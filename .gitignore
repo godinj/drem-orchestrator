@@ -9,6 +9,7 @@ dist/
 # Node
 node_modules/
 ui/dist/
+*.tsbuildinfo
 
 # IDE
 .idea/
