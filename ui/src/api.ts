@@ -97,6 +97,17 @@ export async function submitTestResult(
   });
 }
 
+// Task transitions
+export async function transitionTask(
+  taskId: string,
+  targetStatus: TaskStatus,
+): Promise<Task> {
+  return request<Task>(`/tasks/${taskId}/transition`, {
+    method: "POST",
+    body: JSON.stringify({ target_status: targetStatus }),
+  });
+}
+
 // Agents
 export async function getAgents(projectId: string): Promise<Agent[]> {
   return request<Agent[]>(`/projects/${projectId}/agents`);

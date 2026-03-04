@@ -140,6 +140,13 @@ export function useBoard(projectId: string | null) {
     },
   });
 
+  const retryTaskMutation = useMutation({
+    mutationFn: (taskId: string) => api.transitionTask(taskId, "backlog"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["board", projectId] });
+    },
+  });
+
   const columns = boardQuery.data ?? emptyColumns();
 
   return {
@@ -165,6 +172,9 @@ export function useBoard(projectId: string | null) {
       feedback?: string,
     ) => {
       await submitTestMutation.mutateAsync({ taskId, passed, feedback });
+    },
+    retryTask: async (taskId: string) => {
+      await retryTaskMutation.mutateAsync(taskId);
     },
   };
 }

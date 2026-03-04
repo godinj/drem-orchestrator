@@ -186,6 +186,7 @@ function AppContent() {
             onCreateTask={() => setShowCreateDialog(true)}
             onReviewPlan={board.reviewPlan}
             onSubmitTest={board.submitTest}
+            onRetryTask={board.retryTask}
             onSelectTask={setSelectedTask}
             onToggleAgents={() => setShowAgentSidebar(!showAgentSidebar)}
             agentCount={board.agents.length}
@@ -216,6 +217,7 @@ function AppContent() {
           onClose={() => setSelectedTask(null)}
           onReviewPlan={board.reviewPlan}
           onSubmitTest={board.submitTest}
+          onRetryTask={board.retryTask}
         />
       )}
     </div>

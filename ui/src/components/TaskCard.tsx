@@ -14,6 +14,7 @@ interface TaskCardProps {
     passed: boolean,
     feedback?: string,
   ) => Promise<void>;
+  onRetryTask: (taskId: string) => Promise<void>;
   onSelect: (task: Task) => void;
 }
 
@@ -187,6 +188,7 @@ export function TaskCard({
   agents,
   onReviewPlan,
   onSubmitTest,
+  onRetryTask,
   onSelect,
 }: TaskCardProps) {
   const [rejectFeedback, setRejectFeedback] = useState("");
@@ -515,6 +517,24 @@ export function TaskCard({
               PR
             </a>
           )}
+        </div>
+      )}
+
+      {/* Failed — retry button */}
+      {task.status === "failed" && (
+        <div className="mt-2" onClick={(e) => e.stopPropagation()}>
+          <button
+            disabled={actionLoading}
+            onClick={() =>
+              handleAction(() => onRetryTask(task.id))
+            }
+            className="w-full text-xs py-1.5 rounded-md bg-orange-600 hover:bg-orange-500 text-white font-medium disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5"
+          >
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Retry
+          </button>
         </div>
       )}
     </div>

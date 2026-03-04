@@ -20,6 +20,7 @@ interface BoardProps {
     passed: boolean,
     feedback?: string,
   ) => Promise<void>;
+  onRetryTask: (taskId: string) => Promise<void>;
   onSelectTask: (task: Task) => void;
   onToggleAgents: () => void;
   agentCount: number;
@@ -58,6 +59,7 @@ export function Board({
   onCreateTask,
   onReviewPlan,
   onSubmitTest,
+  onRetryTask,
   onSelectTask,
   onToggleAgents,
   agentCount,
@@ -248,6 +250,7 @@ export function Board({
                           agents={agents}
                           onReviewPlan={onReviewPlan}
                           onSubmitTest={onSubmitTest}
+                          onRetryTask={onRetryTask}
                           onSelect={onSelectTask}
                         />
                       ))
