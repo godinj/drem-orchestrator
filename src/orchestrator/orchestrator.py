@@ -117,7 +117,7 @@ class Orchestrator:
             await self._process_agent_results(session)
 
             # 7. Clean up stale agents
-            await self.agent_runner.cleanup_stale()
+            await self.agent_runner.cleanup_stale_agents()
 
             await session.commit()
 
@@ -354,7 +354,7 @@ class Orchestrator:
             # Spawn the agent process
             await self.agent_runner.spawn(
                 agent_id=agent.id,
-                agent_type=agent_type,
+                task_id=subtask.id,
                 worktree_path=agent_wt.path,
                 branch=agent_wt.branch,
                 prompt=prompt,
@@ -568,7 +568,7 @@ class Orchestrator:
         6. Check parent completion
         """
         # Read agent output
-        output = await self.agent_runner.get_output(agent.id)
+        output = await self.agent_runner.get_agent_output(agent.id)
 
         # Store output in task context
         task.context = task.context or {}
@@ -639,7 +639,7 @@ class Orchestrator:
         3. Update agent status
         4. Notify human if retries exhausted
         """
-        output = await self.agent_runner.get_output(agent.id)
+        output = await self.agent_runner.get_agent_output(agent.id)
 
         task.context = task.context or {}
         task.context["error_log"] = output[:5000]
@@ -675,7 +675,7 @@ class Orchestrator:
 
         for agent in working_agents:
             status = await self.agent_runner.get_status(agent.id)
-            if status == AgentStatus.WORKING:
+            if status == AgentStatus.WORKING.value:
                 continue  # Still running
 
             if agent.current_task_id is None:
@@ -686,7 +686,7 @@ class Orchestrator:
                 continue
 
             process = self.agent_runner._processes.get(agent.id)
-            if process and process.exit_code is not None and process.exit_code != 0:
+            if process and process.process.returncode is not None and process.process.returncode != 0:
                 await self._on_agent_failed(session, agent, task)
             else:
                 await self._on_agent_completed(session, agent, task)
