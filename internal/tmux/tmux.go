@@ -40,6 +40,14 @@ func (m *Manager) EnsureSession(dashboardCmd string) error {
 	// Check if session already exists.
 	_, err := runTmux("has-session", "-t", m.SessionName)
 	if err == nil {
+		// Session exists. Respawn dashboard if its process has exited
+		// (e.g., user quit the TUI and rebuilt the binary).
+		if dashboardCmd != "" {
+			alive, aliveErr := m.IsWindowAlive("dashboard")
+			if aliveErr == nil && !alive {
+				_, _ = runTmux("respawn-pane", "-k", "-t", m.SessionName+":dashboard", dashboardCmd)
+			}
+		}
 		return nil
 	}
 
