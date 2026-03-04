@@ -390,9 +390,15 @@ func (m *Manager) WaitForAgentIdle(ctx context.Context, sessionName, idleSignalP
 	}
 
 	// Phase 2: send /exit to gracefully close the Claude TUI.
+	// The /exit command opens a confirmation prompt, so we send Enter
+	// again after a short delay to confirm it.
 	if err := m.SendKeys(sessionName, "/exit", "Enter"); err != nil {
 		// If send-keys fails (session already gone), fall through to
 		// WaitForAgentExit which will handle the error.
+		_ = err
+	}
+	time.Sleep(500 * time.Millisecond)
+	if err := m.SendKeys(sessionName, "Enter"); err != nil {
 		_ = err
 	}
 
