@@ -412,8 +412,16 @@ func (m Model) handleRetry() (tea.Model, tea.Cmd) {
 
 // handleJump focuses the tmux window of the selected task's agent.
 func (m Model) handleJump() (tea.Model, tea.Cmd) {
-	if m.detail.agent != nil && m.detail.agent.TmuxWindow != "" {
-		_ = m.tmux.FocusWindow(m.detail.agent.TmuxWindow)
+	if m.detail.agent == nil {
+		m.err = fmt.Errorf("no agent assigned to this task")
+		return m, nil
+	}
+	if m.detail.agent.TmuxWindow == "" {
+		m.err = fmt.Errorf("agent %s has no tmux window", m.detail.agent.Name)
+		return m, nil
+	}
+	if err := m.tmux.FocusWindow(m.detail.agent.TmuxWindow); err != nil {
+		m.err = fmt.Errorf("jump to agent: %w", err)
 	}
 	return m, nil
 }

@@ -453,15 +453,16 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 		}
 	}
 
-	// Update agent status to IDLE.
+	// Keep the agent assigned during plan_review so the TUI can still
+	// jump to its tmux window for plan review. The assignment is cleared
+	// when the plan is approved or rejected.
 	ag.Status = model.AgentIdle
 	ag.CurrentTaskID = nil
 	if err := o.db.Save(ag).Error; err != nil {
 		return fmt.Errorf("on planner completed: save agent: %w", err)
 	}
 
-	// Clear task assignment and transition to PLAN_REVIEW.
-	task.AssignedAgentID = nil
+	// Transition to PLAN_REVIEW (keep AssignedAgentID so user can inspect agent output).
 	evt, err := state.TransitionTask(task, model.StatusPlanReview, "orchestrator", nil)
 	if err != nil {
 		return fmt.Errorf("on planner completed: transition to plan_review: %w", err)
@@ -826,6 +827,9 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 		}
 	}
 
+	// Clear planner agent assignment now that review is complete.
+	task.AssignedAgentID = nil
+
 	// Transition task to IN_PROGRESS.
 	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "plan_approved"})
 	if err != nil {
@@ -856,6 +860,7 @@ func (o *Orchestrator) HandlePlanRejected(taskID uuid.UUID, feedback string) err
 
 	task.Plan = nil
 	task.PlanFeedback = feedback
+	task.AssignedAgentID = nil
 
 	evt, err := state.TransitionTask(&task, model.StatusPlanning, "user", map[string]any{"action": "plan_rejected", "feedback": feedback})
 	if err != nil {
