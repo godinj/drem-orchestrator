@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -57,6 +58,12 @@ type logCapturedMsg struct {
 	err  error
 }
 
+// orchLogCapturedMsg carries orchestrator log file content.
+type orchLogCapturedMsg struct {
+	text string
+	err  error
+}
+
 // feedbackAction tracks what action triggered the feedback dialog.
 type feedbackAction int
 
@@ -80,6 +87,7 @@ type Model struct {
 	create   CreateModel
 	feedback FeedbackModel
 
+	logPath        string
 	focus          Focus
 	feedbackAction feedbackAction
 	keys           keyMap
@@ -95,6 +103,7 @@ func NewModel(
 	tmux *tmuxpkg.Manager,
 	projectID uuid.UUID,
 	events <-chan orchestrator.Event,
+	logPath string,
 ) Model {
 	return Model{
 		db:        db,
@@ -102,6 +111,7 @@ func NewModel(
 		tmux:      tmux,
 		projectID: projectID,
 		events:    events,
+		logPath:   logPath,
 		board:     NewBoardModel(),
 		agents:    NewAgentsModel(),
 		detail:    NewDetailModel(),
@@ -154,6 +164,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.refreshData(), listenForEvents(m.events))
 
 	case logCapturedMsg:
+		if msg.err != nil {
+			m.detail.logText = fmt.Sprintf("Error: %v", msg.err)
+		} else {
+			m.detail.logText = msg.text
+		}
+		return m, nil
+
+	case orchLogCapturedMsg:
 		if msg.err != nil {
 			m.detail.logText = fmt.Sprintf("Error: %v", msg.err)
 		} else {
@@ -224,6 +242,8 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleJump()
 	case "l":
 		return m.handleLog()
+	case "L":
+		return m.handleOrchLog()
 	}
 
 	return m, nil
@@ -446,6 +466,22 @@ func (m Model) handleLog() (tea.Model, tea.Cmd) {
 	}
 }
 
+// handleOrchLog reads the tail of the orchestrator log file.
+func (m Model) handleOrchLog() (tea.Model, tea.Cmd) {
+	logPath := m.logPath
+	return m, func() tea.Msg {
+		data, err := os.ReadFile(logPath)
+		if err != nil {
+			return orchLogCapturedMsg{err: err}
+		}
+		lines := strings.Split(string(data), "\n")
+		if len(lines) > 50 {
+			lines = lines[len(lines)-50:]
+		}
+		return orchLogCapturedMsg{text: strings.Join(lines, "\n")}
+	}
+}
+
 // View renders the entire TUI layout.
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
@@ -595,7 +631,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  p:pause  R:retry  g:jump  l:log  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  p:pause  R:retry  g:jump  l:log  L:orch-log  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.

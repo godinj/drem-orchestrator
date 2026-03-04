@@ -102,10 +102,14 @@ func (d DetailModel) View() string {
 		))
 	}
 
-	// Log preview.
+	// Log preview — fill remaining available height.
 	if d.logText != "" {
+		usedLines := len(sections) + 2 // +2 for actions line and padding
+		maxLines := d.height - usedLines
+		if maxLines < 3 {
+			maxLines = 3
+		}
 		logLines := strings.Split(d.logText, "\n")
-		maxLines := 5
 		if len(logLines) > maxLines {
 			logLines = logLines[len(logLines)-maxLines:]
 		}

@@ -20,6 +20,7 @@ type Config struct {
 	StaleTimeout        time.Duration `toml:"stale_timeout"`
 	SupervisorEnabled   bool          `toml:"supervisor_enabled"`
 	SupervisorTimeout   time.Duration `toml:"supervisor_timeout"`
+	LogPath             string        `toml:"log_path"`
 }
 
 // DefaultConfig returns a Config populated with sensible default values.
@@ -35,6 +36,7 @@ func DefaultConfig() Config {
 		StaleTimeout:        5 * time.Minute,
 		SupervisorEnabled:   true,
 		SupervisorTimeout:   2 * time.Minute,
+		LogPath:             "./drem.log",
 	}
 }
 

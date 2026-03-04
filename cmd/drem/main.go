@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,6 +82,15 @@ func main() {
 
 	// Inner invocation: running inside the tmux session. Init DB/TUI normally.
 
+	// Redirect logging to file so it doesn't corrupt the TUI.
+	logFile, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		log.Fatalf("open log file: %v", err)
+	}
+	defer logFile.Close()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logFile, nil)))
+	log.SetOutput(logFile)
+
 	// Init database.
 	database, err := db.Init(cfg.DatabasePath)
 	if err != nil {
@@ -122,7 +132,7 @@ func main() {
 
 	// Start TUI (blocks until quit).
 	p := tea.NewProgram(
-		tui.NewModel(database, orch, tmux, project.ID, events),
+		tui.NewModel(database, orch, tmux, project.ID, events, cfg.LogPath),
 		tea.WithAltScreen(),
 	)
 	if _, err := p.Run(); err != nil {
