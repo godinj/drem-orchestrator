@@ -7,16 +7,19 @@ decomposes them via planner agents, assigns workers, and manages human gates.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid
+from pathlib import Path
 from typing import Any, Callable, Coroutine
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from orchestrator.agent_prompt import generate_agent_prompt
 from orchestrator.agent_runner import AgentRunner
 from orchestrator.enums import AgentStatus, AgentType, TaskStatus
-from orchestrator.models import Agent, Memory, Task, TaskEvent
+from orchestrator.models import Agent, Memory, Project, Task, TaskEvent
 from orchestrator.schemas import SubtaskPlan
 from orchestrator.state_machine import transition_task
 from orchestrator.worktree import WorktreeManager
@@ -177,19 +180,9 @@ class Orchestrator:
         logger.info(f"Task {task.id} ({task.title}): BACKLOG -> PLANNING")
 
     async def _process_planning(self, session: AsyncSession, task: Task) -> None:
-        """Run the planner to decompose a task, then transition to PLAN_REVIEW.
-
-        In the real implementation, this spawns a planner agent. For now,
-        the planner is expected to produce a PlanSubmission that gets stored
-        on the task record. When the plan arrives, the task transitions to
-        PLAN_REVIEW so a human can approve or reject.
-
-        If the task already has a plan (e.g., replanning after rejection),
-        we move straight to PLAN_REVIEW.
-        """
+        """Spawn a planner agent to decompose the task, or transition if plan ready."""
+        # Plan already exists — move to review
         if task.plan is not None:
-            # Plan already exists (perhaps from a retry after feedback).
-            # Transition to PLAN_REVIEW for human approval.
             event = transition_task(
                 task,
                 TaskStatus.PLAN_REVIEW,
@@ -205,14 +198,61 @@ class Orchestrator:
             })
             return
 
-        # No plan yet: In a full implementation, we'd spawn a planner agent here.
-        # The planner agent would call back when done, setting task.plan.
-        # For now, we generate a simple placeholder plan to demonstrate the flow.
-        # A real planner agent would analyze the task description and produce
-        # SubtaskPlan items.
-        logger.info(f"Task {task.id}: Awaiting planner agent to decompose task")
-        # The task stays in PLANNING until a plan is submitted
-        # (either by the planner agent callback or an API call)
+        # Planner already assigned and running — wait for it
+        if task.assigned_agent_id is not None:
+            return
+
+        # Check capacity
+        if not self.agent_runner.can_spawn:
+            logger.debug("Max concurrent agents reached, deferring planner spawn")
+            return
+
+        # Look up the project for prompt generation
+        project = await session.get(Project, task.project_id)
+        if project is None:
+            logger.error(f"Task {task.id}: Project {task.project_id} not found")
+            return
+
+        # Create feature worktree if not already created
+        feature_name = _task_feature_name(task)
+        if task.worktree_branch is None:
+            try:
+                wt_info = await self.worktree_manager.create_feature(feature_name)
+                task.worktree_branch = wt_info.branch
+            except Exception:
+                logger.exception(f"Task {task.id}: Failed to create feature worktree")
+                return
+
+        # Build planner prompt
+        prompt = generate_agent_prompt(
+            task=task,
+            project=project,
+            agent_type="planner",
+            worktree_path=self.worktree_manager.bare_repo / task.worktree_branch,
+        )
+
+        # Spawn planner agent
+        try:
+            agent = await self.agent_runner.spawn_agent(
+                task=task,
+                feature_name=feature_name,
+                agent_type="planner",
+                prompt=prompt,
+            )
+        except Exception:
+            logger.exception(f"Task {task.id}: Failed to spawn planner agent")
+            return
+
+        task.assigned_agent_id = agent.id
+        logger.info(
+            f"Task {task.id} ({task.title}): Spawned planner agent {agent.id}"
+        )
+        await self.broadcast_fn({
+            "type": "planner_spawned",
+            "task_id": str(task.id),
+            "agent_id": str(agent.id),
+            "title": task.title,
+        })
 
     async def _handle_plan_approved(self, session: AsyncSession, task: Task) -> None:
         """Called when human approves a plan (PLAN_REVIEW -> IN_PROGRESS).
@@ -231,14 +271,15 @@ class Orchestrator:
             logger.error(f"Task {task.id}: Plan is not a list")
             return
 
-        # Create a feature worktree for this task
-        feature_name = _task_feature_name(task)
-        try:
-            wt_info = await self.worktree_manager.create_feature(feature_name)
-            task.worktree_branch = wt_info.branch
-        except Exception:
-            logger.exception(f"Task {task.id}: Failed to create feature worktree")
-            # Continue without worktree — subtask creation still proceeds
+        # Create a feature worktree for this task (skip if planner already created it)
+        if task.worktree_branch is None:
+            feature_name = _task_feature_name(task)
+            try:
+                wt_info = await self.worktree_manager.create_feature(feature_name)
+                task.worktree_branch = wt_info.branch
+            except Exception:
+                logger.exception(f"Task {task.id}: Failed to create feature worktree")
+                # Continue without worktree — subtask creation still proceeds
 
         # Create subtasks from the plan
         for i, item in enumerate(plan_items):
@@ -282,6 +323,7 @@ class Orchestrator:
         """
         task.plan_feedback = feedback
         task.plan = None  # Clear plan so planner will regenerate
+        task.assigned_agent_id = None  # Clear so a fresh planner spawns on retry
 
         event = transition_task(
             task,
@@ -558,15 +600,14 @@ class Orchestrator:
     async def _on_agent_completed(
         self, session: AsyncSession, agent: Agent, task: Task
     ) -> None:
-        """Handle agent completion.
+        """Handle agent completion. Planner agents set task.plan; coder agents fast-track to DONE."""
 
-        1. Read agent output
-        2. Store results in task context
-        3. Merge agent branch into feature branch
-        4. Clean up agent worktree
-        5. Transition subtask: IN_PROGRESS -> DONE (via TESTING_READY -> MANUAL_TESTING -> MERGING -> DONE)
-        6. Check parent completion
-        """
+        # --- Planner agent completion ---
+        if agent.agent_type == AgentType.PLANNER.value:
+            await self._on_planner_completed(session, agent, task)
+            return
+
+        # --- Coder/researcher agent completion (existing logic below) ---
         # Read agent output
         output = await self.agent_runner.get_agent_output(agent.id)
 
@@ -629,21 +670,122 @@ class Orchestrator:
 
         logger.info(f"Agent {agent.id} completed task {task.id} ({task.title})")
 
+    async def _on_planner_completed(
+        self, session: AsyncSession, agent: Agent, task: Task
+    ) -> None:
+        """Handle planner agent completion: read plan.json and set task.plan."""
+        # Read plan.json from agent worktree
+        plan_path = Path(agent.worktree_path) / "plan.json" if agent.worktree_path else None
+        plan_data = None
+
+        if plan_path and plan_path.exists():
+            try:
+                raw = plan_path.read_text()
+                plan_data = json.loads(raw)
+            except (json.JSONDecodeError, OSError):
+                logger.exception(f"Task {task.id}: Failed to parse plan.json")
+
+        if plan_data is None:
+            # Fallback: try to extract plan from agent log output
+            output = await self.agent_runner.get_agent_output(agent.id)
+            logger.warning(
+                f"Task {task.id}: No plan.json found, planner output: {output[:500]}"
+            )
+            task.context = task.context or {}
+            task.context["planner_error"] = "No plan.json produced"
+            task.assigned_agent_id = None
+            agent.status = AgentStatus.IDLE.value
+            agent.current_task_id = None
+            # Stay in PLANNING — next tick will retry
+            return
+
+        # Transform plan.json format to SubtaskPlan format
+        subtask_plans: list[dict[str, Any]] = []
+        for item in plan_data.get("subtasks", []):
+            subtask_plans.append({
+                "title": item.get("title", "Untitled"),
+                "description": item.get("description", ""),
+                "agent_type": item.get("agent_type", "coder"),
+                "estimated_files": item.get("files", []),
+            })
+
+        if not subtask_plans:
+            logger.warning(f"Task {task.id}: Planner produced empty plan")
+            task.context = task.context or {}
+            task.context["planner_error"] = "Empty plan"
+            task.assigned_agent_id = None
+            agent.status = AgentStatus.IDLE.value
+            agent.current_task_id = None
+            return
+
+        # Set the plan on the task
+        task.plan = subtask_plans
+
+        # Clean up planner agent worktree (not the feature worktree)
+        if agent.worktree_branch:
+            try:
+                await self.worktree_manager.remove_agent_worktree(agent.worktree_branch)
+            except Exception:
+                logger.exception("Failed to remove planner agent worktree")
+
+        # Update agent state
+        agent.status = AgentStatus.IDLE.value
+        agent.current_task_id = None
+        task.assigned_agent_id = None
+
+        # Transition PLANNING -> PLAN_REVIEW
+        event = transition_task(
+            task,
+            TaskStatus.PLAN_REVIEW,
+            actor="orchestrator",
+            details={"plan": subtask_plans, "subtask_count": len(subtask_plans)},
+        )
+        session.add(event)
+
+        logger.info(
+            f"Task {task.id}: PLANNING -> PLAN_REVIEW "
+            f"({len(subtask_plans)} subtasks proposed)"
+        )
+        await self.broadcast_fn({
+            "type": "plan_ready",
+            "task_id": str(task.id),
+            "title": task.title,
+            "subtask_count": len(subtask_plans),
+        })
+
     async def _on_agent_failed(
         self, session: AsyncSession, agent: Agent, task: Task
     ) -> None:
-        """Handle agent failure.
-
-        1. Read error log
-        2. Transition subtask: IN_PROGRESS -> FAILED
-        3. Update agent status
-        4. Notify human if retries exhausted
-        """
+        """Handle agent failure."""
         output = await self.agent_runner.get_agent_output(agent.id)
 
         task.context = task.context or {}
         task.context["error_log"] = output[:5000]
 
+        # Planner failure: clear assignment so next tick retries
+        if agent.agent_type == AgentType.PLANNER.value:
+            task.assigned_agent_id = None
+            agent.status = AgentStatus.IDLE.value
+            agent.current_task_id = None
+
+            # Clean up agent worktree
+            if agent.worktree_branch:
+                try:
+                    await self.worktree_manager.remove_agent_worktree(agent.worktree_branch)
+                except Exception:
+                    logger.exception("Failed to remove failed planner agent worktree")
+
+            logger.warning(
+                f"Task {task.id}: Planner agent {agent.id} failed, will retry next tick"
+            )
+            await self.broadcast_fn({
+                "type": "planner_failed",
+                "task_id": str(task.id),
+                "title": task.title,
+            })
+            return
+
+        # --- Existing coder/researcher failure handling ---
         event = transition_task(
             task,
             TaskStatus.FAILED,
