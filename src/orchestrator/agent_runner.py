@@ -60,6 +60,7 @@ class AgentRunner:
         self._processes: dict[uuid.UUID, AgentProcess] = {}
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._completion_events: dict[uuid.UUID, asyncio.Event] = {}
+        self._completions: list[tuple[uuid.UUID, int]] = []
 
     @property
     def can_spawn(self) -> bool:
@@ -337,6 +338,18 @@ class AgentRunner:
         """Return list of currently running agent processes."""
         return list(self._processes.values())
 
+    def drain_completions(self) -> list[tuple[uuid.UUID, int]]:
+        """Return and clear all queued agent completions.
+
+        Each entry is (agent_id, return_code). The orchestrator should call
+        this once per tick to reliably discover completed agents, avoiding
+        the race where _monitor_agent commits status='idle' before the
+        orchestrator's DB query can see the agent as 'working'.
+        """
+        items = list(self._completions)
+        self._completions.clear()
+        return items
+
     async def _monitor_agent(self, agent_id: uuid.UUID) -> None:
         """Background task per agent.
 
@@ -380,6 +393,9 @@ class AgentRunner:
                     .values(status=new_status, heartbeat_at=_utcnow())
                 )
                 await session.commit()
+
+            # Enqueue completion so the orchestrator can process it
+            self._completions.append((agent_id, return_code))
 
         except asyncio.CancelledError:
             # Monitor was cancelled (e.g., by stop_agent), just exit

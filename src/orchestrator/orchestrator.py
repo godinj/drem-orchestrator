@@ -98,14 +98,18 @@ class Orchestrator:
             for task in backlog_tasks:
                 await self._process_backlog(session, task)
 
-            # 2. Process PLANNING tasks (run planner agent)
+            # 2. Drain completed agents BEFORE planning so planner completions
+            #    are visible before we consider spawning new planners.
+            await self._process_agent_results(session)
+
+            # 3. Process PLANNING tasks (run planner agent)
             planning_tasks = await self._query_top_level_tasks(session, TaskStatus.PLANNING)
             for task in planning_tasks:
                 await self._process_planning(session, task)
 
-            # 3. PLAN_REVIEW, TESTING_READY, MANUAL_TESTING — skip (human-owned)
+            # 4. PLAN_REVIEW, TESTING_READY, MANUAL_TESTING — skip (human-owned)
 
-            # 4. Process IN_PROGRESS parent tasks — schedule subtasks & check completion
+            # 5. Process IN_PROGRESS parent tasks — schedule subtasks & check completion
             in_progress_parents = await self._query_parent_tasks(
                 session, TaskStatus.IN_PROGRESS
             )
@@ -113,13 +117,10 @@ class Orchestrator:
                 await self._schedule_subtasks(session, task)
                 await self._check_feature_completion(session, task)
 
-            # 5. Process MERGING tasks
+            # 6. Process MERGING tasks
             merging_tasks = await self._query_top_level_tasks(session, TaskStatus.MERGING)
             for task in merging_tasks:
                 await self._execute_merge(session, task)
-
-            # 6. Handle completed/failed agent subtasks
-            await self._process_agent_results(session)
 
             # 7. Clean up stale agents
             await self.agent_runner.cleanup_stale_agents()
@@ -867,27 +868,33 @@ class Orchestrator:
         })
 
     async def _process_agent_results(self, session: AsyncSession) -> None:
-        """Check for agents that have completed or failed and process results."""
-        # Query agents with WORKING status
-        result = await session.execute(
-            select(Agent).where(Agent.status == AgentStatus.WORKING.value)
-        )
-        working_agents = list(result.scalars().all())
+        """Drain the completion queue and dispatch results.
 
-        for agent in working_agents:
-            status = await self.agent_runner.get_status(agent.id)
-            if status == AgentStatus.WORKING.value:
-                continue  # Still running
+        Uses the AgentRunner completion queue instead of polling the DB for
+        WORKING agents, which avoids a race where _monitor_agent commits
+        status='idle' before this method queries for 'working' agents.
+        """
+        completions = self.agent_runner.drain_completions()
+
+        for agent_id, return_code in completions:
+            agent = await session.get(Agent, agent_id)
+            if agent is None:
+                logger.warning("Completed agent %s not found in DB", agent_id)
+                continue
 
             if agent.current_task_id is None:
+                logger.warning("Completed agent %s has no current_task_id", agent_id)
                 continue
 
             task = await session.get(Task, agent.current_task_id)
             if task is None:
+                logger.warning(
+                    "Task %s for completed agent %s not found",
+                    agent.current_task_id, agent_id,
+                )
                 continue
 
-            process = self.agent_runner._processes.get(agent.id)
-            if process and process.process.returncode is not None and process.process.returncode != 0:
+            if return_code != 0:
                 await self._on_agent_failed(session, agent, task)
             else:
                 await self._on_agent_completed(session, agent, task)
