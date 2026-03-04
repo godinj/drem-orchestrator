@@ -194,6 +194,31 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		return fmt.Errorf("write prompt: %w", err)
 	}
 
+	// Write settings.json with an idle_prompt notification hook that creates
+	// a signal file when Claude finishes processing. The orchestrator polls
+	// for this file to detect completion while keeping the TUI alive.
+	idleSignal := filepath.Join(claudeDir, "agent-idle")
+	settingsJSON := fmt.Sprintf(`{
+  "hooks": {
+    "Notification": [
+      {
+        "matcher": "idle_prompt",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "touch %s",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}`, idleSignal)
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	if err := os.WriteFile(settingsPath, []byte(settingsJSON), 0o644); err != nil {
+		return fmt.Errorf("write claude settings: %w", err)
+	}
+
 	// Build the claude command (interactive TUI mode).
 	cmd := fmt.Sprintf(
 		"%s --dangerously-skip-permissions \"$(cat %s)\"",
@@ -223,7 +248,7 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 	r.running[agentID] = ra
 	r.mu.Unlock()
 
-	go r.monitorAgent(ctx, agentID, sessionName)
+	go r.monitorAgent(ctx, agentID, sessionName, worktreePath)
 	go r.heartbeatLoop(ctx, agentID)
 
 	return nil
@@ -350,11 +375,14 @@ func (r *Runner) CleanupStaleAgents(timeout time.Duration) error {
 	return nil
 }
 
-// monitorAgent is a background goroutine that waits for the tmux session's
-// process to exit and records the completion.
-func (r *Runner) monitorAgent(ctx context.Context, agentID uuid.UUID, sessionName string) {
-	// WaitForAgentExit blocks until the command exits.
-	exitCode, err := r.tmux.WaitForAgentExit(sessionName)
+// monitorAgent is a background goroutine that waits for the agent's idle
+// signal file (created by the idle_prompt notification hook) and then
+// gracefully exits the Claude TUI. Falls back to WaitForAgentExit if
+// the idle signal approach fails.
+func (r *Runner) monitorAgent(ctx context.Context, agentID uuid.UUID, sessionName, worktreePath string) {
+	idleSignal := filepath.Join(worktreePath, ".claude", "agent-idle")
+
+	exitCode, err := r.tmux.WaitForAgentIdle(ctx, sessionName, idleSignal)
 	if err != nil {
 		exitCode = -1
 	}

@@ -3,6 +3,7 @@
 package tmux
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -354,6 +355,49 @@ func (m *Manager) CaptureAgentPaneFull(sessionName string) (string, error) {
 		return "", fmt.Errorf("capture agent pane full %q: %w", sessionName, err)
 	}
 	return out, nil
+}
+
+// SendKeys sends a sequence of keystrokes to an agent session's pane.
+// Used to gracefully exit the Claude TUI after detecting completion.
+func (m *Manager) SendKeys(sessionName string, keys ...string) error {
+	args := append([]string{"send-keys", "-t", sessionName}, keys...)
+	_, err := runTmux(args...)
+	if err != nil {
+		return fmt.Errorf("send keys to %q: %w", sessionName, err)
+	}
+	return nil
+}
+
+// WaitForAgentIdle polls for an idle signal file and then gracefully exits
+// the Claude TUI. It checks for the signal file every 500ms. Once detected,
+// it sends "/exit" + Enter to the tmux pane, then falls through to
+// WaitForAgentExit to collect the exit code from pane_dead. The ctx parameter
+// allows the caller to cancel the wait (e.g. on StopAgent).
+func (m *Manager) WaitForAgentIdle(ctx context.Context, sessionName, idleSignalPath string) (int, error) {
+	// Phase 1: poll for the idle signal file.
+	for {
+		select {
+		case <-ctx.Done():
+			return -1, ctx.Err()
+		default:
+		}
+
+		if _, err := os.Stat(idleSignalPath); err == nil {
+			break // signal file exists — agent is idle
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Phase 2: send /exit to gracefully close the Claude TUI.
+	if err := m.SendKeys(sessionName, "/exit", "Enter"); err != nil {
+		// If send-keys fails (session already gone), fall through to
+		// WaitForAgentExit which will handle the error.
+		_ = err
+	}
+
+	// Phase 3: wait for the process to actually exit and get the exit code.
+	return m.WaitForAgentExit(sessionName)
 }
 
 // FocusAgentSession switches the tmux client to an agent's session. This
