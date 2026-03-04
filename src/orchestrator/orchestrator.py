@@ -34,6 +34,8 @@ ACTIONABLE_STATES = [
     TaskStatus.MERGING,
 ]
 
+MAX_PLANNER_RETRIES = 3
+
 # States owned by humans — orchestrator skips these
 HUMAN_OWNED_STATES = [
     TaskStatus.PLAN_REVIEW,
@@ -178,6 +180,34 @@ class Orchestrator:
         event = transition_task(task, TaskStatus.PLANNING, actor="orchestrator")
         session.add(event)
         logger.info(f"Task {task.id} ({task.title}): BACKLOG -> PLANNING")
+
+    async def _fail_planner(
+        self, session: AsyncSession, task: Task, reason: str
+    ) -> None:
+        """Transition a PLANNING task to FAILED after exhausting retries."""
+        task.assigned_agent_id = None
+        event = transition_task(
+            task,
+            TaskStatus.FAILED,
+            actor="orchestrator",
+            details={"reason": reason},
+        )
+        session.add(event)
+        logger.warning(f"Task {task.id}: PLANNING -> FAILED ({reason})")
+        await self.broadcast_fn({
+            "type": "planner_failed",
+            "task_id": str(task.id),
+            "title": task.title,
+            "reason": reason,
+        })
+
+    def _bump_planner_retries(self, task: Task, error: str) -> bool:
+        """Increment planner retry count. Return True if retries exhausted."""
+        task.context = task.context or {}
+        count = task.context.get("planner_retries", 0) + 1
+        task.context["planner_retries"] = count
+        task.context["planner_error"] = error
+        return count >= MAX_PLANNER_RETRIES
 
     async def _process_planning(self, session: AsyncSession, task: Task) -> None:
         """Spawn a planner agent to decompose the task, or transition if plan ready."""
@@ -693,17 +723,19 @@ class Orchestrator:
                 logger.exception(f"Task {task.id}: Failed to parse plan.json")
 
         if plan_data is None:
-            # Fallback: try to extract plan from agent log output
             output = await self.agent_runner.get_agent_output(agent.id)
             logger.warning(
                 f"Task {task.id}: No plan.json found, planner output: {output[:500]}"
             )
-            task.context = task.context or {}
-            task.context["planner_error"] = "No plan.json produced"
-            task.assigned_agent_id = None
             agent.status = AgentStatus.IDLE.value
             agent.current_task_id = None
-            # Stay in PLANNING — next tick will retry
+            exhausted = self._bump_planner_retries(task, "No plan.json produced")
+            if exhausted:
+                await self._fail_planner(
+                    session, task, "Planner produced no plan after max retries"
+                )
+            else:
+                task.assigned_agent_id = None
             return
 
         # Transform plan.json format to SubtaskPlan format
@@ -718,11 +750,15 @@ class Orchestrator:
 
         if not subtask_plans:
             logger.warning(f"Task {task.id}: Planner produced empty plan")
-            task.context = task.context or {}
-            task.context["planner_error"] = "Empty plan"
-            task.assigned_agent_id = None
             agent.status = AgentStatus.IDLE.value
             agent.current_task_id = None
+            exhausted = self._bump_planner_retries(task, "Empty plan")
+            if exhausted:
+                await self._fail_planner(
+                    session, task, "Planner produced empty plan after max retries"
+                )
+            else:
+                task.assigned_agent_id = None
             return
 
         # Set the plan on the task
@@ -769,9 +805,8 @@ class Orchestrator:
         task.context = task.context or {}
         task.context["error_log"] = output[:5000]
 
-        # Planner failure: clear assignment so next tick retries
+        # Planner failure: retry up to MAX_PLANNER_RETRIES, then fail
         if agent.agent_type == AgentType.PLANNER.value:
-            task.assigned_agent_id = None
             agent.status = AgentStatus.IDLE.value
             agent.current_task_id = None
 
@@ -782,14 +817,23 @@ class Orchestrator:
                 except Exception:
                     logger.exception("Failed to remove failed planner agent worktree")
 
-            logger.warning(
-                f"Task {task.id}: Planner agent {agent.id} failed, will retry next tick"
-            )
-            await self.broadcast_fn({
-                "type": "planner_failed",
-                "task_id": str(task.id),
-                "title": task.title,
-            })
+            exhausted = self._bump_planner_retries(task, "Agent process failed")
+            if exhausted:
+                await self._fail_planner(
+                    session, task, "Planner agent failed after max retries"
+                )
+            else:
+                task.assigned_agent_id = None
+                retries = task.context["planner_retries"]
+                logger.warning(
+                    f"Task {task.id}: Planner agent {agent.id} failed "
+                    f"(attempt {retries}/{MAX_PLANNER_RETRIES}), will retry"
+                )
+                await self.broadcast_fn({
+                    "type": "planner_failed",
+                    "task_id": str(task.id),
+                    "title": task.title,
+                })
             return
 
         # --- Existing coder/researcher failure handling ---

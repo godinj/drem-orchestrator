@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 VALID_TRANSITIONS: dict[TaskStatus, list[TaskStatus]] = {
     TaskStatus.BACKLOG: [TaskStatus.PLANNING],
-    TaskStatus.PLANNING: [TaskStatus.PLAN_REVIEW],
+    TaskStatus.PLANNING: [TaskStatus.PLAN_REVIEW, TaskStatus.FAILED],
     TaskStatus.PLAN_REVIEW: [TaskStatus.IN_PROGRESS, TaskStatus.PLANNING],  # approve or reject
     TaskStatus.IN_PROGRESS: [TaskStatus.TESTING_READY, TaskStatus.FAILED],
     TaskStatus.TESTING_READY: [TaskStatus.MANUAL_TESTING],
