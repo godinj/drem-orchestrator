@@ -3,13 +3,20 @@
 package tmux
 
 import (
+	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
+
+// ErrDashboardRespawned is returned by EnsureSession when the session already
+// existed and the dashboard pane was respawned. Callers should exit instead of
+// attaching, since the new binary is already running inside the pane.
+var ErrDashboardRespawned = errors.New("dashboard respawned")
 
 // WindowInfo holds metadata about a tmux window.
 type WindowInfo struct {
@@ -46,6 +53,7 @@ func (m *Manager) EnsureSession(dashboardCmd string) error {
 			alive, aliveErr := m.IsWindowAlive("dashboard")
 			if aliveErr == nil && !alive {
 				_, _ = runTmux("respawn-pane", "-k", "-t", m.SessionName+":dashboard", dashboardCmd)
+				return ErrDashboardRespawned
 			}
 		}
 		return nil
@@ -225,6 +233,8 @@ func (m *Manager) KillSession() error {
 }
 
 // Attach replaces the current process with `tmux attach-session -t <session>`.
+// When already inside a tmux session ($TMUX is set), it uses switch-client
+// instead to avoid the "sessions should be nested with care" error.
 // It uses syscall.Exec so the calling process is fully replaced; this function
 // only returns on error.
 func (m *Manager) Attach() error {
@@ -233,6 +243,9 @@ func (m *Manager) Attach() error {
 		return fmt.Errorf("find tmux binary: %w", err)
 	}
 	argv := []string{"tmux", "attach-session", "-t", m.SessionName}
+	if os.Getenv("TMUX") != "" {
+		argv = []string{"tmux", "switch-client", "-t", m.SessionName}
+	}
 	return syscall.Exec(tmuxBin, argv, syscall.Environ())
 }
 

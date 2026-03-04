@@ -134,7 +134,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.board.tasks = msg.tasks
 		m.clampCursor()
 		m.updateDetail()
-		return m, nil
+		return m, m.refreshData()
 
 	case agentsLoadedMsg:
 		m.agents.agents = msg.agents

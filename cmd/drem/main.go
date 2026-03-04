@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -63,10 +64,14 @@ func main() {
 
 		tmux := tmuxpkg.NewManager(sessionName)
 		if err := tmux.EnsureSession(dashCmd); err != nil {
-			log.Fatalf("tmux: %v", err)
+			if !errors.Is(err, tmuxpkg.ErrDashboardRespawned) {
+				log.Fatalf("tmux: %v", err)
+			}
+			// Dashboard was respawned — fall through to attach/switch.
 		}
 
-		// Replace this process with tmux attach.
+		// Replace this process with tmux attach (or switch-client if
+		// already inside tmux).
 		if err := tmux.Attach(); err != nil {
 			log.Fatalf("tmux attach: %v", err)
 		}
