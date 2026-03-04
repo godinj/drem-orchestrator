@@ -1,0 +1,7 @@
+{
+  "enabledMcpjsonServers": [
+    "mcp-toolkit-gateway",
+    "filesystem"
+  ],
+  "enableAllProjectMcpServers": true
+}

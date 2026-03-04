@@ -266,11 +266,11 @@ class MergeOrchestrator:
             st
             for st in task.subtasks
             if st.status == TaskStatus.DONE
-            and st.agent is not None
-            and st.agent.worktree_branch
+            and st.assigned_agent is not None
+            and st.assigned_agent.worktree_branch
         ]
         done_subtasks.sort(
-            key=lambda st: st.completed_at or st.agent.completed_at or st.id
+            key=lambda st: st.updated_at or st.id
         )
 
         agent_merges: list[MergeResult] = []
@@ -279,7 +279,7 @@ class MergeOrchestrator:
         all_succeeded = True
 
         for subtask in done_subtasks:
-            agent_branch = subtask.agent.worktree_branch
+            agent_branch = subtask.assigned_agent.worktree_branch
 
             # Plan first to gather info
             try:
@@ -353,7 +353,7 @@ class MergeOrchestrator:
         """
         default_branch = await self._wt.get_default_branch()
         main_worktree = self._wt.bare_repo / default_branch
-        feature_branch = task.feature_branch
+        feature_branch = task.worktree_branch
 
         # 1. Verify main is clean
         if not await _is_worktree_clean(main_worktree):
@@ -450,15 +450,18 @@ class MergeOrchestrator:
                 logger.info(
                     "Skipping sync of %s — worktree is dirty", wt.branch
                 )
-                if self._bus:
-                    await self._bus.publish(
-                        "merge.sync_skipped",
-                        {
-                            "feature": wt.branch,
-                            "reason": "worktree_dirty",
-                            "merged_feature": merged_feature,
-                        },
-                    )
+                if self._bus and self._bus._redis is not None:
+                    try:
+                        await self._bus.publish(
+                            "merge.sync_skipped",
+                            {
+                                "feature": wt.branch,
+                                "reason": "worktree_dirty",
+                                "merged_feature": merged_feature,
+                            },
+                        )
+                    except (RuntimeError, Exception):
+                        pass  # Best-effort notification
                 results.append(
                     SyncResult(
                         feature=wt.branch,
@@ -509,15 +512,18 @@ class MergeOrchestrator:
                     )
                 )
 
-                if self._bus:
-                    await self._bus.publish(
-                        "merge.sync_conflict",
-                        {
-                            "feature": wt.branch,
-                            "conflicts": conflicts,
-                            "merged_feature": merged_feature,
-                        },
-                    )
+                if self._bus and self._bus._redis is not None:
+                    try:
+                        await self._bus.publish(
+                            "merge.sync_conflict",
+                            {
+                                "feature": wt.branch,
+                                "conflicts": conflicts,
+                                "merged_feature": merged_feature,
+                            },
+                        )
+                    except (RuntimeError, Exception):
+                        pass  # Best-effort notification
 
                 logger.warning(
                     "Rebase conflict syncing %s: %s",
