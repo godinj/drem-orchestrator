@@ -24,6 +24,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/state"
+	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -43,41 +44,45 @@ type Event struct {
 // Orchestrator is the main scheduling loop. It queries the database each tick,
 // processes tasks through the state machine, spawns agents, and drives merges.
 type Orchestrator struct {
-	db        *gorm.DB
-	runner    *agent.Runner
-	worktree  *worktree.Manager
-	merger    *merge.Orchestrator
-	memory    *memory.Manager
-	projectID uuid.UUID
-	events    chan<- Event
-	tick      time.Duration
-	stale     time.Duration
-	logger    *slog.Logger
+	db         *gorm.DB
+	runner     *agent.Runner
+	worktree   *worktree.Manager
+	merger     *merge.Orchestrator
+	memory     *memory.Manager
+	supervisor *supervisor.Supervisor // nil disables LLM-powered decisions
+	projectID  uuid.UUID
+	events     chan<- Event
+	tick       time.Duration
+	stale      time.Duration
+	logger     *slog.Logger
 }
 
-// New creates an Orchestrator.
+// New creates an Orchestrator. The supervisor parameter is optional — pass nil
+// to disable LLM-powered decision points and fall back to existing behavior.
 func New(
 	db *gorm.DB,
 	runner *agent.Runner,
 	wt *worktree.Manager,
 	merger *merge.Orchestrator,
 	mem *memory.Manager,
+	sup *supervisor.Supervisor,
 	projectID uuid.UUID,
 	events chan<- Event,
 	tickInterval time.Duration,
 	staleTimeout time.Duration,
 ) *Orchestrator {
 	return &Orchestrator{
-		db:        db,
-		runner:    runner,
-		worktree:  wt,
-		merger:    merger,
-		memory:    mem,
-		projectID: projectID,
-		events:    events,
-		tick:      tickInterval,
-		stale:     staleTimeout,
-		logger:    slog.Default().With("component", "orchestrator", "project_id", projectID),
+		db:         db,
+		runner:     runner,
+		worktree:   wt,
+		merger:     merger,
+		memory:     mem,
+		supervisor: sup,
+		projectID:  projectID,
+		events:     events,
+		tick:       tickInterval,
+		stale:      staleTimeout,
+		logger:     slog.Default().With("component", "orchestrator", "project_id", projectID),
 	}
 }
 
@@ -405,6 +410,16 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 
 // onPlannerCompleted handles a successfully completed planner agent.
 func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) error {
+	// Mark agent as idle immediately — it has exited regardless of whether
+	// it produced a valid plan. This prevents orphaned WORKING agents in DB
+	// when the early-return paths below clear task.AssignedAgentID and
+	// trigger a retry spawn in the same tick.
+	ag.Status = model.AgentIdle
+	ag.CurrentTaskID = nil
+	if err := o.db.Save(ag).Error; err != nil {
+		return fmt.Errorf("on planner completed: save agent: %w", err)
+	}
+
 	// Read plan.json from the agent's worktree.
 	planPath := filepath.Join(ag.WorktreePath, "plan.json")
 	planData, err := os.ReadFile(planPath)
@@ -453,16 +468,9 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 		}
 	}
 
-	// Keep the agent assigned during plan_review so the TUI can still
-	// jump to its tmux window for plan review. The assignment is cleared
-	// when the plan is approved or rejected.
-	ag.Status = model.AgentIdle
-	ag.CurrentTaskID = nil
-	if err := o.db.Save(ag).Error; err != nil {
-		return fmt.Errorf("on planner completed: save agent: %w", err)
-	}
-
-	// Transition to PLAN_REVIEW (keep AssignedAgentID so user can inspect agent output).
+	// Transition to PLAN_REVIEW. Keep AssignedAgentID so the TUI can still
+	// jump to the agent's tmux session for plan review. The assignment is
+	// cleared when the plan is approved or rejected.
 	evt, err := state.TransitionTask(task, model.StatusPlanReview, "orchestrator", nil)
 	if err != nil {
 		return fmt.Errorf("on planner completed: transition to plan_review: %w", err)
@@ -479,7 +487,10 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	return nil
 }
 
-// onAgentFailed handles a failed agent.
+// onAgentFailed handles a failed agent. When a supervisor is configured, it
+// performs LLM-powered failure diagnosis to decide whether to retry (and with
+// what prompt adjustments). Without a supervisor, planners retry up to
+// MaxPlannerRetries and coders/researchers hard-fail.
 func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	// Read agent output for error details.
 	output, err := o.runner.GetAgentOutput(ag.ID)
@@ -506,6 +517,54 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	ag.CurrentTaskID = nil
 	if err := o.db.Save(ag).Error; err != nil {
 		return fmt.Errorf("on agent failed: save agent: %w", err)
+	}
+
+	// Supervisor-powered failure diagnosis.
+	if o.supervisor != nil {
+		var diagnosis supervisor.FailureDiagnosis
+		diagPrompt := supervisor.FailureDiagnosisPrompt(
+			task.Title, task.Description, string(ag.AgentType), output, truncate(output, 500),
+		)
+		if diagErr := o.supervisor.EvaluateJSON(context.Background(), diagPrompt, &diagnosis); diagErr != nil {
+			o.logger.Warn("supervisor failure diagnosis failed, falling back", "error", diagErr)
+		} else {
+			task.Context["failure_diagnosis"] = diagnosis.RootCause
+			task.Context["failure_category"] = diagnosis.Category
+
+			if diagnosis.ShouldRetry {
+				task.AssignedAgentID = nil
+				if diagnosis.PromptAdjustment != "" {
+					task.Context["prompt_adjustment"] = diagnosis.PromptAdjustment
+				}
+				retries := o.incrementRetryCount(task)
+				maxRetries := MaxPlannerRetries
+				if diagnosis.MaxAdditionalRetries > 0 {
+					maxRetries = retries + diagnosis.MaxAdditionalRetries
+				}
+				if retries >= maxRetries {
+					if err := o.failTask(task, fmt.Sprintf("agent failed after %d retries (supervisor: %s)", retries, diagnosis.RootCause)); err != nil {
+						return err
+					}
+					o.emit("agent_failed", map[string]any{"task_id": task.ID, "agent_id": ag.ID, "diagnosis": diagnosis.RootCause})
+					return nil
+				}
+
+				// For planners, stay in PLANNING. For coders/researchers,
+				// stay in current parent status (IN_PROGRESS) to be rescheduled.
+				if err := o.db.Save(task).Error; err != nil {
+					return fmt.Errorf("on agent failed: save task after supervisor retry: %w", err)
+				}
+				o.emit("agent_retrying", map[string]any{
+					"task_id":   task.ID,
+					"agent_id":  ag.ID,
+					"retries":   retries,
+					"diagnosis": diagnosis.RootCause,
+				})
+				o.logger.Info("supervisor recommends retry", "task_id", task.ID, "retries", retries, "strategy", diagnosis.RetryStrategy)
+				return nil
+			}
+			// Supervisor says don't retry — fall through to default behavior.
+		}
 	}
 
 	if ag.AgentType == model.AgentPlanner {
@@ -711,6 +770,55 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 		o.emit("merge_complete", map[string]any{"task_id": task.ID})
 		o.logger.Info("merge complete", "task_id", task.ID)
 	} else {
+		// Supervisor-powered analysis of the failure.
+		if o.supervisor != nil && len(result.Conflicts) > 0 {
+			if task.Context == nil {
+				task.Context = make(model.JSONField)
+			}
+
+			// Detect whether this is a build failure or a merge conflict.
+			isBuildFailure := len(result.Conflicts) == 1 && strings.HasPrefix(result.Conflicts[0], "build verification failed:")
+			if isBuildFailure {
+				// Build failure diagnosis.
+				buildOutput := strings.TrimPrefix(result.Conflicts[0], "build verification failed: ")
+				mainWorktree := filepath.Join(o.worktree.BareRepoPath, o.worktree.DefaultBranch)
+				changedFiles, _ := worktree.GetChangedFiles(mainWorktree, o.worktree.DefaultBranch)
+
+				var diagnosis supervisor.BuildFailureDiagnosis
+				bfPrompt := supervisor.BuildFailurePrompt(mainWorktree, buildOutput, changedFiles)
+				if bfErr := o.supervisor.EvaluateJSON(context.Background(), bfPrompt, &diagnosis); bfErr != nil {
+					o.logger.Warn("supervisor build failure diagnosis failed", "task_id", task.ID, "error", bfErr)
+				} else {
+					task.Context["build_diagnosis"] = diagnosis.RootCause
+					task.Context["build_suggested_fix"] = diagnosis.SuggestedFix
+					task.Context["build_affected_files"] = diagnosis.AffectedFiles
+					task.Context["build_can_auto_fix"] = diagnosis.CanAutoFix
+				}
+			} else {
+				// Merge conflict analysis.
+				var analysis supervisor.MergeConflictAnalysis
+				mainWorktree := filepath.Join(o.worktree.BareRepoPath, o.worktree.DefaultBranch)
+				diffOutput, _ := worktree.RunGit([]string{
+					"diff", o.worktree.DefaultBranch + "..." + task.WorktreeBranch,
+				}, mainWorktree)
+
+				mcPrompt := supervisor.MergeConflictPrompt(
+					task.WorktreeBranch, o.worktree.DefaultBranch,
+					result.Conflicts, diffOutput,
+				)
+				if mcErr := o.supervisor.EvaluateJSON(context.Background(), mcPrompt, &analysis); mcErr != nil {
+					o.logger.Warn("supervisor merge conflict analysis failed", "task_id", task.ID, "error", mcErr)
+				} else {
+					task.Context["merge_conflict_severity"] = analysis.Severity
+					task.Context["merge_conflict_strategy"] = analysis.ResolutionStrategy
+					task.Context["merge_conflict_hints"] = analysis.ResolutionHints
+					if analysis.ResolutionStrategy == "spawn_agent" {
+						o.logger.Info("supervisor suggests spawning resolver agent", "task_id", task.ID)
+					}
+				}
+			}
+		}
+
 		details := map[string]any{"conflicts": result.Conflicts}
 		if err := o.failTask(task, "merge conflicts"); err != nil {
 			return err
@@ -862,6 +970,22 @@ func (o *Orchestrator) HandlePlanRejected(taskID uuid.UUID, feedback string) err
 	task.PlanFeedback = feedback
 	task.AssignedAgentID = nil
 
+	// Supervisor-powered feedback synthesis.
+	if o.supervisor != nil && feedback != "" {
+		var synthesis supervisor.FeedbackIntegration
+		fbPrompt := supervisor.FeedbackIntegrationPrompt(task.Title, task.Description, feedback, "plan_rejection")
+		if fbErr := o.supervisor.EvaluateJSON(context.Background(), fbPrompt, &synthesis); fbErr != nil {
+			o.logger.Warn("supervisor feedback integration failed", "task_id", task.ID, "error", fbErr)
+		} else {
+			if task.Context == nil {
+				task.Context = make(model.JSONField)
+			}
+			task.Context["feedback_synthesis"] = synthesis.Summary
+			task.Context["feedback_key_issues"] = synthesis.KeyIssues
+			task.Context["feedback_approach"] = synthesis.SuggestedApproach
+		}
+	}
+
 	evt, err := state.TransitionTask(&task, model.StatusPlanning, "user", map[string]any{"action": "plan_rejected", "feedback": feedback})
 	if err != nil {
 		return fmt.Errorf("handle plan rejected: transition: %w", err)
@@ -917,6 +1041,22 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID, feedback string) error
 	}
 
 	task.TestFeedback = feedback
+
+	// Supervisor-powered test feedback synthesis.
+	if o.supervisor != nil && feedback != "" {
+		var synthesis supervisor.FeedbackIntegration
+		fbPrompt := supervisor.FeedbackIntegrationPrompt(task.Title, task.Description, feedback, "test_failure")
+		if fbErr := o.supervisor.EvaluateJSON(context.Background(), fbPrompt, &synthesis); fbErr != nil {
+			o.logger.Warn("supervisor test feedback integration failed", "task_id", task.ID, "error", fbErr)
+		} else {
+			if task.Context == nil {
+				task.Context = make(model.JSONField)
+			}
+			task.Context["test_feedback_synthesis"] = synthesis.Summary
+			task.Context["test_feedback_key_issues"] = synthesis.KeyIssues
+			task.Context["test_feedback_approach"] = synthesis.SuggestedApproach
+		}
+	}
 
 	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_failed", "feedback": feedback})
 	if err != nil {

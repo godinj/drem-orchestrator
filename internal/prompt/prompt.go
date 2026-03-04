@@ -49,13 +49,56 @@ func Generate(opts Opts) string {
 	sections = append(sections, "## Task Description", "")
 	sections = append(sections, opts.Task.Description, "")
 
-	// Task-specific context
+	// Task-specific context (exclude internal keys injected below).
 	if len(opts.Task.Context) > 0 {
 		sections = append(sections, "## Additional Context", "")
 		for key, value := range opts.Task.Context {
+			// Skip keys that are injected as dedicated sections below.
+			switch key {
+			case "prompt_adjustment", "feedback_synthesis", "feedback_key_issues",
+				"feedback_approach", "test_feedback_synthesis", "test_feedback_key_issues",
+				"test_feedback_approach":
+				continue
+			}
 			sections = append(sections, fmt.Sprintf("- **%s**: %v", key, value))
 		}
 		sections = append(sections, "")
+	}
+
+	// Prompt adjustment from supervisor failure diagnosis.
+	if opts.Task.Context != nil {
+		if adj, ok := opts.Task.Context["prompt_adjustment"].(string); ok && adj != "" {
+			sections = append(sections, "## Additional Guidance from Prior Attempt", "")
+			sections = append(sections, adj, "")
+		}
+	}
+
+	// Previous plan feedback (from plan rejection).
+	if opts.Task.PlanFeedback != "" {
+		sections = append(sections, "## Previous Plan Feedback", "")
+		sections = append(sections, fmt.Sprintf("The user rejected the previous plan with this feedback: %s", opts.Task.PlanFeedback), "")
+		if opts.Task.Context != nil {
+			if synthesis, ok := opts.Task.Context["feedback_synthesis"].(string); ok && synthesis != "" {
+				sections = append(sections, fmt.Sprintf("**Synthesis**: %s", synthesis), "")
+			}
+			if approach, ok := opts.Task.Context["feedback_approach"].(string); ok && approach != "" {
+				sections = append(sections, fmt.Sprintf("**Suggested approach**: %s", approach), "")
+			}
+		}
+	}
+
+	// Test failure feedback (from manual testing rejection).
+	if opts.Task.TestFeedback != "" {
+		sections = append(sections, "## Test Failure Feedback", "")
+		sections = append(sections, fmt.Sprintf("The user reported test failures: %s", opts.Task.TestFeedback), "")
+		if opts.Task.Context != nil {
+			if synthesis, ok := opts.Task.Context["test_feedback_synthesis"].(string); ok && synthesis != "" {
+				sections = append(sections, fmt.Sprintf("**Synthesis**: %s", synthesis), "")
+			}
+			if approach, ok := opts.Task.Context["test_feedback_approach"].(string); ok && approach != "" {
+				sections = append(sections, fmt.Sprintf("**Suggested approach**: %s", approach), "")
+			}
+		}
 	}
 
 	// Parent task context if subtask

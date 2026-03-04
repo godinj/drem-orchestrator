@@ -253,24 +253,28 @@ func (m *Manager) Attach() error {
 // in it. The session is independent of the dashboard session, so it persists
 // across dashboard restarts. remain-on-exit is set so the pane stays around
 // after the command exits, allowing WaitForAgentExit to read the exit code.
+//
+// The command is wrapped so that remain-on-exit is set from within the pane
+// before the real command runs. This avoids race conditions with fast-exiting
+// commands and the reliability issues of respawn-pane.
 func (m *Manager) CreateAgentSession(sessionName, cmd, cwd string) error {
-	// Create a detached session with a default shell (stays alive so we can
-	// set options before the real command runs).
-	_, err := runTmux("new-session", "-d", "-s", sessionName, "-c", cwd)
+	// Wrap: set remain-on-exit on this pane first, then run the real command.
+	// Both execute in the same shell, so there is no race — even commands
+	// that exit instantly (like "true") will have remain-on-exit set before
+	// the pane dies.
+	wrapped := fmt.Sprintf("tmux set-option -p remain-on-exit on; %s", cmd)
+	_, err := runTmux("new-session", "-d", "-s", sessionName, "-c", cwd, wrapped)
 	if err != nil {
 		return fmt.Errorf("create agent session %q: %w", sessionName, err)
 	}
-	// Set remain-on-exit so the pane persists after the command exits,
-	// allowing WaitForAgentExit to read the exit code.
-	_, err = runTmux("set-option", "-t", sessionName, "remain-on-exit", "on")
+
+	// Set large scrollback so CaptureAgentPane can retrieve sufficient
+	// context for memory extraction after long-running agents.
+	_, err = runTmux("set-option", "-t", sessionName, "history-limit", "50000")
 	if err != nil {
-		return fmt.Errorf("set remain-on-exit for agent session %q: %w", sessionName, err)
+		return fmt.Errorf("set history-limit for agent session %q: %w", sessionName, err)
 	}
-	// Replace the default shell with the actual command.
-	_, err = runTmux("respawn-pane", "-k", "-t", sessionName, cmd)
-	if err != nil {
-		return fmt.Errorf("respawn agent pane for session %q: %w", sessionName, err)
-	}
+
 	return nil
 }
 
@@ -338,6 +342,16 @@ func (m *Manager) CaptureAgentPane(sessionName string, lines int) (string, error
 	out, err := runTmux("capture-pane", "-t", sessionName, "-p", "-S", fmt.Sprintf("-%d", lines))
 	if err != nil {
 		return "", fmt.Errorf("capture agent pane %q: %w", sessionName, err)
+	}
+	return out, nil
+}
+
+// CaptureAgentPaneFull captures the entire scrollback of an agent session's
+// pane. Used by the orchestrator for memory extraction on completion.
+func (m *Manager) CaptureAgentPaneFull(sessionName string) (string, error) {
+	out, err := runTmux("capture-pane", "-t", sessionName, "-p", "-S", "-")
+	if err != nil {
+		return "", fmt.Errorf("capture agent pane full %q: %w", sessionName, err)
 	}
 	return out, nil
 }

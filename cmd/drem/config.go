@@ -18,6 +18,8 @@ type Config struct {
 	TickInterval        time.Duration `toml:"tick_interval"`
 	HeartbeatInterval   time.Duration `toml:"heartbeat_interval"`
 	StaleTimeout        time.Duration `toml:"stale_timeout"`
+	SupervisorEnabled   bool          `toml:"supervisor_enabled"`
+	SupervisorTimeout   time.Duration `toml:"supervisor_timeout"`
 }
 
 // DefaultConfig returns a Config populated with sensible default values.
@@ -31,6 +33,8 @@ func DefaultConfig() Config {
 		TickInterval:        5 * time.Second,
 		HeartbeatInterval:   30 * time.Second,
 		StaleTimeout:        5 * time.Minute,
+		SupervisorEnabled:   true,
+		SupervisorTimeout:   2 * time.Minute,
 	}
 }
 

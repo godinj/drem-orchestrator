@@ -20,6 +20,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
+	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
 	"github.com/godinj/drem-orchestrator/internal/tui"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
@@ -107,8 +108,13 @@ func main() {
 	merger := merge.NewOrchestrator(wt, database)
 	mem := memory.NewManager(database)
 
+	var sup *supervisor.Supervisor
+	if cfg.SupervisorEnabled {
+		sup = supervisor.New(cfg.ClaudeBin, cfg.SupervisorTimeout)
+	}
+
 	events := make(chan orchestrator.Event, 100)
-	orch := orchestrator.New(database, runner, wt, merger, mem, project.ID, events, cfg.TickInterval, cfg.StaleTimeout)
+	orch := orchestrator.New(database, runner, wt, merger, mem, sup, project.ID, events, cfg.TickInterval, cfg.StaleTimeout)
 
 	// Start orchestrator in background.
 	ctx, cancel := context.WithCancel(context.Background())

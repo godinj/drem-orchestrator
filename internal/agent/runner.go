@@ -27,6 +27,10 @@ import (
 // when returning output (50 KB).
 const maxLogBytes = 50 * 1024
 
+// maxCaptureLines is the number of tmux scrollback lines to capture when
+// reading agent output from interactive TUI sessions.
+const maxCaptureLines = 500
+
 // Completion records the result of an agent process exit.
 type Completion struct {
 	AgentID    uuid.UUID
@@ -190,11 +194,10 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		return fmt.Errorf("write prompt: %w", err)
 	}
 
-	// Build the claude command.
-	logPath := filepath.Join(claudeDir, "agent.log")
+	// Build the claude command (interactive TUI mode).
 	cmd := fmt.Sprintf(
-		"%s -p --dangerously-skip-permissions < %s 2>&1 | tee %s",
-		r.claudeBin, promptPath, logPath,
+		"%s --dangerously-skip-permissions \"$(cat %s)\"",
+		r.claudeBin, promptPath,
 	)
 
 	// Create tmux session for this agent.
@@ -212,7 +215,7 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		Branch:       branch,
 		TmuxSession:  sessionName,
 		StartedAt:    time.Now(),
-		LogPath:      logPath,
+		LogPath:      "",
 		cancel:       cancel,
 	}
 
@@ -258,27 +261,25 @@ func (r *Runner) StopAgent(agentID uuid.UUID) error {
 	return nil
 }
 
-// GetAgentOutput reads the agent's log file. Returns the last maxLogBytes of
-// content if the file is large. Returns an empty string if the file does not exist.
+// GetAgentOutput captures the agent's tmux pane output. For running agents it
+// reads from the in-memory session name; for finished agents it looks up the
+// session name from the DB. Returns an empty string if no session is available.
 func (r *Runner) GetAgentOutput(agentID uuid.UUID) (string, error) {
 	r.mu.Lock()
 	ra, ok := r.running[agentID]
 	r.mu.Unlock()
 
 	if !ok {
-		// Try reading the agent from DB to get the worktree path.
 		var agent model.Agent
 		if err := r.db.First(&agent, "id = ?", agentID).Error; err != nil {
 			return "", fmt.Errorf("get agent output: agent %s not found: %w", agentID, err)
 		}
-		if agent.WorktreePath == "" {
+		if agent.TmuxSession == "" {
 			return "", nil
 		}
-		logPath := filepath.Join(agent.WorktreePath, ".claude", "agent.log")
-		return readLogTail(logPath)
+		return r.tmux.CaptureAgentPane(agent.TmuxSession, maxCaptureLines)
 	}
-
-	return readLogTail(ra.LogPath)
+	return r.tmux.CaptureAgentPane(ra.TmuxSession, maxCaptureLines)
 }
 
 // GetRunningAgents returns a copy of all currently running agent entries.
