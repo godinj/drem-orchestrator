@@ -245,9 +245,9 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "g":
-		// Jump to the selected agent's tmux window.
-		if ag := m.agents.Selected(); ag != nil && ag.TmuxWindow != "" {
-			_ = m.tmux.FocusWindow(ag.TmuxWindow)
+		// Jump to the selected agent's tmux session.
+		if ag := m.agents.Selected(); ag != nil && ag.TmuxSession != "" {
+			_ = m.tmux.FocusAgentSession(ag.TmuxSession)
 		}
 		return m, nil
 	}
@@ -412,15 +412,22 @@ func (m Model) handleRetry() (tea.Model, tea.Cmd) {
 
 // handleJump focuses the tmux window of the selected task's agent.
 func (m Model) handleJump() (tea.Model, tea.Cmd) {
-	if m.detail.agent == nil {
-		m.err = fmt.Errorf("no agent assigned to this task")
+	ag := m.detail.agent
+	if ag == nil || ag.TmuxSession == "" {
+		if m.detail.task != nil && m.detail.task.Status == model.StatusPlanReview {
+			m.err = fmt.Errorf("agent session ended; plan is shown in the detail panel")
+		} else {
+			m.err = fmt.Errorf("no agent assigned to this task")
+		}
 		return m, nil
 	}
-	if m.detail.agent.TmuxWindow == "" {
-		m.err = fmt.Errorf("agent %s has no tmux window", m.detail.agent.Name)
+	// Verify the session still exists before attempting to focus it.
+	alive, err := m.tmux.IsAgentSessionAlive(ag.TmuxSession)
+	if err != nil || !alive {
+		m.err = fmt.Errorf("agent session %q no longer exists", ag.TmuxSession)
 		return m, nil
 	}
-	if err := m.tmux.FocusWindow(m.detail.agent.TmuxWindow); err != nil {
+	if err := m.tmux.FocusAgentSession(ag.TmuxSession); err != nil {
 		m.err = fmt.Errorf("jump to agent: %w", err)
 	}
 	return m, nil
@@ -428,13 +435,13 @@ func (m Model) handleJump() (tea.Model, tea.Cmd) {
 
 // handleLog captures the pane output from the selected task's agent.
 func (m Model) handleLog() (tea.Model, tea.Cmd) {
-	if m.detail.agent == nil || m.detail.agent.TmuxWindow == "" {
+	if m.detail.agent == nil || m.detail.agent.TmuxSession == "" {
 		return m, nil
 	}
-	windowName := m.detail.agent.TmuxWindow
+	sessionName := m.detail.agent.TmuxSession
 	tmuxMgr := m.tmux
 	return m, func() tea.Msg {
-		text, err := tmuxMgr.CapturePane(windowName, 50)
+		text, err := tmuxMgr.CaptureAgentPane(sessionName, 50)
 		return logCapturedMsg{text: text, err: err}
 	}
 }
@@ -689,6 +696,17 @@ func (m Model) refreshData() tea.Cmd {
 			if selectedTask.AssignedAgentID != nil {
 				var ag model.Agent
 				if err := db.First(&ag, "id = ?", selectedTask.AssignedAgentID).Error; err == nil {
+					detailAgent = &ag
+				}
+			}
+			// Fallback for plan_review tasks whose assignment was cleared:
+			// find the project's planner agent so the user can still jump
+			// to its window (if it exists).
+			if detailAgent == nil && selectedTask.Status == model.StatusPlanReview {
+				var ag model.Agent
+				if err := db.Where("project_id = ? AND agent_type = ? AND tmux_session != ''",
+					projectID, model.AgentPlanner).
+					Order("updated_at desc").First(&ag).Error; err == nil {
 					detailAgent = &ag
 				}
 			}

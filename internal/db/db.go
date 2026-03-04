@@ -22,6 +22,10 @@ func Init(dbPath string) (*gorm.DB, error) {
 	if err := AutoMigrate(db); err != nil {
 		return nil, fmt.Errorf("auto-migrate: %w", err)
 	}
+
+	// Data migration: copy tmux_window → tmux_session for existing rows.
+	db.Exec("UPDATE agents SET tmux_session = tmux_window WHERE tmux_session = '' AND tmux_window != ''")
+
 	return db, nil
 }
 

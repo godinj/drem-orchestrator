@@ -1,8 +1,9 @@
-// Package agent manages Claude Code agent lifecycles via tmux windows.
+// Package agent manages Claude Code agent lifecycles via tmux sessions.
 //
-// It spawns agents in tmux windows, monitors their execution, tracks heartbeats,
-// and handles graceful shutdown. Each agent runs in its own git worktree with
-// its own tmux window, allowing full visibility and interactivity.
+// It spawns agents in per-agent tmux sessions, monitors their execution, tracks
+// heartbeats, and handles graceful shutdown. Each agent runs in its own git
+// worktree with its own tmux session, allowing full visibility, interactivity,
+// and persistence independent of the dashboard lifecycle.
 package agent
 
 import (
@@ -38,7 +39,7 @@ type RunningAgent struct {
 	TaskID       uuid.UUID
 	WorktreePath string
 	Branch       string
-	TmuxWindow   string
+	TmuxSession  string
 	StartedAt    time.Time
 	LogPath      string
 	cancel       context.CancelFunc // cancels the monitor and heartbeat goroutines
@@ -105,26 +106,26 @@ func (r *Runner) SpawnAgent(task *model.Task, featureName string, agentType mode
 
 	// Create Agent DB record.
 	agentID := uuid.New()
-	windowName := fmt.Sprintf("%s-%s", agentType, agentID.String()[:8])
+	sessionName := fmt.Sprintf("%s-%s-%s", r.tmux.SessionName, agentType, agentID.String()[:8])
 	now := time.Now()
 	agent := &model.Agent{
 		ID:             agentID,
 		ProjectID:      task.ProjectID,
 		AgentType:      agentType,
-		Name:           windowName,
+		Name:           sessionName,
 		Status:         model.AgentWorking,
 		CurrentTaskID:  &task.ID,
 		WorktreePath:   wtInfo.Path,
 		WorktreeBranch: wtInfo.Branch,
-		TmuxWindow:     windowName,
+		TmuxSession:    sessionName,
 		HeartbeatAt:    &now,
 	}
 	if err := r.db.Create(agent).Error; err != nil {
 		return nil, fmt.Errorf("spawn agent: create db record: %w", err)
 	}
 
-	// Write prompt, build command, create tmux window, start monitoring.
-	if err := r.startAgent(agent.ID, task.ID, wtInfo.Path, wtInfo.Branch, windowName, prompt); err != nil {
+	// Write prompt, build command, create tmux session, start monitoring.
+	if err := r.startAgent(agent.ID, task.ID, wtInfo.Path, wtInfo.Branch, sessionName, prompt); err != nil {
 		// Mark agent as dead since we failed to start it.
 		r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("status", model.AgentDead)
 		return nil, fmt.Errorf("spawn agent: start: %w", err)
@@ -135,7 +136,7 @@ func (r *Runner) SpawnAgent(task *model.Task, featureName string, agentType mode
 }
 
 // Spawn is a low-level spawn for a pre-existing Agent DB record. It writes the
-// prompt, creates the tmux window, and starts monitoring. The caller must have
+// prompt, creates the tmux session, and starts monitoring. The caller must have
 // already created the agent and worktree.
 func (r *Runner) Spawn(agentID, taskID uuid.UUID, worktreePath, branch, prompt string) error {
 	// Acquire semaphore (non-blocking).
@@ -152,20 +153,20 @@ func (r *Runner) Spawn(agentID, taskID uuid.UUID, worktreePath, branch, prompt s
 		}
 	}()
 
-	// Read the agent from DB to get its window name.
+	// Read the agent from DB to get its session name.
 	var agent model.Agent
 	if err := r.db.First(&agent, "id = ?", agentID).Error; err != nil {
 		return fmt.Errorf("spawn: read agent %s: %w", agentID, err)
 	}
 
-	windowName := agent.TmuxWindow
-	if windowName == "" {
-		windowName = fmt.Sprintf("%s-%s", agent.AgentType, agentID.String()[:8])
-		// Persist the window name.
-		r.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("tmux_window", windowName)
+	sessionName := agent.TmuxSession
+	if sessionName == "" {
+		sessionName = fmt.Sprintf("%s-%s-%s", r.tmux.SessionName, agent.AgentType, agentID.String()[:8])
+		// Persist the session name.
+		r.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("tmux_session", sessionName)
 	}
 
-	if err := r.startAgent(agentID, taskID, worktreePath, branch, windowName, prompt); err != nil {
+	if err := r.startAgent(agentID, taskID, worktreePath, branch, sessionName, prompt); err != nil {
 		return fmt.Errorf("spawn: start: %w", err)
 	}
 
@@ -174,9 +175,9 @@ func (r *Runner) Spawn(agentID, taskID uuid.UUID, worktreePath, branch, prompt s
 }
 
 // startAgent performs the common steps shared by SpawnAgent and Spawn:
-// write prompt file, build command, create tmux window, store RunningAgent,
+// write prompt file, build command, create tmux session, store RunningAgent,
 // launch monitor and heartbeat goroutines.
-func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, windowName, prompt string) error {
+func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, sessionName, prompt string) error {
 	// Ensure .claude directory exists.
 	claudeDir := filepath.Join(worktreePath, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
@@ -196,9 +197,9 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, win
 		r.claudeBin, promptPath, logPath,
 	)
 
-	// Create tmux window.
-	if err := r.tmux.CreateWindow(windowName, cmd, worktreePath); err != nil {
-		return fmt.Errorf("create tmux window: %w", err)
+	// Create tmux session for this agent.
+	if err := r.tmux.CreateAgentSession(sessionName, cmd, worktreePath); err != nil {
+		return fmt.Errorf("create tmux session: %w", err)
 	}
 
 	// Context for monitor and heartbeat goroutines.
@@ -209,7 +210,7 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, win
 		TaskID:       taskID,
 		WorktreePath: worktreePath,
 		Branch:       branch,
-		TmuxWindow:   windowName,
+		TmuxSession:  sessionName,
 		StartedAt:    time.Now(),
 		LogPath:      logPath,
 		cancel:       cancel,
@@ -219,7 +220,7 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, win
 	r.running[agentID] = ra
 	r.mu.Unlock()
 
-	go r.monitorAgent(ctx, agentID, windowName)
+	go r.monitorAgent(ctx, agentID, sessionName)
 	go r.heartbeatLoop(ctx, agentID)
 
 	return nil
@@ -240,8 +241,8 @@ func (r *Runner) StopAgent(agentID uuid.UUID) error {
 	// Cancel monitor and heartbeat goroutines.
 	ra.cancel()
 
-	// Close the tmux window (idempotent).
-	if err := r.tmux.CloseWindow(ra.TmuxWindow); err != nil {
+	// Kill the tmux session (idempotent).
+	if err := r.tmux.KillAgentSession(ra.TmuxSession); err != nil {
 		// Log but don't fail — best effort.
 		_ = err
 	}
@@ -292,7 +293,7 @@ func (r *Runner) GetRunningAgents() []RunningAgent {
 			TaskID:       ra.TaskID,
 			WorktreePath: ra.WorktreePath,
 			Branch:       ra.Branch,
-			TmuxWindow:   ra.TmuxWindow,
+			TmuxSession:  ra.TmuxSession,
 			StartedAt:    ra.StartedAt,
 			LogPath:      ra.LogPath,
 		})
@@ -337,9 +338,9 @@ func (r *Runner) CleanupStaleAgents(timeout time.Duration) error {
 				continue
 			}
 		} else {
-			// Not in our running map — close tmux window if it exists and update DB.
-			if agent.TmuxWindow != "" {
-				_ = r.tmux.CloseWindow(agent.TmuxWindow)
+			// Not in our running map — kill tmux session if it exists and update DB.
+			if agent.TmuxSession != "" {
+				_ = r.tmux.KillAgentSession(agent.TmuxSession)
 			}
 			r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("status", model.AgentDead)
 		}
@@ -348,11 +349,11 @@ func (r *Runner) CleanupStaleAgents(timeout time.Duration) error {
 	return nil
 }
 
-// monitorAgent is a background goroutine that waits for the tmux window's
+// monitorAgent is a background goroutine that waits for the tmux session's
 // process to exit and records the completion.
-func (r *Runner) monitorAgent(ctx context.Context, agentID uuid.UUID, windowName string) {
-	// WaitForExit blocks until the command exits.
-	exitCode, err := r.tmux.WaitForExit(windowName)
+func (r *Runner) monitorAgent(ctx context.Context, agentID uuid.UUID, sessionName string) {
+	// WaitForAgentExit blocks until the command exits.
+	exitCode, err := r.tmux.WaitForAgentExit(sessionName)
 	if err != nil {
 		exitCode = -1
 	}

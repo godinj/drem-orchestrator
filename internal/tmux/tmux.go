@@ -249,6 +249,134 @@ func (m *Manager) Attach() error {
 	return syscall.Exec(tmuxBin, argv, syscall.Environ())
 }
 
+// CreateAgentSession creates a new tmux session for an agent and runs a command
+// in it. The session is independent of the dashboard session, so it persists
+// across dashboard restarts. remain-on-exit is set so the pane stays around
+// after the command exits, allowing WaitForAgentExit to read the exit code.
+func (m *Manager) CreateAgentSession(sessionName, cmd, cwd string) error {
+	// Create a detached session with a default shell (stays alive so we can
+	// set options before the real command runs).
+	_, err := runTmux("new-session", "-d", "-s", sessionName, "-c", cwd)
+	if err != nil {
+		return fmt.Errorf("create agent session %q: %w", sessionName, err)
+	}
+	// Set remain-on-exit so the pane persists after the command exits,
+	// allowing WaitForAgentExit to read the exit code.
+	_, err = runTmux("set-option", "-t", sessionName, "remain-on-exit", "on")
+	if err != nil {
+		return fmt.Errorf("set remain-on-exit for agent session %q: %w", sessionName, err)
+	}
+	// Replace the default shell with the actual command.
+	_, err = runTmux("respawn-pane", "-k", "-t", sessionName, cmd)
+	if err != nil {
+		return fmt.Errorf("respawn agent pane for session %q: %w", sessionName, err)
+	}
+	return nil
+}
+
+// KillAgentSession destroys an agent's tmux session. If the session does not
+// exist, the error is silently ignored (idempotent).
+func (m *Manager) KillAgentSession(sessionName string) error {
+	_, err := runTmux("kill-session", "-t", sessionName)
+	if err != nil {
+		if strings.Contains(err.Error(), "can't find session") ||
+			strings.Contains(err.Error(), "session not found") ||
+			strings.Contains(err.Error(), "no such session") ||
+			strings.Contains(err.Error(), "no server running") {
+			return nil
+		}
+		return fmt.Errorf("kill agent session %q: %w", sessionName, err)
+	}
+	return nil
+}
+
+// IsAgentSessionAlive checks if the process in an agent session is still
+// running. Returns true if the process is alive (pane_dead is 0), false if it
+// has exited. Returns false, nil if the session doesn't exist.
+func (m *Manager) IsAgentSessionAlive(sessionName string) (bool, error) {
+	out, err := runTmux("list-panes", "-t", sessionName, "-F", "#{pane_dead}")
+	if err != nil {
+		if strings.Contains(err.Error(), "can't find session") ||
+			strings.Contains(err.Error(), "session not found") ||
+			strings.Contains(err.Error(), "no such session") ||
+			strings.Contains(err.Error(), "can't find window") ||
+			strings.Contains(err.Error(), "no server running") {
+			return false, nil
+		}
+		return false, fmt.Errorf("check agent session alive %q: %w", sessionName, err)
+	}
+	return strings.TrimSpace(out) == "0", nil
+}
+
+// WaitForAgentExit blocks until the command in an agent session's pane exits
+// and returns its exit code. It polls pane_dead and pane_dead_status every
+// 500ms. The caller is responsible for calling KillAgentSession to clean up.
+func (m *Manager) WaitForAgentExit(sessionName string) (int, error) {
+	for {
+		out, err := runTmux("list-panes", "-t", sessionName, "-F", "#{pane_dead}:#{pane_dead_status}")
+		if err != nil {
+			return -1, fmt.Errorf("wait for agent exit %q: %w", sessionName, err)
+		}
+
+		line := strings.TrimSpace(out)
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 && parts[0] == "1" {
+			exitCode, parseErr := strconv.Atoi(parts[1])
+			if parseErr != nil {
+				return -1, fmt.Errorf("parse exit code %q for agent session %q: %w", parts[1], sessionName, parseErr)
+			}
+			return exitCode, nil
+		}
+
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// CaptureAgentPane captures the visible content of an agent session's pane.
+// The lines parameter controls how many lines of scrollback to capture.
+func (m *Manager) CaptureAgentPane(sessionName string, lines int) (string, error) {
+	out, err := runTmux("capture-pane", "-t", sessionName, "-p", "-S", fmt.Sprintf("-%d", lines))
+	if err != nil {
+		return "", fmt.Errorf("capture agent pane %q: %w", sessionName, err)
+	}
+	return out, nil
+}
+
+// FocusAgentSession switches the tmux client to an agent's session. This
+// performs a cross-session switch-client, allowing the user to jump from the
+// dashboard session to any agent session.
+func (m *Manager) FocusAgentSession(sessionName string) error {
+	_, err := runTmux("switch-client", "-t", sessionName)
+	if err != nil {
+		return fmt.Errorf("focus agent session %q: %w", sessionName, err)
+	}
+	return nil
+}
+
+// ListAgentSessions returns the names of all tmux sessions that belong to
+// agents of this manager's project. Agent sessions are identified by having
+// the manager's session name as a prefix (e.g. "drem-myproject-coder-a1b2c3d4").
+func (m *Manager) ListAgentSessions() ([]string, error) {
+	out, err := runTmux("list-sessions", "-F", "#{session_name}")
+	if err != nil {
+		if strings.Contains(err.Error(), "no server running") ||
+			strings.Contains(err.Error(), "no sessions") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list agent sessions: %w", err)
+	}
+
+	prefix := m.SessionName + "-"
+	var sessions []string
+	for _, line := range strings.Split(out, "\n") {
+		name := strings.TrimSpace(line)
+		if name != "" && strings.HasPrefix(name, prefix) {
+			sessions = append(sessions, name)
+		}
+	}
+	return sessions, nil
+}
+
 // runTmux executes a tmux command and returns stdout. On failure, the error
 // message includes the tmux arguments and combined output for debugging.
 func runTmux(args ...string) (string, error) {

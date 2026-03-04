@@ -74,7 +74,7 @@ type Agent struct {
 	CurrentTaskID  *uuid.UUID  `gorm:"type:text"`
 	WorktreePath   string
 	WorktreeBranch string
-	TmuxWindow     string
+	TmuxSession    string
 	MemorySummary  string
 	HeartbeatAt    *time.Time
 	Config         JSONField `gorm:"type:text"`

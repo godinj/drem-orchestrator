@@ -68,6 +68,26 @@ func (d DetailModel) View() string {
 	}
 	sections = append(sections, strings.Join(infoParts, "  |  "))
 
+	// Plan subtasks (for plan_review, show the proposed plan).
+	if d.task.Status == model.StatusPlanReview && d.task.Plan != nil {
+		if subtasks, ok := d.task.Plan["subtasks"]; ok {
+			if items, ok := subtasks.([]any); ok && len(items) > 0 {
+				planStyle := lipgloss.NewStyle().Foreground(colorWarning)
+				sections = append(sections, planStyle.Render("Plan:"))
+				for i, item := range items {
+					if m, ok := item.(map[string]any); ok {
+						title, _ := m["title"].(string)
+						maxTitle := d.width - 8
+						if maxTitle > 0 && len(title) > maxTitle {
+							title = title[:maxTitle-1] + "\u2026"
+						}
+						sections = append(sections, fmt.Sprintf("  %d. %s", i+1, title))
+					}
+				}
+			}
+		}
+	}
+
 	// Subtask progress.
 	if len(d.subtasks) > 0 {
 		done := 0
@@ -126,7 +146,7 @@ func (d DetailModel) availableActions() string {
 	}
 
 	// Agent-specific actions.
-	if d.agent != nil && d.agent.TmuxWindow != "" {
+	if d.agent != nil && d.agent.TmuxSession != "" {
 		parts = append(parts, "[g] jump to agent", "[l] view log")
 	}
 

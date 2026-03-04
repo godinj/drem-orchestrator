@@ -70,9 +70,9 @@ func (a AgentsModel) View() string {
 		lines = append(lines, header)
 
 		// Indented details.
-		if ag.TmuxWindow != "" {
+		if ag.TmuxSession != "" {
 			lines = append(lines, subtitleStyle.Render(
-				fmt.Sprintf("    window: %s", ag.TmuxWindow),
+				fmt.Sprintf("    session: %s", ag.TmuxSession),
 			))
 		}
 		if ag.WorktreeBranch != "" {

@@ -237,6 +237,205 @@ func TestFocusWindow(t *testing.T) {
 	}
 }
 
+func TestCreateAndKillAgentSession(t *testing.T) {
+	requireTmux(t)
+	session := testSessionName(t)
+	mgr := NewManager(session)
+
+	agentSession := session + "-coder-abcd1234"
+	t.Cleanup(func() { _ = mgr.KillAgentSession(agentSession) })
+
+	// Create an agent session.
+	if err := mgr.CreateAgentSession(agentSession, "sleep 30", "/tmp"); err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+
+	// Verify the session exists.
+	_, err := runTmux("has-session", "-t", agentSession)
+	if err != nil {
+		t.Fatalf("agent session should exist after create: %v", err)
+	}
+
+	// Kill the agent session.
+	if err := mgr.KillAgentSession(agentSession); err != nil {
+		t.Fatalf("KillAgentSession: %v", err)
+	}
+
+	// Verify it's gone.
+	_, err = runTmux("has-session", "-t", agentSession)
+	if err == nil {
+		t.Error("agent session should not exist after kill")
+	}
+
+	// Killing again should be idempotent.
+	if err := mgr.KillAgentSession(agentSession); err != nil {
+		t.Fatalf("KillAgentSession (idempotent): %v", err)
+	}
+
+	// Killing a session that never existed should be fine.
+	if err := mgr.KillAgentSession("nonexistent-session-xyz"); err != nil {
+		t.Fatalf("KillAgentSession (nonexistent): %v", err)
+	}
+}
+
+func TestIsAgentSessionAlive(t *testing.T) {
+	requireTmux(t)
+	session := testSessionName(t)
+	mgr := NewManager(session)
+
+	agentSession := session + "-coder-alive123"
+	t.Cleanup(func() { _ = mgr.KillAgentSession(agentSession) })
+
+	if err := mgr.CreateAgentSession(agentSession, "sleep 30", "/tmp"); err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+
+	alive, err := mgr.IsAgentSessionAlive(agentSession)
+	if err != nil {
+		t.Fatalf("IsAgentSessionAlive: %v", err)
+	}
+	if !alive {
+		t.Error("expected agent session to be alive")
+	}
+
+	// Nonexistent session.
+	alive, err = mgr.IsAgentSessionAlive("no-such-session-xyz")
+	if err != nil {
+		t.Fatalf("IsAgentSessionAlive (nonexistent): %v", err)
+	}
+	if alive {
+		t.Error("expected nonexistent session to not be alive")
+	}
+}
+
+func TestWaitForAgentExit(t *testing.T) {
+	requireTmux(t)
+	session := testSessionName(t)
+	mgr := NewManager(session)
+
+	// Agent session with command that exits with code 0.
+	agentOK := session + "-coder-exitok"
+	t.Cleanup(func() { _ = mgr.KillAgentSession(agentOK) })
+
+	if err := mgr.CreateAgentSession(agentOK, "true", "/tmp"); err != nil {
+		t.Fatalf("CreateAgentSession (exit-ok): %v", err)
+	}
+
+	code, err := mgr.WaitForAgentExit(agentOK)
+	if err != nil {
+		t.Fatalf("WaitForAgentExit: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("expected exit code 0, got %d", code)
+	}
+	_ = mgr.KillAgentSession(agentOK)
+
+	// Agent session with command that exits with non-zero code.
+	agentFail := session + "-coder-exitfail"
+	t.Cleanup(func() { _ = mgr.KillAgentSession(agentFail) })
+
+	if err := mgr.CreateAgentSession(agentFail, "exit 42", "/tmp"); err != nil {
+		t.Fatalf("CreateAgentSession (exit-fail): %v", err)
+	}
+
+	code, err = mgr.WaitForAgentExit(agentFail)
+	if err != nil {
+		t.Fatalf("WaitForAgentExit (exit-fail): %v", err)
+	}
+	if code != 42 {
+		t.Errorf("expected exit code 42, got %d", code)
+	}
+}
+
+func TestCaptureAgentPane(t *testing.T) {
+	requireTmux(t)
+	session := testSessionName(t)
+	mgr := NewManager(session)
+
+	agentSession := session + "-coder-capture"
+	t.Cleanup(func() { _ = mgr.KillAgentSession(agentSession) })
+
+	if err := mgr.CreateAgentSession(agentSession, "echo 'hello from agent'; sleep 30", "/tmp"); err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+
+	// Give the shell a moment to print output.
+	time.Sleep(500 * time.Millisecond)
+
+	out, err := mgr.CaptureAgentPane(agentSession, 50)
+	if err != nil {
+		t.Fatalf("CaptureAgentPane: %v", err)
+	}
+
+	if out == "" {
+		t.Log("CaptureAgentPane returned empty (may depend on timing); not fatal")
+	} else {
+		t.Logf("CaptureAgentPane output:\n%s", out)
+	}
+}
+
+func TestFocusAgentSession(t *testing.T) {
+	requireTmux(t)
+	session := testSessionName(t)
+	mgr := NewManager(session)
+
+	agentSession := session + "-coder-focus"
+	t.Cleanup(func() { _ = mgr.KillAgentSession(agentSession) })
+
+	if err := mgr.CreateAgentSession(agentSession, "sleep 30", "/tmp"); err != nil {
+		t.Fatalf("CreateAgentSession: %v", err)
+	}
+
+	// FocusAgentSession uses switch-client which requires an attached client.
+	// From a detached test we expect an error but it should not panic.
+	_ = mgr.FocusAgentSession(agentSession)
+}
+
+func TestListAgentSessions(t *testing.T) {
+	requireTmux(t)
+	session := testSessionName(t)
+	mgr := NewManager(session)
+
+	agent1 := session + "-planner-11111111"
+	agent2 := session + "-coder-22222222"
+	t.Cleanup(func() {
+		_ = mgr.KillAgentSession(agent1)
+		_ = mgr.KillAgentSession(agent2)
+	})
+
+	if err := mgr.CreateAgentSession(agent1, "sleep 30", "/tmp"); err != nil {
+		t.Fatalf("CreateAgentSession (agent1): %v", err)
+	}
+	if err := mgr.CreateAgentSession(agent2, "sleep 30", "/tmp"); err != nil {
+		t.Fatalf("CreateAgentSession (agent2): %v", err)
+	}
+
+	sessions, err := mgr.ListAgentSessions()
+	if err != nil {
+		t.Fatalf("ListAgentSessions: %v", err)
+	}
+
+	if len(sessions) < 2 {
+		t.Fatalf("expected at least 2 agent sessions, got %d: %v", len(sessions), sessions)
+	}
+
+	found1, found2 := false, false
+	for _, s := range sessions {
+		if s == agent1 {
+			found1 = true
+		}
+		if s == agent2 {
+			found2 = true
+		}
+	}
+	if !found1 {
+		t.Errorf("agent session %q not found in: %v", agent1, sessions)
+	}
+	if !found2 {
+		t.Errorf("agent session %q not found in: %v", agent2, sessions)
+	}
+}
+
 func TestKillSession(t *testing.T) {
 	requireTmux(t)
 	session := testSessionName(t)
