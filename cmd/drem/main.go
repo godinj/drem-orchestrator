@@ -9,11 +9,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -41,6 +42,39 @@ func main() {
 		log.Fatal("--repo is required: path to bare git repo")
 	}
 
+	// Derive session name.
+	projectName := filepath.Base(cfg.BareRepoPath)
+	projectName = strings.TrimSuffix(projectName, ".git")
+	sessionName := "drem-" + projectName
+
+	// Self-respawn: if DREM_SESSION is not set, we are the outer invocation.
+	// Create the tmux session with ourselves as the dashboard command, then
+	// attach (replacing this process).
+	if os.Getenv("DREM_SESSION") != sessionName {
+		exe, err := os.Executable()
+		if err != nil {
+			log.Fatalf("resolve executable: %v", err)
+		}
+
+		// Build the command that tmux will run in the dashboard window.
+		// It re-invokes drem with the same flags, plus DREM_SESSION set.
+		dashCmd := fmt.Sprintf("DREM_SESSION=%s %s --config %s --repo %s",
+			sessionName, exe, *configPath, cfg.BareRepoPath)
+
+		tmux := tmuxpkg.NewManager(sessionName)
+		if err := tmux.EnsureSession(dashCmd); err != nil {
+			log.Fatalf("tmux: %v", err)
+		}
+
+		// Replace this process with tmux attach.
+		if err := tmux.Attach(); err != nil {
+			log.Fatalf("tmux attach: %v", err)
+		}
+		return // unreachable after successful Exec
+	}
+
+	// Inner invocation: running inside the tmux session. Init DB/TUI normally.
+
 	// Init database.
 	database, err := db.Init(cfg.DatabasePath)
 	if err != nil {
@@ -48,7 +82,6 @@ func main() {
 	}
 
 	// Get or create project.
-	projectName := filepath.Base(cfg.BareRepoPath)
 	var project model.Project
 	result := database.Where("bare_repo_path = ?", cfg.BareRepoPath).First(&project)
 	if result.Error != nil {
@@ -63,11 +96,7 @@ func main() {
 	}
 
 	// Init components.
-	tmux := tmuxpkg.NewManager("drem-" + projectName)
-	if err := tmux.EnsureSession(); err != nil {
-		log.Fatalf("tmux: %v", err)
-	}
-
+	tmux := tmuxpkg.NewManager(sessionName)
 	wt := worktree.NewManager(cfg.BareRepoPath, cfg.DefaultBranch)
 	runner := agent.NewRunner(database, tmux, wt, cfg.ClaudeBin, cfg.MaxConcurrentAgents)
 	merger := merge.NewOrchestrator(wt, database)

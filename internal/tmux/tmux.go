@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -22,15 +23,20 @@ type Manager struct {
 	SessionName string // e.g., "drem-myproject"
 }
 
-// NewManager creates a Manager for the given session name.
+// NewManager creates a Manager for the given session name. The name is
+// sanitised to replace characters that tmux silently mangles (dots, colons)
+// with hyphens, preventing has-session / new-session mismatches.
 func NewManager(sessionName string) *Manager {
-	return &Manager{SessionName: sessionName}
+	s := strings.NewReplacer(".", "-", ":", "-").Replace(sessionName)
+	return &Manager{SessionName: s}
 }
 
 // EnsureSession creates the tmux session if it doesn't exist.
 // If the session already exists, this is a no-op.
-// The first window is named "dashboard" — this is where the TUI will run.
-func (m *Manager) EnsureSession() error {
+// The first window is named "dashboard". When dashboardCmd is non-empty, it is
+// used as the shell command for the initial window (e.g. the self-respawned
+// drem binary that runs the TUI).
+func (m *Manager) EnsureSession(dashboardCmd string) error {
 	// Check if session already exists.
 	_, err := runTmux("has-session", "-t", m.SessionName)
 	if err == nil {
@@ -38,7 +44,11 @@ func (m *Manager) EnsureSession() error {
 	}
 
 	// Session does not exist; create a detached session with a "dashboard" window.
-	_, err = runTmux("new-session", "-d", "-s", m.SessionName, "-n", "dashboard")
+	args := []string{"new-session", "-d", "-s", m.SessionName, "-n", "dashboard"}
+	if dashboardCmd != "" {
+		args = append(args, dashboardCmd)
+	}
+	_, err = runTmux(args...)
 	if err != nil {
 		return fmt.Errorf("ensure session %q: %w", m.SessionName, err)
 	}
@@ -127,7 +137,9 @@ func (m *Manager) ListWindows() ([]WindowInfo, error) {
 	return windows, nil
 }
 
-// FocusWindow switches the tmux client to a specific window.
+// FocusWindow selects a window by name within the managed session. Because the
+// TUI now runs inside the same tmux session as agents, select-window is
+// sufficient (no cross-session switch-client needed).
 func (m *Manager) FocusWindow(name string) error {
 	target := fmt.Sprintf("%s:%s", m.SessionName, name)
 	_, err := runTmux("select-window", "-t", target)
@@ -202,6 +214,18 @@ func (m *Manager) KillSession() error {
 		return fmt.Errorf("kill session %q: %w", m.SessionName, err)
 	}
 	return nil
+}
+
+// Attach replaces the current process with `tmux attach-session -t <session>`.
+// It uses syscall.Exec so the calling process is fully replaced; this function
+// only returns on error.
+func (m *Manager) Attach() error {
+	tmuxBin, err := exec.LookPath("tmux")
+	if err != nil {
+		return fmt.Errorf("find tmux binary: %w", err)
+	}
+	argv := []string{"tmux", "attach-session", "-t", m.SessionName}
+	return syscall.Exec(tmuxBin, argv, syscall.Environ())
 }
 
 // runTmux executes a tmux command and returns stdout. On failure, the error

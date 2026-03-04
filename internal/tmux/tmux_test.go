@@ -29,12 +29,12 @@ func TestEnsureSession(t *testing.T) {
 	t.Cleanup(func() { _ = mgr.KillSession() })
 
 	// First call should create the session.
-	if err := mgr.EnsureSession(); err != nil {
+	if err := mgr.EnsureSession(""); err != nil {
 		t.Fatalf("EnsureSession (create): %v", err)
 	}
 
 	// Second call should be a no-op (session already exists).
-	if err := mgr.EnsureSession(); err != nil {
+	if err := mgr.EnsureSession(""); err != nil {
 		t.Fatalf("EnsureSession (idempotent): %v", err)
 	}
 }
@@ -45,7 +45,7 @@ func TestCreateAndListWindows(t *testing.T) {
 	mgr := NewManager(session)
 	t.Cleanup(func() { _ = mgr.KillSession() })
 
-	if err := mgr.EnsureSession(); err != nil {
+	if err := mgr.EnsureSession(""); err != nil {
 		t.Fatalf("EnsureSession: %v", err)
 	}
 
@@ -82,7 +82,7 @@ func TestCloseWindow(t *testing.T) {
 	mgr := NewManager(session)
 	t.Cleanup(func() { _ = mgr.KillSession() })
 
-	if err := mgr.EnsureSession(); err != nil {
+	if err := mgr.EnsureSession(""); err != nil {
 		t.Fatalf("EnsureSession: %v", err)
 	}
 
@@ -112,7 +112,7 @@ func TestCapturePane(t *testing.T) {
 	mgr := NewManager(session)
 	t.Cleanup(func() { _ = mgr.KillSession() })
 
-	if err := mgr.EnsureSession(); err != nil {
+	if err := mgr.EnsureSession(""); err != nil {
 		t.Fatalf("EnsureSession: %v", err)
 	}
 
@@ -143,7 +143,7 @@ func TestIsWindowAlive(t *testing.T) {
 	mgr := NewManager(session)
 	t.Cleanup(func() { _ = mgr.KillSession() })
 
-	if err := mgr.EnsureSession(); err != nil {
+	if err := mgr.EnsureSession(""); err != nil {
 		t.Fatalf("EnsureSession: %v", err)
 	}
 
@@ -176,7 +176,7 @@ func TestWaitForExit(t *testing.T) {
 	mgr := NewManager(session)
 	t.Cleanup(func() { _ = mgr.KillSession() })
 
-	if err := mgr.EnsureSession(); err != nil {
+	if err := mgr.EnsureSession(""); err != nil {
 		t.Fatalf("EnsureSession: %v", err)
 	}
 
@@ -223,7 +223,7 @@ func TestFocusWindow(t *testing.T) {
 	mgr := NewManager(session)
 	t.Cleanup(func() { _ = mgr.KillSession() })
 
-	if err := mgr.EnsureSession(); err != nil {
+	if err := mgr.EnsureSession(""); err != nil {
 		t.Fatalf("EnsureSession: %v", err)
 	}
 
@@ -242,7 +242,7 @@ func TestKillSession(t *testing.T) {
 	session := testSessionName(t)
 	mgr := NewManager(session)
 
-	if err := mgr.EnsureSession(); err != nil {
+	if err := mgr.EnsureSession(""); err != nil {
 		t.Fatalf("EnsureSession: %v", err)
 	}
 
