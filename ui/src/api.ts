@@ -30,7 +30,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
 // Projects
 export async function getProjects(): Promise<Project[]> {
-  return request<Project[]>("/projects/");
+  return request<Project[]>("/projects");
 }
 
 export async function getProject(id: string): Promise<Project> {
@@ -50,7 +50,7 @@ export async function createTask(data: {
   project_id: string;
   priority?: number;
 }): Promise<Task> {
-  return request<Task>("/tasks/", {
+  return request<Task>("/tasks", {
     method: "POST",
     body: JSON.stringify(data),
   });

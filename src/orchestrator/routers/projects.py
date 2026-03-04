@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 from orchestrator.db import get_db
 from orchestrator.enums import TaskStatus
 from orchestrator.models import Agent, Project, Task
-from orchestrator.schemas import ProjectCreate, ProjectResponse, TaskResponse
+from orchestrator.schemas import AgentResponse, ProjectCreate, ProjectResponse, TaskResponse
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 
@@ -66,6 +66,7 @@ async def list_projects(
 @router.post("", status_code=201)
 async def create_project(
     body: ProjectCreate,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> ProjectResponse:
     """Create a new project. Validates that bare_repo_path exists on disk."""
@@ -85,6 +86,11 @@ async def create_project(
     db.add(project)
     await db.commit()
     await db.refresh(project)
+
+    # Start orchestrator loop for the new project
+    manager = getattr(request.app.state, "orchestrator_manager", None)
+    if manager is not None:
+        await manager.start_for_project(project.id, project.bare_repo_path)
 
     return await _build_project_response(project, db)
 
@@ -157,3 +163,15 @@ async def get_board(
         board[task.status].append(resp)
 
     return board
+
+
+@router.get("/{project_id}/agents")
+async def list_project_agents(
+    project_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> list[AgentResponse]:
+    """List agents for a specific project."""
+    stmt = select(Agent).where(Agent.project_id == project_id)
+    result = await db.execute(stmt)
+    agents = result.scalars().all()
+    return [AgentResponse.model_validate(a) for a in agents]

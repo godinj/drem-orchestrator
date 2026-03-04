@@ -117,7 +117,7 @@ class Orchestrator:
             await self._process_agent_results(session)
 
             # 7. Clean up stale agents
-            await self.agent_runner.cleanup_stale()
+            await self.agent_runner.cleanup_stale_agents()
 
             await session.commit()
 
