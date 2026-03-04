@@ -318,23 +318,37 @@ func (m *Manager) IsAgentSessionAlive(sessionName string) (bool, error) {
 // 500ms. The caller is responsible for calling KillAgentSession to clean up.
 func (m *Manager) WaitForAgentExit(sessionName string) (int, error) {
 	for {
-		out, err := runTmux("list-panes", "-t", sessionName, "-F", "#{pane_dead}:#{pane_dead_status}")
+		exitCode, dead, err := m.checkPaneDead(sessionName)
 		if err != nil {
 			return -1, fmt.Errorf("wait for agent exit %q: %w", sessionName, err)
 		}
-
-		line := strings.TrimSpace(out)
-		parts := strings.SplitN(line, ":", 2)
-		if len(parts) == 2 && parts[0] == "1" {
-			exitCode, parseErr := strconv.Atoi(parts[1])
-			if parseErr != nil {
-				return -1, fmt.Errorf("parse exit code %q for agent session %q: %w", parts[1], sessionName, parseErr)
-			}
+		if dead {
 			return exitCode, nil
 		}
 
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+// checkPaneDead checks whether a tmux pane's process has exited. Returns the
+// exit code, whether the pane is dead, and any error from the tmux query.
+func (m *Manager) checkPaneDead(sessionName string) (exitCode int, dead bool, err error) {
+	out, err := runTmux("list-panes", "-t", sessionName, "-F", "#{pane_dead}:#{pane_dead_status}")
+	if err != nil {
+		return -1, false, err
+	}
+
+	line := strings.TrimSpace(out)
+	parts := strings.SplitN(line, ":", 2)
+	if len(parts) == 2 && parts[0] == "1" {
+		code, parseErr := strconv.Atoi(parts[1])
+		if parseErr != nil {
+			return -1, false, fmt.Errorf("parse exit code %q: %w", parts[1], parseErr)
+		}
+		return code, true, nil
+	}
+
+	return 0, false, nil
 }
 
 // CaptureAgentPane captures the visible content of an agent session's pane.
@@ -374,7 +388,11 @@ func (m *Manager) SendKeys(sessionName string, keys ...string) error {
 // WaitForAgentExit to collect the exit code from pane_dead. The ctx parameter
 // allows the caller to cancel the wait (e.g. on StopAgent).
 func (m *Manager) WaitForAgentIdle(ctx context.Context, sessionName, idleSignalPath string) (int, error) {
-	// Phase 1: poll for the idle signal file.
+	// Phase 1: poll for the idle signal file OR early process exit.
+	// If the user (or something else) already exited the agent, the pane
+	// will be dead and we should skip straight to collecting the exit code
+	// instead of polling forever for a signal file that will never appear.
+	alreadyDead := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -386,7 +404,20 @@ func (m *Manager) WaitForAgentIdle(ctx context.Context, sessionName, idleSignalP
 			break // signal file exists — agent is idle
 		}
 
+		// Check if the pane process already exited.
+		exitCode, dead, err := m.checkPaneDead(sessionName)
+		if err == nil && dead {
+			alreadyDead = true
+			_ = exitCode // will be re-read below for consistency
+			break
+		}
+
 		time.Sleep(500 * time.Millisecond)
+	}
+
+	if alreadyDead {
+		// Process already exited — just collect the exit code.
+		return m.WaitForAgentExit(sessionName)
 	}
 
 	// Phase 2: send /exit to gracefully close the Claude TUI.
