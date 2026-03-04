@@ -61,6 +61,89 @@ class AgentRunner:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._completion_events: dict[uuid.UUID, asyncio.Event] = {}
 
+    @property
+    def can_spawn(self) -> bool:
+        """Whether we can spawn another agent (haven't hit max concurrency)."""
+        return len(self._processes) < self._max_concurrent
+
+    async def get_status(self, agent_id: uuid.UUID) -> str:
+        """Get agent status -- check in-memory process first, fall back to DB."""
+        proc = self._processes.get(agent_id)
+        if proc is not None:
+            if proc.process.returncode is None:
+                return "working"
+            return "idle" if proc.process.returncode == 0 else "dead"
+        # Not tracked in memory — check DB
+        async with self._db_session_factory() as session:
+            agent = await session.get(Agent, agent_id)
+            if agent is not None:
+                return agent.status
+        return "dead"
+
+    async def spawn(
+        self,
+        agent_id: uuid.UUID,
+        task_id: uuid.UUID,
+        worktree_path: Path,
+        branch: str,
+        prompt: str,
+    ) -> None:
+        """Start a subprocess for an already-created Agent record.
+
+        Unlike spawn_agent() which creates everything, this just launches
+        the CLI process and starts monitoring.
+        """
+        await self._semaphore.acquire()
+
+        try:
+            # Write prompt file
+            prompt_path = write_prompt_file(worktree_path, prompt)
+
+            # Prepare log file
+            log_dir = worktree_path / ".claude"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "agent.log"
+
+            # Launch Claude Code process
+            log_file = open(log_path, "w")  # noqa: SIM115
+            process = await asyncio.create_subprocess_exec(
+                str(self._claude_bin),
+                "--agent",
+                str(prompt_path),
+                cwd=worktree_path,
+                stdout=log_file,
+                stderr=log_file,
+            )
+
+            # Track the process
+            agent_process = AgentProcess(
+                agent_id=agent_id,
+                process=process,
+                worktree_path=worktree_path,
+                branch=branch,
+                task_id=task_id,
+                started_at=_utcnow(),
+                log_path=log_path,
+            )
+            self._processes[agent_id] = agent_process
+
+            # Create a completion event
+            self._completion_events[agent_id] = asyncio.Event()
+
+            # Start background monitoring and heartbeat
+            agent_process._monitor_task = asyncio.create_task(
+                self._monitor_agent(agent_id)
+            )
+            agent_process._heartbeat_task = asyncio.create_task(
+                self._heartbeat_loop(agent_id)
+            )
+
+            logger.info("Spawned agent %s (low-level) in %s", agent_id, worktree_path)
+
+        except Exception:
+            self._semaphore.release()
+            raise
+
     async def spawn_agent(
         self,
         task: Task,

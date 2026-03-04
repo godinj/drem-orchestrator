@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -56,10 +57,16 @@ def mock_agent_runner():
     runner.can_spawn = True
     runner.active_count = 0
     runner.spawn = AsyncMock()
+
+    # spawn_agent returns a mock Agent with a real UUID id
+    mock_spawned_agent = MagicMock(spec=Agent)
+    mock_spawned_agent.id = uuid.uuid4()
+    runner.spawn_agent = AsyncMock(return_value=mock_spawned_agent)
+
     runner.stop = AsyncMock()
-    runner.get_status = AsyncMock(return_value=AgentStatus.WORKING)
-    runner.get_output = AsyncMock(return_value="Agent output")
-    runner.cleanup_stale = AsyncMock(return_value=[])
+    runner.get_status = AsyncMock(return_value="working")
+    runner.get_agent_output = AsyncMock(return_value="Agent output")
+    runner.cleanup_stale_agents = AsyncMock(return_value=[])
     runner.list_running = AsyncMock(return_value=[])
     runner._processes = {}
     return runner
@@ -69,7 +76,7 @@ def mock_agent_runner():
 def mock_worktree_manager():
     """Create a mock WorktreeManager."""
     manager = MagicMock(spec=WorktreeManager)
-    manager.bare_repo = MagicMock()
+    manager.bare_repo = Path("/tmp/test.git")
     manager.get_default_branch = AsyncMock(return_value="main")
     manager.create_feature = AsyncMock(
         return_value=WorktreeInfo(

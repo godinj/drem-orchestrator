@@ -30,6 +30,23 @@ uv run pytest
 - `src/orchestrator/merge.py` — Merge orchestration and conflict handling
 - `ui/` — React + Vite task board frontend
 
+## Key Files
+
+| File | Role |
+|------|------|
+| `src/orchestrator/agent_runner.py` | Agent process lifecycle |
+| `src/orchestrator/orchestrator.py` | Main scheduling loop |
+| `src/orchestrator/agent_prompt.py` | Prompt generation (`generate_agent_prompt`, `_planner_instructions`) |
+| `src/orchestrator/worktree.py` | Git worktree management |
+| `src/orchestrator/schemas.py` | `SubtaskPlan` model |
+| `src/orchestrator/models.py` | Task/Agent ORM models |
+| `src/orchestrator/state_machine.py` | `transition_task()` |
+| `src/orchestrator/enums.py` | `AgentType`, `AgentStatus`, `TaskStatus` |
+
+## Prompts
+
+See `docs/planner-agent/prompts/README.md` for the agent execution plan.
+
 ## Conventions
 
 - Async everywhere (asyncio, async SQLAlchemy, async subprocess)
