@@ -58,6 +58,7 @@ class Task(Base):
             "planning",
             "plan_review",
             "in_progress",
+            "paused",
             "testing_ready",
             "manual_testing",
             "merging",

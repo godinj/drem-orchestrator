@@ -40,6 +40,9 @@ class TestValidateTransition:
             (TaskStatus.DONE, TaskStatus.BACKLOG),
             (TaskStatus.DONE, TaskStatus.IN_PROGRESS),
             (TaskStatus.MERGING, TaskStatus.BACKLOG),
+            (TaskStatus.DONE, TaskStatus.PAUSED),
+            (TaskStatus.MERGING, TaskStatus.PAUSED),
+            (TaskStatus.PLAN_REVIEW, TaskStatus.PAUSED),
         ],
     )
     def test_invalid_transitions_return_false(self, current: TaskStatus, target: TaskStatus):
@@ -48,7 +51,9 @@ class TestValidateTransition:
 
 class TestGetAvailableTransitions:
     def test_backlog_transitions(self):
-        assert get_available_transitions(TaskStatus.BACKLOG) == [TaskStatus.PLANNING]
+        transitions = get_available_transitions(TaskStatus.BACKLOG)
+        assert TaskStatus.PLANNING in transitions
+        assert TaskStatus.PAUSED in transitions
 
     def test_plan_review_transitions(self):
         transitions = get_available_transitions(TaskStatus.PLAN_REVIEW)
@@ -82,6 +87,9 @@ class TestHumanGates:
 
     def test_done_is_not_human_gate(self):
         assert is_human_gate(TaskStatus.DONE) is False
+
+    def test_paused_is_not_human_gate(self):
+        assert is_human_gate(TaskStatus.PAUSED) is False
 
     def test_human_gates_set_contents(self):
         assert HUMAN_GATES == {TaskStatus.PLAN_REVIEW, TaskStatus.MANUAL_TESTING}

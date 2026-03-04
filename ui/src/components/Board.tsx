@@ -21,6 +21,8 @@ interface BoardProps {
     feedback?: string,
   ) => Promise<void>;
   onRetryTask: (taskId: string) => Promise<void>;
+  onPauseTask: (taskId: string) => Promise<void>;
+  onResumeTask: (taskId: string) => Promise<void>;
   onSelectTask: (task: Task) => void;
   onToggleAgents: () => void;
   agentCount: number;
@@ -29,6 +31,7 @@ interface BoardProps {
 const COLUMN_BG: Partial<Record<TaskStatus, string>> = {
   plan_review: "bg-blue-900/20",
   testing_ready: "bg-green-900/20",
+  paused: "bg-yellow-900/20",
   manual_testing: "bg-purple-900/15",
   failed: "bg-red-900/15",
 };
@@ -37,6 +40,7 @@ const COLUMN_HEADER_COLORS: Partial<Record<TaskStatus, string>> = {
   plan_review: "text-blue-300",
   testing_ready: "text-green-300",
   manual_testing: "text-purple-300",
+  paused: "text-yellow-300",
   done: "text-green-400",
   failed: "text-red-400",
 };
@@ -44,11 +48,12 @@ const COLUMN_HEADER_COLORS: Partial<Record<TaskStatus, string>> = {
 const COLUMN_COUNT_BG: Partial<Record<TaskStatus, string>> = {
   plan_review: "bg-blue-600",
   testing_ready: "bg-green-600",
+  paused: "bg-yellow-600",
   manual_testing: "bg-purple-600",
 };
 
 // Columns that are displayed but can be collapsed
-const COLLAPSIBLE_COLUMNS: TaskStatus[] = ["done", "failed"];
+const COLLAPSIBLE_COLUMNS: TaskStatus[] = ["paused", "done", "failed"];
 
 export function Board({
   columns,
@@ -60,6 +65,8 @@ export function Board({
   onReviewPlan,
   onSubmitTest,
   onRetryTask,
+  onPauseTask,
+  onResumeTask,
   onSelectTask,
   onToggleAgents,
   agentCount,
@@ -251,6 +258,8 @@ export function Board({
                           onReviewPlan={onReviewPlan}
                           onSubmitTest={onSubmitTest}
                           onRetryTask={onRetryTask}
+                          onPauseTask={onPauseTask}
+                          onResumeTask={onResumeTask}
                           onSelect={onSelectTask}
                         />
                       ))

@@ -108,6 +108,15 @@ export async function transitionTask(
   });
 }
 
+// Pause / Resume
+export async function pauseTask(taskId: string): Promise<Task> {
+  return request<Task>(`/tasks/${taskId}/pause`, { method: "POST" });
+}
+
+export async function resumeTask(taskId: string): Promise<Task> {
+  return request<Task>(`/tasks/${taskId}/resume`, { method: "POST" });
+}
+
 // Agents
 export async function getAgents(projectId: string): Promise<Agent[]> {
   return request<Agent[]>(`/projects/${projectId}/agents`);

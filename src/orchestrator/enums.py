@@ -11,6 +11,7 @@ class TaskStatus(str, enum.Enum):
     TESTING_READY = "testing_ready"
     MANUAL_TESTING = "manual_testing"  # human gate: approve feature
     MERGING = "merging"
+    PAUSED = "paused"
     DONE = "done"
     FAILED = "failed"
 

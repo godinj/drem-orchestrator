@@ -187,6 +187,8 @@ function AppContent() {
             onReviewPlan={board.reviewPlan}
             onSubmitTest={board.submitTest}
             onRetryTask={board.retryTask}
+            onPauseTask={board.pauseTask}
+            onResumeTask={board.resumeTask}
             onSelectTask={setSelectedTask}
             onToggleAgents={() => setShowAgentSidebar(!showAgentSidebar)}
             agentCount={board.agents.length}
@@ -218,6 +220,8 @@ function AppContent() {
           onReviewPlan={board.reviewPlan}
           onSubmitTest={board.submitTest}
           onRetryTask={board.retryTask}
+          onPauseTask={board.pauseTask}
+          onResumeTask={board.resumeTask}
         />
       )}
     </div>

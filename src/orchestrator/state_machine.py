@@ -11,13 +11,14 @@ if TYPE_CHECKING:
     from orchestrator.models import Task
 
 VALID_TRANSITIONS: dict[TaskStatus, list[TaskStatus]] = {
-    TaskStatus.BACKLOG: [TaskStatus.PLANNING],
-    TaskStatus.PLANNING: [TaskStatus.PLAN_REVIEW, TaskStatus.FAILED],
+    TaskStatus.BACKLOG: [TaskStatus.PLANNING, TaskStatus.PAUSED],
+    TaskStatus.PLANNING: [TaskStatus.PLAN_REVIEW, TaskStatus.FAILED, TaskStatus.PAUSED],
     TaskStatus.PLAN_REVIEW: [TaskStatus.IN_PROGRESS, TaskStatus.PLANNING],  # approve or reject
-    TaskStatus.IN_PROGRESS: [TaskStatus.TESTING_READY, TaskStatus.FAILED],
+    TaskStatus.IN_PROGRESS: [TaskStatus.TESTING_READY, TaskStatus.FAILED, TaskStatus.PAUSED],
     TaskStatus.TESTING_READY: [TaskStatus.MANUAL_TESTING],
     TaskStatus.MANUAL_TESTING: [TaskStatus.MERGING, TaskStatus.IN_PROGRESS],  # pass or fail
     TaskStatus.MERGING: [TaskStatus.DONE, TaskStatus.FAILED],
+    TaskStatus.PAUSED: [TaskStatus.BACKLOG, TaskStatus.PLANNING, TaskStatus.IN_PROGRESS],  # resume
     TaskStatus.DONE: [],
     TaskStatus.FAILED: [TaskStatus.BACKLOG],  # retry
 }

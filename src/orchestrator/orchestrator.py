@@ -41,6 +41,7 @@ HUMAN_OWNED_STATES = [
     TaskStatus.PLAN_REVIEW,
     TaskStatus.TESTING_READY,
     TaskStatus.MANUAL_TESTING,
+    TaskStatus.PAUSED,
 ]
 
 
@@ -122,10 +123,33 @@ class Orchestrator:
             for task in merging_tasks:
                 await self._execute_merge(session, task)
 
-            # 7. Clean up stale agents
+            # 7. Stop agents on paused tasks
+            await self._handle_paused_tasks(session)
+
+            # 8. Clean up stale agents
             await self.agent_runner.cleanup_stale_agents()
 
             await session.commit()
+
+    async def _handle_paused_tasks(self, session: AsyncSession) -> None:
+        """Stop agents assigned to PAUSED tasks and clear their assignment."""
+        result = await session.execute(
+            select(Task).where(
+                Task.status == TaskStatus.PAUSED.value,
+                Task.assigned_agent_id.isnot(None),
+            )
+        )
+        for task in result.scalars().all():
+            agent = await session.get(Agent, task.assigned_agent_id)
+            if agent is not None:
+                try:
+                    await self.agent_runner.stop_agent(agent.id)
+                except Exception:
+                    logger.exception(f"Failed to stop agent {agent.id} for paused task {task.id}")
+                agent.status = AgentStatus.IDLE.value
+                agent.current_task_id = None
+            task.assigned_agent_id = None
+            logger.info(f"Task {task.id}: Cleared agent for paused task")
 
     # ---- Task queries ----
 

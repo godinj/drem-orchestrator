@@ -3,6 +3,7 @@ export type TaskStatus =
   | "planning"
   | "plan_review"
   | "in_progress"
+  | "paused"
   | "testing_ready"
   | "manual_testing"
   | "merging"
@@ -89,6 +90,7 @@ export const COLUMN_ORDER: TaskStatus[] = [
   "planning",
   "plan_review",
   "in_progress",
+  "paused",
   "testing_ready",
   "manual_testing",
   "merging",
@@ -101,6 +103,7 @@ export const COLUMN_LABELS: Record<TaskStatus, string> = {
   planning: "Planning",
   plan_review: "Plan Review",
   in_progress: "In Progress",
+  paused: "Paused",
   testing_ready: "Testing Ready",
   manual_testing: "Manual Testing",
   merging: "Merging",

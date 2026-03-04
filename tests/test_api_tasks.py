@@ -316,3 +316,114 @@ async def test_task_events(client: AsyncClient, project_id: uuid.UUID) -> None:
     event_types = [e["event_type"] for e in events]
     assert "status_change" in event_types
     assert "plan_approved" in event_types
+
+
+async def test_pause_planning_task(client: AsyncClient, project_id: uuid.UUID) -> None:
+    """Pause a task in PLANNING status, verify status and context."""
+    data = await _create_task(client, project_id)
+    task_id = data["id"]
+
+    # backlog -> planning
+    await client.post(
+        f"/api/tasks/{task_id}/transition",
+        json={"target_status": "planning"},
+    )
+
+    # pause
+    resp = await client.post(f"/api/tasks/{task_id}/pause")
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["status"] == "paused"
+    assert result["context"]["paused_from_status"] == "planning"
+
+
+async def test_resume_paused_task(client: AsyncClient, project_id: uuid.UUID) -> None:
+    """Pause then resume a task, verify restoration to previous status."""
+    data = await _create_task(client, project_id)
+    task_id = data["id"]
+
+    # backlog -> planning
+    await client.post(
+        f"/api/tasks/{task_id}/transition",
+        json={"target_status": "planning"},
+    )
+
+    # pause
+    resp = await client.post(f"/api/tasks/{task_id}/pause")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "paused"
+
+    # resume
+    resp = await client.post(f"/api/tasks/{task_id}/resume")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "planning"
+
+
+async def test_pause_invalid_state(client: AsyncClient, project_id: uuid.UUID) -> None:
+    """Pause from DONE returns 400."""
+    data = await _create_task(client, project_id)
+    task_id = data["id"]
+
+    # Walk to DONE
+    await client.post(f"/api/tasks/{task_id}/transition", json={"target_status": "planning"})
+    plan = [{"title": "S", "description": "D", "agent_type": "coder", "estimated_files": ["f.py"]}]
+    await client.post(f"/api/tasks/{task_id}/plan", json={"plan": plan})
+    await client.post(f"/api/tasks/{task_id}/plan-review", json={"approved": True})
+    await client.post(f"/api/tasks/{task_id}/transition", json={"target_status": "testing_ready"})
+    await client.post(f"/api/tasks/{task_id}/transition", json={"target_status": "manual_testing"})
+    await client.post(f"/api/tasks/{task_id}/test-result", json={"passed": True})
+    await client.post(f"/api/tasks/{task_id}/transition", json={"target_status": "done"})
+
+    # Try to pause from DONE
+    resp = await client.post(f"/api/tasks/{task_id}/pause")
+    assert resp.status_code == 400
+
+
+async def test_pause_cascades_to_subtasks(client: AsyncClient, project_id: uuid.UUID) -> None:
+    """Pausing a parent cascades pause to active subtasks."""
+    parent_data = await _create_task(client, project_id, title="Parent")
+    parent_id = parent_data["id"]
+
+    # Create subtasks
+    sub1 = await _create_task(client, project_id, title="Sub 1", parent_task_id=uuid.UUID(parent_id))
+    sub2 = await _create_task(client, project_id, title="Sub 2", parent_task_id=uuid.UUID(parent_id))
+
+    # Advance parent to planning
+    await client.post(f"/api/tasks/{parent_id}/transition", json={"target_status": "planning"})
+
+    # Pause parent
+    resp = await client.post(f"/api/tasks/{parent_id}/pause")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "paused"
+
+    # Check subtasks are paused
+    sub1_resp = await client.get(f"/api/tasks/{sub1['id']}")
+    assert sub1_resp.json()["status"] == "paused"
+    assert sub1_resp.json()["context"]["paused_from_status"] == "backlog"
+
+    sub2_resp = await client.get(f"/api/tasks/{sub2['id']}")
+    assert sub2_resp.json()["status"] == "paused"
+
+
+async def test_resume_cascades_subtasks(client: AsyncClient, project_id: uuid.UUID) -> None:
+    """Resume restores subtask statuses."""
+    parent_data = await _create_task(client, project_id, title="Parent")
+    parent_id = parent_data["id"]
+
+    # Create subtask
+    sub = await _create_task(client, project_id, title="Sub", parent_task_id=uuid.UUID(parent_id))
+
+    # Advance parent to planning
+    await client.post(f"/api/tasks/{parent_id}/transition", json={"target_status": "planning"})
+
+    # Pause parent (cascades to subtask)
+    await client.post(f"/api/tasks/{parent_id}/pause")
+
+    # Resume parent (cascades to subtask)
+    resp = await client.post(f"/api/tasks/{parent_id}/resume")
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "planning"
+
+    # Check subtask is restored
+    sub_resp = await client.get(f"/api/tasks/{sub['id']}")
+    assert sub_resp.json()["status"] == "backlog"

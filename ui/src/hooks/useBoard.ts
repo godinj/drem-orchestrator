@@ -147,6 +147,20 @@ export function useBoard(projectId: string | null) {
     },
   });
 
+  const pauseTaskMutation = useMutation({
+    mutationFn: (taskId: string) => api.pauseTask(taskId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["board", projectId] });
+    },
+  });
+
+  const resumeTaskMutation = useMutation({
+    mutationFn: (taskId: string) => api.resumeTask(taskId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["board", projectId] });
+    },
+  });
+
   const columns = boardQuery.data ?? emptyColumns();
 
   return {
@@ -175,6 +189,12 @@ export function useBoard(projectId: string | null) {
     },
     retryTask: async (taskId: string) => {
       await retryTaskMutation.mutateAsync(taskId);
+    },
+    pauseTask: async (taskId: string) => {
+      await pauseTaskMutation.mutateAsync(taskId);
+    },
+    resumeTask: async (taskId: string) => {
+      await resumeTaskMutation.mutateAsync(taskId);
     },
   };
 }

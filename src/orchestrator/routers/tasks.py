@@ -460,6 +460,136 @@ async def submit_test_result(
     return resp
 
 
+PAUSABLE_STATUSES = {TaskStatus.BACKLOG, TaskStatus.PLANNING, TaskStatus.IN_PROGRESS}
+
+
+@router.post("/{task_id}/pause")
+async def pause_task(
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> TaskResponse:
+    """Pause a task, stopping agent work and preventing scheduling.
+
+    Saves the current status in context["paused_from_status"] so resume
+    can restore it. Cascades to active subtasks.
+    """
+    stmt = (
+        select(Task)
+        .where(Task.id == task_id)
+        .options(selectinload(Task.subtasks))
+    )
+    result = await db.execute(stmt)
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    current = TaskStatus(task.status)
+    if current not in PAUSABLE_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot pause task in {current.value!r} status. "
+            f"Pausable statuses: {[s.value for s in PAUSABLE_STATUSES]}",
+        )
+
+    # Save current status for resume
+    task.context = task.context or {}
+    task.context["paused_from_status"] = current.value
+
+    event = transition_task(task, TaskStatus.PAUSED, actor="human", details={"paused_from": current.value})
+    db.add(event)
+
+    # Cascade: pause active subtasks
+    subtask_stmt = select(Task).where(
+        Task.parent_task_id == task_id,
+        Task.status.in_([s.value for s in PAUSABLE_STATUSES]),
+    )
+    subtask_result = await db.execute(subtask_stmt)
+    for subtask in subtask_result.scalars().all():
+        subtask.context = subtask.context or {}
+        subtask.context["paused_from_status"] = subtask.status
+        sub_event = transition_task(subtask, TaskStatus.PAUSED, actor="human", details={"paused_from": subtask.status, "cascade": True})
+        db.add(sub_event)
+
+    await db.commit()
+    await db.refresh(task)
+
+    # Reload with subtasks
+    stmt = (
+        select(Task)
+        .where(Task.id == task.id)
+        .options(selectinload(Task.subtasks))
+    )
+    result = await db.execute(stmt)
+    task = result.scalar_one()
+
+    resp = _task_response(task)
+    await broadcast(task.project_id, {"type": "task_updated", "task": resp.model_dump(mode="json")})
+    return resp
+
+
+@router.post("/{task_id}/resume")
+async def resume_task(
+    task_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> TaskResponse:
+    """Resume a paused task, restoring it to its previous status.
+
+    Reads context["paused_from_status"] for the target state (fallback: BACKLOG).
+    Cascades to paused subtasks.
+    """
+    stmt = (
+        select(Task)
+        .where(Task.id == task_id)
+        .options(selectinload(Task.subtasks))
+    )
+    result = await db.execute(stmt)
+    task = result.scalar_one_or_none()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    current = TaskStatus(task.status)
+    if current != TaskStatus.PAUSED:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot resume task in {current.value!r} status. Task must be paused.",
+        )
+
+    # Determine resume target
+    paused_from = (task.context or {}).get("paused_from_status", TaskStatus.BACKLOG.value)
+    target = TaskStatus(paused_from)
+
+    event = transition_task(task, target, actor="human", details={"resumed_to": target.value})
+    db.add(event)
+
+    # Cascade: resume paused subtasks
+    subtask_stmt = select(Task).where(
+        Task.parent_task_id == task_id,
+        Task.status == TaskStatus.PAUSED.value,
+    )
+    subtask_result = await db.execute(subtask_stmt)
+    for subtask in subtask_result.scalars().all():
+        sub_target_value = (subtask.context or {}).get("paused_from_status", TaskStatus.BACKLOG.value)
+        sub_target = TaskStatus(sub_target_value)
+        sub_event = transition_task(subtask, sub_target, actor="human", details={"resumed_to": sub_target.value, "cascade": True})
+        db.add(sub_event)
+
+    await db.commit()
+    await db.refresh(task)
+
+    # Reload with subtasks
+    stmt = (
+        select(Task)
+        .where(Task.id == task.id)
+        .options(selectinload(Task.subtasks))
+    )
+    result = await db.execute(stmt)
+    task = result.scalar_one()
+
+    resp = _task_response(task)
+    await broadcast(task.project_id, {"type": "task_updated", "task": resp.model_dump(mode="json")})
+    return resp
+
+
 @router.get("/{task_id}/events")
 async def list_task_events(
     task_id: uuid.UUID,
