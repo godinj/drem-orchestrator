@@ -216,12 +216,19 @@ class Orchestrator:
         # Create feature worktree if not already created
         feature_name = _task_feature_name(task)
         if task.worktree_branch is None:
-            try:
-                wt_info = await self.worktree_manager.create_feature(feature_name)
-                task.worktree_branch = wt_info.branch
-            except Exception:
-                logger.exception(f"Task {task.id}: Failed to create feature worktree")
-                return
+            branch = self.worktree_manager._ensure_prefix(feature_name)
+            worktree_dir = self.worktree_manager.bare_repo / branch
+            if worktree_dir.exists():
+                # Worktree exists from a previous attempt — reuse it
+                task.worktree_branch = branch
+                logger.info(f"Task {task.id}: Reusing existing worktree {branch}")
+            else:
+                try:
+                    wt_info = await self.worktree_manager.create_feature(feature_name)
+                    task.worktree_branch = wt_info.branch
+                except Exception:
+                    logger.exception(f"Task {task.id}: Failed to create feature worktree")
+                    return
 
         # Build planner prompt
         prompt = generate_agent_prompt(

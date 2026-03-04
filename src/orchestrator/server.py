@@ -47,11 +47,14 @@ class OrchestratorManager:
             claude_bin=Path(settings.CLAUDE_BIN),
             max_concurrent=settings.MAX_CONCURRENT_AGENTS,
         )
+        async def _project_broadcast(event: dict) -> None:
+            await broadcast(project_id, event)
+
         orchestrator = Orchestrator(
             agent_runner=agent_runner,
             worktree_manager=wt_manager,
             db_session_factory=async_session,
-            broadcast_fn=broadcast,
+            broadcast_fn=_project_broadcast,
         )
         self._orchestrators[project_id] = orchestrator
         self._tasks[project_id] = asyncio.create_task(

@@ -106,11 +106,13 @@ class AgentRunner:
 
             # Launch Claude Code process
             log_file = open(log_path, "w")  # noqa: SIM115
+            prompt_file = open(prompt_path)  # noqa: SIM115
             process = await asyncio.create_subprocess_exec(
                 str(self._claude_bin),
-                "--agent",
-                str(prompt_path),
+                "-p",
+                "--dangerously-skip-permissions",
                 cwd=worktree_path,
+                stdin=prompt_file,
                 stdout=log_file,
                 stderr=log_file,
             )
@@ -198,11 +200,13 @@ class AgentRunner:
 
             # Launch Claude Code process
             log_file = open(log_path, "w")  # noqa: SIM115
+            prompt_file = open(prompt_path)  # noqa: SIM115
             process = await asyncio.create_subprocess_exec(
                 str(self._claude_bin),
-                "--agent",
-                str(prompt_path),
+                "-p",
+                "--dangerously-skip-permissions",
                 cwd=worktree_info.path,
+                stdin=prompt_file,
                 stdout=log_file,
                 stderr=log_file,
             )
