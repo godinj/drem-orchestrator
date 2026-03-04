@@ -228,9 +228,17 @@ class Orchestrator:
             })
             return
 
-        # Planner already assigned and running — wait for it
+        # Planner already assigned — verify it's still alive
         if task.assigned_agent_id is not None:
-            return
+            agent = await session.get(Agent, task.assigned_agent_id)
+            if agent is not None and agent.status == AgentStatus.WORKING.value:
+                return  # Still running, wait for it
+            # Agent missing or no longer working — clear stale reference
+            logger.warning(
+                f"Task {task.id}: Clearing stale planner agent ref "
+                f"{task.assigned_agent_id} (agent {'missing' if agent is None else agent.status})"
+            )
+            task.assigned_agent_id = None
 
         # Check capacity
         if not self.agent_runner.can_spawn:
