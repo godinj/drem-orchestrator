@@ -35,6 +35,7 @@ type DetailModel struct {
 	width    int
 	height   int
 
+	scrollOffset int  // vertical scroll offset for detail content
 	deleteMode   bool // true when selecting an item to delete
 	deleteCursor int  // index into deletableItems()
 }
@@ -280,6 +281,17 @@ func (d DetailModel) View() string {
 	if actions != "" {
 		sections = append(sections, "")
 		sections = append(sections, helpStyle.Render(actions))
+	}
+
+	// Apply vertical scrolling.
+	if d.height > 0 && len(sections) > d.height {
+		if d.scrollOffset > len(sections)-d.height {
+			d.scrollOffset = len(sections) - d.height
+		}
+		sections = sections[d.scrollOffset:]
+		if len(sections) > d.height {
+			sections = sections[:d.height]
+		}
 	}
 
 	return strings.Join(sections, "\n")

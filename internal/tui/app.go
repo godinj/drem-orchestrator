@@ -343,7 +343,7 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleDetailKeys handles keys when the detail panel is focused.
-// Task-action keys work the same as the board; j/k scroll the board selection.
+// Task-action keys work the same as the board; j/k scroll the detail content.
 func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.detail.deleteMode {
 		return m.handleDeleteModeKeys(msg)
@@ -358,11 +358,14 @@ func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "shift+tab", "btab":
 		m.focus = FocusAgents
 		return m, nil
-	case "j", "down", "k", "up":
-		var cmd tea.Cmd
-		m.board, cmd = m.board.Update(msg)
-		m.updateDetail()
-		return m, cmd
+	case "j", "down":
+		m.detail.scrollOffset++
+		return m, nil
+	case "k", "up":
+		if m.detail.scrollOffset > 0 {
+			m.detail.scrollOffset--
+		}
+		return m, nil
 	case "a":
 		return m.handleApprove()
 	case "r":
@@ -897,6 +900,9 @@ func (m *Model) updatePanelSizes() {
 // updateDetail refreshes the detail panel based on the currently selected task.
 func (m *Model) updateDetail() {
 	selected := m.board.Selected()
+	if selected == nil || m.detail.task == nil || selected.ID != m.detail.task.ID {
+		m.detail.scrollOffset = 0
+	}
 	m.detail.task = selected
 	m.detail.logText = ""
 	// Update agent task filter from selected task and known subtasks.
