@@ -278,8 +278,14 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 			return o.db.Save(task).Error
 		}
 
-		// If agent is dead or idle (finished without plan), clear and maybe retry.
+		// If agent is dead or idle (finished without plan), clean up its
+		// worktree, clear assignment, and maybe retry.
 		if ag.Status == model.AgentDead || ag.Status == model.AgentIdle {
+			if ag.WorktreeBranch != "" {
+				if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+					o.logger.Warn("cleanup dead planner worktree failed", "agent_id", ag.ID, "error", err)
+				}
+			}
 			task.AssignedAgentID = nil
 			retries := o.incrementRetryCount(task)
 			if retries >= MaxPlannerRetries {
@@ -803,13 +809,10 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 			}
 		}
 
-		// Create agent worktree.
+		// Use the feature integration worktree for prompt generation context.
+		// The actual agent worktree is created inside SpawnAgent.
 		featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
-		wtInfo, err := o.worktree.CreateAgentWorktree(featureName)
-		if err != nil {
-			o.logger.Error("create agent worktree failed", "subtask_id", sub.ID, "error", err)
-			continue
-		}
+		featureDir := o.worktree.FeatureWorktreePath(featureName)
 
 		// Load project for prompt generation.
 		var project model.Project
@@ -830,12 +833,12 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 			Task:         sub,
 			Project:      &project,
 			AgentType:    agentType,
-			WorktreePath: wtInfo.Path,
+			WorktreePath: featureDir,
 			Comments:     subComments,
 			ParentCtx:    parentCtx,
 		})
 
-		// Spawn agent.
+		// Spawn agent (creates worktree internally).
 		ag, err := o.runner.SpawnAgent(sub, featureName, agentType, agentPrompt)
 		if err != nil {
 			o.logger.Error("spawn agent for subtask failed", "subtask_id", sub.ID, "error", err)
