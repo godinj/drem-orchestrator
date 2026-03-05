@@ -194,6 +194,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case reconcileMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("reconcile: %w", msg.err)
+		} else if msg.fixes > 0 {
+			m.err = fmt.Errorf("reconcile: applied %d fixes", msg.fixes)
+		}
+		return m, m.refreshData()
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -265,6 +273,8 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDeleteComment()
 	case "S":
 		return m.handleSupervisorEval()
+	case "X":
+		return m.handleReconcile()
 	case "A":
 		m.agents.showArchived = !m.agents.showArchived
 		m.agents.clampAgentCursor()
@@ -566,6 +576,21 @@ func (m Model) handleSupervisorEval() (tea.Model, tea.Cmd) {
 	}
 }
 
+// reconcileMsg carries the result of an on-demand Reconcile call.
+type reconcileMsg struct {
+	fixes int
+	err   error
+}
+
+// handleReconcile runs the consistency audit on demand.
+func (m Model) handleReconcile() (tea.Model, tea.Cmd) {
+	orch := m.orch
+	return m, func() tea.Msg {
+		fixes, err := orch.Reconcile()
+		return reconcileMsg{fixes: fixes, err: err}
+	}
+}
+
 // View renders the entire TUI layout.
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
@@ -725,7 +750,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  S:supervisor  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  S:supervisor  X:reconcile  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.

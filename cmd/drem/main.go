@@ -131,7 +131,7 @@ func main() {
 	}
 
 	events := make(chan orchestrator.Event, 100)
-	orch := orchestrator.New(database, runner, wt, merger, mem, sup, project.ID, events, cfg.TickInterval, cfg.StaleTimeout)
+	orch := orchestrator.New(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, events, cfg.TickInterval, cfg.StaleTimeout)
 
 	// Start orchestrator in background.
 	ctx, cancel := context.WithCancel(context.Background())
