@@ -12,14 +12,13 @@ import (
 
 // DetailModel renders task details and available actions.
 type DetailModel struct {
-	task           *model.Task
-	subtasks       []model.Task
-	agent          *model.Agent
-	comments       []model.TaskComment
-	logText        string
-	supervisorText string
-	width          int
-	height         int
+	task     *model.Task
+	subtasks []model.Task
+	agent    *model.Agent
+	comments []model.TaskComment
+	logText  string
+	width    int
+	height   int
 }
 
 // NewDetailModel creates an empty DetailModel.
@@ -119,16 +118,6 @@ func (d DetailModel) View() string {
 				body = body[:maxBody-1] + "\u2026"
 			}
 			sections = append(sections, fmt.Sprintf("%s[%s] %s", prefix, c.Author, body))
-		}
-	}
-
-	// Supervisor evaluation output.
-	if d.supervisorText != "" {
-		supStyle := lipgloss.NewStyle().Foreground(colorWarning)
-		sections = append(sections, supStyle.Render("Supervisor:"))
-		supLines := strings.Split(d.supervisorText, "\n")
-		for _, line := range supLines {
-			sections = append(sections, "  "+line)
 		}
 	}
 

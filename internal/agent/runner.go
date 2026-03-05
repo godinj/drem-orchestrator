@@ -145,6 +145,22 @@ func (r *Runner) buildAgentNames(task *model.Task, agentType model.AgentType, ag
 	return name, session
 }
 
+// TmuxSessionName returns the dashboard tmux session name used as a namespace
+// prefix for agent and supervisor sessions.
+func (r *Runner) TmuxSessionName() string {
+	return r.tmux.SessionName
+}
+
+// TmuxManager returns the underlying tmux Manager.
+func (r *Runner) TmuxManager() *tmux.Manager {
+	return r.tmux
+}
+
+// ClaudeBin returns the path to the Claude binary.
+func (r *Runner) ClaudeBin() string {
+	return r.claudeBin
+}
+
 // CanSpawn returns whether there is capacity for another agent.
 func (r *Runner) CanSpawn() bool {
 	r.mu.Lock()

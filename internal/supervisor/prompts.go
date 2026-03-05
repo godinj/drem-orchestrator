@@ -94,40 +94,34 @@ Analyze the conflicts and suggest a resolution strategy. Return ONLY a JSON obje
 	)
 }
 
-// OnDemandPrompt builds a prompt for an on-demand supervisor evaluation of a
-// task, giving the user an analysis and recommended next steps.
-func OnDemandPrompt(taskTitle, taskDesc, status, branch, gitStatus, contextJSON string) string {
-	return fmt.Sprintf(`You are a supervisor evaluating the current state of a task in a multi-agent orchestrator.
+// OnDemandPrompt builds a system prompt for an interactive supervisor session.
+// Unlike other prompts, this one is used with the Claude TUI (not pipe mode),
+// so it provides context and instructions for an interactive conversation.
+func OnDemandPrompt(taskTitle, taskDesc, status, branch string) string {
+	return fmt.Sprintf(`You are a supervisor for the Drem orchestrator. You have been spawned to interactively analyze and fix issues with a task.
 
-## Task
+## Task Context
 - **Title**: %s
 - **Description**: %s
 - **Status**: %s
 - **Branch**: %s
 
-## Git Status (worktree)
-%s
+## Your Role
+You are working in the task's worktree. You can read files, run git commands, edit code, and take any actions needed to diagnose and resolve issues.
 
-## Task Context
-%s
+Start by assessing the current state: run git status, check for uncommitted changes, merge conflicts, build errors, or any other problems. Then present your findings and ask what the user wants you to do.
 
-## Instructions
-Analyze the current state of this task and its worktree. Identify any issues (stale branches, uncommitted changes, merge conflicts, orphaned work, etc.) and recommend concrete next steps to resolve them.
-
-Return ONLY a JSON object:
-
-{
-  "summary": "brief assessment of the task state",
-  "issues": ["issue1", "issue2"],
-  "recommended_steps": ["step1", "step2"],
-  "severity": "low|medium|high|critical"
-}`,
+Common tasks you may be asked to perform:
+- Clean up stale or orphaned branches
+- Resolve merge conflicts
+- Fix build errors after a failed merge
+- Reorganize or squash messy commit history
+- Investigate why an agent task failed
+- Make targeted code fixes`,
 		taskTitle,
-		truncateForPrompt(taskDesc, 1000),
+		truncateForPrompt(taskDesc, 2000),
 		status,
 		branch,
-		truncateForPrompt(gitStatus, 3000),
-		truncateForPrompt(contextJSON, 2000),
 	)
 }
 

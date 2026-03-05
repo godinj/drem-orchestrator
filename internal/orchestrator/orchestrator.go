@@ -1313,52 +1313,63 @@ func (o *Orchestrator) CreateTask(title, description string, priority int) (*mod
 	return task, nil
 }
 
-// SupervisorEvaluate runs an on-demand supervisor evaluation for the given
-// task. It gathers task metadata and worktree git status, then calls the
-// supervisor for analysis. Returns nil evaluation when no supervisor is configured.
-func (o *Orchestrator) SupervisorEvaluate(taskID uuid.UUID) (*supervisor.OnDemandEvaluation, error) {
-	if o.supervisor == nil {
-		return nil, fmt.Errorf("supervisor not configured")
-	}
-
+// SpawnSupervisorSession creates an interactive Claude session in a tmux
+// session for on-demand supervisor work on a task. The session runs in the
+// task's integration worktree with a system prompt containing task context.
+// Returns the tmux session name so the TUI can switch to it.
+func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
-		return nil, fmt.Errorf("supervisor evaluate: find task: %w", err)
+		return "", fmt.Errorf("spawn supervisor: find task: %w", err)
 	}
 
-	// Gather git status from the worktree if available.
-	var gitStatus string
+	// Determine the working directory. Prefer the task's integration worktree;
+	// fall back to the default branch worktree.
+	cwd := filepath.Join(o.worktree.BareRepoPath, o.worktree.DefaultBranch)
 	if task.WorktreeBranch != "" {
-		wtPath := filepath.Join(o.worktree.BareRepoPath, task.WorktreeBranch, "integration")
-		if status, err := worktree.RunGit([]string{"status", "--short"}, wtPath); err == nil {
-			gitStatus = status
-		}
-		if logOutput, err := worktree.RunGit([]string{"log", "--oneline", "-10"}, wtPath); err == nil {
-			gitStatus += "\n\nRecent commits:\n" + logOutput
+		candidate := filepath.Join(o.worktree.BareRepoPath, task.WorktreeBranch, "integration")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			cwd = candidate
 		}
 	}
 
-	// Serialize task context.
-	contextJSON := "{}"
-	if task.Context != nil {
-		if data, err := json.Marshal(task.Context); err == nil {
-			contextJSON = string(data)
-		}
-	}
-
+	// Build the system prompt with task context.
 	prompt := supervisor.OnDemandPrompt(
 		task.Title, task.Description,
 		string(task.Status), task.WorktreeBranch,
-		gitStatus, contextJSON,
 	)
 
-	var eval supervisor.OnDemandEvaluation
-	if err := o.supervisor.EvaluateJSON(context.Background(), prompt, &eval); err != nil {
-		return nil, fmt.Errorf("supervisor evaluate: %w", err)
+	// Write prompt to a temp file in the worktree.
+	claudeDir := filepath.Join(cwd, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		return "", fmt.Errorf("spawn supervisor: mkdir .claude: %w", err)
+	}
+	promptPath := filepath.Join(claudeDir, "supervisor-prompt.md")
+	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
+		return "", fmt.Errorf("spawn supervisor: write prompt: %w", err)
 	}
 
-	o.logger.Info("supervisor on-demand evaluation", "task_id", taskID, "severity", eval.Severity)
-	return &eval, nil
+	// Build session name under the dashboard's namespace.
+	shortID := taskID.String()[:8]
+	sessionName := fmt.Sprintf("%s/supervisor %s", o.runner.TmuxSessionName(), shortID)
+	sessionName = strings.ReplaceAll(sessionName, ".", "-")
+	sessionName = strings.ReplaceAll(sessionName, ":", "-")
+
+	// Kill any existing supervisor session for this task.
+	tmuxMgr := o.runner.TmuxManager()
+	_ = tmuxMgr.KillAgentSession(sessionName)
+
+	// Build the claude command.
+	claudeBin := o.runner.ClaudeBin()
+	cmd := fmt.Sprintf("%s --dangerously-skip-permissions \"$(cat %s)\"", claudeBin, promptPath)
+
+	// Create the tmux session.
+	if err := tmuxMgr.CreateAgentSession(sessionName, cmd, cwd); err != nil {
+		return "", fmt.Errorf("spawn supervisor: create session: %w", err)
+	}
+
+	o.logger.Info("supervisor session spawned", "task_id", taskID, "session", sessionName)
+	return sessionName, nil
 }
 
 // ---------------------------------------------------------------------------
