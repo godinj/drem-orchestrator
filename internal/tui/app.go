@@ -690,10 +690,11 @@ func (m *Model) updateDetail() {
 	// Subtasks and agent are loaded asynchronously via refreshData.
 }
 
-// clampCursor ensures the board cursor doesn't exceed the task count.
+// clampCursor ensures the board cursor doesn't exceed the display list length.
 func (m *Model) clampCursor() {
-	if m.board.cursor >= len(m.board.tasks) {
-		m.board.cursor = len(m.board.tasks) - 1
+	count := len(m.board.buildDisplayList())
+	if m.board.cursor >= count {
+		m.board.cursor = count - 1
 	}
 	if m.board.cursor < 0 {
 		m.board.cursor = 0

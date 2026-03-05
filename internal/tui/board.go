@@ -7,9 +7,18 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
+
+// displayEntry is one row in the rendered task list, holding the task and
+// optional tree-connector metadata for child tasks.
+type displayEntry struct {
+	task      model.Task
+	isChild   bool
+	connector string // e.g. "├─ " or "└─ "
+}
 
 // statusSortOrder controls the display order of tasks: actionable first,
 // then human gates, then terminal states.
@@ -39,13 +48,86 @@ func NewBoardModel() BoardModel {
 	return BoardModel{}
 }
 
+// buildDisplayList creates a flat display list where subtasks appear
+// immediately after their parent with tree connectors (├─ / └─).
+// Root tasks (ParentTaskID == nil) are sorted by status priority then
+// priority. Each parent's children are sorted the same way.
+func (b BoardModel) buildDisplayList() []displayEntry {
+	if len(b.tasks) == 0 {
+		return nil
+	}
+
+	// Separate roots from children.
+	var roots []model.Task
+	children := make(map[uuid.UUID][]model.Task) // parentID -> children
+	for _, t := range b.tasks {
+		if t.ParentTaskID == nil {
+			roots = append(roots, t)
+		} else {
+			children[*t.ParentTaskID] = append(children[*t.ParentTaskID], t)
+		}
+	}
+
+	taskSort := func(s []model.Task) {
+		sort.SliceStable(s, func(i, j int) bool {
+			oi := statusSortOrder[s[i].Status]
+			oj := statusSortOrder[s[j].Status]
+			if oi != oj {
+				return oi < oj
+			}
+			return s[i].Priority > s[j].Priority
+		})
+	}
+
+	taskSort(roots)
+	for k := range children {
+		c := children[k]
+		taskSort(c)
+		children[k] = c
+	}
+
+	var entries []displayEntry
+	for _, root := range roots {
+		entries = append(entries, displayEntry{task: root})
+		kids := children[root.ID]
+		for i, kid := range kids {
+			connector := "├─ "
+			if i == len(kids)-1 {
+				connector = "└─ "
+			}
+			entries = append(entries, displayEntry{
+				task:      kid,
+				isChild:   true,
+				connector: connector,
+			})
+		}
+	}
+
+	// Append orphan subtasks (parent not in current task set) at the end.
+	rootIDs := make(map[uuid.UUID]bool, len(roots))
+	for _, r := range roots {
+		rootIDs[r.ID] = true
+	}
+	for pid, kids := range children {
+		if rootIDs[pid] {
+			continue
+		}
+		for _, kid := range kids {
+			entries = append(entries, displayEntry{task: kid})
+		}
+	}
+
+	return entries
+}
+
 // Update handles messages for the board panel.
 func (b BoardModel) Update(msg tea.Msg) (BoardModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
+		count := len(b.buildDisplayList())
 		switch msg.String() {
 		case "j", "down":
-			if b.cursor < len(b.tasks)-1 {
+			if b.cursor < count-1 {
 				b.cursor++
 			}
 		case "k", "up":
@@ -59,22 +141,10 @@ func (b BoardModel) Update(msg tea.Msg) (BoardModel, tea.Cmd) {
 
 // View renders the task list.
 func (b BoardModel) View() string {
-	if len(b.tasks) == 0 {
+	entries := b.buildDisplayList()
+	if len(entries) == 0 {
 		return subtitleStyle.Render("  No tasks yet. Press [n] to create one.")
 	}
-
-	// Sort tasks: actionable first, then human gates, then done/failed.
-	sorted := make([]model.Task, len(b.tasks))
-	copy(sorted, b.tasks)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		oi := statusSortOrder[sorted[i].Status]
-		oj := statusSortOrder[sorted[j].Status]
-		if oi != oj {
-			return oi < oj
-		}
-		// Within the same status group, higher priority first.
-		return sorted[i].Priority > sorted[j].Priority
-	})
 
 	// Determine available width for title.
 	// Format: "  <icon> <STATUS>  <title>"
@@ -84,8 +154,15 @@ func (b BoardModel) View() string {
 		maxTitleWidth = 10
 	}
 
+	// Child rows get 4 extra chars for the connector prefix.
+	childTitleWidth := maxTitleWidth - 4
+	if childTitleWidth < 10 {
+		childTitleWidth = 10
+	}
+
 	var lines []string
-	for i, task := range sorted {
+	for i, entry := range entries {
+		task := entry.task
 		icon := statusIcons[task.Status]
 		if icon == "" {
 			icon = "?"
@@ -100,16 +177,27 @@ func (b BoardModel) View() string {
 			Width(16).
 			Render(fmt.Sprintf("%s %s", icon, strings.ToUpper(string(task.Status))))
 
-		title := task.Title
-		if len(title) > maxTitleWidth {
-			title = title[:maxTitleWidth-1] + "\u2026"
+		tw := maxTitleWidth
+		prefix := "  "
+		if entry.isChild {
+			tw = childTitleWidth
+			prefix = "  " + entry.connector
 		}
 
-		line := fmt.Sprintf("  %s  %s", statusStr, title)
+		title := task.Title
+		if len(title) > tw {
+			title = title[:tw-1] + "\u2026"
+		}
+
+		line := fmt.Sprintf("%s%s  %s", prefix, statusStr, title)
 
 		if i == b.cursor {
+			cursorPrefix := "> "
+			if entry.isChild {
+				cursorPrefix = "> " + entry.connector
+			}
 			line = selectedStyle.Width(b.width).Render(
-				fmt.Sprintf("> %s  %s", statusStr, title),
+				fmt.Sprintf("%s%s  %s", cursorPrefix, statusStr, title),
 			)
 		}
 
@@ -140,30 +228,18 @@ func (b BoardModel) View() string {
 
 // Selected returns the currently highlighted task, or nil if there are no tasks.
 func (b BoardModel) Selected() *model.Task {
-	if len(b.tasks) == 0 {
+	entries := b.buildDisplayList()
+	if len(entries) == 0 {
 		return nil
 	}
 
-	// We need to return from the sorted order (same as View), since the
-	// cursor tracks the display position.
-	sorted := make([]model.Task, len(b.tasks))
-	copy(sorted, b.tasks)
-	sort.SliceStable(sorted, func(i, j int) bool {
-		oi := statusSortOrder[sorted[i].Status]
-		oj := statusSortOrder[sorted[j].Status]
-		if oi != oj {
-			return oi < oj
-		}
-		return sorted[i].Priority > sorted[j].Priority
-	})
-
 	idx := b.cursor
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
+	if idx >= len(entries) {
+		idx = len(entries) - 1
 	}
 	if idx < 0 {
 		return nil
 	}
-	t := sorted[idx]
+	t := entries[idx].task
 	return &t
 }
