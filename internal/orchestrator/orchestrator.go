@@ -319,7 +319,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 
 	// Generate planner prompt.
 	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
-	featureDir := filepath.Join(o.worktree.BareRepoPath, task.WorktreeBranch)
+	featureDir := o.worktree.FeatureWorktreePath(featureName)
 	comments, _ := o.GetComments(task.ID)
 	plannerPrompt := prompt.Generate(prompt.Opts{
 		Task:         task,
@@ -386,7 +386,8 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 
 	// Merge agent branch into feature.
 	if ag.WorktreeBranch != "" && task.WorktreeBranch != "" {
-		featureDir := filepath.Join(o.worktree.BareRepoPath, task.WorktreeBranch)
+		fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+		featureDir := o.worktree.FeatureWorktreePath(fn)
 		if _, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir); mergeErr != nil {
 			o.logger.Error("merge agent into feature failed", "agent_id", ag.ID, "error", mergeErr)
 		}

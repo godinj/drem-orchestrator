@@ -88,7 +88,7 @@ func TestCreateAndListFeature(t *testing.T) {
 		t.Errorf("expected branch feature/my-feature, got %s", info.Branch)
 	}
 
-	expectedPath := filepath.Join(bareRepo, "feature", "my-feature")
+	expectedPath := filepath.Join(bareRepo, "feature", "my-feature", "integration")
 	if info.Path != expectedPath {
 		t.Errorf("expected path %s, got %s", expectedPath, info.Path)
 	}
@@ -150,14 +150,19 @@ func TestCreateAgentWorktree(t *testing.T) {
 		t.Fatalf("CreateAgentWorktree failed: %v", err)
 	}
 
-	// Verify the agent worktree path is nested inside the feature
-	if !strings.HasPrefix(agentInfo.Path, featureInfo.Path) {
-		t.Errorf("agent path %s is not inside feature path %s", agentInfo.Path, featureInfo.Path)
+	// Verify the agent worktree is a sibling of the integration worktree
+	groupDir := filepath.Dir(featureInfo.Path) // parent of integration/
+	if !strings.HasPrefix(agentInfo.Path, groupDir) {
+		t.Errorf("agent path %s is not inside group dir %s", agentInfo.Path, groupDir)
 	}
 
-	// Verify the nested .claude/worktrees/ structure
-	if !strings.Contains(agentInfo.Path, ".claude/worktrees/agent-") {
-		t.Errorf("agent path %s does not contain expected .claude/worktrees/agent- pattern", agentInfo.Path)
+	// Verify the agent is at <groupDir>/agent-<uuid>, not nested in .claude/worktrees/
+	if strings.Contains(agentInfo.Path, ".claude") {
+		t.Errorf("agent path %s should not contain .claude", agentInfo.Path)
+	}
+	agentDirName := filepath.Base(agentInfo.Path)
+	if !strings.HasPrefix(agentDirName, "agent-") {
+		t.Errorf("agent dir name %s does not start with agent-", agentDirName)
 	}
 
 	// Verify the branch name pattern
@@ -216,9 +221,15 @@ func TestRemoveFeature(t *testing.T) {
 		t.Fatalf("RemoveFeature failed: %v", err)
 	}
 
-	// Verify the directory is gone
+	// Verify the integration worktree directory is gone
 	if _, err := os.Stat(info.Path); !os.IsNotExist(err) {
-		t.Error("feature worktree directory still exists after removal")
+		t.Error("integration worktree directory still exists after removal")
+	}
+
+	// Verify the entire group directory is gone
+	groupDir := filepath.Dir(info.Path)
+	if _, err := os.Stat(groupDir); !os.IsNotExist(err) {
+		t.Error("feature group directory still exists after removal")
 	}
 
 	// Verify it no longer appears in the list

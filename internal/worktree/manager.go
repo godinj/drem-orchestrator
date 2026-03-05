@@ -54,11 +54,25 @@ type BranchStatus struct {
 	LastCommitMessage string
 }
 
-// Manager manages git worktrees in a 3-tier hierarchy:
-// bare-repo.git/ -> feature/X/ -> .claude/worktrees/agent-<uuid>/
+// Manager manages git worktrees in a grouped hierarchy:
+// bare-repo.git/feature/<name>/integration/ (feature worktree)
+// bare-repo.git/feature/<name>/agent-<uuid>/ (agent worktrees as siblings)
 type Manager struct {
 	BareRepoPath  string
 	DefaultBranch string
+}
+
+// FeatureGroupDir returns the parent directory that groups a feature's
+// integration worktree and its agent worktrees:
+// <bare>/feature/<name>/
+func (m *Manager) FeatureGroupDir(name string) string {
+	return filepath.Join(m.BareRepoPath, "feature", name)
+}
+
+// FeatureWorktreePath returns the path to the integration worktree inside
+// a feature group directory: <bare>/feature/<name>/integration/
+func (m *Manager) FeatureWorktreePath(name string) string {
+	return filepath.Join(m.FeatureGroupDir(name), "integration")
 }
 
 // NewManager creates a Manager for the given bare repo.
@@ -77,70 +91,87 @@ func ensurePrefix(name string) string {
 	return featurePrefix + name
 }
 
-// CreateFeature creates a feature worktree at <bare-repo>/feature/<name>
-// with branch feature/<name>. If the worktree already exists (directory exists),
-// returns its info without error.
+// CreateFeature creates a feature worktree at
+// <bare-repo>/feature/<name>/integration/ with branch feature/<name>.
+// The parent directory <bare-repo>/feature/<name>/ is a plain directory
+// that groups the integration worktree with its agent worktrees.
+// If the integration worktree already exists, returns its info without error.
 func (m *Manager) CreateFeature(name string) (*WorktreeInfo, error) {
 	branch := ensurePrefix(name)
-	worktreeDir := filepath.Join(m.BareRepoPath, branch)
+	featureName := strings.TrimPrefix(branch, featurePrefix)
+	groupDir := m.FeatureGroupDir(featureName)
+	integrationDir := m.FeatureWorktreePath(featureName)
 
-	// If the worktree directory already exists, return its info
-	if info, err := os.Stat(worktreeDir); err == nil && info.IsDir() {
-		head, headErr := RunGit([]string{"rev-parse", "HEAD"}, worktreeDir)
+	// If the integration worktree already exists, return its info
+	if info, err := os.Stat(integrationDir); err == nil && info.IsDir() {
+		head, headErr := RunGit([]string{"rev-parse", "HEAD"}, integrationDir)
 		if headErr != nil {
 			return nil, fmt.Errorf("create feature: read HEAD of existing worktree: %w", headErr)
 		}
 		return &WorktreeInfo{
-			Path:   worktreeDir,
+			Path:   integrationDir,
 			Branch: branch,
 			Head:   head,
 			IsBare: false,
 		}, nil
 	}
 
-	// Create the worktree with a new branch
+	// Create the group parent directory
+	if err := os.MkdirAll(groupDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create feature %q: mkdir group: %w", name, err)
+	}
+
+	// Create the worktree with a new branch inside the group dir
 	_, err := RunGit([]string{
-		"worktree", "add", "-b", branch, worktreeDir,
+		"worktree", "add", "-b", branch, integrationDir,
 	}, m.BareRepoPath)
 	if err != nil {
 		return nil, fmt.Errorf("create feature %q: %w", name, err)
 	}
 
 	// Get the HEAD commit of the new worktree
-	head, err := RunGit([]string{"rev-parse", "HEAD"}, worktreeDir)
+	head, err := RunGit([]string{"rev-parse", "HEAD"}, integrationDir)
 	if err != nil {
 		return nil, fmt.Errorf("create feature: read HEAD: %w", err)
 	}
 
 	return &WorktreeInfo{
-		Path:   worktreeDir,
+		Path:   integrationDir,
 		Branch: branch,
 		Head:   head,
 		IsBare: false,
 	}, nil
 }
 
-// RemoveFeature removes a feature worktree and its branch.
+// RemoveFeature removes all agent worktrees, the integration worktree,
+// the feature branch, and the group directory.
 func (m *Manager) RemoveFeature(name string) error {
 	branch := ensurePrefix(name)
-	worktreeDir := filepath.Join(m.BareRepoPath, branch)
+	featureName := strings.TrimPrefix(branch, featurePrefix)
+	groupDir := m.FeatureGroupDir(featureName)
+	integrationDir := m.FeatureWorktreePath(featureName)
 
-	// Remove the worktree
+	// Remove all agent worktrees first
+	agents, _ := m.ListAgentWorktrees(featureName)
+	for _, ag := range agents {
+		_ = m.RemoveAgentWorktree(ag.Branch)
+	}
+
+	// Remove the integration worktree
 	_, err := RunGit([]string{
-		"worktree", "remove", worktreeDir, "--force",
+		"worktree", "remove", integrationDir, "--force",
 	}, m.BareRepoPath)
 	if err != nil {
 		// Fallback: manual removal + prune
-		os.RemoveAll(worktreeDir)
+		os.RemoveAll(integrationDir)
 		RunGit([]string{"worktree", "prune"}, m.BareRepoPath)
 	}
 
-	// Delete the branch
-	_, err = RunGit([]string{"branch", "-D", branch}, m.BareRepoPath)
-	if err != nil {
-		// Branch may already be gone, not a fatal error
-		return nil
-	}
+	// Delete the feature branch
+	_, _ = RunGit([]string{"branch", "-D", branch}, m.BareRepoPath)
+
+	// Remove the group directory
+	os.RemoveAll(groupDir)
 
 	return nil
 }
@@ -191,26 +222,23 @@ func (m *Manager) ListWorktrees() ([]WorktreeInfo, error) {
 	return worktrees, nil
 }
 
-// CreateAgentWorktree creates a nested agent worktree inside a feature worktree:
-// feature/<featureName>/.claude/worktrees/agent-<uuid>/
+// CreateAgentWorktree creates an agent worktree as a sibling of the
+// integration worktree: feature/<featureName>/agent-<uuid>/
 // With branch name worktree-agent-<uuid>. Based on the feature branch.
 func (m *Manager) CreateAgentWorktree(featureName string) (*AgentWorktreeInfo, error) {
 	branch := ensurePrefix(featureName)
-	featureDir := filepath.Join(m.BareRepoPath, branch)
+	fn := strings.TrimPrefix(branch, featurePrefix)
+	integrationDir := m.FeatureWorktreePath(fn)
 
-	// Verify the feature worktree exists
-	if _, err := os.Stat(featureDir); os.IsNotExist(err) {
-		return nil, fmt.Errorf("create agent worktree: feature worktree %q does not exist", featureDir)
+	// Verify the integration worktree exists
+	if _, err := os.Stat(integrationDir); os.IsNotExist(err) {
+		return nil, fmt.Errorf("create agent worktree: integration worktree %q does not exist", integrationDir)
 	}
 
 	agentUUID := uuid.New().String()[:8]
 	agentBranch := fmt.Sprintf("worktree-agent-%s", agentUUID)
-	agentDir := filepath.Join(featureDir, ".claude", "worktrees", fmt.Sprintf("agent-%s", agentUUID))
-
-	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(agentDir), 0o755); err != nil {
-		return nil, fmt.Errorf("create agent worktree: mkdir: %w", err)
-	}
+	groupDir := m.FeatureGroupDir(fn)
+	agentDir := filepath.Join(groupDir, fmt.Sprintf("agent-%s", agentUUID))
 
 	// Create the worktree branching from the feature branch
 	_, err := RunGit([]string{
@@ -270,18 +298,18 @@ func (m *Manager) RemoveAgentWorktree(branch string) error {
 	return nil
 }
 
-// ListAgentWorktrees lists agent worktrees inside a feature by scanning
-// feature/<name>/.claude/worktrees/.
+// ListAgentWorktrees lists agent worktrees inside a feature group directory
+// by scanning feature/<name>/agent-* directories.
 func (m *Manager) ListAgentWorktrees(featureName string) ([]AgentWorktreeInfo, error) {
 	branch := ensurePrefix(featureName)
-	featureDir := filepath.Join(m.BareRepoPath, branch)
-	agentBase := filepath.Join(featureDir, ".claude", "worktrees")
+	fn := strings.TrimPrefix(branch, featurePrefix)
+	groupDir := m.FeatureGroupDir(fn)
 
-	if _, err := os.Stat(agentBase); os.IsNotExist(err) {
+	if _, err := os.Stat(groupDir); os.IsNotExist(err) {
 		return nil, nil
 	}
 
-	entries, err := os.ReadDir(agentBase)
+	entries, err := os.ReadDir(groupDir)
 	if err != nil {
 		return nil, fmt.Errorf("list agent worktrees: read dir: %w", err)
 	}
@@ -292,7 +320,7 @@ func (m *Manager) ListAgentWorktrees(featureName string) ([]AgentWorktreeInfo, e
 			continue
 		}
 
-		agentDir := filepath.Join(agentBase, entry.Name())
+		agentDir := filepath.Join(groupDir, entry.Name())
 
 		head, headErr := RunGit([]string{"rev-parse", "HEAD"}, agentDir)
 		if headErr != nil {
