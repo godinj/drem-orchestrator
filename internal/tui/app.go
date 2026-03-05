@@ -202,6 +202,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refreshData()
 
+	case deleteResultMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		}
+		return m, m.refreshData()
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -562,6 +568,11 @@ func (m Model) handleDelete() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// deleteResultMsg carries the result of an async delete operation.
+type deleteResultMsg struct {
+	err error
+}
+
 // handleDeleteModeKeys handles keys while in delete selection mode.
 func (m Model) handleDeleteModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	items := m.detail.deletableItems()
@@ -585,24 +596,29 @@ func (m Model) handleDeleteModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		item := items[m.detail.deleteCursor]
+		m.detail.deleteMode = false
+
+		// Run deletion async to avoid blocking the TUI event loop
+		// (StopAgent can block on tmux kills and semaphore drains).
+		orch := m.orch
 		switch item.kind {
 		case deleteItemComment:
-			comment := m.detail.comments[item.index]
-			if err := m.orch.DeleteComment(comment.ID); err != nil {
-				m.err = err
+			commentID := m.detail.comments[item.index].ID
+			return m, func() tea.Msg {
+				return deleteResultMsg{err: orch.DeleteComment(commentID)}
 			}
 		case deleteItemPlanStep:
-			if err := m.orch.DeletePlanStep(m.detail.task.ID, item.index); err != nil {
-				m.err = err
+			taskID := m.detail.task.ID
+			stepIdx := item.index
+			return m, func() tea.Msg {
+				return deleteResultMsg{err: orch.DeletePlanStep(taskID, stepIdx)}
 			}
 		case deleteItemSubtask:
-			sub := m.detail.subtasks[item.index]
-			if err := m.orch.DeleteSubtask(sub.ID); err != nil {
-				m.err = err
+			subID := m.detail.subtasks[item.index].ID
+			return m, func() tea.Msg {
+				return deleteResultMsg{err: orch.DeleteSubtask(subID)}
 			}
 		}
-		m.detail.deleteMode = false
-		return m, m.refreshData()
 	}
 	return m, nil
 }
