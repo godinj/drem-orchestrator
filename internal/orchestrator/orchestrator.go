@@ -391,9 +391,17 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 	}
 
 	// Merge agent branch into feature.
+	// Subtasks don't carry WorktreeBranch — resolve from the parent task.
+	featureBranch := task.WorktreeBranch
+	if featureBranch == "" && task.ParentTaskID != nil {
+		var parent model.Task
+		if err := o.db.Select("worktree_branch").First(&parent, "id = ?", task.ParentTaskID).Error; err == nil {
+			featureBranch = parent.WorktreeBranch
+		}
+	}
 	merged := false
-	if ag.WorktreeBranch != "" && task.WorktreeBranch != "" {
-		fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+	if ag.WorktreeBranch != "" && featureBranch != "" {
+		fn := strings.TrimPrefix(featureBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
 
 		// Check if agent actually committed changes before attempting merge.
