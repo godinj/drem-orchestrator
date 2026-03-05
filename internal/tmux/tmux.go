@@ -461,7 +461,8 @@ func (m *Manager) FocusAgentSession(sessionName string) error {
 
 // ListAgentSessions returns the names of all tmux sessions that belong to
 // agents of this manager's project. Agent sessions are identified by having
-// the manager's session name as a prefix (e.g. "drem-myproject-coder-a1b2c3d4").
+// the manager's session name followed by "/" as a prefix
+// (e.g. "󱇯 dash myproject/code - Auth > Implement JWT a1b2").
 func (m *Manager) ListAgentSessions() ([]string, error) {
 	out, err := runTmux("list-sessions", "-F", "#{session_name}")
 	if err != nil {
@@ -472,7 +473,7 @@ func (m *Manager) ListAgentSessions() ([]string, error) {
 		return nil, fmt.Errorf("list agent sessions: %w", err)
 	}
 
-	prefix := m.SessionName + "-"
+	prefix := m.SessionName + "/"
 	var sessions []string
 	for _, line := range strings.Split(out, "\n") {
 		name := strings.TrimSpace(line)

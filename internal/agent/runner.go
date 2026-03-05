@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -77,6 +78,73 @@ func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin st
 	}
 }
 
+// agentTypeLabel returns a short human-readable label for an agent type.
+func agentTypeLabel(at model.AgentType) string {
+	switch at {
+	case model.AgentPlanner:
+		return "plan"
+	case model.AgentCoder:
+		return "code"
+	case model.AgentResearcher:
+		return "research"
+	default:
+		return string(at)
+	}
+}
+
+// truncateTitle shortens s to maxLen runes, appending "…" if truncated.
+func truncateTitle(s string, maxLen int) string {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
+		return s
+	}
+	return string(runes[:maxLen-1]) + "…"
+}
+
+// sanitizeSessionName replaces tmux-illegal characters ("." and ":") with "-",
+// preserving "/" which is used as a tree separator.
+func sanitizeSessionName(s string) string {
+	s = strings.ReplaceAll(s, ".", "-")
+	s = strings.ReplaceAll(s, ":", "-")
+	return s
+}
+
+// loadParentTitle fetches the title of a task's parent. Returns "unknown" on failure.
+func (r *Runner) loadParentTitle(task *model.Task) string {
+	if task.ParentTaskID == nil {
+		return "unknown"
+	}
+	var parent model.Task
+	if err := r.db.Select("title").First(&parent, "id = ?", *task.ParentTaskID).Error; err != nil {
+		return "unknown"
+	}
+	return parent.Title
+}
+
+// buildAgentNames constructs the human-readable Name and the tmux session name
+// for an agent. Planners show "plan - <task-title>"; coders and researchers
+// show "code - <parent> > <subtask>". The tmux session nests under the
+// dashboard via "/" separator.
+func (r *Runner) buildAgentNames(task *model.Task, agentType model.AgentType, agentID uuid.UUID) (name, session string) {
+	label := agentTypeLabel(agentType)
+	shortID := agentID.String()[:4]
+
+	if agentType == model.AgentPlanner {
+		title := strings.ReplaceAll(task.Title, "/", "-")
+		title = truncateTitle(title, 30)
+		name = fmt.Sprintf("%s - %s", label, title)
+	} else {
+		parentTitle := strings.ReplaceAll(r.loadParentTitle(task), "/", "-")
+		parentTitle = truncateTitle(parentTitle, 30)
+		subtaskTitle := strings.ReplaceAll(task.Title, "/", "-")
+		subtaskTitle = truncateTitle(subtaskTitle, 30)
+		name = fmt.Sprintf("%s - %s > %s", label, parentTitle, subtaskTitle)
+	}
+
+	session = sanitizeSessionName(fmt.Sprintf("%s/%s %s", r.tmux.SessionName, name, shortID))
+	return name, session
+}
+
 // CanSpawn returns whether there is capacity for another agent.
 func (r *Runner) CanSpawn() bool {
 	r.mu.Lock()
@@ -110,13 +178,13 @@ func (r *Runner) SpawnAgent(task *model.Task, featureName string, agentType mode
 
 	// Create Agent DB record.
 	agentID := uuid.New()
-	sessionName := fmt.Sprintf("%s-%s-%s", r.tmux.SessionName, agentType, agentID.String()[:8])
+	agentName, sessionName := r.buildAgentNames(task, agentType, agentID)
 	now := time.Now()
 	agent := &model.Agent{
 		ID:             agentID,
 		ProjectID:      task.ProjectID,
 		AgentType:      agentType,
-		Name:           sessionName,
+		Name:           agentName,
 		Status:         model.AgentWorking,
 		CurrentTaskID:  &task.ID,
 		WorktreePath:   wtInfo.Path,
@@ -165,9 +233,17 @@ func (r *Runner) Spawn(agentID, taskID uuid.UUID, worktreePath, branch, prompt s
 
 	sessionName := agent.TmuxSession
 	if sessionName == "" {
-		sessionName = fmt.Sprintf("%s-%s-%s", r.tmux.SessionName, agent.AgentType, agentID.String()[:8])
-		// Persist the session name.
-		r.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("tmux_session", sessionName)
+		var task model.Task
+		if err := r.db.First(&task, "id = ?", taskID).Error; err != nil {
+			return fmt.Errorf("spawn: load task %s: %w", taskID, err)
+		}
+		name, sess := r.buildAgentNames(&task, agent.AgentType, agentID)
+		sessionName = sess
+		// Persist both name and session name.
+		r.db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(map[string]interface{}{
+			"name":         name,
+			"tmux_session": sessionName,
+		})
 	}
 
 	if err := r.startAgent(agentID, taskID, worktreePath, branch, sessionName, prompt); err != nil {

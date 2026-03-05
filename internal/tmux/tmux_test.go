@@ -396,8 +396,8 @@ func TestListAgentSessions(t *testing.T) {
 	session := testSessionName(t)
 	mgr := NewManager(session)
 
-	agent1 := session + "-planner-11111111"
-	agent2 := session + "-coder-22222222"
+	agent1 := session + "/plan - test task 1111"
+	agent2 := session + "/code - parent > subtask 2222"
 	t.Cleanup(func() {
 		_ = mgr.KillAgentSession(agent1)
 		_ = mgr.KillAgentSession(agent2)
