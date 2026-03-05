@@ -229,6 +229,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFeedbackKeys(msg)
 	case FocusAgents:
 		return m.handleAgentKeys(msg)
+	case FocusDetail:
+		return m.handleDetailKeys(msg)
 	default:
 		return m.handleBoardKeys(msg)
 	}
@@ -253,6 +255,9 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case "tab":
 		m.focus = FocusAgents
+		return m, nil
+	case "shift+tab", "btab":
+		m.focus = FocusDetail
 		return m, nil
 
 	case "n":
@@ -311,6 +316,9 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case "tab":
+		m.focus = FocusDetail
+		return m, nil
+	case "shift+tab", "btab":
 		m.focus = FocusBoard
 		return m, nil
 
@@ -329,6 +337,56 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.agents.autoFilter = !m.agents.autoFilter
 		m.agents.clampAgentCursor()
 		return m, nil
+	}
+
+	return m, nil
+}
+
+// handleDetailKeys handles keys when the detail panel is focused.
+// Task-action keys work the same as the board; j/k scroll the board selection.
+func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.detail.deleteMode {
+		return m.handleDeleteModeKeys(msg)
+	}
+
+	switch msg.String() {
+	case "q":
+		return m, tea.Quit
+	case "tab":
+		m.focus = FocusBoard
+		return m, nil
+	case "shift+tab", "btab":
+		m.focus = FocusAgents
+		return m, nil
+	case "j", "down", "k", "up":
+		var cmd tea.Cmd
+		m.board, cmd = m.board.Update(msg)
+		m.updateDetail()
+		return m, cmd
+	case "a":
+		return m.handleApprove()
+	case "r":
+		return m.handleReject()
+	case "t":
+		return m.handleTestPass()
+	case "f":
+		return m.handleTestFail()
+	case "p":
+		return m.handlePauseResume()
+	case "R":
+		return m.handleRetry()
+	case "g":
+		return m.handleJump()
+	case "l":
+		return m.handleLog()
+	case "L":
+		return m.handleOrchLog()
+	case "c":
+		return m.handleAddComment()
+	case "d":
+		return m.handleDelete()
+	case "S":
+		return m.handleSupervisorEval()
 	}
 
 	return m, nil

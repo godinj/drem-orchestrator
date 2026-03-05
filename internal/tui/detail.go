@@ -92,6 +92,15 @@ func (d DetailModel) isDeleteTarget(kind deleteItemKind, index int) bool {
 	return item != nil && item.kind == kind && item.index == index
 }
 
+// isDeleteSection reports whether the current cursor is within the given section.
+func (d DetailModel) isDeleteSection(kind deleteItemKind) bool {
+	if !d.deleteMode {
+		return false
+	}
+	item := d.selectedDeleteItem()
+	return item != nil && item.kind == kind
+}
+
 // Update handles messages for the detail panel.
 func (d DetailModel) Update(msg tea.Msg) (DetailModel, tea.Cmd) {
 	// The detail panel is mostly display-only; key actions are handled
@@ -139,8 +148,13 @@ func (d DetailModel) View() string {
 	if d.task.Status == model.StatusPlanReview && d.task.Plan != nil {
 		if subtasks, ok := d.task.Plan["subtasks"]; ok {
 			if items, ok := subtasks.([]any); ok && len(items) > 0 {
+				planHeader := "Plan:"
 				planStyle := lipgloss.NewStyle().Foreground(colorWarning)
-				sections = append(sections, planStyle.Render("Plan:"))
+				if d.isDeleteSection(deleteItemPlanStep) {
+					planHeader = "Plan: (select step to delete)"
+					planStyle = planStyle.Foreground(colorDanger).Bold(true)
+				}
+				sections = append(sections, planStyle.Render(planHeader))
 				deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
 				for i, item := range items {
 					if m, ok := item.(map[string]any); ok {
@@ -172,10 +186,13 @@ func (d DetailModel) View() string {
 				done++
 			}
 		}
+		subtaskHeader := fmt.Sprintf("Subtasks: %d/%d complete", done, len(d.subtasks))
 		progressStyle := lipgloss.NewStyle().Foreground(colorInfo)
-		sections = append(sections, progressStyle.Render(
-			fmt.Sprintf("Subtasks: %d/%d complete", done, len(d.subtasks)),
-		))
+		if d.isDeleteSection(deleteItemSubtask) {
+			subtaskHeader += " (select subtask to delete)"
+			progressStyle = progressStyle.Foreground(colorDanger).Bold(true)
+		}
+		sections = append(sections, progressStyle.Render(subtaskHeader))
 		deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
 		for i, sub := range d.subtasks {
 			prefix := "  "
@@ -215,8 +232,13 @@ func (d DetailModel) View() string {
 
 	// Comment thread.
 	if len(d.comments) > 0 {
+		commentHeader := fmt.Sprintf("Comments (%d):", len(d.comments))
 		commentStyle := lipgloss.NewStyle().Foreground(colorInfo)
-		sections = append(sections, commentStyle.Render(fmt.Sprintf("Comments (%d):", len(d.comments))))
+		if d.isDeleteSection(deleteItemComment) {
+			commentHeader += " (select comment to delete)"
+			commentStyle = commentStyle.Foreground(colorDanger).Bold(true)
+		}
+		sections = append(sections, commentStyle.Render(commentHeader))
 		deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
 		for i, c := range d.comments {
 			prefix := "  "
