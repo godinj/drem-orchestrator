@@ -2,12 +2,14 @@ package worktree
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 const featurePrefix = "feature/"
@@ -426,6 +428,125 @@ func (m *Manager) SyncAll() ([]SyncResult, error) {
 	}
 
 	return results, nil
+}
+
+// MigrateToGroupedLayout relocates worktrees from the old flat layout
+// (feature/<name>/) to the new grouped layout (feature/<name>/integration/).
+// Agent worktrees are moved from .claude/worktrees/agent-<uuid> to sibling
+// directories at feature/<name>/agent-<uuid>/. Idempotent: skips worktrees
+// already at /integration paths.
+func (m *Manager) MigrateToGroupedLayout() error {
+	worktrees, err := m.ListWorktrees()
+	if err != nil {
+		return fmt.Errorf("migrate: list worktrees: %w", err)
+	}
+
+	featureDir := filepath.Join(m.BareRepoPath, "feature")
+
+	// Build map of feature worktrees in old layout: path starts with
+	// <bare>/feature/<name> and does NOT end in /integration.
+	var oldFeatures []WorktreeInfo
+	for _, wt := range worktrees {
+		if wt.IsBare {
+			continue
+		}
+		if !strings.HasPrefix(wt.Branch, featurePrefix) {
+			continue
+		}
+		if !strings.HasPrefix(wt.Path, featureDir+string(os.PathSeparator)) {
+			continue
+		}
+		// Already migrated — path ends in /integration
+		if filepath.Base(wt.Path) == "integration" {
+			continue
+		}
+		oldFeatures = append(oldFeatures, wt)
+	}
+
+	if len(oldFeatures) == 0 {
+		return nil
+	}
+
+	migrationTmp := filepath.Join(m.BareRepoPath, ".migration-tmp")
+
+	for _, feat := range oldFeatures {
+		featureName := strings.TrimPrefix(feat.Branch, featurePrefix)
+		oldPath := feat.Path // e.g. <bare>/feature/<name>
+		groupDir := m.FeatureGroupDir(featureName)
+		integrationDir := m.FeatureWorktreePath(featureName)
+
+		slog.Info("migrating feature worktree", "feature", featureName, "from", oldPath, "to", integrationDir)
+
+		// (a) Find agent worktrees nested at .claude/worktrees/agent-*
+		var agentWTs []WorktreeInfo
+		for _, wt := range worktrees {
+			if strings.HasPrefix(wt.Path, filepath.Join(oldPath, ".claude", "worktrees", "agent-")) {
+				agentWTs = append(agentWTs, wt)
+			}
+		}
+
+		// (b) Move agents to temp holding area
+		if len(agentWTs) > 0 {
+			if err := os.MkdirAll(migrationTmp, 0o755); err != nil {
+				return fmt.Errorf("migrate: mkdir tmp: %w", err)
+			}
+		}
+		for _, ag := range agentWTs {
+			agentDirName := filepath.Base(ag.Path) // agent-<uuid>
+			tmpDest := filepath.Join(migrationTmp, agentDirName)
+			slog.Info("migrating agent worktree to tmp", "agent", agentDirName, "from", ag.Path, "to", tmpDest)
+			if _, err := RunGit([]string{"worktree", "move", ag.Path, tmpDest}, m.BareRepoPath); err != nil {
+				return fmt.Errorf("migrate: move agent %s to tmp: %w", agentDirName, err)
+			}
+		}
+
+		// (c) Move the feature worktree to a temp name
+		tmpName := oldPath + "--migrating"
+		if _, err := RunGit([]string{"worktree", "move", oldPath, tmpName}, m.BareRepoPath); err != nil {
+			return fmt.Errorf("migrate: move feature %s to tmp name: %w", featureName, err)
+		}
+
+		// (d) Create the group directory
+		if err := os.MkdirAll(groupDir, 0o755); err != nil {
+			return fmt.Errorf("migrate: mkdir group %s: %w", groupDir, err)
+		}
+
+		// (e) Move the feature worktree into it as integration
+		if _, err := RunGit([]string{"worktree", "move", tmpName, integrationDir}, m.BareRepoPath); err != nil {
+			return fmt.Errorf("migrate: move feature %s to integration: %w", featureName, err)
+		}
+
+		// (f) Move each agent into the group dir as a sibling
+		for _, ag := range agentWTs {
+			agentDirName := filepath.Base(ag.Path)
+			tmpSrc := filepath.Join(migrationTmp, agentDirName)
+			dest := filepath.Join(groupDir, agentDirName)
+			slog.Info("migrating agent worktree to group", "agent", agentDirName, "to", dest)
+			if _, err := RunGit([]string{"worktree", "move", tmpSrc, dest}, m.BareRepoPath); err != nil {
+				return fmt.Errorf("migrate: move agent %s to group: %w", agentDirName, err)
+			}
+		}
+
+		// (g) Clean up .migration-tmp/
+		os.RemoveAll(migrationTmp)
+	}
+
+	return nil
+}
+
+// MigrateAgentPaths updates Agent.WorktreePath in the database, converting
+// old-style nested paths (.claude/worktrees/agent-) to the new sibling layout.
+func (m *Manager) MigrateAgentPaths(db *gorm.DB) {
+	result := db.Exec(
+		`UPDATE agents SET worktree_path = REPLACE(worktree_path, '/.claude/worktrees/agent-', '/agent-') WHERE worktree_path LIKE '%/.claude/worktrees/agent-%'`,
+	)
+	if result.Error != nil {
+		slog.Warn("migrate agent paths failed", "error", result.Error)
+		return
+	}
+	if result.RowsAffected > 0 {
+		slog.Info("migrated agent worktree paths", "count", result.RowsAffected)
+	}
 }
 
 // GetBranchStatus returns ahead/behind counts and dirty file count for a worktree.

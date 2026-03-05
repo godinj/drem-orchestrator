@@ -114,6 +114,13 @@ func main() {
 	// Init components.
 	tmux := tmuxpkg.NewManager(sessionName)
 	wt := worktree.NewManager(cfg.BareRepoPath, cfg.DefaultBranch)
+
+	// Migrate old-layout worktrees to grouped layout.
+	if err := wt.MigrateToGroupedLayout(); err != nil {
+		slog.Warn("worktree layout migration failed", "error", err)
+	}
+	wt.MigrateAgentPaths(database)
+
 	runner := agent.NewRunner(database, tmux, wt, cfg.ClaudeBin, cfg.MaxConcurrentAgents)
 	merger := merge.NewOrchestrator(wt, database)
 	mem := memory.NewManager(database)

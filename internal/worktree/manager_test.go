@@ -618,6 +618,116 @@ func isGitError(err error, target **GitError) bool {
 	return false
 }
 
+func TestMigrateToGroupedLayout(t *testing.T) {
+	bareRepo := initBareRepo(t)
+	defaultBranch := getDefaultBranch(t, bareRepo)
+	mgr := NewManager(bareRepo, defaultBranch)
+
+	// Manually create worktrees in the OLD layout:
+	//   feature/<name>/         (feature worktree, not inside /integration)
+	//   feature/<name>/.claude/worktrees/agent-<uuid>/  (agent worktree)
+
+	featureName := "migrate-test"
+	featureBranch := "feature/" + featureName
+	oldFeaturePath := filepath.Join(bareRepo, "feature", featureName)
+
+	// Create the feature worktree in old layout (directly at feature/<name>/)
+	_, err := RunGit([]string{
+		"worktree", "add", "-b", featureBranch, oldFeaturePath,
+	}, bareRepo)
+	if err != nil {
+		t.Fatalf("failed to create old-layout feature worktree: %v", err)
+	}
+
+	// Create an agent worktree in old layout (nested at .claude/worktrees/agent-<uuid>/)
+	agentUUID := "deadbeef"
+	agentBranch := "worktree-agent-" + agentUUID
+	oldAgentPath := filepath.Join(oldFeaturePath, ".claude", "worktrees", "agent-"+agentUUID)
+	if err := os.MkdirAll(filepath.Dir(oldAgentPath), 0o755); err != nil {
+		t.Fatalf("failed to create .claude/worktrees dir: %v", err)
+	}
+	_, err = RunGit([]string{
+		"worktree", "add", "-b", agentBranch, oldAgentPath, featureBranch,
+	}, bareRepo)
+	if err != nil {
+		t.Fatalf("failed to create old-layout agent worktree: %v", err)
+	}
+
+	// Verify old layout exists
+	if _, err := os.Stat(oldFeaturePath); os.IsNotExist(err) {
+		t.Fatal("old feature worktree not created")
+	}
+	if _, err := os.Stat(oldAgentPath); os.IsNotExist(err) {
+		t.Fatal("old agent worktree not created")
+	}
+
+	// Run migration
+	if err := mgr.MigrateToGroupedLayout(); err != nil {
+		t.Fatalf("MigrateToGroupedLayout failed: %v", err)
+	}
+
+	// Assert feature worktree moved to feature/<name>/integration/
+	expectedIntegration := filepath.Join(bareRepo, "feature", featureName, "integration")
+	if _, err := os.Stat(expectedIntegration); os.IsNotExist(err) {
+		t.Error("integration worktree directory was not created")
+	}
+
+	// Assert agent worktree moved to feature/<name>/agent-<uuid>/
+	expectedAgent := filepath.Join(bareRepo, "feature", featureName, "agent-"+agentUUID)
+	if _, err := os.Stat(expectedAgent); os.IsNotExist(err) {
+		t.Error("agent worktree was not moved to group directory")
+	}
+
+	// Verify git worktree list reflects new paths
+	worktrees, err := mgr.ListWorktrees()
+	if err != nil {
+		t.Fatalf("ListWorktrees failed: %v", err)
+	}
+
+	foundIntegration := false
+	foundAgent := false
+	for _, wt := range worktrees {
+		if wt.Branch == featureBranch && wt.Path == expectedIntegration {
+			foundIntegration = true
+		}
+		if wt.Branch == agentBranch && wt.Path == expectedAgent {
+			foundAgent = true
+		}
+	}
+	if !foundIntegration {
+		t.Errorf("feature worktree not found at expected integration path %s", expectedIntegration)
+	}
+	if !foundAgent {
+		t.Errorf("agent worktree not found at expected sibling path %s", expectedAgent)
+	}
+
+	// Run migration again — should be a no-op (idempotent)
+	if err := mgr.MigrateToGroupedLayout(); err != nil {
+		t.Fatalf("MigrateToGroupedLayout (idempotent) failed: %v", err)
+	}
+
+	// Verify paths are unchanged after second run
+	worktrees2, err := mgr.ListWorktrees()
+	if err != nil {
+		t.Fatalf("ListWorktrees (idempotent) failed: %v", err)
+	}
+
+	for _, wt := range worktrees2 {
+		if wt.Branch == featureBranch && wt.Path != expectedIntegration {
+			t.Errorf("feature worktree path changed after idempotent migration: %s", wt.Path)
+		}
+		if wt.Branch == agentBranch && wt.Path != expectedAgent {
+			t.Errorf("agent worktree path changed after idempotent migration: %s", wt.Path)
+		}
+	}
+
+	// Verify .migration-tmp was cleaned up
+	migrationTmp := filepath.Join(bareRepo, ".migration-tmp")
+	if _, err := os.Stat(migrationTmp); !os.IsNotExist(err) {
+		t.Error(".migration-tmp directory should be cleaned up")
+	}
+}
+
 func TestSyncAll(t *testing.T) {
 	bareRepo := initBareRepo(t)
 	defaultBranch := getDefaultBranch(t, bareRepo)

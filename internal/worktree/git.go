@@ -1,12 +1,12 @@
 // Package worktree provides git worktree management for the Drem Orchestrator.
 //
-// It implements a 3-tier worktree hierarchy:
+// It implements a grouped worktree hierarchy:
 //
 //	bare-repo.git/
 //	  main/                           <- default branch
-//	  feature/X/                      <- feature/X branch
-//	    .claude/worktrees/
-//	      agent-<uuid>/               <- worktree-agent-<uuid> branch
+//	  feature/X/                      <- group directory (not a worktree)
+//	    integration/                  <- feature/X branch
+//	    agent-<uuid>/                 <- worktree-agent-<uuid> branch
 package worktree
 
 import (
