@@ -385,15 +385,46 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 	}
 
 	// Merge agent branch into feature.
+	merged := false
 	if ag.WorktreeBranch != "" && task.WorktreeBranch != "" {
 		fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
-		if _, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir); mergeErr != nil {
+		result, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir)
+		if mergeErr != nil {
 			o.logger.Error("merge agent into feature failed", "agent_id", ag.ID, "error", mergeErr)
+		} else if !result.Success {
+			o.logger.Error("merge agent into feature had conflicts",
+				"agent_id", ag.ID,
+				"source", result.SourceBranch,
+				"target", result.TargetBranch,
+				"conflicts", result.Conflicts)
+		} else {
+			merged = true
 		}
+	} else {
+		// No branches to merge (e.g. planner-only task); treat as merged.
+		merged = true
 	}
 
-	// Clean up agent worktree.
+	if !merged {
+		// Merge failed — keep the agent worktree/branch intact so work is not lost.
+		// Transition the subtask to failed so it can be retried or manually resolved.
+		ag.Status = model.AgentIdle
+		ag.CurrentTaskID = nil
+		if err := o.db.Save(ag).Error; err != nil {
+			return fmt.Errorf("on agent completed: save agent: %w", err)
+		}
+		evt, err := state.TransitionTask(task, model.StatusFailed, "orchestrator",
+			map[string]any{"reason": "merge into feature branch failed, agent branch preserved"})
+		if err != nil {
+			o.logger.Warn("failed to transition task to failed after merge failure", "task_id", task.ID, "error", err)
+		} else if err := o.db.Create(evt).Error; err != nil {
+			return fmt.Errorf("on agent completed: save merge-failure event: %w", err)
+		}
+		return nil
+	}
+
+	// Merge succeeded — clean up agent worktree.
 	if ag.WorktreeBranch != "" {
 		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
 			o.logger.Warn("cleanup agent worktree failed", "agent_id", ag.ID, "error", err)
