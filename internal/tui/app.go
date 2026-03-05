@@ -435,10 +435,10 @@ func (m Model) handleTestPass() (tea.Model, tea.Cmd) {
 	return m, m.refreshData()
 }
 
-// handleTestFail fails the test and transitions back to IN_PROGRESS.
+// handleTestFail fails the test and transitions back to PLANNING.
 func (m Model) handleTestFail() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
-	if selected == nil || selected.Status != model.StatusManualTesting {
+	if selected == nil || (selected.Status != model.StatusManualTesting && selected.Status != model.StatusTestingReady) {
 		return m, nil
 	}
 	if err := m.orch.HandleTestFailed(selected.ID); err != nil {

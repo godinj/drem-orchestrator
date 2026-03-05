@@ -1487,17 +1487,31 @@ func (o *Orchestrator) HandleTestPassed(taskID uuid.UUID) error {
 	return nil
 }
 
-// HandleTestFailed transitions from MANUAL_TESTING back to PLANNING so the
-// planner agent can read user comments and create new subtasks to address
-// the feedback.
+// HandleTestFailed transitions from MANUAL_TESTING (or TESTING_READY) back
+// to PLANNING so the planner agent can read user comments and create new
+// subtasks to address the feedback.
 func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
 		return fmt.Errorf("handle test failed: load task: %w", err)
 	}
 
-	if task.Status != model.StatusManualTesting {
-		return fmt.Errorf("handle test failed: task %s is in %s, expected manual_testing", taskID, task.Status)
+	if task.Status != model.StatusManualTesting && task.Status != model.StatusTestingReady {
+		return fmt.Errorf("handle test failed: task %s is in %s, expected manual_testing or testing_ready", taskID, task.Status)
+	}
+
+	// If still in testing_ready, transition through manual_testing first.
+	if task.Status == model.StatusTestingReady {
+		evt, err := state.TransitionTask(&task, model.StatusManualTesting, "user", map[string]any{"action": "start_testing"})
+		if err != nil {
+			return fmt.Errorf("handle test failed: start testing: %w", err)
+		}
+		if err := o.db.Save(&task).Error; err != nil {
+			return fmt.Errorf("handle test failed: save start testing: %w", err)
+		}
+		if err := o.db.Create(evt).Error; err != nil {
+			return fmt.Errorf("handle test failed: save start event: %w", err)
+		}
 	}
 
 	// Clear the existing plan so the planner re-plans with user feedback.
