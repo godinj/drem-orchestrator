@@ -12,13 +12,14 @@ import (
 
 // DetailModel renders task details and available actions.
 type DetailModel struct {
-	task     *model.Task
-	subtasks []model.Task
-	agent    *model.Agent
-	comments []model.TaskComment
-	logText  string
-	width    int
-	height   int
+	task           *model.Task
+	subtasks       []model.Task
+	agent          *model.Agent
+	comments       []model.TaskComment
+	logText        string
+	supervisorText string
+	width          int
+	height         int
 }
 
 // NewDetailModel creates an empty DetailModel.
@@ -121,6 +122,16 @@ func (d DetailModel) View() string {
 		}
 	}
 
+	// Supervisor evaluation output.
+	if d.supervisorText != "" {
+		supStyle := lipgloss.NewStyle().Foreground(colorWarning)
+		sections = append(sections, supStyle.Render("Supervisor:"))
+		supLines := strings.Split(d.supervisorText, "\n")
+		for _, line := range supLines {
+			sections = append(sections, "  "+line)
+		}
+	}
+
 	// Log preview — fill remaining available height.
 	if d.logText != "" {
 		usedLines := len(sections) + 2 // +2 for actions line and padding
@@ -169,6 +180,9 @@ func (d DetailModel) availableActions() string {
 	case model.StatusFailed:
 		parts = append(parts, "[R]etry")
 	}
+
+	// Supervisor evaluation is always available.
+	parts = append(parts, "[S]upervisor")
 
 	// Agent-specific actions.
 	if d.agent != nil && d.agent.TmuxSession != "" {

@@ -1313,6 +1313,54 @@ func (o *Orchestrator) CreateTask(title, description string, priority int) (*mod
 	return task, nil
 }
 
+// SupervisorEvaluate runs an on-demand supervisor evaluation for the given
+// task. It gathers task metadata and worktree git status, then calls the
+// supervisor for analysis. Returns nil evaluation when no supervisor is configured.
+func (o *Orchestrator) SupervisorEvaluate(taskID uuid.UUID) (*supervisor.OnDemandEvaluation, error) {
+	if o.supervisor == nil {
+		return nil, fmt.Errorf("supervisor not configured")
+	}
+
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return nil, fmt.Errorf("supervisor evaluate: find task: %w", err)
+	}
+
+	// Gather git status from the worktree if available.
+	var gitStatus string
+	if task.WorktreeBranch != "" {
+		wtPath := filepath.Join(o.worktree.BareRepoPath, task.WorktreeBranch, "integration")
+		if status, err := worktree.RunGit([]string{"status", "--short"}, wtPath); err == nil {
+			gitStatus = status
+		}
+		if logOutput, err := worktree.RunGit([]string{"log", "--oneline", "-10"}, wtPath); err == nil {
+			gitStatus += "\n\nRecent commits:\n" + logOutput
+		}
+	}
+
+	// Serialize task context.
+	contextJSON := "{}"
+	if task.Context != nil {
+		if data, err := json.Marshal(task.Context); err == nil {
+			contextJSON = string(data)
+		}
+	}
+
+	prompt := supervisor.OnDemandPrompt(
+		task.Title, task.Description,
+		string(task.Status), task.WorktreeBranch,
+		gitStatus, contextJSON,
+	)
+
+	var eval supervisor.OnDemandEvaluation
+	if err := o.supervisor.EvaluateJSON(context.Background(), prompt, &eval); err != nil {
+		return nil, fmt.Errorf("supervisor evaluate: %w", err)
+	}
+
+	o.logger.Info("supervisor on-demand evaluation", "task_id", taskID, "severity", eval.Severity)
+	return &eval, nil
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------

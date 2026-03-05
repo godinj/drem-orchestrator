@@ -33,3 +33,12 @@ type BuildFailureDiagnosis struct {
 	SuggestedFix  string   `json:"suggested_fix"`
 	CanAutoFix    bool     `json:"can_auto_fix"`
 }
+
+// OnDemandEvaluation is the supervisor's on-demand analysis of a task,
+// triggered by the user from the TUI.
+type OnDemandEvaluation struct {
+	Summary          string   `json:"summary"`
+	Issues           []string `json:"issues"`
+	RecommendedSteps []string `json:"recommended_steps"`
+	Severity         string   `json:"severity"` // low, medium, high, critical
+}

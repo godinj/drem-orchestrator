@@ -19,6 +19,7 @@ type keyMap struct {
 	Log           key.Binding // l - view agent log
 	Comment       key.Binding // c - add comment
 	DeleteComment key.Binding // d - delete last comment
+	Supervisor    key.Binding // S - supervisor evaluation
 	Archive       key.Binding // A - toggle archived agents
 	Filter        key.Binding // F - toggle task filter
 	Quit          key.Binding // q
@@ -87,6 +88,10 @@ func defaultKeyMap() keyMap {
 		DeleteComment: key.NewBinding(
 			key.WithKeys("d"),
 			key.WithHelp("d", "delete comment"),
+		),
+		Supervisor: key.NewBinding(
+			key.WithKeys("S"),
+			key.WithHelp("S", "supervisor"),
 		),
 		Archive: key.NewBinding(
 			key.WithKeys("A"),

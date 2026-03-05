@@ -12,6 +12,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
+	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
 )
 
@@ -62,6 +63,12 @@ type logCapturedMsg struct {
 // orchLogCapturedMsg carries orchestrator log file content.
 type orchLogCapturedMsg struct {
 	text string
+	err  error
+}
+
+// supervisorEvalMsg carries the result of an on-demand supervisor evaluation.
+type supervisorEvalMsg struct {
+	eval *supervisor.OnDemandEvaluation
 	err  error
 }
 
@@ -180,6 +187,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case supervisorEvalMsg:
+		if msg.err != nil {
+			m.detail.supervisorText = fmt.Sprintf("Error: %v", msg.err)
+		} else {
+			m.detail.supervisorText = formatSupervisorEval(msg.eval)
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -249,6 +264,8 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAddComment()
 	case "d":
 		return m.handleDeleteComment()
+	case "S":
+		return m.handleSupervisorEval()
 	case "A":
 		m.agents.showArchived = !m.agents.showArchived
 		m.agents.clampAgentCursor()
@@ -535,6 +552,41 @@ func (m Model) handleDeleteComment() (tea.Model, tea.Cmd) {
 	return m, m.refreshData()
 }
 
+// handleSupervisorEval triggers an on-demand supervisor evaluation for the
+// selected task.
+func (m Model) handleSupervisorEval() (tea.Model, tea.Cmd) {
+	selected := m.board.Selected()
+	if selected == nil {
+		return m, nil
+	}
+	m.detail.supervisorText = "Evaluating..."
+	orch := m.orch
+	taskID := selected.ID
+	return m, func() tea.Msg {
+		eval, err := orch.SupervisorEvaluate(taskID)
+		return supervisorEvalMsg{eval: eval, err: err}
+	}
+}
+
+// formatSupervisorEval formats a supervisor evaluation for display.
+func formatSupervisorEval(eval *supervisor.OnDemandEvaluation) string {
+	var lines []string
+	lines = append(lines, fmt.Sprintf("[%s] %s", strings.ToUpper(eval.Severity), eval.Summary))
+	if len(eval.Issues) > 0 {
+		lines = append(lines, "Issues:")
+		for _, issue := range eval.Issues {
+			lines = append(lines, "  - "+issue)
+		}
+	}
+	if len(eval.RecommendedSteps) > 0 {
+		lines = append(lines, "Steps:")
+		for i, step := range eval.RecommendedSteps {
+			lines = append(lines, fmt.Sprintf("  %d. %s", i+1, step))
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
 // View renders the entire TUI layout.
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
@@ -694,7 +746,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  S:supervisor  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.
@@ -723,6 +775,7 @@ func (m *Model) updateDetail() {
 	selected := m.board.Selected()
 	m.detail.task = selected
 	m.detail.logText = ""
+	m.detail.supervisorText = ""
 	// Update agent task filter from selected task and known subtasks.
 	var taskID *uuid.UUID
 	var subtaskIDs []uuid.UUID

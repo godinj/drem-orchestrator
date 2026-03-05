@@ -94,6 +94,43 @@ Analyze the conflicts and suggest a resolution strategy. Return ONLY a JSON obje
 	)
 }
 
+// OnDemandPrompt builds a prompt for an on-demand supervisor evaluation of a
+// task, giving the user an analysis and recommended next steps.
+func OnDemandPrompt(taskTitle, taskDesc, status, branch, gitStatus, contextJSON string) string {
+	return fmt.Sprintf(`You are a supervisor evaluating the current state of a task in a multi-agent orchestrator.
+
+## Task
+- **Title**: %s
+- **Description**: %s
+- **Status**: %s
+- **Branch**: %s
+
+## Git Status (worktree)
+%s
+
+## Task Context
+%s
+
+## Instructions
+Analyze the current state of this task and its worktree. Identify any issues (stale branches, uncommitted changes, merge conflicts, orphaned work, etc.) and recommend concrete next steps to resolve them.
+
+Return ONLY a JSON object:
+
+{
+  "summary": "brief assessment of the task state",
+  "issues": ["issue1", "issue2"],
+  "recommended_steps": ["step1", "step2"],
+  "severity": "low|medium|high|critical"
+}`,
+		taskTitle,
+		truncateForPrompt(taskDesc, 1000),
+		status,
+		branch,
+		truncateForPrompt(gitStatus, 3000),
+		truncateForPrompt(contextJSON, 2000),
+	)
+}
+
 // BuildFailurePrompt builds a prompt for diagnosing a build failure.
 func BuildFailurePrompt(worktreePath, buildOutput string, changedFiles []string) string {
 	return fmt.Sprintf(`You are a supervisor diagnosing a build failure after merge.
