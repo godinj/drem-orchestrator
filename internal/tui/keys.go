@@ -16,9 +16,11 @@ type keyMap struct {
 	New      key.Binding // n - new task
 	Pause    key.Binding // p - pause/resume
 	Retry    key.Binding // R - retry failed
-	Log      key.Binding // l - view agent log
-	Quit     key.Binding // q
-	Esc      key.Binding
+	Log           key.Binding // l - view agent log
+	Comment       key.Binding // c - add comment
+	DeleteComment key.Binding // d - delete last comment
+	Quit          key.Binding // q
+	Esc           key.Binding
 }
 
 // defaultKeyMap returns the default key bindings.
@@ -75,6 +77,14 @@ func defaultKeyMap() keyMap {
 		Log: key.NewBinding(
 			key.WithKeys("l"),
 			key.WithHelp("l", "view log"),
+		),
+		Comment: key.NewBinding(
+			key.WithKeys("c"),
+			key.WithHelp("c", "add comment"),
+		),
+		DeleteComment: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "delete comment"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q"),

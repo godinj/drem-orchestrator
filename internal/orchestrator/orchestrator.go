@@ -280,11 +280,13 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 	// Generate planner prompt.
 	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
 	featureDir := filepath.Join(o.worktree.BareRepoPath, task.WorktreeBranch)
+	comments, _ := o.GetComments(task.ID)
 	plannerPrompt := prompt.Generate(prompt.Opts{
 		Task:         task,
 		Project:      &project,
 		AgentType:    model.AgentPlanner,
 		WorktreePath: featureDir,
+		Comments:     comments,
 	})
 
 	// Spawn planner agent.
@@ -655,11 +657,13 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 		}
 
 		// Build prompt.
+		subComments, _ := o.GetComments(parent.ID)
 		agentPrompt := prompt.Generate(prompt.Opts{
 			Task:         sub,
 			Project:      &project,
 			AgentType:    agentType,
 			WorktreePath: wtInfo.Path,
+			Comments:     subComments,
 			ParentCtx:    parentCtx,
 		})
 
@@ -956,7 +960,7 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 }
 
 // HandlePlanRejected clears the plan and transitions back to PLANNING.
-func (o *Orchestrator) HandlePlanRejected(taskID uuid.UUID, feedback string) error {
+func (o *Orchestrator) HandlePlanRejected(taskID uuid.UUID) error {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
 		return fmt.Errorf("handle plan rejected: load task: %w", err)
@@ -967,26 +971,9 @@ func (o *Orchestrator) HandlePlanRejected(taskID uuid.UUID, feedback string) err
 	}
 
 	task.Plan = nil
-	task.PlanFeedback = feedback
 	task.AssignedAgentID = nil
 
-	// Supervisor-powered feedback synthesis.
-	if o.supervisor != nil && feedback != "" {
-		var synthesis supervisor.FeedbackIntegration
-		fbPrompt := supervisor.FeedbackIntegrationPrompt(task.Title, task.Description, feedback, "plan_rejection")
-		if fbErr := o.supervisor.EvaluateJSON(context.Background(), fbPrompt, &synthesis); fbErr != nil {
-			o.logger.Warn("supervisor feedback integration failed", "task_id", task.ID, "error", fbErr)
-		} else {
-			if task.Context == nil {
-				task.Context = make(model.JSONField)
-			}
-			task.Context["feedback_synthesis"] = synthesis.Summary
-			task.Context["feedback_key_issues"] = synthesis.KeyIssues
-			task.Context["feedback_approach"] = synthesis.SuggestedApproach
-		}
-	}
-
-	evt, err := state.TransitionTask(&task, model.StatusPlanning, "user", map[string]any{"action": "plan_rejected", "feedback": feedback})
+	evt, err := state.TransitionTask(&task, model.StatusPlanning, "user", map[string]any{"action": "plan_rejected"})
 	if err != nil {
 		return fmt.Errorf("handle plan rejected: transition: %w", err)
 	}
@@ -1030,7 +1017,7 @@ func (o *Orchestrator) HandleTestPassed(taskID uuid.UUID) error {
 }
 
 // HandleTestFailed transitions from MANUAL_TESTING back to IN_PROGRESS.
-func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID, feedback string) error {
+func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
 		return fmt.Errorf("handle test failed: load task: %w", err)
@@ -1040,25 +1027,7 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID, feedback string) error
 		return fmt.Errorf("handle test failed: task %s is in %s, expected manual_testing", taskID, task.Status)
 	}
 
-	task.TestFeedback = feedback
-
-	// Supervisor-powered test feedback synthesis.
-	if o.supervisor != nil && feedback != "" {
-		var synthesis supervisor.FeedbackIntegration
-		fbPrompt := supervisor.FeedbackIntegrationPrompt(task.Title, task.Description, feedback, "test_failure")
-		if fbErr := o.supervisor.EvaluateJSON(context.Background(), fbPrompt, &synthesis); fbErr != nil {
-			o.logger.Warn("supervisor test feedback integration failed", "task_id", task.ID, "error", fbErr)
-		} else {
-			if task.Context == nil {
-				task.Context = make(model.JSONField)
-			}
-			task.Context["test_feedback_synthesis"] = synthesis.Summary
-			task.Context["test_feedback_key_issues"] = synthesis.KeyIssues
-			task.Context["test_feedback_approach"] = synthesis.SuggestedApproach
-		}
-	}
-
-	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_failed", "feedback": feedback})
+	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_failed"})
 	if err != nil {
 		return fmt.Errorf("handle test failed: transition: %w", err)
 	}
@@ -1072,6 +1041,45 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID, feedback string) error
 	o.emit("task_updated", &task)
 	o.logger.Info("test failed, task back to in_progress", "task_id", task.ID)
 	return nil
+}
+
+// AddComment creates a new comment on a task. Only allowed for human-gate statuses.
+func (o *Orchestrator) AddComment(taskID uuid.UUID, author, body string) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("add comment: load task: %w", err)
+	}
+	if !task.Status.IsHumanGate() {
+		return fmt.Errorf("add comment: task %s is in %s, comments only allowed in human-gate statuses", taskID, task.Status)
+	}
+	comment := model.TaskComment{
+		TaskID: taskID,
+		Author: author,
+		Body:   body,
+	}
+	if err := o.db.Create(&comment).Error; err != nil {
+		return fmt.Errorf("add comment: %w", err)
+	}
+	o.logger.Info("comment added", "task_id", taskID, "author", author)
+	return nil
+}
+
+// DeleteComment deletes a comment by ID.
+func (o *Orchestrator) DeleteComment(commentID uuid.UUID) error {
+	if err := o.db.Delete(&model.TaskComment{}, "id = ?", commentID).Error; err != nil {
+		return fmt.Errorf("delete comment: %w", err)
+	}
+	o.logger.Info("comment deleted", "comment_id", commentID)
+	return nil
+}
+
+// GetComments returns all comments for a task ordered by creation time.
+func (o *Orchestrator) GetComments(taskID uuid.UUID) ([]model.TaskComment, error) {
+	var comments []model.TaskComment
+	if err := o.db.Where("task_id = ?", taskID).Order("created_at asc").Find(&comments).Error; err != nil {
+		return nil, fmt.Errorf("get comments: %w", err)
+	}
+	return comments, nil
 }
 
 // PauseTask pauses a task and stops its agents.

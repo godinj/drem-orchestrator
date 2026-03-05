@@ -15,6 +15,7 @@ type DetailModel struct {
 	task     *model.Task
 	subtasks []model.Task
 	agent    *model.Agent
+	comments []model.TaskComment
 	logText  string
 	width    int
 	height   int
@@ -102,6 +103,24 @@ func (d DetailModel) View() string {
 		))
 	}
 
+	// Comment thread.
+	if len(d.comments) > 0 {
+		commentStyle := lipgloss.NewStyle().Foreground(colorInfo)
+		sections = append(sections, commentStyle.Render(fmt.Sprintf("Comments (%d):", len(d.comments))))
+		for i, c := range d.comments {
+			prefix := "  "
+			if i == len(d.comments)-1 {
+				prefix = "> "
+			}
+			body := c.Body
+			maxBody := d.width - 20
+			if maxBody > 0 && len(body) > maxBody {
+				body = body[:maxBody-1] + "\u2026"
+			}
+			sections = append(sections, fmt.Sprintf("%s[%s] %s", prefix, c.Author, body))
+		}
+	}
+
 	// Log preview — fill remaining available height.
 	if d.logText != "" {
 		usedLines := len(sections) + 2 // +2 for actions line and padding
@@ -138,9 +157,9 @@ func (d DetailModel) availableActions() string {
 
 	switch d.task.Status {
 	case model.StatusPlanReview:
-		parts = append(parts, "[a]pprove plan", "[r]eject plan")
+		parts = append(parts, "[a]pprove plan", "[r]eject plan", "[c]omment", "[d]elete comment")
 	case model.StatusManualTesting:
-		parts = append(parts, "[t]est pass", "[f]ail test")
+		parts = append(parts, "[t]est pass", "[f]ail test", "[c]omment", "[d]elete comment")
 	case model.StatusInProgress:
 		parts = append(parts, "[p]ause")
 	case model.StatusPaused:

@@ -52,8 +52,9 @@ type Task struct {
 	Project         Project     `gorm:"foreignKey:ProjectID"`
 	ParentTask      *Task       `gorm:"foreignKey:ParentTaskID"`
 	Subtasks        []Task      `gorm:"foreignKey:ParentTaskID"`
-	AssignedAgent   *Agent      `gorm:"foreignKey:AssignedAgentID"`
-	Events          []TaskEvent `gorm:"foreignKey:TaskID"`
+	AssignedAgent   *Agent        `gorm:"foreignKey:AssignedAgentID"`
+	Events          []TaskEvent   `gorm:"foreignKey:TaskID"`
+	Comments        []TaskComment `gorm:"foreignKey:TaskID"`
 }
 
 // BeforeCreate generates a UUID for a new Task if one is not already set.
@@ -125,6 +126,24 @@ type Memory struct {
 func (m *Memory) BeforeCreate(_ *gorm.DB) error {
 	if m.ID == uuid.Nil {
 		m.ID = uuid.New()
+	}
+	return nil
+}
+
+// TaskComment stores a user or system comment on a task, forming a
+// conversational thread that agents receive at spawn time.
+type TaskComment struct {
+	ID        uuid.UUID `gorm:"type:text;primaryKey"`
+	TaskID    uuid.UUID `gorm:"type:text;not null;index"`
+	Author    string    `gorm:"not null"` // "user" or "system"
+	Body      string    `gorm:"not null"`
+	CreatedAt time.Time
+}
+
+// BeforeCreate generates a UUID for a new TaskComment if one is not already set.
+func (c *TaskComment) BeforeCreate(_ *gorm.DB) error {
+	if c.ID == uuid.Nil {
+		c.ID = uuid.New()
 	}
 	return nil
 }

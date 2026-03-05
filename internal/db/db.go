@@ -38,5 +38,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Agent{},
 		&model.TaskEvent{},
 		&model.Memory{},
+		&model.TaskComment{},
 	)
 }

@@ -50,6 +50,7 @@ type dataRefreshedMsg struct {
 	agents   []model.Agent
 	subtasks []model.Task
 	agent    *model.Agent
+	comments []model.TaskComment
 }
 
 // logCapturedMsg carries captured tmux pane output.
@@ -69,8 +70,7 @@ type feedbackAction int
 
 const (
 	feedbackNone       feedbackAction = iota
-	feedbackRejectPlan                // reject plan with feedback
-	feedbackFailTest                  // fail test with feedback
+	feedbackAddComment                // add comment to task
 )
 
 // Model is the root Bubble Tea model that composes all TUI sub-models.
@@ -155,6 +155,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agents.agents = msg.agents
 		m.detail.subtasks = msg.subtasks
 		m.detail.agent = msg.agent
+		m.detail.comments = msg.comments
 		m.clampCursor()
 		m.updateDetail()
 		return m, nil
@@ -244,6 +245,10 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleLog()
 	case "L":
 		return m.handleOrchLog()
+	case "c":
+		return m.handleAddComment()
+	case "d":
+		return m.handleDeleteComment()
 	}
 
 	return m, nil
@@ -315,29 +320,24 @@ func (m Model) handleFeedbackKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		feedback := m.feedback.Value()
+		body := m.feedback.Value()
 		selected := m.board.Selected()
-		if selected == nil {
+		if selected == nil || body == "" {
 			m.feedback.Hide()
+			m.feedbackAction = feedbackNone
 			m.focus = FocusBoard
 			return m, nil
 		}
 
-		var err error
-		switch m.feedbackAction {
-		case feedbackRejectPlan:
-			err = m.orch.HandlePlanRejected(selected.ID, feedback)
-		case feedbackFailTest:
-			err = m.orch.HandleTestFailed(selected.ID, feedback)
+		if m.feedbackAction == feedbackAddComment {
+			if err := m.orch.AddComment(selected.ID, "user", body); err != nil {
+				m.err = err
+			}
 		}
 
 		m.feedback.Hide()
 		m.feedbackAction = feedbackNone
 		m.focus = FocusBoard
-
-		if err != nil {
-			m.err = err
-		}
 
 		return m, m.refreshData()
 	}
@@ -359,17 +359,16 @@ func (m Model) handleApprove() (tea.Model, tea.Cmd) {
 	return m, m.refreshData()
 }
 
-// handleReject shows the feedback dialog for plan rejection.
+// handleReject rejects the plan and transitions back to PLANNING.
 func (m Model) handleReject() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil || selected.Status != model.StatusPlanReview {
 		return m, nil
 	}
-	m.feedback = NewFeedbackModel("Reject Plan")
-	m.feedback.Show()
-	m.feedbackAction = feedbackRejectPlan
-	m.focus = FocusFeedback
-	return m, nil
+	if err := m.orch.HandlePlanRejected(selected.ID); err != nil {
+		m.err = err
+	}
+	return m, m.refreshData()
 }
 
 // handleTestPass passes a test if the selected task is in MANUAL_TESTING.
@@ -384,17 +383,16 @@ func (m Model) handleTestPass() (tea.Model, tea.Cmd) {
 	return m, m.refreshData()
 }
 
-// handleTestFail shows the feedback dialog for test failure.
+// handleTestFail fails the test and transitions back to IN_PROGRESS.
 func (m Model) handleTestFail() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil || selected.Status != model.StatusManualTesting {
 		return m, nil
 	}
-	m.feedback = NewFeedbackModel("Fail Test")
-	m.feedback.Show()
-	m.feedbackAction = feedbackFailTest
-	m.focus = FocusFeedback
-	return m, nil
+	if err := m.orch.HandleTestFailed(selected.ID); err != nil {
+		m.err = err
+	}
+	return m, m.refreshData()
 }
 
 // handlePauseResume pauses or resumes the selected task.
@@ -480,6 +478,35 @@ func (m Model) handleOrchLog() (tea.Model, tea.Cmd) {
 		}
 		return orchLogCapturedMsg{text: strings.Join(lines, "\n")}
 	}
+}
+
+// handleAddComment opens the feedback dialog to add a comment.
+func (m Model) handleAddComment() (tea.Model, tea.Cmd) {
+	selected := m.board.Selected()
+	if selected == nil || !selected.Status.IsHumanGate() {
+		return m, nil
+	}
+	m.feedback = NewFeedbackModel("Add Comment")
+	m.feedback.Show()
+	m.feedbackAction = feedbackAddComment
+	m.focus = FocusFeedback
+	return m, nil
+}
+
+// handleDeleteComment deletes the last comment in the thread (LIFO).
+func (m Model) handleDeleteComment() (tea.Model, tea.Cmd) {
+	selected := m.board.Selected()
+	if selected == nil || !selected.Status.IsHumanGate() {
+		return m, nil
+	}
+	if len(m.detail.comments) == 0 {
+		return m, nil
+	}
+	last := m.detail.comments[len(m.detail.comments)-1]
+	if err := m.orch.DeleteComment(last.ID); err != nil {
+		m.err = err
+	}
+	return m, m.refreshData()
 }
 
 // View renders the entire TUI layout.
@@ -631,7 +658,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  p:pause  R:retry  g:jump  l:log  L:orch-log  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  g:jump  l:log  L:orch-log  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.
@@ -726,9 +753,11 @@ func (m Model) refreshData() tea.Cmd {
 
 		var subtasks []model.Task
 		var detailAgent *model.Agent
+		var comments []model.TaskComment
 
 		if selectedTask != nil {
 			db.Where("parent_task_id = ?", selectedTask.ID).Find(&subtasks)
+			db.Where("task_id = ?", selectedTask.ID).Order("created_at asc").Find(&comments)
 			if selectedTask.AssignedAgentID != nil {
 				var ag model.Agent
 				if err := db.First(&ag, "id = ?", selectedTask.AssignedAgentID).Error; err == nil {
@@ -753,6 +782,7 @@ func (m Model) refreshData() tea.Cmd {
 			agents:   agents,
 			subtasks: subtasks,
 			agent:    detailAgent,
+			comments: comments,
 		}
 	}
 }

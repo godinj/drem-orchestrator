@@ -19,6 +19,7 @@ type Opts struct {
 	AgentType    model.AgentType
 	WorktreePath string
 	Memories     []model.Memory
+	Comments     []model.TaskComment
 	ParentCtx    map[string]any
 }
 
@@ -55,9 +56,7 @@ func Generate(opts Opts) string {
 		for key, value := range opts.Task.Context {
 			// Skip keys that are injected as dedicated sections below.
 			switch key {
-			case "prompt_adjustment", "feedback_synthesis", "feedback_key_issues",
-				"feedback_approach", "test_feedback_synthesis", "test_feedback_key_issues",
-				"test_feedback_approach":
+			case "prompt_adjustment":
 				continue
 			}
 			sections = append(sections, fmt.Sprintf("- **%s**: %v", key, value))
@@ -73,32 +72,13 @@ func Generate(opts Opts) string {
 		}
 	}
 
-	// Previous plan feedback (from plan rejection).
-	if opts.Task.PlanFeedback != "" {
-		sections = append(sections, "## Previous Plan Feedback", "")
-		sections = append(sections, fmt.Sprintf("The user rejected the previous plan with this feedback: %s", opts.Task.PlanFeedback), "")
-		if opts.Task.Context != nil {
-			if synthesis, ok := opts.Task.Context["feedback_synthesis"].(string); ok && synthesis != "" {
-				sections = append(sections, fmt.Sprintf("**Synthesis**: %s", synthesis), "")
-			}
-			if approach, ok := opts.Task.Context["feedback_approach"].(string); ok && approach != "" {
-				sections = append(sections, fmt.Sprintf("**Suggested approach**: %s", approach), "")
-			}
+	// User feedback comments thread.
+	if len(opts.Comments) > 0 {
+		sections = append(sections, "## User Feedback Comments", "")
+		for _, c := range opts.Comments {
+			sections = append(sections, fmt.Sprintf("- **[%s]** %s", c.Author, c.Body))
 		}
-	}
-
-	// Test failure feedback (from manual testing rejection).
-	if opts.Task.TestFeedback != "" {
-		sections = append(sections, "## Test Failure Feedback", "")
-		sections = append(sections, fmt.Sprintf("The user reported test failures: %s", opts.Task.TestFeedback), "")
-		if opts.Task.Context != nil {
-			if synthesis, ok := opts.Task.Context["test_feedback_synthesis"].(string); ok && synthesis != "" {
-				sections = append(sections, fmt.Sprintf("**Synthesis**: %s", synthesis), "")
-			}
-			if approach, ok := opts.Task.Context["test_feedback_approach"].(string); ok && approach != "" {
-				sections = append(sections, fmt.Sprintf("**Suggested approach**: %s", approach), "")
-			}
-		}
+		sections = append(sections, "")
 	}
 
 	// Parent task context if subtask
