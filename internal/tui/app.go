@@ -249,6 +249,10 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAddComment()
 	case "d":
 		return m.handleDeleteComment()
+	case "A":
+		m.agents.showDead = !m.agents.showDead
+		m.agents.clampAgentCursor()
+		return m, nil
 	}
 
 	return m, nil
@@ -274,6 +278,11 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if ag := m.agents.Selected(); ag != nil && ag.TmuxSession != "" {
 			_ = m.tmux.FocusAgentSession(ag.TmuxSession)
 		}
+		return m, nil
+
+	case "A":
+		m.agents.showDead = !m.agents.showDead
+		m.agents.clampAgentCursor()
 		return m, nil
 	}
 
@@ -587,8 +596,15 @@ func (m Model) View() string {
 		Render(lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(boardLabel) + "\n" + m.board.View())
 
 	agentsLabel := " Agents "
+	if m.agents.showDead {
+		agentsLabel = " Agents [+dead] "
+	}
 	if m.focus == FocusAgents {
-		agentsLabel = " Agents (active) "
+		if m.agents.showDead {
+			agentsLabel = " Agents [+dead] (active) "
+		} else {
+			agentsLabel = " Agents (active) "
+		}
 	}
 	agentsPanel := panelStyle.
 		Width(agentsWidth).
@@ -667,7 +683,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  g:jump  l:log  L:orch-log  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  g:jump  l:log  L:orch-log  A:archive  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.
