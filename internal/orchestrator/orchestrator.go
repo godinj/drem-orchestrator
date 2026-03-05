@@ -126,6 +126,10 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 		}
 	}
 
+	// 2b. Fallback: detect agents stuck as WORKING whose idle signal file
+	// exists but was never picked up (e.g. notification hook failed to fire).
+	o.recoverStuckAgents()
+
 	// 3. Process PLANNING tasks -> spawn planners or handle plans.
 	var planningTasks []model.Task
 	if err := o.db.Where("project_id = ? AND status = ? AND parent_task_id IS NULL", o.projectID, model.StatusPlanning).
@@ -186,6 +190,42 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 // ---------------------------------------------------------------------------
 // Tick helpers
 // ---------------------------------------------------------------------------
+
+// recoverStuckAgents finds agents marked WORKING in the DB whose idle signal
+// file exists, meaning the agent finished but the notification hook never
+// fired (or the monitor goroutine missed it). For each such agent, it
+// synthesizes a completion event so the normal processing pipeline picks it up.
+func (o *Orchestrator) recoverStuckAgents() {
+	var agents []model.Agent
+	if err := o.db.Where("project_id = ? AND status = ?", o.projectID, model.AgentWorking).
+		Find(&agents).Error; err != nil {
+		o.logger.Error("recover stuck agents: query", "error", err)
+		return
+	}
+
+	for _, ag := range agents {
+		idleSignal := filepath.Join(ag.WorktreePath, ".claude", "agent-idle")
+		if _, err := os.Stat(idleSignal); err != nil {
+			continue // signal file doesn't exist — agent is genuinely working
+		}
+
+		o.logger.Info("recovering stuck agent (idle signal found)", "agent_id", ag.ID, "type", ag.AgentType)
+
+		if ag.CurrentTaskID == nil {
+			continue
+		}
+
+		var task model.Task
+		if err := o.db.First(&task, "id = ?", ag.CurrentTaskID).Error; err != nil {
+			o.logger.Error("recover stuck agent: load task", "agent_id", ag.ID, "error", err)
+			continue
+		}
+
+		if err := o.onAgentCompleted(&ag, &task); err != nil {
+			o.logger.Error("recover stuck agent: on completed", "agent_id", ag.ID, "error", err)
+		}
+	}
+}
 
 // processBacklog transitions a task from BACKLOG to PLANNING.
 func (o *Orchestrator) processBacklog(task *model.Task) error {
@@ -249,7 +289,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 			return o.db.Save(task).Error
 		}
 
-		// Agent is still working — do nothing.
+		// Agent is still working — do nothing (recoverStuckAgents handles fallback).
 		return nil
 	}
 
