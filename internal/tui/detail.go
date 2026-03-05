@@ -158,6 +158,8 @@ func (d DetailModel) availableActions() string {
 	switch d.task.Status {
 	case model.StatusPlanReview:
 		parts = append(parts, "[a]pprove plan", "[r]eject plan", "[c]omment", "[d]elete comment")
+	case model.StatusTestingReady:
+		parts = append(parts, "[c]omment", "[d]elete comment")
 	case model.StatusManualTesting:
 		parts = append(parts, "[t]est pass", "[f]ail test", "[c]omment", "[d]elete comment")
 	case model.StatusInProgress:

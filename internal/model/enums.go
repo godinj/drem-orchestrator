@@ -54,7 +54,7 @@ func (s TaskStatus) IsActionable() bool {
 // the task can proceed.
 func (s TaskStatus) IsHumanGate() bool {
 	switch s {
-	case StatusPlanReview, StatusManualTesting:
+	case StatusPlanReview, StatusTestingReady, StatusManualTesting:
 		return true
 	default:
 		return false
