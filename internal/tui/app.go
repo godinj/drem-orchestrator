@@ -347,14 +347,23 @@ func (m Model) handleFeedbackKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// handleApprove approves a plan if the selected task is in PLAN_REVIEW.
+// handleApprove approves a plan (PLAN_REVIEW) or starts testing (TESTING_READY).
 func (m Model) handleApprove() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
-	if selected == nil || selected.Status != model.StatusPlanReview {
+	if selected == nil {
 		return m, nil
 	}
-	if err := m.orch.HandlePlanApproved(selected.ID); err != nil {
-		m.err = err
+	switch selected.Status {
+	case model.StatusPlanReview:
+		if err := m.orch.HandlePlanApproved(selected.ID); err != nil {
+			m.err = err
+		}
+	case model.StatusTestingReady:
+		if err := m.orch.HandleStartTesting(selected.ID); err != nil {
+			m.err = err
+		}
+	default:
+		return m, nil
 	}
 	return m, m.refreshData()
 }

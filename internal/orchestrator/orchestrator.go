@@ -989,6 +989,33 @@ func (o *Orchestrator) HandlePlanRejected(taskID uuid.UUID) error {
 	return nil
 }
 
+// HandleStartTesting transitions from TESTING_READY to MANUAL_TESTING.
+func (o *Orchestrator) HandleStartTesting(taskID uuid.UUID) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("handle start testing: load task: %w", err)
+	}
+
+	if task.Status != model.StatusTestingReady {
+		return fmt.Errorf("handle start testing: task %s is in %s, expected testing_ready", taskID, task.Status)
+	}
+
+	evt, err := state.TransitionTask(&task, model.StatusManualTesting, "user", map[string]any{"action": "start_testing"})
+	if err != nil {
+		return fmt.Errorf("handle start testing: transition: %w", err)
+	}
+	if err := o.db.Save(&task).Error; err != nil {
+		return fmt.Errorf("handle start testing: save task: %w", err)
+	}
+	if err := o.db.Create(evt).Error; err != nil {
+		return fmt.Errorf("handle start testing: save event: %w", err)
+	}
+
+	o.emit("task_updated", &task)
+	o.logger.Info("testing started", "task_id", task.ID)
+	return nil
+}
+
 // HandleTestPassed transitions from MANUAL_TESTING to MERGING.
 func (o *Orchestrator) HandleTestPassed(taskID uuid.UUID) error {
 	var task model.Task
@@ -1016,7 +1043,9 @@ func (o *Orchestrator) HandleTestPassed(taskID uuid.UUID) error {
 	return nil
 }
 
-// HandleTestFailed transitions from MANUAL_TESTING back to IN_PROGRESS.
+// HandleTestFailed transitions from MANUAL_TESTING back to PLANNING so the
+// planner agent can read user comments and create new subtasks to address
+// the feedback.
 func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
@@ -1027,7 +1056,11 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 		return fmt.Errorf("handle test failed: task %s is in %s, expected manual_testing", taskID, task.Status)
 	}
 
-	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_failed"})
+	// Clear the existing plan so the planner re-plans with user feedback.
+	task.Plan = nil
+	task.AssignedAgentID = nil
+
+	evt, err := state.TransitionTask(&task, model.StatusPlanning, "user", map[string]any{"action": "test_failed"})
 	if err != nil {
 		return fmt.Errorf("handle test failed: transition: %w", err)
 	}
@@ -1039,7 +1072,7 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
-	o.logger.Info("test failed, task back to in_progress", "task_id", task.ID)
+	o.logger.Info("test failed, task back to planning", "task_id", task.ID)
 	return nil
 }
 
