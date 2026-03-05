@@ -157,7 +157,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail.agent = msg.agent
 		m.detail.comments = msg.comments
 		m.clampCursor()
-		m.updateDetail()
+		m.updateDetail() // also refreshes agent task filter with new subtasks
 		return m, nil
 
 	case EventMsg:
@@ -250,7 +250,11 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		return m.handleDeleteComment()
 	case "A":
-		m.agents.showDead = !m.agents.showDead
+		m.agents.showArchived = !m.agents.showArchived
+		m.agents.clampAgentCursor()
+		return m, nil
+	case "F":
+		m.agents.autoFilter = !m.agents.autoFilter
 		m.agents.clampAgentCursor()
 		return m, nil
 	}
@@ -281,7 +285,11 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "A":
-		m.agents.showDead = !m.agents.showDead
+		m.agents.showArchived = !m.agents.showArchived
+		m.agents.clampAgentCursor()
+		return m, nil
+	case "F":
+		m.agents.autoFilter = !m.agents.autoFilter
 		m.agents.clampAgentCursor()
 		return m, nil
 	}
@@ -596,15 +604,18 @@ func (m Model) View() string {
 		Render(lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(boardLabel) + "\n" + m.board.View())
 
 	agentsLabel := " Agents "
-	if m.agents.showDead {
-		agentsLabel = " Agents [+dead] "
+	var tags []string
+	if m.agents.showArchived {
+		tags = append(tags, "+archived")
+	}
+	if !m.agents.autoFilter {
+		tags = append(tags, "all")
+	}
+	if len(tags) > 0 {
+		agentsLabel = fmt.Sprintf(" Agents [%s] ", strings.Join(tags, " "))
 	}
 	if m.focus == FocusAgents {
-		if m.agents.showDead {
-			agentsLabel = " Agents [+dead] (active) "
-		} else {
-			agentsLabel = " Agents (active) "
-		}
+		agentsLabel = strings.TrimSuffix(agentsLabel, " ") + " (active) "
 	}
 	agentsPanel := panelStyle.
 		Width(agentsWidth).
@@ -683,7 +694,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  g:jump  l:log  L:orch-log  A:archive  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.
@@ -712,7 +723,16 @@ func (m *Model) updateDetail() {
 	selected := m.board.Selected()
 	m.detail.task = selected
 	m.detail.logText = ""
-	// Subtasks and agent are loaded asynchronously via refreshData.
+	// Update agent task filter from selected task and known subtasks.
+	var taskID *uuid.UUID
+	var subtaskIDs []uuid.UUID
+	if selected != nil {
+		taskID = &selected.ID
+		for _, st := range m.detail.subtasks {
+			subtaskIDs = append(subtaskIDs, st.ID)
+		}
+	}
+	m.agents.setTaskFilter(taskID, subtaskIDs)
 }
 
 // clampCursor ensures the board cursor doesn't exceed the display list length.

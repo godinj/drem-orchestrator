@@ -5,32 +5,63 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
 // AgentsModel renders the agent sidebar.
 type AgentsModel struct {
-	agents   []model.Agent
-	cursor   int
-	width    int
-	height   int
-	showDead bool
+	agents       []model.Agent
+	cursor       int
+	width        int
+	height       int
+	showArchived bool        // A toggle: show dead + idle agents
+	filterTaskID *uuid.UUID  // selected board task (nil = no filter)
+	subtaskIDs   []uuid.UUID // subtask IDs of selected task
+	autoFilter   bool        // F toggle: auto-filter by task (default true)
 }
 
 // visibleAgents returns the agents that should be displayed based on the
-// current showDead toggle. When showDead is false, dead agents are hidden.
+// showArchived toggle and task filter. When showArchived is false, dead and
+// idle agents are hidden. When autoFilter is true and a task is selected,
+// only agents working on that task or its subtasks are shown.
 func (a AgentsModel) visibleAgents() []model.Agent {
-	if a.showDead {
-		return a.agents
-	}
 	var visible []model.Agent
 	for _, ag := range a.agents {
-		if ag.Status != model.AgentDead {
-			visible = append(visible, ag)
+		// Filter out dead + idle unless showArchived is on.
+		if !a.showArchived && (ag.Status == model.AgentDead || ag.Status == model.AgentIdle) {
+			continue
 		}
+		// Task-based filter: keep only agents related to the selected task.
+		if a.autoFilter && a.filterTaskID != nil {
+			if ag.CurrentTaskID == nil {
+				continue
+			}
+			if *ag.CurrentTaskID != *a.filterTaskID && !a.isSubtaskID(*ag.CurrentTaskID) {
+				continue
+			}
+		}
+		visible = append(visible, ag)
 	}
 	return visible
+}
+
+// isSubtaskID checks whether the given ID is one of the subtask IDs.
+func (a AgentsModel) isSubtaskID(id uuid.UUID) bool {
+	for _, sid := range a.subtaskIDs {
+		if sid == id {
+			return true
+		}
+	}
+	return false
+}
+
+// setTaskFilter updates the task filter from the board selection.
+func (a *AgentsModel) setTaskFilter(taskID *uuid.UUID, subtaskIDs []uuid.UUID) {
+	a.filterTaskID = taskID
+	a.subtaskIDs = subtaskIDs
+	a.clampAgentCursor()
 }
 
 // clampAgentCursor ensures the agent cursor doesn't exceed the visible list length.
@@ -46,7 +77,7 @@ func (a *AgentsModel) clampAgentCursor() {
 
 // NewAgentsModel creates an empty AgentsModel.
 func NewAgentsModel() AgentsModel {
-	return AgentsModel{}
+	return AgentsModel{autoFilter: true}
 }
 
 // Update handles messages for the agent panel.
@@ -72,8 +103,8 @@ func (a AgentsModel) Update(msg tea.Msg) (AgentsModel, tea.Cmd) {
 func (a AgentsModel) View() string {
 	visible := a.visibleAgents()
 	if len(visible) == 0 {
-		if !a.showDead && len(a.agents) > 0 {
-			return subtitleStyle.Render("  No active agents. Press A to show archived.")
+		if len(a.agents) > 0 {
+			return subtitleStyle.Render("  No matching agents. A:archived  F:filter")
 		}
 		return subtitleStyle.Render("  No agents running.")
 	}

@@ -19,7 +19,8 @@ type keyMap struct {
 	Log           key.Binding // l - view agent log
 	Comment       key.Binding // c - add comment
 	DeleteComment key.Binding // d - delete last comment
-	Archive       key.Binding // A - toggle dead agents
+	Archive       key.Binding // A - toggle archived agents
+	Filter        key.Binding // F - toggle task filter
 	Quit          key.Binding // q
 	Esc           key.Binding
 }
@@ -90,6 +91,10 @@ func defaultKeyMap() keyMap {
 		Archive: key.NewBinding(
 			key.WithKeys("A"),
 			key.WithHelp("A", "archive"),
+		),
+		Filter: key.NewBinding(
+			key.WithKeys("F"),
+			key.WithHelp("F", "filter"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q"),
