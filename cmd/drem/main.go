@@ -48,7 +48,7 @@ func main() {
 	// Derive session name.
 	projectName := filepath.Base(cfg.BareRepoPath)
 	projectName = strings.TrimSuffix(projectName, ".git")
-	sessionName := "drem-" + projectName
+	sessionName := "󱇯 dash " + projectName
 
 	// Self-respawn: if DREM_SESSION is not set, we are the outer invocation.
 	// Create the tmux session with ourselves as the dashboard command, then
@@ -61,7 +61,7 @@ func main() {
 
 		// Build the command that tmux will run in the dashboard window.
 		// It re-invokes drem with the same flags, plus DREM_SESSION set.
-		dashCmd := fmt.Sprintf("DREM_SESSION=%s %s --config %s --repo %s",
+		dashCmd := fmt.Sprintf("DREM_SESSION='%s' %s --config %s --repo %s",
 			sessionName, exe, *configPath, cfg.BareRepoPath)
 
 		tmux := tmuxpkg.NewManager(sessionName)
