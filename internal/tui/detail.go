@@ -10,6 +10,21 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
+// deleteItemKind distinguishes the type of item being selected for deletion.
+type deleteItemKind int
+
+const (
+	deleteItemPlanStep deleteItemKind = iota
+	deleteItemSubtask
+	deleteItemComment
+)
+
+// deleteItem identifies one deletable entry in the detail view.
+type deleteItem struct {
+	kind  deleteItemKind
+	index int // index within the source slice (plan steps, subtasks, or comments)
+}
+
 // DetailModel renders task details and available actions.
 type DetailModel struct {
 	task     *model.Task
@@ -19,11 +34,62 @@ type DetailModel struct {
 	logText  string
 	width    int
 	height   int
+
+	deleteMode   bool // true when selecting an item to delete
+	deleteCursor int  // index into deletableItems()
 }
 
 // NewDetailModel creates an empty DetailModel.
 func NewDetailModel() DetailModel {
 	return DetailModel{}
+}
+
+// deletableItems returns a flat list of all items that can be deleted in the
+// current detail view, in display order: plan steps, subtasks, then comments.
+func (d DetailModel) deletableItems() []deleteItem {
+	var items []deleteItem
+
+	// Plan steps (only in plan_review).
+	if d.task != nil && d.task.Status == model.StatusPlanReview && d.task.Plan != nil {
+		if subtasks, ok := d.task.Plan["subtasks"]; ok {
+			if list, ok := subtasks.([]any); ok {
+				for i := range list {
+					items = append(items, deleteItem{kind: deleteItemPlanStep, index: i})
+				}
+			}
+		}
+	}
+
+	// Subtasks (when parent has children).
+	for i := range d.subtasks {
+		items = append(items, deleteItem{kind: deleteItemSubtask, index: i})
+	}
+
+	// Comments.
+	for i := range d.comments {
+		items = append(items, deleteItem{kind: deleteItemComment, index: i})
+	}
+
+	return items
+}
+
+// selectedDeleteItem returns the deleteItem at the current cursor, or nil.
+func (d DetailModel) selectedDeleteItem() *deleteItem {
+	items := d.deletableItems()
+	if d.deleteCursor < 0 || d.deleteCursor >= len(items) {
+		return nil
+	}
+	return &items[d.deleteCursor]
+}
+
+// isDeleteTarget reports whether the item at (kind, index) is the current
+// delete cursor target.
+func (d DetailModel) isDeleteTarget(kind deleteItemKind, index int) bool {
+	if !d.deleteMode {
+		return false
+	}
+	item := d.selectedDeleteItem()
+	return item != nil && item.kind == kind && item.index == index
 }
 
 // Update handles messages for the detail panel.
@@ -75,6 +141,7 @@ func (d DetailModel) View() string {
 			if items, ok := subtasks.([]any); ok && len(items) > 0 {
 				planStyle := lipgloss.NewStyle().Foreground(colorWarning)
 				sections = append(sections, planStyle.Render("Plan:"))
+				deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
 				for i, item := range items {
 					if m, ok := item.(map[string]any); ok {
 						title, _ := m["title"].(string)
@@ -82,7 +149,15 @@ func (d DetailModel) View() string {
 						if maxTitle > 0 && len(title) > maxTitle {
 							title = title[:maxTitle-1] + "\u2026"
 						}
-						sections = append(sections, fmt.Sprintf("  %d. %s", i+1, title))
+						prefix := "  "
+						if d.isDeleteTarget(deleteItemPlanStep, i) {
+							prefix = "X "
+						}
+						line := fmt.Sprintf("%s%d. %s", prefix, i+1, title)
+						if d.isDeleteTarget(deleteItemPlanStep, i) {
+							line = deleteHighlight.Render(line)
+						}
+						sections = append(sections, line)
 					}
 				}
 			}
@@ -101,6 +176,22 @@ func (d DetailModel) View() string {
 		sections = append(sections, progressStyle.Render(
 			fmt.Sprintf("Subtasks: %d/%d complete", done, len(d.subtasks)),
 		))
+		deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
+		for i, sub := range d.subtasks {
+			prefix := "  "
+			if d.isDeleteTarget(deleteItemSubtask, i) {
+				prefix = "X "
+			}
+			line := fmt.Sprintf("%s- [%s] %s", prefix, sub.Status, sub.Title)
+			maxLine := d.width - 4
+			if maxLine > 0 && len(line) > maxLine {
+				line = line[:maxLine-1] + "\u2026"
+			}
+			if d.isDeleteTarget(deleteItemSubtask, i) {
+				line = deleteHighlight.Render(line)
+			}
+			sections = append(sections, line)
+		}
 	}
 
 	// Warnings from task context.
@@ -126,9 +217,12 @@ func (d DetailModel) View() string {
 	if len(d.comments) > 0 {
 		commentStyle := lipgloss.NewStyle().Foreground(colorInfo)
 		sections = append(sections, commentStyle.Render(fmt.Sprintf("Comments (%d):", len(d.comments))))
+		deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
 		for i, c := range d.comments {
 			prefix := "  "
-			if i == len(d.comments)-1 {
+			if d.isDeleteTarget(deleteItemComment, i) {
+				prefix = "X "
+			} else if i == len(d.comments)-1 {
 				prefix = "> "
 			}
 			body := c.Body
@@ -136,7 +230,11 @@ func (d DetailModel) View() string {
 			if maxBody > 0 && len(body) > maxBody {
 				body = body[:maxBody-1] + "\u2026"
 			}
-			sections = append(sections, fmt.Sprintf("%s[%s] %s", prefix, c.Author, body))
+			line := fmt.Sprintf("%s[%s] %s", prefix, c.Author, body)
+			if d.isDeleteTarget(deleteItemComment, i) {
+				line = deleteHighlight.Render(line)
+			}
+			sections = append(sections, line)
 		}
 	}
 
@@ -172,17 +270,32 @@ func (d DetailModel) availableActions() string {
 		return ""
 	}
 
+	if d.deleteMode {
+		target := "item"
+		if item := d.selectedDeleteItem(); item != nil {
+			switch item.kind {
+			case deleteItemPlanStep:
+				target = "plan step"
+			case deleteItemSubtask:
+				target = "subtask (+ agent)"
+			case deleteItemComment:
+				target = "comment"
+			}
+		}
+		return fmt.Sprintf("[j/k] navigate  [enter/y] delete %s  [esc] cancel", target)
+	}
+
 	var parts []string
 
 	switch d.task.Status {
 	case model.StatusPlanReview:
-		parts = append(parts, "[a]pprove plan", "[r]eject plan", "[c]omment", "[d]elete comment")
+		parts = append(parts, "[a]pprove plan", "[r]eject plan", "[c]omment", "[d]elete")
 	case model.StatusTestingReady:
-		parts = append(parts, "[c]omment", "[d]elete comment")
+		parts = append(parts, "[c]omment", "[d]elete")
 	case model.StatusManualTesting:
-		parts = append(parts, "[t]est pass", "[f]ail test", "[c]omment", "[d]elete comment")
+		parts = append(parts, "[t]est pass", "[f]ail test", "[c]omment", "[d]elete")
 	case model.StatusInProgress:
-		parts = append(parts, "[p]ause")
+		parts = append(parts, "[p]ause", "[d]elete")
 	case model.StatusPaused:
 		parts = append(parts, "[p] resume")
 	case model.StatusFailed:

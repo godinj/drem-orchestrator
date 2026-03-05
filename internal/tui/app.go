@@ -230,6 +230,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // handleBoardKeys handles keys when the board panel is focused.
 func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Delete-comment selection mode intercepts all keys.
+	if m.detail.deleteMode {
+		return m.handleDeleteModeKeys(msg)
+	}
+
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
@@ -270,7 +275,7 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		return m.handleAddComment()
 	case "d":
-		return m.handleDeleteComment()
+		return m.handleDelete()
 	case "S":
 		return m.handleSupervisorEval()
 	case "X":
@@ -545,20 +550,61 @@ func (m Model) handleAddComment() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleDeleteComment deletes the last comment in the thread (LIFO).
-func (m Model) handleDeleteComment() (tea.Model, tea.Cmd) {
-	selected := m.board.Selected()
-	if selected == nil || !selected.Status.IsHumanGate() {
+// handleDelete enters delete mode, letting the user select a plan step,
+// subtask, or comment to remove.
+func (m Model) handleDelete() (tea.Model, tea.Cmd) {
+	items := m.detail.deletableItems()
+	if len(items) == 0 {
 		return m, nil
 	}
-	if len(m.detail.comments) == 0 {
+	m.detail.deleteMode = true
+	m.detail.deleteCursor = len(items) - 1
+	return m, nil
+}
+
+// handleDeleteModeKeys handles keys while in delete selection mode.
+func (m Model) handleDeleteModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	items := m.detail.deletableItems()
+	switch msg.String() {
+	case "esc":
+		m.detail.deleteMode = false
 		return m, nil
+	case "j", "down":
+		if m.detail.deleteCursor < len(items)-1 {
+			m.detail.deleteCursor++
+		}
+		return m, nil
+	case "k", "up":
+		if m.detail.deleteCursor > 0 {
+			m.detail.deleteCursor--
+		}
+		return m, nil
+	case "enter", "y":
+		if m.detail.deleteCursor < 0 || m.detail.deleteCursor >= len(items) {
+			m.detail.deleteMode = false
+			return m, nil
+		}
+		item := items[m.detail.deleteCursor]
+		switch item.kind {
+		case deleteItemComment:
+			comment := m.detail.comments[item.index]
+			if err := m.orch.DeleteComment(comment.ID); err != nil {
+				m.err = err
+			}
+		case deleteItemPlanStep:
+			if err := m.orch.DeletePlanStep(m.detail.task.ID, item.index); err != nil {
+				m.err = err
+			}
+		case deleteItemSubtask:
+			sub := m.detail.subtasks[item.index]
+			if err := m.orch.DeleteSubtask(sub.ID); err != nil {
+				m.err = err
+			}
+		}
+		m.detail.deleteMode = false
+		return m, m.refreshData()
 	}
-	last := m.detail.comments[len(m.detail.comments)-1]
-	if err := m.orch.DeleteComment(last.ID); err != nil {
-		m.err = err
-	}
-	return m, m.refreshData()
+	return m, nil
 }
 
 // handleSupervisorEval spawns an interactive supervisor Claude session in tmux

@@ -1564,6 +1564,72 @@ func (o *Orchestrator) DeleteComment(commentID uuid.UUID) error {
 	return nil
 }
 
+// DeletePlanStep removes a single step from a task's plan by index.
+// Only valid for tasks in plan_review state.
+func (o *Orchestrator) DeletePlanStep(taskID uuid.UUID, stepIndex int) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("delete plan step: load task: %w", err)
+	}
+	if task.Status != model.StatusPlanReview {
+		return fmt.Errorf("delete plan step: task %s is in %s, expected plan_review", taskID, task.Status)
+	}
+	if task.Plan == nil {
+		return fmt.Errorf("delete plan step: task %s has no plan", taskID)
+	}
+	subtasksRaw, ok := task.Plan["subtasks"]
+	if !ok {
+		return fmt.Errorf("delete plan step: no subtasks key in plan")
+	}
+	items, ok := subtasksRaw.([]any)
+	if !ok || stepIndex < 0 || stepIndex >= len(items) {
+		return fmt.Errorf("delete plan step: index %d out of range", stepIndex)
+	}
+
+	// Remove the step.
+	items = append(items[:stepIndex], items[stepIndex+1:]...)
+	task.Plan["subtasks"] = items
+
+	if err := o.db.Save(&task).Error; err != nil {
+		return fmt.Errorf("delete plan step: save task: %w", err)
+	}
+	o.emit("task_updated", &task)
+	o.logger.Info("plan step deleted", "task_id", taskID, "step_index", stepIndex)
+	return nil
+}
+
+// DeleteSubtask removes a subtask and stops its agent if one is running.
+func (o *Orchestrator) DeleteSubtask(subtaskID uuid.UUID) error {
+	var sub model.Task
+	if err := o.db.First(&sub, "id = ?", subtaskID).Error; err != nil {
+		return fmt.Errorf("delete subtask: load: %w", err)
+	}
+
+	// Stop the assigned agent if it's running.
+	if sub.AssignedAgentID != nil {
+		agentID := *sub.AssignedAgentID
+		// StopAgent is best-effort — the agent may already be dead.
+		if err := o.runner.StopAgent(agentID); err != nil {
+			o.logger.Debug("stop agent during subtask delete (may be already stopped)", "agent_id", agentID, "error", err)
+		}
+		// Mark agent as dead in DB regardless.
+		o.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("status", model.AgentDead)
+	}
+
+	// Delete associated comments and events.
+	o.db.Where("task_id = ?", subtaskID).Delete(&model.TaskComment{})
+	o.db.Where("task_id = ?", subtaskID).Delete(&model.TaskEvent{})
+
+	// Delete the subtask itself.
+	if err := o.db.Delete(&sub).Error; err != nil {
+		return fmt.Errorf("delete subtask: %w", err)
+	}
+
+	o.emit("task_updated", nil)
+	o.logger.Info("subtask deleted", "subtask_id", subtaskID, "agent_id", sub.AssignedAgentID)
+	return nil
+}
+
 // GetComments returns all comments for a task ordered by creation time.
 func (o *Orchestrator) GetComments(taskID uuid.UUID) ([]model.TaskComment, error) {
 	var comments []model.TaskComment
