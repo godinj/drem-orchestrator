@@ -157,6 +157,16 @@ func IsClean(worktreePath string) (bool, error) {
 	return true, nil
 }
 
+// BranchHasNewCommits returns true if sourceBranch has commits that are not
+// yet in the worktree's current HEAD (i.e. there is work to merge).
+func BranchHasNewCommits(worktreePath, sourceBranch string) (bool, error) {
+	output, err := RunGit([]string{"rev-list", "--count", "HEAD.." + sourceBranch}, worktreePath)
+	if err != nil {
+		return false, fmt.Errorf("check new commits: %w", err)
+	}
+	return strings.TrimSpace(output) != "0", nil
+}
+
 // GetDefaultBranch detects the default branch name (main or master).
 // Uses: git symbolic-ref refs/remotes/origin/HEAD, falls back to checking
 // if "main" branch exists, then tries "master".

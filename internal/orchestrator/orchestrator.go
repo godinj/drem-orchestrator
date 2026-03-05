@@ -389,6 +389,17 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 	if ag.WorktreeBranch != "" && task.WorktreeBranch != "" {
 		fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
+
+		// Check if agent actually committed changes before attempting merge.
+		hasCommits, commitErr := worktree.BranchHasNewCommits(featureDir, ag.WorktreeBranch)
+		if commitErr != nil {
+			o.logger.Warn("failed to check agent commits, proceeding with merge", "agent_id", ag.ID, "error", commitErr)
+			hasCommits = true // assume there are commits on error
+		}
+		if !hasCommits {
+			return o.onAgentEmptyWork(ag, task, output)
+		}
+
 		result, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir)
 		if mergeErr != nil {
 			o.logger.Error("merge agent into feature failed", "agent_id", ag.ID, "error", mergeErr)
@@ -667,13 +678,98 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	return nil
 }
 
-// scheduleSubtasks looks for BACKLOG subtasks of the parent that have their
-// dependencies met and spawns agents for them.
+// MaxEmptyWorkRetries is the number of times a subtask will be rescheduled
+// after an agent completes without committing any changes.
+const MaxEmptyWorkRetries = 2
+
+// onAgentEmptyWork handles the case where an agent exited successfully but
+// made no commits. It retries (with supervisor diagnosis when available) or
+// fails the subtask so the parent can be replanned.
+func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agentOutput string) error {
+	o.logger.Warn("agent completed without making changes", "agent_id", ag.ID, "task_id", task.ID)
+
+	// Clean up agent worktree — nothing to preserve.
+	if ag.WorktreeBranch != "" {
+		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+			o.logger.Warn("cleanup empty agent worktree failed", "agent_id", ag.ID, "error", err)
+		}
+	}
+
+	// Mark agent as idle (it completed normally, just produced nothing).
+	ag.Status = model.AgentIdle
+	ag.CurrentTaskID = nil
+	if err := o.db.Save(ag).Error; err != nil {
+		return fmt.Errorf("on agent empty work: save agent: %w", err)
+	}
+
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context["empty_work"] = true
+	task.Context["last_error"] = "agent completed without committing any changes"
+
+	retries := o.incrementRetryCount(task)
+
+	// Supervisor-powered diagnosis.
+	if o.supervisor != nil {
+		var diagnosis supervisor.FailureDiagnosis
+		diagPrompt := supervisor.FailureDiagnosisPrompt(
+			task.Title, task.Description, string(ag.AgentType),
+			"Agent completed successfully (exit code 0) but did not commit any changes to the repository.",
+			truncate(agentOutput, 500),
+		)
+		if diagErr := o.supervisor.EvaluateJSON(context.Background(), diagPrompt, &diagnosis); diagErr != nil {
+			o.logger.Warn("supervisor empty-work diagnosis failed", "error", diagErr)
+		} else {
+			task.Context["failure_diagnosis"] = diagnosis.RootCause
+			if diagnosis.PromptAdjustment != "" {
+				task.Context["prompt_adjustment"] = diagnosis.PromptAdjustment
+			}
+
+			if diagnosis.ShouldRetry && retries < MaxEmptyWorkRetries {
+				task.AssignedAgentID = nil
+				if err := o.db.Save(task).Error; err != nil {
+					return fmt.Errorf("on agent empty work: save task for retry: %w", err)
+				}
+				o.emit("agent_retrying", map[string]any{
+					"task_id": task.ID, "reason": "no commits", "retries": retries,
+				})
+				o.logger.Info("retrying subtask after empty work", "task_id", task.ID, "retries", retries)
+				return nil
+			}
+		}
+	}
+
+	// Retry without supervisor if under limit.
+	if retries < MaxEmptyWorkRetries {
+		task.AssignedAgentID = nil
+		if err := o.db.Save(task).Error; err != nil {
+			return fmt.Errorf("on agent empty work: save task for retry: %w", err)
+		}
+		o.emit("agent_retrying", map[string]any{
+			"task_id": task.ID, "reason": "no commits", "retries": retries,
+		})
+		o.logger.Info("retrying subtask after empty work (no supervisor)", "task_id", task.ID, "retries", retries)
+		return nil
+	}
+
+	// Max retries exceeded — fail the subtask.
+	if err := o.failTask(task, "agent completed without making any changes"); err != nil {
+		return err
+	}
+	o.emit("agent_failed", map[string]any{"task_id": task.ID, "agent_id": ag.ID, "reason": "no commits"})
+	return nil
+}
+
+// scheduleSubtasks looks for BACKLOG subtasks — and IN_PROGRESS subtasks
+// whose agent has been cleared (e.g. after empty-work retry) — of the parent
+// that have their dependencies met and spawns agents for them.
 func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 	var subtasks []model.Task
-	if err := o.db.Where("parent_task_id = ? AND status = ?", parent.ID, model.StatusBacklog).
-		Order("priority DESC").
-		Find(&subtasks).Error; err != nil {
+	if err := o.db.Where(
+		"parent_task_id = ? AND ((status = ?) OR (status = ? AND assigned_agent_id IS NULL))",
+		parent.ID, model.StatusBacklog, model.StatusInProgress,
+	).Order("priority DESC").Find(&subtasks).Error; err != nil {
 		return fmt.Errorf("schedule subtasks: query: %w", err)
 	}
 
@@ -803,6 +899,27 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 	}
 
 	if allDone && parent.Status == model.StatusInProgress {
+		// Verify the feature branch actually has changes before declaring
+		// testing ready. If all subtasks "completed" without producing commits,
+		// fail the parent so the user can replan.
+		if parent.WorktreeBranch != "" {
+			fn := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
+			featureDir := o.worktree.FeatureWorktreePath(fn)
+			// Check if the feature branch has any file changes relative to
+			// the default branch.
+			changed, changeErr := worktree.GetChangedFiles(featureDir, o.worktree.DefaultBranch)
+			if changeErr != nil {
+				o.logger.Warn("failed to check feature branch changes", "task_id", parent.ID, "error", changeErr)
+			} else if len(changed) == 0 {
+				o.logger.Warn("all subtasks done but feature branch has no changes, failing parent", "task_id", parent.ID)
+				if parent.Context == nil {
+					parent.Context = make(model.JSONField)
+				}
+				parent.Context["empty_feature"] = true
+				return o.failTask(parent, "all subtasks completed but no changes were committed to the feature branch")
+			}
+		}
+
 		evt, err := state.TransitionTask(parent, model.StatusTestingReady, "orchestrator", map[string]any{"reason": "all subtasks done"})
 		if err != nil {
 			return fmt.Errorf("check feature completion: transition to testing_ready: %w", err)

@@ -185,8 +185,17 @@ func (b BoardModel) View() string {
 		}
 
 		title := task.Title
+
+		// Annotate tasks that have empty work or are being retried.
+		annotation := taskAnnotation(task)
+		if annotation != "" {
+			tw -= len(annotation) + 1
+		}
 		if len(title) > tw {
 			title = title[:tw-1] + "\u2026"
+		}
+		if annotation != "" {
+			title = title + " " + annotation
 		}
 
 		line := fmt.Sprintf("%s%s  %s", prefix, statusStr, title)
@@ -242,4 +251,24 @@ func (b BoardModel) Selected() *model.Task {
 	}
 	t := entries[idx].task
 	return &t
+}
+
+// taskAnnotation returns a short annotation string for tasks with notable
+// context flags (e.g. empty work, retries, empty feature branch).
+func taskAnnotation(t model.Task) string {
+	if t.Context == nil {
+		return ""
+	}
+	if _, ok := t.Context["empty_feature"]; ok {
+		return lipgloss.NewStyle().Foreground(colorDanger).Render("\u26a0 no changes")
+	}
+	if _, ok := t.Context["empty_work"]; ok {
+		if rc, ok := t.Context["retry_count"].(float64); ok && rc > 0 {
+			return lipgloss.NewStyle().Foreground(colorWarning).Render(
+				fmt.Sprintf("\u21bb retry %d", int(rc)),
+			)
+		}
+		return lipgloss.NewStyle().Foreground(colorWarning).Render("\u26a0 no commits")
+	}
+	return ""
 }

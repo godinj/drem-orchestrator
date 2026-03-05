@@ -103,6 +103,25 @@ func (d DetailModel) View() string {
 		))
 	}
 
+	// Warnings from task context.
+	if d.task.Context != nil {
+		warnStyle := lipgloss.NewStyle().Foreground(colorDanger)
+		if _, ok := d.task.Context["empty_feature"]; ok {
+			sections = append(sections, warnStyle.Render(
+				"\u26a0 Feature branch has no changes — subtasks completed without producing code"))
+		}
+		if _, ok := d.task.Context["empty_work"]; ok {
+			sections = append(sections, warnStyle.Render(
+				"\u26a0 Agent completed without committing any changes"))
+		}
+		if reason, ok := d.task.Context["failure_reason"].(string); ok && d.task.Status == model.StatusFailed {
+			sections = append(sections, warnStyle.Render("Reason: "+reason))
+		}
+		if diag, ok := d.task.Context["failure_diagnosis"].(string); ok {
+			sections = append(sections, subtitleStyle.Render("Diagnosis: "+diag))
+		}
+	}
+
 	// Comment thread.
 	if len(d.comments) > 0 {
 		commentStyle := lipgloss.NewStyle().Foreground(colorInfo)
