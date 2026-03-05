@@ -157,6 +157,35 @@ func IsClean(worktreePath string) (bool, error) {
 	return true, nil
 }
 
+// CommitUnstagedChanges stages all non-.claude/ changes and commits them.
+// Returns true if a commit was created, false if there was nothing to commit.
+func CommitUnstagedChanges(worktreePath, message string) (bool, error) {
+	clean, err := IsClean(worktreePath)
+	if err != nil {
+		return false, fmt.Errorf("commit unstaged: check clean: %w", err)
+	}
+	if clean {
+		return false, nil
+	}
+
+	// Stage all changes except .claude/ directory.
+	if _, err := RunGit([]string{"add", "--all", "--", ".", ":(exclude).claude"}, worktreePath); err != nil {
+		return false, fmt.Errorf("commit unstaged: add: %w", err)
+	}
+
+	// Check if anything was actually staged (add --all may have nothing after exclude).
+	if _, err := RunGit([]string{"diff", "--cached", "--quiet"}, worktreePath); err == nil {
+		// Exit code 0 means no staged differences — nothing to commit.
+		return false, nil
+	}
+
+	if _, err := RunGit([]string{"commit", "-m", message}, worktreePath); err != nil {
+		return false, fmt.Errorf("commit unstaged: commit: %w", err)
+	}
+
+	return true, nil
+}
+
 // BranchHasNewCommits returns true if sourceBranch has commits that are not
 // yet in the worktree's current HEAD (i.e. there is work to merge).
 func BranchHasNewCommits(worktreePath, sourceBranch string) (bool, error) {

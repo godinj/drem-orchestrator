@@ -411,6 +411,19 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			hasCommits = true // assume there are commits on error
 		}
 		if !hasCommits {
+			// Agent may have made changes but failed to commit. Rescue them.
+			committed, rescueErr := worktree.CommitUnstagedChanges(
+				ag.WorktreePath,
+				fmt.Sprintf("Auto-commit uncommitted agent work for task: %s", task.Title),
+			)
+			if rescueErr != nil {
+				o.logger.Warn("failed to rescue uncommitted agent work", "agent_id", ag.ID, "error", rescueErr)
+			} else if committed {
+				o.logger.Info("rescued uncommitted agent work", "agent_id", ag.ID, "task_id", task.ID)
+				hasCommits = true
+			}
+		}
+		if !hasCommits {
 			return o.onAgentEmptyWork(ag, task, output)
 		}
 
