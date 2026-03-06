@@ -254,10 +254,13 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.updateDetail()
 		return m, cmd
 
-	case "tab":
+	case "tab", "ctrl+l":
 		m.focus = FocusAgents
 		return m, nil
 	case "shift+tab", "btab":
+		m.focus = FocusDetail
+		return m, nil
+	case "ctrl+j":
 		m.focus = FocusDetail
 		return m, nil
 
@@ -319,8 +322,11 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "tab":
 		m.focus = FocusDetail
 		return m, nil
-	case "shift+tab", "btab":
+	case "shift+tab", "btab", "ctrl+h":
 		m.focus = FocusBoard
+		return m, nil
+	case "ctrl+j":
+		m.focus = FocusDetail
 		return m, nil
 
 	case "g":
@@ -357,6 +363,15 @@ func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = FocusBoard
 		return m, nil
 	case "shift+tab", "btab":
+		m.focus = FocusAgents
+		return m, nil
+	case "ctrl+k":
+		m.focus = FocusBoard
+		return m, nil
+	case "ctrl+h":
+		m.focus = FocusBoard
+		return m, nil
+	case "ctrl+l":
 		m.focus = FocusAgents
 		return m, nil
 	case "j", "down":
@@ -884,7 +899,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  S:supervisor  X:reconcile  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab/C-hjkl:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  S:supervisor  X:reconcile  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.
