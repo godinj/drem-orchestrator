@@ -152,7 +152,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tasksLoadedMsg:
 		m.board.tasks = msg.tasks
-		m.clampCursor()
+		m.board.relocateCursor()
+		m.board.adjustScroll()
 		m.updateDetail()
 		return m, m.refreshData()
 
@@ -163,7 +164,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dataRefreshedMsg:
 		m.board.tasks = msg.tasks
 		m.agents.agents = msg.agents
-		m.clampCursor()
+		m.board.relocateCursor()
+		m.board.adjustScroll()
 		// Only apply detail data if the selection hasn't moved since the
 		// refresh was initiated; otherwise discard stale detail results.
 		selected := m.board.Selected()
@@ -266,10 +268,17 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case "j", "down", "k", "up":
+		prevCursor := m.board.cursor
 		var cmd tea.Cmd
 		m.board, cmd = m.board.Update(msg)
-		m.updateDetail()
-		return m, tea.Batch(cmd, m.refreshData())
+		// Only refresh when the cursor actually moved; pressing j at the
+		// bottom (or k at the top) should be a no-op to avoid redundant
+		// async refreshes that can re-sort the board mid-view.
+		if m.board.cursor != prevCursor {
+			m.updateDetail()
+			return m, tea.Batch(cmd, m.refreshData())
+		}
+		return m, cmd
 
 	case "tab", "ctrl+l":
 		m.focus = FocusAgents
@@ -283,6 +292,7 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case " ":
 		m.toggleBoardCollapse()
+		m.board.adjustScroll()
 		return m, nil
 
 	case "n":
@@ -932,9 +942,36 @@ func (m Model) panelBorderColor(panel Focus) lipgloss.Color {
 }
 
 // updatePanelSizes recalculates panel dimensions after a window resize.
+// These are persisted on the sub-models so that scroll offsets can be
+// maintained correctly between Update and View calls.
 func (m *Model) updatePanelSizes() {
-	// Sizes are computed dynamically in View(), so this is a placeholder
-	// for any future pre-computation.
+	overhead := 8
+	availableHeight := m.height - overhead
+	if availableHeight < 4 {
+		availableHeight = 4
+	}
+	upperHeight := availableHeight * 6 / 10
+	detailHeight := availableHeight - upperHeight
+	if upperHeight < 3 {
+		upperHeight = 3
+	}
+	if detailHeight < 3 {
+		detailHeight = 3
+	}
+
+	innerWidth := m.width - 2
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+	tasksWidth := innerWidth * 6 / 10
+	agentsWidth := innerWidth - tasksWidth
+
+	m.board.width = tasksWidth - 4
+	m.board.height = upperHeight - 2
+	m.agents.width = agentsWidth - 4
+	m.agents.height = upperHeight - 2
+	m.detail.width = innerWidth - 4
+	m.detail.height = detailHeight - 2
 }
 
 // updateDetail refreshes the detail panel based on the currently selected task.
@@ -994,18 +1031,9 @@ func (m *Model) toggleBoardCollapse() {
 			}
 		}
 	}
+	m.board.trackSelected()
 }
 
-// clampCursor ensures the board cursor doesn't exceed the display list length.
-func (m *Model) clampCursor() {
-	count := len(m.board.buildDisplayList())
-	if m.board.cursor >= count {
-		m.board.cursor = count - 1
-	}
-	if m.board.cursor < 0 {
-		m.board.cursor = 0
-	}
-}
 
 // listenForEvents returns a Cmd that blocks on the events channel and wraps
 // the received orchestrator Event as a tea.Msg.
@@ -1092,9 +1120,12 @@ func (m Model) refreshData() tea.Cmd {
 			}
 
 			// Load dependency tasks for display.
+			// Cast to []string to avoid JSONArray's driver.Valuer
+			// serialising the slice as a JSON string in the IN clause.
 			if len(selectedTask.DependencyIDs) > 0 {
 				var depTasks []model.Task
-				db.Where("id IN ?", selectedTask.DependencyIDs).Select("id, title, status").Find(&depTasks)
+				depIDs := []string(selectedTask.DependencyIDs)
+				db.Where("id IN ?", depIDs).Select("id, title, status").Find(&depTasks)
 				for _, dt := range depTasks {
 					deps = append(deps, depInfo{Title: dt.Title, Status: dt.Status})
 				}

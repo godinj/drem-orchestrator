@@ -40,11 +40,13 @@ var statusSortOrder = map[model.TaskStatus]int{
 
 // BoardModel renders the task list panel.
 type BoardModel struct {
-	tasks     []model.Task
-	cursor    int
-	width     int
-	height    int
-	expanded map[uuid.UUID]bool // parent task IDs whose children are shown (collapsed by default)
+	tasks        []model.Task
+	cursor       int
+	selectedID   *uuid.UUID         // tracks cursor by task ID across re-sorts
+	scrollOffset int                // first visible line, maintained for smooth scrolling
+	width        int
+	height       int
+	expanded     map[uuid.UUID]bool // parent task IDs whose children are shown (collapsed by default)
 }
 
 // NewBoardModel creates an empty BoardModel.
@@ -132,6 +134,71 @@ func (b BoardModel) buildDisplayList() []displayEntry {
 	return entries
 }
 
+// relocateCursor finds the task matching selectedID in the current display
+// list and moves the cursor to it. If the task is gone, the cursor is clamped
+// and selectedID updated to whatever is now under the cursor.
+func (b *BoardModel) relocateCursor() {
+	entries := b.buildDisplayList()
+	if len(entries) == 0 {
+		b.cursor = 0
+		b.selectedID = nil
+		return
+	}
+
+	// Try to keep cursor on the same task.
+	if b.selectedID != nil {
+		for i, e := range entries {
+			if e.task.ID == *b.selectedID {
+				b.cursor = i
+				return
+			}
+		}
+	}
+
+	// Task no longer in list; clamp cursor.
+	if b.cursor >= len(entries) {
+		b.cursor = len(entries) - 1
+	}
+	if b.cursor < 0 {
+		b.cursor = 0
+	}
+
+	// Update selectedID to whatever is now at cursor.
+	id := entries[b.cursor].task.ID
+	b.selectedID = &id
+}
+
+// trackSelected sets selectedID to the task currently under the cursor.
+func (b *BoardModel) trackSelected() {
+	if t := b.Selected(); t != nil {
+		id := t.ID
+		b.selectedID = &id
+	}
+}
+
+// adjustScroll clamps scrollOffset so the cursor stays within the visible
+// window.  Must be called from Update (pointer receiver) so changes persist.
+func (b *BoardModel) adjustScroll() {
+	count := len(b.buildDisplayList())
+	if b.height <= 0 || count <= b.height {
+		b.scrollOffset = 0
+		return
+	}
+	if b.cursor < b.scrollOffset {
+		b.scrollOffset = b.cursor
+	}
+	if b.cursor >= b.scrollOffset+b.height {
+		b.scrollOffset = b.cursor - b.height + 1
+	}
+	maxScroll := count - b.height
+	if b.scrollOffset > maxScroll {
+		b.scrollOffset = maxScroll
+	}
+	if b.scrollOffset < 0 {
+		b.scrollOffset = 0
+	}
+}
+
 // Update handles messages for the board panel.
 func (b BoardModel) Update(msg tea.Msg) (BoardModel, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -147,6 +214,8 @@ func (b BoardModel) Update(msg tea.Msg) (BoardModel, tea.Cmd) {
 				b.cursor--
 			}
 		}
+		b.trackSelected()
+		b.adjustScroll()
 	}
 	return b, nil
 }
@@ -234,23 +303,18 @@ func (b BoardModel) View() string {
 		lines = append(lines, line)
 	}
 
-	// Limit visible lines to height.
+	// Limit visible lines to height using the scroll offset maintained by
+	// adjustScroll (called from Update).
 	visible := lines
 	if b.height > 0 && len(visible) > b.height {
-		// Ensure the cursor is visible by scrolling.
-		start := 0
-		if b.cursor >= b.height {
-			start = b.cursor - b.height + 1
+		start := b.scrollOffset
+		if start > len(visible)-b.height {
+			start = len(visible) - b.height
 		}
-		end := start + b.height
-		if end > len(visible) {
-			end = len(visible)
-			start = end - b.height
-			if start < 0 {
-				start = 0
-			}
+		if start < 0 {
+			start = 0
 		}
-		visible = visible[start:end]
+		visible = visible[start : start+b.height]
 	}
 
 	return strings.Join(visible, "\n")
