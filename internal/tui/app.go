@@ -251,7 +251,7 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.board, cmd = m.board.Update(msg)
 		m.updateDetail()
-		return m, cmd
+		return m, tea.Batch(cmd, m.refreshData())
 
 	case "tab", "ctrl+l":
 		m.focus = FocusAgents
@@ -917,6 +917,10 @@ func (m *Model) updateDetail() {
 	selected := m.board.Selected()
 	if selected == nil || m.detail.task == nil || selected.ID != m.detail.task.ID {
 		m.detail.scrollOffset = 0
+		// Clear stale detail data from the previous task.
+		m.detail.comments = nil
+		m.detail.subtasks = nil
+		m.detail.agent = nil
 	}
 	m.detail.task = selected
 	m.detail.logText = ""
