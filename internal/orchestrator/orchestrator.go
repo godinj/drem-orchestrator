@@ -1611,6 +1611,12 @@ func (o *Orchestrator) DeleteSubtask(subtaskID uuid.UUID) error {
 		// StopAgent is best-effort — the agent may already be dead.
 		if err := o.runner.StopAgent(agentID); err != nil {
 			o.logger.Debug("stop agent during subtask delete (may be already stopped)", "agent_id", agentID, "error", err)
+			// StopAgent failed (agent not in running map) — kill tmux session
+			// directly for idle/dead agents that still have one.
+			var ag model.Agent
+			if dbErr := o.db.First(&ag, "id = ?", agentID).Error; dbErr == nil && ag.TmuxSession != "" {
+				_ = o.runner.TmuxManager().KillAgentSession(ag.TmuxSession)
+			}
 		}
 		// Mark agent as dead in DB regardless.
 		o.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("status", model.AgentDead)

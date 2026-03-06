@@ -35,9 +35,11 @@ type DetailModel struct {
 	width    int
 	height   int
 
-	scrollOffset int  // vertical scroll offset for detail content
-	deleteMode   bool // true when selecting an item to delete
-	deleteCursor int  // index into deletableItems()
+	scrollOffset  int  // vertical scroll offset for detail content
+	subtaskCursor int  // selected subtask index (when subtasks exist)
+	focused       bool // true when the detail panel has focus
+	deleteMode    bool // true when selecting an item to delete
+	deleteCursor  int  // index into deletableItems()
 }
 
 // NewDetailModel creates an empty DetailModel.
@@ -91,6 +93,31 @@ func (d DetailModel) isDeleteTarget(kind deleteItemKind, index int) bool {
 	}
 	item := d.selectedDeleteItem()
 	return item != nil && item.kind == kind && item.index == index
+}
+
+// firstDeleteIndex returns the index into deletableItems() of the first item
+// with the given kind, or -1 if none exists.
+func (d DetailModel) firstDeleteIndex(kind deleteItemKind) int {
+	for i, item := range d.deletableItems() {
+		if item.kind == kind {
+			return i
+		}
+	}
+	return -1
+}
+
+// clampSubtaskCursor ensures the subtask cursor doesn't exceed the list length.
+func (d *DetailModel) clampSubtaskCursor() {
+	if len(d.subtasks) == 0 {
+		d.subtaskCursor = 0
+		return
+	}
+	if d.subtaskCursor >= len(d.subtasks) {
+		d.subtaskCursor = len(d.subtasks) - 1
+	}
+	if d.subtaskCursor < 0 {
+		d.subtaskCursor = 0
+	}
 }
 
 // isDeleteSection reports whether the current cursor is within the given section.
@@ -195,10 +222,13 @@ func (d DetailModel) View() string {
 		}
 		sections = append(sections, progressStyle.Render(subtaskHeader))
 		deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
+		cursorHighlight := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
 		for i, sub := range d.subtasks {
 			prefix := "  "
 			if d.isDeleteTarget(deleteItemSubtask, i) {
 				prefix = "X "
+			} else if d.focused && !d.deleteMode && i == d.subtaskCursor {
+				prefix = "> "
 			}
 			line := fmt.Sprintf("%s- [%s] %s", prefix, sub.Status, sub.Title)
 			maxLine := d.width - 4
@@ -207,6 +237,8 @@ func (d DetailModel) View() string {
 			}
 			if d.isDeleteTarget(deleteItemSubtask, i) {
 				line = deleteHighlight.Render(line)
+			} else if d.focused && !d.deleteMode && i == d.subtaskCursor {
+				line = cursorHighlight.Render(line)
 			}
 			sections = append(sections, line)
 		}

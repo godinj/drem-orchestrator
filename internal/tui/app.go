@@ -162,6 +162,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail.subtasks = msg.subtasks
 		m.detail.agent = msg.agent
 		m.detail.comments = msg.comments
+		m.detail.clampSubtaskCursor()
 		m.clampCursor()
 		m.updateDetail() // also refreshes agent task filter with new subtasks
 		return m, nil
@@ -359,10 +360,20 @@ func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = FocusAgents
 		return m, nil
 	case "j", "down":
-		m.detail.scrollOffset++
+		if len(m.detail.subtasks) > 0 {
+			if m.detail.subtaskCursor < len(m.detail.subtasks)-1 {
+				m.detail.subtaskCursor++
+			}
+		} else {
+			m.detail.scrollOffset++
+		}
 		return m, nil
 	case "k", "up":
-		if m.detail.scrollOffset > 0 {
+		if len(m.detail.subtasks) > 0 {
+			if m.detail.subtaskCursor > 0 {
+				m.detail.subtaskCursor--
+			}
+		} else if m.detail.scrollOffset > 0 {
 			m.detail.scrollOffset--
 		}
 		return m, nil
@@ -625,7 +636,16 @@ func (m Model) handleDelete() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.detail.deleteMode = true
-	m.detail.deleteCursor = len(items) - 1
+	// Default cursor to the subtask at the current subtask cursor, otherwise last item.
+	if idx := m.detail.firstDeleteIndex(deleteItemSubtask); idx >= 0 {
+		m.detail.deleteCursor = idx + m.detail.subtaskCursor
+		// Clamp in case subtaskCursor is out of range.
+		if m.detail.deleteCursor >= len(items) {
+			m.detail.deleteCursor = len(items) - 1
+		}
+	} else {
+		m.detail.deleteCursor = len(items) - 1
+	}
 	return m, nil
 }
 
@@ -804,6 +824,7 @@ func (m Model) View() string {
 
 	upperRow := lipgloss.JoinHorizontal(lipgloss.Top, tasksPanel, agentsPanel)
 
+	m.detail.focused = m.focus == FocusDetail
 	detailPanel := panelStyle.
 		Width(innerWidth).
 		Height(detailHeight).
@@ -902,6 +923,7 @@ func (m *Model) updateDetail() {
 	selected := m.board.Selected()
 	if selected == nil || m.detail.task == nil || selected.ID != m.detail.task.ID {
 		m.detail.scrollOffset = 0
+		m.detail.subtaskCursor = 0
 	}
 	m.detail.task = selected
 	m.detail.logText = ""
