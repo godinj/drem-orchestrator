@@ -15,7 +15,6 @@ type deleteItemKind int
 
 const (
 	deleteItemPlanStep deleteItemKind = iota
-	deleteItemSubtask
 	deleteItemComment
 )
 
@@ -35,17 +34,15 @@ type DetailModel struct {
 	width    int
 	height   int
 
-	scrollOffset      int  // vertical scroll offset for detail content
-	subtaskCursor     int  // selected subtask index (when subtasks exist)
-	focused           bool // true when the detail panel has focus
-	deleteMode        bool // true when selecting an item to delete
-	deleteCursor      int  // index into deletableItems()
-	subtasksCollapsed bool // true when subtask list is folded
+	scrollOffset int  // vertical scroll offset for detail content
+	focused      bool // true when the detail panel has focus
+	deleteMode   bool // true when selecting an item to delete
+	deleteCursor int  // index into deletableItems()
 }
 
 // NewDetailModel creates an empty DetailModel.
 func NewDetailModel() DetailModel {
-	return DetailModel{subtasksCollapsed: true}
+	return DetailModel{}
 }
 
 // deletableItems returns a flat list of all items that can be deleted in the
@@ -62,11 +59,6 @@ func (d DetailModel) deletableItems() []deleteItem {
 				}
 			}
 		}
-	}
-
-	// Subtasks (when parent has children).
-	for i := range d.subtasks {
-		items = append(items, deleteItem{kind: deleteItemSubtask, index: i})
 	}
 
 	// Comments.
@@ -105,20 +97,6 @@ func (d DetailModel) firstDeleteIndex(kind deleteItemKind) int {
 		}
 	}
 	return -1
-}
-
-// clampSubtaskCursor ensures the subtask cursor doesn't exceed the list length.
-func (d *DetailModel) clampSubtaskCursor() {
-	if len(d.subtasks) == 0 {
-		d.subtaskCursor = 0
-		return
-	}
-	if d.subtaskCursor >= len(d.subtasks) {
-		d.subtaskCursor = len(d.subtasks) - 1
-	}
-	if d.subtaskCursor < 0 {
-		d.subtaskCursor = 0
-	}
 }
 
 // isDeleteSection reports whether the current cursor is within the given section.
@@ -202,50 +180,6 @@ func (d DetailModel) View() string {
 						sections = append(sections, line)
 					}
 				}
-			}
-		}
-	}
-
-	// Subtask progress.
-	if len(d.subtasks) > 0 {
-		done := 0
-		for _, sub := range d.subtasks {
-			if sub.Status == model.StatusDone {
-				done++
-			}
-		}
-		arrow := "\u25be" // ▾ expanded
-		if d.subtasksCollapsed {
-			arrow = "\u25b8" // ▸ collapsed
-		}
-		subtaskHeader := fmt.Sprintf("%s Subtasks: %d/%d complete", arrow, done, len(d.subtasks))
-		progressStyle := lipgloss.NewStyle().Foreground(colorInfo)
-		if d.isDeleteSection(deleteItemSubtask) {
-			subtaskHeader += " (select subtask to delete)"
-			progressStyle = progressStyle.Foreground(colorDanger).Bold(true)
-		}
-		sections = append(sections, progressStyle.Render(subtaskHeader))
-		if !d.subtasksCollapsed {
-			deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
-			cursorHighlight := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
-			for i, sub := range d.subtasks {
-				prefix := "  "
-				if d.isDeleteTarget(deleteItemSubtask, i) {
-					prefix = "X "
-				} else if d.focused && !d.deleteMode && i == d.subtaskCursor {
-					prefix = "> "
-				}
-				line := fmt.Sprintf("%s- [%s] %s", prefix, sub.Status, sub.Title)
-				maxLine := d.width - 4
-				if maxLine > 0 && len(line) > maxLine {
-					line = line[:maxLine-1] + "\u2026"
-				}
-				if d.isDeleteTarget(deleteItemSubtask, i) {
-					line = deleteHighlight.Render(line)
-				} else if d.focused && !d.deleteMode && i == d.subtaskCursor {
-					line = cursorHighlight.Render(line)
-				}
-				sections = append(sections, line)
 			}
 		}
 	}
@@ -355,8 +289,6 @@ func (d DetailModel) availableActions() string {
 			switch item.kind {
 			case deleteItemPlanStep:
 				target = "plan step"
-			case deleteItemSubtask:
-				target = "subtask (+ agent)"
 			case deleteItemComment:
 				target = "comment"
 			}
