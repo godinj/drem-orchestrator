@@ -48,6 +48,7 @@ type agentsLoadedMsg struct {
 type dataRefreshedMsg struct {
 	tasks    []model.Task
 	agents   []model.Agent
+	forTaskID *uuid.UUID // which task the detail data was loaded for
 	subtasks []model.Task
 	agent    *model.Agent
 	comments []model.TaskComment
@@ -56,14 +57,16 @@ type dataRefreshedMsg struct {
 
 // logCapturedMsg carries captured tmux pane output.
 type logCapturedMsg struct {
-	text string
-	err  error
+	forTaskID uuid.UUID
+	text      string
+	err       error
 }
 
 // orchLogCapturedMsg carries orchestrator log file content.
 type orchLogCapturedMsg struct {
-	text string
-	err  error
+	forTaskID uuid.UUID
+	text      string
+	err       error
 }
 
 // supervisorSpawnedMsg carries the result of spawning a supervisor session.
@@ -160,11 +163,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case dataRefreshedMsg:
 		m.board.tasks = msg.tasks
 		m.agents.agents = msg.agents
-		m.detail.subtasks = msg.subtasks
-		m.detail.agent = msg.agent
-		m.detail.comments = msg.comments
-		m.detail.deps = msg.deps
 		m.clampCursor()
+		// Only apply detail data if the selection hasn't moved since the
+		// refresh was initiated; otherwise discard stale detail results.
+		selected := m.board.Selected()
+		if selected != nil && msg.forTaskID != nil && selected.ID == *msg.forTaskID {
+			m.detail.subtasks = msg.subtasks
+			m.detail.agent = msg.agent
+			m.detail.comments = msg.comments
+			m.detail.deps = msg.deps
+		}
 		m.updateDetail() // also refreshes agent task filter with new subtasks
 		return m, nil
 
@@ -173,6 +181,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.refreshData(), listenForEvents(m.events))
 
 	case logCapturedMsg:
+		// Discard stale log capture if the selection has moved.
+		if selected := m.board.Selected(); selected == nil || selected.ID != msg.forTaskID {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.detail.logText = fmt.Sprintf("Error: %v", msg.err)
 		} else {
@@ -181,6 +193,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case orchLogCapturedMsg:
+		// Discard stale log capture if the selection has moved.
+		if selected := m.board.Selected(); selected == nil || selected.ID != msg.forTaskID {
+			return m, nil
+		}
 		if msg.err != nil {
 			m.detail.logText = fmt.Sprintf("Error: %v", msg.err)
 		} else {
@@ -598,30 +614,37 @@ func (m Model) handleJump() (tea.Model, tea.Cmd) {
 
 // handleLog captures the pane output from the selected task's agent.
 func (m Model) handleLog() (tea.Model, tea.Cmd) {
-	if m.detail.agent == nil || m.detail.agent.TmuxSession == "" {
+	selected := m.board.Selected()
+	if selected == nil || m.detail.agent == nil || m.detail.agent.TmuxSession == "" {
 		return m, nil
 	}
+	taskID := selected.ID
 	sessionName := m.detail.agent.TmuxSession
 	tmuxMgr := m.tmux
 	return m, func() tea.Msg {
 		text, err := tmuxMgr.CaptureAgentPane(sessionName, 50)
-		return logCapturedMsg{text: text, err: err}
+		return logCapturedMsg{forTaskID: taskID, text: text, err: err}
 	}
 }
 
 // handleOrchLog reads the tail of the orchestrator log file.
 func (m Model) handleOrchLog() (tea.Model, tea.Cmd) {
+	selected := m.board.Selected()
+	if selected == nil {
+		return m, nil
+	}
+	taskID := selected.ID
 	logPath := m.logPath
 	return m, func() tea.Msg {
 		data, err := os.ReadFile(logPath)
 		if err != nil {
-			return orchLogCapturedMsg{err: err}
+			return orchLogCapturedMsg{forTaskID: taskID, err: err}
 		}
 		lines := strings.Split(string(data), "\n")
 		if len(lines) > 50 {
 			lines = lines[len(lines)-50:]
 		}
-		return orchLogCapturedMsg{text: strings.Join(lines, "\n")}
+		return orchLogCapturedMsg{forTaskID: taskID, text: strings.Join(lines, "\n")}
 	}
 }
 
@@ -1026,6 +1049,13 @@ func (m Model) refreshData() tea.Cmd {
 	projectID := m.projectID
 	selectedTask := m.board.Selected()
 
+	// Capture the task ID so the receiver can detect stale results.
+	var forTaskID *uuid.UUID
+	if selectedTask != nil {
+		id := selectedTask.ID
+		forTaskID = &id
+	}
+
 	return func() tea.Msg {
 		var tasks []model.Task
 		db.Where("project_id = ?", projectID).
@@ -1072,12 +1102,13 @@ func (m Model) refreshData() tea.Cmd {
 		}
 
 		return dataRefreshedMsg{
-			tasks:    tasks,
-			agents:   agents,
-			subtasks: subtasks,
-			agent:    detailAgent,
-			comments: comments,
-			deps:     deps,
+			tasks:     tasks,
+			agents:    agents,
+			forTaskID: forTaskID,
+			subtasks:  subtasks,
+			agent:     detailAgent,
+			comments:  comments,
+			deps:      deps,
 		}
 	}
 }
