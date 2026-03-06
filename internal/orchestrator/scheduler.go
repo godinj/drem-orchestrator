@@ -69,10 +69,10 @@ func GetScheduleSummary(db *gorm.DB, projectID uuid.UUID) (*ScheduleSummary, err
 	}
 	summary.QueueDepth = len(assignable)
 
-	// Find blocked tasks: BACKLOG subtasks with unmet dependencies.
+	// Find blocked tasks: BACKLOG tasks (root or subtask) with unmet dependencies.
 	var backlogSubtasks []model.Task
 	if err := db.Where(
-		"project_id = ? AND status = ? AND parent_task_id IS NOT NULL AND dependency_ids IS NOT NULL",
+		"project_id = ? AND status = ? AND dependency_ids IS NOT NULL",
 		projectID, model.StatusBacklog,
 	).Find(&backlogSubtasks).Error; err != nil {
 		return nil, fmt.Errorf("get schedule summary: blocked: %w", err)

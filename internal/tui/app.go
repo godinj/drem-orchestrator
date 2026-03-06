@@ -51,6 +51,7 @@ type dataRefreshedMsg struct {
 	subtasks []model.Task
 	agent    *model.Agent
 	comments []model.TaskComment
+	deps     []depInfo
 }
 
 // logCapturedMsg carries captured tmux pane output.
@@ -162,6 +163,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.detail.subtasks = msg.subtasks
 		m.detail.agent = msg.agent
 		m.detail.comments = msg.comments
+		m.detail.deps = msg.deps
 		m.clampCursor()
 		m.updateDetail() // also refreshes agent task filter with new subtasks
 		return m, nil
@@ -921,6 +923,7 @@ func (m *Model) updateDetail() {
 		m.detail.comments = nil
 		m.detail.subtasks = nil
 		m.detail.agent = nil
+		m.detail.deps = nil
 	}
 	m.detail.task = selected
 	m.detail.logText = ""
@@ -1035,6 +1038,7 @@ func (m Model) refreshData() tea.Cmd {
 		var subtasks []model.Task
 		var detailAgent *model.Agent
 		var comments []model.TaskComment
+		var deps []depInfo
 
 		if selectedTask != nil {
 			db.Where("parent_task_id = ?", selectedTask.ID).Find(&subtasks)
@@ -1056,6 +1060,15 @@ func (m Model) refreshData() tea.Cmd {
 					detailAgent = &ag
 				}
 			}
+
+			// Load dependency tasks for display.
+			if len(selectedTask.DependencyIDs) > 0 {
+				var depTasks []model.Task
+				db.Where("id IN ?", selectedTask.DependencyIDs).Select("id, title, status").Find(&depTasks)
+				for _, dt := range depTasks {
+					deps = append(deps, depInfo{Title: dt.Title, Status: dt.Status})
+				}
+			}
 		}
 
 		return dataRefreshedMsg{
@@ -1064,6 +1077,7 @@ func (m Model) refreshData() tea.Cmd {
 			subtasks: subtasks,
 			agent:    detailAgent,
 			comments: comments,
+			deps:     deps,
 		}
 	}
 }

@@ -10,6 +10,12 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
+// depInfo holds a dependency task's title and status for display.
+type depInfo struct {
+	Title  string
+	Status model.TaskStatus
+}
+
 // deleteItemKind distinguishes the type of item being selected for deletion.
 type deleteItemKind int
 
@@ -33,6 +39,8 @@ type DetailModel struct {
 	logText  string
 	width    int
 	height   int
+
+	deps []depInfo // resolved dependency tasks
 
 	scrollOffset int  // vertical scroll offset for detail content
 	focused      bool // true when the detail panel has focus
@@ -149,6 +157,16 @@ func (d DetailModel) View() string {
 		infoParts = append(infoParts, fmt.Sprintf("Branch: %s", branch))
 	}
 	sections = append(sections, strings.Join(infoParts, "  |  "))
+
+	// Dependencies.
+	if len(d.deps) > 0 {
+		depStyle := lipgloss.NewStyle().Foreground(colorWarning)
+		sections = append(sections, depStyle.Render("Depends on:"))
+		for _, dep := range d.deps {
+			badge := StatusBadge(dep.Status)
+			sections = append(sections, fmt.Sprintf("  %s  %s", badge, dep.Title))
+		}
+	}
 
 	// Plan subtasks (for plan_review, show the proposed plan).
 	if d.task.Status == model.StatusPlanReview && d.task.Plan != nil {

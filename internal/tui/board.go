@@ -277,6 +277,12 @@ func (b BoardModel) Selected() *model.Task {
 // taskAnnotation returns a short annotation string for tasks with notable
 // context flags (e.g. empty work, retries, empty feature branch).
 func taskAnnotation(t model.Task) string {
+	// Root tasks stuck in backlog with dependencies are pending.
+	if t.Status == model.StatusBacklog && t.ParentTaskID == nil && len(t.DependencyIDs) > 0 {
+		return lipgloss.NewStyle().Foreground(colorWarning).Render(
+			fmt.Sprintf("\u23f3 pending %d", len(t.DependencyIDs)),
+		)
+	}
 	if t.Context == nil {
 		return ""
 	}

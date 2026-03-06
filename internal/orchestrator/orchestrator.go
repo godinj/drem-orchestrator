@@ -115,14 +115,26 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 	_ = ctx // reserved for future use
 
 	// 1. Process BACKLOG tasks -> transition to PLANNING.
+	// Root tasks with unmet dependencies remain in BACKLOG (pending).
 	var backlogTasks []model.Task
 	if err := o.db.Where("project_id = ? AND status = ? AND parent_task_id IS NULL", o.projectID, model.StatusBacklog).
 		Find(&backlogTasks).Error; err != nil {
 		o.logger.Error("query backlog tasks", "error", err)
 	}
 	for i := range backlogTasks {
-		if err := o.processBacklog(&backlogTasks[i]); err != nil {
-			o.logger.Error("process backlog", "task_id", backlogTasks[i].ID, "error", err)
+		task := &backlogTasks[i]
+		if len(task.DependencyIDs) > 0 {
+			met, err := DependenciesMet(o.db, task.DependencyIDs)
+			if err != nil {
+				o.logger.Error("check root task dependencies", "task_id", task.ID, "error", err)
+				continue
+			}
+			if !met {
+				continue
+			}
+		}
+		if err := o.processBacklog(task); err != nil {
+			o.logger.Error("process backlog", "task_id", task.ID, "error", err)
 		}
 	}
 
