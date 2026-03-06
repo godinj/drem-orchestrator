@@ -22,6 +22,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
+	"github.com/godinj/drem-orchestrator/internal/taskimport"
 	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
 	"github.com/godinj/drem-orchestrator/internal/tui"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
@@ -31,6 +32,7 @@ func main() {
 	// Parse flags.
 	configPath := flag.String("config", "drem.toml", "config file path")
 	repoPath := flag.String("repo", "", "bare repo path (required)")
+	importPath := flag.String("import", "", "import tasks from a Markdown file")
 	flag.Parse()
 
 	// Load config.
@@ -48,6 +50,41 @@ func main() {
 	// Derive session name.
 	projectName := filepath.Base(cfg.BareRepoPath)
 	projectName = strings.TrimSuffix(projectName, ".git")
+
+	// Handle --import: create tasks from Markdown file and exit.
+	if *importPath != "" {
+		database, err := db.Init(cfg.DatabasePath)
+		if err != nil {
+			log.Fatalf("database: %v", err)
+		}
+
+		var project model.Project
+		result := database.Where("bare_repo_path = ?", cfg.BareRepoPath).First(&project)
+		if result.Error != nil {
+			project = model.Project{
+				Name:          projectName,
+				BareRepoPath:  cfg.BareRepoPath,
+				DefaultBranch: cfg.DefaultBranch,
+			}
+			if err := database.Create(&project).Error; err != nil {
+				log.Fatalf("create project: %v", err)
+			}
+		}
+
+		f, err := os.Open(*importPath)
+		if err != nil {
+			log.Fatalf("open import file: %v", err)
+		}
+		defer f.Close()
+
+		n, err := taskimport.Import(f, database, project.ID)
+		if err != nil {
+			log.Fatalf("import: %v", err)
+		}
+		fmt.Printf("Imported %d tasks from %s\n", n, *importPath)
+		return
+	}
+
 	sessionName := "󱇯 dash " + projectName
 
 	// Self-respawn: if DREM_SESSION is not set, we are the outer invocation.
