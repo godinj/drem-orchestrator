@@ -149,12 +149,11 @@ func (d DetailModel) View() string {
 	sections = append(sections, title)
 
 	if d.task.Description != "" {
-		desc := d.task.Description
-		maxDesc := d.width - 4
-		if maxDesc > 0 && len(desc) > maxDesc {
-			desc = desc[:maxDesc-1] + "\u2026"
+		descWidth := d.width - 2
+		if descWidth < 10 {
+			descWidth = 10
 		}
-		sections = append(sections, subtitleStyle.Render(desc))
+		sections = append(sections, subtitleStyle.Width(descWidth).Render(d.task.Description))
 	}
 
 	// Status line: status, agent, branch.
@@ -273,6 +272,10 @@ func (d DetailModel) View() string {
 		}
 		sections = append(sections, commentStyle.Render(commentHeader))
 		deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
+		commentWidth := d.width - 2
+		if commentWidth < 10 {
+			commentWidth = 10
+		}
 		for i, c := range d.comments {
 			prefix := "  "
 			if d.isDeleteTarget(deleteItemComment, i) {
@@ -280,14 +283,11 @@ func (d DetailModel) View() string {
 			} else if i == len(d.comments)-1 {
 				prefix = "> "
 			}
-			body := c.Body
-			maxBody := d.width - 20
-			if maxBody > 0 && len(body) > maxBody {
-				body = body[:maxBody-1] + "\u2026"
-			}
-			line := fmt.Sprintf("%s[%s] %s", prefix, c.Author, body)
+			line := fmt.Sprintf("%s[%s] %s", prefix, c.Author, c.Body)
 			if d.isDeleteTarget(deleteItemComment, i) {
-				line = deleteHighlight.Render(line)
+				line = deleteHighlight.Width(commentWidth).Render(line)
+			} else {
+				line = lipgloss.NewStyle().Width(commentWidth).Render(line)
 			}
 			sections = append(sections, line)
 		}
