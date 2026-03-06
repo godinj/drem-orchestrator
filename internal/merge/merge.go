@@ -233,12 +233,9 @@ func (o *Orchestrator) MergeAllAgentsIntoFeature(task *model.Task, featureWorktr
 // removed.
 func (o *Orchestrator) MergeFeatureIntoMain(task *model.Task) (*worktree.MergeResult, error) {
 	// Determine the main worktree path.
-	mainWorktree := filepath.Join(o.wt.BareRepoPath, o.wt.DefaultBranch)
-
-	// If the main worktree directory does not exist, the bare repo itself may
-	// be the working tree (non-bare setup).
-	if _, err := os.Stat(mainWorktree); os.IsNotExist(err) {
-		mainWorktree = o.wt.BareRepoPath
+	mainWorktree, err := o.wt.MainWorktreePath()
+	if err != nil {
+		return nil, fmt.Errorf("merge feature into main: %w", err)
 	}
 
 	// Ensure the main worktree is clean.
@@ -339,9 +336,9 @@ func (o *Orchestrator) GetMergeStatus(projectID uuid.UUID) (*MergeStatus, error)
 
 	status := &MergeStatus{}
 
-	mainWorktree := filepath.Join(o.wt.BareRepoPath, o.wt.DefaultBranch)
-	if _, err := os.Stat(mainWorktree); os.IsNotExist(err) {
-		mainWorktree = o.wt.BareRepoPath
+	mainWorktree, err := o.wt.MainWorktreePath()
+	if err != nil {
+		return nil, fmt.Errorf("get merge status: %w", err)
 	}
 
 	for _, task := range tasks {

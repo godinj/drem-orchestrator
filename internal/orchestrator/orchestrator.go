@@ -211,9 +211,10 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 
 // ReconcileResult describes the fixes applied by a single Reconcile run.
 type ReconcileResult struct {
-	StaleSubtasksReset     int
-	EmptyFeaturesFailed    int
-	OrphanWorktreesCleaned int
+	StaleSubtasksReset      int
+	OrphanedSubtasksFixed   int
+	EmptyFeaturesFailed     int
+	OrphanWorktreesCleaned  int
 }
 
 // Reconcile audits the project for state inconsistencies and corrects them.
@@ -228,6 +229,12 @@ func (o *Orchestrator) Reconcile() (int, error) {
 		r.StaleSubtasksReset = n
 	}
 
+	if n, err := o.reconcileOrphanedSubtasks(); err != nil {
+		return 0, fmt.Errorf("reconcile orphaned subtasks: %w", err)
+	} else {
+		r.OrphanedSubtasksFixed = n
+	}
+
 	if n, err := o.reconcileEmptyFeatures(); err != nil {
 		return 0, fmt.Errorf("reconcile empty features: %w", err)
 	} else {
@@ -240,7 +247,7 @@ func (o *Orchestrator) Reconcile() (int, error) {
 		r.OrphanWorktreesCleaned = n
 	}
 
-	total := r.StaleSubtasksReset + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned
+	total := r.StaleSubtasksReset + r.OrphanedSubtasksFixed + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned
 	if total > 0 {
 		o.emit("reconcile", r)
 	}
@@ -309,6 +316,151 @@ func (o *Orchestrator) reconcileStaleSubtasks() (int, error) {
 			}
 			fixed++
 		}
+	}
+	return fixed, nil
+}
+
+// reconcileOrphanedSubtasks finds IN_PROGRESS subtasks whose assigned agent
+// is idle or dead — meaning the agent finished but the completion signal was
+// lost before the subtask could be transitioned. For each orphaned subtask,
+// it attempts to merge any remaining agent work into the feature branch and
+// fast-tracks the subtask to DONE. If the agent branch has no mergeable work
+// and the feature branch is empty, the subtask is reset to BACKLOG.
+func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
+	var subtasks []model.Task
+	if err := o.db.Where(
+		"project_id = ? AND status = ? AND parent_task_id IS NOT NULL AND assigned_agent_id IS NOT NULL",
+		o.projectID, model.StatusInProgress,
+	).Find(&subtasks).Error; err != nil {
+		return 0, err
+	}
+
+	fixed := 0
+	for i := range subtasks {
+		sub := &subtasks[i]
+
+		var ag model.Agent
+		if err := o.db.First(&ag, "id = ?", sub.AssignedAgentID).Error; err != nil {
+			// Agent record missing — reset subtask for rescheduling.
+			o.logger.Warn("reconcile: assigned agent not found, resetting subtask",
+				"subtask_id", sub.ID, "agent_id", sub.AssignedAgentID)
+			sub.Status = model.StatusBacklog
+			sub.AssignedAgentID = nil
+			sub.UpdatedAt = time.Now()
+			if err := o.db.Save(sub).Error; err != nil {
+				o.logger.Error("reconcile: save subtask", "subtask_id", sub.ID, "error", err)
+			}
+			fixed++
+			continue
+		}
+
+		// Only act if the agent is no longer actively working.
+		if ag.Status == model.AgentWorking || ag.Status == model.AgentBlocked {
+			continue
+		}
+
+		o.logger.Info("reconcile: processing orphaned in_progress subtask",
+			"subtask_id", sub.ID, "agent_id", ag.ID, "agent_status", ag.Status)
+
+		// Resolve the feature branch from the parent task.
+		featureBranch := ""
+		if sub.ParentTaskID != nil {
+			var parent model.Task
+			if err := o.db.Select("worktree_branch").First(&parent, "id = ?", sub.ParentTaskID).Error; err == nil {
+				featureBranch = parent.WorktreeBranch
+			}
+		}
+
+		// Attempt to merge agent work if the branch still exists.
+		merged := false
+		if ag.WorktreeBranch != "" && featureBranch != "" {
+			fn := strings.TrimPrefix(featureBranch, "feature/")
+			featureDir := o.worktree.FeatureWorktreePath(fn)
+
+			// Ensure the feature worktree is clean before merge attempts.
+			// Leftover changes (e.g. plan.json) block MergeAgentIntoFeature.
+			if committed, cErr := worktree.CommitUnstagedChanges(
+				featureDir, "Auto-commit uncommitted feature worktree changes (reconcile)",
+			); cErr != nil {
+				o.logger.Warn("reconcile: failed to clean feature worktree", "feature", featureBranch, "error", cErr)
+			} else if committed {
+				o.logger.Info("reconcile: committed leftover changes in feature worktree", "feature", featureBranch)
+			}
+
+			hasCommits, err := worktree.BranchHasNewCommits(featureDir, ag.WorktreeBranch)
+			if err != nil {
+				// Branch likely already cleaned up — assume merge happened.
+				merged = true
+			} else if hasCommits {
+				result, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir)
+				if mergeErr != nil {
+					o.logger.Error("reconcile: merge agent into feature failed",
+						"subtask_id", sub.ID, "agent_id", ag.ID, "error", mergeErr)
+				} else if result.Success {
+					merged = true
+					if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+						o.logger.Warn("reconcile: cleanup agent worktree", "agent_id", ag.ID, "error", err)
+					}
+				} else {
+					o.logger.Error("reconcile: merge had conflicts",
+						"subtask_id", sub.ID, "conflicts", result.Conflicts)
+				}
+			} else {
+				// No commits on agent branch — already merged or empty work.
+				merged = true
+			}
+		} else {
+			merged = true
+		}
+
+		if !merged {
+			if err := o.failTask(sub, "reconcile: agent work could not be merged into feature branch"); err != nil {
+				o.logger.Error("reconcile: fail subtask", "subtask_id", sub.ID, "error", err)
+			}
+			fixed++
+			continue
+		}
+
+		// Clean up the agent record if it still references this subtask.
+		if ag.CurrentTaskID != nil && *ag.CurrentTaskID == sub.ID {
+			ag.CurrentTaskID = nil
+			if ag.Status == model.AgentDead {
+				ag.Status = model.AgentIdle
+			}
+			if err := o.db.Save(&ag).Error; err != nil {
+				o.logger.Error("reconcile: save agent", "agent_id", ag.ID, "error", err)
+			}
+		}
+
+		// Fast-track subtask to DONE.
+		transitions := []model.TaskStatus{
+			model.StatusTestingReady,
+			model.StatusManualTesting,
+			model.StatusMerging,
+			model.StatusDone,
+		}
+		for _, target := range transitions {
+			if sub.Status == target {
+				continue
+			}
+			evt, err := state.TransitionTask(sub, target, "orchestrator",
+				map[string]any{"reason": "reconcile-fasttrack"})
+			if err != nil {
+				o.logger.Debug("reconcile fast-track skip",
+					"subtask_id", sub.ID, "from", sub.Status, "to", target, "error", err)
+				continue
+			}
+			if err := o.db.Create(evt).Error; err != nil {
+				o.logger.Error("reconcile: save event", "subtask_id", sub.ID, "error", err)
+				break
+			}
+		}
+
+		if err := o.db.Save(sub).Error; err != nil {
+			o.logger.Error("reconcile: save subtask", "subtask_id", sub.ID, "error", err)
+			continue
+		}
+		fixed++
 	}
 	return fixed, nil
 }
@@ -687,8 +839,13 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			map[string]any{"reason": "merge into feature branch failed, agent branch preserved"})
 		if err != nil {
 			o.logger.Warn("failed to transition task to failed after merge failure", "task_id", task.ID, "error", err)
-		} else if err := o.db.Create(evt).Error; err != nil {
-			return fmt.Errorf("on agent completed: save merge-failure event: %w", err)
+		} else {
+			if err := o.db.Save(task).Error; err != nil {
+				return fmt.Errorf("on agent completed: save task after merge failure: %w", err)
+			}
+			if err := o.db.Create(evt).Error; err != nil {
+				return fmt.Errorf("on agent completed: save merge-failure event: %w", err)
+			}
 		}
 		return nil
 	}

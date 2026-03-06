@@ -77,6 +77,33 @@ func (m *Manager) FeatureWorktreePath(name string) string {
 	return filepath.Join(m.FeatureGroupDir(name), "integration")
 }
 
+// MainWorktreePath returns the filesystem path of the worktree that has the
+// default branch checked out.  It queries `git worktree list` to find the
+// actual path rather than guessing from directory names, which may not match
+// the branch name.
+func (m *Manager) MainWorktreePath() (string, error) {
+	output, err := RunGit([]string{"worktree", "list", "--porcelain"}, m.BareRepoPath)
+	if err != nil {
+		return "", fmt.Errorf("main worktree path: list worktrees: %w", err)
+	}
+
+	var currentPath string
+	for _, line := range strings.Split(output, "\n") {
+		if strings.HasPrefix(line, "worktree ") {
+			currentPath = strings.TrimPrefix(line, "worktree ")
+		}
+		if strings.TrimSpace(line) == "branch refs/heads/"+m.DefaultBranch && currentPath != "" {
+			// Skip the bare repo entry itself.
+			if currentPath == m.BareRepoPath {
+				continue
+			}
+			return currentPath, nil
+		}
+	}
+
+	return "", fmt.Errorf("main worktree path: no worktree found for branch %s", m.DefaultBranch)
+}
+
 // NewManager creates a Manager for the given bare repo.
 func NewManager(bareRepoPath, defaultBranch string) *Manager {
 	return &Manager{
