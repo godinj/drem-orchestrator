@@ -264,6 +264,10 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = FocusDetail
 		return m, nil
 
+	case " ":
+		m.toggleBoardCollapse()
+		return m, nil
+
 	case "n":
 		m.focus = FocusCreate
 		m.create.Reset()
@@ -380,6 +384,11 @@ func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "k", "up":
 		if m.detail.scrollOffset > 0 {
 			m.detail.scrollOffset--
+		}
+		return m, nil
+	case " ":
+		if len(m.detail.subtasks) > 0 {
+			m.detail.subtasksCollapsed = !m.detail.subtasksCollapsed
 		}
 		return m, nil
 	case "a":
@@ -942,6 +951,40 @@ func (m *Model) updateDetail() {
 		}
 	}
 	m.agents.setTaskFilter(taskID, subtaskIDs)
+}
+
+// toggleBoardCollapse toggles the collapsed state of the selected task's
+// children in the board panel. If the cursor is on a parent, toggle it.
+// If on a child, toggle the parent.
+func (m *Model) toggleBoardCollapse() {
+	entries := m.board.buildDisplayList()
+	if m.board.cursor < 0 || m.board.cursor >= len(entries) {
+		return
+	}
+	entry := entries[m.board.cursor]
+
+	if m.board.expanded == nil {
+		m.board.expanded = make(map[uuid.UUID]bool)
+	}
+
+	if entry.hasChildren {
+		// Toggle this parent.
+		m.board.expanded[entry.task.ID] = !m.board.expanded[entry.task.ID]
+	} else if entry.isChild && entry.task.ParentTaskID != nil {
+		// Toggle the parent; move cursor to the parent row.
+		pid := *entry.task.ParentTaskID
+		m.board.expanded[pid] = !m.board.expanded[pid]
+		// If we just collapsed, find the parent row and move cursor there.
+		if !m.board.expanded[pid] {
+			newEntries := m.board.buildDisplayList()
+			for i, e := range newEntries {
+				if e.task.ID == pid {
+					m.board.cursor = i
+					break
+				}
+			}
+		}
+	}
 }
 
 // clampCursor ensures the board cursor doesn't exceed the display list length.

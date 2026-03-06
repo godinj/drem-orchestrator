@@ -134,7 +134,14 @@ func TestBuildDisplayList(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := BoardModel{tasks: tt.tasks}
+			// Expand all parents so existing tests see children.
+			expanded := make(map[uuid.UUID]bool)
+			for _, task := range tt.tasks {
+				if task.ParentTaskID == nil {
+					expanded[task.ID] = true
+				}
+			}
+			b := BoardModel{tasks: tt.tasks, expanded: expanded}
 			entries := b.buildDisplayList()
 			if len(entries) != tt.wantLen {
 				t.Fatalf("expected %d entries, got %d", tt.wantLen, len(entries))
@@ -175,7 +182,7 @@ func TestSelected(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := BoardModel{cursor: tt.cursor}
+			b := BoardModel{cursor: tt.cursor, expanded: map[uuid.UUID]bool{parentA: true, parentB: true}}
 			if tt.name != "empty tasks" {
 				b.tasks = tasks
 			}

@@ -15,9 +15,12 @@ import (
 // displayEntry is one row in the rendered task list, holding the task and
 // optional tree-connector metadata for child tasks.
 type displayEntry struct {
-	task      model.Task
-	isChild   bool
-	connector string // e.g. "├─ " or "└─ "
+	task        model.Task
+	isChild     bool
+	connector   string // e.g. "├─ " or "└─ "
+	hasChildren bool   // true if this root task has child entries
+	collapsed   bool   // true if children are hidden
+	childCount  int    // number of children (shown in collapsed indicator)
 }
 
 // statusSortOrder controls the display order of tasks: actionable first,
@@ -37,10 +40,11 @@ var statusSortOrder = map[model.TaskStatus]int{
 
 // BoardModel renders the task list panel.
 type BoardModel struct {
-	tasks  []model.Task
-	cursor int
-	width  int
-	height int
+	tasks     []model.Task
+	cursor    int
+	width     int
+	height    int
+	expanded map[uuid.UUID]bool // parent task IDs whose children are shown (collapsed by default)
 }
 
 // NewBoardModel creates an empty BoardModel.
@@ -88,18 +92,26 @@ func (b BoardModel) buildDisplayList() []displayEntry {
 
 	var entries []displayEntry
 	for _, root := range roots {
-		entries = append(entries, displayEntry{task: root})
 		kids := children[root.ID]
-		for i, kid := range kids {
-			connector := "├─ "
-			if i == len(kids)-1 {
-				connector = "└─ "
+		isCollapsed := len(kids) > 0 && !b.expanded[root.ID]
+		entries = append(entries, displayEntry{
+			task:        root,
+			hasChildren: len(kids) > 0,
+			collapsed:   isCollapsed,
+			childCount:  len(kids),
+		})
+		if !isCollapsed {
+			for i, kid := range kids {
+				connector := "├─ "
+				if i == len(kids)-1 {
+					connector = "└─ "
+				}
+				entries = append(entries, displayEntry{
+					task:      kid,
+					isChild:   true,
+					connector: connector,
+				})
 			}
-			entries = append(entries, displayEntry{
-				task:      kid,
-				isChild:   true,
-				connector: connector,
-			})
 		}
 	}
 
@@ -185,6 +197,15 @@ func (b BoardModel) View() string {
 		}
 
 		title := task.Title
+
+		// Show collapse/expand indicator for parent tasks with children.
+		if entry.hasChildren {
+			if entry.collapsed {
+				title = fmt.Sprintf("\u25b8 %s [%d]", title, entry.childCount) // ▸
+			} else {
+				title = "\u25be " + title // ▾
+			}
+		}
 
 		// Annotate tasks that have empty work or are being retried.
 		annotation := taskAnnotation(task)

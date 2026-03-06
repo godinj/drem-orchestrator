@@ -35,16 +35,17 @@ type DetailModel struct {
 	width    int
 	height   int
 
-	scrollOffset  int  // vertical scroll offset for detail content
-	subtaskCursor int  // selected subtask index (when subtasks exist)
-	focused       bool // true when the detail panel has focus
-	deleteMode    bool // true when selecting an item to delete
-	deleteCursor  int  // index into deletableItems()
+	scrollOffset      int  // vertical scroll offset for detail content
+	subtaskCursor     int  // selected subtask index (when subtasks exist)
+	focused           bool // true when the detail panel has focus
+	deleteMode        bool // true when selecting an item to delete
+	deleteCursor      int  // index into deletableItems()
+	subtasksCollapsed bool // true when subtask list is folded
 }
 
 // NewDetailModel creates an empty DetailModel.
 func NewDetailModel() DetailModel {
-	return DetailModel{}
+	return DetailModel{subtasksCollapsed: true}
 }
 
 // deletableItems returns a flat list of all items that can be deleted in the
@@ -213,33 +214,39 @@ func (d DetailModel) View() string {
 				done++
 			}
 		}
-		subtaskHeader := fmt.Sprintf("Subtasks: %d/%d complete", done, len(d.subtasks))
+		arrow := "\u25be" // ▾ expanded
+		if d.subtasksCollapsed {
+			arrow = "\u25b8" // ▸ collapsed
+		}
+		subtaskHeader := fmt.Sprintf("%s Subtasks: %d/%d complete", arrow, done, len(d.subtasks))
 		progressStyle := lipgloss.NewStyle().Foreground(colorInfo)
 		if d.isDeleteSection(deleteItemSubtask) {
 			subtaskHeader += " (select subtask to delete)"
 			progressStyle = progressStyle.Foreground(colorDanger).Bold(true)
 		}
 		sections = append(sections, progressStyle.Render(subtaskHeader))
-		deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
-		cursorHighlight := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
-		for i, sub := range d.subtasks {
-			prefix := "  "
-			if d.isDeleteTarget(deleteItemSubtask, i) {
-				prefix = "X "
-			} else if d.focused && !d.deleteMode && i == d.subtaskCursor {
-				prefix = "> "
+		if !d.subtasksCollapsed {
+			deleteHighlight := lipgloss.NewStyle().Foreground(colorDanger).Bold(true)
+			cursorHighlight := lipgloss.NewStyle().Bold(true).Foreground(colorPrimary)
+			for i, sub := range d.subtasks {
+				prefix := "  "
+				if d.isDeleteTarget(deleteItemSubtask, i) {
+					prefix = "X "
+				} else if d.focused && !d.deleteMode && i == d.subtaskCursor {
+					prefix = "> "
+				}
+				line := fmt.Sprintf("%s- [%s] %s", prefix, sub.Status, sub.Title)
+				maxLine := d.width - 4
+				if maxLine > 0 && len(line) > maxLine {
+					line = line[:maxLine-1] + "\u2026"
+				}
+				if d.isDeleteTarget(deleteItemSubtask, i) {
+					line = deleteHighlight.Render(line)
+				} else if d.focused && !d.deleteMode && i == d.subtaskCursor {
+					line = cursorHighlight.Render(line)
+				}
+				sections = append(sections, line)
 			}
-			line := fmt.Sprintf("%s- [%s] %s", prefix, sub.Status, sub.Title)
-			maxLine := d.width - 4
-			if maxLine > 0 && len(line) > maxLine {
-				line = line[:maxLine-1] + "\u2026"
-			}
-			if d.isDeleteTarget(deleteItemSubtask, i) {
-				line = deleteHighlight.Render(line)
-			} else if d.focused && !d.deleteMode && i == d.subtaskCursor {
-				line = cursorHighlight.Render(line)
-			}
-			sections = append(sections, line)
 		}
 	}
 
