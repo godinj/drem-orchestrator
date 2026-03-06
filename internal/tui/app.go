@@ -360,20 +360,10 @@ func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = FocusAgents
 		return m, nil
 	case "j", "down":
-		if len(m.detail.subtasks) > 0 {
-			if m.detail.subtaskCursor < len(m.detail.subtasks)-1 {
-				m.detail.subtaskCursor++
-			}
-		} else {
-			m.detail.scrollOffset++
-		}
+		m.detail.scrollOffset++
 		return m, nil
 	case "k", "up":
-		if len(m.detail.subtasks) > 0 {
-			if m.detail.subtaskCursor > 0 {
-				m.detail.subtaskCursor--
-			}
-		} else if m.detail.scrollOffset > 0 {
+		if m.detail.scrollOffset > 0 {
 			m.detail.scrollOffset--
 		}
 		return m, nil

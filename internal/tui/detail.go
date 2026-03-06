@@ -315,18 +315,24 @@ func (d DetailModel) View() string {
 		sections = append(sections, helpStyle.Render(actions))
 	}
 
+	// Flatten sections into individual lines for per-line scrolling.
+	var lines []string
+	for _, s := range sections {
+		lines = append(lines, strings.Split(s, "\n")...)
+	}
+
 	// Apply vertical scrolling.
-	if d.height > 0 && len(sections) > d.height {
-		if d.scrollOffset > len(sections)-d.height {
-			d.scrollOffset = len(sections) - d.height
+	if d.height > 0 && len(lines) > d.height {
+		if d.scrollOffset > len(lines)-d.height {
+			d.scrollOffset = len(lines) - d.height
 		}
-		sections = sections[d.scrollOffset:]
-		if len(sections) > d.height {
-			sections = sections[:d.height]
+		lines = lines[d.scrollOffset:]
+		if len(lines) > d.height {
+			lines = lines[:d.height]
 		}
 	}
 
-	return strings.Join(sections, "\n")
+	return strings.Join(lines, "\n")
 }
 
 // availableActions returns a string describing the key actions available
