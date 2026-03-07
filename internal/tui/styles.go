@@ -26,9 +26,8 @@ var statusColors = map[model.TaskStatus]lipgloss.Color{
 	model.StatusPlanning:      lipgloss.Color("39"),
 	model.StatusPlanReview:    lipgloss.Color("214"),
 	model.StatusInProgress:    lipgloss.Color("62"),
-	model.StatusTestingReady:  lipgloss.Color("214"),
-	model.StatusManualTesting: lipgloss.Color("214"),
-	model.StatusMerging:       lipgloss.Color("62"),
+	model.StatusTestingReady: lipgloss.Color("214"),
+	model.StatusMerging:      lipgloss.Color("62"),
 	model.StatusPaused:        lipgloss.Color("241"),
 	model.StatusDone:          lipgloss.Color("42"),
 	model.StatusFailed:        lipgloss.Color("196"),
@@ -48,9 +47,8 @@ var statusIcons = map[model.TaskStatus]string{
 	model.StatusPlanning:      "\u25cc", // ◌
 	model.StatusPlanReview:    "\u25c9", // ◉
 	model.StatusInProgress:    "\u25cf", // ●
-	model.StatusTestingReady:  "\u25c8", // ◈
-	model.StatusManualTesting: "\u25c7", // ◇
-	model.StatusMerging:       "\u27f3", // ⟳
+	model.StatusTestingReady: "\u25c8", // ◈
+	model.StatusMerging:      "\u27f3", // ⟳
 	model.StatusPaused:        "\u23f8", // ⏸
 	model.StatusDone:          "\u2713", // ✓
 	model.StatusFailed:        "\u2717", // ✗

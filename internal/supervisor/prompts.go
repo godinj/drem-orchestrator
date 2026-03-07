@@ -156,11 +156,11 @@ The Drem orchestrator automates a multi-agent development workflow. Understandin
 
 %s
 
-    backlog ──> planning ──> plan_review ──> in_progress ──> testing_ready ──> manual_testing ──> merging ──> done
-                   ^              │                │              ^                  │               │
-                   │              │ (reject)       │              │                  │ (reject)      └──> failed
-                   │              └────────────────┘              │                  │
-                   │                                              └──────────────────┘
+    backlog ──> planning ──> plan_review ──> in_progress ──> testing_ready ──> merging ──> done
+                   ^              │                │              ^                │         │
+                   │              │ (reject)       │              │                │ (reject)└──> failed
+                   │              └────────────────┘              │                │
+                   │                                              └────────────────┘
                    │                                              (re-plan or re-impl)
     paused <──> backlog / planning / in_progress
     failed ──> backlog (manual reset)
@@ -171,8 +171,7 @@ The Drem orchestrator automates a multi-agent development workflow. Understandin
 - **planning**: A planner agent is decomposing the task into subtasks (produces plan.json).
 - **plan_review**: Human gate — the plan needs approval before work begins.
 - **in_progress**: Subtask agents (coders/researchers) are executing. The orchestrator schedules subtasks, monitors agents, and merges their work into the feature's integration branch.
-- **testing_ready**: All subtasks done, integration branch built — waiting for human to start testing.
-- **manual_testing**: Human gate — the user is testing. They can approve (-> merging) or reject (-> back to planning or in_progress with feedback).
+- **testing_ready**: Human gate — all subtasks done, integration branch built. The user tests and can approve (-> merging) or reject (-> back to planning or in_progress with feedback).
 - **merging**: The orchestrator merges the feature's integration branch into the default branch (%s).
 - **done**: Merged successfully. Terminal state.
 - **failed**: Something went wrong. Can be manually reset to backlog.
@@ -260,8 +259,7 @@ You can update task status directly. The orchestrator polls the database each ti
 - planning -> plan_review, failed, paused
 - plan_review -> in_progress, planning
 - in_progress -> testing_ready, failed, paused
-- testing_ready -> manual_testing
-- manual_testing -> merging, in_progress, planning
+- testing_ready -> merging, in_progress, planning
 - merging -> done, failed
 - paused -> backlog, planning, in_progress
 - failed -> backlog

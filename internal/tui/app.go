@@ -531,10 +531,6 @@ func (m Model) handleApprove() (tea.Model, tea.Cmd) {
 		if err := m.orch.HandlePlanApproved(selected.ID); err != nil {
 			m.err = err
 		}
-	case model.StatusTestingReady:
-		if err := m.orch.HandleStartTesting(selected.ID); err != nil {
-			m.err = err
-		}
 	default:
 		return m, nil
 	}
@@ -553,10 +549,10 @@ func (m Model) handleReject() (tea.Model, tea.Cmd) {
 	return m, m.refreshData()
 }
 
-// handleTestPass passes a test if the selected task is in MANUAL_TESTING.
+// handleTestPass passes a test if the selected task is in TESTING_READY.
 func (m Model) handleTestPass() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
-	if selected == nil || selected.Status != model.StatusManualTesting {
+	if selected == nil || selected.Status != model.StatusTestingReady {
 		return m, nil
 	}
 	if err := m.orch.HandleTestPassed(selected.ID); err != nil {
@@ -568,7 +564,7 @@ func (m Model) handleTestPass() (tea.Model, tea.Cmd) {
 // handleTestFail fails the test and transitions back to PLANNING.
 func (m Model) handleTestFail() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
-	if selected == nil || (selected.Status != model.StatusManualTesting && selected.Status != model.StatusTestingReady) {
+	if selected == nil || selected.Status != model.StatusTestingReady {
 		return m, nil
 	}
 	if err := m.orch.HandleTestFailed(selected.ID); err != nil {
@@ -919,7 +915,7 @@ func (m Model) renderStatusBar() string {
 		model.StatusPlanning,
 		model.StatusPlanReview,
 		model.StatusInProgress,
-		model.StatusManualTesting,
+		model.StatusTestingReady,
 		model.StatusMerging,
 		model.StatusDone,
 		model.StatusFailed,

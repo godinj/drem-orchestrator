@@ -31,11 +31,10 @@ var statusSortOrder = map[model.TaskStatus]int{
 	model.StatusMerging:       2,
 	model.StatusBacklog:       3,
 	model.StatusPlanReview:    4,
-	model.StatusTestingReady:  5,
-	model.StatusManualTesting: 6,
-	model.StatusPaused:        7,
-	model.StatusDone:          8,
-	model.StatusFailed:        9,
+	model.StatusTestingReady: 5,
+	model.StatusPaused:       6,
+	model.StatusDone:         7,
+	model.StatusFailed:       8,
 }
 
 // BoardModel renders the task list panel.

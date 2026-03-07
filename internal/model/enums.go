@@ -12,9 +12,8 @@ const (
 	StatusPlanning      TaskStatus = "planning"
 	StatusPlanReview    TaskStatus = "plan_review"
 	StatusInProgress    TaskStatus = "in_progress"
-	StatusTestingReady  TaskStatus = "testing_ready"
-	StatusManualTesting TaskStatus = "manual_testing"
-	StatusMerging       TaskStatus = "merging"
+	StatusTestingReady TaskStatus = "testing_ready"
+	StatusMerging      TaskStatus = "merging"
 	StatusPaused        TaskStatus = "paused"
 	StatusDone          TaskStatus = "done"
 	StatusFailed        TaskStatus = "failed"
@@ -27,7 +26,6 @@ var allTaskStatuses = []TaskStatus{
 	StatusPlanReview,
 	StatusInProgress,
 	StatusTestingReady,
-	StatusManualTesting,
 	StatusMerging,
 	StatusPaused,
 	StatusDone,
@@ -54,7 +52,7 @@ func (s TaskStatus) IsActionable() bool {
 // the task can proceed.
 func (s TaskStatus) IsHumanGate() bool {
 	switch s {
-	case StatusPlanReview, StatusTestingReady, StatusManualTesting:
+	case StatusPlanReview, StatusTestingReady:
 		return true
 	default:
 		return false

@@ -320,8 +320,6 @@ func (d DetailModel) availableActions() string {
 	case model.StatusPlanReview:
 		parts = append(parts, "[a]pprove plan", "[r]eject plan", "[c]omment", "[d]elete")
 	case model.StatusTestingReady:
-		parts = append(parts, "[c]omment", "[d]elete")
-	case model.StatusManualTesting:
 		parts = append(parts, "[t]est pass", "[f]ail test", "[c]omment", "[d]elete")
 	case model.StatusInProgress:
 		parts = append(parts, "[p]ause", "[d]elete")

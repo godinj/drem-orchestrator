@@ -51,7 +51,7 @@ func SaveOrchestratorState(db *gorm.DB, orchestratorAgentID uuid.UUID) error {
 	var pendingReviews []model.Task
 	err = db.Where("status IN ?", []string{
 		string(model.StatusPlanReview),
-		string(model.StatusManualTesting),
+		string(model.StatusTestingReady),
 	}).Find(&pendingReviews).Error
 	if err != nil {
 		return fmt.Errorf("save orchestrator state: query pending reviews: %w", err)
