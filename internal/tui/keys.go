@@ -22,6 +22,7 @@ type keyMap struct {
 	Supervisor    key.Binding // S - supervisor evaluation
 	Archive       key.Binding // A - toggle archived agents
 	Filter        key.Binding // F - toggle task filter
+	Reap          key.Binding // C - clean up dead tmux sessions
 	Quit          key.Binding // q
 	Esc           key.Binding
 }
@@ -100,6 +101,10 @@ func defaultKeyMap() keyMap {
 		Filter: key.NewBinding(
 			key.WithKeys("F"),
 			key.WithHelp("F", "filter"),
+		),
+		Reap: key.NewBinding(
+			key.WithKeys("C"),
+			key.WithHelp("C", "clean sessions"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q"),

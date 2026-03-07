@@ -222,6 +222,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refreshData()
 
+	case reapMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("reap sessions: %w", msg.err)
+		} else {
+			m.err = fmt.Errorf("reaped %d dead sessions", msg.reaped)
+		}
+		return m, m.refreshData()
+
 	case deleteResultMsg:
 		if msg.err != nil {
 			m.err = msg.err
@@ -326,6 +334,8 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleSupervisorEval()
 	case "X":
 		return m.handleReconcile()
+	case "C":
+		return m.handleReap()
 	case "A":
 		m.agents.showArchived = !m.agents.showArchived
 		m.agents.clampAgentCursor()
@@ -763,6 +773,21 @@ func (m Model) handleReconcile() (tea.Model, tea.Cmd) {
 	}
 }
 
+// reapMsg carries the result of a manual session reap.
+type reapMsg struct {
+	reaped int
+	err    error
+}
+
+// handleReap cleans up dead tmux agent sessions on demand.
+func (m Model) handleReap() (tea.Model, tea.Cmd) {
+	orch := m.orch
+	return m, func() tea.Msg {
+		reaped, err := orch.ReapOrphanedSessions()
+		return reapMsg{reaped: reaped, err: err}
+	}
+}
+
 // View renders the entire TUI layout.
 func (m Model) View() string {
 	if m.width == 0 || m.height == 0 {
@@ -923,7 +948,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab/C-hjkl:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  S:supervisor  X:reconcile  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab/C-hjkl:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  S:supervisor  X:reconcile  C:clean-sessions  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.

@@ -229,6 +229,13 @@ type ReconcileResult struct {
 	OrphanWorktreesCleaned  int
 }
 
+// ReapOrphanedSessions kills tmux agent sessions that have no active agent
+// and whose process has exited. This is manual-only to avoid destroying
+// worktrees before merges complete. Returns the number of sessions reaped.
+func (o *Orchestrator) ReapOrphanedSessions() (int, error) {
+	return o.runner.ReapOrphanedSessions()
+}
+
 // Reconcile audits the project for state inconsistencies and corrects them.
 // It is called periodically from doTick and can also be invoked on demand
 // from the TUI. Returns the number of fixes applied.
