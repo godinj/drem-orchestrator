@@ -516,6 +516,13 @@ func (r *Runner) reapOrphanedSessions() error {
 		if strings.Contains(sess, "/supervisor ") {
 			continue
 		}
+		// Only reap sessions whose process has exited. A session may
+		// linger between agent completion and merge execution; killing a
+		// live process would abort in-flight work.
+		alive, err := r.tmux.IsAgentSessionAlive(sess)
+		if err != nil || alive {
+			continue
+		}
 		_ = r.tmux.KillAgentSession(sess)
 	}
 
