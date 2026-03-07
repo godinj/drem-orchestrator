@@ -333,7 +333,8 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "S":
 		return m.handleSupervisorEval()
 	case "X":
-		return m.handleReconcile()
+		// Reconcile disabled pending overhaul — see feature/reconcile-overhaul.md
+		return m, nil
 	case "C":
 		return m.handleReap()
 	case "A":
