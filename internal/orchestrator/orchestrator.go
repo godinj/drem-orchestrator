@@ -1059,12 +1059,40 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 					maxRetries = retries + diagnosis.MaxAdditionalRetries
 				}
 				if retries >= maxRetries {
+					o.logSupervisorAction(supervisor.JournalEntry{
+						Timestamp: time.Now(),
+						TaskID:    task.ID.String(),
+						TaskTitle: task.Title,
+						Type:      "failure_diagnosis",
+						Summary:   diagnosis.RootCause,
+						Details: map[string]string{
+							"Category":      diagnosis.Category,
+							"Strategy":      diagnosis.RetryStrategy,
+							"Agent Type":    string(ag.AgentType),
+						},
+						Outcome: fmt.Sprintf("Failed after %d retries — max retries exceeded", retries),
+					})
 					if err := o.failTask(task, fmt.Sprintf("agent failed after %d retries (supervisor: %s)", retries, diagnosis.RootCause)); err != nil {
 						return err
 					}
 					o.emit("agent_failed", map[string]any{"task_id": task.ID, "agent_id": ag.ID, "diagnosis": diagnosis.RootCause})
 					return nil
 				}
+
+				o.logSupervisorAction(supervisor.JournalEntry{
+					Timestamp: time.Now(),
+					TaskID:    task.ID.String(),
+					TaskTitle: task.Title,
+					Type:      "failure_diagnosis",
+					Summary:   diagnosis.RootCause,
+					Details: map[string]string{
+						"Category":         diagnosis.Category,
+						"Strategy":         diagnosis.RetryStrategy,
+						"Prompt Adjustment": diagnosis.PromptAdjustment,
+						"Agent Type":       string(ag.AgentType),
+					},
+					Outcome: fmt.Sprintf("Retrying (attempt %d)", retries),
+				})
 
 				// For planners, stay in PLANNING. For coders/researchers,
 				// stay in current parent status (IN_PROGRESS) to be rescheduled.
@@ -1080,7 +1108,19 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 				o.logger.Info("supervisor recommends retry", "task_id", task.ID, "retries", retries, "strategy", diagnosis.RetryStrategy)
 				return nil
 			}
-			// Supervisor says don't retry — fall through to default behavior.
+
+			o.logSupervisorAction(supervisor.JournalEntry{
+				Timestamp: time.Now(),
+				TaskID:    task.ID.String(),
+				TaskTitle: task.Title,
+				Type:      "failure_diagnosis",
+				Summary:   diagnosis.RootCause,
+				Details: map[string]string{
+					"Category":   diagnosis.Category,
+					"Agent Type": string(ag.AgentType),
+				},
+				Outcome: "No retry recommended — falling through to default behavior",
+			})
 		}
 	}
 
@@ -1159,6 +1199,18 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 			}
 
 			if diagnosis.ShouldRetry && retries < MaxEmptyWorkRetries {
+				o.logSupervisorAction(supervisor.JournalEntry{
+					Timestamp: time.Now(),
+					TaskID:    task.ID.String(),
+					TaskTitle: task.Title,
+					Type:      "empty_work_diagnosis",
+					Summary:   diagnosis.RootCause,
+					Details: map[string]string{
+						"Prompt Adjustment": diagnosis.PromptAdjustment,
+						"Agent Type":        string(ag.AgentType),
+					},
+					Outcome: fmt.Sprintf("Retrying (attempt %d of %d)", retries, MaxEmptyWorkRetries),
+				})
 				task.AssignedAgentID = nil
 				if err := o.db.Save(task).Error; err != nil {
 					return fmt.Errorf("on agent empty work: save task for retry: %w", err)
@@ -1169,6 +1221,18 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 				o.logger.Info("retrying subtask after empty work", "task_id", task.ID, "retries", retries)
 				return nil
 			}
+
+			o.logSupervisorAction(supervisor.JournalEntry{
+				Timestamp: time.Now(),
+				TaskID:    task.ID.String(),
+				TaskTitle: task.Title,
+				Type:      "empty_work_diagnosis",
+				Summary:   diagnosis.RootCause,
+				Details: map[string]string{
+					"Agent Type": string(ag.AgentType),
+				},
+				Outcome: "No retry — will fail or fall through",
+			})
 		}
 	}
 
@@ -1415,6 +1479,24 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 					task.Context["build_suggested_fix"] = diagnosis.SuggestedFix
 					task.Context["build_affected_files"] = diagnosis.AffectedFiles
 					task.Context["build_can_auto_fix"] = diagnosis.CanAutoFix
+
+					canAutoFix := "no"
+					if diagnosis.CanAutoFix {
+						canAutoFix = "yes"
+					}
+					o.logSupervisorAction(supervisor.JournalEntry{
+						Timestamp: time.Now(),
+						TaskID:    task.ID.String(),
+						TaskTitle: task.Title,
+						Type:      "build_failure",
+						Summary:   diagnosis.RootCause,
+						Details: map[string]string{
+							"Suggested Fix":  diagnosis.SuggestedFix,
+							"Affected Files": strings.Join(diagnosis.AffectedFiles, ", "),
+							"Can Auto-Fix":   canAutoFix,
+						},
+						Outcome: "Merge failed — build verification error",
+					})
 				}
 			} else {
 				// Merge conflict analysis.
@@ -1434,6 +1516,20 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 					task.Context["merge_conflict_severity"] = analysis.Severity
 					task.Context["merge_conflict_strategy"] = analysis.ResolutionStrategy
 					task.Context["merge_conflict_hints"] = analysis.ResolutionHints
+
+					o.logSupervisorAction(supervisor.JournalEntry{
+						Timestamp: time.Now(),
+						TaskID:    task.ID.String(),
+						TaskTitle: task.Title,
+						Type:      "merge_conflict",
+						Summary:   fmt.Sprintf("Severity: %s — Strategy: %s", analysis.Severity, analysis.ResolutionStrategy),
+						Details: map[string]string{
+							"Resolution Hints": analysis.ResolutionHints,
+							"Conflicts":        strings.Join(result.Conflicts, ", "),
+						},
+						Outcome: fmt.Sprintf("Merge failed — recommended strategy: %s", analysis.ResolutionStrategy),
+					})
+
 					if analysis.ResolutionStrategy == "spawn_agent" {
 						o.logger.Info("supervisor suggests spawning resolver agent", "task_id", task.ID)
 					}
@@ -1981,6 +2077,20 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 		return "", fmt.Errorf("spawn supervisor: create session: %w", err)
 	}
 
+	o.logSupervisorAction(supervisor.JournalEntry{
+		Timestamp: time.Now(),
+		TaskID:    taskID.String(),
+		TaskTitle: task.Title,
+		Type:      "on_demand_session",
+		Summary:   "Interactive supervisor session spawned",
+		Details: map[string]string{
+			"Status":  string(task.Status),
+			"Branch":  task.WorktreeBranch,
+			"Session": sessionName,
+		},
+		Outcome: "Session started — supervisor will document findings in this journal",
+	})
+
 	o.logger.Info("supervisor session spawned", "task_id", taskID, "session", sessionName)
 	return sessionName, nil
 }
@@ -1988,6 +2098,20 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+// journalPath returns the path to the supervisor journal file, stored
+// alongside the database.
+func (o *Orchestrator) journalPath() string {
+	return filepath.Join(filepath.Dir(o.dbPath), "supervisor-journal.md")
+}
+
+// logSupervisorAction appends a supervisor intervention to the journal file.
+// Errors are logged but do not propagate — journaling is best-effort.
+func (o *Orchestrator) logSupervisorAction(entry supervisor.JournalEntry) {
+	if err := supervisor.AppendJournal(o.journalPath(), entry); err != nil {
+		o.logger.Warn("failed to write supervisor journal", "error", err)
+	}
+}
 
 // emit sends an event to the TUI channel without blocking.
 func (o *Orchestrator) emit(eventType string, payload any) {

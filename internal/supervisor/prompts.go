@@ -2,6 +2,7 @@ package supervisor
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -286,7 +287,7 @@ VALUES (lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(
 		"```sql", "```",
 	)
 
-	b.WriteString(`
+	fmt.Fprintf(&b, `
 ## Your Role
 
 You are working in the task's worktree. You can read files, run git commands, edit code, query/update the database, and take any actions needed to diagnose and resolve issues.
@@ -302,7 +303,33 @@ Common tasks you may be asked to perform:
 - Make targeted code fixes
 - Add comments/feedback to tasks for the next agent attempt
 - Transition tasks to unblock the pipeline
-`)
+
+## IMPORTANT: Document Your Work
+
+Before you finish your session, you MUST append a summary of what you did to the supervisor journal file. This journal is reviewed to iterate on the orchestrator workflow.
+
+**Journal file:** %s
+
+Append a markdown section in this format:
+
+%s
+## <timestamp> — on_demand_session
+
+- **Task**: <task title> (%s)
+- **Problem**: What was wrong when you started
+- **Actions Taken**: What you did to fix it (be specific — commands run, files edited, DB updates made)
+- **Root Cause**: Why the orchestrator workflow couldn't handle this automatically
+- **Suggested Improvement**: How the orchestrator could be improved to handle this case without manual intervention
+- **Outcome**: Final state after your intervention
+
+---
+%s
+
+This documentation is critical for improving the orchestrator. Be specific about what the orchestrator got wrong or couldn't handle, so the workflow can be iterated on.
+`,
+		filepath.Join(filepath.Dir(opts.DBPath), "supervisor-journal.md"),
+		"```markdown", opts.TaskID, "```",
+	)
 
 	return b.String()
 }
