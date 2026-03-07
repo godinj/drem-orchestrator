@@ -1997,8 +1997,10 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 	}
 
 	// Build session name under the dashboard's namespace.
-	shortID := taskID.String()[:8]
-	sessionName := fmt.Sprintf("%s/supervisor %s", o.runner.TmuxSessionName(), shortID)
+	shortID := taskID.String()[:4]
+	title := strings.ReplaceAll(task.Title, "/", "-")
+	title = truncate(title, 30)
+	sessionName := fmt.Sprintf("%s/supervisor - %s %s", o.runner.TmuxSessionName(), title, shortID)
 	sessionName = strings.ReplaceAll(sessionName, ".", "-")
 	sessionName = strings.ReplaceAll(sessionName, ":", "-")
 
