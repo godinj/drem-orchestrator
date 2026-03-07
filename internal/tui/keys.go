@@ -8,8 +8,8 @@ type keyMap struct {
 	Down     key.Binding
 	Tab      key.Binding
 	Enter    key.Binding
-	Approve  key.Binding // a - approve plan
-	Reject   key.Binding // r - reject plan
+	Approve  key.Binding // a - approve plan / pass test
+	Reject   key.Binding // r - reject plan / fail test
 	TestPass key.Binding // t - pass test
 	TestFail key.Binding // f - fail test
 	Jump     key.Binding // g - jump to agent tmux window
@@ -48,11 +48,11 @@ func defaultKeyMap() keyMap {
 		),
 		Approve: key.NewBinding(
 			key.WithKeys("a"),
-			key.WithHelp("a", "approve plan"),
+			key.WithHelp("a", "approve"),
 		),
 		Reject: key.NewBinding(
 			key.WithKeys("r"),
-			key.WithHelp("r", "reject plan"),
+			key.WithHelp("r", "reject"),
 		),
 		TestPass: key.NewBinding(
 			key.WithKeys("t"),

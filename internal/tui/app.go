@@ -520,7 +520,7 @@ func (m Model) handleFeedbackKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
-// handleApprove approves a plan (PLAN_REVIEW) or starts testing (TESTING_READY).
+// handleApprove approves a plan (PLAN_REVIEW) or passes testing (TESTING_READY).
 func (m Model) handleApprove() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil {
@@ -531,20 +531,33 @@ func (m Model) handleApprove() (tea.Model, tea.Cmd) {
 		if err := m.orch.HandlePlanApproved(selected.ID); err != nil {
 			m.err = err
 		}
+	case model.StatusTestingReady:
+		if err := m.orch.HandleTestPassed(selected.ID); err != nil {
+			m.err = err
+		}
 	default:
 		return m, nil
 	}
 	return m, m.refreshData()
 }
 
-// handleReject rejects the plan and transitions back to PLANNING.
+// handleReject rejects the plan (PLAN_REVIEW) or fails testing (TESTING_READY).
 func (m Model) handleReject() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
-	if selected == nil || selected.Status != model.StatusPlanReview {
+	if selected == nil {
 		return m, nil
 	}
-	if err := m.orch.HandlePlanRejected(selected.ID); err != nil {
-		m.err = err
+	switch selected.Status {
+	case model.StatusPlanReview:
+		if err := m.orch.HandlePlanRejected(selected.ID); err != nil {
+			m.err = err
+		}
+	case model.StatusTestingReady:
+		if err := m.orch.HandleTestFailed(selected.ID); err != nil {
+			m.err = err
+		}
+	default:
+		return m, nil
 	}
 	return m, m.refreshData()
 }
@@ -945,7 +958,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab/C-hjkl:panel  a:approve  r:reject  t:pass  f:fail  c:comment  d:del-comment  p:pause  R:retry  S:supervisor  X:reconcile  C:clean-sessions  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab/C-hjkl:panel  a:approve  r:reject  c:comment  d:del  p:pause  R:retry  S:supervisor  C:clean-sessions  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.
