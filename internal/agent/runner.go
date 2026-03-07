@@ -464,6 +464,61 @@ func (r *Runner) CleanupStaleAgents(timeout time.Duration) error {
 		}
 	}
 
+	// Reap orphaned tmux sessions — sessions that exist in tmux but have no
+	// corresponding WORKING agent in the DB (e.g. after a crash or restart).
+	if err := r.reapOrphanedSessions(); err != nil {
+		return fmt.Errorf("cleanup stale agents: reap orphaned sessions: %w", err)
+	}
+
+	return nil
+}
+
+// reapOrphanedSessions kills tmux agent sessions that are not associated with
+// any active (WORKING) agent. This catches sessions left behind after crashes,
+// restarts, or agents that completed but whose sessions persisted due to
+// remain-on-exit.
+func (r *Runner) reapOrphanedSessions() error {
+	sessions, err := r.tmux.ListAgentSessions()
+	if err != nil {
+		return err
+	}
+	if len(sessions) == 0 {
+		return nil
+	}
+
+	// Build the set of tmux session names for agents still actively working.
+	var activeAgents []model.Agent
+	if err := r.db.Where("status = ?", model.AgentWorking).Find(&activeAgents).Error; err != nil {
+		return fmt.Errorf("query active agents: %w", err)
+	}
+
+	activeSessions := make(map[string]bool, len(activeAgents))
+	for _, a := range activeAgents {
+		if a.TmuxSession != "" {
+			activeSessions[a.TmuxSession] = true
+		}
+	}
+
+	// Also keep sessions for agents in the running map (may not have been
+	// persisted to DB yet).
+	r.mu.Lock()
+	for _, ra := range r.running {
+		activeSessions[ra.TmuxSession] = true
+	}
+	r.mu.Unlock()
+
+	for _, sess := range sessions {
+		if activeSessions[sess] {
+			continue
+		}
+		// Supervisor sessions are interactive and not tracked as agents —
+		// skip them so they aren't reaped.
+		if strings.Contains(sess, "/supervisor ") {
+			continue
+		}
+		_ = r.tmux.KillAgentSession(sess)
+	}
+
 	return nil
 }
 
