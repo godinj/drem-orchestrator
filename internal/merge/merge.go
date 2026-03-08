@@ -142,36 +142,39 @@ func (o *Orchestrator) MergeAgentIntoFeature(agentBranch, featureWorktree string
 // mergeWithRebaseAndRetry performs rebase-before-merge with retry logic for
 // transient failures. It is separated from MergeAgentIntoFeature for testability.
 //
+// The rebase is performed only once (before the first merge attempt). If the
+// rebase succeeds but the merge fails transiently, subsequent retries only
+// re-attempt the merge — they do not re-rebase, which would change the branch
+// base and violate idempotency.
+//
 // Retry rules:
 //   - Real conflicts (rebase fails or merge returns file conflicts): return immediately
 //   - Hard errors (non-GitError from RunGit): return immediately
 //   - Transient failures (merge fails with no file conflicts): retry with linear backoff
 func mergeWithRebaseAndRetry(wt mergeWorktreeClient, agentBranch, featureWorktree string) (*worktree.MergeResult, error) {
-	var lastResult *worktree.MergeResult
-
-	for attempt := 1; attempt <= maxMergeRetries; attempt++ {
-		// Find agent worktree (may not exist if already cleaned up)
-		agentWorktree, findErr := wt.FindWorktreeByBranch(agentBranch)
-
-		// Rebase if worktree exists
-		if findErr == nil {
-			rebaseResult, rebaseErr := worktree.RebaseBranch(agentWorktree, featureWorktree)
-			if rebaseErr != nil {
-				return nil, fmt.Errorf("rebase attempt %d: %w", attempt, rebaseErr)
-			}
-			if !rebaseResult.Success {
-				// Real conflict — don't retry
-				return &worktree.MergeResult{
-					Success:      false,
-					SourceBranch: agentBranch,
-					Conflicts:    rebaseResult.Conflicts,
-					GitStderr:    rebaseResult.GitStderr,
-					GitCommand:   "git rebase",
-				}, nil
-			}
+	// Rebase once before any merge attempts. If the agent worktree is gone
+	// (already cleaned up), skip rebase and go straight to merge.
+	agentWorktree, findErr := wt.FindWorktreeByBranch(agentBranch)
+	if findErr == nil {
+		rebaseResult, rebaseErr := worktree.RebaseBranch(agentWorktree, featureWorktree)
+		if rebaseErr != nil {
+			return nil, fmt.Errorf("rebase: %w", rebaseErr)
 		}
+		if !rebaseResult.Success {
+			// Real conflict — don't retry
+			return &worktree.MergeResult{
+				Success:      false,
+				SourceBranch: agentBranch,
+				Conflicts:    rebaseResult.Conflicts,
+				GitStderr:    rebaseResult.GitStderr,
+				GitCommand:   "git rebase",
+			}, nil
+		}
+	}
 
-		// Merge
+	// Merge with retry for transient failures.
+	var lastResult *worktree.MergeResult
+	for attempt := 1; attempt <= maxMergeRetries; attempt++ {
 		var err error
 		lastResult, err = wt.MergeBranch(agentBranch, featureWorktree)
 		if err != nil {

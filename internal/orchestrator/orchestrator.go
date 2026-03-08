@@ -523,9 +523,12 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 		}
 
 		if !merged {
-			if err := o.failTask(sub, "reconcile: agent work could not be merged into feature branch"); err != nil {
+			// Merge failed — keep the agent worktree/branch intact so work
+			// is not lost (consistent with onAgentCompleted behavior).
+			if err := o.failTask(sub, "reconcile: agent work could not be merged into feature branch (agent branch preserved)"); err != nil {
 				o.logger.Error("reconcile: fail subtask", "subtask_id", sub.ID, "error", err)
 			}
+			// Leave agent worktree intact for manual resolution or retry.
 			fixed++
 			continue
 		}
@@ -1237,10 +1240,24 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	}
 	task.Context["last_error"] = truncate(output, 500)
 
-	// Clean up agent worktree.
+	// Only remove the agent worktree if it has no commits to preserve.
+	// If the agent produced work, keep the worktree so it can be retried
+	// or manually resolved (consistent with onAgentCompleted merge failure).
 	if ag.WorktreeBranch != "" {
-		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
-			o.logger.Warn("cleanup failed agent worktree failed", "agent_id", ag.ID, "error", err)
+		featureDir := o.resolveFeatureWorktree(task)
+		hasWork := false
+		if featureDir != "" {
+			if hasCommits, err := worktree.BranchHasNewCommits(featureDir, ag.WorktreeBranch); err == nil && hasCommits {
+				hasWork = true
+			}
+		}
+		if hasWork {
+			o.logger.Info("preserving failed agent worktree with commits",
+				"agent_id", ag.ID, "branch", ag.WorktreeBranch)
+		} else {
+			if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+				o.logger.Warn("cleanup failed agent worktree failed", "agent_id", ag.ID, "error", err)
+			}
 		}
 	}
 
@@ -1707,6 +1724,8 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 
 // findCurrentGroup returns the earliest group that has subtasks not yet in a
 // terminal state (done or failed). Returns nil if all groups are complete.
+// If a task ID in the schedule no longer exists (e.g. after replanning),
+// it is treated as terminal to avoid permanently blocking the wave.
 func (o *Orchestrator) findCurrentGroup(parent *model.Task, schedule Schedule) *SubtaskGroup {
 	for i := range schedule.Groups {
 		group := &schedule.Groups[i]
@@ -1714,9 +1733,10 @@ func (o *Orchestrator) findCurrentGroup(parent *model.Task, schedule Schedule) *
 		for _, taskID := range group.TaskIDs {
 			var sub model.Task
 			if err := o.db.Select("status").First(&sub, "id = ?", taskID).Error; err != nil {
-				// If we can't find the subtask, treat as not terminal
-				// so the group stays active.
-				allTerminal = false
+				// Subtask not found (deleted or replanned) — treat as
+				// terminal so this group doesn't block forever.
+				o.logger.Warn("wave schedule references missing subtask",
+					"parent_id", parent.ID, "subtask_id", taskID)
 				continue
 			}
 			if sub.Status != model.StatusDone && sub.Status != model.StatusFailed {
@@ -2597,6 +2617,7 @@ type planEntry struct {
 	Files          []string `json:"files"`
 	Dependencies   []int    `json:"dependencies"`
 	Priority       int      `json:"priority"`
+	IsTest         bool     `json:"is_test,omitempty"`
 }
 
 // parsePlan extracts subtask plans from a task's Plan JSONField.

@@ -242,8 +242,18 @@ type RebaseResult struct {
 	GitStderr string   // raw git stderr on failure
 }
 
-// rebaseConflictRe matches lines like "CONFLICT (content): Merge conflict in <file>".
-var rebaseConflictRe = regexp.MustCompile(`CONFLICT \([^)]+\): Merge conflict in (.+)`)
+// Regexes for extracting conflicting file paths from git conflict output.
+// Git uses several formats depending on the conflict type:
+//   - "CONFLICT (content): Merge conflict in <file>"
+//   - "CONFLICT (add/add): Merge conflict in <file>"
+//   - "CONFLICT (modify/delete): <file> deleted in ... and modified in ..."
+//   - "CONFLICT (rename/delete): <file> renamed ..."
+var (
+	// Matches "Merge conflict in <file>" (content, add/add conflicts)
+	conflictMergeInRe = regexp.MustCompile(`CONFLICT \([^)]+\): Merge conflict in (.+)`)
+	// Matches "CONFLICT (modify/delete): <file> deleted in" or similar
+	conflictFileFirstRe = regexp.MustCompile(`CONFLICT \([^)]+\): (.+?) (?:deleted|renamed|modified) in `)
+)
 
 // RebaseBranch rebases the branch checked out in sourceWorktree onto
 // the HEAD of targetWorktree. On conflict, the rebase is aborted and
@@ -293,13 +303,21 @@ func RebaseBranch(sourceWorktree, targetWorktree string) (*RebaseResult, error) 
 	}, nil
 }
 
-// parseRebaseConflicts extracts conflicting file paths from rebase stderr output.
-func parseRebaseConflicts(stderr string) []string {
+// parseRebaseConflicts extracts conflicting file paths from git conflict output.
+// It tries multiple patterns to handle different conflict types.
+func parseRebaseConflicts(output string) []string {
+	seen := make(map[string]bool)
 	var conflicts []string
-	for _, line := range strings.Split(stderr, "\n") {
-		matches := rebaseConflictRe.FindStringSubmatch(line)
-		if len(matches) == 2 {
-			conflicts = append(conflicts, matches[1])
+	for _, line := range strings.Split(output, "\n") {
+		var file string
+		if matches := conflictMergeInRe.FindStringSubmatch(line); len(matches) == 2 {
+			file = strings.TrimSpace(matches[1])
+		} else if matches := conflictFileFirstRe.FindStringSubmatch(line); len(matches) == 2 {
+			file = strings.TrimSpace(matches[1])
+		}
+		if file != "" && !seen[file] {
+			seen[file] = true
+			conflicts = append(conflicts, file)
 		}
 	}
 	return conflicts

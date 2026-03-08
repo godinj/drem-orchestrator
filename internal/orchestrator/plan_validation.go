@@ -180,10 +180,34 @@ func hasCycle(subtasks []planEntry) bool {
 	return false
 }
 
-// isTestSubtask checks if a subtask is a test subtask by looking for "test"
-// in the title (case-insensitive).
+// isTestSubtask checks if a subtask is a test subtask. It first looks for an
+// explicit "is_test" field in the plan entry, then falls back to checking if
+// the title contains test-related words ("test", "tests", "testing") as whole
+// words — avoiding false matches on unrelated words like "latest", "contest".
 func isTestSubtask(entry planEntry) bool {
-	return strings.Contains(strings.ToLower(entry.Title), "test")
+	if entry.IsTest {
+		return true
+	}
+	lower := strings.ToLower(entry.Title)
+	// Check for test-related keywords as whole words.
+	for _, keyword := range []string{"test", "tests", "testing"} {
+		if lower == keyword {
+			return true
+		}
+		// keyword at start: "test integration", "testing suite"
+		if strings.HasPrefix(lower, keyword+" ") || strings.HasPrefix(lower, keyword+":") {
+			return true
+		}
+		// keyword at end: "add tests", "unit testing"
+		if strings.HasSuffix(lower, " "+keyword) {
+			return true
+		}
+		// keyword in middle: "add tests for feature", "unit testing suite"
+		if strings.Contains(lower, " "+keyword+" ") || strings.Contains(lower, " "+keyword+":") {
+			return true
+		}
+	}
+	return false
 }
 
 // findMissingTestDependencies returns the indices of non-test subtasks that
