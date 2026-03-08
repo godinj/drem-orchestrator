@@ -7,6 +7,7 @@ package merge
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,9 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
+
+// maxMergeRetries is the maximum number of attempts for transient merge failures.
+const maxMergeRetries = 3
 
 // MergePlan describes a planned merge (analysis only, no side effects).
 type MergePlan struct {
@@ -45,6 +49,13 @@ type MergeStatus struct {
 	ReadyToMerge []string // branches ready to merge cleanly
 	Conflicted   []string // branches that would conflict
 	Behind       []string // branches behind the default branch
+}
+
+// mergeWorktreeClient abstracts worktree operations needed by the merge
+// retry loop. *worktree.Manager satisfies this interface.
+type mergeWorktreeClient interface {
+	FindWorktreeByBranch(branch string) (string, error)
+	MergeBranch(sourceBranch, targetWorktree string) (*worktree.MergeResult, error)
 }
 
 // Orchestrator coordinates multi-step merges.
@@ -112,7 +123,10 @@ func (o *Orchestrator) PlanAgentMerge(agentBranch, featureWorktree string) (*Mer
 }
 
 // MergeAgentIntoFeature merges a single agent branch into the feature
-// worktree.  It verifies the worktree is clean before attempting the merge.
+// worktree. It rebases the agent branch onto the feature HEAD first to
+// reduce conflicts from stale merge bases, then merges. Transient failures
+// (no file conflicts) are retried up to maxMergeRetries times with backoff.
+// Real conflicts (from rebase or merge) are returned immediately without retry.
 func (o *Orchestrator) MergeAgentIntoFeature(agentBranch, featureWorktree string) (*worktree.MergeResult, error) {
 	clean, err := worktree.IsClean(featureWorktree)
 	if err != nil {
@@ -122,11 +136,70 @@ func (o *Orchestrator) MergeAgentIntoFeature(agentBranch, featureWorktree string
 		return nil, fmt.Errorf("merge agent into feature: feature worktree %s has uncommitted changes", featureWorktree)
 	}
 
-	result, err := o.wt.MergeBranch(agentBranch, featureWorktree)
-	if err != nil {
-		return nil, fmt.Errorf("merge agent into feature: %w", err)
+	return mergeWithRebaseAndRetry(o.wt, agentBranch, featureWorktree)
+}
+
+// mergeWithRebaseAndRetry performs rebase-before-merge with retry logic for
+// transient failures. It is separated from MergeAgentIntoFeature for testability.
+//
+// Retry rules:
+//   - Real conflicts (rebase fails or merge returns file conflicts): return immediately
+//   - Hard errors (non-GitError from RunGit): return immediately
+//   - Transient failures (merge fails with no file conflicts): retry with linear backoff
+func mergeWithRebaseAndRetry(wt mergeWorktreeClient, agentBranch, featureWorktree string) (*worktree.MergeResult, error) {
+	var lastResult *worktree.MergeResult
+
+	for attempt := 1; attempt <= maxMergeRetries; attempt++ {
+		// Find agent worktree (may not exist if already cleaned up)
+		agentWorktree, findErr := wt.FindWorktreeByBranch(agentBranch)
+
+		// Rebase if worktree exists
+		if findErr == nil {
+			rebaseResult, rebaseErr := worktree.RebaseBranch(agentWorktree, featureWorktree)
+			if rebaseErr != nil {
+				return nil, fmt.Errorf("rebase attempt %d: %w", attempt, rebaseErr)
+			}
+			if !rebaseResult.Success {
+				// Real conflict — don't retry
+				return &worktree.MergeResult{
+					Success:      false,
+					SourceBranch: agentBranch,
+					Conflicts:    rebaseResult.Conflicts,
+					GitStderr:    rebaseResult.GitStderr,
+					GitCommand:   "git rebase",
+				}, nil
+			}
+		}
+
+		// Merge
+		var err error
+		lastResult, err = wt.MergeBranch(agentBranch, featureWorktree)
+		if err != nil {
+			return nil, fmt.Errorf("merge attempt %d: %w", attempt, err)
+		}
+
+		if lastResult.Success {
+			return lastResult, nil
+		}
+
+		// If conflicts are real file conflicts, don't retry
+		if len(lastResult.Conflicts) > 0 {
+			return lastResult, nil
+		}
+
+		// Transient failure — retry after backoff
+		if attempt < maxMergeRetries {
+			slog.Warn("merge failed transiently, retrying",
+				"attempt", attempt,
+				"max_attempts", maxMergeRetries,
+				"agent_branch", agentBranch,
+				"stderr", lastResult.GitStderr,
+			)
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
 	}
-	return result, nil
+
+	return lastResult, nil
 }
 
 // MergeAllAgentsIntoFeature merges every completed agent branch for a
