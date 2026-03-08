@@ -629,7 +629,22 @@ func (o *Orchestrator) recoverStuckAgents() {
 }
 
 // processBacklog transitions a task from BACKLOG to PLANNING.
+// When replanning (PlanFeedback is set), it detaches old subtasks first
+// to prevent the planner from seeing stale done subtasks and auto-advancing.
 func (o *Orchestrator) processBacklog(task *model.Task) error {
+	if task.PlanFeedback != "" {
+		var oldSubtasks []model.Task
+		o.db.Where("parent_task_id = ?", task.ID).Find(&oldSubtasks)
+		if len(oldSubtasks) > 0 {
+			for i := range oldSubtasks {
+				oldSubtasks[i].ParentTaskID = nil
+				o.db.Save(&oldSubtasks[i])
+			}
+			slog.Info("detached old subtasks for replanning",
+				"task_id", task.ID, "count", len(oldSubtasks))
+		}
+	}
+
 	event, err := state.TransitionTask(task, model.StatusPlanning, "orchestrator", nil)
 	if err != nil {
 		return fmt.Errorf("process backlog: %w", err)
@@ -976,6 +991,34 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 		task.Plan = model.JSONField{"subtasks": rawPlan.Subtasks}
 	} else {
 		task.Plan = model.JSONField{"subtasks": rawPlan.Subtasks}
+	}
+
+	// Validate the plan before transitioning to plan_review.
+	entries, parseErr := parsePlan(task.Plan)
+	if parseErr != nil {
+		o.logger.Warn("plan validation: failed to parse stored plan", "task_id", task.ID, "error", parseErr)
+	} else {
+		validation := ValidatePlan(entries)
+		// Store validation result in task context for TUI display.
+		if task.Context == nil {
+			task.Context = make(model.JSONField)
+		}
+		task.Context["plan_validation"] = map[string]any{
+			"valid":    validation.Valid,
+			"warnings": validation.Warnings,
+			"errors":   validation.Errors,
+		}
+		if !validation.Valid {
+			o.logger.Warn("plan validation failed, will retry",
+				"task_id", task.ID, "errors", validation.Errors)
+			task.AssignedAgentID = nil
+			o.incrementRetryCount(task)
+			return o.db.Save(task).Error
+		}
+		if len(validation.Warnings) > 0 {
+			o.logger.Info("plan validation warnings",
+				"task_id", task.ID, "warnings", validation.Warnings)
+		}
 	}
 
 	// Clean up planner agent worktree.
