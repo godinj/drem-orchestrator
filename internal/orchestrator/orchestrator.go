@@ -1061,6 +1061,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 				if retries >= maxRetries {
 					o.logSupervisorAction(supervisor.JournalEntry{
 						Timestamp: time.Now(),
+						AgentName: ag.Name,
 						TaskID:    task.ID.String(),
 						TaskTitle: task.Title,
 						Type:      "failure_diagnosis",
@@ -1081,6 +1082,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 
 				o.logSupervisorAction(supervisor.JournalEntry{
 					Timestamp: time.Now(),
+					AgentName: ag.Name,
 					TaskID:    task.ID.String(),
 					TaskTitle: task.Title,
 					Type:      "failure_diagnosis",
@@ -1111,6 +1113,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 
 			o.logSupervisorAction(supervisor.JournalEntry{
 				Timestamp: time.Now(),
+				AgentName: ag.Name,
 				TaskID:    task.ID.String(),
 				TaskTitle: task.Title,
 				Type:      "failure_diagnosis",
@@ -1201,6 +1204,7 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 			if diagnosis.ShouldRetry && retries < MaxEmptyWorkRetries {
 				o.logSupervisorAction(supervisor.JournalEntry{
 					Timestamp: time.Now(),
+					AgentName: ag.Name,
 					TaskID:    task.ID.String(),
 					TaskTitle: task.Title,
 					Type:      "empty_work_diagnosis",
@@ -1224,6 +1228,7 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 
 			o.logSupervisorAction(supervisor.JournalEntry{
 				Timestamp: time.Now(),
+				AgentName: ag.Name,
 				TaskID:    task.ID.String(),
 				TaskTitle: task.Title,
 				Type:      "empty_work_diagnosis",
@@ -1486,6 +1491,7 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 					}
 					o.logSupervisorAction(supervisor.JournalEntry{
 						Timestamp: time.Now(),
+						AgentName: "orchestrator",
 						TaskID:    task.ID.String(),
 						TaskTitle: task.Title,
 						Type:      "build_failure",
@@ -1519,6 +1525,7 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 
 					o.logSupervisorAction(supervisor.JournalEntry{
 						Timestamp: time.Now(),
+						AgentName: "orchestrator",
 						TaskID:    task.ID.String(),
 						TaskTitle: task.Title,
 						Type:      "merge_conflict",
@@ -2079,6 +2086,7 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 
 	o.logSupervisorAction(supervisor.JournalEntry{
 		Timestamp: time.Now(),
+		AgentName: "supervisor",
 		TaskID:    taskID.String(),
 		TaskTitle: task.Title,
 		Type:      "on_demand_session",
@@ -2099,16 +2107,16 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-// journalPath returns the path to the supervisor journal file, stored
-// alongside the database.
-func (o *Orchestrator) journalPath() string {
-	return filepath.Join(filepath.Dir(o.dbPath), "supervisor-journal.md")
+// journalDir returns the path to the supervisor journal directory.
+func (o *Orchestrator) journalDir() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, "git", "drem-orchestrator.git", "journals")
 }
 
-// logSupervisorAction appends a supervisor intervention to the journal file.
+// logSupervisorAction writes a supervisor intervention to the journal directory.
 // Errors are logged but do not propagate — journaling is best-effort.
 func (o *Orchestrator) logSupervisorAction(entry supervisor.JournalEntry) {
-	if err := supervisor.AppendJournal(o.journalPath(), entry); err != nil {
+	if err := supervisor.WriteJournalEntry(o.journalDir(), entry); err != nil {
 		o.logger.Warn("failed to write supervisor journal", "error", err)
 	}
 }
