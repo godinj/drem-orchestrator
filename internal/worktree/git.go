@@ -12,6 +12,7 @@ package worktree
 import (
 	"fmt"
 	"os/exec"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -21,6 +22,7 @@ type GitError struct {
 	Command    string
 	ReturnCode int
 	Stderr     string
+	Stdout     string // stdout captured on failure (may contain conflict info)
 }
 
 // Error returns a human-readable description of the git failure.
@@ -38,7 +40,7 @@ type CommitInfo struct {
 }
 
 // RunGit executes a git command in the given directory and returns stdout.
-// Returns GitError on non-zero exit.
+// Returns GitError on non-zero exit, with both stderr and stdout captured.
 func RunGit(args []string, cwd string) (string, error) {
 	cmd := exec.Command("git", args...)
 	if cwd != "" {
@@ -53,6 +55,7 @@ func RunGit(args []string, cwd string) (string, error) {
 				Command:    fmt.Sprintf("git %s", strings.Join(args, " ")),
 				ReturnCode: exitErr.ExitCode(),
 				Stderr:     strings.TrimSpace(string(exitErr.Stderr)),
+				Stdout:     strings.TrimSpace(string(stdout)),
 			}
 		}
 		return "", fmt.Errorf("failed to run git %s: %w", strings.Join(args, " "), err)
@@ -230,4 +233,74 @@ func GetDefaultBranch(repoPath string) (string, error) {
 
 	// Default to "main"
 	return "main", nil
+}
+
+// RebaseResult describes the outcome of a rebase operation.
+type RebaseResult struct {
+	Success   bool
+	Conflicts []string // conflicting file paths if rebase failed
+	GitStderr string   // raw git stderr on failure
+}
+
+// rebaseConflictRe matches lines like "CONFLICT (content): Merge conflict in <file>".
+var rebaseConflictRe = regexp.MustCompile(`CONFLICT \([^)]+\): Merge conflict in (.+)`)
+
+// RebaseBranch rebases the branch checked out in sourceWorktree onto
+// the HEAD of targetWorktree. On conflict, the rebase is aborted and
+// the source worktree is left unchanged.
+func RebaseBranch(sourceWorktree, targetWorktree string) (*RebaseResult, error) {
+	// Resolve target HEAD
+	targetHEAD, err := RunGit([]string{"rev-parse", "HEAD"}, targetWorktree)
+	if err != nil {
+		return nil, fmt.Errorf("rebase branch: resolve target HEAD: %w", err)
+	}
+
+	// Attempt rebase in the source worktree
+	_, rebaseErr := RunGit([]string{"rebase", targetHEAD}, sourceWorktree)
+	if rebaseErr == nil {
+		return &RebaseResult{Success: true}, nil
+	}
+
+	// Rebase failed - extract output and parse conflicts.
+	// Git rebase outputs CONFLICT lines to stdout and error details
+	// to stderr, so we combine both for diagnostics and conflict parsing.
+	var gitStderr, combinedOutput string
+	if gitErr, ok := rebaseErr.(*GitError); ok {
+		gitStderr = gitErr.Stderr
+		combinedOutput = gitErr.Stdout
+		if gitErr.Stderr != "" {
+			if combinedOutput != "" {
+				combinedOutput = combinedOutput + "\n" + gitErr.Stderr
+			} else {
+				combinedOutput = gitErr.Stderr
+			}
+		}
+		// Store combined output as GitStderr for diagnostics
+		if combinedOutput != "" {
+			gitStderr = combinedOutput
+		}
+	}
+
+	conflicts := parseRebaseConflicts(combinedOutput)
+
+	// Abort the rebase to leave the source worktree clean
+	RunGit([]string{"rebase", "--abort"}, sourceWorktree)
+
+	return &RebaseResult{
+		Success:   false,
+		Conflicts: conflicts,
+		GitStderr: gitStderr,
+	}, nil
+}
+
+// parseRebaseConflicts extracts conflicting file paths from rebase stderr output.
+func parseRebaseConflicts(stderr string) []string {
+	var conflicts []string
+	for _, line := range strings.Split(stderr, "\n") {
+		matches := rebaseConflictRe.FindStringSubmatch(line)
+		if len(matches) == 2 {
+			conflicts = append(conflicts, matches[1])
+		}
+	}
+	return conflicts
 }

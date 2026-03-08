@@ -37,6 +37,8 @@ type MergeResult struct {
 	TargetBranch string
 	MergeCommit  string
 	Conflicts    []string
+	GitStderr    string // raw git stderr on failure
+	GitCommand   string // the exact git command that failed
 }
 
 // SyncResult describes the outcome of syncing a feature branch.
@@ -374,8 +376,26 @@ func (m *Manager) ListAgentWorktrees(featureName string) ([]AgentWorktreeInfo, e
 
 // MergeBranch merges a source branch into the target worktree.
 // If the merge fails with conflicts, it aborts the merge and returns
-// the list of conflicting files.
+// the list of conflicting files. Before merging, it verifies the source
+// branch ref is resolvable in the target worktree, fetching if necessary.
 func (m *Manager) MergeBranch(sourceBranch, targetWorktree string) (*MergeResult, error) {
+	// Verify the branch ref is resolvable in the target worktree
+	_, err := RunGit([]string{"rev-parse", "--verify", sourceBranch}, targetWorktree)
+	if err != nil {
+		slog.Warn("branch ref not visible, fetching",
+			"branch", sourceBranch,
+			"worktree", targetWorktree,
+		)
+		// In a bare repo, fetch from local to refresh refs
+		RunGit([]string{"fetch", ".", sourceBranch + ":" + sourceBranch}, targetWorktree)
+
+		// Re-verify
+		_, err = RunGit([]string{"rev-parse", "--verify", sourceBranch}, targetWorktree)
+		if err != nil {
+			return nil, fmt.Errorf("branch %s not resolvable after fetch: %w", sourceBranch, err)
+		}
+	}
+
 	// Get the current branch of the target worktree
 	targetBranch, err := RunGit([]string{"rev-parse", "--abbrev-ref", "HEAD"}, targetWorktree)
 	if err != nil {
@@ -383,7 +403,8 @@ func (m *Manager) MergeBranch(sourceBranch, targetWorktree string) (*MergeResult
 	}
 
 	// Attempt the merge
-	_, mergeErr := RunGit([]string{"merge", sourceBranch, "--no-edit"}, targetWorktree)
+	mergeArgs := []string{"merge", sourceBranch, "--no-edit"}
+	_, mergeErr := RunGit(mergeArgs, targetWorktree)
 	if mergeErr == nil {
 		// Merge succeeded - get the merge commit SHA
 		mergeCommit, err := RunGit([]string{"rev-parse", "HEAD"}, targetWorktree)
@@ -398,7 +419,23 @@ func (m *Manager) MergeBranch(sourceBranch, targetWorktree string) (*MergeResult
 		}, nil
 	}
 
-	// Merge failed - collect conflicts
+	// Merge failed - extract diagnostic info from the error.
+	// Git merge outputs conflict details to stdout and additional errors
+	// to stderr, so we capture both for diagnostics.
+	var gitStderr, gitCommand string
+	if gitErr, ok := mergeErr.(*GitError); ok {
+		gitStderr = gitErr.Stderr
+		if gitErr.Stdout != "" {
+			if gitStderr != "" {
+				gitStderr = gitErr.Stdout + "\n" + gitStderr
+			} else {
+				gitStderr = gitErr.Stdout
+			}
+		}
+		gitCommand = gitErr.Command
+	}
+
+	// Collect conflicting files
 	var conflicts []string
 	conflictOutput, conflictErr := RunGit([]string{
 		"diff", "--name-only", "--diff-filter=U",
@@ -415,7 +452,26 @@ func (m *Manager) MergeBranch(sourceBranch, targetWorktree string) (*MergeResult
 		SourceBranch: sourceBranch,
 		TargetBranch: targetBranch,
 		Conflicts:    conflicts,
+		GitStderr:    gitStderr,
+		GitCommand:   gitCommand,
 	}, nil
+}
+
+// FindWorktreeByBranch returns the worktree path for the given branch,
+// or an error if no worktree has that branch checked out.
+func (m *Manager) FindWorktreeByBranch(branch string) (string, error) {
+	worktrees, err := m.ListWorktrees()
+	if err != nil {
+		return "", fmt.Errorf("find worktree by branch: %w", err)
+	}
+
+	for _, wt := range worktrees {
+		if wt.Branch == branch {
+			return wt.Path, nil
+		}
+	}
+
+	return "", fmt.Errorf("find worktree by branch: no worktree found for branch %q", branch)
 }
 
 // SyncAll rebases all feature branches onto the default branch.
