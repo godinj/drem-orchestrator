@@ -223,11 +223,11 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 
 // ReconcileResult describes the fixes applied by a single Reconcile run.
 type ReconcileResult struct {
-	StaleSubtasksReset      int
-	OrphanedSubtasksFixed   int
-	EmptyFeaturesFailed     int
-	OrphanWorktreesCleaned  int
-	StuckAgentsRecovered    int
+	StaleSubtasksReset     int
+	OrphanedSubtasksFixed  int
+	EmptyFeaturesFailed    int
+	OrphanWorktreesCleaned int
+	StuckAgentsRecovered   int
 }
 
 // ReapOrphanedSessions kills tmux agent sessions that have no active agent
@@ -1282,9 +1282,9 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 						Type:      "failure_diagnosis",
 						Summary:   diagnosis.RootCause,
 						Details: map[string]string{
-							"Category":      diagnosis.Category,
-							"Strategy":      diagnosis.RetryStrategy,
-							"Agent Type":    string(ag.AgentType),
+							"Category":   diagnosis.Category,
+							"Strategy":   diagnosis.RetryStrategy,
+							"Agent Type": string(ag.AgentType),
 						},
 						Outcome: fmt.Sprintf("Failed after %d retries — max retries exceeded", retries),
 					})
@@ -1303,10 +1303,10 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 					Type:      "failure_diagnosis",
 					Summary:   diagnosis.RootCause,
 					Details: map[string]string{
-						"Category":         diagnosis.Category,
-						"Strategy":         diagnosis.RetryStrategy,
+						"Category":          diagnosis.Category,
+						"Strategy":          diagnosis.RetryStrategy,
 						"Prompt Adjustment": diagnosis.PromptAdjustment,
-						"Agent Type":       string(ag.AgentType),
+						"Agent Type":        string(ag.AgentType),
 					},
 					Outcome: fmt.Sprintf("Retrying (attempt %d)", retries),
 				})
@@ -1513,6 +1513,36 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 // whose agent has been cleared (e.g. after empty-work retry) — of the parent
 // that have their dependencies met and spawns agents for them.
 func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
+	// Check for wave schedule in parent context.
+	var allowedIDs map[uuid.UUID]bool
+	if parent.Context != nil {
+		if scheduleRaw, hasSchedule := parent.Context["schedule"]; hasSchedule {
+			scheduleJSON, marshalErr := json.Marshal(scheduleRaw)
+			if marshalErr == nil {
+				var schedule Schedule
+				if parseErr := json.Unmarshal(scheduleJSON, &schedule); parseErr == nil {
+					currentGroup := o.findCurrentGroup(parent, schedule)
+					if currentGroup != nil {
+						allowedIDs = make(map[uuid.UUID]bool, len(currentGroup.TaskIDs))
+						for _, id := range currentGroup.TaskIDs {
+							allowedIDs[id] = true
+						}
+						o.logger.Debug("wave schedule active",
+							"task_id", parent.ID,
+							"group_order", currentGroup.Order,
+							"group_size", len(currentGroup.TaskIDs))
+					} else {
+						// All groups complete.
+						return nil
+					}
+				} else {
+					o.logger.Warn("schedule parse failed, falling back to legacy scheduling",
+						"task_id", parent.ID, "error", parseErr)
+				}
+			}
+		}
+	}
+
 	var subtasks []model.Task
 	if err := o.db.Where(
 		"parent_task_id = ? AND ((status = ?) OR (status = ? AND assigned_agent_id IS NULL))",
@@ -1523,6 +1553,11 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 
 	for i := range subtasks {
 		sub := &subtasks[i]
+
+		// If wave scheduling is active, only schedule subtasks in the current group.
+		if allowedIDs != nil && !allowedIDs[sub.ID] {
+			continue
+		}
 
 		// Check dependencies.
 		if len(sub.DependencyIDs) > 0 {
@@ -1667,6 +1702,32 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 		o.logger.Info("subtask scheduled", "subtask_id", sub.ID, "agent_id", ag.ID, "type", agentType)
 	}
 
+	return nil
+}
+
+// findCurrentGroup returns the earliest group that has subtasks not yet in a
+// terminal state (done or failed). Returns nil if all groups are complete.
+func (o *Orchestrator) findCurrentGroup(parent *model.Task, schedule Schedule) *SubtaskGroup {
+	for i := range schedule.Groups {
+		group := &schedule.Groups[i]
+		allTerminal := true
+		for _, taskID := range group.TaskIDs {
+			var sub model.Task
+			if err := o.db.Select("status").First(&sub, "id = ?", taskID).Error; err != nil {
+				// If we can't find the subtask, treat as not terminal
+				// so the group stays active.
+				allTerminal = false
+				continue
+			}
+			if sub.Status != model.StatusDone && sub.Status != model.StatusFailed {
+				allTerminal = false
+				break
+			}
+		}
+		if !allTerminal {
+			return group
+		}
+	}
 	return nil
 }
 
@@ -1969,6 +2030,32 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 			if err := o.db.Model(&model.Task{}).Where("id = ?", createdIDs[i]).
 				Update("dependency_ids", depIDs).Error; err != nil {
 				return fmt.Errorf("handle plan approved: update dependencies for subtask %d: %w", i, err)
+			}
+		}
+	}
+
+	// Build wave schedule from the created subtasks.
+	var createdSubtasks []model.Task
+	if err := o.db.Where("parent_task_id = ?", task.ID).Find(&createdSubtasks).Error; err != nil {
+		o.logger.Warn("handle plan approved: failed to load subtasks for scheduling", "error", err)
+	} else if len(createdSubtasks) > 0 {
+		schedule := BuildSchedule(createdSubtasks)
+		scheduleJSON, marshalErr := json.Marshal(schedule)
+		if marshalErr != nil {
+			o.logger.Warn("handle plan approved: failed to marshal schedule", "error", marshalErr)
+		} else {
+			if task.Context == nil {
+				task.Context = make(model.JSONField)
+			}
+			var scheduleField any
+			if err := json.Unmarshal(scheduleJSON, &scheduleField); err != nil {
+				o.logger.Warn("handle plan approved: failed to unmarshal schedule into context", "error", err)
+			} else {
+				task.Context["schedule"] = scheduleField
+				o.logger.Info("wave schedule computed",
+					"task_id", task.ID,
+					"groups", len(schedule.Groups),
+					"subtasks", len(createdSubtasks))
 			}
 		}
 	}
