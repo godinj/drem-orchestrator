@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,6 +220,13 @@ func (r *Runner) SpawnAgent(task *model.Task, featureName string, agentType mode
 		return nil, fmt.Errorf("spawn agent: start: %w", err)
 	}
 
+	slog.Info("agent spawned",
+		"agent_id", agent.ID,
+		"task", task.Title,
+		"agent_type", agentType,
+		"prompt_bytes", len(prompt),
+	)
+
 	success = true
 	return agent, nil
 }
@@ -286,6 +294,13 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		return fmt.Errorf("write prompt: %w", err)
 	}
 
+	// Verify prompt was written completely.
+	written, err := os.ReadFile(promptPath)
+	if err != nil || len(written) != len(prompt) {
+		return fmt.Errorf("prompt write verification failed: wrote %d of %d bytes",
+			len(written), len(prompt))
+	}
+
 	// Write settings.json with an idle_prompt notification hook that creates
 	// a signal file when Claude finishes processing. The orchestrator polls
 	// for this file to detect completion while keeping the TUI alive.
@@ -311,10 +326,11 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		return fmt.Errorf("write claude settings: %w", err)
 	}
 
-	// Build the claude command (interactive TUI mode).
+	// Build the claude command. Use pipe-based delivery to avoid shell
+	// argument length limits and special character truncation from $(cat ...).
 	cmd := fmt.Sprintf(
-		"%s --dangerously-skip-permissions \"$(cat %s)\"",
-		r.claudeBin, promptPath,
+		"cat %q | %s --dangerously-skip-permissions -p -",
+		promptPath, r.claudeBin,
 	)
 
 	// Create tmux session for this agent.
@@ -342,8 +358,33 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 
 	go r.monitorAgent(ctx, agentID, sessionName, worktreePath)
 	go r.heartbeatLoop(ctx, agentID)
+	go r.verifySpawn(agentID, sessionName, 10*time.Second)
 
 	return nil
+}
+
+// verifySpawn checks that the agent's tmux session is alive after a
+// short delay. If the session doesn't exist, it sends a failure
+// completion so the orchestrator can handle the dead agent.
+func (r *Runner) verifySpawn(agentID uuid.UUID, sessionName string, delay time.Duration) {
+	time.Sleep(delay)
+
+	r.mu.Lock()
+	_, stillTracked := r.running[agentID]
+	r.mu.Unlock()
+	if !stillTracked {
+		return // already completed or stopped
+	}
+
+	alive, err := r.tmux.IsAgentSessionAlive(sessionName)
+	if err != nil || !alive {
+		slog.Error("agent failed spawn verification",
+			"agent_id", agentID,
+			"session", sessionName,
+			"error", err,
+		)
+		r.completions <- Completion{AgentID: agentID, ReturnCode: 1}
+	}
 }
 
 // StopAgent performs a graceful shutdown of an agent: cancels goroutines,
