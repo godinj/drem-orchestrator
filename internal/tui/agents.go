@@ -145,26 +145,48 @@ func (a AgentsModel) View() string {
 		}
 	}
 
-	// Limit visible lines to height.
-	visibleLines := lines
-	if a.height > 0 && len(visibleLines) > a.height {
-		// Simple scroll: keep the block around the cursor visible.
-		// Each agent takes ~3 lines.
-		blockStart := a.cursor * 3
-		if blockStart >= len(visibleLines) {
-			blockStart = len(visibleLines) - a.height
+	// Limit visible lines to height, scrolling to keep the cursor visible.
+	if a.height > 0 && len(lines) > a.height {
+		// Calculate the actual start line for the selected agent.
+		cursorStart := 0
+		cursorEnd := 0
+		lineIdx := 0
+		for i, ag := range visible {
+			blockLen := 1 // header line
+			if ag.TmuxSession != "" {
+				blockLen++
+			}
+			if ag.WorktreeBranch != "" {
+				blockLen++
+			}
+			if i == a.cursor {
+				cursorStart = lineIdx
+				cursorEnd = lineIdx + blockLen
+				break
+			}
+			lineIdx += blockLen
 		}
-		if blockStart < 0 {
-			blockStart = 0
+
+		// Determine the scroll window that keeps the cursor block visible.
+		start := 0
+		if cursorEnd > a.height {
+			start = cursorEnd - a.height
 		}
-		end := blockStart + a.height
-		if end > len(visibleLines) {
-			end = len(visibleLines)
+		if cursorStart < start {
+			start = cursorStart
 		}
-		visibleLines = visibleLines[blockStart:end]
+		end := start + a.height
+		if end > len(lines) {
+			end = len(lines)
+			start = end - a.height
+			if start < 0 {
+				start = 0
+			}
+		}
+		lines = lines[start:end]
 	}
 
-	return strings.Join(visibleLines, "\n")
+	return strings.Join(lines, "\n")
 }
 
 // Selected returns the currently highlighted agent, or nil if there are no visible agents.
