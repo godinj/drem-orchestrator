@@ -227,6 +227,7 @@ type ReconcileResult struct {
 	OrphanedSubtasksFixed   int
 	EmptyFeaturesFailed     int
 	OrphanWorktreesCleaned  int
+	StuckAgentsRecovered    int
 }
 
 // ReapOrphanedSessions kills tmux agent sessions that have no active agent
@@ -266,7 +267,13 @@ func (o *Orchestrator) Reconcile() (int, error) {
 		r.OrphanWorktreesCleaned = n
 	}
 
-	total := r.StaleSubtasksReset + r.OrphanedSubtasksFixed + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned
+	if n, err := o.reconcileStuckAgents(); err != nil {
+		return 0, fmt.Errorf("reconcile stuck agents: %w", err)
+	} else {
+		r.StuckAgentsRecovered = n
+	}
+
+	total := r.StaleSubtasksReset + r.OrphanedSubtasksFixed + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned + r.StuckAgentsRecovered
 	if total > 0 {
 		o.emit("reconcile", r)
 	}
@@ -339,6 +346,48 @@ func (o *Orchestrator) reconcileStaleSubtasks() (int, error) {
 	return fixed, nil
 }
 
+// isWorkAlreadyMerged checks whether the agent branch's commits are
+// already reachable from the feature branch HEAD. Returns true if the
+// work has been merged (even if the subtask status says failed).
+func (o *Orchestrator) isWorkAlreadyMerged(subtask *model.Task, featureWorktree string) bool {
+	if subtask.AssignedAgentID == nil {
+		return false
+	}
+
+	var ag model.Agent
+	if err := o.db.First(&ag, "id = ?", subtask.AssignedAgentID).Error; err != nil {
+		return false
+	}
+
+	if ag.WorktreeBranch == "" {
+		return false
+	}
+
+	// Check if agent branch tip is an ancestor of feature HEAD.
+	_, err := worktree.RunGit(
+		[]string{"merge-base", "--is-ancestor", ag.WorktreeBranch, "HEAD"},
+		featureWorktree,
+	)
+	return err == nil // exit code 0 means it IS an ancestor
+}
+
+// resolveFeatureWorktree resolves the feature integration worktree path
+// for a subtask by looking up its parent task's WorktreeBranch.
+func (o *Orchestrator) resolveFeatureWorktree(subtask *model.Task) string {
+	if subtask.ParentTaskID == nil {
+		return ""
+	}
+	var parent model.Task
+	if err := o.db.Select("worktree_branch").First(&parent, "id = ?", subtask.ParentTaskID).Error; err != nil {
+		return ""
+	}
+	if parent.WorktreeBranch == "" {
+		return ""
+	}
+	fn := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
+	return o.worktree.FeatureWorktreePath(fn)
+}
+
 // reconcileOrphanedSubtasks finds IN_PROGRESS subtasks whose assigned agent
 // is idle or dead — meaning the agent finished but the completion signal was
 // lost before the subtask could be transitioned. For each orphaned subtask,
@@ -387,6 +436,47 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 			var parent model.Task
 			if err := o.db.Select("worktree_branch").First(&parent, "id = ?", sub.ParentTaskID).Error; err == nil {
 				featureBranch = parent.WorktreeBranch
+			}
+		}
+
+		// Before resetting, check if work is already merged.
+		if featureBranch != "" {
+			fn := strings.TrimPrefix(featureBranch, "feature/")
+			featureDir := o.worktree.FeatureWorktreePath(fn)
+			if o.isWorkAlreadyMerged(sub, featureDir) {
+				o.logger.Info("reconcile: work already merged, fast-tracking to done",
+					"subtask_id", sub.ID, "agent_id", ag.ID)
+				// Fast-track to done since work is already in the feature branch.
+				transitions := []model.TaskStatus{
+					model.StatusTestingReady,
+					model.StatusMerging,
+					model.StatusDone,
+				}
+				for _, target := range transitions {
+					if sub.Status == target {
+						continue
+					}
+					evt, tErr := state.TransitionTask(sub, target, "orchestrator",
+						map[string]any{"reason": "reconcile-already-merged"})
+					if tErr != nil {
+						continue
+					}
+					if err := o.db.Create(evt).Error; err != nil {
+						o.logger.Error("reconcile: save event", "subtask_id", sub.ID, "error", err)
+						break
+					}
+				}
+				if err := o.db.Save(sub).Error; err != nil {
+					o.logger.Error("reconcile: save subtask", "subtask_id", sub.ID, "error", err)
+				}
+				// Clean up agent worktree since work is merged.
+				if ag.WorktreeBranch != "" {
+					if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+						o.logger.Warn("reconcile: cleanup agent worktree", "agent_id", ag.ID, "error", err)
+					}
+				}
+				fixed++
+				continue
 			}
 		}
 
@@ -586,6 +676,88 @@ func (o *Orchestrator) reconcileOrphanWorktrees() (int, error) {
 		}
 	}
 	return cleaned, nil
+}
+
+// reconcileStuckAgents finds IN_PROGRESS subtasks whose agent tmux
+// sessions are dead but no completion was ever received. This catches
+// agents that exited without triggering the monitor goroutine.
+func (o *Orchestrator) reconcileStuckAgents() (int, error) {
+	var subtasks []model.Task
+	if err := o.db.Where(
+		"project_id = ? AND status = ? AND parent_task_id IS NOT NULL AND assigned_agent_id IS NOT NULL",
+		o.projectID, model.StatusInProgress,
+	).Find(&subtasks).Error; err != nil {
+		return 0, err
+	}
+
+	// Build a set of agent IDs that the runner considers active.
+	runningAgents := o.runner.GetRunningAgents()
+	runningSet := make(map[uuid.UUID]bool, len(runningAgents))
+	for _, ra := range runningAgents {
+		runningSet[ra.AgentID] = true
+	}
+
+	fixed := 0
+	for i := range subtasks {
+		sub := &subtasks[i]
+
+		var ag model.Agent
+		if err := o.db.First(&ag, "id = ?", sub.AssignedAgentID).Error; err != nil {
+			continue
+		}
+
+		// Only act on agents that are still marked as working in the DB.
+		if ag.Status != model.AgentWorking {
+			continue
+		}
+
+		// Skip agents that the runner still considers active.
+		if runningSet[ag.ID] {
+			continue
+		}
+
+		// Agent is NOT in the runner's running map AND DB status is working.
+		o.logger.Warn("detected dead agent session without completion",
+			"agent_id", ag.ID, "task", sub.Title, "session", ag.TmuxSession)
+
+		// Check if the agent branch has commits.
+		featureDir := o.resolveFeatureWorktree(sub)
+		hasCommits := false
+		if featureDir != "" && ag.WorktreeBranch != "" {
+			var err error
+			hasCommits, err = worktree.BranchHasNewCommits(featureDir, ag.WorktreeBranch)
+			if err != nil {
+				o.logger.Warn("reconcile stuck: failed to check commits",
+					"agent_id", ag.ID, "error", err)
+			}
+		}
+
+		if hasCommits {
+			// Route through the normal completion path.
+			o.logger.Info("reconcile stuck: agent has commits, sending completion",
+				"agent_id", ag.ID, "task", sub.Title)
+			if err := o.processAgentResult(agent.Completion{
+				AgentID:    ag.ID,
+				ReturnCode: 0,
+			}); err != nil {
+				o.logger.Error("reconcile stuck: process completion",
+					"agent_id", ag.ID, "error", err)
+			}
+		} else {
+			// No work produced — mark agent dead, subtask failed.
+			ag.Status = model.AgentDead
+			ag.CurrentTaskID = nil
+			if err := o.db.Save(&ag).Error; err != nil {
+				o.logger.Error("reconcile stuck: save agent", "agent_id", ag.ID, "error", err)
+				continue
+			}
+			if err := o.failTask(sub, "agent session died without producing commits"); err != nil {
+				o.logger.Error("reconcile stuck: fail subtask", "subtask_id", sub.ID, "error", err)
+			}
+		}
+		fixed++
+	}
+	return fixed, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,6 +1317,38 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 		return nil
 	}
 
+	// Before failing, check if work was already merged (e.g. merge succeeded
+	// but DB update failed on a prior attempt).
+	featureDir := o.resolveFeatureWorktree(task)
+	if featureDir != "" && o.isWorkAlreadyMerged(task, featureDir) {
+		o.logger.Info("agent failed but work already merged, fast-tracking to done",
+			"task_id", task.ID, "agent_id", ag.ID)
+		// Fast-track subtask through states to DONE.
+		transitions := []model.TaskStatus{
+			model.StatusTestingReady,
+			model.StatusMerging,
+			model.StatusDone,
+		}
+		for _, target := range transitions {
+			if task.Status == target {
+				continue
+			}
+			evt, tErr := state.TransitionTask(task, target, "orchestrator",
+				map[string]any{"reason": "already-merged-on-failure"})
+			if tErr != nil {
+				continue
+			}
+			if err := o.db.Create(evt).Error; err != nil {
+				return fmt.Errorf("on agent failed: save event: %w", err)
+			}
+		}
+		if err := o.db.Save(task).Error; err != nil {
+			return fmt.Errorf("on agent failed: save task: %w", err)
+		}
+		o.emit("task_updated", task)
+		return nil
+	}
+
 	// Coder/researcher failure: transition to FAILED.
 	if err := o.failTask(task, "agent exited with non-zero code"); err != nil {
 		return err
@@ -1289,6 +1493,44 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 			}
 		}
 
+		// If subtask was previously assigned an agent, check if its work
+		// is already merged into the feature branch before re-spawning.
+		if sub.AssignedAgentID != nil {
+			featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
+			featureDir := o.worktree.FeatureWorktreePath(featureName)
+			if o.isWorkAlreadyMerged(sub, featureDir) {
+				o.logger.Info("schedule: work already merged, fast-tracking to done",
+					"subtask_id", sub.ID)
+				// Fast-track to done.
+				transitions := []model.TaskStatus{
+					model.StatusPlanning,
+					model.StatusPlanReview,
+					model.StatusInProgress,
+					model.StatusTestingReady,
+					model.StatusMerging,
+					model.StatusDone,
+				}
+				for _, target := range transitions {
+					if sub.Status == target {
+						continue
+					}
+					evt, tErr := state.TransitionTask(sub, target, "orchestrator",
+						map[string]any{"reason": "already-merged-skip-spawn"})
+					if tErr != nil {
+						continue
+					}
+					if err := o.db.Create(evt).Error; err != nil {
+						o.logger.Error("schedule: save event", "subtask_id", sub.ID, "error", err)
+						break
+					}
+				}
+				if err := o.db.Save(sub).Error; err != nil {
+					o.logger.Error("schedule: save subtask", "subtask_id", sub.ID, "error", err)
+				}
+				continue
+			}
+		}
+
 		// Check capacity.
 		if !o.runner.CanSpawn() {
 			break
@@ -1340,6 +1582,18 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 			continue
 		}
 
+		// Verify agent record was created in the DB.
+		var verifyAgent model.Agent
+		if err := o.db.Where("current_task_id = ? AND status = ?",
+			sub.ID, model.AgentWorking).First(&verifyAgent).Error; err != nil {
+			o.logger.Error("agent record missing after spawn",
+				"subtask", sub.Title, "error", err)
+			if err := o.failTask(sub, "agent record not found after spawn"); err != nil {
+				o.logger.Error("schedule: fail subtask after missing agent", "subtask_id", sub.ID, "error", err)
+			}
+			continue
+		}
+
 		// Fast-track subtask: BACKLOG -> PLANNING -> PLAN_REVIEW -> IN_PROGRESS.
 		fastTrack := []model.TaskStatus{
 			model.StatusPlanning,
@@ -1374,7 +1628,9 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 }
 
 // checkFeatureCompletion checks whether all subtasks of a parent are DONE and
-// transitions the parent accordingly.
+// transitions the parent accordingly. The parent only fails when ALL subtasks
+// are terminal (done or failed) and at least one is failed. While any subtask
+// is still in_progress, planning, or backlog, the parent stays in_progress.
 func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 	var subtasks []model.Task
 	if err := o.db.Where("parent_task_id = ?", parent.ID).Find(&subtasks).Error; err != nil {
@@ -1385,14 +1641,20 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		return nil
 	}
 
-	allDone := true
+	allTerminal := true
 	anyFailed := false
+	allDone := true
+
 	for _, sub := range subtasks {
-		if sub.Status != model.StatusDone {
-			allDone = false
-		}
-		if sub.Status == model.StatusFailed {
+		switch sub.Status {
+		case model.StatusDone:
+			// good
+		case model.StatusFailed:
 			anyFailed = true
+			allDone = false
+		default:
+			allTerminal = false
+			allDone = false
 		}
 	}
 
@@ -1430,11 +1692,19 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		}
 		o.emit("testing_ready", map[string]any{"task_id": parent.ID})
 		o.logger.Info("all subtasks done, testing ready", "task_id", parent.ID)
-	} else if anyFailed && parent.Status == model.StatusInProgress {
-		if err := o.failTask(parent, "one or more subtasks failed"); err != nil {
+	} else if allTerminal && anyFailed && parent.Status == model.StatusInProgress {
+		// All subtasks finished but some failed -> parent fails.
+		var failedNames []string
+		for _, sub := range subtasks {
+			if sub.Status == model.StatusFailed {
+				failedNames = append(failedNames, sub.Title)
+			}
+		}
+		if err := o.failTask(parent, fmt.Sprintf("subtasks failed: %s", strings.Join(failedNames, ", "))); err != nil {
 			return err
 		}
 	}
+	// Otherwise: subtasks still running, keep parent in_progress — do nothing.
 
 	return nil
 }

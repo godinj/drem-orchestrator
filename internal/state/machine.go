@@ -23,7 +23,7 @@ var ValidTransitions = map[model.TaskStatus][]model.TaskStatus{
 	model.StatusMerging:       {model.StatusDone, model.StatusFailed},
 	model.StatusPaused:        {model.StatusBacklog, model.StatusPlanning, model.StatusInProgress},
 	model.StatusDone:          {},
-	model.StatusFailed:        {model.StatusBacklog},
+	model.StatusFailed:        {model.StatusBacklog, model.StatusInProgress},
 }
 
 // ValidateTransition checks if moving from current to target is an allowed
