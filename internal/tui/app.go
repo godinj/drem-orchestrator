@@ -805,16 +805,29 @@ func (m Model) handleSupervisorEval() (tea.Model, tea.Cmd) {
 }
 
 // handleReviewerEval spawns a reviewer agent for the selected task.
+// Works on the parent task regardless of which row (parent or subtask) is
+// selected. If the selected row is a subtask, the parent is looked up.
 func (m Model) handleReviewerEval() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil {
 		return m, nil
 	}
-	if selected.Status != model.StatusPlanReview && selected.Status != model.StatusTestingReady {
+
+	// Resolve the parent task if a subtask is selected.
+	task := selected
+	if task.ParentTaskID != nil {
+		var parent model.Task
+		if err := m.db.First(&parent, "id = ?", task.ParentTaskID).Error; err == nil {
+			task = &parent
+		}
+	}
+
+	if task.Status != model.StatusPlanReview && task.Status != model.StatusTestingReady {
+		m.err = fmt.Errorf("review requires plan_review or testing_ready status (task is %s)", task.Status)
 		return m, nil
 	}
 	orch := m.orch
-	taskID := selected.ID
+	taskID := task.ID
 	return m, func() tea.Msg {
 		sessionName, err := orch.SpawnReviewerSession(taskID)
 		return reviewerSpawnedMsg{sessionName: sessionName, err: err}
@@ -822,19 +835,32 @@ func (m Model) handleReviewerEval() (tea.Model, tea.Cmd) {
 }
 
 // handleFixerEval spawns a fixer agent for the selected task.
+// Works on the parent task regardless of which row (parent or subtask) is
+// selected. If the selected row is a subtask, the parent is looked up.
 func (m Model) handleFixerEval() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil {
 		return m, nil
 	}
-	switch selected.Status {
+
+	// Resolve the parent task if a subtask is selected.
+	task := selected
+	if task.ParentTaskID != nil {
+		var parent model.Task
+		if err := m.db.First(&parent, "id = ?", task.ParentTaskID).Error; err == nil {
+			task = &parent
+		}
+	}
+
+	switch task.Status {
 	case model.StatusInProgress, model.StatusFailed, model.StatusTestingReady:
 		// OK
 	default:
+		m.err = fmt.Errorf("fixer requires in_progress, failed, or testing_ready status (task is %s)", task.Status)
 		return m, nil
 	}
 	orch := m.orch
-	taskID := selected.ID
+	taskID := task.ID
 	return m, func() tea.Msg {
 		sessionName, err := orch.SpawnFixerSession(taskID)
 		return fixerSpawnedMsg{sessionName: sessionName, err: err}
