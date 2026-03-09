@@ -202,6 +202,41 @@ func (d DetailModel) View() string {
 		}
 	}
 
+	// Review results from reviewer agent.
+	if d.task.Context != nil {
+		if review, ok := d.task.Context["review"].(map[string]any); ok {
+			reviewStyle := lipgloss.NewStyle().Foreground(colorInfo)
+			sections = append(sections, reviewStyle.Render("Review:"))
+
+			if rec, ok := review["recommendation"].(string); ok {
+				recStyle := lipgloss.NewStyle().Foreground(colorInfo)
+				if rec == "reject" || rec == "needs_work" {
+					recStyle = lipgloss.NewStyle().Foreground(colorDanger)
+				} else if rec == "approve" {
+					recStyle = lipgloss.NewStyle().Foreground(colorSuccess)
+				}
+				sections = append(sections, fmt.Sprintf("  Recommendation: %s", recStyle.Render(rec)))
+			}
+			if coverage, ok := review["coverage"].(string); ok {
+				sections = append(sections, fmt.Sprintf("  Coverage: %s", coverage))
+			}
+			if buildPasses, ok := review["build_passes"].(bool); ok {
+				sections = append(sections, fmt.Sprintf("  Build passes: %v", buildPasses))
+			}
+			if testsPasses, ok := review["tests_pass"].(bool); ok {
+				sections = append(sections, fmt.Sprintf("  Tests pass: %v", testsPasses))
+			}
+			if issues, ok := review["issues"].([]any); ok && len(issues) > 0 {
+				sections = append(sections, "  Issues:")
+				for _, issue := range issues {
+					if s, ok := issue.(string); ok {
+						sections = append(sections, fmt.Sprintf("    - %s", s))
+					}
+				}
+			}
+		}
+	}
+
 	// Warnings from task context.
 	if d.task.Context != nil {
 		warnStyle := lipgloss.NewStyle().Foreground(colorDanger)
@@ -318,15 +353,15 @@ func (d DetailModel) availableActions() string {
 
 	switch d.task.Status {
 	case model.StatusPlanReview:
-		parts = append(parts, "[a]pprove plan", "[r]eject plan", "[c]omment", "[d]elete")
+		parts = append(parts, "[a]pprove plan", "[r]eject plan", "[v]review", "[c]omment", "[d]elete")
 	case model.StatusTestingReady:
-		parts = append(parts, "[t]est pass", "[f]ail test", "[c]omment", "[d]elete")
+		parts = append(parts, "[t]est pass", "[f]ail test", "[v]review", "[x]fix", "[c]omment", "[d]elete")
 	case model.StatusInProgress:
-		parts = append(parts, "[p]ause", "[d]elete")
+		parts = append(parts, "[p]ause", "[x]fix", "[d]elete")
 	case model.StatusPaused:
 		parts = append(parts, "[p] resume")
 	case model.StatusFailed:
-		parts = append(parts, "[R]etry")
+		parts = append(parts, "[R]etry", "[x]fix")
 	}
 
 	// Supervisor evaluation is always available.

@@ -75,6 +75,18 @@ type supervisorSpawnedMsg struct {
 	err         error
 }
 
+// reviewerSpawnedMsg carries the result of spawning a reviewer session.
+type reviewerSpawnedMsg struct {
+	sessionName string
+	err         error
+}
+
+// fixerSpawnedMsg carries the result of spawning a fixer session.
+type fixerSpawnedMsg struct {
+	sessionName string
+	err         error
+}
+
 // feedbackAction tracks what action triggered the feedback dialog.
 type feedbackAction int
 
@@ -214,6 +226,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case reviewerSpawnedMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("reviewer: %w", msg.err)
+		} else {
+			_ = m.tmux.FocusAgentSession(msg.sessionName)
+		}
+		return m, m.refreshData()
+
+	case fixerSpawnedMsg:
+		if msg.err != nil {
+			m.err = fmt.Errorf("fixer: %w", msg.err)
+		} else {
+			_ = m.tmux.FocusAgentSession(msg.sessionName)
+		}
+		return m, m.refreshData()
+
 	case reconcileMsg:
 		if msg.err != nil {
 			m.err = fmt.Errorf("reconcile: %w", msg.err)
@@ -332,6 +360,10 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDelete()
 	case "S":
 		return m.handleSupervisorEval()
+	case "v":
+		return m.handleReviewerEval()
+	case "x":
+		return m.handleFixerEval()
 	case "X":
 		// Reconcile disabled pending overhaul — see feature/reconcile-overhaul.md
 		return m, nil
@@ -448,6 +480,10 @@ func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleDelete()
 	case "S":
 		return m.handleSupervisorEval()
+	case "v":
+		return m.handleReviewerEval()
+	case "x":
+		return m.handleFixerEval()
 	}
 
 	return m, nil
@@ -768,6 +804,43 @@ func (m Model) handleSupervisorEval() (tea.Model, tea.Cmd) {
 	}
 }
 
+// handleReviewerEval spawns a reviewer agent for the selected task.
+func (m Model) handleReviewerEval() (tea.Model, tea.Cmd) {
+	selected := m.board.Selected()
+	if selected == nil {
+		return m, nil
+	}
+	if selected.Status != model.StatusPlanReview && selected.Status != model.StatusTestingReady {
+		return m, nil
+	}
+	orch := m.orch
+	taskID := selected.ID
+	return m, func() tea.Msg {
+		sessionName, err := orch.SpawnReviewerSession(taskID)
+		return reviewerSpawnedMsg{sessionName: sessionName, err: err}
+	}
+}
+
+// handleFixerEval spawns a fixer agent for the selected task.
+func (m Model) handleFixerEval() (tea.Model, tea.Cmd) {
+	selected := m.board.Selected()
+	if selected == nil {
+		return m, nil
+	}
+	switch selected.Status {
+	case model.StatusInProgress, model.StatusFailed, model.StatusTestingReady:
+		// OK
+	default:
+		return m, nil
+	}
+	orch := m.orch
+	taskID := selected.ID
+	return m, func() tea.Msg {
+		sessionName, err := orch.SpawnFixerSession(taskID)
+		return fixerSpawnedMsg{sessionName: sessionName, err: err}
+	}
+}
+
 // reconcileMsg carries the result of an on-demand Reconcile call.
 type reconcileMsg struct {
 	fixes int
@@ -958,7 +1031,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab/C-hjkl:panel  a:approve  r:reject  c:comment  d:del  p:pause  R:retry  S:supervisor  C:clean-sessions  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab/C-hjkl:panel  a:approve  r:reject  c:comment  d:del  p:pause  R:retry  v:review  x:fix  S:supervisor  C:clean-sessions  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.

@@ -967,8 +967,13 @@ func (o *Orchestrator) processAgentResult(comp agent.Completion) error {
 
 // onAgentCompleted handles a successfully completed agent.
 func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error {
-	if ag.AgentType == model.AgentPlanner {
+	switch ag.AgentType {
+	case model.AgentPlanner:
 		return o.onPlannerCompleted(ag, task)
+	case model.AgentReviewer:
+		return o.onReviewerCompleted(ag, task)
+	case model.AgentFixer:
+		return o.onFixerCompleted(ag, task)
 	}
 
 	// Extract memories from agent output.
@@ -1220,6 +1225,260 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	o.emit("plan_ready", map[string]any{"task_id": task.ID, "subtask_count": len(rawPlan.Subtasks)})
 	o.logger.Info("plan ready for review", "task_id", task.ID, "subtasks", len(rawPlan.Subtasks))
 	return nil
+}
+
+// onReviewerCompleted handles a completed reviewer agent by parsing its
+// review.json output and storing it in the task context.
+func (o *Orchestrator) onReviewerCompleted(ag *model.Agent, task *model.Task) error {
+	// Mark agent as idle.
+	ag.Status = model.AgentIdle
+	ag.CurrentTaskID = nil
+	if err := o.db.Save(ag).Error; err != nil {
+		return fmt.Errorf("on reviewer completed: save agent: %w", err)
+	}
+
+	// Read review.json from the worktree.
+	reviewPath := filepath.Join(ag.WorktreePath, "review.json")
+	reviewData, err := os.ReadFile(reviewPath)
+	if err != nil {
+		o.logger.Warn("reviewer produced no review.json", "task_id", task.ID, "agent_id", ag.ID, "error", err)
+		return nil
+	}
+
+	// Parse review JSON into a map.
+	var review map[string]any
+	if err := json.Unmarshal(reviewData, &review); err != nil {
+		o.logger.Warn("reviewer review.json parse failed", "task_id", task.ID, "error", err)
+		return nil
+	}
+
+	// Store review in task context.
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context["review"] = review
+	if err := o.db.Save(task).Error; err != nil {
+		return fmt.Errorf("on reviewer completed: save task: %w", err)
+	}
+
+	// Clean up the review.json file to avoid stale data on re-review.
+	_ = os.Remove(reviewPath)
+
+	o.emit("task_updated", task)
+	o.logger.Info("review stored", "task_id", task.ID, "agent_id", ag.ID)
+	return nil
+}
+
+// onFixerCompleted handles a completed fixer agent. The task stays in its
+// current status for the user to decide next steps.
+func (o *Orchestrator) onFixerCompleted(ag *model.Agent, task *model.Task) error {
+	// Mark agent as idle.
+	ag.Status = model.AgentIdle
+	ag.CurrentTaskID = nil
+	if err := o.db.Save(ag).Error; err != nil {
+		return fmt.Errorf("on fixer completed: save agent: %w", err)
+	}
+
+	o.emit("task_updated", task)
+	o.logger.Info("fixer completed", "task_id", task.ID, "agent_id", ag.ID)
+	return nil
+}
+
+// SpawnReviewerSession spawns a reviewer agent for the given task.
+// The task must be in plan_review or testing_ready status.
+// Returns the tmux session name so the TUI can focus it.
+func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return "", fmt.Errorf("spawn reviewer: find task: %w", err)
+	}
+
+	// Validate status.
+	if task.Status != model.StatusPlanReview && task.Status != model.StatusTestingReady {
+		return "", fmt.Errorf("spawn reviewer: task must be in plan_review or testing_ready, got %s", task.Status)
+	}
+
+	// Check for existing working reviewer on the same task.
+	var existing model.Agent
+	err := o.db.Where("current_task_id = ? AND agent_type = ? AND status = ?",
+		taskID, model.AgentReviewer, model.AgentWorking).First(&existing).Error
+	if err == nil {
+		// Already a working reviewer — return its session.
+		o.logger.Info("reviewer already running for task", "task_id", taskID, "agent_id", existing.ID)
+		return existing.TmuxSession, nil
+	}
+
+	// Resolve integration worktree.
+	worktreePath := o.resolveIntegrationWorktree(&task)
+	if worktreePath == "" {
+		return "", fmt.Errorf("spawn reviewer: no integration worktree found for task %s", taskID)
+	}
+
+	// Load project.
+	var project model.Project
+	if err := o.db.First(&project, "id = ?", o.projectID).Error; err != nil {
+		return "", fmt.Errorf("spawn reviewer: load project: %w", err)
+	}
+
+	// Determine review mode and build context.
+	var reviewMode, planJSON, gitDiff string
+	if task.Status == model.StatusPlanReview {
+		reviewMode = "plan"
+		if task.Plan != nil {
+			if data, err := json.MarshalIndent(task.Plan, "", "  "); err == nil {
+				planJSON = string(data)
+			}
+		}
+	} else {
+		reviewMode = "feature"
+		// Get diff of integration branch vs default branch.
+		diff, err := worktree.RunGit(
+			[]string{"diff", o.worktree.DefaultBranch + "...HEAD", "--stat"},
+			worktreePath,
+		)
+		if err == nil {
+			// Also get the full diff (limited size).
+			fullDiff, _ := worktree.RunGit(
+				[]string{"diff", o.worktree.DefaultBranch + "...HEAD"},
+				worktreePath,
+			)
+			if fullDiff != "" {
+				gitDiff = fullDiff
+			} else {
+				gitDiff = diff
+			}
+		}
+	}
+
+	// Generate prompt.
+	comments, _ := o.GetComments(task.ID)
+	reviewerPrompt := prompt.Generate(prompt.Opts{
+		Task:         &task,
+		Project:      &project,
+		AgentType:    model.AgentReviewer,
+		WorktreePath: worktreePath,
+		Comments:     comments,
+		ReviewMode:   reviewMode,
+		PlanJSON:     planJSON,
+		GitDiff:      gitDiff,
+	})
+
+	// Spawn via runner.
+	ag, err := o.runner.SpawnAgentInWorktree(&task, worktreePath, model.AgentReviewer, reviewerPrompt)
+	if err != nil {
+		return "", fmt.Errorf("spawn reviewer: %w", err)
+	}
+
+	o.emit("reviewer_spawned", map[string]any{"task_id": taskID, "agent_id": ag.ID, "mode": reviewMode})
+	o.logger.Info("reviewer spawned", "task_id", taskID, "agent_id", ag.ID, "mode", reviewMode)
+	return ag.TmuxSession, nil
+}
+
+// SpawnFixerSession spawns a fixer agent for the given task.
+// The task should be in a status where a fix is applicable (in_progress, failed,
+// testing_ready). Returns the tmux session name so the TUI can focus it.
+func (o *Orchestrator) SpawnFixerSession(taskID uuid.UUID) (string, error) {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return "", fmt.Errorf("spawn fixer: find task: %w", err)
+	}
+
+	// Validate status.
+	switch task.Status {
+	case model.StatusInProgress, model.StatusFailed, model.StatusTestingReady:
+		// OK
+	default:
+		return "", fmt.Errorf("spawn fixer: task must be in in_progress, failed, or testing_ready, got %s", task.Status)
+	}
+
+	// Resolve integration worktree.
+	worktreePath := o.resolveIntegrationWorktree(&task)
+	if worktreePath == "" {
+		return "", fmt.Errorf("spawn fixer: no integration worktree found for task %s", taskID)
+	}
+
+	// Check for any agent (reviewer/fixer) working in the same integration worktree.
+	var busy model.Agent
+	err := o.db.Where("worktree_path = ? AND status = ? AND agent_type IN ?",
+		worktreePath, model.AgentWorking, []model.AgentType{model.AgentReviewer, model.AgentFixer}).
+		First(&busy).Error
+	if err == nil {
+		return "", fmt.Errorf("spawn fixer: integration worktree is occupied by %s agent %s", busy.AgentType, busy.ID)
+	}
+
+	// Load project.
+	var project model.Project
+	if err := o.db.First(&project, "id = ?", o.projectID).Error; err != nil {
+		return "", fmt.Errorf("spawn fixer: load project: %w", err)
+	}
+
+	// Extract diagnosis from task context.
+	var diagnosis, suggestedFix string
+	var affectedFiles []string
+	if task.Context != nil {
+		if d, ok := task.Context["failure_diagnosis"].(string); ok {
+			diagnosis = d
+		}
+		if d, ok := task.Context["failure_reason"].(string); ok && diagnosis == "" {
+			diagnosis = d
+		}
+		if sf, ok := task.Context["suggested_fix"].(string); ok {
+			suggestedFix = sf
+		}
+		if af, ok := task.Context["affected_files"].([]any); ok {
+			for _, f := range af {
+				if s, ok := f.(string); ok {
+					affectedFiles = append(affectedFiles, s)
+				}
+			}
+		}
+	}
+
+	// Generate prompt.
+	comments, _ := o.GetComments(task.ID)
+	fixerPrompt := prompt.Generate(prompt.Opts{
+		Task:          &task,
+		Project:       &project,
+		AgentType:     model.AgentFixer,
+		WorktreePath:  worktreePath,
+		Comments:      comments,
+		Diagnosis:     diagnosis,
+		AffectedFiles: affectedFiles,
+		SuggestedFix:  suggestedFix,
+	})
+
+	// Spawn via runner.
+	ag, err := o.runner.SpawnAgentInWorktree(&task, worktreePath, model.AgentFixer, fixerPrompt)
+	if err != nil {
+		return "", fmt.Errorf("spawn fixer: %w", err)
+	}
+
+	o.emit("fixer_spawned", map[string]any{"task_id": taskID, "agent_id": ag.ID})
+	o.logger.Info("fixer spawned", "task_id", taskID, "agent_id", ag.ID)
+	return ag.TmuxSession, nil
+}
+
+// resolveIntegrationWorktree returns the integration worktree path for a task.
+// For parent tasks, it derives from WorktreeBranch. For subtasks, it looks up
+// the parent task. Returns empty string if not found.
+func (o *Orchestrator) resolveIntegrationWorktree(task *model.Task) string {
+	branch := task.WorktreeBranch
+	if branch == "" && task.ParentTaskID != nil {
+		var parent model.Task
+		if err := o.db.Select("worktree_branch").First(&parent, "id = ?", task.ParentTaskID).Error; err != nil {
+			return ""
+		}
+		branch = parent.WorktreeBranch
+	}
+	if branch == "" {
+		return ""
+	}
+	fn := strings.TrimPrefix(branch, "feature/")
+	path := o.worktree.FeatureWorktreePath(fn)
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		return ""
+	}
+	return path
 }
 
 // onAgentFailed handles a failed agent. When a supervisor is configured, it

@@ -21,6 +21,16 @@ type Opts struct {
 	Memories     []model.Memory
 	Comments     []model.TaskComment
 	ParentCtx    map[string]any
+
+	// Reviewer fields
+	ReviewMode string // "plan" or "feature"
+	PlanJSON   string // raw plan JSON for plan review
+	GitDiff    string // diff for feature review
+
+	// Fixer fields
+	Diagnosis     string   // root cause diagnosis
+	AffectedFiles []string // files to fix
+	SuggestedFix  string   // suggested fix from diagnosis
 }
 
 // Generate builds a full markdown prompt for a Claude Code agent.
@@ -110,6 +120,10 @@ func Generate(opts Opts) string {
 		sections = append(sections, coderInstructions(opts.Task)...)
 	case model.AgentResearcher:
 		sections = append(sections, researcherInstructions()...)
+	case model.AgentReviewer:
+		sections = append(sections, reviewerInstructions(opts)...)
+	case model.AgentFixer:
+		sections = append(sections, fixerInstructions(opts)...)
 	default:
 		sections = append(sections, defaultInstructions()...)
 	}
@@ -141,13 +155,21 @@ func Generate(opts Opts) string {
 		"",
 	)
 
-	// Completion instructions
+	// Completion instructions (reviewer agents don't commit)
 	sections = append(sections, "## Completion", "")
-	sections = append(sections,
-		"When you have completed the task, commit all changes with a "+
-			"descriptive commit message. Ensure all tests pass before committing.",
-		"",
-	)
+	if opts.AgentType == model.AgentReviewer {
+		sections = append(sections,
+			"When you have completed your review, ensure `review.json` has been written "+
+				"to the working directory root. Do NOT commit any changes or modify code.",
+			"",
+		)
+	} else {
+		sections = append(sections,
+			"When you have completed the task, commit all changes with a "+
+				"descriptive commit message. Ensure all tests pass before committing.",
+			"",
+		)
+	}
 
 	return strings.Join(sections, "\n")
 }
@@ -291,6 +313,161 @@ func researcherInstructions() []string {
 		"4. References to relevant files/code",
 		"",
 	}
+}
+
+// reviewerInstructions returns prompt sections for reviewer agents.
+// The review mode (plan vs feature) determines the specific instructions.
+func reviewerInstructions(opts Opts) []string {
+	if opts.ReviewMode == "plan" {
+		return planReviewerInstructions(opts)
+	}
+	return featureReviewerInstructions(opts)
+}
+
+// planReviewerInstructions generates instructions for plan review.
+func planReviewerInstructions(opts Opts) []string {
+	var sections []string
+	sections = append(sections, "## Instructions", "")
+	sections = append(sections,
+		"You are a plan reviewer agent. A planner has produced the following plan. "+
+			"Evaluate it against the task's acceptance criteria.",
+		"",
+	)
+
+	if opts.PlanJSON != "" {
+		sections = append(sections, "## Plan", "")
+		sections = append(sections, "```json")
+		sections = append(sections, opts.PlanJSON)
+		sections = append(sections, "```", "")
+	}
+
+	sections = append(sections,
+		"## Review Criteria",
+		"",
+		"Evaluate the plan for:",
+		"1. **Coverage**: Does every acceptance criterion from the task description have at least one subtask addressing it?",
+		"2. **File overlap**: Do subtasks share files? High overlap means merge conflicts and serialized execution.",
+		"3. **Integration**: Is there a final integration subtask that wires pieces together?",
+		"4. **Decomposition quality**: Are subtasks sized appropriately? (3-6 is typical)",
+		"5. **Dependency correctness**: Are dependencies between subtasks correct?",
+		"",
+		"## Output",
+		"",
+		"Produce a `review.json` file in the working directory root:",
+		"",
+		"```json",
+		"{",
+		`  "coverage": "full|partial|none",`,
+		`  "uncovered_criteria": ["criterion not addressed by any subtask"],`,
+		`  "file_overlap_risk": "low|medium|high",`,
+		`  "overlapping_pairs": [{"a": 0, "b": 2, "files": ["shared.go"]}],`,
+		`  "integration_gap": true,`,
+		`  "issues": ["issue description"],`,
+		`  "recommendation": "approve|revise|reject"`,
+		"}",
+		"```",
+		"",
+		"Do NOT modify any code. Do NOT commit anything. Only produce review.json.",
+		"",
+	)
+
+	return sections
+}
+
+// featureReviewerInstructions generates instructions for feature review.
+func featureReviewerInstructions(opts Opts) []string {
+	var sections []string
+	sections = append(sections, "## Instructions", "")
+	sections = append(sections,
+		"You are a feature reviewer agent. All subtasks have been merged into "+
+			"the integration branch. Review the code changes against the acceptance criteria.",
+		"",
+	)
+
+	if opts.GitDiff != "" {
+		// Truncate very large diffs to avoid overwhelming the prompt.
+		diff := opts.GitDiff
+		if len(diff) > 50000 {
+			diff = diff[:50000] + "\n... (truncated)"
+		}
+		sections = append(sections, "## Changes (git diff)", "")
+		sections = append(sections, "```diff")
+		sections = append(sections, diff)
+		sections = append(sections, "```", "")
+	}
+
+	sections = append(sections,
+		"## Review Process",
+		"",
+		"1. Read the acceptance criteria from the task description carefully",
+		"2. Examine the code changes shown above",
+		"3. Run the build command to verify compilation",
+		"4. Run tests if applicable",
+		"5. For each acceptance criterion, verify it is addressed by the code",
+		"",
+		"## Output",
+		"",
+		"Produce a `review.json` file in the working directory root:",
+		"",
+		"```json",
+		"{",
+		`  "build_passes": true,`,
+		`  "tests_pass": true,`,
+		`  "criteria_results": [`,
+		`    {"criterion": "...", "met": true, "evidence": "file:line"}`,
+		"  ],",
+		`  "issues": ["missing wiring between X and Y"],`,
+		`  "recommendation": "approve|needs_work"`,
+		"}",
+		"```",
+		"",
+		"Do NOT modify any code. Do NOT commit anything. Only produce review.json.",
+		"",
+	)
+
+	return sections
+}
+
+// fixerInstructions returns prompt sections for fixer agents.
+func fixerInstructions(opts Opts) []string {
+	var sections []string
+	sections = append(sections, "## Instructions", "")
+	sections = append(sections,
+		"You are a fixer agent. The integration branch has a specific issue "+
+			"that needs a targeted fix. Apply ONLY the fix described below.",
+		"",
+	)
+
+	if opts.Diagnosis != "" {
+		sections = append(sections, "## Diagnosis", "")
+		sections = append(sections, opts.Diagnosis, "")
+	}
+
+	if len(opts.AffectedFiles) > 0 {
+		sections = append(sections, "## Affected Files", "")
+		for _, f := range opts.AffectedFiles {
+			sections = append(sections, fmt.Sprintf("- `%s`", f))
+		}
+		sections = append(sections, "")
+	}
+
+	if opts.SuggestedFix != "" {
+		sections = append(sections, "## Suggested Fix", "")
+		sections = append(sections, opts.SuggestedFix, "")
+	}
+
+	sections = append(sections,
+		"## Rules",
+		"",
+		"1. Apply ONLY the fix described above — do not refactor or change anything else",
+		"2. Run the build command to verify the fix works",
+		"3. Run tests if applicable",
+		"4. Commit with a message describing the fix",
+		"5. The fix should be minimal — the smallest change that resolves the issue",
+		"",
+	)
+
+	return sections
 }
 
 // defaultInstructions returns generic prompt sections for unknown agent types.

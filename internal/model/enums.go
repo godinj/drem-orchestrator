@@ -78,6 +78,8 @@ const (
 	AgentPlanner      AgentType = "planner"
 	AgentCoder        AgentType = "coder"
 	AgentResearcher   AgentType = "researcher"
+	AgentReviewer     AgentType = "reviewer"
+	AgentFixer        AgentType = "fixer"
 )
 
 // allAgentTypes lists every valid AgentType value for parsing.
@@ -86,6 +88,8 @@ var allAgentTypes = []AgentType{
 	AgentPlanner,
 	AgentCoder,
 	AgentResearcher,
+	AgentReviewer,
+	AgentFixer,
 }
 
 // String returns the string representation of an AgentType.

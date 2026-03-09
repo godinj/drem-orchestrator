@@ -20,6 +20,8 @@ type keyMap struct {
 	Comment       key.Binding // c - add comment
 	DeleteComment key.Binding // d - delete last comment
 	Supervisor    key.Binding // S - supervisor evaluation
+	Review        key.Binding // v - review (plan or feature)
+	Fixer         key.Binding // x - fixer
 	Archive       key.Binding // A - toggle archived agents
 	Filter        key.Binding // F - toggle task filter
 	Reap          key.Binding // C - clean up dead tmux sessions
@@ -93,6 +95,14 @@ func defaultKeyMap() keyMap {
 		Supervisor: key.NewBinding(
 			key.WithKeys("S"),
 			key.WithHelp("S", "supervisor"),
+		),
+		Review: key.NewBinding(
+			key.WithKeys("v"),
+			key.WithHelp("v", "review"),
+		),
+		Fixer: key.NewBinding(
+			key.WithKeys("x"),
+			key.WithHelp("x", "fix"),
 		),
 		Archive: key.NewBinding(
 			key.WithKeys("A"),

@@ -88,6 +88,10 @@ func agentTypeLabel(at model.AgentType) string {
 		return "code"
 	case model.AgentResearcher:
 		return "research"
+	case model.AgentReviewer:
+		return "review"
+	case model.AgentFixer:
+		return "fix"
 	default:
 		return string(at)
 	}
@@ -225,6 +229,64 @@ func (r *Runner) SpawnAgent(task *model.Task, featureName string, agentType mode
 		"task", task.Title,
 		"agent_type", agentType,
 		"prompt_bytes", len(prompt),
+	)
+
+	success = true
+	return agent, nil
+}
+
+// SpawnAgentInWorktree starts an agent in an existing worktree without creating
+// a new branch. Used for reviewer and fixer agents that operate on the
+// integration branch directly. Returns the newly created Agent.
+func (r *Runner) SpawnAgentInWorktree(task *model.Task, worktreePath string, agentType model.AgentType, prompt string) (*model.Agent, error) {
+	// Acquire semaphore (non-blocking).
+	select {
+	case r.semaphore <- struct{}{}:
+	default:
+		return nil, fmt.Errorf("spawn agent in worktree: max concurrent agents (%d) reached", r.maxConcurrent)
+	}
+
+	success := false
+	defer func() {
+		if !success {
+			<-r.semaphore
+		}
+	}()
+
+	// Resolve the current branch of the worktree.
+	branch := filepath.Base(worktreePath)
+
+	// Create Agent DB record.
+	agentID := uuid.New()
+	agentName, sessionName := r.buildAgentNames(task, agentType, agentID)
+	now := time.Now()
+	agent := &model.Agent{
+		ID:             agentID,
+		ProjectID:      task.ProjectID,
+		AgentType:      agentType,
+		Name:           agentName,
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &task.ID,
+		WorktreePath:   worktreePath,
+		WorktreeBranch: "", // no dedicated branch — uses existing worktree branch
+		TmuxSession:    sessionName,
+		HeartbeatAt:    &now,
+	}
+	if err := r.db.Create(agent).Error; err != nil {
+		return nil, fmt.Errorf("spawn agent in worktree: create db record: %w", err)
+	}
+
+	// Write prompt, build command, create tmux session, start monitoring.
+	if err := r.startAgent(agent.ID, task.ID, worktreePath, branch, sessionName, prompt); err != nil {
+		r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("status", model.AgentDead)
+		return nil, fmt.Errorf("spawn agent in worktree: start: %w", err)
+	}
+
+	slog.Info("agent spawned in worktree",
+		"agent_id", agent.ID,
+		"task", task.Title,
+		"agent_type", agentType,
+		"worktree", worktreePath,
 	)
 
 	success = true
