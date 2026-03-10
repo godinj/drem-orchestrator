@@ -2729,6 +2729,7 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 		DBPath:        o.dbPath,
 		BareRepoPath:  o.worktree.BareRepoPath,
 		DefaultBranch: o.worktree.DefaultBranch,
+		JournalDir:    o.journalDir(),
 		Subtasks:      stInfos,
 	})
 

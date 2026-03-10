@@ -3,6 +3,7 @@ package supervisor
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -24,6 +25,7 @@ type OnDemandOpts struct {
 	DBPath        string
 	BareRepoPath  string
 	DefaultBranch string
+	JournalDir    string
 	Subtasks      []SubtaskInfo
 }
 
@@ -300,11 +302,30 @@ Append a markdown section in this format:
 
 This documentation is critical for improving the orchestrator. Be specific about what the orchestrator got wrong or couldn't handle, so the workflow can be iterated on.
 `,
-		filepath.Join(filepath.Dir(opts.DBPath), "supervisor-journal.md"),
+		filepath.Join(opts.JournalDir, JournalFilename(opts.TaskTitle)),
 		"```markdown", opts.TaskID, "```",
 	)
 
 	return b.String()
+}
+
+var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
+
+// slugify converts a title like "Automation Lanes & Modes" to "automation-lanes-modes".
+func slugify(title string) string {
+	s := strings.ToLower(strings.TrimSpace(title))
+	s = nonAlnum.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		s = "unknown"
+	}
+	return s
+}
+
+// JournalFilename returns the standard journal filename for a task title,
+// e.g. "supervisor-journal-automation-lanes-modes.md".
+func JournalFilename(taskTitle string) string {
+	return fmt.Sprintf("supervisor-journal-%s.md", slugify(taskTitle))
 }
 
 // BuildFailurePrompt builds a prompt for diagnosing a build failure.
