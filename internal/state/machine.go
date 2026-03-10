@@ -45,18 +45,6 @@ func ValidateTransition(current, target model.TaskStatus) error {
 	)
 }
 
-// GetAvailableTransitions returns the list of valid next statuses for a
-// given current status. Returns nil if the status is unknown or terminal.
-func GetAvailableTransitions(current model.TaskStatus) []model.TaskStatus {
-	return ValidTransitions[current]
-}
-
-// IsHumanGate returns true if the given status requires human approval
-// before the task can proceed.
-func IsHumanGate(status model.TaskStatus) bool {
-	return status.IsHumanGate()
-}
-
 // TransitionTask validates the transition from task.Status to target,
 // updates the task status and UpdatedAt timestamp, and returns a new
 // TaskEvent recording the change. The caller is responsible for persisting

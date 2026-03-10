@@ -96,17 +96,6 @@ func (d DetailModel) isDeleteTarget(kind deleteItemKind, index int) bool {
 	return item != nil && item.kind == kind && item.index == index
 }
 
-// firstDeleteIndex returns the index into deletableItems() of the first item
-// with the given kind, or -1 if none exists.
-func (d DetailModel) firstDeleteIndex(kind deleteItemKind) int {
-	for i, item := range d.deletableItems() {
-		if item.kind == kind {
-			return i
-		}
-	}
-	return -1
-}
-
 // isDeleteSection reports whether the current cursor is within the given section.
 func (d DetailModel) isDeleteSection(kind deleteItemKind) bool {
 	if !d.deleteMode {

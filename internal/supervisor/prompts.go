@@ -61,33 +61,6 @@ Diagnose the failure and decide whether to retry. Return ONLY a JSON object:
 	)
 }
 
-// FeedbackIntegrationPrompt builds a prompt for synthesizing user feedback
-// into actionable guidance for a retried agent.
-func FeedbackIntegrationPrompt(taskTitle, taskDesc, feedback, feedbackType string) string {
-	return fmt.Sprintf(`You are a supervisor synthesizing user feedback for a Claude Code agent.
-
-## Task
-- **Title**: %s
-- **Description**: %s
-
-## User Feedback (%s)
-%s
-
-## Instructions
-Synthesize this feedback into clear, actionable guidance. Return ONLY a JSON object:
-
-{
-  "summary": "concise synthesis of what the user wants changed",
-  "key_issues": ["issue1", "issue2"],
-  "suggested_approach": "specific guidance for the next agent attempt"
-}`,
-		taskTitle,
-		truncateForPrompt(taskDesc, 1000),
-		feedbackType,
-		truncateForPrompt(feedback, 2000),
-	)
-}
-
 // MergeConflictPrompt builds a prompt for analyzing merge conflicts.
 func MergeConflictPrompt(sourceBranch, targetBranch string, conflicts []string, diffOutput string) string {
 	return fmt.Sprintf(`You are a supervisor analyzing merge conflicts.

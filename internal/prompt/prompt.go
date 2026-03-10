@@ -508,19 +508,3 @@ func readBuildCommands(worktreePath string) string {
 
 	return strings.TrimSpace(content[start : start+end])
 }
-
-// WritePromptFile writes the prompt to <worktree>/.claude/agent-prompt.md,
-// creating directories as needed. Returns the full path to the written file.
-func WritePromptFile(worktreePath, prompt string) (string, error) {
-	claudeDir := filepath.Join(worktreePath, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		return "", fmt.Errorf("create .claude directory: %w", err)
-	}
-
-	promptPath := filepath.Join(claudeDir, "agent-prompt.md")
-	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
-		return "", fmt.Errorf("write prompt file: %w", err)
-	}
-
-	return promptPath, nil
-}

@@ -118,26 +118,7 @@ const (
 	AgentDead    AgentStatus = "dead"
 )
 
-// allAgentStatuses lists every valid AgentStatus value for parsing.
-var allAgentStatuses = []AgentStatus{
-	AgentIdle,
-	AgentWorking,
-	AgentBlocked,
-	AgentDead,
-}
-
 // String returns the string representation of an AgentStatus.
 func (s AgentStatus) String() string {
 	return string(s)
-}
-
-// ParseAgentStatus converts a raw string to an AgentStatus, returning an
-// error if the string does not match any known value.
-func ParseAgentStatus(s string) (AgentStatus, error) {
-	for _, as := range allAgentStatuses {
-		if string(as) == s {
-			return as, nil
-		}
-	}
-	return "", fmt.Errorf("unknown agent status: %q", s)
 }

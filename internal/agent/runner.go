@@ -9,7 +9,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -24,10 +23,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/tmux"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
-
-// maxLogBytes is the maximum number of bytes to read from an agent log file
-// when returning output (50 KB).
-const maxLogBytes = 50 * 1024
 
 // maxCaptureLines is the number of tmux scrollback lines to capture when
 // reading agent output from interactive TUI sessions.
@@ -47,7 +42,6 @@ type RunningAgent struct {
 	Branch       string
 	TmuxSession  string
 	StartedAt    time.Time
-	LogPath      string
 	cancel       context.CancelFunc // cancels the monitor and heartbeat goroutines
 }
 
@@ -324,7 +318,6 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		Branch:       branch,
 		TmuxSession:  sessionName,
 		StartedAt:    time.Now(),
-		LogPath:      "",
 		cancel:       cancel,
 	}
 
@@ -430,7 +423,6 @@ func (r *Runner) GetRunningAgents() []RunningAgent {
 			Branch:       ra.Branch,
 			TmuxSession:  ra.TmuxSession,
 			StartedAt:    ra.StartedAt,
-			LogPath:      ra.LogPath,
 		})
 	}
 	return agents
@@ -568,44 +560,4 @@ func (r *Runner) monitorAgent(ctx context.Context, agentID uuid.UUID, sessionNam
 
 	// Release semaphore.
 	<-r.semaphore
-}
-
-// readLogTail reads the tail of a log file, returning at most maxLogBytes of content.
-// Returns an empty string if the file does not exist.
-func readLogTail(logPath string) (string, error) {
-	f, err := os.Open(logPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("read log: %w", err)
-	}
-	defer f.Close()
-
-	info, err := f.Stat()
-	if err != nil {
-		return "", fmt.Errorf("read log: stat: %w", err)
-	}
-
-	size := info.Size()
-	if size <= maxLogBytes {
-		data, err := io.ReadAll(f)
-		if err != nil {
-			return "", fmt.Errorf("read log: read: %w", err)
-		}
-		return string(data), nil
-	}
-
-	// Seek to the last maxLogBytes.
-	if _, err := f.Seek(-maxLogBytes, io.SeekEnd); err != nil {
-		return "", fmt.Errorf("read log: seek: %w", err)
-	}
-
-	data := make([]byte, maxLogBytes)
-	n, err := io.ReadFull(f, data)
-	if err != nil && err != io.ErrUnexpectedEOF {
-		return "", fmt.Errorf("read log: read tail: %w", err)
-	}
-
-	return string(data[:n]), nil
 }

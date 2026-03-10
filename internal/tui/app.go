@@ -242,14 +242,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refreshData()
 
-	case reconcileMsg:
-		if msg.err != nil {
-			m.err = fmt.Errorf("reconcile: %w", msg.err)
-		} else if msg.fixes > 0 {
-			m.err = fmt.Errorf("reconcile: applied %d fixes", msg.fixes)
-		}
-		return m, m.refreshData()
-
 	case reapMsg:
 		if msg.err != nil {
 			m.err = fmt.Errorf("reap sessions: %w", msg.err)
@@ -864,21 +856,6 @@ func (m Model) handleFixerEval() (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg {
 		sessionName, err := orch.SpawnFixerSession(taskID)
 		return fixerSpawnedMsg{sessionName: sessionName, err: err}
-	}
-}
-
-// reconcileMsg carries the result of an on-demand Reconcile call.
-type reconcileMsg struct {
-	fixes int
-	err   error
-}
-
-// handleReconcile runs the consistency audit on demand.
-func (m Model) handleReconcile() (tea.Model, tea.Cmd) {
-	orch := m.orch
-	return m, func() tea.Msg {
-		fixes, err := orch.Reconcile()
-		return reconcileMsg{fixes: fixes, err: err}
 	}
 }
 
