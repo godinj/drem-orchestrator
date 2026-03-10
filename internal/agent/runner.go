@@ -173,9 +173,28 @@ func (r *Runner) CanSpawn() bool {
 	return len(r.running) < r.maxConcurrent
 }
 
-// SpawnAgent is the high-level spawn that creates a worktree, DB record, prompt
-// file, tmux window, and starts monitoring. It returns the newly created Agent.
+// SpawnAgent creates a new worktree, DB record, prompt file, tmux session, and
+// starts monitoring. It returns the newly created Agent.
 func (r *Runner) SpawnAgent(task *model.Task, featureName string, agentType model.AgentType, prompt string) (*model.Agent, error) {
+	wtInfo, err := r.worktree.CreateAgentWorktree(featureName)
+	if err != nil {
+		return nil, fmt.Errorf("spawn agent: create worktree: %w", err)
+	}
+	return r.spawnNewAgent(task, wtInfo.Path, wtInfo.Branch, agentType, prompt)
+}
+
+// SpawnAgentInWorktree starts an agent in an existing worktree without creating
+// a new branch. Used for reviewer and fixer agents that operate on the
+// integration branch directly. Returns the newly created Agent.
+func (r *Runner) SpawnAgentInWorktree(task *model.Task, worktreePath string, agentType model.AgentType, prompt string) (*model.Agent, error) {
+	return r.spawnNewAgent(task, worktreePath, "", agentType, prompt)
+}
+
+// spawnNewAgent is the shared implementation for SpawnAgent and SpawnAgentInWorktree.
+// It acquires the concurrency semaphore, creates the DB record, starts the agent
+// process, and begins monitoring. The dbBranch is stored in the Agent record; if
+// empty, the runtime branch is derived from the worktree path.
+func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, agentType model.AgentType, prompt string) (*model.Agent, error) {
 	// Acquire semaphore (non-blocking).
 	select {
 	case r.semaphore <- struct{}{}:
@@ -191,70 +210,11 @@ func (r *Runner) SpawnAgent(task *model.Task, featureName string, agentType mode
 		}
 	}()
 
-	// Create agent worktree.
-	wtInfo, err := r.worktree.CreateAgentWorktree(featureName)
-	if err != nil {
-		return nil, fmt.Errorf("spawn agent: create worktree: %w", err)
+	// Runtime branch for startAgent: use dbBranch if set, otherwise derive from path.
+	branch := dbBranch
+	if branch == "" {
+		branch = filepath.Base(worktreePath)
 	}
-
-	// Create Agent DB record.
-	agentID := uuid.New()
-	agentName, sessionName := r.buildAgentNames(task, agentType, agentID)
-	now := time.Now()
-	agent := &model.Agent{
-		ID:             agentID,
-		ProjectID:      task.ProjectID,
-		AgentType:      agentType,
-		Name:           agentName,
-		Status:         model.AgentWorking,
-		CurrentTaskID:  &task.ID,
-		WorktreePath:   wtInfo.Path,
-		WorktreeBranch: wtInfo.Branch,
-		TmuxSession:    sessionName,
-		HeartbeatAt:    &now,
-	}
-	if err := r.db.Create(agent).Error; err != nil {
-		return nil, fmt.Errorf("spawn agent: create db record: %w", err)
-	}
-
-	// Write prompt, build command, create tmux session, start monitoring.
-	if err := r.startAgent(agent.ID, task.ID, wtInfo.Path, wtInfo.Branch, sessionName, prompt); err != nil {
-		// Mark agent as dead since we failed to start it.
-		r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("status", model.AgentDead)
-		return nil, fmt.Errorf("spawn agent: start: %w", err)
-	}
-
-	slog.Info("agent spawned",
-		"agent_id", agent.ID,
-		"task", task.Title,
-		"agent_type", agentType,
-		"prompt_bytes", len(prompt),
-	)
-
-	success = true
-	return agent, nil
-}
-
-// SpawnAgentInWorktree starts an agent in an existing worktree without creating
-// a new branch. Used for reviewer and fixer agents that operate on the
-// integration branch directly. Returns the newly created Agent.
-func (r *Runner) SpawnAgentInWorktree(task *model.Task, worktreePath string, agentType model.AgentType, prompt string) (*model.Agent, error) {
-	// Acquire semaphore (non-blocking).
-	select {
-	case r.semaphore <- struct{}{}:
-	default:
-		return nil, fmt.Errorf("spawn agent in worktree: max concurrent agents (%d) reached", r.maxConcurrent)
-	}
-
-	success := false
-	defer func() {
-		if !success {
-			<-r.semaphore
-		}
-	}()
-
-	// Resolve the current branch of the worktree.
-	branch := filepath.Base(worktreePath)
 
 	// Create Agent DB record.
 	agentID := uuid.New()
@@ -268,76 +228,30 @@ func (r *Runner) SpawnAgentInWorktree(task *model.Task, worktreePath string, age
 		Status:         model.AgentWorking,
 		CurrentTaskID:  &task.ID,
 		WorktreePath:   worktreePath,
-		WorktreeBranch: "", // no dedicated branch — uses existing worktree branch
+		WorktreeBranch: dbBranch,
 		TmuxSession:    sessionName,
 		HeartbeatAt:    &now,
 	}
 	if err := r.db.Create(agent).Error; err != nil {
-		return nil, fmt.Errorf("spawn agent in worktree: create db record: %w", err)
+		return nil, fmt.Errorf("spawn agent: create db record: %w", err)
 	}
 
 	// Write prompt, build command, create tmux session, start monitoring.
 	if err := r.startAgent(agent.ID, task.ID, worktreePath, branch, sessionName, prompt); err != nil {
 		r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("status", model.AgentDead)
-		return nil, fmt.Errorf("spawn agent in worktree: start: %w", err)
+		return nil, fmt.Errorf("spawn agent: start: %w", err)
 	}
 
-	slog.Info("agent spawned in worktree",
+	slog.Info("agent spawned",
 		"agent_id", agent.ID,
 		"task", task.Title,
 		"agent_type", agentType,
 		"worktree", worktreePath,
+		"prompt_bytes", len(prompt),
 	)
 
 	success = true
 	return agent, nil
-}
-
-// Spawn is a low-level spawn for a pre-existing Agent DB record. It writes the
-// prompt, creates the tmux session, and starts monitoring. The caller must have
-// already created the agent and worktree.
-func (r *Runner) Spawn(agentID, taskID uuid.UUID, worktreePath, branch, prompt string) error {
-	// Acquire semaphore (non-blocking).
-	select {
-	case r.semaphore <- struct{}{}:
-	default:
-		return fmt.Errorf("spawn: max concurrent agents (%d) reached", r.maxConcurrent)
-	}
-
-	success := false
-	defer func() {
-		if !success {
-			<-r.semaphore
-		}
-	}()
-
-	// Read the agent from DB to get its session name.
-	var agent model.Agent
-	if err := r.db.First(&agent, "id = ?", agentID).Error; err != nil {
-		return fmt.Errorf("spawn: read agent %s: %w", agentID, err)
-	}
-
-	sessionName := agent.TmuxSession
-	if sessionName == "" {
-		var task model.Task
-		if err := r.db.First(&task, "id = ?", taskID).Error; err != nil {
-			return fmt.Errorf("spawn: load task %s: %w", taskID, err)
-		}
-		name, sess := r.buildAgentNames(&task, agent.AgentType, agentID)
-		sessionName = sess
-		// Persist both name and session name.
-		r.db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(map[string]interface{}{
-			"name":         name,
-			"tmux_session": sessionName,
-		})
-	}
-
-	if err := r.startAgent(agentID, taskID, worktreePath, branch, sessionName, prompt); err != nil {
-		return fmt.Errorf("spawn: start: %w", err)
-	}
-
-	success = true
-	return nil
 }
 
 // startAgent performs the common steps shared by SpawnAgent and Spawn:
@@ -368,21 +282,21 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 	// for this file to detect completion while keeping the TUI alive.
 	idleSignal := filepath.Join(claudeDir, "agent-idle")
 	settingsJSON := fmt.Sprintf(`{
-  "hooks": {
-    "Notification": [
-      {
-        "matcher": "idle_prompt",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "touch %s",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
-}`, idleSignal)
+		"hooks": {
+			"Notification": [
+			{
+				"matcher": "idle_prompt",
+				"hooks": [
+				{
+					"type": "command",
+					"command": "touch %s",
+					"timeout": 5
+				}
+				]
+			}
+			]
+		}
+	}`, idleSignal)
 	settingsPath := filepath.Join(claudeDir, "settings.json")
 	if err := os.WriteFile(settingsPath, []byte(settingsJSON), 0o644); err != nil {
 		return fmt.Errorf("write claude settings: %w", err)
