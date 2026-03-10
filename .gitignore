@@ -26,3 +26,10 @@ ui/dist/
 # UV
 uv.lock
 .claude/
+
+# Runtime / build
+drem
+drem.db-*
+drem.log
+drem.toml
+feature/
