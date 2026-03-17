@@ -1,6 +1,8 @@
 package prompt
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -715,5 +717,187 @@ func TestReadBuildCommands_NonexistentPath(t *testing.T) {
 	result := readBuildCommands("/nonexistent/path")
 	if result != "" {
 		t.Error("expected empty string for nonexistent worktree path")
+	}
+}
+
+func TestResearcherInstructions(t *testing.T) {
+	sections := researcherInstructions()
+	output := strings.Join(sections, "\n")
+
+	t.Run("contains key researcher phrases", func(t *testing.T) {
+		required := []string{
+			"You are a researcher agent",
+			"research-report.md",
+			"Summary of findings",
+			"Detailed analysis",
+			"Recommendations",
+		}
+		for _, phrase := range required {
+			if !strings.Contains(output, phrase) {
+				t.Errorf("researcherInstructions() missing phrase: %q", phrase)
+			}
+		}
+	})
+
+	t.Run("does not contain coder-specific phrases", func(t *testing.T) {
+		coderPhrases := []string{
+			"commit all changes",
+			"You are a coder agent",
+			"You are a planner agent",
+		}
+		for _, phrase := range coderPhrases {
+			if strings.Contains(output, phrase) {
+				t.Errorf("researcherInstructions() should not contain coder phrase: %q", phrase)
+			}
+		}
+	})
+}
+
+func TestFixerInstructions(t *testing.T) {
+	t.Run("contains fixer role", func(t *testing.T) {
+		opts := minimalOpts()
+		opts.AgentType = model.AgentFixer
+		sections := fixerInstructions(opts)
+		output := strings.Join(sections, "\n")
+
+		if !strings.Contains(output, "You are a fixer agent") {
+			t.Error("fixerInstructions() missing 'You are a fixer agent'")
+		}
+	})
+
+	t.Run("includes diagnosis when set", func(t *testing.T) {
+		opts := minimalOpts()
+		opts.AgentType = model.AgentFixer
+		opts.Diagnosis = "nil pointer dereference in handler.go line 42"
+		sections := fixerInstructions(opts)
+		output := strings.Join(sections, "\n")
+
+		if !strings.Contains(output, opts.Diagnosis) {
+			t.Errorf("fixerInstructions() missing diagnosis: %q", opts.Diagnosis)
+		}
+		if !strings.Contains(output, "## Diagnosis") {
+			t.Error("fixerInstructions() missing Diagnosis section header")
+		}
+	})
+
+	t.Run("includes affected files when set", func(t *testing.T) {
+		opts := minimalOpts()
+		opts.AgentType = model.AgentFixer
+		opts.AffectedFiles = []string{"internal/handler.go", "internal/router.go"}
+		sections := fixerInstructions(opts)
+		output := strings.Join(sections, "\n")
+
+		for _, f := range opts.AffectedFiles {
+			if !strings.Contains(output, f) {
+				t.Errorf("fixerInstructions() missing affected file: %q", f)
+			}
+		}
+		if !strings.Contains(output, "## Affected Files") {
+			t.Error("fixerInstructions() missing Affected Files section header")
+		}
+	})
+
+	t.Run("includes suggested fix when set", func(t *testing.T) {
+		opts := minimalOpts()
+		opts.AgentType = model.AgentFixer
+		opts.SuggestedFix = "Add nil check before accessing request.Body"
+		sections := fixerInstructions(opts)
+		output := strings.Join(sections, "\n")
+
+		if !strings.Contains(output, opts.SuggestedFix) {
+			t.Errorf("fixerInstructions() missing suggested fix: %q", opts.SuggestedFix)
+		}
+		if !strings.Contains(output, "## Suggested Fix") {
+			t.Error("fixerInstructions() missing Suggested Fix section header")
+		}
+	})
+}
+
+func TestDefaultInstructions(t *testing.T) {
+	sections := defaultInstructions()
+	output := strings.Join(sections, "\n")
+
+	if !strings.Contains(output, "Complete the task as described above") {
+		t.Error("defaultInstructions() missing fallback instruction text")
+	}
+
+	if !strings.Contains(output, "## Instructions") {
+		t.Error("defaultInstructions() missing Instructions section header")
+	}
+}
+
+func TestReadBuildCommands(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T) string // returns worktree path
+		contains string                     // expected substring in output
+		empty    bool                       // if true, expect empty string
+	}{
+		{
+			name: "go.mod and CLAUDE.md with bash block",
+			setup: func(t *testing.T) string {
+				dir := t.TempDir()
+				// Create go.mod
+				if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				// Create CLAUDE.md with a bash block
+				claudeContent := "# My Project\n\n## Build\n\n```bash\ngo build ./...\ngo test ./...\n```\n"
+				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(claudeContent), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return dir
+			},
+			contains: "go build ./...",
+		},
+		{
+			name: "CLAUDE.md with build section",
+			setup: func(t *testing.T) string {
+				dir := t.TempDir()
+				claudeContent := "# Project\n\n```bash\nmake build\nmake test\n```\n"
+				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(claudeContent), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return dir
+			},
+			contains: "make build",
+		},
+		{
+			name: "no build files in directory",
+			setup: func(t *testing.T) string {
+				return t.TempDir()
+			},
+			empty: true,
+		},
+		{
+			name: "CLAUDE.md without bash block",
+			setup: func(t *testing.T) string {
+				dir := t.TempDir()
+				claudeContent := "# Project\n\nNo code blocks here.\n"
+				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(claudeContent), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return dir
+			},
+			empty: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			worktreePath := tc.setup(t)
+			result := readBuildCommands(worktreePath)
+
+			if tc.empty {
+				if result != "" {
+					t.Errorf("readBuildCommands() = %q, want empty string", result)
+				}
+				return
+			}
+
+			if !strings.Contains(result, tc.contains) {
+				t.Errorf("readBuildCommands() = %q, want substring %q", result, tc.contains)
+			}
+		})
 	}
 }
