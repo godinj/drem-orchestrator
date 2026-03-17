@@ -15,15 +15,18 @@ import (
 // ValidTransitions defines which status transitions are allowed. Each key
 // maps to the set of statuses a task may transition to from that state.
 var ValidTransitions = map[model.TaskStatus][]model.TaskStatus{
-	model.StatusBacklog:       {model.StatusPlanning, model.StatusPaused},
-	model.StatusPlanning:      {model.StatusPlanReview, model.StatusFailed, model.StatusPaused},
-	model.StatusPlanReview:    {model.StatusInProgress, model.StatusPlanning},
-	model.StatusInProgress:    {model.StatusTestingReady, model.StatusFailed, model.StatusPaused},
+	model.StatusBacklog:      {model.StatusPlanning, model.StatusPaused},
+	model.StatusPlanning:     {model.StatusPlanReview, model.StatusFailed, model.StatusPaused},
+	model.StatusPlanReview:   {model.StatusTestWriting, model.StatusPlanning},
+	model.StatusTestWriting:  {model.StatusTestReview, model.StatusFailed, model.StatusPaused},
+	model.StatusTestReview:   {model.StatusInProgress, model.StatusTestWriting},
+	model.StatusInProgress:   {model.StatusTestingReady, model.StatusFailed, model.StatusPaused},
 	model.StatusTestingReady: {model.StatusMerging, model.StatusInProgress, model.StatusPlanning},
-	model.StatusMerging:       {model.StatusDone, model.StatusFailed},
-	model.StatusPaused:        {model.StatusBacklog, model.StatusPlanning, model.StatusInProgress},
-	model.StatusDone:          {},
-	model.StatusFailed:        {model.StatusBacklog, model.StatusInProgress},
+	model.StatusMerging:      {model.StatusDone, model.StatusFailed},
+	model.StatusPaused:       {model.StatusBacklog, model.StatusPlanning, model.StatusInProgress, model.StatusTestWriting},
+	model.StatusDone:         {},
+	model.StatusFailed:       {model.StatusBacklog, model.StatusInProgress},
+	model.StatusRejected:     {},
 }
 
 // ValidateTransition checks if moving from current to target is an allowed
