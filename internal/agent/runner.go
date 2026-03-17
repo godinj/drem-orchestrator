@@ -8,6 +8,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/tmux"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
@@ -42,6 +44,7 @@ type RunningAgent struct {
 	Branch       string
 	TmuxSession  string
 	StartedAt    time.Time
+	ContextUsage *ctxmon.Usage      // latest context window usage; nil until first read
 	cancel       context.CancelFunc // cancels the monitor and heartbeat goroutines
 }
 
@@ -271,28 +274,49 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 			len(written), len(prompt))
 	}
 
-	// Write settings.json with an idle_prompt notification hook that creates
-	// a signal file when Claude finishes processing. The orchestrator polls
-	// for this file to detect completion while keeping the TUI alive.
+	// Write the context window status line script.
+	statusScriptPath := filepath.Join(claudeDir, "context-status.sh")
+	statusOutputPath := ctxmon.UsageFilePath(worktreePath)
+	scriptContent := ctxmon.StatusScript(statusOutputPath)
+	if err := os.WriteFile(statusScriptPath, []byte(scriptContent), 0o755); err != nil {
+		return fmt.Errorf("write status script: %w", err)
+	}
+
+	// Build settings.json with idle_prompt notification hook, status line
+	// script, and PreCompact hook for context window monitoring.
 	idleSignal := filepath.Join(claudeDir, "agent-idle")
-	settingsJSON := fmt.Sprintf(`{
-		"hooks": {
-			"Notification": [
-			{
+	compactionSignal := ctxmon.CompactionSignalPath(worktreePath)
+
+	hooks := map[string]any{
+		"Notification": []any{
+			map[string]any{
 				"matcher": "idle_prompt",
-				"hooks": [
-				{
-					"type": "command",
-					"command": "touch %s",
-					"timeout": 5
-				}
-				]
-			}
-			]
-		}
-	}`, idleSignal)
+				"hooks": []any{
+					map[string]any{
+						"type":    "command",
+						"command": fmt.Sprintf("touch %s", idleSignal),
+						"timeout": 5,
+					},
+				},
+			},
+		},
+	}
+	// Merge PreCompact hooks.
+	for k, v := range ctxmon.HooksJSON(compactionSignal) {
+		hooks[k] = v
+	}
+
+	settings := map[string]any{
+		"statusLineScript": statusScriptPath,
+		"hooks":            hooks,
+	}
+
+	settingsBytes, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("marshal claude settings: %w", err)
+	}
 	settingsPath := filepath.Join(claudeDir, "settings.json")
-	if err := os.WriteFile(settingsPath, []byte(settingsJSON), 0o644); err != nil {
+	if err := os.WriteFile(settingsPath, settingsBytes, 0o644); err != nil {
 		return fmt.Errorf("write claude settings: %w", err)
 	}
 
@@ -328,6 +352,7 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 	go r.monitorAgent(ctx, agentID, sessionName, worktreePath)
 	go r.heartbeatLoop(ctx, agentID)
 	go r.verifySpawn(agentID, sessionName, 10*time.Second)
+	go r.contextMonitorLoop(ctx, agentID, worktreePath)
 
 	return nil
 }
@@ -423,6 +448,7 @@ func (r *Runner) GetRunningAgents() []RunningAgent {
 			Branch:       ra.Branch,
 			TmuxSession:  ra.TmuxSession,
 			StartedAt:    ra.StartedAt,
+			ContextUsage: ra.ContextUsage,
 		})
 	}
 	return agents
@@ -529,6 +555,79 @@ func (r *Runner) ReapOrphanedSessions() (int, error) {
 	}
 
 	return reaped, nil
+}
+
+// contextMonitorLoop polls the context usage file and compaction signal for
+// a running agent, updating in-memory state and the DB Config field.
+func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, worktreePath string) {
+	usagePath := ctxmon.UsageFilePath(worktreePath)
+	signalPath := ctxmon.CompactionSignalPath(worktreePath)
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		usage, err := ctxmon.ReadUsageFile(usagePath)
+		if err != nil {
+			slog.Warn("context monitor: read usage file", "agent_id", agentID, "error", err)
+			continue
+		}
+
+		// Check compaction signal.
+		compacted := false
+		if _, err := os.Stat(signalPath); err == nil {
+			compacted = true
+			os.Remove(signalPath)
+		}
+
+		if usage == nil && compacted {
+			usage = &ctxmon.Usage{
+				UsedPercent:         100,
+				CompactionTriggered: true,
+				LastUpdated:         time.Now(),
+			}
+		} else if usage != nil && compacted {
+			usage.CompactionTriggered = true
+		}
+
+		if usage == nil {
+			continue
+		}
+
+		// Update in-memory state.
+		r.mu.Lock()
+		ra, ok := r.running[agentID]
+		if ok {
+			ra.ContextUsage = usage
+		}
+		r.mu.Unlock()
+
+		// Persist to DB Config field.
+		configUpdate := model.JSONField{
+			"context_used_pct":    usage.UsedPercent,
+			"context_window_size": usage.ContextWindowSize,
+			"total_cost_usd":     usage.TotalCostUSD,
+		}
+		r.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("config", configUpdate)
+	}
+}
+
+// GetContextUsage returns the latest context window usage for a running agent.
+// Returns nil if the agent is not running or has no usage data yet.
+func (r *Runner) GetContextUsage(agentID uuid.UUID) *ctxmon.Usage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ra, ok := r.running[agentID]
+	if !ok {
+		return nil
+	}
+	return ra.ContextUsage
 }
 
 // monitorAgent is a background goroutine that waits for the agent's idle

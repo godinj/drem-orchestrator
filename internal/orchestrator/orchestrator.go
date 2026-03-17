@@ -48,19 +48,21 @@ const reconcileInterval = 10
 // Orchestrator is the main scheduling loop. It queries the database each tick,
 // processes tasks through the state machine, spawns agents, and drives merges.
 type Orchestrator struct {
-	db         *gorm.DB
-	dbPath     string
-	runner     *agent.Runner
-	worktree   *worktree.Manager
-	merger     *merge.Orchestrator
-	memory     *memory.Manager
-	supervisor *supervisor.Supervisor // nil disables LLM-powered decisions
-	projectID  uuid.UUID
-	events     chan<- Event
-	tick       time.Duration
-	stale      time.Duration
-	tickCount  int
-	logger     *slog.Logger
+	db             *gorm.DB
+	dbPath         string
+	runner         *agent.Runner
+	worktree       *worktree.Manager
+	merger         *merge.Orchestrator
+	memory         *memory.Manager
+	supervisor     *supervisor.Supervisor // nil disables LLM-powered decisions
+	projectID      uuid.UUID
+	events         chan<- Event
+	tick           time.Duration
+	stale          time.Duration
+	tickCount      int
+	contextWarnPct int
+	contextStopPct int
+	logger         *slog.Logger
 }
 
 // New creates an Orchestrator. The supervisor parameter is optional — pass nil
@@ -77,20 +79,24 @@ func New(
 	events chan<- Event,
 	tickInterval time.Duration,
 	staleTimeout time.Duration,
+	contextWarnPct int,
+	contextStopPct int,
 ) *Orchestrator {
 	return &Orchestrator{
-		db:         db,
-		dbPath:     dbPath,
-		runner:     runner,
-		worktree:   wt,
-		merger:     merger,
-		memory:     mem,
-		supervisor: sup,
-		projectID:  projectID,
-		events:     events,
-		tick:       tickInterval,
-		stale:      staleTimeout,
-		logger:     slog.Default().With("component", "orchestrator", "project_id", projectID),
+		db:             db,
+		dbPath:         dbPath,
+		runner:         runner,
+		worktree:       wt,
+		merger:         merger,
+		memory:         mem,
+		supervisor:     sup,
+		projectID:      projectID,
+		events:         events,
+		tick:           tickInterval,
+		stale:          staleTimeout,
+		contextWarnPct: contextWarnPct,
+		contextStopPct: contextStopPct,
+		logger:         slog.Default().With("component", "orchestrator", "project_id", projectID),
 	}
 }
 
@@ -205,6 +211,9 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 	if err := o.runner.CleanupStaleAgents(o.stale); err != nil {
 		o.logger.Error("cleanup stale agents", "error", err)
 	}
+
+	// 7b. Check context window usage for running agents.
+	o.checkContextUsage()
 
 	// 8. Periodic consistency audit.
 	o.tickCount++
@@ -2808,6 +2817,64 @@ func (o *Orchestrator) journalDir() string {
 func (o *Orchestrator) logSupervisorAction(entry supervisor.JournalEntry) {
 	if err := supervisor.WriteJournalEntry(o.journalDir(), entry); err != nil {
 		o.logger.Warn("failed to write supervisor journal", "error", err)
+	}
+}
+
+// checkContextUsage inspects context window usage for all running agents and
+// takes action at configured thresholds.
+func (o *Orchestrator) checkContextUsage() {
+	agents := o.runner.GetRunningAgents()
+	for _, ra := range agents {
+		usage := ra.ContextUsage
+		if usage == nil {
+			continue
+		}
+
+		if usage.UsedPercent >= o.contextStopPct || usage.CompactionTriggered {
+			reason := fmt.Sprintf("agent exhausted context window (%d%% used, threshold %d%%)",
+				usage.UsedPercent, o.contextStopPct)
+			if usage.CompactionTriggered {
+				reason = "agent triggered auto-compaction"
+			}
+
+			o.logger.Warn("context window exceeded",
+				"agent_id", ra.AgentID,
+				"used_pct", usage.UsedPercent,
+				"threshold", o.contextStopPct,
+			)
+
+			if err := o.runner.StopAgent(ra.AgentID); err != nil {
+				o.logger.Error("stop agent on context exceeded", "agent_id", ra.AgentID, "error", err)
+				continue
+			}
+
+			// Find and fail the agent's task.
+			var task model.Task
+			if err := o.db.First(&task, "id = ?", ra.TaskID).Error; err != nil {
+				o.logger.Error("find task for context exceeded agent", "task_id", ra.TaskID, "error", err)
+				continue
+			}
+
+			if err := o.failTask(&task, reason); err != nil {
+				o.logger.Error("fail task on context exceeded", "task_id", task.ID, "error", err)
+			}
+
+			o.emit("context_window_exceeded", map[string]any{
+				"agent_id": ra.AgentID,
+				"task_id":  ra.TaskID,
+				"used_pct": usage.UsedPercent,
+			})
+		} else if usage.UsedPercent >= o.contextWarnPct {
+			o.logger.Info("context window warning",
+				"agent_id", ra.AgentID,
+				"used_pct", usage.UsedPercent,
+			)
+			o.emit("context_window_warning", map[string]any{
+				"agent_id": ra.AgentID,
+				"task_id":  ra.TaskID,
+				"used_pct": usage.UsedPercent,
+			})
+		}
 	}
 }
 

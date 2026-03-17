@@ -20,6 +20,8 @@ type Config struct {
 	StaleTimeout        time.Duration `toml:"stale_timeout"`
 	SupervisorEnabled   bool          `toml:"supervisor_enabled"`
 	SupervisorTimeout   time.Duration `toml:"supervisor_timeout"`
+	ContextWarnPercent  int           `toml:"context_warn_percent"`
+	ContextStopPercent  int           `toml:"context_stop_percent"`
 	LogPath             string        `toml:"log_path"`
 }
 
@@ -36,6 +38,8 @@ func DefaultConfig() Config {
 		StaleTimeout:        5 * time.Minute,
 		SupervisorEnabled:   true,
 		SupervisorTimeout:   2 * time.Minute,
+		ContextWarnPercent:  75,
+		ContextStopPercent:  90,
 		LogPath:             "./drem.log",
 	}
 }
