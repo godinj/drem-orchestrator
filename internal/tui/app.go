@@ -359,6 +359,8 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "X":
 		// Reconcile disabled pending overhaul — see feature/reconcile-overhaul.md
 		return m, nil
+	case "i":
+		return m.handleShell()
 	case "C":
 		return m.handleReap()
 	case "A":
@@ -476,6 +478,8 @@ func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleReviewerEval()
 	case "x":
 		return m.handleFixerEval()
+	case "i":
+		return m.handleShell()
 	}
 
 	return m, nil
@@ -859,6 +863,30 @@ func (m Model) handleFixerEval() (tea.Model, tea.Cmd) {
 	}
 }
 
+// handleShell opens a new tmux session at the selected task's integration directory.
+func (m Model) handleShell() (tea.Model, tea.Cmd) {
+	selected := m.board.Selected()
+	if selected == nil {
+		return m, nil
+	}
+
+	path := m.orch.IntegrationWorktreePath(selected.ID)
+	if path == "" {
+		m.err = fmt.Errorf("no integration worktree for this task")
+		return m, nil
+	}
+
+	sessionName := fmt.Sprintf("%s/shell %s", m.tmux.SessionName, selected.ID.String()[:4])
+	if err := m.tmux.CreateShellSession(sessionName, path); err != nil {
+		m.err = fmt.Errorf("open shell: %w", err)
+		return m, nil
+	}
+	if err := m.tmux.FocusAgentSession(sessionName); err != nil {
+		m.err = fmt.Errorf("focus shell: %w", err)
+	}
+	return m, nil
+}
+
 // reapMsg carries the result of a manual session reap.
 type reapMsg struct {
 	reaped int
@@ -1034,7 +1062,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows the available key bindings.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab/C-hjkl:panel  a:approve  r:reject  c:comment  d:del  p:pause  R:retry  v:review  x:fix  S:supervisor  C:clean-sessions  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
+	return helpStyle.Render("  j/k:navigate  tab/C-hjkl:panel  a:approve  r:reject  c:comment  d:del  p:pause  R:retry  v:review  x:fix  S:supervisor  i:shell  C:clean-sessions  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.

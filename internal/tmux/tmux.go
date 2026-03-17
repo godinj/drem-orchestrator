@@ -290,6 +290,17 @@ func (m *Manager) CreateAgentSession(sessionName, cmd, cwd string) error {
 	return nil
 }
 
+// CreateShellSession creates a plain interactive shell session with the given
+// name and working directory. Unlike CreateAgentSession, it does not set
+// remain-on-exit or large scrollback — it's a regular shell for the user.
+func (m *Manager) CreateShellSession(sessionName, cwd string) error {
+	_, err := runTmux("new-session", "-d", "-s", sessionName, "-c", cwd)
+	if err != nil {
+		return fmt.Errorf("create shell session %q: %w", sessionName, err)
+	}
+	return nil
+}
+
 // KillAgentSession destroys an agent's tmux session. If the session does not
 // exist, the error is silently ignored (idempotent).
 func (m *Manager) KillAgentSession(sessionName string) error {

@@ -1481,6 +1481,16 @@ func (o *Orchestrator) resolveIntegrationWorktree(task *model.Task) string {
 	return path
 }
 
+// IntegrationWorktreePath returns the integration worktree path for a task,
+// resolving through the parent if the task is a subtask.
+func (o *Orchestrator) IntegrationWorktreePath(taskID uuid.UUID) string {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return ""
+	}
+	return o.resolveIntegrationWorktree(&task)
+}
+
 // onAgentFailed handles a failed agent. When a supervisor is configured, it
 // performs LLM-powered failure diagnosis to decide whether to retry (and with
 // what prompt adjustments). Without a supervisor, planners retry up to
