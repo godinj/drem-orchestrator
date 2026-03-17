@@ -33,3 +33,4 @@ drem.db-*
 drem.log
 drem.toml
 feature/
+journals/
