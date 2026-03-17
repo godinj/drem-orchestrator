@@ -633,8 +633,8 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		// Still run the completion check below — a supervisor may have
 		// manually fixed the subtask and set it to done.
 	} else {
-		// Schedule test-phase subtasks using the existing scheduling logic.
-		if err := o.scheduleSubtasks(parent); err != nil {
+		// Schedule only test-phase subtasks during the test-writing state.
+		if err := o.scheduleSubtasks(parent, "test"); err != nil {
 			return fmt.Errorf("process test writing: schedule: %w", err)
 		}
 	}

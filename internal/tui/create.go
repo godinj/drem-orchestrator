@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -12,7 +13,7 @@ import (
 // CreateModel is the new-task creation form with title and description fields.
 type CreateModel struct {
 	titleInput textinput.Model
-	descInput  textinput.Model
+	descInput  textarea.Model
 	focused    int // 0=title, 1=desc
 	err        error
 }
@@ -25,10 +26,13 @@ func NewCreateModel() CreateModel {
 	ti.Width = 50
 	ti.Focus()
 
-	di := textinput.New()
+	di := textarea.New()
 	di.Placeholder = "Description (what needs to be done)"
 	di.CharLimit = 500
-	di.Width = 50
+	di.ShowLineNumbers = false
+	di.Prompt = ""
+	di.SetHeight(3)
+	di.SetWidth(50)
 
 	return CreateModel{
 		titleInput: ti,
@@ -73,7 +77,8 @@ func (c CreateModel) View() string {
 	b.WriteString(titleStyle.Render("New Task"))
 	b.WriteString("\n\n")
 	b.WriteString(fmt.Sprintf("  Title:       %s\n", c.titleInput.View()))
-	b.WriteString(fmt.Sprintf("  Description: %s\n", c.descInput.View()))
+	b.WriteString("  Description:\n")
+	b.WriteString(fmt.Sprintf("  %s\n", c.descInput.View()))
 	b.WriteString("\n")
 	b.WriteString(helpStyle.Render("  [tab] switch field  [enter] create  [esc] cancel"))
 	if c.err != nil {
@@ -96,6 +101,16 @@ func (c *CreateModel) Reset() {
 	c.titleInput.Focus()
 	c.descInput.Blur()
 	c.err = nil
+}
+
+// SetWidth updates the input widths to fit the given overlay inner width.
+func (c *CreateModel) SetWidth(w int) {
+	inputWidth := w - 2 // account for "  " indent prefix
+	if inputWidth < 10 {
+		inputWidth = 10
+	}
+	c.titleInput.Width = inputWidth
+	c.descInput.SetWidth(inputWidth)
 }
 
 // lipglossRender is a small helper to render text in a color.

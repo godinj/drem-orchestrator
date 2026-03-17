@@ -504,6 +504,85 @@ func TestMergeTDDDependencies(t *testing.T) {
 	}
 }
 
+func TestMergeTDDDependencies_PhaseOrdering(t *testing.T) {
+	tests := []struct {
+		name     string
+		subtasks []planEntry
+		// wantDeps maps subtask index → expected dependencies after merge
+		wantDeps map[int][]int
+	}{
+		{
+			name: "integration depends on all implementation",
+			subtasks: []planEntry{
+				{Title: "Test A", Phase: "test", TestsFor: []int{1}},
+				{Title: "Impl A", Phase: "implementation"},
+				{Title: "Wire", Phase: "integration"},
+			},
+			wantDeps: map[int][]int{
+				1: {0},    // impl depends on test (TDD)
+				2: {1},    // integration depends on impl (phase ordering)
+			},
+		},
+		{
+			name: "integration depends on multiple impl subtasks",
+			subtasks: []planEntry{
+				{Title: "Test A", Phase: "test", TestsFor: []int{1}},
+				{Title: "Impl A", Phase: "implementation"},
+				{Title: "Impl B", Phase: "implementation"},
+				{Title: "Wire", Phase: "integration"},
+			},
+			wantDeps: map[int][]int{
+				1: {0},       // impl A depends on test
+				3: {1, 2},    // integration depends on both impls
+			},
+		},
+		{
+			name: "no integration subtask is no-op",
+			subtasks: []planEntry{
+				{Title: "Test A", Phase: "test", TestsFor: []int{1}},
+				{Title: "Impl A", Phase: "implementation"},
+			},
+			wantDeps: map[int][]int{
+				1: {0},
+			},
+		},
+		{
+			name: "integration with existing dep does not duplicate",
+			subtasks: []planEntry{
+				{Title: "Impl A", Phase: "implementation"},
+				{Title: "Wire", Phase: "integration", Dependencies: []int{0}},
+			},
+			wantDeps: map[int][]int{
+				1: {0},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MergeTDDDependencies(tt.subtasks)
+
+			for idx, want := range tt.wantDeps {
+				got := result[idx].Dependencies
+				if !intSliceEqual(got, want) {
+					t.Errorf("subtask %d deps = %v, want %v", idx, got, want)
+				}
+			}
+
+			// Verify originals not mutated.
+			for i, orig := range tt.subtasks {
+				if _, checked := tt.wantDeps[i]; !checked {
+					continue
+				}
+				got := tt.subtasks[i].Dependencies
+				if !intSliceEqual(got, orig.Dependencies) {
+					t.Errorf("original subtask %d mutated: got %v", i, got)
+				}
+			}
+		})
+	}
+}
+
 func TestHasCycle(t *testing.T) {
 	tests := []struct {
 		name     string

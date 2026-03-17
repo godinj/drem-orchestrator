@@ -4,26 +4,29 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 )
 
 // FeedbackModel is a text input dialog for plan rejection or test failure feedback.
 type FeedbackModel struct {
-	input   textinput.Model
+	input   textarea.Model
 	title   string // e.g. "Reject Plan" or "Fail Test"
 	visible bool
 }
 
 // NewFeedbackModel creates a FeedbackModel with the given dialog title.
 func NewFeedbackModel(title string) FeedbackModel {
-	ti := textinput.New()
-	ti.Placeholder = "Enter feedback..."
-	ti.CharLimit = 500
-	ti.Width = 60
+	ta := textarea.New()
+	ta.Placeholder = "Enter feedback..."
+	ta.CharLimit = 500
+	ta.ShowLineNumbers = false
+	ta.Prompt = ""
+	ta.SetHeight(3)
+	ta.SetWidth(60)
 
 	return FeedbackModel{
-		input: ti,
+		input: ta,
 		title: title,
 	}
 }
@@ -70,6 +73,15 @@ func (f *FeedbackModel) Show() {
 func (f *FeedbackModel) Hide() {
 	f.visible = false
 	f.input.Blur()
+}
+
+// SetWidth updates the input width to fit the given overlay inner width.
+func (f *FeedbackModel) SetWidth(w int) {
+	inputWidth := w - 2 // account for "  " indent prefix
+	if inputWidth < 10 {
+		inputWidth = 10
+	}
+	f.input.SetWidth(inputWidth)
 }
 
 // Visible returns whether the dialog is currently shown.

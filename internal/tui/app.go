@@ -623,6 +623,7 @@ func (m Model) handleReject() (tea.Model, tea.Cmd) {
 	case model.StatusTestReview:
 		// Open feedback dialog for test review rejection (feedback required).
 		m.feedback = NewFeedbackModel("Test Review Rejection Feedback")
+		m.feedback.SetWidth(m.width*2/3 - 4)
 		m.feedback.Show()
 		m.feedbackAction = feedbackTestReviewReject
 		m.focus = FocusFeedback
@@ -754,6 +755,7 @@ func (m Model) handleAddComment() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.feedback = NewFeedbackModel("Add Comment")
+	m.feedback.SetWidth(m.width*2/3 - 4)
 	m.feedback.Show()
 	m.feedbackAction = feedbackAddComment
 	m.focus = FocusFeedback
@@ -1167,6 +1169,12 @@ func (m *Model) updatePanelSizes() {
 	m.agents.height = upperHeight - 2
 	m.detail.width = innerWidth - 4
 	m.detail.height = detailHeight - 2
+
+	// Size overlay text inputs to fit the dialog container.
+	// The overlay is 2/3 of screen width; subtract 4 for border (2) + padding (2).
+	overlayInnerWidth := m.width*2/3 - 4
+	m.create.SetWidth(overlayInnerWidth)
+	m.feedback.SetWidth(overlayInnerWidth)
 }
 
 // updateDetail refreshes the detail panel based on the currently selected task.

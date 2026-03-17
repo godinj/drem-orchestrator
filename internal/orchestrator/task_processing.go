@@ -162,7 +162,9 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 // scheduleSubtasks looks for BACKLOG subtasks — and IN_PROGRESS subtasks
 // whose agent has been cleared (e.g. after empty-work retry) — of the parent
 // that have their dependencies met and spawns agents for them.
-func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
+// If phaseFilter is non-empty, only subtasks with a matching Phase are
+// considered (used by processTestWriting to limit scheduling to test-phase).
+func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...string) error {
 	// Check for wave schedule in parent context.
 	var allowedIDs map[uuid.UUID]bool
 	if parent.Context != nil {
@@ -201,8 +203,19 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 		return fmt.Errorf("schedule subtasks: query: %w", err)
 	}
 
+	// Apply phase filter if provided.
+	var filterPhase string
+	if len(phaseFilter) > 0 && phaseFilter[0] != "" {
+		filterPhase = phaseFilter[0]
+	}
+
 	for i := range subtasks {
 		sub := &subtasks[i]
+
+		// If a phase filter is active, skip subtasks that don't match.
+		if filterPhase != "" && sub.Phase != filterPhase {
+			continue
+		}
 
 		// If wave scheduling is active, only schedule subtasks in the current group.
 		if allowedIDs != nil && !allowedIDs[sub.ID] {

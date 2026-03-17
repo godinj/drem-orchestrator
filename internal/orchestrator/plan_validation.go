@@ -341,6 +341,28 @@ func MergeTDDDependencies(subtasks []planEntry) []planEntry {
 		}
 	}
 
+	// Phase ordering: integration-phase subtasks depend on all
+	// implementation-phase subtasks so they run after implementation
+	// completes.
+	var implIndices []int
+	for i, s := range result {
+		if s.Phase == "implementation" {
+			implIndices = append(implIndices, i)
+		}
+	}
+	if len(implIndices) > 0 {
+		for i, s := range result {
+			if s.Phase != "integration" {
+				continue
+			}
+			for _, implIdx := range implIndices {
+				if !containsInt(result[i].Dependencies, implIdx) {
+					result[i].Dependencies = append(result[i].Dependencies, implIdx)
+				}
+			}
+		}
+	}
+
 	return result
 }
 
