@@ -33,11 +33,12 @@ func testSessionName(t *testing.T) string {
 func newTestRunner(t *testing.T, tm *tmux.Manager) *Runner {
 	t.Helper()
 	return &Runner{
-		tmux:          tm,
-		maxConcurrent: 4,
-		running:       make(map[uuid.UUID]*RunningAgent),
-		completions:   make(chan Completion, 4),
-		semaphore:     make(chan struct{}, 4),
+		tmux:            tm,
+		tmuxSessionName: tm.SessionName,
+		maxConcurrent:   4,
+		running:         make(map[uuid.UUID]*RunningAgent),
+		completions:     make(chan Completion, 4),
+		semaphore:       make(chan struct{}, 4),
 	}
 }
 

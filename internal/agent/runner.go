@@ -50,11 +50,12 @@ type RunningAgent struct {
 
 // Runner manages Claude Code agent lifecycles via tmux.
 type Runner struct {
-	db            *gorm.DB
-	tmux          *tmux.Manager
-	worktree      *worktree.Manager
-	claudeBin     string
-	maxConcurrent int
+	db              *gorm.DB
+	tmux            SessionManager
+	tmuxSessionName string // dashboard session name prefix for agent sessions
+	worktree        *worktree.Manager
+	claudeBin       string
+	maxConcurrent   int
 
 	mu          sync.Mutex
 	running     map[uuid.UUID]*RunningAgent
@@ -62,17 +63,19 @@ type Runner struct {
 	semaphore   chan struct{} // buffered channel of size maxConcurrent
 }
 
-// NewRunner creates an agent Runner.
+// NewRunner creates an agent Runner. The tm parameter must implement
+// SessionManager; *tmux.Manager satisfies this interface.
 func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin string, maxConcurrent int) *Runner {
 	return &Runner{
-		db:            db,
-		tmux:          tm,
-		worktree:      wt,
-		claudeBin:     claudeBin,
-		maxConcurrent: maxConcurrent,
-		running:       make(map[uuid.UUID]*RunningAgent),
-		completions:   make(chan Completion, maxConcurrent),
-		semaphore:     make(chan struct{}, maxConcurrent),
+		db:              db,
+		tmux:            tm,
+		tmuxSessionName: tm.SessionName,
+		worktree:        wt,
+		claudeBin:       claudeBin,
+		maxConcurrent:   maxConcurrent,
+		running:         make(map[uuid.UUID]*RunningAgent),
+		completions:     make(chan Completion, maxConcurrent),
+		semaphore:       make(chan struct{}, maxConcurrent),
 	}
 }
 
@@ -142,19 +145,20 @@ func (r *Runner) buildAgentNames(task *model.Task, agentType model.AgentType, ag
 		name = fmt.Sprintf("%s - %s > %s", label, parentTitle, subtaskTitle)
 	}
 
-	session = SanitizeSessionName(fmt.Sprintf("%s/%s %s", r.tmux.SessionName, name, shortID))
+	session = SanitizeSessionName(fmt.Sprintf("%s/%s %s", r.tmuxSessionName, name, shortID))
 	return name, session
 }
 
 // TmuxSessionName returns the dashboard tmux session name used as a namespace
 // prefix for agent and supervisor sessions.
 func (r *Runner) TmuxSessionName() string {
-	return r.tmux.SessionName
+	return r.tmuxSessionName
 }
 
-// TmuxManager returns the underlying tmux Manager.
+// TmuxManager returns the underlying tmux Manager. It panics if the
+// SessionManager is not a *tmux.Manager (only possible in test code).
 func (r *Runner) TmuxManager() *tmux.Manager {
-	return r.tmux
+	return r.tmux.(*tmux.Manager)
 }
 
 // ClaudeBin returns the path to the Claude binary.
