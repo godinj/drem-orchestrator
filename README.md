@@ -122,7 +122,7 @@ Lists all agents with their type, status, current task, and last heartbeat.
 | `t` | Pass test |
 | `f` | Fail test |
 | `c` | Add comment / feedback |
-| `d` | Delete last comment |
+| `d` | Delete mode — select a comment, plan step, task, or subtask to remove (`d` → select → `y`/`Enter`). Deleting a root task cascades to all subtasks, agents, comments, and events |
 | `g` | Jump to agent's tmux window |
 | `l` | View agent log |
 | `p` | Pause / resume task |

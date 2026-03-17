@@ -22,6 +22,7 @@ type deleteItemKind int
 const (
 	deleteItemPlanStep deleteItemKind = iota
 	deleteItemComment
+	deleteItemTask
 )
 
 // deleteItem identifies one deletable entry in the detail view.
@@ -72,6 +73,11 @@ func (d DetailModel) deletableItems() []deleteItem {
 	// Comments.
 	for i := range d.comments {
 		items = append(items, deleteItem{kind: deleteItemComment, index: i})
+	}
+
+	// The task itself (always available as last item).
+	if d.task != nil {
+		items = append(items, deleteItem{kind: deleteItemTask, index: 0})
 	}
 
 	return items
@@ -348,9 +354,9 @@ func (d DetailModel) availableActions() string {
 	case model.StatusInProgress:
 		parts = append(parts, "[p]ause", "[x]fix", "[d]elete")
 	case model.StatusPaused:
-		parts = append(parts, "[p] resume")
+		parts = append(parts, "[p] resume", "[d]elete")
 	case model.StatusFailed:
-		parts = append(parts, "[R]etry", "[x]fix")
+		parts = append(parts, "[R]etry", "[x]fix", "[d]elete")
 	}
 
 	// Supervisor evaluation is always available.

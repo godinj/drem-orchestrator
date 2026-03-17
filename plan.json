@@ -1,0 +1,79 @@
+{
+  "subtasks": [
+    {
+      "agent_type": "coder",
+      "description": "Add tests for a new DeleteTask() method on Orchestrator that deletes a root task along with all its subtasks, agents, comments, and events. Tests should cover:\n1. Deleting a root task with no subtasks (deletes task, its comments, its events)\n2. Deleting a root task with subtasks (cascades: stops agents, deletes subtask comments/events, deletes subtasks, then deletes parent task comments/events and the task itself)\n3. Attempting to delete a non-existent task (returns error)\n4. Deleting a subtask directly via DeleteTask (should work the same as DeleteSubtask — delegates to existing DeleteSubtask method)\n\nFollow the existing test pattern in lifecycle_test.go using setupLifecycleTest() and lifecycleTestDB(). Tests should initially fail since DeleteTask doesn't exist yet.\n\nIMPORTANT: DeleteTask will live in internal/orchestrator/lifecycle.go (a new file), NOT in orchestrator.go.",
+      "estimated_files": [
+        "internal/orchestrator/lifecycle_test.go"
+      ],
+      "phase": "test",
+      "tests_for": [
+        1
+      ],
+      "title": "Write tests for DeleteTask orchestrator method"
+    },
+    {
+      "agent_type": "coder",
+      "description": "Create a new file internal/orchestrator/lifecycle.go and:\n\n1. MOVE the following methods from orchestrator.go into lifecycle.go (this shrinks orchestrator.go which has a shrink-only constraint):\n   - DeleteSubtask()\n   - DeleteComment()\n   - DeletePlanStep()\n\n2. ADD a new DeleteTask(taskID uuid.UUID) method in lifecycle.go:\n   a. Load the task by ID (return error if not found)\n   b. If the task has a ParentTaskID (it's a subtask), delegate to the existing DeleteSubtask() method\n   c. If it's a root task:\n      - Load all subtasks (WHERE parent_task_id = taskID)\n      - For each subtask, call DeleteSubtask() to handle agent cleanup, comment/event deletion\n      - Delete the root task's own comments and events\n      - Delete the root task record itself\n      - Emit 'task_updated' event\n\nThis reuses DeleteSubtask() for agent lifecycle management. The move to lifecycle.go respects the shrink-only constraint on orchestrator.go (baseline: 2917 lines, must not grow).",
+      "estimated_files": [
+        "internal/orchestrator/lifecycle.go",
+        "internal/orchestrator/orchestrator.go"
+      ],
+      "phase": "implementation",
+      "title": "Implement DeleteTask and extract deletion methods to lifecycle.go"
+    },
+    {
+      "agent_type": "coder",
+      "description": "Add tests in detail_test.go verifying that:\n1. deletableItems() includes a deleteItemTask entry for the selected task (as the LAST item, after plan steps and comments)\n2. When the task is a subtask (ParentTaskID != nil), it still appears as a deletable item\n3. The deleteItemTask kind is correctly identified by isDeleteTarget() and isDeleteSection()\n4. The task deletion item appears regardless of task status (unlike plan steps which only appear in plan_review)\n\nFollow the existing table-driven test pattern in detail_test.go.",
+      "estimated_files": [
+        "internal/tui/detail_test.go"
+      ],
+      "phase": "test",
+      "tests_for": [
+        3
+      ],
+      "title": "Write tests for TUI task deletion in delete mode"
+    },
+    {
+      "agent_type": "coder",
+      "description": "Extend the existing delete mode in the TUI to support deleting the selected task or subtask:\n\n1. In detail.go:\n   - Add deleteItemTask to the deleteItemKind enum\n   - In deletableItems(), append a deleteItemTask entry as the last item (always present when a task is selected)\n   - In the View rendering, show the task deletion option in delete mode (e.g., render it with a label like '× Delete task' or '× Delete subtask' depending on ParentTaskID)\n\n2. In app.go:\n   - In handleDeleteModeKeys(), add a case for deleteItemTask in the switch on item.kind\n   - If the task is a subtask (ParentTaskID != nil), call orch.DeleteSubtask(taskID)\n   - If the task is a root task, call orch.DeleteTask(taskID)\n   - Run deletion async (same pattern as existing deleteItemComment/deleteItemPlanStep)\n   - After deletion, refresh data to update the board\n\nThe existing 'd' -\u003e delete mode -\u003e select item -\u003e 'y'/'enter' flow provides the confirmation UX naturally.",
+      "estimated_files": [
+        "internal/tui/detail.go",
+        "internal/tui/app.go"
+      ],
+      "phase": "implementation",
+      "title": "Implement TUI task/subtask deletion via delete mode"
+    },
+    {
+      "agent_type": "coder",
+      "description": "Update README.md to document the new task/subtask deletion capability:\n\n1. In the TUI keybindings section, add documentation for the 'd' key delete mode now supporting task and subtask deletion\n2. Note that deleting a root task cascades to all subtasks, agents, comments, and events\n3. Note that the delete confirmation flow (d -\u003e select -\u003e y/enter) applies\n\nKeep the documentation concise and consistent with the existing README style.",
+      "estimated_files": [
+        "README.md"
+      ],
+      "phase": "implementation",
+      "title": "Update documentation for task deletion keybinding"
+    },
+    {
+      "agent_type": "coder",
+      "description": "Verify the complete task deletion flow works end-to-end:\n1. Run go build to confirm compilation\n2. Run go test ./... to confirm all tests pass\n3. Run gofmt -l ./internal/ ./cmd/ to confirm formatting compliance\n4. Verify that orchestrator.go did not grow (deletion methods were moved to lifecycle.go)\n5. Verify that DeleteTask properly cascades through subtasks\n\nIf issues are found, fix them in the appropriate files.",
+      "estimated_files": [
+        "internal/orchestrator/lifecycle.go",
+        "internal/orchestrator/orchestrator.go",
+        "internal/tui/detail.go",
+        "internal/tui/app.go"
+      ],
+      "phase": "integration",
+      "title": "Integration: verify end-to-end task deletion"
+    }
+  ],
+  "tdd_exceptions": [
+    {
+      "reason": "documentation-only subtask, no testable code changes",
+      "subtask_index": 4
+    },
+    {
+      "reason": "integration verification subtask connecting already-tested components",
+      "subtask_index": 5
+    }
+  ]
+}

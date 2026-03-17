@@ -284,6 +284,123 @@ func TestDeletePlanStep_WrongStatus(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// DeleteTask tests
+// ---------------------------------------------------------------------------
+
+func TestDeleteTask_Subtask(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	parent := createLifecycleTask(t, db, o.projectID, "parent", model.StatusInProgress, nil)
+	parentID := parent.ID
+	sub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "child-subtask",
+		Description:  "a subtask",
+		Status:       model.StatusBacklog,
+	}
+	if err := db.Create(&sub).Error; err != nil {
+		t.Fatalf("create subtask: %v", err)
+	}
+
+	// DeleteTask on a subtask should delete just the subtask.
+	if err := o.DeleteTask(sub.ID); err != nil {
+		t.Fatalf("DeleteTask(subtask): unexpected error: %v", err)
+	}
+
+	// Subtask should be gone.
+	var count int64
+	db.Model(&model.Task{}).Where("id = ?", sub.ID).Count(&count)
+	if count != 0 {
+		t.Error("expected subtask to be deleted")
+	}
+
+	// Parent should still exist.
+	db.Model(&model.Task{}).Where("id = ?", parent.ID).Count(&count)
+	if count != 1 {
+		t.Error("expected parent to still exist")
+	}
+}
+
+func TestDeleteTask_ParentCascade(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	parent := createLifecycleTask(t, db, o.projectID, "cascade-parent", model.StatusInProgress, nil)
+	parentID := parent.ID
+
+	// Create several subtasks with comments and events.
+	var subtaskIDs []uuid.UUID
+	for i := 0; i < 3; i++ {
+		sub := model.Task{
+			ID:           uuid.New(),
+			ProjectID:    o.projectID,
+			ParentTaskID: &parentID,
+			Title:        fmt.Sprintf("sub-%d", i),
+			Description:  "subtask",
+			Status:       model.StatusBacklog,
+		}
+		if err := db.Create(&sub).Error; err != nil {
+			t.Fatalf("create subtask %d: %v", i, err)
+		}
+		subtaskIDs = append(subtaskIDs, sub.ID)
+
+		// Add a comment to each subtask.
+		comment := model.TaskComment{
+			ID:     uuid.New(),
+			TaskID: sub.ID,
+			Author: "user",
+			Body:   fmt.Sprintf("comment on sub-%d", i),
+		}
+		db.Create(&comment)
+	}
+
+	// Add a comment to the parent too.
+	parentComment := model.TaskComment{
+		ID:     uuid.New(),
+		TaskID: parent.ID,
+		Author: "user",
+		Body:   "parent comment",
+	}
+	db.Create(&parentComment)
+
+	// Delete the parent task — should cascade.
+	if err := o.DeleteTask(parent.ID); err != nil {
+		t.Fatalf("DeleteTask(parent): unexpected error: %v", err)
+	}
+
+	// Parent should be gone.
+	var count int64
+	db.Model(&model.Task{}).Where("id = ?", parent.ID).Count(&count)
+	if count != 0 {
+		t.Error("expected parent task to be deleted")
+	}
+
+	// All subtasks should be gone.
+	for _, subID := range subtaskIDs {
+		db.Model(&model.Task{}).Where("id = ?", subID).Count(&count)
+		if count != 0 {
+			t.Errorf("expected subtask %s to be deleted", subID)
+		}
+	}
+
+	// All comments should be gone (subtask comments + parent comment).
+	db.Model(&model.TaskComment{}).Where("task_id IN ?", append(subtaskIDs, parent.ID)).Count(&count)
+	if count != 0 {
+		t.Errorf("expected all comments to be deleted, got %d remaining", count)
+	}
+}
+
+func TestDeleteTask_NotFound(t *testing.T) {
+	o, _ := setupLifecycleTest(t)
+
+	err := o.DeleteTask(uuid.New())
+	if err == nil {
+		t.Fatal("DeleteTask: expected error for nonexistent task, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // HandlePlanApproved tests
 // ---------------------------------------------------------------------------
 
@@ -1087,6 +1204,231 @@ func TestFailTask_AlreadyFailed(t *testing.T) {
 	err := o.failTask(&task, "second failure")
 	if err == nil {
 		t.Fatal("failTask: expected error for already-failed task, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DeleteTask tests
+// ---------------------------------------------------------------------------
+
+func TestDeleteTask_RootNoSubtasks(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	task := createLifecycleTask(t, db, o.projectID, "delete-root-no-subs", model.StatusBacklog, nil)
+
+	// Add comments to the task.
+	comment := model.TaskComment{
+		ID:     uuid.New(),
+		TaskID: task.ID,
+		Author: "user",
+		Body:   "this task should be deleted",
+	}
+	if err := db.Create(&comment).Error; err != nil {
+		t.Fatalf("create comment: %v", err)
+	}
+
+	// Add events to the task.
+	event := model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    task.ID,
+		EventType: "status_change",
+		OldValue:  "",
+		NewValue:  string(model.StatusBacklog),
+		Actor:     "system",
+	}
+	if err := db.Create(&event).Error; err != nil {
+		t.Fatalf("create event: %v", err)
+	}
+
+	// Delete the task.
+	if err := o.DeleteTask(task.ID); err != nil {
+		t.Fatalf("DeleteTask: unexpected error: %v", err)
+	}
+
+	// Verify the task is gone.
+	var count int64
+	db.Model(&model.Task{}).Where("id = ?", task.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("expected task to be deleted, but found %d", count)
+	}
+
+	// Verify comments are gone.
+	db.Model(&model.TaskComment{}).Where("task_id = ?", task.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("expected comments to be deleted, but found %d", count)
+	}
+
+	// Verify events are gone.
+	db.Model(&model.TaskEvent{}).Where("task_id = ?", task.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("expected events to be deleted, but found %d", count)
+	}
+}
+
+func TestDeleteTask_RootWithSubtasks(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	// Create a root task with a plan.
+	plan := makePlan(2)
+	parent := createLifecycleTask(t, db, o.projectID, "delete-root-with-subs", model.StatusInProgress, plan)
+
+	// Create subtasks attached to the parent.
+	parentID := parent.ID
+	sub1 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "subtask-1",
+		Description:  "first subtask",
+		Status:       model.StatusInProgress,
+	}
+	sub2 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "subtask-2",
+		Description:  "second subtask",
+		Status:       model.StatusDone,
+	}
+	if err := db.Create(&sub1).Error; err != nil {
+		t.Fatalf("create sub1: %v", err)
+	}
+	if err := db.Create(&sub2).Error; err != nil {
+		t.Fatalf("create sub2: %v", err)
+	}
+
+	// Add comments and events to subtasks.
+	for _, subID := range []uuid.UUID{sub1.ID, sub2.ID} {
+		db.Create(&model.TaskComment{
+			ID:     uuid.New(),
+			TaskID: subID,
+			Author: "system",
+			Body:   "subtask comment",
+		})
+		db.Create(&model.TaskEvent{
+			ID:        uuid.New(),
+			TaskID:    subID,
+			EventType: "status_change",
+			OldValue:  string(model.StatusBacklog),
+			NewValue:  string(model.StatusInProgress),
+			Actor:     "system",
+		})
+	}
+
+	// Add comments and events to the parent task.
+	db.Create(&model.TaskComment{
+		ID:     uuid.New(),
+		TaskID: parent.ID,
+		Author: "user",
+		Body:   "parent comment",
+	})
+	db.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    parent.ID,
+		EventType: "status_change",
+		OldValue:  string(model.StatusBacklog),
+		NewValue:  string(model.StatusInProgress),
+		Actor:     "system",
+	})
+
+	// Delete the root task — should cascade to subtasks.
+	if err := o.DeleteTask(parent.ID); err != nil {
+		t.Fatalf("DeleteTask: unexpected error: %v", err)
+	}
+
+	// Verify parent task is gone.
+	var count int64
+	db.Model(&model.Task{}).Where("id = ?", parent.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("expected parent task to be deleted, but found %d", count)
+	}
+
+	// Verify subtasks are gone.
+	db.Model(&model.Task{}).Where("parent_task_id = ?", parent.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("expected subtasks to be deleted, but found %d", count)
+	}
+
+	// Verify subtask comments are gone.
+	db.Model(&model.TaskComment{}).Where("task_id IN ?", []uuid.UUID{sub1.ID, sub2.ID}).Count(&count)
+	if count != 0 {
+		t.Errorf("expected subtask comments to be deleted, but found %d", count)
+	}
+
+	// Verify subtask events are gone.
+	db.Model(&model.TaskEvent{}).Where("task_id IN ?", []uuid.UUID{sub1.ID, sub2.ID}).Count(&count)
+	if count != 0 {
+		t.Errorf("expected subtask events to be deleted, but found %d", count)
+	}
+
+	// Verify parent comments are gone.
+	db.Model(&model.TaskComment{}).Where("task_id = ?", parent.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("expected parent comments to be deleted, but found %d", count)
+	}
+
+	// Verify parent events are gone.
+	db.Model(&model.TaskEvent{}).Where("task_id = ?", parent.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("expected parent events to be deleted, but found %d", count)
+	}
+}
+
+func TestDeleteTask_RootWithSubtasksAndAgents(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	parent := createLifecycleTask(t, db, o.projectID, "delete-root-agents", model.StatusInProgress, makePlan(1))
+	parentID := parent.ID
+
+	// Create an agent assigned to a subtask.
+	agent := model.Agent{
+		ID:        uuid.New(),
+		ProjectID: o.projectID,
+		AgentType: model.AgentCoder,
+		Name:      "test-agent",
+		Status:    model.AgentWorking,
+	}
+	if err := db.Create(&agent).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	agentID := agent.ID
+	sub := model.Task{
+		ID:              uuid.New(),
+		ProjectID:       o.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "subtask-with-agent",
+		Description:     "subtask with assigned agent",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+	}
+	if err := db.Create(&sub).Error; err != nil {
+		t.Fatalf("create subtask: %v", err)
+	}
+
+	// Delete the root task.
+	if err := o.DeleteTask(parent.ID); err != nil {
+		t.Fatalf("DeleteTask: unexpected error: %v", err)
+	}
+
+	// Verify agent was marked as dead.
+	var updatedAgent model.Agent
+	if err := db.First(&updatedAgent, "id = ?", agentID).Error; err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	if updatedAgent.Status != model.AgentDead {
+		t.Errorf("expected agent status %q, got %q", model.AgentDead, updatedAgent.Status)
+	}
+
+	// Verify subtask and parent are deleted.
+	var count int64
+	db.Model(&model.Task{}).Where("id = ?", sub.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("expected subtask to be deleted, but found %d", count)
+	}
+	db.Model(&model.Task{}).Where("id = ?", parent.ID).Count(&count)
+	if count != 0 {
+		t.Errorf("expected parent to be deleted, but found %d", count)
 	}
 }
 

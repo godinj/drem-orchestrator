@@ -34,7 +34,7 @@ func TestDeletableItems(t *testing.T) {
 				{ID: uuid.New(), Author: "user", Body: "Comment 1"},
 				{ID: uuid.New(), Author: "system", Body: "Comment 2"},
 			},
-			wantLen:      5,
+			wantLen:      6, // 3 plan + 2 comments + 1 task
 			wantPlanLen:  3,
 			wantComments: 2,
 		},
@@ -45,7 +45,7 @@ func TestDeletableItems(t *testing.T) {
 				Status: model.StatusBacklog,
 			},
 			comments:     nil,
-			wantLen:      0,
+			wantLen:      1, // task only
 			wantPlanLen:  0,
 			wantComments: 0,
 		},
@@ -60,7 +60,7 @@ func TestDeletableItems(t *testing.T) {
 				{ID: uuid.New(), Author: "user", Body: "Another comment"},
 				{ID: uuid.New(), Author: "system", Body: "System note"},
 			},
-			wantLen:      3,
+			wantLen:      4, // 3 comments + 1 task
 			wantPlanLen:  0,
 			wantComments: 3,
 		},
@@ -76,7 +76,7 @@ func TestDeletableItems(t *testing.T) {
 				},
 			},
 			comments:     nil,
-			wantLen:      1,
+			wantLen:      2, // 1 plan + 1 task
 			wantPlanLen:  1,
 			wantComments: 0,
 		},
@@ -100,7 +100,7 @@ func TestDeletableItems(t *testing.T) {
 				},
 			},
 			comments:     nil,
-			wantLen:      0,
+			wantLen:      1, // task only (plan steps excluded for non-plan_review)
 			wantPlanLen:  0,
 			wantComments: 0,
 		},
@@ -220,7 +220,7 @@ func TestSelectedDeleteItem(t *testing.T) {
 		},
 		{
 			name:         "no deletable items returns nil",
-			task:         &model.Task{ID: uuid.New(), Status: model.StatusBacklog},
+			task:         nil,
 			comments:     nil,
 			deleteCursor: 0,
 			wantNil:      true,
@@ -330,6 +330,260 @@ func TestIsDeleteTarget(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("isDeleteTarget(%d, %d) = %v, want %v",
 					tt.queryKind, tt.queryIndex, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeletableItemsIncludesTask(t *testing.T) {
+	parentID := uuid.New()
+
+	tests := []struct {
+		name     string
+		task     *model.Task
+		comments []model.TaskComment
+		wantTask bool // expect a deleteItemTask entry
+		wantLast bool // the task entry should be the last item
+	}{
+		{
+			name: "task with plan and comments includes task as last item",
+			task: &model.Task{
+				ID:     uuid.New(),
+				Status: model.StatusPlanReview,
+				Plan: model.JSONField{
+					"subtasks": []any{
+						map[string]any{"title": "Step 1"},
+					},
+				},
+			},
+			comments: []model.TaskComment{
+				{ID: uuid.New(), Author: "user", Body: "Comment 1"},
+			},
+			wantTask: true,
+			wantLast: true,
+		},
+		{
+			name: "task with comments only includes task as last item",
+			task: &model.Task{
+				ID:     uuid.New(),
+				Status: model.StatusInProgress,
+			},
+			comments: []model.TaskComment{
+				{ID: uuid.New(), Author: "user", Body: "Comment 1"},
+			},
+			wantTask: true,
+			wantLast: true,
+		},
+		{
+			name: "task with no plan and no comments includes task as only item",
+			task: &model.Task{
+				ID:     uuid.New(),
+				Status: model.StatusBacklog,
+			},
+			comments: nil,
+			wantTask: true,
+			wantLast: true,
+		},
+		{
+			name: "subtask with ParentTaskID includes task as deletable item",
+			task: &model.Task{
+				ID:           uuid.New(),
+				ParentTaskID: &parentID,
+				Status:       model.StatusInProgress,
+			},
+			comments: nil,
+			wantTask: true,
+			wantLast: true,
+		},
+		{
+			name:     "nil task does not include task item",
+			task:     nil,
+			comments: nil,
+			wantTask: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := DetailModel{
+				task:     tt.task,
+				comments: tt.comments,
+			}
+			items := d.deletableItems()
+
+			// Check that a deleteItemTask entry exists.
+			var taskCount int
+			var lastItem *deleteItem
+			for i := range items {
+				if items[i].kind == deleteItemTask {
+					taskCount++
+				}
+				lastItem = &items[i]
+			}
+
+			if tt.wantTask && taskCount != 1 {
+				t.Fatalf("expected exactly 1 deleteItemTask entry, got %d", taskCount)
+			}
+			if !tt.wantTask && taskCount != 0 {
+				t.Fatalf("expected no deleteItemTask entry, got %d", taskCount)
+			}
+
+			// Verify the task entry is the last item.
+			if tt.wantLast && lastItem != nil && lastItem.kind != deleteItemTask {
+				t.Errorf("expected deleteItemTask as last item, got kind %d", lastItem.kind)
+			}
+		})
+	}
+}
+
+func TestDeletableItemsTaskAppearsRegardlessOfStatus(t *testing.T) {
+	// Unlike plan steps (which only appear in plan_review), the task deletion
+	// item should appear for all task statuses.
+	statuses := []model.TaskStatus{
+		model.StatusBacklog,
+		model.StatusPlanning,
+		model.StatusPlanReview,
+		model.StatusTestWriting,
+		model.StatusTestReview,
+		model.StatusInProgress,
+		model.StatusTestingReady,
+		model.StatusMerging,
+		model.StatusPaused,
+		model.StatusDone,
+		model.StatusFailed,
+		model.StatusRejected,
+	}
+
+	for _, status := range statuses {
+		t.Run(string(status), func(t *testing.T) {
+			d := DetailModel{
+				task: &model.Task{
+					ID:     uuid.New(),
+					Status: status,
+				},
+			}
+			items := d.deletableItems()
+
+			var hasTask bool
+			for _, item := range items {
+				if item.kind == deleteItemTask {
+					hasTask = true
+					break
+				}
+			}
+			if !hasTask {
+				t.Errorf("expected deleteItemTask for status %s, but it was not present", status)
+			}
+		})
+	}
+}
+
+func TestIsDeleteTargetTask(t *testing.T) {
+	tests := []struct {
+		name         string
+		deleteMode   bool
+		deleteCursor int
+		queryKind    deleteItemKind
+		queryIndex   int
+		want         bool
+	}{
+		{
+			name:         "cursor on task item matches deleteItemTask",
+			deleteMode:   true,
+			deleteCursor: 0, // task is only item (no plan steps, no comments)
+			queryKind:    deleteItemTask,
+			queryIndex:   0,
+			want:         true,
+		},
+		{
+			name:         "cursor on task item does not match comment kind",
+			deleteMode:   true,
+			deleteCursor: 0,
+			queryKind:    deleteItemComment,
+			queryIndex:   0,
+			want:         false,
+		},
+		{
+			name:         "delete mode off returns false for task kind",
+			deleteMode:   false,
+			deleteCursor: 0,
+			queryKind:    deleteItemTask,
+			queryIndex:   0,
+			want:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := DetailModel{
+				task: &model.Task{
+					ID:     uuid.New(),
+					Status: model.StatusBacklog,
+				},
+				deleteMode:   tt.deleteMode,
+				deleteCursor: tt.deleteCursor,
+			}
+			got := d.isDeleteTarget(tt.queryKind, tt.queryIndex)
+			if got != tt.want {
+				t.Errorf("isDeleteTarget(%d, %d) = %v, want %v",
+					tt.queryKind, tt.queryIndex, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsDeleteSectionTask(t *testing.T) {
+	tests := []struct {
+		name         string
+		deleteMode   bool
+		deleteCursor int
+		queryKind    deleteItemKind
+		want         bool
+	}{
+		{
+			name:         "cursor on task item matches task section",
+			deleteMode:   true,
+			deleteCursor: 0, // task is only item
+			queryKind:    deleteItemTask,
+			want:         true,
+		},
+		{
+			name:         "cursor on task item does not match comment section",
+			deleteMode:   true,
+			deleteCursor: 0,
+			queryKind:    deleteItemComment,
+			want:         false,
+		},
+		{
+			name:         "cursor on task item does not match plan section",
+			deleteMode:   true,
+			deleteCursor: 0,
+			queryKind:    deleteItemPlanStep,
+			want:         false,
+		},
+		{
+			name:         "delete mode off returns false for task section",
+			deleteMode:   false,
+			deleteCursor: 0,
+			queryKind:    deleteItemTask,
+			want:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := DetailModel{
+				task: &model.Task{
+					ID:     uuid.New(),
+					Status: model.StatusBacklog,
+				},
+				deleteMode:   tt.deleteMode,
+				deleteCursor: tt.deleteCursor,
+			}
+			got := d.isDeleteSection(tt.queryKind)
+			if got != tt.want {
+				t.Errorf("isDeleteSection(%d) = %v, want %v",
+					tt.queryKind, got, tt.want)
 			}
 		})
 	}

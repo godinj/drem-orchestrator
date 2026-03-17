@@ -367,7 +367,7 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "c":
 		return m.handleAddComment()
 	case "d":
-		return m.handleDelete()
+		return m.handleDeleteTask()
 	case "S":
 		return m.handleSupervisorEval()
 	case "v":
@@ -760,6 +760,20 @@ func (m Model) handleAddComment() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleDeleteTask deletes the currently selected task or subtask from the
+// board. Parent tasks cascade through all subtasks.
+func (m Model) handleDeleteTask() (tea.Model, tea.Cmd) {
+	selected := m.board.Selected()
+	if selected == nil {
+		return m, nil
+	}
+	orch := m.orch
+	taskID := selected.ID
+	return m, func() tea.Msg {
+		return deleteResultMsg{err: orch.DeleteTask(taskID)}
+	}
+}
+
 // handleDelete enters delete mode, letting the user select a plan step,
 // subtask, or comment to remove.
 func (m Model) handleDelete() (tea.Model, tea.Cmd) {
@@ -816,6 +830,11 @@ func (m Model) handleDeleteModeKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			stepIdx := item.index
 			return m, func() tea.Msg {
 				return deleteResultMsg{err: orch.DeletePlanStep(taskID, stepIdx)}
+			}
+		case deleteItemTask:
+			taskID := m.detail.task.ID
+			return m, func() tea.Msg {
+				return deleteResultMsg{err: orch.DeleteTask(taskID)}
 			}
 		}
 	}
