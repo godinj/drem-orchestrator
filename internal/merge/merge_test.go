@@ -8,71 +8,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
-
-// ---------------------------------------------------------------------------
-// Git test helpers (same pattern as internal/worktree/worktree_test.go)
-// ---------------------------------------------------------------------------
-
-// setupBareRepo creates a bare git repo with an initial commit.
-func setupBareRepo(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	bareRepo := filepath.Join(dir, "test.git")
-
-	if _, err := worktree.RunGit([]string{"init", "--bare", bareRepo}, ""); err != nil {
-		t.Fatalf("init bare repo: %v", err)
-	}
-
-	// Clone, make initial commit, push
-	cloneDir := filepath.Join(dir, "clone")
-	if _, err := worktree.RunGit([]string{"clone", bareRepo, cloneDir}, ""); err != nil {
-		t.Fatalf("clone bare repo: %v", err)
-	}
-	worktree.RunGit([]string{"config", "user.email", "test@test.com"}, cloneDir)
-	worktree.RunGit([]string{"config", "user.name", "Test"}, cloneDir)
-
-	initFile := filepath.Join(cloneDir, "README.md")
-	if err := os.WriteFile(initFile, []byte("# Test\n"), 0o644); err != nil {
-		t.Fatalf("write init file: %v", err)
-	}
-	worktree.RunGit([]string{"add", "."}, cloneDir)
-	if _, err := worktree.RunGit([]string{"commit", "-m", "initial commit"}, cloneDir); err != nil {
-		t.Fatalf("initial commit: %v", err)
-	}
-	if _, err := worktree.RunGit([]string{"push", "origin", "HEAD"}, cloneDir); err != nil {
-		t.Fatalf("push initial commit: %v", err)
-	}
-
-	return bareRepo
-}
-
-// addWorktree creates a worktree with a new branch.
-func addWorktree(t *testing.T, bareRepo, branch, dir string) string {
-	t.Helper()
-	if _, err := worktree.RunGit([]string{"worktree", "add", "-b", branch, dir}, bareRepo); err != nil {
-		t.Fatalf("add worktree %s: %v", branch, err)
-	}
-	worktree.RunGit([]string{"config", "user.email", "test@test.com"}, dir)
-	worktree.RunGit([]string{"config", "user.name", "Test"}, dir)
-	return dir
-}
-
-// commitFile creates/overwrites a file and commits it.
-func commitFile(t *testing.T, wt, filename, content, message string) {
-	t.Helper()
-	fpath := filepath.Join(wt, filename)
-	if err := os.WriteFile(fpath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write file %s: %v", filename, err)
-	}
-	if _, err := worktree.RunGit([]string{"add", filename}, wt); err != nil {
-		t.Fatalf("git add %s: %v", filename, err)
-	}
-	if _, err := worktree.RunGit([]string{"commit", "-m", message}, wt); err != nil {
-		t.Fatalf("commit %s: %v", message, err)
-	}
-}
 
 // ---------------------------------------------------------------------------
 // Mock worktree client for retry tests
@@ -97,22 +35,22 @@ func (m *mockWorktreeClient) MergeBranch(sourceBranch, targetWorktree string) (*
 // ---------------------------------------------------------------------------
 
 func TestMergeAgentIntoFeature_CleanRebaseAndMerge(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	// Create feature worktree (integration branch)
 	featureDir := filepath.Join(dir, "feature")
-	addWorktree(t, bareRepo, "feature/test", featureDir)
+	testutil.AddWorktree(t, bareRepo, "feature/test", featureDir)
 
 	// Create agent worktree
 	agentDir := filepath.Join(dir, "agent")
-	addWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
+	testutil.AddWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
 
 	// Feature gets a commit on a different file
-	commitFile(t, featureDir, "feature-file.txt", "feature work\n", "feature commit")
+	testutil.CommitFile(t, featureDir, "feature-file.txt", "feature work\n", "feature commit")
 
 	// Agent gets a commit on a non-overlapping file
-	commitFile(t, agentDir, "agent-file.txt", "agent work\n", "agent commit")
+	testutil.CommitFile(t, agentDir, "agent-file.txt", "agent work\n", "agent commit")
 
 	mgr := worktree.NewManager(bareRepo, "main")
 	orch := NewOrchestrator(mgr, nil)
@@ -139,20 +77,20 @@ func TestMergeAgentIntoFeature_CleanRebaseAndMerge(t *testing.T) {
 }
 
 func TestMergeAgentIntoFeature_RebaseConflict(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	// Create feature worktree
 	featureDir := filepath.Join(dir, "feature")
-	addWorktree(t, bareRepo, "feature/test", featureDir)
+	testutil.AddWorktree(t, bareRepo, "feature/test", featureDir)
 
 	// Create agent worktree
 	agentDir := filepath.Join(dir, "agent")
-	addWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
+	testutil.AddWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
 
 	// Both modify the same file — conflicting changes
-	commitFile(t, featureDir, "shared.txt", "feature content\n", "feature change")
-	commitFile(t, agentDir, "shared.txt", "agent content\n", "agent change")
+	testutil.CommitFile(t, featureDir, "shared.txt", "feature content\n", "feature change")
+	testutil.CommitFile(t, agentDir, "shared.txt", "agent content\n", "agent change")
 
 	mgr := worktree.NewManager(bareRepo, "main")
 	orch := NewOrchestrator(mgr, nil)
@@ -207,18 +145,18 @@ func TestMergeAgentIntoFeature_RebaseConflict(t *testing.T) {
 }
 
 func TestMergeAgentIntoFeature_AgentWorktreeMissing(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	// Create feature worktree
 	featureDir := filepath.Join(dir, "feature")
-	addWorktree(t, bareRepo, "feature/test", featureDir)
+	testutil.AddWorktree(t, bareRepo, "feature/test", featureDir)
 
 	// Create agent worktree and commit, then remove the worktree
 	// but keep the branch (simulating worktree already cleaned up)
 	agentDir := filepath.Join(dir, "agent")
-	addWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
-	commitFile(t, agentDir, "agent-file.txt", "agent work\n", "agent commit")
+	testutil.AddWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
+	testutil.CommitFile(t, agentDir, "agent-file.txt", "agent work\n", "agent commit")
 
 	// Remove the worktree (but the branch and commits remain in the bare repo)
 	worktree.RunGit([]string{"worktree", "remove", agentDir, "--force"}, bareRepo)
@@ -387,18 +325,18 @@ func TestMergeWithRetry_HardErrorNoRetry(t *testing.T) {
 func TestMergeWithRetry_RebaseConflictNoRetry(t *testing.T) {
 	// When rebase has a real conflict, no merge or retry should be attempted.
 	// This test uses a real git repo to exercise the full rebase path.
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	featureDir := filepath.Join(dir, "feature")
-	addWorktree(t, bareRepo, "feature/test", featureDir)
+	testutil.AddWorktree(t, bareRepo, "feature/test", featureDir)
 
 	agentDir := filepath.Join(dir, "agent")
-	addWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
+	testutil.AddWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
 
 	// Create conflicting changes
-	commitFile(t, featureDir, "shared.txt", "feature line\n", "feature change")
-	commitFile(t, agentDir, "shared.txt", "agent line\n", "agent change")
+	testutil.CommitFile(t, featureDir, "shared.txt", "feature line\n", "feature change")
+	testutil.CommitFile(t, agentDir, "shared.txt", "agent line\n", "agent change")
 
 	mgr := worktree.NewManager(bareRepo, "main")
 

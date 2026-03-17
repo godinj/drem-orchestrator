@@ -5,91 +5,25 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
-// setupBareRepo creates a bare git repo with an initial commit in a temp dir.
-// Returns the bare repo path and a cleanup function.
-func setupBareRepo(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	bareRepo := filepath.Join(dir, "test.git")
-
-	// Init bare repo
-	if _, err := RunGit([]string{"init", "--bare", bareRepo}, ""); err != nil {
-		t.Fatalf("init bare repo: %v", err)
-	}
-
-	// Create a temporary clone to make an initial commit
-	cloneDir := filepath.Join(dir, "clone")
-	if _, err := RunGit([]string{"clone", bareRepo, cloneDir}, ""); err != nil {
-		t.Fatalf("clone bare repo: %v", err)
-	}
-
-	// Configure git user for commits
-	RunGit([]string{"config", "user.email", "test@test.com"}, cloneDir)
-	RunGit([]string{"config", "user.name", "Test"}, cloneDir)
-
-	// Create initial commit
-	initFile := filepath.Join(cloneDir, "README.md")
-	if err := os.WriteFile(initFile, []byte("# Test\n"), 0o644); err != nil {
-		t.Fatalf("write init file: %v", err)
-	}
-	RunGit([]string{"add", "."}, cloneDir)
-	if _, err := RunGit([]string{"commit", "-m", "initial commit"}, cloneDir); err != nil {
-		t.Fatalf("initial commit: %v", err)
-	}
-
-	// Push to bare repo
-	if _, err := RunGit([]string{"push", "origin", "HEAD"}, cloneDir); err != nil {
-		t.Fatalf("push initial commit: %v", err)
-	}
-
-	return bareRepo
-}
-
-// addWorktree creates a worktree from the bare repo with a new branch.
-// Returns the worktree path.
-func addWorktree(t *testing.T, bareRepo, branch, dir string) string {
-	t.Helper()
-	if _, err := RunGit([]string{"worktree", "add", "-b", branch, dir}, bareRepo); err != nil {
-		t.Fatalf("add worktree %s: %v", branch, err)
-	}
-	// Configure git user in the worktree
-	RunGit([]string{"config", "user.email", "test@test.com"}, dir)
-	RunGit([]string{"config", "user.name", "Test"}, dir)
-	return dir
-}
-
-// commitFile creates or overwrites a file and commits it in the given worktree.
-func commitFile(t *testing.T, worktree, filename, content, message string) {
-	t.Helper()
-	fpath := filepath.Join(worktree, filename)
-	if err := os.WriteFile(fpath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write file %s: %v", filename, err)
-	}
-	if _, err := RunGit([]string{"add", filename}, worktree); err != nil {
-		t.Fatalf("git add %s: %v", filename, err)
-	}
-	if _, err := RunGit([]string{"commit", "-m", message}, worktree); err != nil {
-		t.Fatalf("commit %s: %v", message, err)
-	}
-}
-
 func TestMergeBranch_EnrichedResult_OnConflict(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	// Create target worktree (simulates integration branch)
 	targetDir := filepath.Join(dir, "target")
-	addWorktree(t, bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Create source worktree (simulates agent branch)
 	sourceDir := filepath.Join(dir, "source")
-	addWorktree(t, bareRepo, "agent-source", sourceDir)
+	testutil.AddWorktree(t, bareRepo, "agent-source", sourceDir)
 
 	// Make conflicting changes to the same file in both worktrees
-	commitFile(t, targetDir, "conflict.txt", "target content\n", "target change")
-	commitFile(t, sourceDir, "conflict.txt", "source content\n", "source change")
+	testutil.CommitFile(t, targetDir, "conflict.txt", "target content\n", "target change")
+	testutil.CommitFile(t, sourceDir, "conflict.txt", "source content\n", "source change")
 
 	// Attempt merge
 	mgr := NewManager(bareRepo, "main")
@@ -140,18 +74,18 @@ func TestMergeBranch_EnrichedResult_OnConflict(t *testing.T) {
 }
 
 func TestMergeBranch_SuccessfulMerge(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	// Create target worktree
 	targetDir := filepath.Join(dir, "target")
-	addWorktree(t, bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Create source worktree with non-overlapping changes
 	sourceDir := filepath.Join(dir, "source")
-	addWorktree(t, bareRepo, "agent-source", sourceDir)
+	testutil.AddWorktree(t, bareRepo, "agent-source", sourceDir)
 
-	commitFile(t, sourceDir, "new-file.txt", "new content\n", "add new file")
+	testutil.CommitFile(t, sourceDir, "new-file.txt", "new content\n", "add new file")
 
 	// Merge should succeed
 	mgr := NewManager(bareRepo, "main")
@@ -184,17 +118,17 @@ func TestMergeBranch_SuccessfulMerge(t *testing.T) {
 }
 
 func TestMergeBranch_PreMergeFetchHappyPath(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	// Create target worktree
 	targetDir := filepath.Join(dir, "target")
-	addWorktree(t, bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Create source worktree with a commit
 	sourceDir := filepath.Join(dir, "source")
-	addWorktree(t, bareRepo, "agent-source", sourceDir)
-	commitFile(t, sourceDir, "file.txt", "content\n", "add file")
+	testutil.AddWorktree(t, bareRepo, "agent-source", sourceDir)
+	testutil.CommitFile(t, sourceDir, "file.txt", "content\n", "add file")
 
 	// The ref "agent-source" should be visible (same bare repo) so
 	// the pre-merge fetch step is skipped and the merge succeeds.
@@ -209,12 +143,12 @@ func TestMergeBranch_PreMergeFetchHappyPath(t *testing.T) {
 }
 
 func TestMergeBranch_UnresolvableBranch(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	// Create target worktree
 	targetDir := filepath.Join(dir, "target")
-	addWorktree(t, bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Attempt to merge a branch that doesn't exist
 	mgr := NewManager(bareRepo, "main")
@@ -228,20 +162,20 @@ func TestMergeBranch_UnresolvableBranch(t *testing.T) {
 }
 
 func TestRebaseBranch_CleanRebase(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	// Create target worktree (simulates integration branch)
 	targetDir := filepath.Join(dir, "target")
-	addWorktree(t, bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Create source worktree (simulates agent branch)
 	sourceDir := filepath.Join(dir, "source")
-	addWorktree(t, bareRepo, "agent-source", sourceDir)
+	testutil.AddWorktree(t, bareRepo, "agent-source", sourceDir)
 
 	// Make non-overlapping changes
-	commitFile(t, targetDir, "target-file.txt", "target content\n", "target change")
-	commitFile(t, sourceDir, "source-file.txt", "source content\n", "source change")
+	testutil.CommitFile(t, targetDir, "target-file.txt", "target content\n", "target change")
+	testutil.CommitFile(t, sourceDir, "source-file.txt", "source content\n", "source change")
 
 	// Rebase should succeed
 	result, err := RebaseBranch(sourceDir, targetDir)
@@ -266,20 +200,20 @@ func TestRebaseBranch_CleanRebase(t *testing.T) {
 }
 
 func TestRebaseBranch_Conflict(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	// Create target worktree
 	targetDir := filepath.Join(dir, "target")
-	addWorktree(t, bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Create source worktree
 	sourceDir := filepath.Join(dir, "source")
-	addWorktree(t, bareRepo, "agent-source", sourceDir)
+	testutil.AddWorktree(t, bareRepo, "agent-source", sourceDir)
 
 	// Make conflicting changes to the same file
-	commitFile(t, targetDir, "shared.txt", "target line\n", "target change")
-	commitFile(t, sourceDir, "shared.txt", "source line\n", "source change")
+	testutil.CommitFile(t, targetDir, "shared.txt", "target line\n", "target change")
+	testutil.CommitFile(t, sourceDir, "shared.txt", "source line\n", "source change")
 
 	// Record the source HEAD before rebase to verify rollback
 	headBefore, err := RunGit([]string{"rev-parse", "HEAD"}, sourceDir)
@@ -335,12 +269,12 @@ func TestRebaseBranch_Conflict(t *testing.T) {
 }
 
 func TestFindWorktreeByBranch_Found(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
 
 	// Create a worktree with a known branch
 	wtDir := filepath.Join(dir, "my-worktree")
-	addWorktree(t, bareRepo, "feature/test-find", wtDir)
+	testutil.AddWorktree(t, bareRepo, "feature/test-find", wtDir)
 
 	mgr := NewManager(bareRepo, "main")
 	path, err := mgr.FindWorktreeByBranch("feature/test-find")
@@ -354,7 +288,7 @@ func TestFindWorktreeByBranch_Found(t *testing.T) {
 }
 
 func TestFindWorktreeByBranch_NotFound(t *testing.T) {
-	bareRepo := setupBareRepo(t)
+	bareRepo := testutil.SetupBareRepo(t)
 
 	mgr := NewManager(bareRepo, "main")
 	_, err := mgr.FindWorktreeByBranch("nonexistent-branch")

@@ -10,37 +10,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
-
-// testDB creates an in-memory SQLite database with auto-migration.
-func testDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	if err != nil {
-		t.Fatalf("open test db: %v", err)
-	}
-	if err := db.AutoMigrate(
-		&model.Project{},
-		&model.Task{},
-		&model.Agent{},
-		&model.TaskEvent{},
-		&model.Memory{},
-		&model.TaskComment{},
-	); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
-	return db
-}
 
 // testOrchestrator creates an Orchestrator with a test DB and minimal
 // dependencies. The worktree manager and runner are set up with dummy paths.
@@ -151,7 +128,7 @@ func runGitCmd(t *testing.T, dir string, args ...string) string {
 // ---------------------------------------------------------------------------
 
 func TestIsWorkAlreadyMerged_NoAgent(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -165,7 +142,7 @@ func TestIsWorkAlreadyMerged_NoAgent(t *testing.T) {
 }
 
 func TestIsWorkAlreadyMerged_AgentNoBranch(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -199,7 +176,7 @@ func TestIsWorkAlreadyMerged_BranchIsAncestor(t *testing.T) {
 
 	featureDir := filepath.Join(bareRepoPath, "feature", featureName, "integration")
 
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -247,7 +224,7 @@ func TestIsWorkAlreadyMerged_BranchDiverged(t *testing.T) {
 	runGitCmd(t, agentDir, "add", ".")
 	runGitCmd(t, agentDir, "commit", "-m", "diverged commit")
 
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -277,7 +254,7 @@ func TestIsWorkAlreadyMerged_BranchDiverged(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckFeatureCompletion_AllDone(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -287,11 +264,11 @@ func TestCheckFeatureCompletion_AllDone(t *testing.T) {
 
 	parentID := uuid.New()
 	parent := model.Task{
-		ID:        parentID,
-		ProjectID: o.projectID,
-		Title:     "parent",
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent",
 		Description: "test parent",
-		Status:    model.StatusInProgress,
+		Status:      model.StatusInProgress,
 		// No WorktreeBranch — skip the file change check.
 	}
 	db.Create(&parent)
@@ -322,7 +299,7 @@ func TestCheckFeatureCompletion_AllDone(t *testing.T) {
 }
 
 func TestCheckFeatureCompletion_MixedFailedAndInProgress(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -373,7 +350,7 @@ func TestCheckFeatureCompletion_MixedFailedAndInProgress(t *testing.T) {
 }
 
 func TestCheckFeatureCompletion_AllTerminalSomeFailed(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -434,7 +411,7 @@ func TestCheckFeatureCompletion_AllTerminalSomeFailed(t *testing.T) {
 }
 
 func TestCheckFeatureCompletion_NoSubtasks(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -468,7 +445,7 @@ func TestCheckFeatureCompletion_NoSubtasks(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestReconcileStuckAgents_AgentInRunnerMap(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -531,7 +508,7 @@ func TestReconcileStuckAgents_AgentInRunnerMap(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestResolveFeatureWorktree(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/bare-repo.git", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -564,7 +541,7 @@ func TestResolveFeatureWorktree(t *testing.T) {
 }
 
 func TestResolveFeatureWorktree_NoParent(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/bare-repo.git", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -636,10 +613,10 @@ func TestTransitionTask_FailedToBacklog(t *testing.T) {
 
 func TestAgentRecordVerification_MissingAgent(t *testing.T) {
 	// This tests that the verification query works correctly.
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	project := model.Project{
-		ID:   uuid.New(),
-		Name: "test-verify",
+		ID:           uuid.New(),
+		Name:         "test-verify",
 		BareRepoPath: "/tmp/fake",
 	}
 	db.Create(&project)
@@ -664,10 +641,10 @@ func TestAgentRecordVerification_MissingAgent(t *testing.T) {
 }
 
 func TestAgentRecordVerification_AgentExists(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	project := model.Project{
-		ID:   uuid.New(),
-		Name: "test-verify",
+		ID:           uuid.New(),
+		Name:         "test-verify",
 		BareRepoPath: "/tmp/fake",
 	}
 	db.Create(&project)
