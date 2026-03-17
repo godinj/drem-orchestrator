@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/gorm"
 )
 
 // Project represents a top-level orchestrated repository.
@@ -18,14 +17,6 @@ type Project struct {
 	UpdatedAt     time.Time
 	Tasks         []Task  `gorm:"foreignKey:ProjectID"`
 	Agents        []Agent `gorm:"foreignKey:ProjectID"`
-}
-
-// BeforeCreate generates a UUID for a new Project if one is not already set.
-func (p *Project) BeforeCreate(_ *gorm.DB) error {
-	if p.ID == uuid.Nil {
-		p.ID = uuid.New()
-	}
-	return nil
 }
 
 // Task represents a unit of work tracked by the orchestrator.
@@ -57,14 +48,6 @@ type Task struct {
 	Comments        []TaskComment `gorm:"foreignKey:TaskID"`
 }
 
-// BeforeCreate generates a UUID for a new Task if one is not already set.
-func (t *Task) BeforeCreate(_ *gorm.DB) error {
-	if t.ID == uuid.Nil {
-		t.ID = uuid.New()
-	}
-	return nil
-}
-
 // Agent represents a Claude Code agent working on tasks.
 type Agent struct {
 	ID             uuid.UUID   `gorm:"type:text;primaryKey"`
@@ -83,14 +66,6 @@ type Agent struct {
 	UpdatedAt      time.Time
 }
 
-// BeforeCreate generates a UUID for a new Agent if one is not already set.
-func (a *Agent) BeforeCreate(_ *gorm.DB) error {
-	if a.ID == uuid.Nil {
-		a.ID = uuid.New()
-	}
-	return nil
-}
-
 // TaskEvent records a status change or other significant event on a task.
 type TaskEvent struct {
 	ID        uuid.UUID `gorm:"type:text;primaryKey"`
@@ -101,14 +76,6 @@ type TaskEvent struct {
 	Details   JSONField `gorm:"type:text"`
 	Actor     string    `gorm:"not null"`
 	CreatedAt time.Time
-}
-
-// BeforeCreate generates a UUID for a new TaskEvent if one is not already set.
-func (e *TaskEvent) BeforeCreate(_ *gorm.DB) error {
-	if e.ID == uuid.Nil {
-		e.ID = uuid.New()
-	}
-	return nil
 }
 
 // Memory stores agent memory fragments for context persistence and compaction.
@@ -122,14 +89,6 @@ type Memory struct {
 	CreatedAt  time.Time
 }
 
-// BeforeCreate generates a UUID for a new Memory if one is not already set.
-func (m *Memory) BeforeCreate(_ *gorm.DB) error {
-	if m.ID == uuid.Nil {
-		m.ID = uuid.New()
-	}
-	return nil
-}
-
 // TaskComment stores a user or system comment on a task, forming a
 // conversational thread that agents receive at spawn time.
 type TaskComment struct {
@@ -138,14 +97,6 @@ type TaskComment struct {
 	Author    string    `gorm:"not null"` // "user" or "system"
 	Body      string    `gorm:"not null"`
 	CreatedAt time.Time
-}
-
-// BeforeCreate generates a UUID for a new TaskComment if one is not already set.
-func (c *TaskComment) BeforeCreate(_ *gorm.DB) error {
-	if c.ID == uuid.Nil {
-		c.ID = uuid.New()
-	}
-	return nil
 }
 
 // SubtaskPlan is the plan item produced by planner agents during task

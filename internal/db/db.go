@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"reflect"
 
+	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -45,6 +47,8 @@ func Init(dbPath string, logPath ...string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("auto-migrate: %w", err)
 	}
 
+	registerUUIDCallback(db)
+
 	// Data migration: copy tmux_window → tmux_session for existing rows.
 	db.Exec("UPDATE agents SET tmux_session = tmux_window WHERE tmux_session = '' AND tmux_window != ''")
 
@@ -62,4 +66,29 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Memory{},
 		&model.TaskComment{},
 	)
+}
+
+// registerUUIDCallback registers a single GORM callback that generates UUIDs
+// for any model whose ID field is uuid.UUID and currently set to uuid.Nil.
+// This replaces per-model BeforeCreate hooks with one centralised check.
+func registerUUIDCallback(db *gorm.DB) {
+	db.Callback().Create().Before("gorm:create").Register("generate_uuid", func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Dest == nil {
+			return
+		}
+		val := reflect.ValueOf(tx.Statement.Dest)
+		if val.Kind() == reflect.Ptr {
+			val = val.Elem()
+		}
+		if val.Kind() != reflect.Struct {
+			return
+		}
+		idField := val.FieldByName("ID")
+		if !idField.IsValid() || idField.Type() != reflect.TypeOf(uuid.UUID{}) {
+			return
+		}
+		if idField.Interface().(uuid.UUID) == uuid.Nil {
+			idField.Set(reflect.ValueOf(uuid.New()))
+		}
+	})
 }
