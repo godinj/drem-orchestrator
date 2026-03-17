@@ -677,16 +677,9 @@ func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, work
 			usage.CompactionTriggered = true
 		}
 
-		if usage == nil {
-			continue
-		}
-
-		// Scan activity monitor alongside context usage.
+		// Scan activity monitor (independent of context usage).
 		r.mu.Lock()
 		ra, ok := r.running[agentID]
-		if ok {
-			ra.ContextUsage = usage
-		}
 		var actMon *agentmon.Monitor
 		if ok && ra.ActivityMon != nil {
 			actMon = ra.ActivityMon
@@ -708,11 +701,22 @@ func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, work
 			}
 		}
 
-		// Persist to DB Config field.
-		configUpdate := model.JSONField{
-			"context_used_pct":    usage.UsedPercent,
-			"context_window_size": usage.ContextWindowSize,
-			"total_cost_usd":      usage.TotalCostUSD,
+		// Update context usage in-memory state (may be nil if no data yet).
+		if usage != nil {
+			r.mu.Lock()
+			if ra, ok := r.running[agentID]; ok {
+				ra.ContextUsage = usage
+			}
+			r.mu.Unlock()
+		}
+
+		// Persist to DB Config field. Always write activity if available;
+		// only write context fields when usage data exists.
+		configUpdate := model.JSONField{}
+		if usage != nil {
+			configUpdate["context_used_pct"] = usage.UsedPercent
+			configUpdate["context_window_size"] = usage.ContextWindowSize
+			configUpdate["total_cost_usd"] = usage.TotalCostUSD
 		}
 		if activity != nil {
 			configUpdate["activity_tool"] = activity.LastTool
@@ -722,6 +726,9 @@ func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, work
 			configUpdate["activity_phase"] = activity.Phase
 			configUpdate["activity_file_progress"] = activity.FileProgress
 			configUpdate["activity_stuck_score"] = activity.StuckScore
+		}
+		if len(configUpdate) == 0 {
+			continue
 		}
 		r.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("config", configUpdate)
 	}
