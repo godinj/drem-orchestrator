@@ -142,6 +142,67 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		return nil
 	}
 
+	// After merge succeeded, check constraints on the feature worktree.
+	// Use file-based constraints only (no commands) for speed.
+	if merged && featureBranch != "" {
+		fn := strings.TrimPrefix(featureBranch, "feature/")
+		featureDir := o.worktree.FeatureWorktreePath(fn)
+
+		constraintCfg, cfgErr := constraints.LoadConfig(featureDir)
+		if cfgErr != nil {
+			o.logger.Warn("constraint config load failed after merge",
+				"agent_id", ag.ID, "error", cfgErr)
+		} else if constraintCfg != nil {
+			// Get the files this agent changed.
+			changedFiles, chErr := worktree.GetChangedFiles(featureDir, o.worktree.DefaultBranch)
+			if chErr != nil {
+				o.logger.Warn("failed to get changed files for constraint check",
+					"agent_id", ag.ID, "error", chErr)
+			} else if len(changedFiles) > 0 {
+				report, evalErr := constraints.EvaluateFiles(constraintCfg, featureDir, changedFiles)
+				if evalErr != nil {
+					o.logger.Warn("constraint evaluation failed",
+						"agent_id", ag.ID, "error", evalErr)
+				} else if report.Failed > 0 {
+					// Constraint violation — fail the subtask with feedback.
+					o.logger.Warn("constraint violations after agent merge",
+						"agent_id", ag.ID, "task_id", task.ID,
+						"failed", report.Failed)
+
+					// Store violations in task context for visibility.
+					if task.Context == nil {
+						task.Context = make(model.JSONField)
+					}
+					task.Context["constraint_violations"] = constraints.FormatReport(report)
+
+					// Fail the subtask so it can be retried with constraint feedback.
+					ag.Status = model.AgentIdle
+					ag.CurrentTaskID = nil
+					if err := o.db.Save(ag).Error; err != nil {
+						return fmt.Errorf("on agent completed: save agent after constraint fail: %w", err)
+					}
+					evt, err := state.TransitionTask(task, model.StatusFailed, "orchestrator",
+						map[string]any{
+							"reason":     "constraint violations after merge",
+							"violations": constraints.FormatReport(report),
+						})
+					if err != nil {
+						o.logger.Warn("failed to transition task after constraint violation",
+							"task_id", task.ID, "error", err)
+						return nil
+					}
+					if err := o.db.Save(task).Error; err != nil {
+						return fmt.Errorf("on agent completed: save task after constraint fail: %w", err)
+					}
+					if err := o.db.Create(evt).Error; err != nil {
+						return fmt.Errorf("on agent completed: save constraint-fail event: %w", err)
+					}
+					return nil
+				}
+			}
+		}
+	}
+
 	// Merge succeeded — clean up agent worktree.
 	if ag.WorktreeBranch != "" {
 		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
