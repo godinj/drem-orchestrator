@@ -1,8 +1,6 @@
 package prompt
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,7 +16,7 @@ func TestPlannerInstructionsContainsNewSections(t *testing.T) {
 		"## Integration Subtask",
 		"## Decomposition Rules",
 		"## File Overlap",
-		"### Test Subtask Requirements",
+		"## Test Subtasks",
 	}
 
 	for _, header := range requiredHeaders {
@@ -90,8 +88,8 @@ func TestPlannerInstructionsTestSubtasksContent(t *testing.T) {
 	output := strings.Join(sections, "\n")
 
 	keyContent := []string{
-		"test subtasks -> HUMAN REVIEW -> implementation subtasks -> integration subtask",
-		"### Test Subtask Requirements",
+		"Depend on ALL implementation subtasks",
+		"implementation subtasks -> test subtask -> integration subtask",
 	}
 
 	for _, c := range keyContent {
@@ -101,348 +99,621 @@ func TestPlannerInstructionsTestSubtasksContent(t *testing.T) {
 	}
 }
 
-func TestResearcherInstructions(t *testing.T) {
-	sections := researcherInstructions()
-	if len(sections) == 0 {
-		t.Fatal("researcherInstructions() returned empty slice")
-	}
-
-	output := strings.Join(sections, "\n")
-
-	expected := []string{
-		"researcher agent",
-		"Investigate",
-		"research-report.md",
-		"Summary of findings",
-		"Detailed analysis",
-		"Recommendations",
-	}
-
-	for _, phrase := range expected {
-		if !strings.Contains(output, phrase) {
-			t.Errorf("researcherInstructions() missing expected phrase: %q", phrase)
-		}
-	}
-}
-
-func TestFixerInstructions(t *testing.T) {
-	opts := Opts{
-		Diagnosis:     "nil pointer dereference in handler.go line 42",
-		AffectedFiles: []string{"internal/handler.go", "internal/handler_test.go"},
-		SuggestedFix:  "Add nil check before accessing request.Body",
-	}
-
-	sections := fixerInstructions(opts)
-	if len(sections) == 0 {
-		t.Fatal("fixerInstructions() returned empty slice")
-	}
-
-	output := strings.Join(sections, "\n")
-
-	// Verify fixer-specific directives.
-	fixerPhrases := []string{
-		"fixer agent",
-		"targeted fix",
-		"Apply ONLY the fix",
-		"minimal",
-	}
-	for _, phrase := range fixerPhrases {
-		if !strings.Contains(output, phrase) {
-			t.Errorf("fixerInstructions() missing fixer directive: %q", phrase)
-		}
-	}
-
-	// Verify opts context is included.
-	if !strings.Contains(output, opts.Diagnosis) {
-		t.Error("fixerInstructions() missing diagnosis from opts")
-	}
-	for _, f := range opts.AffectedFiles {
-		if !strings.Contains(output, f) {
-			t.Errorf("fixerInstructions() missing affected file: %q", f)
-		}
-	}
-	if !strings.Contains(output, opts.SuggestedFix) {
-		t.Error("fixerInstructions() missing suggested fix from opts")
-	}
-}
-
-func TestFixerInstructionsEmptyOpts(t *testing.T) {
-	sections := fixerInstructions(Opts{})
-	if len(sections) == 0 {
-		t.Fatal("fixerInstructions() with empty opts returned empty slice")
-	}
-
-	output := strings.Join(sections, "\n")
-
-	// Should still contain base fixer directives even with empty opts.
-	if !strings.Contains(output, "fixer agent") {
-		t.Error("fixerInstructions() with empty opts missing 'fixer agent'")
-	}
-	// Should not contain Diagnosis/Affected/Suggested headers when empty.
-	if strings.Contains(output, "## Diagnosis") {
-		t.Error("fixerInstructions() with empty opts should not include Diagnosis section")
-	}
-}
-
-func TestDefaultInstructions(t *testing.T) {
-	sections := defaultInstructions()
-	if len(sections) == 0 {
-		t.Fatal("defaultInstructions() returned empty slice")
-	}
-
-	output := strings.Join(sections, "\n")
-
-	if !strings.Contains(output, "Complete the task") {
-		t.Error("defaultInstructions() missing generic fallback guidance")
-	}
-	if !strings.Contains(output, "Commit your changes") {
-		t.Error("defaultInstructions() missing commit instruction")
-	}
-}
-
-func TestReadBuildCommands(t *testing.T) {
-	tests := []struct {
-		name     string
-		setup    func(t *testing.T) string // returns worktree path
-		contains string                    // expected substring in result
-		empty    bool                      // expect empty result
-	}{
-		{
-			name: "go project with CLAUDE.md",
-			setup: func(t *testing.T) string {
-				t.Helper()
-				dir := t.TempDir()
-				content := "# My Project\n\n## Build\n\n```bash\ngo build ./...\ngo test ./...\n```\n"
-				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0644); err != nil {
-					t.Fatal(err)
-				}
-				return dir
-			},
-			contains: "go build",
-		},
-		{
-			name: "makefile project",
-			setup: func(t *testing.T) string {
-				t.Helper()
-				dir := t.TempDir()
-				content := "# Project\n\n```bash\nmake build\nmake test\n```\n"
-				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0644); err != nil {
-					t.Fatal(err)
-				}
-				return dir
-			},
-			contains: "make",
-		},
-		{
-			name: "npm project",
-			setup: func(t *testing.T) string {
-				t.Helper()
-				dir := t.TempDir()
-				content := "# Node Project\n\n```bash\nnpm install\nnpm test\n```\n"
-				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0644); err != nil {
-					t.Fatal(err)
-				}
-				return dir
-			},
-			contains: "npm",
-		},
-		{
-			name: "empty directory without CLAUDE.md",
-			setup: func(t *testing.T) string {
-				t.Helper()
-				return t.TempDir()
-			},
-			empty: true,
-		},
-		{
-			name: "nonexistent directory",
-			setup: func(t *testing.T) string {
-				t.Helper()
-				return "/nonexistent/path/that/does/not/exist"
-			},
-			empty: true,
-		},
-		{
-			name: "empty worktree path",
-			setup: func(t *testing.T) string {
-				t.Helper()
-				return ""
-			},
-			empty: true,
-		},
-		{
-			name: "CLAUDE.md without bash block",
-			setup: func(t *testing.T) string {
-				t.Helper()
-				dir := t.TempDir()
-				content := "# Project\n\nNo code blocks here.\n"
-				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0644); err != nil {
-					t.Fatal(err)
-				}
-				return dir
-			},
-			empty: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			path := tc.setup(t)
-			result := readBuildCommands(path)
-
-			if tc.empty {
-				if result != "" {
-					t.Errorf("readBuildCommands() = %q, want empty string", result)
-				}
-				return
-			}
-			if !strings.Contains(result, tc.contains) {
-				t.Errorf("readBuildCommands() = %q, want substring %q", result, tc.contains)
-			}
-		})
-	}
-}
-
-// helper builds a minimal Opts for Generate tests.
-func minimalOpts(agentType model.AgentType) Opts {
+// minimalOpts returns a basic Opts struct suitable for testing.
+func minimalOpts() Opts {
 	return Opts{
-		AgentType: agentType,
 		Task: &model.Task{
-			Title:       "Test task",
-			Description: "A task for testing prompt generation",
+			Title:       "Test Task",
+			Description: "A test task description",
 		},
 		Project: &model.Project{
 			Name:         "test-project",
-			BareRepoPath: "/tmp/test.git",
+			BareRepoPath: "/tmp/test-repo.git",
 		},
+		AgentType:    model.AgentCoder,
 		WorktreePath: "/tmp/worktrees/test-branch",
 	}
 }
 
-func TestGenerate_Planner(t *testing.T) {
-	result := Generate(minimalOpts(model.AgentPlanner))
+// ── 1. coderInstructions dispatch ──────────────────────────────────────────
 
-	if result == "" {
-		t.Fatal("Generate() returned empty string for planner")
+func TestGenerate_CoderDefaultPhase(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentCoder
+	output := Generate(opts)
+
+	if !strings.Contains(output, "Implement the described task") {
+		t.Error("expected default coder instructions containing 'Implement the described task'")
+	}
+}
+
+func TestGenerate_CoderIntegrationPhase(t *testing.T) {
+	// With no phase-specific dispatch, the coder should use default instructions.
+	opts := minimalOpts()
+	opts.AgentType = model.AgentCoder
+	output := Generate(opts)
+
+	if !strings.Contains(output, "Implement the described task") {
+		t.Error("expected default coder instructions for unknown phase")
+	}
+}
+
+// ── 2. coderInstructions detail tests ──────────────────────────────────────
+
+func TestGenerate_CoderWithEstimatedFiles(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentCoder
+	opts.Task.Context = model.JSONField{
+		"estimated_files": []any{"foo_test.go", "bar.go"},
+	}
+	output := Generate(opts)
+
+	if !strings.Contains(output, "foo_test.go") {
+		t.Error("expected estimated file 'foo_test.go' in output")
+	}
+	if !strings.Contains(output, "bar.go") {
+		t.Error("expected estimated file 'bar.go' in output")
+	}
+}
+
+func TestGenerate_CoderWithTestPlan(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentCoder
+	opts.Task.TestPlan = "Test X and Y"
+	output := Generate(opts)
+
+	if !strings.Contains(output, "## Test Plan") {
+		t.Error("expected '## Test Plan' section header")
+	}
+	if !strings.Contains(output, "Test X and Y") {
+		t.Error("expected test plan content 'Test X and Y' in output")
+	}
+}
+
+func TestGenerate_CoderNoEstimatedFiles(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentCoder
+	// No context set
+	output := Generate(opts)
+
+	if !strings.Contains(output, "Implement the described task") {
+		t.Error("expected default coder instructions")
+	}
+	if strings.Contains(output, "Files to create/modify") {
+		t.Error("did not expect 'Files to create/modify' when no estimated files set")
+	}
+}
+
+func TestGenerate_DefaultCoder_WithEstimatedFiles(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentCoder
+	opts.Task.Context = model.JSONField{
+		"estimated_files": []any{"main.go"},
+	}
+	output := Generate(opts)
+
+	if !strings.Contains(output, "main.go") {
+		t.Error("expected 'main.go' in output when set as estimated file")
+	}
+}
+
+func TestGenerate_DefaultCoder_WithTestPlan(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentCoder
+	opts.Task.TestPlan = "Run go test"
+	output := Generate(opts)
+
+	if !strings.Contains(output, "Run go test") {
+		t.Error("expected test plan 'Run go test' in output")
+	}
+}
+
+// ── 3. reviewerInstructions dispatch ───────────────────────────────────────
+
+func TestGenerate_PlanReviewer(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentReviewer
+	opts.ReviewMode = "plan"
+	opts.PlanJSON = `{"subtasks": []}`
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "plan reviewer") {
+		t.Error("expected 'plan reviewer' in output")
+	}
+	if !strings.Contains(output, "Review Criteria") {
+		t.Error("expected 'Review Criteria' section")
+	}
+	if !strings.Contains(output, `{"subtasks": []}`) {
+		t.Error("expected plan JSON in output")
+	}
+}
+
+func TestGenerate_FeatureReviewer(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentReviewer
+	opts.ReviewMode = "feature"
+	opts.GitDiff = "+added line"
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "feature reviewer") {
+		t.Error("expected 'feature reviewer' in output")
+	}
+	if !strings.Contains(output, "+added line") {
+		t.Error("expected diff content in output")
+	}
+}
+
+// ── 4. planReviewerInstructions details ────────────────────────────────────
+
+func TestGenerate_PlanReviewer_ReviewCriteria(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentReviewer
+	opts.ReviewMode = "plan"
+	opts.PlanJSON = `{}`
+
+	output := Generate(opts)
+
+	criteria := []string{
+		"Coverage",
+		"File overlap",
+		"Integration",
+		"Decomposition quality",
+		"Dependency correctness",
 	}
 
-	expected := []string{
-		"planner",
-		"Test task",
-		"plan.json",
-		"## Instructions",
-		"test-project",
-	}
-
-	for _, phrase := range expected {
-		if !strings.Contains(result, phrase) {
-			t.Errorf("Generate(planner) missing expected phrase: %q", phrase)
+	for _, c := range criteria {
+		if !strings.Contains(output, c) {
+			t.Errorf("expected review criterion %q in output", c)
 		}
 	}
 }
 
-func TestGenerate_Coder(t *testing.T) {
-	result := Generate(minimalOpts(model.AgentCoder))
+func TestGenerate_PlanReviewer_OutputSchema(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentReviewer
+	opts.ReviewMode = "plan"
+	opts.PlanJSON = `{}`
 
-	if result == "" {
-		t.Fatal("Generate() returned empty string for coder")
+	output := Generate(opts)
+
+	schemaKeys := []string{
+		"coverage",
+		"recommendation",
 	}
 
-	expected := []string{
-		"coder",
-		"Test task",
-		"## Instructions",
-		"Implement",
-		"Commit your changes",
-	}
-
-	for _, phrase := range expected {
-		if !strings.Contains(result, phrase) {
-			t.Errorf("Generate(coder) missing expected phrase: %q", phrase)
+	for _, k := range schemaKeys {
+		if !strings.Contains(output, k) {
+			t.Errorf("expected JSON schema key %q in output", k)
 		}
 	}
 }
 
-func TestGenerate_Researcher(t *testing.T) {
-	result := Generate(minimalOpts(model.AgentResearcher))
+func TestGenerate_PlanReviewer_NoPlanJSON(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentReviewer
+	opts.ReviewMode = "plan"
+	opts.PlanJSON = "" // No plan JSON
 
-	if result == "" {
-		t.Fatal("Generate() returned empty string for researcher")
+	output := Generate(opts)
+
+	// The "## Plan" section should not appear when PlanJSON is empty.
+	if strings.Contains(output, "## Plan\n") {
+		t.Error("did not expect '## Plan' section when PlanJSON is empty")
+	}
+}
+
+// ── 5. featureReviewerInstructions details ─────────────────────────────────
+
+func TestGenerate_FeatureReviewer_DiffTruncation(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentReviewer
+	opts.ReviewMode = "feature"
+	// Create a diff longer than 50000 characters.
+	opts.GitDiff = strings.Repeat("a", 50001)
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "truncated") {
+		t.Error("expected 'truncated' marker in output for large diff")
+	}
+}
+
+func TestGenerate_FeatureReviewer_NoDiff(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentReviewer
+	opts.ReviewMode = "feature"
+	opts.GitDiff = "" // No diff
+
+	output := Generate(opts)
+
+	if strings.Contains(output, "## Changes") {
+		t.Error("did not expect '## Changes' section when no diff provided")
+	}
+}
+
+func TestGenerate_FeatureReviewer_OutputSchema(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentReviewer
+	opts.ReviewMode = "feature"
+	opts.GitDiff = "+some change"
+
+	output := Generate(opts)
+
+	schemaKeys := []string{
+		"criteria_results",
+		"recommendation",
 	}
 
-	expected := []string{
-		"researcher",
-		"Test task",
-		"research-report.md",
-		"Investigate",
-	}
-
-	for _, phrase := range expected {
-		if !strings.Contains(result, phrase) {
-			t.Errorf("Generate(researcher) missing expected phrase: %q", phrase)
+	for _, k := range schemaKeys {
+		if !strings.Contains(output, k) {
+			t.Errorf("expected JSON schema key %q in feature review output", k)
 		}
 	}
 }
 
-func TestGenerate_DefaultAgent(t *testing.T) {
-	opts := minimalOpts("unknown")
-	result := Generate(opts)
+// ── 6. Generate() conditional sections ─────────────────────────────────────
 
-	if result == "" {
-		t.Fatal("Generate() returned empty string for unknown agent type")
+func TestGenerate_WithComments(t *testing.T) {
+	opts := minimalOpts()
+	opts.Comments = []model.TaskComment{
+		{Author: "user", Body: "Please add logging"},
+		{Author: "system", Body: "Build failed on retry 2"},
 	}
 
-	if !strings.Contains(result, "Complete the task") {
-		t.Error("Generate(unknown) missing default instructions")
-	}
-}
+	output := Generate(opts)
 
-func TestGenerate_WithMemories(t *testing.T) {
-	opts := minimalOpts(model.AgentCoder)
-	opts.Memories = []model.Memory{
-		{MemoryType: "lesson", Content: "Always check nil pointers"},
+	if !strings.Contains(output, "## User Feedback Comments") {
+		t.Error("expected '## User Feedback Comments' section header")
 	}
-
-	result := Generate(opts)
-
-	if !strings.Contains(result, "## Prior Context") {
-		t.Error("Generate() with memories missing Prior Context section")
+	if !strings.Contains(output, "Please add logging") {
+		t.Error("expected first comment body in output")
 	}
-	if !strings.Contains(result, "Always check nil pointers") {
-		t.Error("Generate() with memories missing memory content")
+	if !strings.Contains(output, "Build failed on retry 2") {
+		t.Error("expected second comment body in output")
 	}
 }
 
-func TestGenerate_WithBuildCommands(t *testing.T) {
-	dir := t.TempDir()
-	content := "# Project\n\n```bash\ngo test ./...\n```\n"
-	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0644); err != nil {
-		t.Fatal(err)
+func TestGenerate_WithParentCtx(t *testing.T) {
+	opts := minimalOpts()
+	opts.ParentCtx = map[string]any{
+		"parent_goal": "Implement feature X",
 	}
 
-	opts := minimalOpts(model.AgentCoder)
-	opts.WorktreePath = dir
+	output := Generate(opts)
 
-	result := Generate(opts)
-
-	if !strings.Contains(result, "## Build & Verify") {
-		t.Error("Generate() with CLAUDE.md missing Build & Verify section")
+	if !strings.Contains(output, "## Parent Task Context") {
+		t.Error("expected '## Parent Task Context' section header")
 	}
-	if !strings.Contains(result, "go test") {
-		t.Error("Generate() with CLAUDE.md missing build commands")
+	if !strings.Contains(output, "Implement feature X") {
+		t.Error("expected parent context value in output")
+	}
+}
+
+func TestGenerate_WithPromptAdjustment(t *testing.T) {
+	opts := minimalOpts()
+	opts.Task.Context = model.JSONField{
+		"prompt_adjustment": "try a different approach",
+	}
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "## Additional Guidance from Prior Attempt") {
+		t.Error("expected '## Additional Guidance from Prior Attempt' section header")
+	}
+	if !strings.Contains(output, "try a different approach") {
+		t.Error("expected prompt adjustment text in output")
+	}
+}
+
+func TestGenerate_WithTaskContext(t *testing.T) {
+	opts := minimalOpts()
+	opts.Task.Context = model.JSONField{
+		"retry_count": 2,
+	}
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "## Additional Context") {
+		t.Error("expected '## Additional Context' section header")
+	}
+	if !strings.Contains(output, "retry_count") {
+		t.Error("expected context key 'retry_count' in output")
 	}
 }
 
 func TestGenerate_ReviewerCompletion(t *testing.T) {
-	opts := minimalOpts(model.AgentReviewer)
+	opts := minimalOpts()
+	opts.AgentType = model.AgentReviewer
 	opts.ReviewMode = "feature"
 
-	result := Generate(opts)
+	output := Generate(opts)
 
-	if !strings.Contains(result, "review.json") {
-		t.Error("Generate(reviewer) missing review.json in completion")
+	if !strings.Contains(output, "review.json") {
+		t.Error("expected 'review.json' in reviewer completion section")
 	}
-	if !strings.Contains(result, "Do NOT commit") {
-		t.Error("Generate(reviewer) missing 'Do NOT commit' instruction")
+	if strings.Contains(output, "commit all changes") {
+		t.Error("reviewer should not be told to commit changes")
+	}
+}
+
+func TestGenerate_NonReviewerCompletion(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentCoder
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "commit all changes") {
+		t.Error("non-reviewer should be told to commit changes")
+	}
+	if strings.Contains(output, "review.json") {
+		t.Error("non-reviewer should not mention review.json")
+	}
+}
+
+// ── 7. Generate() role and project sections ────────────────────────────────
+
+func TestGenerate_RoleAndTask(t *testing.T) {
+	opts := minimalOpts()
+	output := Generate(opts)
+
+	if !strings.Contains(output, "# Agent Task: Test Task") {
+		t.Error("expected task title in header")
+	}
+	if !strings.Contains(output, "**coder** agent") {
+		t.Error("expected agent type in role description")
+	}
+}
+
+func TestGenerate_ProjectContext(t *testing.T) {
+	opts := minimalOpts()
+	output := Generate(opts)
+
+	if !strings.Contains(output, "## Project Context") {
+		t.Error("expected '## Project Context' section")
+	}
+	if !strings.Contains(output, "test-project") {
+		t.Error("expected project name in output")
+	}
+	if !strings.Contains(output, "/tmp/test-repo.git") {
+		t.Error("expected bare repo path in output")
+	}
+}
+
+func TestGenerate_ProjectContextWithDescription(t *testing.T) {
+	opts := minimalOpts()
+	opts.Project.Description = "A test orchestrator project"
+	output := Generate(opts)
+
+	if !strings.Contains(output, "A test orchestrator project") {
+		t.Error("expected project description in output")
+	}
+}
+
+func TestGenerate_NilProject(t *testing.T) {
+	opts := minimalOpts()
+	opts.Project = nil
+	output := Generate(opts)
+
+	if strings.Contains(output, "## Project Context") {
+		t.Error("did not expect '## Project Context' section with nil project")
+	}
+}
+
+func TestGenerate_WorktreeInfo(t *testing.T) {
+	opts := minimalOpts()
+	output := Generate(opts)
+
+	if !strings.Contains(output, "## Working Environment") {
+		t.Error("expected '## Working Environment' section")
+	}
+	if !strings.Contains(output, "/tmp/worktrees/test-branch") {
+		t.Error("expected worktree path in output")
+	}
+	if !strings.Contains(output, "test-branch") {
+		t.Error("expected branch name derived from worktree path")
+	}
+}
+
+func TestGenerate_ScopeSection(t *testing.T) {
+	opts := minimalOpts()
+	output := Generate(opts)
+
+	if !strings.Contains(output, "## Scope") {
+		t.Error("expected '## Scope' section")
+	}
+	if !strings.Contains(output, "Only modify files directly relevant") {
+		t.Error("expected scope limitation text")
+	}
+}
+
+// ── 8. Agent-type specific Generate dispatch ───────────────────────────────
+
+func TestGenerate_PlannerDispatch(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentPlanner
+	output := Generate(opts)
+
+	if !strings.Contains(output, "You are a planner agent") {
+		t.Error("expected planner instructions in output")
+	}
+}
+
+func TestGenerate_ResearcherDispatch(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentResearcher
+	output := Generate(opts)
+
+	if !strings.Contains(output, "You are a researcher agent") {
+		t.Error("expected researcher instructions in output")
+	}
+	if !strings.Contains(output, "research-report.md") {
+		t.Error("expected research-report.md reference in output")
+	}
+}
+
+func TestGenerate_FixerDispatch(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentFixer
+	opts.Diagnosis = "Nil pointer in handler"
+	opts.AffectedFiles = []string{"internal/handler.go"}
+	opts.SuggestedFix = "Add nil check before dereference"
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "You are a fixer agent") {
+		t.Error("expected fixer instructions in output")
+	}
+	if !strings.Contains(output, "Nil pointer in handler") {
+		t.Error("expected diagnosis in output")
+	}
+	if !strings.Contains(output, "internal/handler.go") {
+		t.Error("expected affected file in output")
+	}
+	if !strings.Contains(output, "Add nil check before dereference") {
+		t.Error("expected suggested fix in output")
+	}
+}
+
+func TestGenerate_DefaultAgentDispatch(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentType("unknown")
+	output := Generate(opts)
+
+	if !strings.Contains(output, "Complete the task as described above") {
+		t.Error("expected default instructions for unknown agent type")
+	}
+}
+
+// ── 9. Fixer instructions details ──────────────────────────────────────────
+
+func TestGenerate_FixerNoDiagnosis(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentFixer
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "You are a fixer agent") {
+		t.Error("expected fixer instructions")
+	}
+	if strings.Contains(output, "## Diagnosis") {
+		t.Error("did not expect '## Diagnosis' section when no diagnosis provided")
+	}
+}
+
+func TestGenerate_FixerNoAffectedFiles(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentFixer
+	opts.Diagnosis = "Some issue"
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "## Diagnosis") {
+		t.Error("expected '## Diagnosis' section")
+	}
+	if strings.Contains(output, "## Affected Files") {
+		t.Error("did not expect '## Affected Files' when none provided")
+	}
+}
+
+func TestGenerate_FixerNoSuggestedFix(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentFixer
+	opts.Diagnosis = "Some issue"
+	opts.AffectedFiles = []string{"file.go"}
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "## Affected Files") {
+		t.Error("expected '## Affected Files' section")
+	}
+	if strings.Contains(output, "## Suggested Fix") {
+		t.Error("did not expect '## Suggested Fix' when none provided")
+	}
+}
+
+// ── 10. Memories section ───────────────────────────────────────────────────
+
+func TestGenerate_WithMemories(t *testing.T) {
+	opts := minimalOpts()
+	opts.Memories = []model.Memory{
+		{MemoryType: "context", Content: "Previously explored the API design"},
+		{MemoryType: "lesson", Content: "Tests must run before commit"},
+	}
+
+	output := Generate(opts)
+
+	if !strings.Contains(output, "## Prior Context") {
+		t.Error("expected '## Prior Context' section")
+	}
+	if !strings.Contains(output, "Previously explored the API design") {
+		t.Error("expected first memory content in output")
+	}
+	if !strings.Contains(output, "Tests must run before commit") {
+		t.Error("expected second memory content in output")
+	}
+}
+
+func TestGenerate_NoMemories(t *testing.T) {
+	opts := minimalOpts()
+	output := Generate(opts)
+
+	if strings.Contains(output, "## Prior Context") {
+		t.Error("did not expect '## Prior Context' section with no memories")
+	}
+}
+
+// ── 11. prompt_adjustment is excluded from Additional Context ──────────────
+
+func TestGenerate_PromptAdjustmentExcludedFromContext(t *testing.T) {
+	opts := minimalOpts()
+	opts.Task.Context = model.JSONField{
+		"prompt_adjustment": "try harder",
+		"other_key":         "other_value",
+	}
+
+	output := Generate(opts)
+
+	// prompt_adjustment should appear in its own section, not under Additional Context.
+	if !strings.Contains(output, "## Additional Guidance from Prior Attempt") {
+		t.Error("expected prompt adjustment in its own section")
+	}
+
+	// The Additional Context section should contain other_key but not prompt_adjustment as a key.
+	lines := strings.Split(output, "\n")
+	inAdditionalCtx := false
+	inGuidance := false
+	for _, line := range lines {
+		if strings.Contains(line, "## Additional Context") {
+			inAdditionalCtx = true
+			inGuidance = false
+		} else if strings.Contains(line, "## Additional Guidance") {
+			inGuidance = true
+			inAdditionalCtx = false
+		} else if strings.HasPrefix(line, "## ") {
+			inAdditionalCtx = false
+			inGuidance = false
+		}
+		if inAdditionalCtx && strings.Contains(line, "prompt_adjustment") {
+			t.Error("prompt_adjustment should not appear under Additional Context")
+		}
+	}
+	_ = inGuidance
+}
+
+// ── 12. readBuildCommands ──────────────────────────────────────────────────
+
+func TestReadBuildCommands_EmptyPath(t *testing.T) {
+	result := readBuildCommands("")
+	if result != "" {
+		t.Error("expected empty string for empty worktree path")
+	}
+}
+
+func TestReadBuildCommands_NonexistentPath(t *testing.T) {
+	result := readBuildCommands("/nonexistent/path")
+	if result != "" {
+		t.Error("expected empty string for nonexistent worktree path")
 	}
 }
