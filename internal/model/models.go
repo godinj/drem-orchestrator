@@ -44,8 +44,6 @@ type Task struct {
 	PlanFeedback    string
 	TestPlan        string
 	TestFeedback    string
-	Phase           string // "test", "implementation", "integration", or ""
-	TestsFor        *uuid.UUID `gorm:"type:text"` // links impl subtask to its test subtask
 	WorktreeBranch  string
 	PRUrl           string
 	// TDD fields (used for subtasks)
