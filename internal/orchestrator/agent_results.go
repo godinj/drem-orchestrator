@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
@@ -257,6 +258,27 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 		o.logger.Warn("plan validation: failed to parse stored plan", "task_id", task.ID, "error", parseErr)
 	} else {
 		validation := ValidatePlan(planResult.Subtasks, planResult.TDDExceptions)
+
+		// Check plan against project constraints (grandfathered files, ceilings).
+		constraintCfg, cfgErr := constraints.LoadConfig(ag.WorktreePath)
+		if cfgErr != nil {
+			o.logger.Warn("constraint config load failed", "task_id", task.ID, "error", cfgErr)
+		} else if constraintCfg != nil {
+			// Use feature worktree for near-limit checks (integration branch has latest state).
+			featureDir := ""
+			if task.WorktreeBranch != "" {
+				fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+				featureDir = o.worktree.FeatureWorktreePath(fn)
+			}
+			constraintResult := ValidatePlanConstraints(planResult.Subtasks, constraintCfg, featureDir)
+			// Merge constraint warnings into the existing validation result.
+			validation.Warnings = append(validation.Warnings, constraintResult.Warnings...)
+			validation.Errors = append(validation.Errors, constraintResult.Errors...)
+			if len(constraintResult.Errors) > 0 {
+				validation.Valid = false
+			}
+		}
+
 		// Store validation result in task context for TUI display.
 		if task.Context == nil {
 			task.Context = make(model.JSONField)
