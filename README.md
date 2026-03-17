@@ -340,6 +340,160 @@ bash scripts/check_constitution.sh
 - Table-driven tests
 - Exported functions have doc comments
 
+## Self-Healing & Recovery
+
+The orchestrator automatically handles five recurring failure patterns that would otherwise require manual intervention. Each recovery is logged to the log file configured via `log_path`.
+
+### 1. Dirty Worktree Auto-Commit
+
+**Problem:** Orchestrator-generated artifacts (`.claude/`, `journals/`, `plan.json`) left in a feature worktree cause rebase and merge operations to fail with "dirty worktree" errors.
+
+**How it works:** Before any merge or rebase, `MergeAgentIntoFeature()` checks whether the feature worktree is clean; if not, it auto-commits all unstaged changes with a `chore:` message. See `internal/merge/merge.go` lines 142-167.
+
+**Where you see it:** Log entries reading `auto-committed orchestrator artifacts before merge` with the feature worktree path.
+
+### 2. Stale Agent Unlinking
+
+**Problem:** A failed agent leaves behind its assignment on a subtask, plus failure-related context keys (`retry_count`, `last_error`), preventing the task from being properly rescheduled.
+
+**How it works:** `RetryTask()` clears the `retry_count` and `last_error` context keys and transitions the task back to BACKLOG so it can be picked up by a fresh agent. See `internal/orchestrator/orchestrator.go`.
+
+**Where you see it:** Log entry `task retried` with the task ID; the task reappears in BACKLOG status in the TUI.
+
+### 3. Stuck Agent Recovery
+
+**Problem:** An agent's tmux session dies (crash, OOM, network drop) without sending a completion signal, leaving the subtask permanently stuck in IN_PROGRESS.
+
+**How it works:** The reconciliation loop detects IN_PROGRESS subtasks whose assigned agent is no longer in the runner's active set. If the agent branch has commits, those are routed through the normal completion path. If not, the subtask is rescheduled (up to `MaxEmptyWorkRetries = 2` attempts) before being marked FAILED. See `reconcileStuckAgents()` in `internal/orchestrator/reconcile.go`.
+
+**Where you see it:** Log warning `detected dead agent session without completion` followed by either `auto-retrying dead agent subtask` or a failure message.
+
+### 4. Already-Complete Fast-Track
+
+**Problem:** The supervisor diagnoses an empty-work agent as `already_complete` (the work was already done by a prior agent or manual edit), but the default path would waste retry attempts on a task that needs no further action.
+
+**How it works:** When the supervisor's failure diagnosis returns a category of `already_complete`, `no_changes_needed`, or `work_done`, the subtask is fast-tracked directly to DONE, bypassing retry logic. See `onAgentEmptyWork()` in `internal/orchestrator/agent_results.go`.
+
+**Where you see it:** Supervisor journal entry with outcome `Fast-tracked to DONE — work already complete`; the task jumps to DONE in the TUI.
+
+### 5. Merge Conflict Fixer
+
+**Problem:** Merging a feature branch into the default branch fails with file conflicts that could be automatically resolved.
+
+**How it works:** When `executeMerge()` detects conflicts, the supervisor analyzes them and returns a `resolution_strategy`. If the strategy is `spawn_agent`, a fixer agent is automatically spawned to resolve the conflicts in the feature worktree. See `internal/orchestrator/task_processing.go` lines 525-654.
+
+**Where you see it:** Log entry `spawning resolver agent for merge conflict`; the TUI shows a new fixer agent attached to the task; a `merge_conflict` event is emitted with `fixer_spawned: true`.
+
+## State Reconciliation
+
+The `Reconcile()` method runs automatically every tick (default 5s) and audits the project for six categories of state inconsistency. All fixes are logged and emitted as a `reconcile` event. Source: `internal/orchestrator/reconcile.go`.
+
+| # | Category | Detected State | Fix Applied |
+|---|----------|---------------|-------------|
+| 1 | **Stale subtasks** | DONE subtasks whose parent is IN_PROGRESS but the feature branch has zero file changes relative to the default branch | Reset to BACKLOG for rescheduling |
+| 2 | **Orphaned subtasks** | IN_PROGRESS subtasks whose assigned agent is idle or dead (completion signal was lost) | Attempt to merge remaining agent work into the feature branch and fast-track to DONE; if merge fails, mark FAILED with agent worktree preserved |
+| 3 | **Empty features** | TESTING_READY parent tasks whose feature branch has no file changes relative to the default branch | Marked FAILED with `empty_feature` context flag |
+| 4 | **Orphan worktrees** | Agent worktrees with no commits ahead of the feature branch and no corresponding WORKING agent in the database | Worktree removed via `git worktree remove` |
+| 5 | **Stuck agents** | IN_PROGRESS subtasks whose agent tmux session is dead but still marked WORKING in the database | If agent branch has commits, route through normal completion; otherwise auto-retry (up to `MaxEmptyWorkRetries = 2`), then fail |
+| 6 | **Already-merged features** | FAILED parent tasks whose feature branch is already an ancestor of the default branch HEAD | Transition directly to DONE (bypasses state machine since failed-to-done is not a normal transition); feature worktree cleaned up |
+
+Reconciliation results can be observed in the log file. When any fixes are applied, a `reconcile` event is emitted containing a `ReconcileResult` struct with counts for each category.
+
+## Troubleshooting
+
+### Running the Constitution Check
+
+The constitution check enforces structural quality constraints defined in `.drem/constraints.toml`:
+
+```bash
+bash scripts/check_constitution.sh
+```
+
+This runs `go run ./cmd/check-constraints/...` which evaluates 9 rules:
+
+1. **gofmt compliance** -- all Go files under `internal/` and `cmd/` must be formatted
+2. **go vet** -- `go vet ./...` must pass
+3. **File length ceiling** -- no non-test `.go` file exceeds 800 lines (with per-file exceptions)
+4. **Exported function count** -- no file has more than 20 exported functions (with exceptions)
+5. **Internal import ceiling** -- no directory exceeds 6 internal imports (with exceptions)
+6. **GORM hook consolidation** -- at most 1 `BeforeCreate` hook in models
+7. **No DB init outside testutil** -- test files must not call `gorm.Open(sqlite` directly
+8. **No git helpers outside testutil** -- test files must not define ad-hoc git setup helpers
+9. **No test factories outside testutil** -- test files must not define ad-hoc test factories
+
+A passing run means all 9 checks report OK. Any failure prints the violating files and counts.
+
+### Inspecting the Database
+
+The SQLite database (default `drem.db`) can be queried directly:
+
+```bash
+sqlite3 drem.db
+```
+
+Useful queries:
+
+```sql
+-- Table structure
+.schema
+
+-- Task overview
+SELECT id, title, status FROM tasks;
+
+-- Active agents
+SELECT id, agent_type, status FROM agents WHERE status = 'working';
+
+-- Failed tasks with error context
+SELECT id, title, context FROM tasks WHERE status = 'failed';
+
+-- Recent task events
+SELECT task_id, event_type, old_value, new_value, created_at
+FROM task_events ORDER BY created_at DESC LIMIT 20;
+```
+
+### Debugging a Failed Merge
+
+1. **Check the log file** (default `drem.log`) for merge error details -- search for `merge failed` or `merge conflicts`
+2. **Inspect task context** in the database -- `SELECT context FROM tasks WHERE id = '<task-id>';` will show supervisor diagnosis fields like `merge_conflict_severity`, `merge_conflict_strategy`, and `merge_conflict_hints`
+3. **Check the feature worktree** for conflict markers -- navigate to the feature integration worktree (e.g., `<bare-repo>/feature/<name>/integration/`) and look for `<<<<<<<` markers in source files
+
+### Cleaning Up After a Failed Run
+
+1. **Clean dead tmux sessions** -- press `C` in the TUI to reap orphaned agent sessions
+2. **Remove orphan worktrees manually** -- list worktrees with `git worktree list` from the bare repo, then remove stale ones with `git worktree remove <path>`
+3. **Reset stuck tasks** -- press `R` on a FAILED task in the TUI to retry it back to BACKLOG, or use the database directly to update status
+
+### Understanding Supervisor Diagnoses
+
+The supervisor is an LLM-powered decision layer that evaluates failures and merge conflicts. Its outputs are stored in `task.Context` and visible in the TUI detail panel.
+
+**Failure diagnosis** (`FailureDiagnosis`):
+- `category` -- classifies the failure: `transient`, `prompt_issue`, `code_error`, `environment`, `already_complete`, or `unknown`
+- `should_retry` -- whether the orchestrator should retry the task
+- `retry_strategy` -- `same_prompt`, `modified_prompt`, or `different_approach`
+
+**Merge conflict analysis** (`MergeConflictAnalysis`):
+- `severity` -- `trivial`, `moderate`, or `complex`
+- `resolution_strategy` -- `auto_resolve`, `spawn_agent`, or `manual`
+- `resolution_hints` -- free-text guidance for resolving the conflicts
+
+**Build failure diagnosis** (`BuildFailureDiagnosis`):
+- `root_cause` -- what went wrong in the build
+- `can_auto_fix` -- whether a fixer agent can resolve it automatically
+
+All supervisor evaluations are also recorded in journal files under the `journals/` directory.
+
+### Effort Levels
+
+The orchestrator uses two different Claude Code effort levels:
+
+| Component | Effort Level | Rationale |
+|-----------|-------------|-----------|
+| Supervisor (`internal/supervisor/supervisor.go`) | `--effort low` | Fast classification and diagnosis; supervisor calls happen on every decision point so speed matters |
+| Agents (`internal/agent/process.go`) | `--effort medium` | Balanced speed and quality for actual code generation and research work |
+
+These effort levels are hardcoded and not configurable via `drem.toml`.
+
 ## License
 
 See [LICENSE](LICENSE) for details.
