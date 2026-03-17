@@ -156,6 +156,18 @@ backlog ──► planning ──► plan_review ──► in_progress ──►
 - **failed** -- Something went wrong (can be retried back to backlog)
 - **paused** -- Manually paused by user
 
+### Step Scores
+
+Every plan and implementation is scored on three dimensions when ready for human review:
+
+| Dimension | Plan Review | Implementation Review |
+|-----------|------------|----------------------|
+| **TDD** | % of implementation subtasks covered by test subtasks | `go test -cover` average across packages |
+| **Constitution** | Plan validation pass rate (errors=0%, warnings reduce score) | Constraint check pass/fail ratio |
+| **Documentation** | Whether any subtask touches doc files | Whether changed files include documentation |
+
+Scores appear in the TUI board as compact badges (T:85 C:100 D:0) and in the detail panel as a full score line.
+
 ## Agent Types
 
 | Type | Purpose |

@@ -232,6 +232,16 @@ func (d DetailModel) View() string {
 		}
 	}
 
+	// Step scores.
+	if d.task.Context != nil {
+		if scoresRaw, ok := d.task.Context["scores"].(map[string]any); ok {
+			scoreStr := renderScoreSection(scoresRaw)
+			if scoreStr != "" {
+				sections = append(sections, scoreStr)
+			}
+		}
+	}
+
 	// Warnings from task context.
 	if d.task.Context != nil {
 		warnStyle := lipgloss.NewStyle().Foreground(colorDanger)
@@ -371,4 +381,24 @@ func (d DetailModel) availableActions() string {
 	}
 
 	return strings.Join(parts, "  ")
+}
+
+// renderScoreSection renders the step score block for the detail view.
+func renderScoreSection(scores map[string]any) string {
+	formatted, ok := scores["formatted"].(string)
+	if !ok {
+		return ""
+	}
+	style := lipgloss.NewStyle().Bold(true)
+	tdd, _ := scores["tdd"].(float64)
+	constitution, _ := scores["constitution"].(float64)
+	docs, _ := scores["documentation"].(float64)
+
+	color := colorSuccess
+	if tdd < 0.5 || constitution < 0.5 {
+		color = colorDanger
+	} else if tdd < 0.8 || docs < 0.5 {
+		color = colorWarning
+	}
+	return style.Foreground(color).Render("Scores: " + formatted)
 }
