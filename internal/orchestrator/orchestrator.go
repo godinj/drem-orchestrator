@@ -23,6 +23,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -671,6 +672,51 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		// Clear any blocking flags that may have been set by prior failure handling.
 		delete(parent.Context, "baseline_tests_failed")
 		delete(parent.Context, "needs_human_review")
+
+		// Run full constraint evaluation on the integration worktree before
+		// allowing transition to test_review.
+		if parent.WorktreeBranch != "" {
+			fn := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
+			featureDir := o.worktree.FeatureWorktreePath(fn)
+
+			constraintCfg, cfgErr := constraints.LoadConfig(featureDir)
+			if cfgErr != nil {
+				o.logger.Warn("constraint config load failed at integration gate",
+					"task_id", parent.ID, "error", cfgErr)
+			} else if constraintCfg != nil {
+				report, evalErr := constraints.Evaluate(constraintCfg, featureDir)
+				if evalErr != nil {
+					o.logger.Warn("constraint evaluation failed at integration gate",
+						"task_id", parent.ID, "error", evalErr)
+				} else if report.Failed > 0 {
+					o.logger.Warn("constraint violations at integration gate, blocking test_review",
+						"task_id", parent.ID, "failed", report.Failed)
+
+					// Store violations in task context for TUI visibility.
+					if parent.Context == nil {
+						parent.Context = make(model.JSONField)
+					}
+					parent.Context["constraint_violations"] = constraints.FormatReport(report)
+					if err := o.db.Save(parent).Error; err != nil {
+						return fmt.Errorf("check feature completion: save constraint violations: %w", err)
+					}
+
+					// Do NOT transition to test_review. The parent stays in current state.
+					// The violations are visible in the TUI for the user to address.
+					o.emit("constraint_violations", map[string]any{
+						"task_id":    parent.ID,
+						"failed":     report.Failed,
+						"violations": constraints.FormatReport(report),
+					})
+					return nil
+				}
+
+				// Constraints passed — clear any previous violation context.
+				if parent.Context != nil {
+					delete(parent.Context, "constraint_violations")
+				}
+			}
+		}
 
 		evt, err := state.TransitionTask(parent, model.StatusTestReview, "orchestrator",
 			map[string]any{"reason": "all test subtasks done"})
