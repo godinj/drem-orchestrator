@@ -1,0 +1,85 @@
+# Project-agnostic constraint definitions for drem-orchestrator.
+# The orchestrator reads this file to enforce quality constraints at:
+# - Plan validation (before plan_review)
+# - Post-agent checks (before merge into integration)
+# - Integration gate (before testing_ready)
+
+context_files = ["ARCHITECTURE.md"]
+
+# ── Commands ──────────────────────────────────────────────────
+
+[[command]]
+name   = "gofmt compliance"
+run    = "gofmt -l ./internal/ ./cmd/"
+expect = "empty_output"
+
+[[command]]
+name = "go vet"
+run  = "go vet ./..."
+
+# ── File Length ───────────────────────────────────────────────
+
+[[max_lines]]
+name    = "File length ceiling"
+glob    = "internal/**/*.go"
+exclude = ["*_test.go"]
+limit   = 800
+
+[[max_lines.exception]]
+path           = "internal/orchestrator/orchestrator.go"
+rule           = "shrink-only"
+baseline_lines = 2917
+
+# ── Symbol Counts ────────────────────────────────────────────
+
+[[max_matches]]
+name    = "Exported function count"
+glob    = "internal/**/*.go"
+exclude = ["*_test.go"]
+pattern = "^func [A-Z]"
+limit   = 20
+scope   = "file"
+
+[[max_matches.exception]]
+path           = "internal/orchestrator/orchestrator.go"
+rule           = "shrink-only"
+baseline_count = 1
+
+[[max_matches]]
+name    = "Internal import ceiling"
+glob    = "internal/**/*.go"
+exclude = ["*_test.go"]
+pattern = "\".*internal/"
+limit   = 6
+scope   = "directory"
+
+[[max_matches.exception]]
+path           = "internal/orchestrator/"
+rule           = "shrink-only"
+baseline_count = 8
+
+[[max_matches]]
+name    = "GORM hook consolidation"
+glob    = "internal/model/models.go"
+pattern = "func.*BeforeCreate"
+limit   = 1
+
+# ── Forbidden Patterns ───────────────────────────────────────
+
+[[no_match]]
+name         = "DB init outside testutil"
+glob         = "internal/**/*_test.go"
+exclude_path = ["internal/testutil/"]
+pattern      = "gorm\\.Open\\(sqlite"
+
+[[no_match]]
+name         = "Git helpers outside testutil"
+glob         = "internal/**/*_test.go"
+exclude_path = ["internal/testutil/"]
+pattern      = "func setupBareRepo|func initBareRepo|func addWorktree|func commitFile"
+
+[[no_match]]
+name         = "Test factories outside testutil"
+glob         = "internal/**/*_test.go"
+exclude_path = ["internal/testutil/"]
+pattern      = "func createTest|func newTest|func mockTestDB|func lifecycleTestDB"
