@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
@@ -144,6 +145,12 @@ func Generate(opts Opts) string {
 		sections = append(sections, "```bash")
 		sections = append(sections, buildCmds)
 		sections = append(sections, "```", "")
+	}
+
+	// 8. Architecture & Constraints — read context files from .drem/constraints.toml
+	ctxFiles := readContextFiles(opts.WorktreePath)
+	if ctxFiles != "" {
+		sections = append(sections, ctxFiles)
 	}
 
 	// Scope limitation
@@ -738,4 +745,40 @@ func readBuildCommands(worktreePath string) string {
 	}
 
 	return strings.TrimSpace(content[start : start+end])
+}
+
+// readContextFiles reads the context files specified in .drem/constraints.toml
+// and returns their contents as a formatted markdown section. Returns an empty
+// string if no config exists or no context files are specified.
+func readContextFiles(worktreePath string) string {
+	if worktreePath == "" {
+		return ""
+	}
+
+	cfg, err := constraints.LoadConfig(worktreePath)
+	if err != nil || cfg == nil || len(cfg.ContextFiles) == 0 {
+		return ""
+	}
+
+	var parts []string
+	for _, relPath := range cfg.ContextFiles {
+		absPath := filepath.Join(worktreePath, relPath)
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			// Absence is normal for some worktrees — skip silently.
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("### %s\n\n%s", relPath, strings.TrimSpace(string(data))))
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	header := "## Architecture & Constraints\n\n" +
+		"The following project architecture constraints apply to your work.\n" +
+		"Respect file length ceilings, shrink-only rules for grandfathered files,\n" +
+		"and all other structural limits described below.\n"
+
+	return header + "\n" + strings.Join(parts, "\n\n") + "\n"
 }
