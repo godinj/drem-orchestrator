@@ -74,7 +74,11 @@ MERGING       → {DONE, FAILED}
 PAUSED        → {BACKLOG, PLANNING, IN_PROGRESS, TEST_WRITING}
 DONE          → {}
 FAILED        → {BACKLOG, IN_PROGRESS}
+REJECTED      → {}                                    # new: terminal state for subtasks rejected at TEST_REVIEW
 ```
+
+Note: `REJECTED` applies only to subtasks, not parent tasks. It is a terminal
+state — rejected subtasks are replaced by new clones with feedback (see §4.4.3).
 
 The human gate moves from `TESTING_READY` (post-implementation) to `TEST_REVIEW` (post-test-writing, pre-implementation). The `TESTING_READY` state becomes an automated gate (run full suite, verify passage) rather than a manual one.
 
@@ -186,6 +190,8 @@ ERROR if: No subtasks have phase "test" AND no tdd_exceptions cover all implemen
 ERROR if: An implementation subtask has no corresponding test subtask and no tdd_exception.
 ERROR if: A test subtask's tests_for references more than one implementation subtask (enforce 1:1).
 ERROR if: Two test subtasks reference the same implementation subtask (no duplicates).
+ERROR if: A test subtask's tests_for references a subtask index that doesn't exist in the plan (out-of-bounds).
+ERROR if: A test subtask's tests_for references a subtask that is not phase "implementation" (e.g., referencing another test or integration subtask).
 ```
 
 #### 4.3.2 `tests_for` Implies Reverse Dependency
@@ -223,9 +229,29 @@ ERROR if: A tdd_exception references a subtask that has phase "test" (nonsensica
 The automated test gate at merge time applies **only to implementation and
 integration phase subtasks**. Test-phase subtasks are expected to produce
 intentionally-failing tests (the implementation doesn't exist yet), so they
-skip the merge-time test verification. The gate for test-phase subtasks is
-limited to: tests compile, and failures are for the right reasons (missing
-implementation, not syntax errors).
+skip the merge-time test verification.
+
+The automated gate for test-phase subtasks is **compilation only**: the test
+files must compile successfully. Test execution results are ignored — failures
+are expected. Whether the tests are testing the right things is evaluated by
+the human at `TEST_REVIEW`.
+
+**Compilation check discovery**: The compilation command follows a two-tier
+lookup analogous to `test_command` (see §4.10):
+
+1. **`drem.toml`** (preferred): A `compile_command` field.
+   ```toml
+   compile_command = "go vet ./..."
+   ```
+2. **Language-based defaults**: If `compile_command` is not set, the
+   orchestrator infers a default from the project's primary language:
+   - Go: `go vet ./...`
+   - TypeScript/JavaScript: `npx tsc --noEmit` (if `tsconfig.json` exists)
+   - Python: `python -m py_compile` on changed files (syntax check only)
+   - Rust: `cargo check`
+3. **Fallback**: If neither `compile_command` is set nor the language can be
+   detected, the compilation gate is skipped and the test-phase subtask is
+   gated only on agent completion (the human catches issues at `TEST_REVIEW`).
 
 ---
 
@@ -262,6 +288,13 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) {
 }
 ```
 
+**Scheduling behavior**: `TEST_WRITING` uses the same wave-based scheduling
+as `IN_PROGRESS`, including file-overlap detection. Test subtasks that touch
+overlapping files are serialized into waves; non-overlapping test subtasks run
+in parallel. There is no additional concurrency limit specific to the
+test-writing phase — the existing `max_concurrent_agents` setting from
+`drem.toml` applies uniformly.
+
 #### 4.4.3 `TEST_REVIEW` Human Gate
 
 At `TEST_REVIEW`, the human reviews:
@@ -284,6 +317,29 @@ The human can:
      implementation subtasks as the originals
   5. When all replacement test subtasks complete, the parent transitions back
      to `TEST_REVIEW` for another round of human review
+
+**Rejection loop limit**: After 3 rejection rounds, the orchestrator pauses
+the task and spawns a diagnostic agent to facilitate a deep-dive with the
+human. The diagnostic agent receives:
+- The original task description and acceptance criteria
+- All 3 rounds of test subtask diffs and rejection feedback
+- Instruction: "The tests for this task have been rejected 3 times. Help the
+  human understand why. Either the test premise is wrong, the acceptance
+  criteria are ambiguous, or there's a misunderstanding. Summarize the pattern
+  of rejections and suggest a path forward."
+
+**Diagnostic agent lifecycle**: The diagnostic agent runs as a reviewer-type
+agent on the integration branch worktree. It has a context window limit of
+`context_stop_percent` (same as other agents). If the diagnostic agent
+exhausts its context window before producing output, the orchestrator logs a
+warning and writes a fallback diagnostic to the task: "Diagnostic agent was
+unable to complete analysis. Manual review of the 3 rejection rounds is
+required." The task remains paused regardless — the diagnostic is advisory,
+not gating.
+
+The task remains paused until the human manually resumes it (back to
+`TEST_WRITING` with revised guidance, or back to `PLANNING` to rethink the
+approach).
 
 #### 4.4.4 `IN_PROGRESS` Changes
 
@@ -676,6 +732,78 @@ If tests fail, this blocks the `TESTING_READY → MERGING` transition automatica
 
 ---
 
+### 4.10 Test Command Discovery
+
+The orchestrator needs to know how to run tests for each project. Test command
+configuration follows a two-tier lookup:
+
+1. **`drem.toml`** (preferred): A `test_command` field in the project config.
+   This is the explicit, unambiguous source.
+   ```toml
+   test_command = "go test ./..."
+   compile_command = "go vet ./..."   # for test-phase compilation gate (§4.3.5)
+   scoped_tests = true                # per-agent gate uses scoped execution (default: true)
+   ```
+
+2. **CLAUDE.md fallback**: If `test_command` is not set in `drem.toml`, the
+   orchestrator parses the project's CLAUDE.md for a `## Test` section and
+   extracts the first code-fenced command. This mirrors how build commands are
+   already discovered.
+
+If neither source provides a test command, the orchestrator logs a warning and
+skips the automated test gate (falls back to manual verification at
+`TESTING_READY`). This is the degraded mode mentioned in §8.
+
+For per-agent merge gates (§4.5.3), the orchestrator also supports scoped test
+execution: running only tests in packages touched by the agent's diff. The
+scoped command is derived from the base test command:
+
+```
+# Base: go test ./...
+# Scoped: go test ./internal/track/... ./internal/render/...
+```
+
+The full test suite always runs at the `TESTING_READY` integration gate.
+
+**Transitive dependency caveat**: Scoped test execution may miss failures in
+packages that transitively depend on changed code but are not themselves in
+the diff. For example, if an agent modifies `internal/track/`, scoped
+execution runs `go test ./internal/track/...` but won't catch breakage in
+`internal/render/` which imports `internal/track/`. This is an accepted
+trade-off for per-agent gate speed — the full suite at `TESTING_READY` is the
+safety net that catches transitive failures. If a project experiences frequent
+transitive failures slipping through per-agent gates, it should set
+`scoped_tests = false` in `drem.toml` to force full-suite execution at every
+merge point (at the cost of slower per-agent merges).
+
+---
+
+### 4.11 Test Suite Performance
+
+The test suite should run in under 2 minutes, even as the project grows. If
+test execution time exceeds this threshold, the project should adopt one or
+more of:
+
+- **Parallel test execution**: `go test -parallel N ./...` or equivalent
+  framework-level parallelism
+- **Package-level parallelism**: Go already runs packages in parallel by
+  default; ensure tests are not serialized by shared resources (databases,
+  files)
+- **Test sharding**: Split the suite across multiple workers for CI
+
+The `test_timeout` configuration in `drem.toml` (default: 5 minutes) sets a
+hard upper bound on test execution time. If tests exceed this timeout, the
+result is treated as a failure:
+
+```toml
+test_timeout = "5m"
+```
+
+This timeout applies to both per-agent merge gates and the `TESTING_READY`
+integration gate.
+
+---
+
 ## 5. Implementation Plan
 
 Ordered by dependency. Each phase builds on the previous.
@@ -687,7 +815,8 @@ Ordered by dependency. Each phase builds on the previous.
 | 1a | `internal/state/machine.go` | Add `TEST_WRITING` and `TEST_REVIEW` states and transitions |
 | 1b | `internal/model/task.go` | Add `StatusTestWriting`, `StatusTestReview` constants; add `StatusRejected` for subtasks rejected at `TEST_REVIEW` |
 | 1c | `internal/orchestrator/plan_validation.go` | Add phase validation, TDD exception validation, test ordering checks |
-| 1d | `internal/orchestrator/orchestrator.go` | Parse `phase`, `tests_for`, `tdd_exceptions` from plan JSON |
+| 1d | `internal/model/task.go`, `internal/model/subtask.go` | Add `Phase` (string), `TestsFor` (JSON int array) fields to subtask model; add `TDDExceptions` (JSON) to parent task model; add `NeedsHumanReview` (bool) to task model. GORM AutoMigrate handles column additions. |
+| 1e | `internal/orchestrator/orchestrator.go` | Parse `phase`, `tests_for`, `tdd_exceptions` from plan JSON |
 
 ### Phase 2: Planner & Test Writing Flow
 
@@ -703,7 +832,7 @@ Ordered by dependency. Each phase builds on the previous.
 
 | Item | Files | Description |
 |------|-------|-------------|
-| 3a | `internal/orchestrator/orchestrator.go` | Add `HandleTestReviewApproved()` / `HandleTestReviewRejected()` — rejection marks old test subtasks `REJECTED`, clones new ones with feedback, transitions back to `TEST_WRITING` |
+| 3a | `internal/orchestrator/orchestrator.go` | Add `HandleTestReviewApproved()` / `HandleTestReviewRejected()` — rejection marks old test subtasks `REJECTED`, clones new ones with feedback, transitions back to `TEST_WRITING`. After 3rd rejection, pause task and spawn diagnostic agent (see §4.4.3). |
 | 3b | `internal/prompt/prompt.go` | Update plan reviewer to assess TDD quality |
 | 3c | `internal/tui/` | Surface `TEST_WRITING` and `TEST_REVIEW` states in dashboard — status colors, `a`/`r` keybindings for approve/reject at `TEST_REVIEW` (mirroring existing `PLAN_REVIEW` UX), rejection prompts for feedback text |
 
@@ -711,12 +840,14 @@ Ordered by dependency. Each phase builds on the previous.
 
 | Item | Files | Description | Status |
 |------|-------|-------------|--------|
-| 4a | `internal/orchestrator/orchestrator.go` | Add `verifyTestsBeforeMerge()` — run test command, check exit code | |
+| 4a | `internal/orchestrator/orchestrator.go`, `cmd/drem/config.go` | Add `verifyTestsBeforeMerge()` — run test command (from `drem.toml` or CLAUDE.md fallback), check exit code, enforce `test_timeout` | |
 | 4b | `internal/prompt/prompt.go` | Update implementation-phase coder instructions (tests mandatory, no flaky tolerance) | |
 | 4c | `internal/ctxmon/`, `internal/agent/runner.go`, `internal/orchestrator/orchestrator.go` | Context window monitoring via status line script + PreCompact hook | **Done** (fb390a9) |
 | 4d | `internal/orchestrator/orchestrator.go` | Add `context_fixer_percent` threshold (85%) and role-aware fixer escalation | |
 | 4e | `internal/orchestrator/orchestrator.go` | Add test file tracking — `git diff --name-only` after test-phase agent completes, store `actual_test_files` in subtask context | |
 | 4f | `internal/orchestrator/orchestrator.go` | Add test-writing failure recovery — retry once with error context, then fail to human (see §4.6.3) | |
+| 4g | `internal/orchestrator/orchestrator.go` | Add scoped test execution for per-agent merge gates — derive package list from agent diff, run only affected packages; respect `scoped_tests` config (see §4.10) |
+| 4h | `internal/orchestrator/orchestrator.go`, `cmd/drem/config.go` | Add `verifyCompilationBeforeMerge()` for test-phase subtasks — run `compile_command` (from `drem.toml`, language default, or skip); see §4.3.5 | |
 
 ### Phase 5: Automated `TESTING_READY` Gate
 
@@ -737,7 +868,7 @@ We will eat our own dogfood: implement this PRD using TDD, even before the orche
 | Component | Tests |
 |-----------|-------|
 | State machine | `TEST_WRITING` and `TEST_REVIEW` transitions valid/invalid |
-| Plan validation | Plans without test subtasks rejected; phase ordering enforced; TDD exceptions validated; `tests_for` auto-generates reverse dependency |
+| Plan validation | Plans without test subtasks rejected; phase ordering enforced; TDD exceptions validated; `tests_for` auto-generates reverse dependency; out-of-bounds and wrong-phase `tests_for` references rejected |
 | Phase parsing | Plan JSON with `phase`, `tests_for`, `tdd_exceptions` parses correctly |
 | `processTestWriting()` | Only test-phase subtasks scheduled; impl subtasks remain in backlog |
 | `verifyTestsBeforeMerge()` | Tests pass → merge proceeds; tests fail → merge blocked |
@@ -746,6 +877,11 @@ We will eat our own dogfood: implement this PRD using TDD, even before the orche
 | Impl-phase prompt | References pre-written test files from `actual_test_files`; mandates all tests pass |
 | Test file tracking | `git diff --name-only` extracts test files; falls back to plan `files` if none found |
 | Baseline health check | Pre-existing test failures block `TEST_WRITING` with diagnostic |
+| Test command discovery | Reads from `drem.toml`; falls back to CLAUDE.md; logs warning if neither found |
+| Scoped test execution | Derives correct package list from agent diff; falls back to full suite on empty diff |
+| Test timeout | Tests killed after `test_timeout`; result treated as failure |
+| Compilation gate | `compile_command` from `drem.toml`; language default fallback; skip if undetectable |
+| `processTestWriting()` scheduling | File-overlap wave scheduling applies; `max_concurrent_agents` respected |
 
 ### Integration Tests
 
@@ -762,6 +898,16 @@ We will eat our own dogfood: implement this PRD using TDD, even before the orche
 | Impl agent hits 85% context | Fixer spawned with test failure context |
 | Fixer hits 80% context | Fixer stopped, human review requested |
 | Full suite fails at `TESTING_READY` | Fixer spawned on integration branch |
+| 3rd TEST_REVIEW rejection | Task paused, diagnostic agent spawned with all 3 rounds of feedback |
+| Test command missing from config and CLAUDE.md | Warning logged, automated gate skipped, falls back to manual |
+| Tests exceed `test_timeout` | Test run killed, treated as failure, merge blocked |
+| `tests_for` references out-of-bounds index | Validation error, plan rejected |
+| `tests_for` references a non-implementation subtask | Validation error, plan rejected |
+| Diagnostic agent exhausts context at 3rd rejection | Fallback diagnostic written, task remains paused |
+| `scoped_tests = false` in config | Per-agent merge gate runs full suite instead of scoped |
+| Test-phase subtask with `compile_command` set | Compilation gate runs; test execution skipped |
+| Test-phase subtask with no `compile_command` and unknown language | Compilation gate skipped, subtask gated on agent completion only |
+| 8 non-overlapping test subtasks with `max_concurrent_agents = 4` | Only 4 test agents run concurrently |
 
 ---
 
@@ -799,4 +945,12 @@ traceability and reflected in the design sections above.
 
 4. ~~**Flaky test detection**~~ — **Resolved: retry allowance for environmental flakiness, but tests must pass.** The merge-time test gate retries up to 3 times with backoff to handle transient environmental issues (filesystem timing, network). But all tests must ultimately pass — no skipping. Pre-existing broken or flaky tests should be caught and addressed before work begins (baseline test health check at `PLAN_REVIEW → TEST_WRITING` transition). See §4.5.2 and §4.5.3.
 
-5. ~~**Test-phase merge gate**~~ — **Resolved: skip test gate for test-phase subtasks.** Test-phase agents produce intentionally-failing tests. The merge-time test gate applies only to implementation and integration phase subtasks. Test-phase subtasks are gated on: tests compile, and failures are for the right reasons (missing implementation, not syntax errors). See §4.3.5.
+5. ~~**Test-phase merge gate**~~ — **Resolved: skip test gate for test-phase subtasks.** Test-phase agents produce intentionally-failing tests. The merge-time test gate applies only to implementation and integration phase subtasks. Test-phase subtasks are gated on compilation only — test execution results are ignored. Test quality is the human's job at `TEST_REVIEW`. See §4.3.5.
+
+6. ~~**Rejection loop bounds**~~ — **Resolved: 3 rounds, then diagnostic agent.** After 3 TEST_REVIEW rejections, the orchestrator pauses the task and spawns a diagnostic agent to help the human understand the pattern — whether the test premise is wrong, acceptance criteria are ambiguous, or something else. The human decides how to proceed (revise tests, replan, or abandon). See §4.4.3.
+
+7. ~~**Database schema changes**~~ — **Resolved: extend existing models via GORM AutoMigrate.** New fields (`Phase`, `TestsFor` on subtasks; `TDDExceptions`, `NeedsHumanReview` on tasks; `REJECTED` status) are added to existing GORM models. AutoMigrate handles column additions. See Phase 1 implementation plan.
+
+8. ~~**Test command discovery**~~ — **Resolved: `drem.toml` with CLAUDE.md fallback.** Explicit `test_command` in project config is preferred. Falls back to parsing CLAUDE.md's `## Test` section. Per-agent merge gates use scoped test execution (packages touched by diff); full suite runs at `TESTING_READY`. See §4.10.
+
+9. ~~**Test suite performance**~~ — **Resolved: 2-minute target, 5-minute hard timeout.** Test suites should stay under 2 minutes via parallelism; if they exceed this, the project must optimize. A configurable `test_timeout` (default 5m) hard-caps execution time. See §4.11.
