@@ -300,6 +300,65 @@ func TestFindWorktreeByBranch_NotFound(t *testing.T) {
 	}
 }
 
+func TestMainWorktreePath_BareRepoIsMainWorktree(t *testing.T) {
+	// Create a non-bare repo where the root itself is the working tree.
+	dir := t.TempDir()
+	repoDir := filepath.Join(dir, "repo")
+	RunGit([]string{"init", repoDir}, "")
+	RunGit([]string{"config", "user.email", "test@test.com"}, repoDir)
+	RunGit([]string{"config", "user.name", "Test"}, repoDir)
+
+	// Create an initial commit so the default branch exists.
+	initFile := filepath.Join(repoDir, "README.md")
+	os.WriteFile(initFile, []byte("# Test\n"), 0o644)
+	RunGit([]string{"add", "."}, repoDir)
+	RunGit([]string{"commit", "-m", "initial commit"}, repoDir)
+
+	// Detect the default branch.
+	branch, err := RunGit([]string{"rev-parse", "--abbrev-ref", "HEAD"}, repoDir)
+	if err != nil {
+		t.Fatalf("detect default branch: %v", err)
+	}
+
+	mgr := NewManager(repoDir, branch)
+	got, err := mgr.MainWorktreePath()
+	if err != nil {
+		t.Fatalf("MainWorktreePath() returned error: %v", err)
+	}
+	if got != repoDir {
+		t.Errorf("MainWorktreePath() = %q, want %q", got, repoDir)
+	}
+}
+
+func TestMainWorktreePath_LinkedWorktree(t *testing.T) {
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
+
+	mgr := NewManager(bareRepo, defaultBranch)
+	got, err := mgr.MainWorktreePath()
+	if err != nil {
+		t.Fatalf("MainWorktreePath() returned error: %v", err)
+	}
+
+	want := filepath.Join(bareRepo, defaultBranch)
+	if got != want {
+		t.Errorf("MainWorktreePath() = %q, want %q", got, want)
+	}
+}
+
+func TestMainWorktreePath_NotFound(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+
+	mgr := NewManager(bareRepo, "nonexistent-branch")
+	_, err := mgr.MainWorktreePath()
+	if err == nil {
+		t.Fatal("expected error for nonexistent branch")
+	}
+	if !strings.Contains(err.Error(), "no worktree found for branch") {
+		t.Errorf("error should mention 'no worktree found for branch', got: %v", err)
+	}
+}
+
 func TestParseRebaseConflicts(t *testing.T) {
 	tests := []struct {
 		name     string

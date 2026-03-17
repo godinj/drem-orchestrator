@@ -95,10 +95,6 @@ func (m *Manager) MainWorktreePath() (string, error) {
 			currentPath = strings.TrimPrefix(line, "worktree ")
 		}
 		if strings.TrimSpace(line) == "branch refs/heads/"+m.DefaultBranch && currentPath != "" {
-			// Skip the bare repo entry itself.
-			if currentPath == m.BareRepoPath {
-				continue
-			}
 			return currentPath, nil
 		}
 	}
