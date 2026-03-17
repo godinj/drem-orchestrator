@@ -127,13 +127,32 @@ func (o *Orchestrator) PlanAgentMerge(agentBranch, featureWorktree string) (*Mer
 // reduce conflicts from stale merge bases, then merges. Transient failures
 // (no file conflicts) are retried up to maxMergeRetries times with backoff.
 // Real conflicts (from rebase or merge) are returned immediately without retry.
+//
+// If the feature worktree has uncommitted changes (e.g. plan.json or .claude/
+// artifacts), they are auto-committed before the merge to avoid blocking on
+// dirty worktree errors.
 func (o *Orchestrator) MergeAgentIntoFeature(agentBranch, featureWorktree string) (*worktree.MergeResult, error) {
 	clean, err := worktree.IsClean(featureWorktree)
 	if err != nil {
 		return nil, fmt.Errorf("merge agent into feature: check clean: %w", err)
 	}
 	if !clean {
-		return nil, fmt.Errorf("merge agent into feature: feature worktree %s has uncommitted changes", featureWorktree)
+		// Auto-commit orchestrator artifacts before merge.
+		committed, commitErr := worktree.CommitUnstagedChanges(
+			featureWorktree, "chore: commit orchestrator artifacts before merge")
+		if commitErr != nil {
+			return nil, fmt.Errorf("merge agent into feature: auto-commit dirty worktree: %w", commitErr)
+		}
+		if committed {
+			slog.Info("auto-committed orchestrator artifacts before merge",
+				"feature_worktree", featureWorktree,
+				"agent_branch", agentBranch)
+		} else {
+			// CommitUnstagedChanges returned false but IsClean said not clean —
+			// there may be unknown/unexpected files. Log a warning but proceed.
+			slog.Warn("feature worktree has uncommitted changes that could not be auto-committed",
+				"feature_worktree", featureWorktree)
+		}
 	}
 
 	return mergeWithRebaseAndRetry(o.wt, agentBranch, featureWorktree)

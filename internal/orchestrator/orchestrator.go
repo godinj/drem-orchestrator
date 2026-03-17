@@ -1950,9 +1950,16 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 // whose agent has been cleared (e.g. after empty-work retry) — of the parent
 // that have their dependencies met and spawns agents for them.
 func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
+	// During TEST_WRITING, skip wave-group gating entirely. Test subtasks are
+	// additive (they create new test files and append to build files), so
+	// file-overlap conflicts are rare and trivially handled by merge retry.
+	// Serializing test subtasks via wave groups doubles wall-clock time for no
+	// practical benefit.
+	skipWaveGating := parent.Status == model.StatusTestWriting
+
 	// Check for wave schedule in parent context.
 	var allowedIDs map[uuid.UUID]bool
-	if parent.Context != nil {
+	if !skipWaveGating && parent.Context != nil {
 		if scheduleRaw, hasSchedule := parent.Context["schedule"]; hasSchedule {
 			scheduleJSON, marshalErr := json.Marshal(scheduleRaw)
 			if marshalErr == nil {
@@ -2216,15 +2223,21 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		}
 	}
 
-	// Block scheduling if baseline tests failed.
+	// Block scheduling (but NOT completion checks) if baseline tests failed.
 	if failed, ok := parent.Context["baseline_tests_failed"].(bool); ok && failed {
-		return nil
+		// Still run the completion check below — a supervisor may have
+		// manually fixed the subtask and set it to done.
+	} else {
+		// Schedule test-phase subtasks using the existing scheduling logic.
+		if err := o.scheduleSubtasks(parent); err != nil {
+			return fmt.Errorf("process test writing: schedule: %w", err)
+		}
 	}
 
-	// Schedule test-phase subtasks using the existing scheduling logic.
-	if err := o.scheduleSubtasks(parent); err != nil {
-		return fmt.Errorf("process test writing: schedule: %w", err)
-	}
+	// Completion check runs unconditionally every tick. This ensures that
+	// when a supervisor manually fixes a failed subtask (merges work, sets
+	// subtask to done), processTestWriting detects the change on the next
+	// tick and transitions the parent.
 
 	// Check if all test-phase subtasks are in a terminal state.
 	var testSubtasks []model.Task
@@ -2256,6 +2269,10 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 
 	if allDone {
 		// All test subtasks done -> transition to TEST_REVIEW.
+		// Clear any blocking flags that may have been set by prior failure handling.
+		delete(parent.Context, "baseline_tests_failed")
+		delete(parent.Context, "needs_human_review")
+
 		evt, err := state.TransitionTask(parent, model.StatusTestReview, "orchestrator",
 			map[string]any{"reason": "all test subtasks done"})
 		if err != nil {
@@ -2656,6 +2673,31 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 
 	// Clear planner agent assignment now that review is complete.
 	task.AssignedAgentID = nil
+
+	// Write plan.json to the integration worktree and commit it immediately
+	// so it doesn't leave the worktree dirty (which blocks subsequent merges).
+	if task.WorktreeBranch != "" {
+		featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+		featureDir := o.worktree.FeatureWorktreePath(featureName)
+		planJSON, marshalErr := json.MarshalIndent(task.Plan, "", "  ")
+		if marshalErr != nil {
+			o.logger.Warn("handle plan approved: failed to marshal plan for worktree", "error", marshalErr)
+		} else {
+			planPath := filepath.Join(featureDir, "plan.json")
+			if writeErr := os.WriteFile(planPath, planJSON, 0o644); writeErr != nil {
+				o.logger.Warn("handle plan approved: failed to write plan.json to worktree", "error", writeErr)
+			} else {
+				committed, commitErr := worktree.CommitUnstagedChanges(
+					featureDir, "chore: commit plan.json after plan approval")
+				if commitErr != nil {
+					o.logger.Warn("handle plan approved: failed to commit plan.json", "error", commitErr)
+				} else if committed {
+					o.logger.Info("handle plan approved: committed plan.json to integration worktree",
+						"task_id", task.ID)
+				}
+			}
+		}
+	}
 
 	// Determine transition target: TEST_WRITING if plan has test-phase subtasks,
 	// IN_PROGRESS otherwise (backward compatible for old-format plans).
@@ -3513,6 +3555,24 @@ func isTestFile(name string) bool {
 	for _, suffix := range []string{".test.ts", ".test.js", ".spec.ts", ".spec.js", ".test.tsx", ".test.jsx", ".spec.tsx", ".spec.jsx"} {
 		if strings.HasSuffix(lower, suffix) {
 			return true
+		}
+	}
+	// C++: *Test.cpp, *Tests.cpp, *_test.cpp, *_tests.cpp, *Test.h, *Tests.h
+	for _, suffix := range []string{"test.cpp", "tests.cpp", "_test.cpp", "_tests.cpp", "test.h", "tests.h"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	// C++: files under tests/ or test/ directories
+	normalizedPath := strings.ToLower(name)
+	for _, prefix := range []string{"tests/", "test/"} {
+		if strings.HasPrefix(normalizedPath, prefix) || strings.Contains(normalizedPath, "/"+prefix) {
+			// Only match C++ source/header files in test directories
+			for _, ext := range []string{".cpp", ".cc", ".cxx", ".h", ".hpp"} {
+				if strings.HasSuffix(lower, ext) {
+					return true
+				}
+			}
 		}
 	}
 	return false
