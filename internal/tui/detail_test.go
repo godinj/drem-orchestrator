@@ -1,0 +1,411 @@
+package tui
+
+import (
+	"testing"
+
+	"github.com/google/uuid"
+
+	"github.com/godinj/drem-orchestrator/internal/model"
+)
+
+func TestDeletableItems(t *testing.T) {
+	tests := []struct {
+		name         string
+		task         *model.Task
+		comments     []model.TaskComment
+		wantLen      int
+		wantPlanLen  int // expected number of deleteItemPlanStep items
+		wantComments int // expected number of deleteItemComment items
+	}{
+		{
+			name: "task with 2 comments and 3-step plan",
+			task: &model.Task{
+				ID:     uuid.New(),
+				Status: model.StatusPlanReview,
+				Plan: model.JSONField{
+					"subtasks": []any{
+						map[string]any{"title": "Step 1"},
+						map[string]any{"title": "Step 2"},
+						map[string]any{"title": "Step 3"},
+					},
+				},
+			},
+			comments: []model.TaskComment{
+				{ID: uuid.New(), Author: "user", Body: "Comment 1"},
+				{ID: uuid.New(), Author: "system", Body: "Comment 2"},
+			},
+			wantLen:      5,
+			wantPlanLen:  3,
+			wantComments: 2,
+		},
+		{
+			name: "task with no comments and no plan",
+			task: &model.Task{
+				ID:     uuid.New(),
+				Status: model.StatusBacklog,
+			},
+			comments:     nil,
+			wantLen:      0,
+			wantPlanLen:  0,
+			wantComments: 0,
+		},
+		{
+			name: "task with comments only",
+			task: &model.Task{
+				ID:     uuid.New(),
+				Status: model.StatusInProgress,
+			},
+			comments: []model.TaskComment{
+				{ID: uuid.New(), Author: "user", Body: "A comment"},
+				{ID: uuid.New(), Author: "user", Body: "Another comment"},
+				{ID: uuid.New(), Author: "system", Body: "System note"},
+			},
+			wantLen:      3,
+			wantPlanLen:  0,
+			wantComments: 3,
+		},
+		{
+			name: "task with plan steps only",
+			task: &model.Task{
+				ID:     uuid.New(),
+				Status: model.StatusPlanReview,
+				Plan: model.JSONField{
+					"subtasks": []any{
+						map[string]any{"title": "Only step"},
+					},
+				},
+			},
+			comments:     nil,
+			wantLen:      1,
+			wantPlanLen:  1,
+			wantComments: 0,
+		},
+		{
+			name:         "nil task",
+			task:         nil,
+			comments:     nil,
+			wantLen:      0,
+			wantPlanLen:  0,
+			wantComments: 0,
+		},
+		{
+			name: "plan steps only included for plan_review status",
+			task: &model.Task{
+				ID:     uuid.New(),
+				Status: model.StatusInProgress, // not plan_review
+				Plan: model.JSONField{
+					"subtasks": []any{
+						map[string]any{"title": "Step 1"},
+					},
+				},
+			},
+			comments:     nil,
+			wantLen:      0,
+			wantPlanLen:  0,
+			wantComments: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := DetailModel{
+				task:     tt.task,
+				comments: tt.comments,
+			}
+			items := d.deletableItems()
+			if len(items) != tt.wantLen {
+				t.Fatalf("expected %d items, got %d", tt.wantLen, len(items))
+			}
+
+			var planCount, commentCount int
+			for _, item := range items {
+				switch item.kind {
+				case deleteItemPlanStep:
+					planCount++
+				case deleteItemComment:
+					commentCount++
+				}
+			}
+			if planCount != tt.wantPlanLen {
+				t.Errorf("expected %d plan step items, got %d", tt.wantPlanLen, planCount)
+			}
+			if commentCount != tt.wantComments {
+				t.Errorf("expected %d comment items, got %d", tt.wantComments, commentCount)
+			}
+
+			// Verify ordering: plan steps come before comments.
+			seenComment := false
+			for _, item := range items {
+				if item.kind == deleteItemComment {
+					seenComment = true
+				}
+				if item.kind == deleteItemPlanStep && seenComment {
+					t.Error("plan step appeared after comment; expected plan steps first")
+				}
+			}
+
+			// Verify indices are sequential within each kind.
+			planIdx, commentIdx := 0, 0
+			for _, item := range items {
+				switch item.kind {
+				case deleteItemPlanStep:
+					if item.index != planIdx {
+						t.Errorf("plan step index: expected %d, got %d", planIdx, item.index)
+					}
+					planIdx++
+				case deleteItemComment:
+					if item.index != commentIdx {
+						t.Errorf("comment index: expected %d, got %d", commentIdx, item.index)
+					}
+					commentIdx++
+				}
+			}
+		})
+	}
+}
+
+func TestSelectedDeleteItem(t *testing.T) {
+	task := &model.Task{
+		ID:     uuid.New(),
+		Status: model.StatusPlanReview,
+		Plan: model.JSONField{
+			"subtasks": []any{
+				map[string]any{"title": "Step 1"},
+				map[string]any{"title": "Step 2"},
+			},
+		},
+	}
+	comments := []model.TaskComment{
+		{ID: uuid.New(), Author: "user", Body: "Comment 1"},
+	}
+
+	tests := []struct {
+		name         string
+		task         *model.Task
+		comments     []model.TaskComment
+		deleteCursor int
+		wantNil      bool
+		wantKind     deleteItemKind
+		wantIndex    int
+	}{
+		{
+			name:         "cursor at 0 returns first plan step",
+			task:         task,
+			comments:     comments,
+			deleteCursor: 0,
+			wantKind:     deleteItemPlanStep,
+			wantIndex:    0,
+		},
+		{
+			name:         "cursor at last index returns comment",
+			task:         task,
+			comments:     comments,
+			deleteCursor: 2, // 2 plan steps + 1 comment = index 2
+			wantKind:     deleteItemComment,
+			wantIndex:    0,
+		},
+		{
+			name:         "cursor at -1 returns nil",
+			task:         task,
+			comments:     comments,
+			deleteCursor: -1,
+			wantNil:      true,
+		},
+		{
+			name:         "cursor beyond bounds returns nil",
+			task:         task,
+			comments:     comments,
+			deleteCursor: 99,
+			wantNil:      true,
+		},
+		{
+			name:         "no deletable items returns nil",
+			task:         &model.Task{ID: uuid.New(), Status: model.StatusBacklog},
+			comments:     nil,
+			deleteCursor: 0,
+			wantNil:      true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := DetailModel{
+				task:         tt.task,
+				comments:     tt.comments,
+				deleteCursor: tt.deleteCursor,
+			}
+			item := d.selectedDeleteItem()
+			if tt.wantNil {
+				if item != nil {
+					t.Fatalf("expected nil, got %+v", item)
+				}
+				return
+			}
+			if item == nil {
+				t.Fatal("expected non-nil item, got nil")
+			}
+			if item.kind != tt.wantKind {
+				t.Errorf("expected kind %d, got %d", tt.wantKind, item.kind)
+			}
+			if item.index != tt.wantIndex {
+				t.Errorf("expected index %d, got %d", tt.wantIndex, item.index)
+			}
+		})
+	}
+}
+
+func TestIsDeleteTarget(t *testing.T) {
+	task := &model.Task{
+		ID:     uuid.New(),
+		Status: model.StatusPlanReview,
+		Plan: model.JSONField{
+			"subtasks": []any{
+				map[string]any{"title": "Step 1"},
+			},
+		},
+	}
+	comments := []model.TaskComment{
+		{ID: uuid.New(), Author: "user", Body: "Comment"},
+	}
+
+	tests := []struct {
+		name         string
+		deleteMode   bool
+		deleteCursor int
+		queryKind    deleteItemKind
+		queryIndex   int
+		want         bool
+	}{
+		{
+			name:         "matching target in delete mode",
+			deleteMode:   true,
+			deleteCursor: 0,
+			queryKind:    deleteItemPlanStep,
+			queryIndex:   0,
+			want:         true,
+		},
+		{
+			name:         "non-matching kind",
+			deleteMode:   true,
+			deleteCursor: 0,
+			queryKind:    deleteItemComment,
+			queryIndex:   0,
+			want:         false,
+		},
+		{
+			name:         "non-matching index",
+			deleteMode:   true,
+			deleteCursor: 0,
+			queryKind:    deleteItemPlanStep,
+			queryIndex:   1,
+			want:         false,
+		},
+		{
+			name:         "delete mode off returns false",
+			deleteMode:   false,
+			deleteCursor: 0,
+			queryKind:    deleteItemPlanStep,
+			queryIndex:   0,
+			want:         false,
+		},
+		{
+			name:         "cursor on comment matches comment target",
+			deleteMode:   true,
+			deleteCursor: 1, // second item = first comment
+			queryKind:    deleteItemComment,
+			queryIndex:   0,
+			want:         true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := DetailModel{
+				task:         task,
+				comments:     comments,
+				deleteMode:   tt.deleteMode,
+				deleteCursor: tt.deleteCursor,
+			}
+			got := d.isDeleteTarget(tt.queryKind, tt.queryIndex)
+			if got != tt.want {
+				t.Errorf("isDeleteTarget(%d, %d) = %v, want %v",
+					tt.queryKind, tt.queryIndex, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsDeleteSection(t *testing.T) {
+	task := &model.Task{
+		ID:     uuid.New(),
+		Status: model.StatusPlanReview,
+		Plan: model.JSONField{
+			"subtasks": []any{
+				map[string]any{"title": "Step 1"},
+			},
+		},
+	}
+	comments := []model.TaskComment{
+		{ID: uuid.New(), Author: "user", Body: "Comment"},
+	}
+
+	tests := []struct {
+		name         string
+		deleteMode   bool
+		deleteCursor int
+		queryKind    deleteItemKind
+		want         bool
+	}{
+		{
+			name:         "cursor on plan step matches plan section",
+			deleteMode:   true,
+			deleteCursor: 0,
+			queryKind:    deleteItemPlanStep,
+			want:         true,
+		},
+		{
+			name:         "cursor on plan step does not match comment section",
+			deleteMode:   true,
+			deleteCursor: 0,
+			queryKind:    deleteItemComment,
+			want:         false,
+		},
+		{
+			name:         "cursor on comment matches comment section",
+			deleteMode:   true,
+			deleteCursor: 1, // first comment
+			queryKind:    deleteItemComment,
+			want:         true,
+		},
+		{
+			name:         "cursor on comment does not match plan section",
+			deleteMode:   true,
+			deleteCursor: 1,
+			queryKind:    deleteItemPlanStep,
+			want:         false,
+		},
+		{
+			name:         "delete mode off returns false",
+			deleteMode:   false,
+			deleteCursor: 0,
+			queryKind:    deleteItemPlanStep,
+			want:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := DetailModel{
+				task:         task,
+				comments:     comments,
+				deleteMode:   tt.deleteMode,
+				deleteCursor: tt.deleteCursor,
+			}
+			got := d.isDeleteSection(tt.queryKind)
+			if got != tt.want {
+				t.Errorf("isDeleteSection(%d) = %v, want %v",
+					tt.queryKind, got, tt.want)
+			}
+		})
+	}
+}
