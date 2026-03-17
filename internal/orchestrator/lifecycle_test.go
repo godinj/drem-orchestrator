@@ -7,11 +7,10 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -21,7 +20,7 @@ import (
 // spawning should skip with testing.Short or use a skip guard.
 func setupLifecycleTest(t *testing.T) (*Orchestrator, *gorm.DB) {
 	t.Helper()
-	db := lifecycleTestDB(t)
+	db := testutil.NewTestDB(t)
 	projectID := uuid.New()
 	events := make(chan Event, 100)
 
@@ -43,32 +42,6 @@ func setupLifecycleTest(t *testing.T) (*Orchestrator, *gorm.DB) {
 		logger:    slog.Default().With("component", "lifecycle-test"),
 	}
 	return o, db
-}
-
-// lifecycleTestDB creates an isolated in-memory SQLite database for each test.
-// Unlike testDB which uses cache=shared, this avoids unique constraint
-// collisions between parallel tests.
-func lifecycleTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	// Use a unique file name for each test to ensure isolation.
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=private", uuid.New().String())
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	if err != nil {
-		t.Fatalf("open test db: %v", err)
-	}
-	if err := db.AutoMigrate(
-		&model.Project{},
-		&model.Task{},
-		&model.Agent{},
-		&model.TaskEvent{},
-		&model.Memory{},
-		&model.TaskComment{},
-	); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
-	return db
 }
 
 // createLifecycleTask creates a task with the given status and optional plan.

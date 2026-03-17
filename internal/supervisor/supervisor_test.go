@@ -386,8 +386,8 @@ func TestWriteJournalEntry_ContentFormat(t *testing.T) {
 	content := string(data)
 
 	checks := []struct {
-		name    string
-		needle  string
+		name   string
+		needle string
 	}{
 		{"heading", "# 2026-03-14 10:30:00 — failure_diagnosis"},
 		{"agent", "**Agent**: test-agent"},

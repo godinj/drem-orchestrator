@@ -24,11 +24,14 @@ func testOrchestrator(t *testing.T, db *gorm.DB, wtManager *worktree.Manager) *O
 	projectID := uuid.New()
 	events := make(chan Event, 100)
 	return &Orchestrator{
-		db:        db,
-		projectID: projectID,
-		worktree:  wtManager,
-		events:    events,
-		logger:    slog.Default().With("component", "test-orchestrator"),
+		db:              db,
+		projectID:       projectID,
+		worktree:        wtManager,
+		events:          events,
+		contextWarnPct:  75,
+		contextStopPct:  90,
+		contextFixerPct: 85,
+		logger:          slog.Default().With("component", "test-orchestrator"),
 	}
 }
 
@@ -52,14 +55,6 @@ func setupTestRepoWithMainBranch(t *testing.T) string {
 		}
 	}
 	return bareRepoPath
-}
-
-// initBareRepo creates a temporary bare git repo with an initial commit on "main".
-// Wraps testutil helpers for compatibility with existing test files.
-func initBareRepo(t *testing.T) (bareRepoPath string, cleanup func()) {
-	t.Helper()
-	bareRepoPath = setupTestRepoWithMainBranch(t)
-	return bareRepoPath, func() {}
 }
 
 // runGitCmd runs a git command in the given directory and returns the output.
@@ -280,11 +275,11 @@ func TestCheckFeatureCompletion_AllDone(t *testing.T) {
 
 	parentID := uuid.New()
 	parent := model.Task{
-		ID:        parentID,
-		ProjectID: o.projectID,
-		Title:     "parent",
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent",
 		Description: "test parent",
-		Status:    model.StatusInProgress,
+		Status:      model.StatusInProgress,
 		// No WorktreeBranch — skip the file change check.
 	}
 	db.Create(&parent)
@@ -631,8 +626,8 @@ func TestAgentRecordVerification_MissingAgent(t *testing.T) {
 	// This tests that the verification query works correctly.
 	db := testutil.NewTestDB(t)
 	project := model.Project{
-		ID:   uuid.New(),
-		Name: "test-verify",
+		ID:           uuid.New(),
+		Name:         "test-verify",
 		BareRepoPath: "/tmp/fake",
 	}
 	db.Create(&project)
@@ -659,8 +654,8 @@ func TestAgentRecordVerification_MissingAgent(t *testing.T) {
 func TestAgentRecordVerification_AgentExists(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	project := model.Project{
-		ID:   uuid.New(),
-		Name: "test-verify",
+		ID:           uuid.New(),
+		Name:         "test-verify",
 		BareRepoPath: "/tmp/fake",
 	}
 	db.Create(&project)

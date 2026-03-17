@@ -49,9 +49,9 @@ func forbidBindings(t *testing.T, bindings []helpBinding, keys ...string) {
 	}
 }
 
-// newTestModel creates a minimal Model for help testing with the given focus,
+// buildTestModel creates a minimal Model for help testing with the given focus,
 // task (placed on board + detail), agent, and deleteMode.
-func newTestModel(focus Focus, task *model.Task, agent *model.Agent, deleteMode bool) Model {
+func buildTestModel(focus Focus, task *model.Task, agent *model.Agent, deleteMode bool) Model {
 	m := Model{
 		keys:     defaultKeyMap(),
 		focus:    focus,
@@ -176,7 +176,7 @@ func TestContextActions_BoardFocusTaskStatuses(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newTestModel(FocusBoard, tt.task, tt.agent, false)
+			m := buildTestModel(FocusBoard, tt.task, tt.agent, false)
 			actions := m.contextActions()
 
 			requireBindings(t, actions, tt.wantKeys...)
@@ -197,7 +197,7 @@ func TestContextActions_BoardFocusTaskStatuses(t *testing.T) {
 }
 
 func TestContextActions_BoardFocusNoTask(t *testing.T) {
-	m := newTestModel(FocusBoard, nil, nil, false)
+	m := buildTestModel(FocusBoard, nil, nil, false)
 	actions := m.contextActions()
 
 	// Global/navigation actions should still be present.
@@ -240,7 +240,7 @@ func TestContextActions_AgentFocus(t *testing.T) {
 			// The contextActions for FocusAgents always includes g if there's an
 			// agent — but the implementation hardcodes it in the agents section.
 			// We test via the model.
-			m := newTestModel(FocusAgents, nil, nil, false)
+			m := buildTestModel(FocusAgents, nil, nil, false)
 			actions := m.contextActions()
 
 			requireBindings(t, actions, tt.wantKeys...)
@@ -298,7 +298,7 @@ func TestContextActions_DetailFocus(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newTestModel(FocusDetail, tt.task, tt.agent, false)
+			m := buildTestModel(FocusDetail, tt.task, tt.agent, false)
 			actions := m.contextActions()
 
 			// Task-status-specific actions should match board.
@@ -328,7 +328,7 @@ func TestContextActions_DetailDeleteMode(t *testing.T) {
 		Status: model.StatusPlanReview,
 	}
 
-	m := newTestModel(FocusDetail, task, nil, true)
+	m := buildTestModel(FocusDetail, task, nil, true)
 	actions := m.contextActions()
 
 	// Delete mode should have navigation, confirm, and cancel actions.
@@ -382,7 +382,7 @@ func TestContextActions_GlobalActionsAlwaysPresent(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newTestModel(tt.focus, tt.task, tt.agent, false)
+			m := buildTestModel(tt.focus, tt.task, tt.agent, false)
 			actions := m.contextActions()
 			requireBindings(t, actions, globalKeys...)
 
@@ -460,7 +460,7 @@ func TestContextActions_AgentRelatedOnBoardDetail(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := newTestModel(tt.focus, tt.task, tt.agent, false)
+			m := buildTestModel(tt.focus, tt.task, tt.agent, false)
 			actions := m.contextActions()
 
 			if tt.wantLog {
@@ -512,7 +512,7 @@ func TestContextActions_SupervisorAlwaysOnBoardDetail(t *testing.T) {
 			if tt.focus != FocusAgents {
 				taskArg = task
 			}
-			m := newTestModel(tt.focus, taskArg, nil, false)
+			m := buildTestModel(tt.focus, taskArg, nil, false)
 			actions := m.contextActions()
 
 			if tt.want {

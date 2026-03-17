@@ -11,8 +11,8 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
-// createTestProject sets up a project with a task and agent for memory tests.
-func createTestProject(t *testing.T, db *gorm.DB) (projectID, taskID, agentID uuid.UUID) {
+// setupTestEntities sets up a project with a task and agent for memory tests.
+func setupTestEntities(t *testing.T, db *gorm.DB) (projectID, taskID, agentID uuid.UUID) {
 	t.Helper()
 
 	projectID = uuid.New()
@@ -56,7 +56,7 @@ func TestStoreMemory(t *testing.T) {
 	t.Run("all fields populated", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		_, taskID, agentID := createTestProject(t, db)
+		_, taskID, agentID := setupTestEntities(t, db)
 
 		meta := map[string]any{"key": "value", "count": float64(42)}
 		mem, err := mgr.StoreMemory(agentID, "decided to use JSON", "decision", &taskID, meta)
@@ -95,7 +95,7 @@ func TestStoreMemory(t *testing.T) {
 	t.Run("nil taskID", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		_, _, agentID := createTestProject(t, db)
+		_, _, agentID := setupTestEntities(t, db)
 
 		mem, err := mgr.StoreMemory(agentID, "a lesson learned", "lesson", nil, nil)
 		if err != nil {
@@ -109,7 +109,7 @@ func TestStoreMemory(t *testing.T) {
 	t.Run("metadata JSON round-trip", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		_, taskID, agentID := createTestProject(t, db)
+		_, taskID, agentID := setupTestEntities(t, db)
 
 		meta := map[string]any{
 			"files":   []any{"main.go", "util.go"},
@@ -140,13 +140,19 @@ func TestGetMemories(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	mgr := NewManager(db)
 
-	_, taskID, agentID := createTestProject(t, db)
+	_, taskID, agentID := setupTestEntities(t, db)
 
 	// Create a second agent under the same project
 	agent2ID := uuid.New()
 	agent2 := model.Agent{
-		ID:        agent2ID,
-		ProjectID: uuid.MustParse(func() string { var p model.Agent; db.First(&p, "id = ?", agentID); var a model.Agent; db.First(&a, "id = ?", agentID); return a.ProjectID.String() }()),
+		ID: agent2ID,
+		ProjectID: uuid.MustParse(func() string {
+			var p model.Agent
+			db.First(&p, "id = ?", agentID)
+			var a model.Agent
+			db.First(&a, "id = ?", agentID)
+			return a.ProjectID.String()
+		}()),
 		AgentType: model.AgentReviewer,
 		Name:      "test-agent-2",
 		Status:    model.AgentIdle,
@@ -231,7 +237,7 @@ func TestGetProjectMemories(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	mgr := NewManager(db)
 
-	projectID, taskID, agentID := createTestProject(t, db)
+	projectID, taskID, agentID := setupTestEntities(t, db)
 
 	// Create second task and agent under same project
 	task2ID := uuid.New()
@@ -334,7 +340,7 @@ func TestCompactAgentMemory(t *testing.T) {
 	t.Run("compacts multiple memories into summary", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		_, taskID, agentID := createTestProject(t, db)
+		_, taskID, agentID := setupTestEntities(t, db)
 		tid := &taskID
 
 		// Store 5+ memories of various types
@@ -401,7 +407,7 @@ func TestCompactAgentMemory(t *testing.T) {
 	t.Run("idempotent compact does not duplicate", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		_, taskID, agentID := createTestProject(t, db)
+		_, taskID, agentID := setupTestEntities(t, db)
 		tid := &taskID
 
 		if _, err := mgr.StoreMemory(agentID, "a decision", "decision", tid, nil); err != nil {
@@ -435,7 +441,7 @@ func TestCompactAgentMemory(t *testing.T) {
 	t.Run("agent with no memories returns empty", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		_, _, agentID := createTestProject(t, db)
+		_, _, agentID := setupTestEntities(t, db)
 
 		summary, err := mgr.CompactAgentMemory(agentID)
 		if err != nil {
@@ -451,7 +457,7 @@ func TestBuildAgentContext(t *testing.T) {
 	t.Run("agent with memories returns formatted context", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		_, taskID, agentID := createTestProject(t, db)
+		_, taskID, agentID := setupTestEntities(t, db)
 		tid := &taskID
 
 		// Set agent memory summary
@@ -486,7 +492,7 @@ func TestBuildAgentContext(t *testing.T) {
 	t.Run("token budget truncation", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		_, taskID, agentID := createTestProject(t, db)
+		_, taskID, agentID := setupTestEntities(t, db)
 
 		// Set a long memory summary
 		longSummary := strings.Repeat("x", 10000)
@@ -505,7 +511,7 @@ func TestBuildAgentContext(t *testing.T) {
 	t.Run("no memories returns empty string", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		_, taskID, agentID := createTestProject(t, db)
+		_, taskID, agentID := setupTestEntities(t, db)
 
 		ctx, err := mgr.BuildAgentContext(agentID, taskID, 0)
 		if err != nil {
@@ -519,7 +525,7 @@ func TestBuildAgentContext(t *testing.T) {
 	t.Run("includes project-wide context from other agents", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		projectID, taskID, agentID := createTestProject(t, db)
+		projectID, taskID, agentID := setupTestEntities(t, db)
 
 		// Create a second agent in the same project
 		agent2ID := uuid.New()
@@ -650,7 +656,7 @@ func TestExtractMemoriesFromOutput(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			db := testutil.NewTestDB(t)
 			mgr := NewManager(db)
-			_, taskID, agentID := createTestProject(t, db)
+			_, taskID, agentID := setupTestEntities(t, db)
 
 			got, err := mgr.ExtractMemoriesFromOutput(agentID, taskID, tc.output)
 			if err != nil {
@@ -685,7 +691,7 @@ func TestExtractMemoriesFromOutput(t *testing.T) {
 	t.Run("deduplicates identical matches", func(t *testing.T) {
 		db := testutil.NewTestDB(t)
 		mgr := NewManager(db)
-		_, taskID, agentID := createTestProject(t, db)
+		_, taskID, agentID := setupTestEntities(t, db)
 
 		// Same line repeated should only produce one memory
 		output := "I decided to use goroutines\nI decided to use goroutines"

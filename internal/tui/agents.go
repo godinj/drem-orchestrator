@@ -11,6 +11,8 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
+const maxBranchDisplayLen = 30
+
 // AgentsModel renders the agent sidebar.
 type AgentsModel struct {
 	agents       []model.Agent
@@ -171,8 +173,8 @@ func (a AgentsModel) View() string {
 			}
 
 			// Truncate target for display.
-			if len(target) > 30 {
-				target = "…" + target[len(target)-29:]
+			if len(target) > maxBranchDisplayLen {
+				target = "…" + target[len(target)-maxBranchDisplayLen+1:]
 			}
 
 			actLine := fmt.Sprintf("    ▸ %s %s", tool, target)

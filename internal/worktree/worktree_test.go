@@ -15,15 +15,15 @@ func TestMergeBranch_EnrichedResult_OnConflict(t *testing.T) {
 
 	// Create target worktree (simulates integration branch)
 	targetDir := filepath.Join(dir, "target")
-	testutil.AddWorktree(t,bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Create source worktree (simulates agent branch)
 	sourceDir := filepath.Join(dir, "source")
-	testutil.AddWorktree(t,bareRepo, "agent-source", sourceDir)
+	testutil.AddWorktree(t, bareRepo, "agent-source", sourceDir)
 
 	// Make conflicting changes to the same file in both worktrees
-	testutil.CommitFile(t,targetDir, "conflict.txt", "target content\n", "target change")
-	testutil.CommitFile(t,sourceDir, "conflict.txt", "source content\n", "source change")
+	testutil.CommitFile(t, targetDir, "conflict.txt", "target content\n", "target change")
+	testutil.CommitFile(t, sourceDir, "conflict.txt", "source content\n", "source change")
 
 	// Attempt merge
 	mgr := NewManager(bareRepo, "main")
@@ -79,13 +79,13 @@ func TestMergeBranch_SuccessfulMerge(t *testing.T) {
 
 	// Create target worktree
 	targetDir := filepath.Join(dir, "target")
-	testutil.AddWorktree(t,bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Create source worktree with non-overlapping changes
 	sourceDir := filepath.Join(dir, "source")
-	testutil.AddWorktree(t,bareRepo, "agent-source", sourceDir)
+	testutil.AddWorktree(t, bareRepo, "agent-source", sourceDir)
 
-	testutil.CommitFile(t,sourceDir, "new-file.txt", "new content\n", "add new file")
+	testutil.CommitFile(t, sourceDir, "new-file.txt", "new content\n", "add new file")
 
 	// Merge should succeed
 	mgr := NewManager(bareRepo, "main")
@@ -123,12 +123,12 @@ func TestMergeBranch_PreMergeFetchHappyPath(t *testing.T) {
 
 	// Create target worktree
 	targetDir := filepath.Join(dir, "target")
-	testutil.AddWorktree(t,bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Create source worktree with a commit
 	sourceDir := filepath.Join(dir, "source")
-	testutil.AddWorktree(t,bareRepo, "agent-source", sourceDir)
-	testutil.CommitFile(t,sourceDir, "file.txt", "content\n", "add file")
+	testutil.AddWorktree(t, bareRepo, "agent-source", sourceDir)
+	testutil.CommitFile(t, sourceDir, "file.txt", "content\n", "add file")
 
 	// The ref "agent-source" should be visible (same bare repo) so
 	// the pre-merge fetch step is skipped and the merge succeeds.
@@ -148,7 +148,7 @@ func TestMergeBranch_UnresolvableBranch(t *testing.T) {
 
 	// Create target worktree
 	targetDir := filepath.Join(dir, "target")
-	testutil.AddWorktree(t,bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Attempt to merge a branch that doesn't exist
 	mgr := NewManager(bareRepo, "main")
@@ -167,15 +167,15 @@ func TestRebaseBranch_CleanRebase(t *testing.T) {
 
 	// Create target worktree (simulates integration branch)
 	targetDir := filepath.Join(dir, "target")
-	testutil.AddWorktree(t,bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Create source worktree (simulates agent branch)
 	sourceDir := filepath.Join(dir, "source")
-	testutil.AddWorktree(t,bareRepo, "agent-source", sourceDir)
+	testutil.AddWorktree(t, bareRepo, "agent-source", sourceDir)
 
 	// Make non-overlapping changes
-	testutil.CommitFile(t,targetDir, "target-file.txt", "target content\n", "target change")
-	testutil.CommitFile(t,sourceDir, "source-file.txt", "source content\n", "source change")
+	testutil.CommitFile(t, targetDir, "target-file.txt", "target content\n", "target change")
+	testutil.CommitFile(t, sourceDir, "source-file.txt", "source content\n", "source change")
 
 	// Rebase should succeed
 	result, err := RebaseBranch(sourceDir, targetDir)
@@ -205,15 +205,15 @@ func TestRebaseBranch_Conflict(t *testing.T) {
 
 	// Create target worktree
 	targetDir := filepath.Join(dir, "target")
-	testutil.AddWorktree(t,bareRepo, "feature/target", targetDir)
+	testutil.AddWorktree(t, bareRepo, "feature/target", targetDir)
 
 	// Create source worktree
 	sourceDir := filepath.Join(dir, "source")
-	testutil.AddWorktree(t,bareRepo, "agent-source", sourceDir)
+	testutil.AddWorktree(t, bareRepo, "agent-source", sourceDir)
 
 	// Make conflicting changes to the same file
-	testutil.CommitFile(t,targetDir, "shared.txt", "target line\n", "target change")
-	testutil.CommitFile(t,sourceDir, "shared.txt", "source line\n", "source change")
+	testutil.CommitFile(t, targetDir, "shared.txt", "target line\n", "target change")
+	testutil.CommitFile(t, sourceDir, "shared.txt", "source line\n", "source change")
 
 	// Record the source HEAD before rebase to verify rollback
 	headBefore, err := RunGit([]string{"rev-parse", "HEAD"}, sourceDir)
@@ -274,7 +274,7 @@ func TestFindWorktreeByBranch_Found(t *testing.T) {
 
 	// Create a worktree with a known branch
 	wtDir := filepath.Join(dir, "my-worktree")
-	testutil.AddWorktree(t,bareRepo, "feature/test-find", wtDir)
+	testutil.AddWorktree(t, bareRepo, "feature/test-find", wtDir)
 
 	mgr := NewManager(bareRepo, "main")
 	path, err := mgr.FindWorktreeByBranch("feature/test-find")

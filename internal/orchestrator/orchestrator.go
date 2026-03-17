@@ -37,6 +37,17 @@ import (
 // planner agent before failing the task.
 const MaxPlannerRetries = 3
 
+const (
+	defaultContextFixerPct = 85
+	maxTestOutputLen       = 5000
+	maxGitDiffLen          = 10000
+	maxCmdOutputLen        = 5000
+	maxTestFailureLen      = 2000
+	maxErrorSnippetLen     = 500
+	maxSlugLen             = 40
+	maxBuildRetries        = 3
+)
+
 // slugRegexp matches non-alphanumeric characters for feature name derivation.
 var slugRegexp = regexp.MustCompile(`[^a-z0-9]+`)
 
@@ -132,7 +143,7 @@ func New(
 	contextStopPct int,
 	contextFixerPct ...int,
 ) *Orchestrator {
-	fixerPct := 85
+	fixerPct := defaultContextFixerPct
 	if len(contextFixerPct) > 0 && contextFixerPct[0] > 0 {
 		fixerPct = contextFixerPct[0]
 	}
@@ -614,7 +625,7 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 			parent.Context["baseline_tests_checked"] = true
 			if runErr != nil || result.ExitCode != 0 {
 				parent.Context["baseline_tests_failed"] = true
-				parent.Context["baseline_test_output"] = truncate(result.Output, 5000)
+				parent.Context["baseline_test_output"] = truncate(result.Output, maxTestOutputLen)
 				o.logger.Warn("baseline tests fail on integration branch",
 					"task_id", parent.ID, "exit_code", result.ExitCode)
 				if err := o.db.Save(parent).Error; err != nil {
@@ -1279,8 +1290,8 @@ func taskFeatureName(task *model.Task) string {
 	slug := strings.ToLower(task.Title)
 	slug = slugRegexp.ReplaceAllString(slug, "-")
 	slug = strings.Trim(slug, "-")
-	if len(slug) > 40 {
-		slug = slug[:40]
+	if len(slug) > maxSlugLen {
+		slug = slug[:maxSlugLen]
 	}
 	return fmt.Sprintf("%s-%s", task.ID.String()[:8], slug)
 }
@@ -1472,7 +1483,7 @@ func (o *Orchestrator) spawnFixerForTestFailure(subtask *model.Task, ag *model.A
 			ag.WorktreePath,
 		)
 		if fullErr == nil && fullDiff != "" {
-			gitDiff = truncate(fullDiff, 10000)
+			gitDiff = truncate(fullDiff, maxGitDiffLen)
 		}
 	}
 
@@ -1786,7 +1797,7 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 	if fixerAttempted {
 		// Fixer already tried and failed → flag for human review.
 		parent.Context["needs_human_review"] = true
-		parent.Context["testing_ready_failure"] = truncate(testOutput, 2000)
+		parent.Context["testing_ready_failure"] = truncate(testOutput, maxTestFailureLen)
 		if err := o.db.Save(parent).Error; err != nil {
 			return fmt.Errorf("processTestingReady: save parent after fixer failure: %w", err)
 		}
@@ -1800,7 +1811,7 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 
 	// Spawn a fixer agent on the integration worktree.
 	parent.Context["testing_ready_fixer_attempted"] = true
-	parent.Context["test_failure_output"] = truncate(testOutput, 2000)
+	parent.Context["test_failure_output"] = truncate(testOutput, maxTestFailureLen)
 
 	// Get the diff between feature branch and default branch.
 	var gitDiff string
@@ -1809,7 +1820,7 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 		worktreePath,
 	)
 	if diffErr == nil {
-		gitDiff = truncate(diff, 10000)
+		gitDiff = truncate(diff, maxGitDiffLen)
 	}
 
 	fixerPrompt := fmt.Sprintf(`Fix the integration failures. Prefer fixing implementation code over modifying tests.
@@ -1823,7 +1834,7 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 ## Task
 Title: %s
 Description: %s
-`, truncate(testOutput, 5000), o.worktree.DefaultBranch, gitDiff, parent.Title, parent.Description)
+`, truncate(testOutput, maxTestOutputLen), o.worktree.DefaultBranch, gitDiff, parent.Title, parent.Description)
 
 	if o.runner == nil {
 		o.logger.Error("processTestingReady: runner is nil, cannot spawn fixer", "task_id", parent.ID)
@@ -1974,11 +1985,11 @@ func (o *Orchestrator) verifyTestsBeforeMerge(subtask *model.Task, worktreePath 
 	}
 
 	var lastResult *TestResult
-	for attempt := 1; attempt <= 3; attempt++ {
+	for attempt := 1; attempt <= maxBuildRetries; attempt++ {
 		cmdResult := o.runCommandWithTimeout(worktreePath, testCmd, timeout)
 		lastResult = &TestResult{
 			Passed:       cmdResult.ExitCode == 0,
-			Output:       truncate(cmdResult.Output, 5000),
+			Output:       truncate(cmdResult.Output, maxCmdOutputLen),
 			ExitCode:     cmdResult.ExitCode,
 			RunAt:        time.Now(),
 			Duration:     cmdResult.Duration.Seconds(),
@@ -1989,7 +2000,7 @@ func (o *Orchestrator) verifyTestsBeforeMerge(subtask *model.Task, worktreePath 
 		if lastResult.Passed {
 			return lastResult, nil
 		}
-		if attempt < 3 {
+		if attempt < maxBuildRetries {
 			time.Sleep(time.Duration(attempt) * 2 * time.Second)
 		}
 	}
@@ -2017,7 +2028,7 @@ func (o *Orchestrator) verifyCompilationBeforeMerge(subtask *model.Task, worktre
 	cmdResult := o.runCommandWithTimeout(worktreePath, compileCmd, timeout)
 	return &TestResult{
 		Passed:       cmdResult.ExitCode == 0,
-		Output:       truncate(cmdResult.Output, 5000),
+		Output:       truncate(cmdResult.Output, maxCmdOutputLen),
 		ExitCode:     cmdResult.ExitCode,
 		RunAt:        time.Now(),
 		Duration:     cmdResult.Duration.Seconds(),
@@ -2128,7 +2139,7 @@ func (o *Orchestrator) runCommandWithTimeout(dir, cmd string, timeout time.Durat
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return &commandResult{
-				Output:   truncate(outBuf.String(), 5000) + "\n[killed: timeout exceeded]",
+				Output:   truncate(outBuf.String(), maxCmdOutputLen) + "\n[killed: timeout exceeded]",
 				ExitCode: -1,
 				Duration: elapsed,
 			}

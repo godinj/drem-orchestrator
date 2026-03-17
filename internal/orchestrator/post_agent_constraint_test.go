@@ -22,8 +22,7 @@ import (
 // exists in the feature worktree, the agent completes normally and the subtask
 // transitions to DONE.
 func TestPostAgentConstraint_NoConfig(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "constraint-no-config"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -122,8 +121,7 @@ func TestPostAgentConstraint_NoConfig(t *testing.T) {
 // TestPostAgentConstraint_Pass verifies that when constraints exist and pass,
 // the agent completes normally and the subtask transitions to DONE.
 func TestPostAgentConstraint_Pass(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "constraint-pass"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -229,8 +227,7 @@ limit = 1000
 // TestPostAgentConstraint_Fail verifies that when constraints are violated,
 // the subtask fails with feedback containing the violation report.
 func TestPostAgentConstraint_Fail(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "constraint-fail"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)

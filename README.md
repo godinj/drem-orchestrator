@@ -228,6 +228,94 @@ internal/
 - [GORM](https://gorm.io/) + [go-sqlite3](https://github.com/mattn/go-sqlite3) -- ORM and database
 - [BurntSushi/toml](https://github.com/BurntSushi/toml) -- Configuration parsing
 
+## Agent Lifecycle
+
+When a subtask is scheduled, the orchestrator:
+
+1. **Creates a git worktree** under `feature/<name>/agent-<uuid>/` with a dedicated branch
+2. **Writes a prompt file** to `.claude/agent-prompt.md` in the worktree with task context, constraints, and instructions
+3. **Spawns a Claude Code process** as a headless subprocess (planners, coders, reviewers, fixers) or a tmux session (supervisors, shells)
+4. **Monitors heartbeats** — each agent updates `HeartbeatAt` via the context monitor. If an agent's heartbeat is older than `stale_timeout`, it is marked dead
+5. **Tracks context usage** — the context monitor (`ctxmon`) reads Claude's cost/token output to detect when an agent is approaching its context window limit
+6. **Handles completion** — when the subprocess exits, the orchestrator processes the agent's work (merge, test gate, or failure recovery)
+
+Agents that exceed context thresholds trigger automatic recovery: a fixer agent is spawned for implementation agents at 85%, and a hard stop occurs at 90%. Fixer agents that hit 80% escalate to human review.
+
+## Supervisor
+
+The optional supervisor is an LLM-powered evaluation layer (`internal/supervisor/`). It is invoked at key decision points:
+
+- **Plan validation** — checks that a planner's decomposition is reasonable before presenting it for human review
+- **Failure diagnosis** — when a task fails, the supervisor analyzes logs and context to recommend retry, replan, or escalate
+- **Manual trigger** — users can press `S` in the TUI to request a supervisor evaluation of any task
+
+The supervisor returns structured JSON with a verdict (approve/reject/retry/escalate) and reasoning. Its output is stored in `task.Context` and displayed in the detail panel. Configure via `supervisor_enabled` and `supervisor_timeout` in `drem.toml`.
+
+## Memory & Context
+
+Agent memory (`internal/memory/`) provides cross-conversation persistence:
+
+- **StoreMemory** — agents can record decisions, blockers, file changes, and completions as typed memory entries
+- **ExtractMemoriesFromOutput** — automatically extracts memory-worthy facts from agent output using pattern matching
+- **CompactAgentMemory** — compresses accumulated memories into a structured summary (grouped by type: decisions, file changes, blockers, completions) and archives the originals
+- **BuildAgentContext** — assembles a token-budgeted context string for an agent, combining its own memory summary, recent task memories, and project-wide context from other agents
+
+Context management tracks each agent's token usage via the `context_used_pct` field in `agent.Config`. The orchestrator uses this to trigger compaction, spawn fixers, or hard-stop agents before they exhaust their context window.
+
+## Prompt System
+
+Prompts are generated per agent type in `internal/prompt/`. Each prompt includes:
+
+- Task description and acceptance criteria
+- Parent task context (for subtasks)
+- Git diff of existing work (truncated to 50,000 characters)
+- Constraint rules from `.drem/constraints.toml`
+- Agent-type-specific instructions (planners get decomposition rules, coders get implementation guidelines, reviewers get evaluation criteria)
+
+Prompts are written to `.claude/agent-prompt.md` in the agent's worktree before the Claude process starts.
+
+## Transcript Monitoring
+
+The `agentmon` package (`internal/agentmon/`) tails Claude's conversation transcript (`~/.claude/projects/.../conversations/*.jsonl`) to extract structured signals:
+
+- Test results (pass/fail with output)
+- Build errors
+- Git operations
+- Context usage indicators
+
+These signals feed back into the orchestrator's decision loop for automated test gating and failure recovery.
+
+## Database
+
+Drem uses SQLite in WAL mode for zero-configuration persistence:
+
+- **Location** — configured via `database_path` (default `./drem.db`)
+- **Schema** — auto-migrated on startup via GORM for models: Project, Task, Agent, TaskEvent, Memory, TaskComment
+- **Inspection** — use `sqlite3 drem.db` to query directly; `.schema` shows tables, `.mode column` + `.headers on` for readable output
+- **WAL mode** — enables concurrent reads during agent writes; the `-wal` and `-shm` files are expected alongside the main DB file
+
+## Writing Tests
+
+The `internal/testutil/` package provides shared helpers to eliminate boilerplate:
+
+| Helper | Purpose |
+|--------|---------|
+| `testutil.NewTestDB(t)` | In-memory SQLite with auto-migration and unique name for isolation |
+| `testutil.SetupBareRepo(t)` | Bare git repo with initial commit (auto-cleaned via `t.TempDir()`) |
+| `testutil.InitBareRepoWithMainWorktree(t)` | Bare repo plus a linked main worktree |
+| `testutil.AddWorktree(t, bareRepo, branch, dir)` | Create a worktree with a new branch |
+| `testutil.CommitFile(t, wt, filename, content, msg)` | Write a file and commit it |
+| `testutil.CreateProject(t, db, name, path, branch)` | Insert a project record |
+| `testutil.CreateTask(t, db, projectID, title, status)` | Insert a task record |
+| `testutil.CreateAgent(t, db, taskID, agentType, status)` | Insert an agent record |
+
+**Patterns to follow:**
+
+- Use `testutil.NewTestDB(t)` instead of opening SQLite directly in tests
+- Use table-driven tests for parameterized cases
+- Use `t.TempDir()` for any filesystem operations (auto-cleanup)
+- Keep test helpers in `testutil/` when they are needed by multiple packages; package-local helpers are fine when used by only one package
+
 ## Development
 
 ```bash
@@ -239,6 +327,9 @@ go build -o drem ./cmd/drem
 
 # Format
 gofmt -w .
+
+# Check quality constraints
+bash scripts/check_constitution.sh
 ```
 
 ### Conventions

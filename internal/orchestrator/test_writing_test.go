@@ -1435,8 +1435,7 @@ func TestMergeAutoCommitsDirtyWorktree(t *testing.T) {
 	// This test verifies that MergeAgentIntoFeature auto-commits dirty
 	// worktree files (like plan.json) instead of rejecting the merge.
 	// We use a real git setup since merge operations require it.
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "test-autocommit"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -1483,8 +1482,7 @@ func TestMergeAutoCommitsDirtyWorktree(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandlePlanApproved_CommitsPlanJSON(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "test-plan-commit"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -1498,12 +1496,12 @@ func TestHandlePlanApproved_CommitsPlanJSON(t *testing.T) {
 
 	taskID := uuid.New()
 	task := model.Task{
-		ID:              taskID,
-		ProjectID:       o.projectID,
-		Title:           "plan-commit-task",
-		Description:     "verify plan.json is committed",
-		Status:          model.StatusPlanReview,
-		WorktreeBranch:  "feature/" + featureName,
+		ID:             taskID,
+		ProjectID:      o.projectID,
+		Title:          "plan-commit-task",
+		Description:    "verify plan.json is committed",
+		Status:         model.StatusPlanReview,
+		WorktreeBranch: "feature/" + featureName,
 		Plan: model.JSONField{
 			"subtasks": []any{
 				map[string]any{

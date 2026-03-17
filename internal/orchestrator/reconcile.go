@@ -15,11 +15,11 @@ import (
 
 // ReconcileResult describes the fixes applied by a single Reconcile run.
 type ReconcileResult struct {
-	StaleSubtasksReset        int
-	OrphanedSubtasksFixed     int
-	EmptyFeaturesFailed       int
-	OrphanWorktreesCleaned    int
-	StuckAgentsRecovered      int
+	StaleSubtasksReset         int
+	OrphanedSubtasksFixed      int
+	EmptyFeaturesFailed        int
+	OrphanWorktreesCleaned     int
+	StuckAgentsRecovered       int
 	AlreadyMergedFeaturesFixed int
 }
 

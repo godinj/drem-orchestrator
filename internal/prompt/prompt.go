@@ -13,6 +13,8 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
+const maxDiffLen = 50000
+
 // Opts contains all inputs needed to generate an agent prompt.
 type Opts struct {
 	Task         *model.Task
@@ -573,7 +575,7 @@ func planReviewerInstructions(opts Opts) []string {
 		"6. **TDD structure**: Does every implementation subtask have a corresponding test subtask with `tests_for`?",
 		"7. **Test quality**: Are test subtask descriptions specific about what behavior they verify?",
 		`8. **TDD exceptions**: Are exceptions justified? (integration wiring and research are valid; "too hard to test" is not)`,
-		"9. **Documentation**: If the feature changes user-facing behavior (CLI, config, TUI, new capabilities), " +
+		"9. **Documentation**: If the feature changes user-facing behavior (CLI, config, TUI, new capabilities), "+
 			"does at least one subtask update the README or add a walkthrough? Flag if missing.",
 		"",
 		"## Output",
@@ -617,8 +619,8 @@ func featureReviewerInstructions(opts Opts) []string {
 	if opts.GitDiff != "" {
 		// Truncate very large diffs to avoid overwhelming the prompt.
 		diff := opts.GitDiff
-		if len(diff) > 50000 {
-			diff = diff[:50000] + "\n... (truncated)"
+		if len(diff) > maxDiffLen {
+			diff = diff[:maxDiffLen] + "\n... (truncated)"
 		}
 		sections = append(sections, "## Changes (git diff)", "")
 		sections = append(sections, "```diff")
@@ -634,7 +636,7 @@ func featureReviewerInstructions(opts Opts) []string {
 		"3. Examine the code changes shown above",
 		"4. Run the build command to verify compilation",
 		"5. For each acceptance criterion, verify it is addressed by the code",
-		"6. If the feature changes user-facing behavior, verify that README or " +
+		"6. If the feature changes user-facing behavior, verify that README or "+
 			"documentation has been updated to reflect the changes",
 		"",
 		"## Output",

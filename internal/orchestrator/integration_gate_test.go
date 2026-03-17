@@ -21,8 +21,7 @@ import (
 // .drem/constraints.toml exists in the worktree, the parent task transitions
 // normally to testing_ready.
 func TestIntegrationGate_NoConstraintsConfig(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "gate-no-config"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -80,8 +79,7 @@ func TestIntegrationGate_NoConstraintsConfig(t *testing.T) {
 // TestIntegrationGate_ConstraintsPass verifies that when constraints are
 // configured and all pass, the parent transitions to testing_ready.
 func TestIntegrationGate_ConstraintsPass(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "gate-pass"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -151,8 +149,7 @@ limit = 1000
 // TestIntegrationGate_ConstraintsFail verifies that when constraints fail,
 // the parent stays in_progress and constraint_violations are stored in context.
 func TestIntegrationGate_ConstraintsFail(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "gate-fail"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -239,8 +236,7 @@ pattern = "TODO: remove this debug"
 // TestIntegrationGate_ViolationsClearedOnPass verifies that when constraints
 // pass after a previous failure, the constraint_violations context is cleared.
 func TestIntegrationGate_ViolationsClearedOnPass(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "gate-cleared"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -320,8 +316,7 @@ limit = 1000
 // TestIntegrationGate_CommandConstraintFails verifies that a command constraint
 // that returns a non-zero exit code blocks the transition to testing_ready.
 func TestIntegrationGate_CommandConstraintFails(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "gate-cmd-fail"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)

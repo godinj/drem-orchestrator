@@ -9,11 +9,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
 // mockProcessStarter returns a ProcessStarter that creates a real subprocess
@@ -48,35 +47,6 @@ func writeFakeClaudeBin(t *testing.T, dir string, exitCode int) string {
 	return binPath
 }
 
-// mockTestDB creates an in-memory SQLite database with auto-migration for tests.
-func mockTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared&_busy_timeout=5000"), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	if err != nil {
-		t.Fatalf("open test db: %v", err)
-	}
-	// Use a unique connection to avoid shared cache conflicts between tests.
-	sqlDB, err := db.DB()
-	if err != nil {
-		t.Fatalf("get underlying db: %v", err)
-	}
-	t.Cleanup(func() { _ = sqlDB.Close() })
-
-	if err := db.AutoMigrate(
-		&model.Project{},
-		&model.Task{},
-		&model.Agent{},
-		&model.TaskEvent{},
-		&model.Memory{},
-		&model.TaskComment{},
-	); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
-	return db
-}
-
 // newMockRunner creates a Runner backed by a mock ProcessStarter and in-memory DB.
 func newMockRunner(t *testing.T, db *gorm.DB, claudeBin string) *Runner {
 	t.Helper()
@@ -107,50 +77,20 @@ func newMockRunnerWithStarter(t *testing.T, db *gorm.DB, starter ProcessStarter)
 	}
 }
 
-// createTestProject inserts a project and returns it.
-func createTestProject(t *testing.T, db *gorm.DB) *model.Project {
-	t.Helper()
-	p := &model.Project{
-		ID:           uuid.New(),
-		Name:         "test-project",
-		BareRepoPath: "/tmp/test.git",
-	}
-	if err := db.Create(p).Error; err != nil {
-		t.Fatalf("create test project: %v", err)
-	}
-	return p
-}
-
-// createTestTask inserts a task for the given project and returns it.
-func createTestTask(t *testing.T, db *gorm.DB, projectID uuid.UUID) *model.Task {
-	t.Helper()
-	task := &model.Task{
-		ID:          uuid.New(),
-		ProjectID:   projectID,
-		Title:       "Implement auth module",
-		Description: "Build JWT-based authentication",
-		Status:      model.StatusInProgress,
-	}
-	if err := db.Create(task).Error; err != nil {
-		t.Fatalf("create test task: %v", err)
-	}
-	return task
-}
-
 func TestSpawnAgentInWorktree_Subprocess(t *testing.T) {
-	db := mockTestDB(t)
+	db := testutil.NewTestDB(t)
 
 	binDir := t.TempDir()
 	claudeBin := writeFakeClaudeBin(t, binDir, 0)
 	r := newMockRunner(t, db, claudeBin)
 
-	project := createTestProject(t, db)
-	task := createTestTask(t, db, project.ID)
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+	task := testutil.CreateTask(t, db, project.ID, "Implement auth module", model.StatusInProgress)
 
 	worktreeDir := t.TempDir()
 	prompt := "You are a coding agent. Implement the auth module."
 
-	agent, err := r.SpawnAgentInWorktree(task, worktreeDir, model.AgentCoder, prompt)
+	agent, err := r.SpawnAgentInWorktree(&task, worktreeDir, model.AgentCoder, prompt)
 	if err != nil {
 		t.Fatalf("SpawnAgentInWorktree: %v", err)
 	}
@@ -205,20 +145,20 @@ func TestSpawnAgentInWorktree_Subprocess(t *testing.T) {
 }
 
 func TestSpawnAgentInWorktree_ProcessFailure(t *testing.T) {
-	db := mockTestDB(t)
+	db := testutil.NewTestDB(t)
 
 	starter := func(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error) {
 		return nil, fmt.Errorf("process start failed")
 	}
 	r := newMockRunnerWithStarter(t, db, starter)
 
-	project := createTestProject(t, db)
-	task := createTestTask(t, db, project.ID)
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+	task := testutil.CreateTask(t, db, project.ID, "Implement auth module", model.StatusInProgress)
 
 	worktreeDir := t.TempDir()
 	prompt := "Test prompt"
 
-	agent, err := r.SpawnAgentInWorktree(task, worktreeDir, model.AgentCoder, prompt)
+	agent, err := r.SpawnAgentInWorktree(&task, worktreeDir, model.AgentCoder, prompt)
 	if err == nil {
 		t.Fatal("expected error from SpawnAgentInWorktree, got nil")
 	}
@@ -251,13 +191,13 @@ func TestSpawnAgentInWorktree_ProcessFailure(t *testing.T) {
 }
 
 func TestStopAgent_Subprocess(t *testing.T) {
-	db := mockTestDB(t)
+	db := testutil.NewTestDB(t)
 
 	binDir := t.TempDir()
 	claudeBin := writeFakeClaudeBin(t, binDir, 0)
 	r := newMockRunner(t, db, claudeBin)
 
-	project := createTestProject(t, db)
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
 	agentID := uuid.New()
 	sessionName := "test-session/code - auth a1b2"
 
@@ -312,7 +252,7 @@ func TestStopAgent_Subprocess(t *testing.T) {
 }
 
 func TestStopAgent_NotFound(t *testing.T) {
-	db := mockTestDB(t)
+	db := testutil.NewTestDB(t)
 	r := newMockRunner(t, db, "/bin/true")
 
 	unknownID := uuid.New()
@@ -326,7 +266,7 @@ func TestStopAgent_NotFound(t *testing.T) {
 }
 
 func TestGetAgentOutput_FromLogFile(t *testing.T) {
-	db := mockTestDB(t)
+	db := testutil.NewTestDB(t)
 	r := newMockRunner(t, db, "/bin/true")
 
 	agentID := uuid.New()
@@ -361,7 +301,7 @@ func TestGetAgentOutput_FromLogFile(t *testing.T) {
 }
 
 func TestGetAgentOutput_NotRunning(t *testing.T) {
-	db := mockTestDB(t)
+	db := testutil.NewTestDB(t)
 	r := newMockRunner(t, db, "/bin/true")
 
 	unknownID := uuid.New()
@@ -377,10 +317,10 @@ func TestGetAgentOutput_NotRunning(t *testing.T) {
 }
 
 func TestGetAgentOutput_NotRunning_InDB(t *testing.T) {
-	db := mockTestDB(t)
+	db := testutil.NewTestDB(t)
 	r := newMockRunner(t, db, "/bin/true")
 
-	project := createTestProject(t, db)
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
 	agentID := uuid.New()
 	expectedOutput := "Output from DB agent"
 
@@ -418,10 +358,10 @@ func TestGetAgentOutput_NotRunning_InDB(t *testing.T) {
 }
 
 func TestCleanupStaleAgents_Subprocess(t *testing.T) {
-	db := mockTestDB(t)
+	db := testutil.NewTestDB(t)
 	r := newMockRunner(t, db, "/bin/true")
 
-	project := createTestProject(t, db)
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
 
 	// Create a stale agent: heartbeat older than the timeout.
 	staleTime := time.Now().Add(-10 * time.Minute)
@@ -454,10 +394,10 @@ func TestCleanupStaleAgents_Subprocess(t *testing.T) {
 }
 
 func TestCleanupStaleAgents_NoneStale(t *testing.T) {
-	db := mockTestDB(t)
+	db := testutil.NewTestDB(t)
 	r := newMockRunner(t, db, "/bin/true")
 
-	project := createTestProject(t, db)
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
 
 	// Create a fresh agent: heartbeat is recent.
 	freshTime := time.Now()
@@ -491,10 +431,10 @@ func TestCleanupStaleAgents_NoneStale(t *testing.T) {
 // TestCleanupStaleAgents_InRunningMap tests cleanup of a stale agent that
 // is also present in the running map (uses StopAgent path).
 func TestCleanupStaleAgents_InRunningMap(t *testing.T) {
-	db := mockTestDB(t)
+	db := testutil.NewTestDB(t)
 	r := newMockRunner(t, db, "/bin/true")
 
-	project := createTestProject(t, db)
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
 
 	staleTime := time.Now().Add(-10 * time.Minute)
 	sessionName := "test-session/code - stale-running a1b2"

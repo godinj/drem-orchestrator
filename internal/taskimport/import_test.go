@@ -41,7 +41,7 @@ func TestToJSONArray_NonEmpty(t *testing.T) {
 
 // --- Import: happy path ---
 
-func createTestProject(t *testing.T, db *gorm.DB) (uuid.UUID, model.Project) {
+func setupTestProject(t *testing.T, db *gorm.DB) (uuid.UUID, model.Project) {
 	t.Helper()
 	proj := model.Project{
 		ID:           uuid.New(),
@@ -56,7 +56,7 @@ func createTestProject(t *testing.T, db *gorm.DB) (uuid.UUID, model.Project) {
 
 func TestImport_BasicParentTask(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	projectID, _ := createTestProject(t, db)
+	projectID, _ := setupTestProject(t, db)
 
 	md := `# My Parent Task
 
@@ -87,7 +87,7 @@ A description of the parent task.
 
 func TestImport_ParentWithSubtasks(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	projectID, _ := createTestProject(t, db)
+	projectID, _ := setupTestProject(t, db)
 
 	md := `# Parent Task
 
@@ -139,7 +139,7 @@ Second subtask description.
 
 func TestImport_MultipleParents(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	projectID, _ := createTestProject(t, db)
+	projectID, _ := setupTestProject(t, db)
 
 	md := `# First Parent
 
@@ -194,7 +194,7 @@ Belongs to second parent.
 
 func TestImport_SkipsExistingParent(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	projectID, _ := createTestProject(t, db)
+	projectID, _ := setupTestProject(t, db)
 
 	// Pre-create a task with the same title.
 	existing := model.Task{
@@ -232,7 +232,7 @@ New description that should be ignored.
 
 func TestImport_SkipsExistingSubtask(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	projectID, _ := createTestProject(t, db)
+	projectID, _ := setupTestProject(t, db)
 
 	// Pre-create only the subtask (not the parent). The Import function
 	// loads all existing tasks in the project and uses their titles for
@@ -290,7 +290,7 @@ Brand new subtask.
 
 func TestImport_ResolvesDependencies(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	projectID, _ := createTestProject(t, db)
+	projectID, _ := setupTestProject(t, db)
 
 	md := `# First Task
 
@@ -328,7 +328,7 @@ Second task that depends on first.
 
 func TestImport_UnknownDependencyError(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	projectID, _ := createTestProject(t, db)
+	projectID, _ := setupTestProject(t, db)
 
 	md := `# Some Task
 
@@ -349,7 +349,7 @@ A task depending on something that does not exist.
 
 func TestImport_Priority(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	projectID, _ := createTestProject(t, db)
+	projectID, _ := setupTestProject(t, db)
 
 	md := `# Priority Task
 
@@ -376,7 +376,7 @@ Task with priority three.
 
 func TestImport_Labels(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	projectID, _ := createTestProject(t, db)
+	projectID, _ := setupTestProject(t, db)
 
 	md := `# Labeled Task
 
@@ -408,7 +408,7 @@ Task with labels.
 
 func TestImport_ParseError(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	projectID, _ := createTestProject(t, db)
+	projectID, _ := setupTestProject(t, db)
 
 	_, err := Import(iotest.ErrReader(iotest.ErrTimeout), db, projectID)
 	if err == nil {

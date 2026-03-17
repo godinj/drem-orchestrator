@@ -14,13 +14,13 @@ func TestVisibleAgents(t *testing.T) {
 	subtaskA1 := uuid.New()
 
 	tests := []struct {
-		name       string
-		agents     []model.Agent
-		autoFilter bool
-		filterTask *uuid.UUID
-		subtaskIDs []uuid.UUID
+		name         string
+		agents       []model.Agent
+		autoFilter   bool
+		filterTask   *uuid.UUID
+		subtaskIDs   []uuid.UUID
 		showArchived bool
-		wantLen    int
+		wantLen      int
 	}{
 		{
 			name: "no filter returns all non-archived agents",

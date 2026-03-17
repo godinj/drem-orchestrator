@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -17,7 +18,7 @@ import (
 // and worktree manager are nil/minimal, so only DB-level behavior is exercised.
 func setupSchedulingTest(t *testing.T) (*Orchestrator, *gorm.DB, uuid.UUID) {
 	t.Helper()
-	db := lifecycleTestDB(t)
+	db := testutil.NewTestDB(t)
 	projectID := uuid.New()
 	project := model.Project{
 		ID:            projectID,

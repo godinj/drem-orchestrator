@@ -2,17 +2,18 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"github.com/google/uuid"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/tmux"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
@@ -27,7 +28,7 @@ import (
 // panic. The supervisor is nil (no LLM calls).
 func agentResultOrchestrator(t *testing.T, bareRepoPath string) (*Orchestrator, *model.Project) {
 	t.Helper()
-	db := lifecycleTestDB(t)
+	db := testutil.NewTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	projectID := uuid.New()
 	events := make(chan Event, 100)
@@ -62,8 +63,7 @@ func agentResultOrchestrator(t *testing.T, bareRepoPath string) (*Orchestrator, 
 // ---------------------------------------------------------------------------
 
 func TestProcessAgentResult_SuccessRouting(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "success-routing"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -154,8 +154,7 @@ func TestProcessAgentResult_SuccessRouting(t *testing.T) {
 }
 
 func TestProcessAgentResult_FailureRouting(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "failure-routing"
 	createFeatureWorktree(t, bareRepoPath, featureName)
@@ -256,8 +255,7 @@ func TestProcessAgentResult_UnknownAgent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOnPlannerCompleted_ValidPlan(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "planner-valid"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -357,8 +355,7 @@ func TestOnPlannerCompleted_ValidPlan(t *testing.T) {
 }
 
 func TestOnPlannerCompleted_InvalidPlan(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "planner-invalid"
 	createFeatureWorktree(t, bareRepoPath, featureName)
@@ -422,8 +419,7 @@ func TestOnPlannerCompleted_InvalidPlan(t *testing.T) {
 }
 
 func TestOnPlannerCompleted_MissingPlan(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "planner-missing"
 	createFeatureWorktree(t, bareRepoPath, featureName)
@@ -480,8 +476,7 @@ func TestOnPlannerCompleted_MissingPlan(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOnAgentFailed_FirstFailure(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "fail-first"
 	createFeatureWorktree(t, bareRepoPath, featureName)
@@ -553,8 +548,7 @@ func TestOnAgentFailed_FirstFailure(t *testing.T) {
 }
 
 func TestOnAgentFailed_MaxRetries(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "fail-max-retries"
 	createFeatureWorktree(t, bareRepoPath, featureName)
@@ -613,8 +607,7 @@ func TestOnAgentFailed_MaxRetries(t *testing.T) {
 }
 
 func TestOnAgentFailed_WithSupervisorNil(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "fail-no-supervisor"
 	createFeatureWorktree(t, bareRepoPath, featureName)
@@ -694,8 +687,7 @@ func TestOnAgentFailed_WithSupervisorNil(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOnReviewerCompleted(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "reviewer-complete"
 	createFeatureWorktree(t, bareRepoPath, featureName)
@@ -839,8 +831,7 @@ func TestOnFixerCompleted(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestExecuteMerge_Success(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	// Create a worktree for 'main' so MergeFeatureIntoMain can find it.
 	mainDir := filepath.Join(bareRepoPath, "main-worktree")
@@ -1059,8 +1050,7 @@ func TestProcessAgentResult_AgentWithNoTask(t *testing.T) {
 }
 
 func TestOnPlannerCompleted_EmptySubtasks(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "planner-empty"
 	createFeatureWorktree(t, bareRepoPath, featureName)
@@ -1115,8 +1105,7 @@ func TestOnPlannerCompleted_EmptySubtasks(t *testing.T) {
 }
 
 func TestOnAgentFailed_PlannerRetryThenMax(t *testing.T) {
-	bareRepoPath, cleanup := initBareRepo(t)
-	defer cleanup()
+	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "planner-retry-cycle"
 	createFeatureWorktree(t, bareRepoPath, featureName)

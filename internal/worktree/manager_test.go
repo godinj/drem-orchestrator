@@ -11,7 +11,7 @@ import (
 
 func TestCreateAndListFeature(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature worktree
@@ -71,7 +71,7 @@ func TestCreateAndListFeature(t *testing.T) {
 
 func TestCreateAgentWorktree(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature first
@@ -137,7 +137,7 @@ func TestCreateAgentWorktree(t *testing.T) {
 
 func TestRemoveFeature(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature
@@ -183,7 +183,7 @@ func TestRemoveFeature(t *testing.T) {
 
 func TestMergeBranch(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature worktree
@@ -248,7 +248,7 @@ func TestMergeBranch(t *testing.T) {
 
 func TestMergeBranchConflict(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create source feature with a file
@@ -327,7 +327,7 @@ func TestMergeBranchConflict(t *testing.T) {
 
 func TestRemoveAgentWorktree(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature
@@ -373,7 +373,7 @@ func TestRemoveAgentWorktree(t *testing.T) {
 
 func TestGetBranchStatus(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature worktree
@@ -421,7 +421,7 @@ func TestGetBranchStatus(t *testing.T) {
 
 func TestGitHelpers(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature worktree
@@ -556,7 +556,7 @@ func isGitError(err error, target **GitError) bool {
 
 func TestMigrateToGroupedLayout(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Manually create worktrees in the OLD layout:
@@ -666,7 +666,7 @@ func TestMigrateToGroupedLayout(t *testing.T) {
 
 func TestSyncAll(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature worktree

@@ -41,17 +41,17 @@ func TestMergeAgentIntoFeature_CleanRebaseAndMerge(t *testing.T) {
 
 	// Create feature worktree (integration branch)
 	featureDir := filepath.Join(dir, "feature")
-	testutil.AddWorktree(t,bareRepo, "feature/test", featureDir)
+	testutil.AddWorktree(t, bareRepo, "feature/test", featureDir)
 
 	// Create agent worktree
 	agentDir := filepath.Join(dir, "agent")
-	testutil.AddWorktree(t,bareRepo, "worktree-agent-abc", agentDir)
+	testutil.AddWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
 
 	// Feature gets a commit on a different file
-	testutil.CommitFile(t,featureDir, "feature-file.txt", "feature work\n", "feature commit")
+	testutil.CommitFile(t, featureDir, "feature-file.txt", "feature work\n", "feature commit")
 
 	// Agent gets a commit on a non-overlapping file
-	testutil.CommitFile(t,agentDir, "agent-file.txt", "agent work\n", "agent commit")
+	testutil.CommitFile(t, agentDir, "agent-file.txt", "agent work\n", "agent commit")
 
 	mgr := worktree.NewManager(bareRepo, "main")
 	orch := NewOrchestrator(mgr, nil)
@@ -83,15 +83,15 @@ func TestMergeAgentIntoFeature_RebaseConflict(t *testing.T) {
 
 	// Create feature worktree
 	featureDir := filepath.Join(dir, "feature")
-	testutil.AddWorktree(t,bareRepo, "feature/test", featureDir)
+	testutil.AddWorktree(t, bareRepo, "feature/test", featureDir)
 
 	// Create agent worktree
 	agentDir := filepath.Join(dir, "agent")
-	testutil.AddWorktree(t,bareRepo, "worktree-agent-abc", agentDir)
+	testutil.AddWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
 
 	// Both modify the same file — conflicting changes
-	testutil.CommitFile(t,featureDir, "shared.txt", "feature content\n", "feature change")
-	testutil.CommitFile(t,agentDir, "shared.txt", "agent content\n", "agent change")
+	testutil.CommitFile(t, featureDir, "shared.txt", "feature content\n", "feature change")
+	testutil.CommitFile(t, agentDir, "shared.txt", "agent content\n", "agent change")
 
 	mgr := worktree.NewManager(bareRepo, "main")
 	orch := NewOrchestrator(mgr, nil)
@@ -151,13 +151,13 @@ func TestMergeAgentIntoFeature_AgentWorktreeMissing(t *testing.T) {
 
 	// Create feature worktree
 	featureDir := filepath.Join(dir, "feature")
-	testutil.AddWorktree(t,bareRepo, "feature/test", featureDir)
+	testutil.AddWorktree(t, bareRepo, "feature/test", featureDir)
 
 	// Create agent worktree and commit, then remove the worktree
 	// but keep the branch (simulating worktree already cleaned up)
 	agentDir := filepath.Join(dir, "agent")
-	testutil.AddWorktree(t,bareRepo, "worktree-agent-abc", agentDir)
-	testutil.CommitFile(t,agentDir, "agent-file.txt", "agent work\n", "agent commit")
+	testutil.AddWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
+	testutil.CommitFile(t, agentDir, "agent-file.txt", "agent work\n", "agent commit")
 
 	// Remove the worktree (but the branch and commits remain in the bare repo)
 	worktree.RunGit([]string{"worktree", "remove", agentDir, "--force"}, bareRepo)
@@ -330,14 +330,14 @@ func TestMergeWithRetry_RebaseConflictNoRetry(t *testing.T) {
 	dir := filepath.Dir(bareRepo)
 
 	featureDir := filepath.Join(dir, "feature")
-	testutil.AddWorktree(t,bareRepo, "feature/test", featureDir)
+	testutil.AddWorktree(t, bareRepo, "feature/test", featureDir)
 
 	agentDir := filepath.Join(dir, "agent")
-	testutil.AddWorktree(t,bareRepo, "worktree-agent-abc", agentDir)
+	testutil.AddWorktree(t, bareRepo, "worktree-agent-abc", agentDir)
 
 	// Create conflicting changes
-	testutil.CommitFile(t,featureDir, "shared.txt", "feature line\n", "feature change")
-	testutil.CommitFile(t,agentDir, "shared.txt", "agent line\n", "agent change")
+	testutil.CommitFile(t, featureDir, "shared.txt", "feature line\n", "feature change")
+	testutil.CommitFile(t, agentDir, "shared.txt", "agent line\n", "agent change")
 
 	mgr := worktree.NewManager(bareRepo, "main")
 

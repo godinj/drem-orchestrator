@@ -146,8 +146,8 @@ func (d DetailModel) View() string {
 	}
 	if d.task.WorktreeBranch != "" {
 		branch := d.task.WorktreeBranch
-		if len(branch) > 30 {
-			branch = "\u2026" + branch[len(branch)-29:]
+		if len(branch) > maxBranchDisplayLen {
+			branch = "\u2026" + branch[len(branch)-maxBranchDisplayLen+1:]
 		}
 		infoParts = append(infoParts, fmt.Sprintf("Branch: %s", branch))
 	}

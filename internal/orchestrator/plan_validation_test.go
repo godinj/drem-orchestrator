@@ -519,8 +519,8 @@ func TestMergeTDDDependencies_PhaseOrdering(t *testing.T) {
 				{Title: "Wire", Phase: "integration"},
 			},
 			wantDeps: map[int][]int{
-				1: {0},    // impl depends on test (TDD)
-				2: {1},    // integration depends on impl (phase ordering)
+				1: {0}, // impl depends on test (TDD)
+				2: {1}, // integration depends on impl (phase ordering)
 			},
 		},
 		{
@@ -532,8 +532,8 @@ func TestMergeTDDDependencies_PhaseOrdering(t *testing.T) {
 				{Title: "Wire", Phase: "integration"},
 			},
 			wantDeps: map[int][]int{
-				1: {0},       // impl A depends on test
-				3: {1, 2},    // integration depends on both impls
+				1: {0},    // impl A depends on test
+				3: {1, 2}, // integration depends on both impls
 			},
 		},
 		{

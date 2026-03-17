@@ -461,7 +461,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	if task.Context == nil {
 		task.Context = make(model.JSONField)
 	}
-	task.Context["last_error"] = truncate(output, 500)
+	task.Context["last_error"] = truncate(output, maxErrorSnippetLen)
 
 	// Only remove the agent worktree if it has no commits to preserve.
 	// If the agent produced work, keep the worktree so it can be retried
@@ -495,7 +495,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	if o.supervisor != nil {
 		var diagnosis supervisor.FailureDiagnosis
 		diagPrompt := supervisor.FailureDiagnosisPrompt(
-			task.Title, task.Description, string(ag.AgentType), output, truncate(output, 500),
+			task.Title, task.Description, string(ag.AgentType), output, truncate(output, maxErrorSnippetLen),
 		)
 		if diagErr := o.supervisor.EvaluateJSON(context.Background(), diagPrompt, &diagnosis); diagErr != nil {
 			o.logger.Warn("supervisor failure diagnosis failed, falling back", "error", diagErr)
@@ -674,7 +674,7 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 		diagPrompt := supervisor.FailureDiagnosisPrompt(
 			task.Title, task.Description, string(ag.AgentType),
 			"Agent completed successfully (exit code 0) but did not commit any changes to the repository.",
-			truncate(agentOutput, 500),
+			truncate(agentOutput, maxErrorSnippetLen),
 		)
 		if diagErr := o.supervisor.EvaluateJSON(context.Background(), diagPrompt, &diagnosis); diagErr != nil {
 			o.logger.Warn("supervisor empty-work diagnosis failed", "error", diagErr)

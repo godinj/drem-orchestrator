@@ -12,6 +12,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -20,8 +21,8 @@ import (
 // ready for reconciliation tests.
 func setupReconcileTest(t *testing.T) (*Orchestrator, *gorm.DB, string) {
 	t.Helper()
-	db := lifecycleTestDB(t)
-	bareRepo, _ := initBareRepo(t)
+	db := testutil.NewTestDB(t)
+	bareRepo := setupTestRepoWithMainBranch(t)
 
 	project := model.Project{
 		ID:            uuid.New(),
