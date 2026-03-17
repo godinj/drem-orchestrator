@@ -8,14 +8,10 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/google/uuid"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
-
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
+	"github.com/google/uuid"
 )
 
 // ---------------------------------------------------------------------------
@@ -570,33 +566,6 @@ func TestDetectBuildCommand(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test DB helper
-// ---------------------------------------------------------------------------
-
-// newTestDB creates an isolated file-based SQLite database with auto-migration.
-func newTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "test.db")
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	if err != nil {
-		t.Fatalf("open test db: %v", err)
-	}
-	if err := db.AutoMigrate(
-		&model.Project{},
-		&model.Task{},
-		&model.Agent{},
-		&model.TaskEvent{},
-		&model.Memory{},
-		&model.TaskComment{},
-	); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
-	return db
-}
-
-// ---------------------------------------------------------------------------
 // Integration tests for PlanAgentMerge, MergeAllAgentsIntoFeature,
 // SyncFeaturesAfterMerge, and GetMergeStatus
 // ---------------------------------------------------------------------------
@@ -700,7 +669,7 @@ func TestMergeAllAgentsIntoFeature_TwoAgents(t *testing.T) {
 	testutil.CommitFile(t, agent2Dir, "agent2-file.go", "package a2", "agent2 commit")
 
 	// Set up DB records.
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	projectID := uuid.New()
 	project := model.Project{ID: projectID, Name: "test-project", BareRepoPath: bareRepo, DefaultBranch: "main"}
 	if err := db.Create(&project).Error; err != nil {
@@ -815,7 +784,7 @@ func TestMergeAllAgentsIntoFeature_OneConflict(t *testing.T) {
 	testutil.AddWorktree(t, bareRepo, "worktree-agent-c2", agent2Dir)
 	testutil.CommitFile(t, agent2Dir, "shared.txt", "content from agent 2\n", "agent2 change")
 
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	projectID := uuid.New()
 	project := model.Project{ID: projectID, Name: "conflict-project", BareRepoPath: bareRepo, DefaultBranch: "main"}
 	if err := db.Create(&project).Error; err != nil {
@@ -954,7 +923,7 @@ func TestGetMergeStatus(t *testing.T) {
 	testutil.AddWorktree(t, bareRepo, "feature/status-test", featureDir)
 	testutil.CommitFile(t, featureDir, "status-file.txt", "status content\n", "status commit")
 
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	projectID := uuid.New()
 	project := model.Project{ID: projectID, Name: "status-project", BareRepoPath: bareRepo, DefaultBranch: "main"}
 	if err := db.Create(&project).Error; err != nil {

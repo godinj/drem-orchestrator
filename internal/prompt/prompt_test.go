@@ -830,8 +830,8 @@ func TestReadBuildCommands(t *testing.T) {
 	tests := []struct {
 		name     string
 		setup    func(t *testing.T) string // returns worktree path
-		contains string                     // expected substring in output
-		empty    bool                       // if true, expect empty string
+		contains string                    // expected substring in output
+		empty    bool                      // if true, expect empty string
 	}{
 		{
 			name: "go.mod and CLAUDE.md with bash block",

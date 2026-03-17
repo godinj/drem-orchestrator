@@ -168,11 +168,11 @@ backlog ──► planning ──► plan_review ──► in_progress ──►
 
 ## Git Worktree Layout
 
-Drem uses a structured worktree hierarchy under the bare repo:
+Drem uses a structured worktree hierarchy under the bare repo. The default branch can be checked out either as a linked worktree inside the bare repo or at the bare repo root itself (for non-bare clones used as the `--repo` path):
 
 ```
-your-project.git/              # bare repo
-├── main/                      # default branch worktree
+your-project.git/              # bare repo (root may also be the main worktree)
+├── main/                      # default branch worktree (linked)
 └── feature/
     └── my-feature/
         ├── integration/       # feature integration branch
@@ -180,7 +180,7 @@ your-project.git/              # bare repo
         └── agent-<uuid-2>/    # agent 2's isolated worktree
 ```
 
-Each agent works in its own worktree and branch. Completed work is rebased onto the integration branch, then merged with `--no-ff` for clean history.
+Each agent works in its own worktree and branch. Completed work is rebased onto the integration branch, then merged with `--no-ff` for clean history. The `MainWorktreePath()` resolver checks all worktrees — including the repo root — for the default branch checkout, so both layouts work without additional configuration.
 
 ## Task Import
 
