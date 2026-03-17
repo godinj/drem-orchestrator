@@ -5,77 +5,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
-// initBareRepo creates a bare git repo with an initial empty commit in tmpDir.
-// Returns the path to the bare repo.
-func initBareRepo(t *testing.T) string {
-	t.Helper()
-
-	tmpDir := t.TempDir()
-	bareRepo := filepath.Join(tmpDir, "test.git")
-
-	// Create a bare repo
-	_, err := RunGit([]string{"init", "--bare", bareRepo}, "")
-	if err != nil {
-		t.Fatalf("failed to init bare repo: %v", err)
-	}
-
-	// We need a commit to base worktrees on. Create a temporary clone,
-	// make an empty commit, and push back to the bare repo.
-	cloneDir := filepath.Join(tmpDir, "clone-init")
-	_, err = RunGit([]string{"clone", bareRepo, cloneDir}, "")
-	if err != nil {
-		t.Fatalf("failed to clone bare repo: %v", err)
-	}
-
-	// Configure git user for the clone
-	RunGit([]string{"config", "user.email", "test@test.com"}, cloneDir)
-	RunGit([]string{"config", "user.name", "Test"}, cloneDir)
-
-	_, err = RunGit([]string{"commit", "--allow-empty", "-m", "init"}, cloneDir)
-	if err != nil {
-		t.Fatalf("failed to create initial commit: %v", err)
-	}
-
-	_, err = RunGit([]string{"push", "origin", "HEAD"}, cloneDir)
-	if err != nil {
-		t.Fatalf("failed to push initial commit: %v", err)
-	}
-
-	// Detect the default branch that was created
-	defaultBranch, err := RunGit([]string{"rev-parse", "--abbrev-ref", "HEAD"}, cloneDir)
-	if err != nil {
-		t.Fatalf("failed to determine default branch: %v", err)
-	}
-
-	// Create a main worktree from the bare repo so worktrees can reference it.
-	// The bare repo HEAD should already point to the default branch.
-	mainWorktree := filepath.Join(bareRepo, defaultBranch)
-	_, err = RunGit([]string{"worktree", "add", mainWorktree, defaultBranch}, bareRepo)
-	if err != nil {
-		t.Fatalf("failed to create main worktree: %v", err)
-	}
-
-	// Clean up the temporary clone
-	os.RemoveAll(cloneDir)
-
-	return bareRepo
-}
-
-// getDefaultBranch returns the default branch name for the bare repo.
-func getDefaultBranch(t *testing.T, bareRepo string) string {
-	t.Helper()
-	branch, err := RunGit([]string{"symbolic-ref", "--short", "HEAD"}, bareRepo)
-	if err != nil {
-		t.Fatalf("failed to get default branch: %v", err)
-	}
-	return branch
-}
-
 func TestCreateAndListFeature(t *testing.T) {
-	bareRepo := initBareRepo(t)
-	defaultBranch := getDefaultBranch(t, bareRepo)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature worktree
@@ -134,8 +70,8 @@ func TestCreateAndListFeature(t *testing.T) {
 }
 
 func TestCreateAgentWorktree(t *testing.T) {
-	bareRepo := initBareRepo(t)
-	defaultBranch := getDefaultBranch(t, bareRepo)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature first
@@ -200,8 +136,8 @@ func TestCreateAgentWorktree(t *testing.T) {
 }
 
 func TestRemoveFeature(t *testing.T) {
-	bareRepo := initBareRepo(t)
-	defaultBranch := getDefaultBranch(t, bareRepo)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature
@@ -246,8 +182,8 @@ func TestRemoveFeature(t *testing.T) {
 }
 
 func TestMergeBranch(t *testing.T) {
-	bareRepo := initBareRepo(t)
-	defaultBranch := getDefaultBranch(t, bareRepo)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature worktree
@@ -311,8 +247,8 @@ func TestMergeBranch(t *testing.T) {
 }
 
 func TestMergeBranchConflict(t *testing.T) {
-	bareRepo := initBareRepo(t)
-	defaultBranch := getDefaultBranch(t, bareRepo)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create source feature with a file
@@ -390,8 +326,8 @@ func TestMergeBranchConflict(t *testing.T) {
 }
 
 func TestRemoveAgentWorktree(t *testing.T) {
-	bareRepo := initBareRepo(t)
-	defaultBranch := getDefaultBranch(t, bareRepo)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature
@@ -436,8 +372,8 @@ func TestRemoveAgentWorktree(t *testing.T) {
 }
 
 func TestGetBranchStatus(t *testing.T) {
-	bareRepo := initBareRepo(t)
-	defaultBranch := getDefaultBranch(t, bareRepo)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature worktree
@@ -484,8 +420,8 @@ func TestGetBranchStatus(t *testing.T) {
 }
 
 func TestGitHelpers(t *testing.T) {
-	bareRepo := initBareRepo(t)
-	defaultBranch := getDefaultBranch(t, bareRepo)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature worktree
@@ -619,8 +555,8 @@ func isGitError(err error, target **GitError) bool {
 }
 
 func TestMigrateToGroupedLayout(t *testing.T) {
-	bareRepo := initBareRepo(t)
-	defaultBranch := getDefaultBranch(t, bareRepo)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Manually create worktrees in the OLD layout:
@@ -729,8 +665,8 @@ func TestMigrateToGroupedLayout(t *testing.T) {
 }
 
 func TestSyncAll(t *testing.T) {
-	bareRepo := initBareRepo(t)
-	defaultBranch := getDefaultBranch(t, bareRepo)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t,bareRepo)
 	mgr := NewManager(bareRepo, defaultBranch)
 
 	// Create a feature worktree
