@@ -2,14 +2,20 @@ package model
 
 import "testing"
 
-func TestParseTaskStatus_NewStatuses(t *testing.T) {
+func TestParseTaskStatus(t *testing.T) {
 	tests := []struct {
 		input string
 		want  TaskStatus
 	}{
-		{"test_writing", StatusTestWriting},
-		{"test_review", StatusTestReview},
-		{"rejected", StatusRejected},
+		{"backlog", StatusBacklog},
+		{"planning", StatusPlanning},
+		{"plan_review", StatusPlanReview},
+		{"in_progress", StatusInProgress},
+		{"testing_ready", StatusTestingReady},
+		{"merging", StatusMerging},
+		{"paused", StatusPaused},
+		{"done", StatusDone},
+		{"failed", StatusFailed},
 	}
 	for _, tc := range tests {
 		t.Run(tc.input, func(t *testing.T) {
@@ -19,6 +25,67 @@ func TestParseTaskStatus_NewStatuses(t *testing.T) {
 			}
 			if got != tc.want {
 				t.Errorf("ParseTaskStatus(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseTaskStatus_Error(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"invalid value", "nonexistent"},
+		{"empty string", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseTaskStatus(tc.input)
+			if err == nil {
+				t.Errorf("ParseTaskStatus(%q) expected error, got nil", tc.input)
+			}
+		})
+	}
+}
+
+func TestParseAgentType(t *testing.T) {
+	tests := []struct {
+		input string
+		want  AgentType
+	}{
+		{"orchestrator", AgentOrchestrator},
+		{"planner", AgentPlanner},
+		{"coder", AgentCoder},
+		{"researcher", AgentResearcher},
+		{"reviewer", AgentReviewer},
+		{"fixer", AgentFixer},
+	}
+	for _, tc := range tests {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := ParseAgentType(tc.input)
+			if err != nil {
+				t.Fatalf("ParseAgentType(%q) returned error: %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Errorf("ParseAgentType(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestParseAgentType_Error(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"invalid value", "invalid_agent"},
+		{"empty string", ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseAgentType(tc.input)
+			if err == nil {
+				t.Errorf("ParseAgentType(%q) expected error, got nil", tc.input)
 			}
 		})
 	}
@@ -75,6 +142,69 @@ func TestIsHumanGate(t *testing.T) {
 			got := tc.status.IsHumanGate()
 			if got != tc.want {
 				t.Errorf("IsHumanGate(%q) = %v, want %v", tc.status, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestTaskStatusString(t *testing.T) {
+	tests := []struct {
+		status TaskStatus
+		want   string
+	}{
+		{StatusBacklog, "backlog"},
+		{StatusPlanning, "planning"},
+		{StatusPlanReview, "plan_review"},
+		{StatusInProgress, "in_progress"},
+		{StatusDone, "done"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.want, func(t *testing.T) {
+			got := tc.status.String()
+			if got != tc.want {
+				t.Errorf("String() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentTypeString(t *testing.T) {
+	tests := []struct {
+		agentType AgentType
+		want      string
+	}{
+		{AgentOrchestrator, "orchestrator"},
+		{AgentPlanner, "planner"},
+		{AgentCoder, "coder"},
+		{AgentResearcher, "researcher"},
+		{AgentReviewer, "reviewer"},
+		{AgentFixer, "fixer"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.want, func(t *testing.T) {
+			got := tc.agentType.String()
+			if got != tc.want {
+				t.Errorf("String() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAgentStatusString(t *testing.T) {
+	tests := []struct {
+		status AgentStatus
+		want   string
+	}{
+		{AgentIdle, "idle"},
+		{AgentWorking, "working"},
+		{AgentBlocked, "blocked"},
+		{AgentDead, "dead"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.want, func(t *testing.T) {
+			got := tc.status.String()
+			if got != tc.want {
+				t.Errorf("String() = %q, want %q", got, tc.want)
 			}
 		})
 	}

@@ -3,6 +3,7 @@ package model
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -21,6 +22,251 @@ func testDB(t *testing.T) *gorm.DB {
 		t.Fatalf("auto migrate: %v", err)
 	}
 	return db
+}
+
+// createProjectAndTask is a helper that creates a Project and Task in the DB,
+// returning both for use as FK parents.
+func createProjectAndTask(t *testing.T, db *gorm.DB) (Project, Task) {
+	t.Helper()
+	proj := Project{Name: "test-proj", BareRepoPath: "/tmp/test"}
+	if err := db.Create(&proj).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	task := Task{
+		ProjectID:   proj.ID,
+		Title:       "Test Task",
+		Description: "A test task",
+	}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	return proj, task
+}
+
+func TestProjectBeforeCreate(t *testing.T) {
+	t.Run("generates UUID when nil", func(t *testing.T) {
+		db := testDB(t)
+		proj := Project{Name: "auto-uuid", BareRepoPath: "/tmp/test"}
+		if err := db.Create(&proj).Error; err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+		var loaded Project
+		if err := db.First(&loaded, "id = ?", proj.ID).Error; err != nil {
+			t.Fatalf("load project: %v", err)
+		}
+		if loaded.ID == uuid.Nil {
+			t.Errorf("expected non-nil UUID, got nil")
+		}
+	})
+
+	t.Run("preserves pre-set UUID", func(t *testing.T) {
+		db := testDB(t)
+		presetID := uuid.New()
+		proj := Project{ID: presetID, Name: "preset-uuid", BareRepoPath: "/tmp/test"}
+		if err := db.Create(&proj).Error; err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+		var loaded Project
+		if err := db.First(&loaded, "id = ?", presetID).Error; err != nil {
+			t.Fatalf("load project: %v", err)
+		}
+		if loaded.ID != presetID {
+			t.Errorf("ID = %v, want %v", loaded.ID, presetID)
+		}
+	})
+}
+
+func TestTaskBeforeCreate(t *testing.T) {
+	t.Run("generates UUID when nil", func(t *testing.T) {
+		db := testDB(t)
+		proj := Project{Name: "task-auto", BareRepoPath: "/tmp/test"}
+		if err := db.Create(&proj).Error; err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+		task := Task{ProjectID: proj.ID, Title: "T", Description: "D"}
+		if err := db.Create(&task).Error; err != nil {
+			t.Fatalf("create task: %v", err)
+		}
+		var loaded Task
+		if err := db.First(&loaded, "id = ?", task.ID).Error; err != nil {
+			t.Fatalf("load task: %v", err)
+		}
+		if loaded.ID == uuid.Nil {
+			t.Errorf("expected non-nil UUID, got nil")
+		}
+	})
+
+	t.Run("preserves pre-set UUID", func(t *testing.T) {
+		db := testDB(t)
+		proj := Project{Name: "task-preset", BareRepoPath: "/tmp/test"}
+		if err := db.Create(&proj).Error; err != nil {
+			t.Fatalf("create project: %v", err)
+		}
+		presetID := uuid.New()
+		task := Task{ID: presetID, ProjectID: proj.ID, Title: "T", Description: "D"}
+		if err := db.Create(&task).Error; err != nil {
+			t.Fatalf("create task: %v", err)
+		}
+		var loaded Task
+		if err := db.First(&loaded, "id = ?", presetID).Error; err != nil {
+			t.Fatalf("load task: %v", err)
+		}
+		if loaded.ID != presetID {
+			t.Errorf("ID = %v, want %v", loaded.ID, presetID)
+		}
+	})
+}
+
+func TestAgentBeforeCreate(t *testing.T) {
+	t.Run("generates UUID when nil", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "agent-auto",
+			Status:    AgentIdle,
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+		if loaded.ID == uuid.Nil {
+			t.Errorf("expected non-nil UUID, got nil")
+		}
+	})
+
+	t.Run("preserves pre-set UUID", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		presetID := uuid.New()
+		agent := Agent{
+			ID:        presetID,
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "agent-preset",
+			Status:    AgentIdle,
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", presetID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+		if loaded.ID != presetID {
+			t.Errorf("ID = %v, want %v", loaded.ID, presetID)
+		}
+	})
+}
+
+func TestTaskEventBeforeCreate(t *testing.T) {
+	t.Run("generates UUID when nil", func(t *testing.T) {
+		db := testDB(t)
+		_, task := createProjectAndTask(t, db)
+		event := TaskEvent{
+			TaskID:    task.ID,
+			EventType: "status_change",
+			Actor:     "test",
+		}
+		if err := db.Create(&event).Error; err != nil {
+			t.Fatalf("create event: %v", err)
+		}
+		var loaded TaskEvent
+		if err := db.First(&loaded, "id = ?", event.ID).Error; err != nil {
+			t.Fatalf("load event: %v", err)
+		}
+		if loaded.ID == uuid.Nil {
+			t.Errorf("expected non-nil UUID, got nil")
+		}
+	})
+
+	t.Run("preserves pre-set UUID", func(t *testing.T) {
+		db := testDB(t)
+		_, task := createProjectAndTask(t, db)
+		presetID := uuid.New()
+		event := TaskEvent{
+			ID:        presetID,
+			TaskID:    task.ID,
+			EventType: "status_change",
+			Actor:     "test",
+		}
+		if err := db.Create(&event).Error; err != nil {
+			t.Fatalf("create event: %v", err)
+		}
+		var loaded TaskEvent
+		if err := db.First(&loaded, "id = ?", presetID).Error; err != nil {
+			t.Fatalf("load event: %v", err)
+		}
+		if loaded.ID != presetID {
+			t.Errorf("ID = %v, want %v", loaded.ID, presetID)
+		}
+	})
+}
+
+func TestMemoryBeforeCreate(t *testing.T) {
+	t.Run("generates UUID when nil", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "mem-agent",
+			Status:    AgentIdle,
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+		mem := Memory{
+			AgentID:    agent.ID,
+			Content:    "test memory",
+			MemoryType: "summary",
+		}
+		if err := db.Create(&mem).Error; err != nil {
+			t.Fatalf("create memory: %v", err)
+		}
+		var loaded Memory
+		if err := db.First(&loaded, "id = ?", mem.ID).Error; err != nil {
+			t.Fatalf("load memory: %v", err)
+		}
+		if loaded.ID == uuid.Nil {
+			t.Errorf("expected non-nil UUID, got nil")
+		}
+	})
+
+	t.Run("preserves pre-set UUID", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "mem-agent-preset",
+			Status:    AgentIdle,
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+		presetID := uuid.New()
+		mem := Memory{
+			ID:         presetID,
+			AgentID:    agent.ID,
+			Content:    "test memory",
+			MemoryType: "summary",
+		}
+		if err := db.Create(&mem).Error; err != nil {
+			t.Fatalf("create memory: %v", err)
+		}
+		var loaded Memory
+		if err := db.First(&loaded, "id = ?", presetID).Error; err != nil {
+			t.Fatalf("load memory: %v", err)
+		}
+		if loaded.ID != presetID {
+			t.Errorf("ID = %v, want %v", loaded.ID, presetID)
+		}
+	})
 }
 
 func TestTaskTDDFields(t *testing.T) {
@@ -175,4 +421,48 @@ func TestTaskNeedsHumanReviewDefaultsFalse(t *testing.T) {
 	if loaded.Phase != "" {
 		t.Errorf("Phase should default to empty string, got %q", loaded.Phase)
 	}
+}
+
+func TestTaskCommentBeforeCreate(t *testing.T) {
+	t.Run("generates UUID when nil", func(t *testing.T) {
+		db := testDB(t)
+		_, task := createProjectAndTask(t, db)
+		comment := TaskComment{
+			TaskID: task.ID,
+			Author: "user",
+			Body:   "test comment",
+		}
+		if err := db.Create(&comment).Error; err != nil {
+			t.Fatalf("create comment: %v", err)
+		}
+		var loaded TaskComment
+		if err := db.First(&loaded, "id = ?", comment.ID).Error; err != nil {
+			t.Fatalf("load comment: %v", err)
+		}
+		if loaded.ID == uuid.Nil {
+			t.Errorf("expected non-nil UUID, got nil")
+		}
+	})
+
+	t.Run("preserves pre-set UUID", func(t *testing.T) {
+		db := testDB(t)
+		_, task := createProjectAndTask(t, db)
+		presetID := uuid.New()
+		comment := TaskComment{
+			ID:     presetID,
+			TaskID: task.ID,
+			Author: "system",
+			Body:   "test comment",
+		}
+		if err := db.Create(&comment).Error; err != nil {
+			t.Fatalf("create comment: %v", err)
+		}
+		var loaded TaskComment
+		if err := db.First(&loaded, "id = ?", presetID).Error; err != nil {
+			t.Fatalf("load comment: %v", err)
+		}
+		if loaded.ID != presetID {
+			t.Errorf("ID = %v, want %v", loaded.ID, presetID)
+		}
+	})
 }
