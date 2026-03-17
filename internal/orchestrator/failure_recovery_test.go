@@ -1,43 +1,17 @@
 package orchestrator
 
 import (
-	"fmt"
 	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
-
-// newTestDB creates a fresh in-memory SQLite database with auto-migration.
-// Each call uses a unique DSN to avoid sharing state across tests.
-func newTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	dsn := fmt.Sprintf("file:%s?mode=memory&cache=private", uuid.New().String())
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	if err != nil {
-		t.Fatalf("open test db: %v", err)
-	}
-	if err := db.AutoMigrate(
-		&model.Project{},
-		&model.Task{},
-		&model.Agent{},
-		&model.TaskEvent{},
-		&model.Memory{},
-		&model.TaskComment{},
-	); err != nil {
-		t.Fatalf("auto migrate: %v", err)
-	}
-	return db
-}
 
 // newTestOrch creates an Orchestrator with a test DB and minimal dependencies.
 func newTestOrch(t *testing.T, database *gorm.DB) *Orchestrator {
@@ -79,7 +53,7 @@ func createProject(t *testing.T, db *gorm.DB, projectID uuid.UUID) {
 // ---------------------------------------------------------------------------
 
 func TestGetTaskPhase_FromContext(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 
 	task := &model.Task{
@@ -92,7 +66,7 @@ func TestGetTaskPhase_FromContext(t *testing.T) {
 }
 
 func TestGetTaskPhase_DefaultSubtask(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 
 	parentID := uuid.New()
@@ -106,7 +80,7 @@ func TestGetTaskPhase_DefaultSubtask(t *testing.T) {
 }
 
 func TestGetTaskPhase_RootTask(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 
 	task := &model.Task{ID: uuid.New()}
@@ -123,7 +97,7 @@ func TestCheckContextUsage_ImplAgentAt85_FixerSpawned(t *testing.T) {
 	// This test verifies the logic in checkContextUsage when an implementation
 	// agent is at 85% context usage. Since we can't spawn a real fixer (no
 	// runner), we verify the thresholds and phase detection logic.
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -177,7 +151,7 @@ func TestCheckContextUsage_ImplAgentAt85_FixerSpawned(t *testing.T) {
 }
 
 func TestCheckContextUsage_ImplAgentAt74_NoAction(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -216,7 +190,7 @@ func TestCheckContextUsage_ImplAgentAt74_NoAction(t *testing.T) {
 }
 
 func TestCheckContextUsage_TestAgentAt85_NoFixer(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -258,7 +232,7 @@ func TestCheckContextUsage_TestAgentAt85_NoFixer(t *testing.T) {
 }
 
 func TestCheckContextUsage_FixerAgentAt80_HumanEscalation(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -330,7 +304,7 @@ func TestCheckContextUsage_FixerAgentAt80_HumanEscalation(t *testing.T) {
 }
 
 func TestCheckContextUsage_AnyAgentAt90_HardStop(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -379,7 +353,7 @@ func TestCheckContextUsage_AnyAgentAt90_HardStop(t *testing.T) {
 }
 
 func TestCheckContextUsage_CompactionTriggered_HardStop(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -434,7 +408,7 @@ func TestCheckContextUsage_CompactionTriggered_HardStop(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleTestWritingFailure_CompilableTestsExist(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -478,7 +452,7 @@ func TestHandleTestWritingFailure_CompilableTestsExist(t *testing.T) {
 }
 
 func TestHandleTestWritingFailure_NoCompilableTests_FirstAttempt(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -524,7 +498,7 @@ func TestHandleTestWritingFailure_NoCompilableTests_FirstAttempt(t *testing.T) {
 }
 
 func TestHandleTestWritingFailure_NoCompilableTests_Retry(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -598,7 +572,7 @@ func TestProcessTestingReady_TestsPass(t *testing.T) {
 	featureName := "test-gate-pass"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
 
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	events := make(chan Event, 100)
 	o := &Orchestrator{
@@ -650,7 +624,7 @@ func TestProcessTestingReady_TestsPass(t *testing.T) {
 }
 
 func TestProcessTestingReady_AlreadyHasAgent(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -697,7 +671,7 @@ func TestProcessTestingReady_FixerSucceeds(t *testing.T) {
 	// This tests the scenario where a fixer agent has completed and tests
 	// are re-run. Since this requires a full integration with runner and
 	// tmux, we test the state machine logic.
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -732,7 +706,7 @@ func TestProcessTestingReady_FixerSucceeds(t *testing.T) {
 func TestProcessTestingReady_FixerAt80_HumanReview(t *testing.T) {
 	// This tests the scenario where a fixer has already been attempted and
 	// the task should be flagged for human review.
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -797,7 +771,7 @@ func TestProcessTestingReady_FixerAt80_HumanReview(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleTestFailed_TransitionsToInProgress(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 
@@ -828,7 +802,7 @@ func TestHandleTestFailed_TransitionsToInProgress(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSpawnFixerForTestFailure_BuildsPrompt(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	o := newTestOrch(t, db)
 	createProject(t, db, o.projectID)
 

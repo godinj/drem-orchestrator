@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -19,7 +20,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestVerifyTestsBeforeMerge_PassFirstTry(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
@@ -51,7 +52,7 @@ func TestVerifyTestsBeforeMerge_PassFirstTry(t *testing.T) {
 }
 
 func TestVerifyTestsBeforeMerge_PassOnRetry(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -106,7 +107,7 @@ exit 0
 }
 
 func TestVerifyTestsBeforeMerge_AllRetriesFail(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
@@ -138,7 +139,7 @@ func TestVerifyTestsBeforeMerge_AllRetriesFail(t *testing.T) {
 }
 
 func TestVerifyTestsBeforeMerge_NoTestCommand(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
@@ -168,7 +169,7 @@ func TestVerifyTestsBeforeMerge_NoTestCommand(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestVerifyCompilationBeforeMerge_Passes(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
@@ -198,7 +199,7 @@ func TestVerifyCompilationBeforeMerge_Passes(t *testing.T) {
 }
 
 func TestVerifyCompilationBeforeMerge_Fails(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
@@ -225,7 +226,7 @@ func TestVerifyCompilationBeforeMerge_Fails(t *testing.T) {
 }
 
 func TestVerifyCompilationBeforeMerge_NoCommand_UnknownLanguage(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
@@ -255,7 +256,7 @@ func TestVerifyCompilationBeforeMerge_NoCommand_UnknownLanguage(t *testing.T) {
 }
 
 func TestVerifyCompilationBeforeMerge_InfersGoVet(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
@@ -369,7 +370,7 @@ func TestScopeTestCommand_RootLevelGoFile(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestStoreTestResult_PopulatesAgentConfig(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -426,7 +427,7 @@ func TestStoreTestResult_PopulatesAgentConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestRunCommandWithTimeout_TimesOut(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -445,7 +446,7 @@ func TestRunCommandWithTimeout_TimesOut(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestOutputTruncation(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 

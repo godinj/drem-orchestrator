@@ -6,6 +6,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -14,7 +15,7 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestHandleTestReviewApproved_HappyPath(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -50,7 +51,7 @@ func TestHandleTestReviewApproved_HappyPath(t *testing.T) {
 }
 
 func TestHandleTestReviewApproved_WrongStatus(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -78,7 +79,7 @@ func TestHandleTestReviewApproved_WrongStatus(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandleTestReviewRejected_FirstRejection(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -174,7 +175,7 @@ func TestHandleTestReviewRejected_FirstRejection(t *testing.T) {
 }
 
 func TestHandleTestReviewRejected_RejectionCountIncrements(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -222,7 +223,7 @@ func TestHandleTestReviewRejected_RejectionCountIncrements(t *testing.T) {
 }
 
 func TestHandleTestReviewRejected_ThirdRejectionPauses(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -275,7 +276,7 @@ func TestHandleTestReviewRejected_ThirdRejectionPauses(t *testing.T) {
 }
 
 func TestHandleTestReviewRejected_WrongStatus(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -299,7 +300,7 @@ func TestHandleTestReviewRejected_WrongStatus(t *testing.T) {
 }
 
 func TestHandleTestReviewRejected_ReplacementPreservesPhaseAndTestsFor(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -389,7 +390,7 @@ func TestIsTerminal(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCheckFeatureCompletion_RejectedSubtasksAreTerminal(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -454,7 +455,7 @@ func TestScheduleSubtasks_RejectedNotInQuery(t *testing.T) {
 	// Verify that the scheduleSubtasks query (BACKLOG or unassigned IN_PROGRESS)
 	// does not match REJECTED subtasks. We test this at the DB query level
 	// since scheduleSubtasks requires a runner to be initialized.
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 
 	projectID := uuid.New()
 	project := model.Project{ID: projectID, Name: "test", BareRepoPath: "/tmp/fake"}

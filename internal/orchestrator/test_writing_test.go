@@ -12,6 +12,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -30,7 +31,7 @@ func testOrchestratorWithRunner(t *testing.T, db *gorm.DB, wtManager *worktree.M
 // ---------------------------------------------------------------------------
 
 func TestProcessTestWriting_SchedulesOnlyTestPhaseSubtasks(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -129,7 +130,7 @@ func TestProcessTestWriting_SchedulesOnlyTestPhaseSubtasks(t *testing.T) {
 }
 
 func TestProcessTestWriting_AllTestSubtasksDone_TransitionsToTestReview(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
@@ -185,7 +186,7 @@ func TestProcessTestWriting_AllTestSubtasksDone_TransitionsToTestReview(t *testi
 }
 
 func TestProcessTestWriting_AllTestSubtasksTerminal_SomeFailed(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
@@ -236,7 +237,7 @@ func TestProcessTestWriting_AllTestSubtasksTerminal_SomeFailed(t *testing.T) {
 }
 
 func TestProcessTestWriting_TestSubtasksStillRunning(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
@@ -292,7 +293,7 @@ func TestProcessTestWriting_TestSubtasksStillRunning(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandlePlanApproved_TDDPlan_TransitionsToTestWriting(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -355,7 +356,7 @@ func TestHandlePlanApproved_TDDPlan_TransitionsToTestWriting(t *testing.T) {
 }
 
 func TestHandlePlanApproved_OldFormatPlan_TransitionsToInProgress(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -403,7 +404,7 @@ func TestHandlePlanApproved_OldFormatPlan_TransitionsToInProgress(t *testing.T) 
 // ---------------------------------------------------------------------------
 
 func TestPhaseAwareScheduling_InProgressSkipsTestSubtasks(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -632,7 +633,7 @@ func TestMergeTDDDependencies_OutOfRangeIndex(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestHandlePlanApproved_SetsTestsForOnSubtasks(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -709,7 +710,7 @@ func TestHandlePlanApproved_SetsTestsForOnSubtasks(t *testing.T) {
 }
 
 func TestHandlePlanApproved_StoresTDDExceptions(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -939,7 +940,7 @@ func TestParsePlanFull_OldFormat_NoPhase(t *testing.T) {
 
 func TestDoTick_QueriesTestWritingTasks(t *testing.T) {
 	// Verify that doTick picks up TEST_WRITING tasks.
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -988,7 +989,7 @@ func TestDoTick_QueriesTestWritingTasks(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestGetTestCommand_FromConfig(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate.TestCommand = "go test -v ./..."
@@ -1002,7 +1003,7 @@ func TestGetTestCommand_FromConfig(t *testing.T) {
 }
 
 func TestGetTestCommand_NoContextNoWorktree(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -1022,7 +1023,7 @@ func TestScheduleSubtasks_TestWriting_SkipsWaveGroupGating(t *testing.T) {
 	// During TEST_WRITING, the wave schedule should be ignored and all
 	// test-phase subtasks with met dependencies should be schedulable,
 	// regardless of file-overlap groups.
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
@@ -1157,7 +1158,7 @@ func TestScheduleSubtasks_TestWriting_SkipsWaveGroupGating(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScheduleSubtasks_TestWriting_RespectsExplicitDependencies(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
@@ -1229,7 +1230,7 @@ func TestScheduleSubtasks_TestWriting_RespectsExplicitDependencies(t *testing.T)
 // ---------------------------------------------------------------------------
 
 func TestProcessTestWriting_SupervisorFixTriggersTestReview(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
@@ -1289,7 +1290,7 @@ func TestProcessTestWriting_SupervisorFixTriggersTestReview(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFullLifecycle_TestWritingToInProgress(t *testing.T) {
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
@@ -1488,7 +1489,7 @@ func TestHandlePlanApproved_CommitsPlanJSON(t *testing.T) {
 	featureName := "test-plan-commit"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
 
-	db := testDB(t)
+	db := testutil.NewSharedTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
