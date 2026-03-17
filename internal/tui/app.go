@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
@@ -1268,6 +1269,31 @@ func (m Model) refreshData() tea.Cmd {
 
 		var agents []model.Agent
 		db.Where("project_id = ?", projectID).Find(&agents)
+
+		// Enrich working agents with context usage from transcript if
+		// the runner's contextMonitorLoop hasn't populated it (e.g.
+		// after a drem restart when pre-existing agents aren't in the
+		// runner's in-memory map).
+		for i := range agents {
+			ag := &agents[i]
+			if ag.Status != model.AgentWorking || ag.WorktreePath == "" {
+				continue
+			}
+			if ag.Config != nil {
+				if _, ok := ag.Config["context_used_pct"]; ok {
+					continue
+				}
+			}
+			usage, err := ctxmon.ReadTranscriptUsage(ag.WorktreePath)
+			if err != nil || usage == nil {
+				continue
+			}
+			if ag.Config == nil {
+				ag.Config = make(model.JSONField)
+			}
+			ag.Config["context_used_pct"] = float64(usage.UsedPercent)
+			ag.Config["context_window_size"] = float64(usage.ContextWindowSize)
+		}
 
 		var subtasks []model.Task
 		var detailAgent *model.Agent
