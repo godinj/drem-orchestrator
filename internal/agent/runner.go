@@ -76,8 +76,8 @@ func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin st
 	}
 }
 
-// agentTypeLabel returns a short human-readable label for an agent type.
-func agentTypeLabel(at model.AgentType) string {
+// AgentTypeLabel returns a human-readable label for the given agent type.
+func AgentTypeLabel(at model.AgentType) string {
 	switch at {
 	case model.AgentPlanner:
 		return "plan"
@@ -94,8 +94,8 @@ func agentTypeLabel(at model.AgentType) string {
 	}
 }
 
-// truncateTitle shortens s to maxLen runes, appending "…" if truncated.
-func truncateTitle(s string, maxLen int) string {
+// TruncateTitle truncates s to maxLen characters, appending "..." if truncated.
+func TruncateTitle(s string, maxLen int) string {
 	runes := []rune(s)
 	if len(runes) <= maxLen {
 		return s
@@ -103,9 +103,8 @@ func truncateTitle(s string, maxLen int) string {
 	return string(runes[:maxLen-1]) + "…"
 }
 
-// sanitizeSessionName replaces tmux-illegal characters ("." and ":") with "-",
-// preserving "/" which is used as a tree separator.
-func sanitizeSessionName(s string) string {
+// SanitizeSessionName removes characters not valid in tmux session names.
+func SanitizeSessionName(s string) string {
 	s = strings.ReplaceAll(s, ".", "-")
 	s = strings.ReplaceAll(s, ":", "-")
 	return s
@@ -128,22 +127,22 @@ func (r *Runner) loadParentTitle(task *model.Task) string {
 // show "code - <parent> > <subtask>". The tmux session nests under the
 // dashboard via "/" separator.
 func (r *Runner) buildAgentNames(task *model.Task, agentType model.AgentType, agentID uuid.UUID) (name, session string) {
-	label := agentTypeLabel(agentType)
+	label := AgentTypeLabel(agentType)
 	shortID := agentID.String()[:4]
 
 	if agentType == model.AgentPlanner {
 		title := strings.ReplaceAll(task.Title, "/", "-")
-		title = truncateTitle(title, 30)
+		title = TruncateTitle(title, 30)
 		name = fmt.Sprintf("%s - %s", label, title)
 	} else {
 		parentTitle := strings.ReplaceAll(r.loadParentTitle(task), "/", "-")
-		parentTitle = truncateTitle(parentTitle, 30)
+		parentTitle = TruncateTitle(parentTitle, 30)
 		subtaskTitle := strings.ReplaceAll(task.Title, "/", "-")
-		subtaskTitle = truncateTitle(subtaskTitle, 30)
+		subtaskTitle = TruncateTitle(subtaskTitle, 30)
 		name = fmt.Sprintf("%s - %s > %s", label, parentTitle, subtaskTitle)
 	}
 
-	session = sanitizeSessionName(fmt.Sprintf("%s/%s %s", r.tmux.SessionName, name, shortID))
+	session = SanitizeSessionName(fmt.Sprintf("%s/%s %s", r.tmux.SessionName, name, shortID))
 	return name, session
 }
 
