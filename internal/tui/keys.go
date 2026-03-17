@@ -4,18 +4,18 @@ import "github.com/charmbracelet/bubbles/key"
 
 // keyMap defines all key bindings for the TUI dashboard.
 type keyMap struct {
-	Up       key.Binding
-	Down     key.Binding
-	Tab      key.Binding
-	Enter    key.Binding
-	Approve  key.Binding // a - approve plan / pass test
-	Reject   key.Binding // r - reject plan / fail test
-	TestPass key.Binding // t - pass test
-	TestFail key.Binding // f - fail test
-	Jump     key.Binding // g - jump to agent tmux window
-	New      key.Binding // n - new task
-	Pause    key.Binding // p - pause/resume
-	Retry    key.Binding // R - retry failed
+	Up            key.Binding
+	Down          key.Binding
+	Tab           key.Binding
+	Enter         key.Binding
+	Approve       key.Binding // a - approve plan / pass test
+	Reject        key.Binding // r - reject plan / fail test
+	TestPass      key.Binding // t - pass test
+	TestFail      key.Binding // f - fail test
+	Jump          key.Binding // g - jump to agent tmux window
+	New           key.Binding // n - new task
+	Pause         key.Binding // p - pause/resume
+	Retry         key.Binding // R - retry failed
 	Log           key.Binding // l - view agent log
 	Comment       key.Binding // c - add comment
 	DeleteComment key.Binding // d - delete last comment

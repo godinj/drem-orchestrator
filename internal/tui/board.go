@@ -26,11 +26,11 @@ type displayEntry struct {
 // statusSortOrder controls the display order of tasks: actionable first,
 // then human gates, then terminal states.
 var statusSortOrder = map[model.TaskStatus]int{
-	model.StatusInProgress:    0,
-	model.StatusPlanning:      1,
-	model.StatusMerging:       2,
-	model.StatusBacklog:       3,
-	model.StatusPlanReview:    4,
+	model.StatusInProgress:   0,
+	model.StatusPlanning:     1,
+	model.StatusMerging:      2,
+	model.StatusBacklog:      3,
+	model.StatusPlanReview:   4,
 	model.StatusTestingReady: 5,
 	model.StatusPaused:       6,
 	model.StatusDone:         7,
@@ -41,8 +41,8 @@ var statusSortOrder = map[model.TaskStatus]int{
 type BoardModel struct {
 	tasks        []model.Task
 	cursor       int
-	selectedID   *uuid.UUID         // tracks cursor by task ID across re-sorts
-	scrollOffset int                // first visible line, maintained for smooth scrolling
+	selectedID   *uuid.UUID // tracks cursor by task ID across re-sorts
+	scrollOffset int        // first visible line, maintained for smooth scrolling
 	width        int
 	height       int
 	expanded     map[uuid.UUID]bool // parent task IDs whose children are shown (collapsed by default)

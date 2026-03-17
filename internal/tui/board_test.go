@@ -167,10 +167,10 @@ func TestSelected(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		cursor   int
-		wantID   uuid.UUID
-		wantNil  bool
+		name    string
+		cursor  int
+		wantID  uuid.UUID
+		wantNil bool
 	}{
 		{name: "cursor 0 selects first root", cursor: 0, wantID: parentA},
 		{name: "cursor 1 selects first child", cursor: 1},

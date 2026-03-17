@@ -22,15 +22,15 @@ var (
 
 // statusColors maps each TaskStatus to a display color.
 var statusColors = map[model.TaskStatus]lipgloss.Color{
-	model.StatusBacklog:       lipgloss.Color("241"),
-	model.StatusPlanning:      lipgloss.Color("39"),
-	model.StatusPlanReview:    lipgloss.Color("214"),
-	model.StatusInProgress:    lipgloss.Color("62"),
+	model.StatusBacklog:      lipgloss.Color("241"),
+	model.StatusPlanning:     lipgloss.Color("39"),
+	model.StatusPlanReview:   lipgloss.Color("214"),
+	model.StatusInProgress:   lipgloss.Color("62"),
 	model.StatusTestingReady: lipgloss.Color("214"),
 	model.StatusMerging:      lipgloss.Color("62"),
-	model.StatusPaused:        lipgloss.Color("241"),
-	model.StatusDone:          lipgloss.Color("42"),
-	model.StatusFailed:        lipgloss.Color("196"),
+	model.StatusPaused:       lipgloss.Color("241"),
+	model.StatusDone:         lipgloss.Color("42"),
+	model.StatusFailed:       lipgloss.Color("196"),
 }
 
 // agentStatusColors maps each AgentStatus to a display color.
@@ -43,15 +43,15 @@ var agentStatusColors = map[model.AgentStatus]lipgloss.Color{
 
 // statusIcons maps each TaskStatus to a Unicode icon.
 var statusIcons = map[model.TaskStatus]string{
-	model.StatusBacklog:       "\u25cb", // ○
-	model.StatusPlanning:      "\u25cc", // ◌
-	model.StatusPlanReview:    "\u25c9", // ◉
-	model.StatusInProgress:    "\u25cf", // ●
+	model.StatusBacklog:      "\u25cb", // ○
+	model.StatusPlanning:     "\u25cc", // ◌
+	model.StatusPlanReview:   "\u25c9", // ◉
+	model.StatusInProgress:   "\u25cf", // ●
 	model.StatusTestingReady: "\u25c8", // ◈
 	model.StatusMerging:      "\u27f3", // ⟳
-	model.StatusPaused:        "\u23f8", // ⏸
-	model.StatusDone:          "\u2713", // ✓
-	model.StatusFailed:        "\u2717", // ✗
+	model.StatusPaused:       "\u23f8", // ⏸
+	model.StatusDone:         "\u2713", // ✓
+	model.StatusFailed:       "\u2717", // ✗
 }
 
 // Component styles used across the TUI.
