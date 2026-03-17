@@ -27,6 +27,7 @@ type Config struct {
 	CompileCommand      string        `toml:"compile_command"`
 	ScopedTests         *bool         `toml:"scoped_tests"` // pointer for default-true detection
 	TestTimeout         time.Duration `toml:"test_timeout"`
+	ContextFixerPercent int           `toml:"context_fixer_percent"`
 }
 
 // DefaultConfig returns a Config populated with sensible default values.
@@ -48,6 +49,7 @@ func DefaultConfig() Config {
 		LogPath:             "./drem.log",
 		TestTimeout:         5 * time.Minute,
 		ScopedTests:         &scopedDefault,
+		ContextFixerPercent: 85,
 	}
 }
 
