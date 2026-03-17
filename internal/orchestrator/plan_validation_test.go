@@ -19,7 +19,7 @@ func TestValidatePlan(t *testing.T) {
 			subtasks: []planEntry{
 				{Title: "Add models", Files: []string{"models.go"}},
 				{Title: "Add handlers", Files: []string{"handlers.go"}},
-				{Title: "Integration", Files: []string{"main.go"}, Dependencies: []int{0, 1}},
+				{Title: "Integration", Files: []string{"main.go", "README.md"}, Dependencies: []int{0, 1}},
 			},
 			wantValid:    true,
 			wantWarnings: nil,
@@ -29,7 +29,7 @@ func TestValidatePlan(t *testing.T) {
 			name: "file overlap without dependency warns",
 			subtasks: []planEntry{
 				{Title: "Feature A", Files: []string{"shared.go", "a.go"}},
-				{Title: "Feature B", Files: []string{"shared.go", "b.go"}},
+				{Title: "Feature B", Files: []string{"shared.go", "b.go", "docs/usage.md"}},
 			},
 			wantValid: true,
 			wantWarnings: []string{
@@ -41,7 +41,7 @@ func TestValidatePlan(t *testing.T) {
 			name: "file overlap with dependency does not warn",
 			subtasks: []planEntry{
 				{Title: "Feature A", Files: []string{"shared.go", "a.go"}},
-				{Title: "Feature B", Files: []string{"shared.go", "b.go"}, Dependencies: []int{0}},
+				{Title: "Feature B", Files: []string{"shared.go", "b.go", "README.md"}, Dependencies: []int{0}},
 			},
 			wantValid:    true,
 			wantWarnings: nil,
@@ -50,7 +50,7 @@ func TestValidatePlan(t *testing.T) {
 		{
 			name: "empty files warns about scheduling",
 			subtasks: []planEntry{
-				{Title: "Subtask 1", Files: []string{"a.go"}},
+				{Title: "Subtask 1", Files: []string{"a.go", "docs/guide.md"}},
 				{Title: "Subtask 2"},
 				{Title: "Subtask 3"},
 			},
@@ -71,7 +71,7 @@ func TestValidatePlan(t *testing.T) {
 				{Title: "S6", Files: []string{"6.go"}},
 				{Title: "S7", Files: []string{"7.go"}},
 				{Title: "S8", Files: []string{"8.go"}},
-				{Title: "S9", Files: []string{"9.go"}},
+				{Title: "S9", Files: []string{"9.go", "README.md"}},
 			},
 			wantValid: true,
 			wantWarnings: []string{
@@ -84,7 +84,7 @@ func TestValidatePlan(t *testing.T) {
 			subtasks: []planEntry{
 				{Title: "A", Files: []string{"a.go"}, Dependencies: []int{1}},
 				{Title: "B", Files: []string{"b.go"}, Dependencies: []int{2}},
-				{Title: "C", Files: []string{"c.go"}, Dependencies: []int{0}},
+				{Title: "C", Files: []string{"c.go", "docs/fix.md"}, Dependencies: []int{0}},
 			},
 			wantValid:    false,
 			wantWarnings: nil,
@@ -96,7 +96,7 @@ func TestValidatePlan(t *testing.T) {
 			name: "test subtask without full dependencies warns (legacy)",
 			subtasks: []planEntry{
 				{Title: "Implement feature A", Files: []string{"a.go"}},
-				{Title: "Implement feature B", Files: []string{"b.go"}},
+				{Title: "Implement feature B", Files: []string{"b.go", "README.md"}},
 				{Title: "Add tests", Files: []string{"a_test.go", "b_test.go"}, Dependencies: []int{0}},
 			},
 			wantValid: true,
@@ -109,7 +109,7 @@ func TestValidatePlan(t *testing.T) {
 			name: "test subtask with full dependencies no warning (legacy)",
 			subtasks: []planEntry{
 				{Title: "Implement feature A", Files: []string{"a.go"}},
-				{Title: "Implement feature B", Files: []string{"b.go"}},
+				{Title: "Implement feature B", Files: []string{"b.go", "docs/api.md"}},
 				{Title: "Add tests", Files: []string{"a_test.go", "b_test.go"}, Dependencies: []int{0, 1}},
 			},
 			wantValid:    true,
@@ -120,7 +120,7 @@ func TestValidatePlan(t *testing.T) {
 			name: "estimated_files used when files empty",
 			subtasks: []planEntry{
 				{Title: "Subtask 1", EstimatedFiles: []string{"shared.go", "a.go"}},
-				{Title: "Subtask 2", EstimatedFiles: []string{"shared.go", "b.go"}},
+				{Title: "Subtask 2", EstimatedFiles: []string{"shared.go", "b.go", "README.md"}},
 			},
 			wantValid: true,
 			wantWarnings: []string{
@@ -131,13 +131,35 @@ func TestValidatePlan(t *testing.T) {
 		{
 			name: "self-referencing dependency cycle",
 			subtasks: []planEntry{
-				{Title: "A", Files: []string{"a.go"}, Dependencies: []int{0}},
+				{Title: "A", Files: []string{"a.go", "README.md"}, Dependencies: []int{0}},
 			},
 			wantValid:    false,
 			wantWarnings: nil,
 			wantErrors: []string{
 				"Dependency cycle detected in subtask dependencies",
 			},
+		},
+		{
+			name: "no doc files warns about documentation",
+			subtasks: []planEntry{
+				{Title: "Feature A", Files: []string{"a.go"}},
+				{Title: "Feature B", Files: []string{"b.go"}},
+			},
+			wantValid: true,
+			wantWarnings: []string{
+				"No subtask lists documentation files (README, docs/) — if this feature changes user-facing behavior, consider adding a documentation step",
+			},
+			wantErrors: nil,
+		},
+		{
+			name: "doc file in subtask suppresses documentation warning",
+			subtasks: []planEntry{
+				{Title: "Feature A", Files: []string{"a.go"}},
+				{Title: "Update docs", Files: []string{"docs/feature-a.md"}},
+			},
+			wantValid:    true,
+			wantWarnings: nil,
+			wantErrors:   nil,
 		},
 	}
 
@@ -187,7 +209,7 @@ func TestValidatePlanTDD(t *testing.T) {
 			name: "no test subtasks no exceptions errors",
 			subtasks: []planEntry{
 				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go"}},
-				{Title: "Impl B", Phase: "implementation", Files: []string{"b.go"}},
+				{Title: "Impl B", Phase: "implementation", Files: []string{"b.go", "README.md"}},
 			},
 			wantValid:     false,
 			wantErrorSubs: []string{"no test subtasks"},
@@ -198,7 +220,7 @@ func TestValidatePlanTDD(t *testing.T) {
 				{Title: "Test A", Phase: "test", Files: []string{"a_test.go", "a.go"}, TestsFor: []int{2}, Dependencies: []int{}},
 				{Title: "Test B", Phase: "test", Files: []string{"b_test.go", "b.go"}, TestsFor: []int{3}, Dependencies: []int{}},
 				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go"}, Dependencies: []int{0}},
-				{Title: "Impl B", Phase: "implementation", Files: []string{"b.go"}, Dependencies: []int{1}},
+				{Title: "Impl B", Phase: "implementation", Files: []string{"b.go", "README.md"}, Dependencies: []int{1}},
 			},
 			wantValid:       true,
 			wantWarningSubs: nil,
@@ -209,7 +231,7 @@ func TestValidatePlanTDD(t *testing.T) {
 			subtasks: []planEntry{
 				{Title: "Test A", Phase: "test", Files: []string{"a_test.go"}, TestsFor: []int{1, 2}},
 				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go"}},
-				{Title: "Impl B", Phase: "implementation", Files: []string{"b.go"}},
+				{Title: "Impl B", Phase: "implementation", Files: []string{"b.go", "docs/b.md"}},
 			},
 			wantValid:     false,
 			wantErrorSubs: []string{"must reference exactly one"},
@@ -229,7 +251,7 @@ func TestValidatePlanTDD(t *testing.T) {
 			name: "tests_for out of bounds errors",
 			subtasks: []planEntry{
 				{Title: "Test A", Phase: "test", Files: []string{"a_test.go"}, TestsFor: []int{99}},
-				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go"}},
+				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go", "README.md"}},
 			},
 			wantValid:     false,
 			wantErrorSubs: []string{"out-of-bounds"},
@@ -239,7 +261,7 @@ func TestValidatePlanTDD(t *testing.T) {
 			subtasks: []planEntry{
 				{Title: "Test A", Phase: "test", Files: []string{"a_test.go"}, TestsFor: []int{1}},
 				{Title: "Setup", Phase: "setup", Files: []string{"setup.go"}},
-				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go"}},
+				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go", "docs/setup.md"}},
 			},
 			wantValid:     false,
 			wantErrorSubs: []string{"non-implementation"},
@@ -248,7 +270,7 @@ func TestValidatePlanTDD(t *testing.T) {
 			name: "test depends on impl subtask errors",
 			subtasks: []planEntry{
 				{Title: "Test A", Phase: "test", Files: []string{"a_test.go", "a.go"}, TestsFor: []int{1}, Dependencies: []int{1}},
-				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go"}},
+				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go", "README.md"}},
 			},
 			wantValid:     false,
 			wantErrorSubs: []string{"tests must run before implementation"},
@@ -299,7 +321,7 @@ func TestValidatePlanTDD(t *testing.T) {
 			name: "old format plan no phases skips TDD checks",
 			subtasks: []planEntry{
 				{Title: "Implement feature A", Files: []string{"a.go"}},
-				{Title: "Implement feature B", Files: []string{"b.go"}},
+				{Title: "Implement feature B", Files: []string{"b.go", "README.md"}},
 				{Title: "Add tests", Files: []string{"a_test.go", "b_test.go"}, Dependencies: []int{0, 1}},
 			},
 			wantValid:       true,
@@ -320,7 +342,7 @@ func TestValidatePlanTDD(t *testing.T) {
 			name: "no file overlap warning when files overlap",
 			subtasks: []planEntry{
 				{Title: "Test A", Phase: "test", Files: []string{"a_test.go", "a.go"}, TestsFor: []int{1}},
-				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go"}, Dependencies: []int{0}},
+				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go", "docs/a.md"}, Dependencies: []int{0}},
 			},
 			wantValid:       true,
 			wantWarningSubs: nil,
@@ -331,7 +353,7 @@ func TestValidatePlanTDD(t *testing.T) {
 			subtasks: []planEntry{
 				{Title: "Test A", Phase: "test", Files: []string{"a_test.go", "a.go"}, TestsFor: []int{1}},
 				{Title: "Impl A", Phase: "implementation", Files: []string{"a.go"}, Dependencies: []int{0}},
-				{Title: "Impl B config", Phase: "implementation", Files: []string{"config.go"}},
+				{Title: "Impl B config", Phase: "implementation", Files: []string{"config.go", "README.md"}},
 			},
 			exceptions: []tddException{
 				{SubtaskIndex: 2, Reason: "config only, no logic"},

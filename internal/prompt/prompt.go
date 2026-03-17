@@ -284,6 +284,10 @@ func plannerInstructions() []string {
 		"2. For each criterion, identify which subtask(s) address it",
 		"3. If any criterion is not covered, add a subtask for it",
 		"4. If any subtask doesn't map to a criterion, justify it or remove it",
+		"5. If the feature changes user-facing behavior, configuration, CLI flags, " +
+			"or adds new capabilities, verify that at least one subtask updates " +
+			"the relevant README or documentation. This can be a dedicated subtask " +
+			"or a step within the integration subtask.",
 		"",
 		"## Integration Subtask",
 		"",
@@ -303,6 +307,9 @@ func plannerInstructions() []string {
 		"- Make each subtask produce a testable, observable behavior change",
 		"- Include acceptance criteria from the parent task in subtask descriptions",
 		"- Prefer fewer, larger subtasks over many small ones (3-6 is typical)",
+		"- Include documentation updates (README, walkthrough, usage examples) when " +
+			"the feature changes user-facing behavior — either as a step in the " +
+			"integration subtask or as a dedicated subtask",
 		"",
 		"DO NOT:",
 		"- Decompose by code layer (one subtask for models, one for handlers, one for UI) — this maximizes file overlap and merge conflicts",
@@ -486,8 +493,11 @@ func defaultCoderInstructions(task *model.Task) []string {
 		"4. If a test fails:",
 		"   - If it's a test you wrote or modified: fix it",
 		"   - If it's a pre-existing test broken by your changes: fix your implementation, not the test",
-		"5. Commit your changes with a descriptive message",
-		"6. Do NOT push to remote",
+		"5. If this is an integration subtask and the feature changes user-facing "+
+			"behavior (CLI, config, TUI, new capabilities), update the README "+
+			"or relevant documentation to reflect the changes",
+		"6. Commit your changes with a descriptive message",
+		"7. Do NOT push to remote",
 		"",
 	)
 
@@ -556,6 +566,8 @@ func planReviewerInstructions(opts Opts) []string {
 		"6. **TDD structure**: Does every implementation subtask have a corresponding test subtask with `tests_for`?",
 		"7. **Test quality**: Are test subtask descriptions specific about what behavior they verify?",
 		`8. **TDD exceptions**: Are exceptions justified? (integration wiring and research are valid; "too hard to test" is not)`,
+		"9. **Documentation**: If the feature changes user-facing behavior (CLI, config, TUI, new capabilities), " +
+			"does at least one subtask update the README or add a walkthrough? Flag if missing.",
 		"",
 		"## Output",
 		"",
@@ -615,6 +627,8 @@ func featureReviewerInstructions(opts Opts) []string {
 		"3. Examine the code changes shown above",
 		"4. Run the build command to verify compilation",
 		"5. For each acceptance criterion, verify it is addressed by the code",
+		"6. If the feature changes user-facing behavior, verify that README or " +
+			"documentation has been updated to reflect the changes",
 		"",
 		"## Output",
 		"",

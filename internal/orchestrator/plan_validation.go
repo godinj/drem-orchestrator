@@ -68,6 +68,13 @@ func ValidatePlan(subtasks []planEntry, exceptions []tddException) PlanValidatio
 		validateLegacyTestOrdering(subtasks, &result)
 	}
 
+	// 6. Documentation coverage heuristic.
+	if !planTouchesDocFiles(subtasks) {
+		result.Warnings = append(result.Warnings,
+			"No subtask lists documentation files (README, docs/) — if this feature "+
+				"changes user-facing behavior, consider adding a documentation step")
+	}
+
 	result.Valid = len(result.Errors) == 0
 	return result
 }
@@ -508,4 +515,20 @@ func findMissingTestDependencies(subtasks []planEntry, testIdx int) []int {
 		}
 	}
 	return missing
+}
+
+// planTouchesDocFiles returns true if any subtask lists a documentation file
+// (README*, docs/*, *.md in the project root) in its file list.
+func planTouchesDocFiles(subtasks []planEntry) bool {
+	for _, s := range subtasks {
+		for _, f := range allFiles(s) {
+			lower := strings.ToLower(f)
+			if strings.HasPrefix(lower, "readme") ||
+				strings.HasPrefix(lower, "docs/") ||
+				strings.HasPrefix(lower, "doc/") {
+				return true
+			}
+		}
+	}
+	return false
 }
