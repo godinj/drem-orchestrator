@@ -59,13 +59,16 @@ func ValidatePlan(subtasks []planEntry, exceptions []tddException) PlanValidatio
 		}
 	}
 
-	// 4. Dependency cycle detection.
+	// 4. Same-package test-phase overlap detection.
+	warnSamePackageTestOverlap(subtasks, &result)
+
+	// 5. Dependency cycle detection.
 	if hasCycle(subtasks) {
 		result.Errors = append(result.Errors,
 			"Dependency cycle detected in subtask dependencies")
 	}
 
-	// 5. TDD validation (only if at least one subtask has a non-empty Phase).
+	// 6. TDD validation (only if at least one subtask has a non-empty Phase).
 	if hasTDDPhases(subtasks) {
 		validateTDD(subtasks, exceptions, &result)
 	} else {
@@ -73,7 +76,7 @@ func ValidatePlan(subtasks []planEntry, exceptions []tddException) PlanValidatio
 		validateLegacyTestOrdering(subtasks, &result)
 	}
 
-	// 6. Documentation coverage heuristic.
+	// 7. Documentation coverage heuristic.
 	if !planTouchesDocFiles(subtasks) {
 		result.Warnings = append(result.Warnings,
 			"No subtask lists documentation files (README, docs/) — if this feature "+
@@ -663,6 +666,71 @@ func matchesGlob(pattern, path string) bool {
 		return matched
 	}
 	return false
+}
+
+// goPackages extracts unique Go package directory paths from a file list.
+// For each .go file, the package is the directory portion of the path.
+func goPackages(files []string) []string {
+	seen := make(map[string]bool)
+	var pkgs []string
+	for _, f := range files {
+		if !strings.HasSuffix(f, ".go") {
+			continue
+		}
+		dir := filepath.Dir(f)
+		if dir == "." {
+			dir = ""
+		}
+		if dir != "" && !seen[dir] {
+			seen[dir] = true
+			pkgs = append(pkgs, dir)
+		}
+	}
+	return pkgs
+}
+
+// warnSamePackageTestOverlap checks pairs of test-phase subtasks that share
+// no dependency. If both target files in the same Go package, they likely need
+// shared stubs and should either list those stubs in files or be sequenced.
+func warnSamePackageTestOverlap(subtasks []planEntry, result *PlanValidationResult) {
+	// Collect test-phase subtask indices.
+	var testIndices []int
+	for i, s := range subtasks {
+		if s.Phase == "test" {
+			testIndices = append(testIndices, i)
+		}
+	}
+
+	for a := 0; a < len(testIndices); a++ {
+		idxA := testIndices[a]
+		pkgsA := goPackages(allFiles(subtasks[idxA]))
+		if len(pkgsA) == 0 {
+			continue
+		}
+		pkgSetA := make(map[string]bool, len(pkgsA))
+		for _, p := range pkgsA {
+			pkgSetA[p] = true
+		}
+
+		for b := a + 1; b < len(testIndices); b++ {
+			idxB := testIndices[b]
+
+			// Skip pairs that already have a dependency (different wave groups).
+			if hasDependency(subtasks, idxA, idxB) {
+				continue
+			}
+
+			for _, pkg := range goPackages(allFiles(subtasks[idxB])) {
+				if pkgSetA[pkg] {
+					result.Warnings = append(result.Warnings,
+						fmt.Sprintf("Test subtasks %d and %d both target same Go package %q — "+
+							"they likely need shared stubs. List stub files in files or add a dependency.",
+							idxA, idxB, pkg))
+					break // one warning per pair is enough
+				}
+			}
+		}
+	}
 }
 
 // countFileLines counts the number of newline characters in a file.

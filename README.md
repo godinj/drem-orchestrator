@@ -263,6 +263,22 @@ The optional supervisor is an LLM-powered evaluation layer (`internal/supervisor
 
 The supervisor returns structured JSON with a verdict (approve/reject/retry/escalate) and reasoning. Its output is stored in `task.Context` and displayed in the detail panel. Configure via `supervisor_enabled` and `supervisor_timeout` in `drem.toml`.
 
+## Merge Conflict Prevention
+
+The orchestrator uses a layered approach to prevent merge conflicts when parallel agents work in the same codebase.
+
+### Layer 1: Plan-Time Prevention
+
+The planner prompt requires test subtasks to list **all** files they will create or modify in `files`, including stub and interface files needed for compilation. This allows the scheduler's wave grouping (which uses `estimated_files` overlap) to detect conflicts before agents run.
+
+**Same-package overlap warning:** Plan validation (`internal/orchestrator/plan_validation.go`) checks pairs of test-phase subtasks that share no dependency. If both target files in the same Go package, it warns that they likely need shared stubs and should either list those stubs explicitly or be sequenced with a dependency.
+
+**Shared foundations pattern:** When multiple subtasks need the same new type or interface, the planner is guided to create a small foundational subtask that establishes those shared types first. Other subtasks depend on it, avoiding duplicate stubs and merge conflicts.
+
+### Layer 2: Merge-Time Recovery
+
+When an agent-to-feature merge fails despite plan-time prevention, the supervisor diagnoses the conflict and may spawn a fixer agent to auto-resolve trivial conflicts (see Self-Healing item #6 above). This mirrors the existing feature-to-main merge conflict fixer but operates at the subtask level.
+
 ## Memory & Context
 
 Agent memory (`internal/memory/`) provides cross-conversation persistence:
@@ -413,13 +429,21 @@ The orchestrator automatically handles five recurring failure patterns that woul
 
 **Where you see it:** Supervisor journal entry with outcome `Fast-tracked to DONE — work already complete`; the task jumps to DONE in the TUI.
 
-### 5. Merge Conflict Fixer
+### 5. Merge Conflict Fixer (Feature-to-Main)
 
 **Problem:** Merging a feature branch into the default branch fails with file conflicts that could be automatically resolved.
 
 **How it works:** When `executeMerge()` detects conflicts, the supervisor analyzes them and returns a `resolution_strategy`. If the strategy is `spawn_agent`, a fixer agent is automatically spawned to resolve the conflicts in the feature worktree. See `internal/orchestrator/task_processing.go` lines 525-654.
 
 **Where you see it:** Log entry `spawning resolver agent for merge conflict`; the TUI shows a new fixer agent attached to the task; a `merge_conflict` event is emitted with `fixer_spawned: true`.
+
+### 6. Agent-to-Feature Merge Conflict Recovery
+
+**Problem:** When parallel agents create overlapping stubs or modify the same files, merging an agent's branch into the feature integration branch fails. Previously this immediately marked the subtask as failed.
+
+**How it works:** `handleAgentMergeFailure()` invokes the supervisor to diagnose the merge conflict before giving up. If the supervisor recommends `spawn_agent` (trivial or auto-fixable conflict), a fixer agent is spawned to resolve the conflicts in the feature worktree. If the conflict is non-trivial or no supervisor is available, the subtask falls back to failure with the agent branch preserved. See `internal/orchestrator/agent_merge.go`.
+
+**Where you see it:** Supervisor journal entry with type `merge_conflict` and outcome `Spawning resolver agent for agent-to-feature merge conflict`; the task context gains `merge_conflict_severity`, `merge_conflict_strategy`, and `merge_conflict_files` fields.
 
 ## State Reconciliation
 

@@ -75,7 +75,8 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		}
 	}
 
-	// Merge agent branch into feature (resolve from parent if subtask).
+	// Merge agent branch into feature.
+	// Subtasks don't carry WorktreeBranch — resolve from the parent task.
 	featureBranch := task.WorktreeBranch
 	if featureBranch == "" && task.ParentTaskID != nil {
 		var parent model.Task
@@ -84,6 +85,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		}
 	}
 	merged := false
+	var mergeResult *worktree.MergeResult
 	if ag.WorktreeBranch != "" && featureBranch != "" {
 		fn := strings.TrimPrefix(featureBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
@@ -95,6 +97,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			hasCommits = true // assume there are commits on error
 		}
 		if !hasCommits {
+			// Agent may have made changes but failed to commit. Rescue them.
 			committed, rescueErr := worktree.CommitUnstagedChanges(
 				ag.WorktreePath,
 				fmt.Sprintf("Auto-commit uncommitted agent work for task: %s", task.Title),
@@ -114,6 +117,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		if mergeErr != nil {
 			o.logger.Error("merge agent into feature failed", "agent_id", ag.ID, "error", mergeErr)
 		} else if !result.Success {
+			mergeResult = result
 			o.logger.Error("merge agent into feature had conflicts",
 				"agent_id", ag.ID,
 				"source", result.SourceBranch,
@@ -128,24 +132,11 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 	}
 
 	if !merged {
-		ag.Status = model.AgentIdle
-		ag.CurrentTaskID = nil
-		if err := o.db.Save(ag).Error; err != nil {
-			return fmt.Errorf("on agent completed: save agent: %w", err)
-		}
-		evt, err := state.TransitionTask(task, model.StatusFailed, "orchestrator",
-			map[string]any{"reason": "merge into feature branch failed, agent branch preserved"})
-		if err != nil {
-			o.logger.Warn("failed to transition task to failed after merge failure", "task_id", task.ID, "error", err)
-		} else {
-			if err := o.db.Save(task).Error; err != nil {
-				return fmt.Errorf("on agent completed: save task after merge failure: %w", err)
-			}
-			if err := o.db.Create(evt).Error; err != nil {
-				return fmt.Errorf("on agent completed: save merge-failure event: %w", err)
-			}
-		}
-		return nil
+		// Merge failed — delegate to handleAgentMergeFailure which may invoke
+		// supervisor diagnosis and spawn a fixer agent for trivial conflicts.
+		fn := strings.TrimPrefix(featureBranch, "feature/")
+		mergeFeatureDir := o.worktree.FeatureWorktreePath(fn)
+		return o.handleAgentMergeFailure(ag, task, mergeResult, mergeFeatureDir)
 	}
 
 	// After merge succeeded, check constraints and compute step scores.
@@ -207,6 +198,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		task.Context["scores"] = scoreImplGate(implScorePassed, implScoreFailed, implChangedFiles, "")
 	}
 
+	// Merge succeeded — clean up agent worktree.
 	if ag.WorktreeBranch != "" {
 		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
 			o.logger.Warn("cleanup agent worktree failed", "agent_id", ag.ID, "error", err)

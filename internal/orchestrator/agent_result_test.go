@@ -1247,7 +1247,263 @@ func TestIsWorkAlreadyCompleteCategory(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. Exit info storage
+// 7. handleAgentMergeFailure
+// ---------------------------------------------------------------------------
+
+func TestHandleAgentMergeFailure_NilSupervisorNilResult(t *testing.T) {
+	o, _ := agentResultOrchestrator(t, "/tmp/fake")
+	// supervisor is nil by default in agentResultOrchestrator.
+
+	taskID := uuid.New()
+	agentID := uuid.New()
+	agentBranch := "worktree-agent-merge-nil"
+
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-coder-merge-nil",
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &taskID,
+		WorktreePath:   "/tmp/fake-agent-merge",
+		WorktreeBranch: agentBranch,
+	}
+	o.db.Create(&ag)
+
+	task := model.Task{
+		ID:          taskID,
+		ProjectID:   o.projectID,
+		Title:       "merge-fail-nil-result",
+		Description: "merge failure with nil result",
+		Status:      model.StatusInProgress,
+	}
+	o.db.Create(&task)
+
+	err := o.handleAgentMergeFailure(&ag, &task, nil, "/tmp/fake-feature-dir")
+	if err != nil {
+		t.Fatalf("handleAgentMergeFailure: %v", err)
+	}
+
+	// Verify task transitioned to failed.
+	var updatedTask model.Task
+	o.db.First(&updatedTask, "id = ?", taskID)
+	if updatedTask.Status != model.StatusFailed {
+		t.Errorf("expected task status failed, got %s", updatedTask.Status)
+	}
+
+	// Verify agent is idle with CurrentTaskID cleared.
+	var updatedAgent model.Agent
+	o.db.First(&updatedAgent, "id = ?", agentID)
+	if updatedAgent.Status != model.AgentIdle {
+		t.Errorf("expected agent status idle, got %s", updatedAgent.Status)
+	}
+	if updatedAgent.CurrentTaskID != nil {
+		t.Error("expected agent CurrentTaskID to be nil")
+	}
+
+	// Verify agent branch is preserved (WorktreeBranch not cleared).
+	if updatedAgent.WorktreeBranch != agentBranch {
+		t.Errorf("expected agent branch %q preserved, got %q", agentBranch, updatedAgent.WorktreeBranch)
+	}
+
+	// Verify a TaskEvent was created with correct details.
+	var events []model.TaskEvent
+	o.db.Where("task_id = ?", taskID).Find(&events)
+	found := false
+	for _, evt := range events {
+		if evt.EventType == "status_change" && evt.NewValue == string(model.StatusFailed) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected a status_change event to failed")
+	}
+}
+
+func TestHandleAgentMergeFailure_NilSupervisorWithConflicts(t *testing.T) {
+	o, _ := agentResultOrchestrator(t, "/tmp/fake")
+
+	taskID := uuid.New()
+	agentID := uuid.New()
+	agentBranch := "worktree-agent-merge-conflicts"
+
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-coder-merge-conflicts",
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &taskID,
+		WorktreePath:   "/tmp/fake-agent-conflicts",
+		WorktreeBranch: agentBranch,
+	}
+	o.db.Create(&ag)
+
+	task := model.Task{
+		ID:          taskID,
+		ProjectID:   o.projectID,
+		Title:       "merge-fail-conflicts",
+		Description: "merge failure with conflicts",
+		Status:      model.StatusInProgress,
+	}
+	o.db.Create(&task)
+
+	mergeResult := &worktree.MergeResult{
+		Success:      false,
+		SourceBranch: agentBranch,
+		TargetBranch: "feature/test",
+		Conflicts:    []string{"shared_stub.go", "runner.go"},
+		GitStderr:    "CONFLICT (content): Merge conflict in shared_stub.go",
+	}
+
+	err := o.handleAgentMergeFailure(&ag, &task, mergeResult, "/tmp/fake-feature-dir")
+	if err != nil {
+		t.Fatalf("handleAgentMergeFailure with conflicts: %v", err)
+	}
+
+	// Verify task transitioned to failed (same fallback as nil result).
+	var updatedTask model.Task
+	o.db.First(&updatedTask, "id = ?", taskID)
+	if updatedTask.Status != model.StatusFailed {
+		t.Errorf("expected task status failed, got %s", updatedTask.Status)
+	}
+
+	// Verify agent is idle with CurrentTaskID cleared.
+	var updatedAgent model.Agent
+	o.db.First(&updatedAgent, "id = ?", agentID)
+	if updatedAgent.Status != model.AgentIdle {
+		t.Errorf("expected agent status idle, got %s", updatedAgent.Status)
+	}
+	if updatedAgent.CurrentTaskID != nil {
+		t.Error("expected agent CurrentTaskID to be nil")
+	}
+
+	// Verify agent branch is preserved.
+	if updatedAgent.WorktreeBranch != agentBranch {
+		t.Errorf("expected agent branch %q preserved, got %q", agentBranch, updatedAgent.WorktreeBranch)
+	}
+
+	// Verify TaskEvent exists.
+	var events []model.TaskEvent
+	o.db.Where("task_id = ?", taskID).Find(&events)
+	found := false
+	for _, evt := range events {
+		if evt.EventType == "status_change" && evt.NewValue == string(model.StatusFailed) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected a status_change event to failed")
+	}
+}
+
+func TestHandleAgentMergeFailure_NilSupervisorPreservesAgentBranch(t *testing.T) {
+	o, _ := agentResultOrchestrator(t, "/tmp/fake")
+
+	taskID := uuid.New()
+	agentID := uuid.New()
+	agentBranch := "worktree-agent-preserve"
+	agentPath := "/tmp/fake-agent-preserve-path"
+
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-coder-preserve",
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &taskID,
+		WorktreePath:   agentPath,
+		WorktreeBranch: agentBranch,
+	}
+	o.db.Create(&ag)
+
+	task := model.Task{
+		ID:          taskID,
+		ProjectID:   o.projectID,
+		Title:       "merge-fail-preserve",
+		Description: "verify branch preservation",
+		Status:      model.StatusInProgress,
+	}
+	o.db.Create(&task)
+
+	err := o.handleAgentMergeFailure(&ag, &task, nil, "/tmp/fake-feature-dir")
+	if err != nil {
+		t.Fatalf("handleAgentMergeFailure: %v", err)
+	}
+
+	// Key assertion: agent worktree path and branch are preserved, not cleaned up.
+	var updatedAgent model.Agent
+	o.db.First(&updatedAgent, "id = ?", agentID)
+	if updatedAgent.WorktreeBranch != agentBranch {
+		t.Errorf("expected WorktreeBranch %q preserved, got %q", agentBranch, updatedAgent.WorktreeBranch)
+	}
+	if updatedAgent.WorktreePath != agentPath {
+		t.Errorf("expected WorktreePath %q preserved, got %q", agentPath, updatedAgent.WorktreePath)
+	}
+
+	// Agent should be idle (not dead — work is preserved for manual resolution).
+	if updatedAgent.Status != model.AgentIdle {
+		t.Errorf("expected agent status idle, got %s", updatedAgent.Status)
+	}
+	if updatedAgent.CurrentTaskID != nil {
+		t.Error("expected agent CurrentTaskID to be nil")
+	}
+}
+
+func TestHandleAgentMergeFailure_NilResultDefensive(t *testing.T) {
+	o, _ := agentResultOrchestrator(t, "/tmp/fake")
+
+	taskID := uuid.New()
+	agentID := uuid.New()
+
+	ag := model.Agent{
+		ID:            agentID,
+		ProjectID:     o.projectID,
+		AgentType:     model.AgentCoder,
+		Name:          "test-coder-defensive",
+		Status:        model.AgentWorking,
+		CurrentTaskID: &taskID,
+		WorktreePath:  "/tmp/fake-agent-defensive",
+	}
+	o.db.Create(&ag)
+
+	task := model.Task{
+		ID:          taskID,
+		ProjectID:   o.projectID,
+		Title:       "merge-fail-defensive",
+		Description: "defensive nil result handling",
+		Status:      model.StatusInProgress,
+	}
+	o.db.Create(&task)
+
+	// Should not panic with nil result — should fall through to default fail path.
+	err := o.handleAgentMergeFailure(&ag, &task, nil, "/tmp/fake-feature-dir")
+	if err != nil {
+		t.Fatalf("handleAgentMergeFailure with nil result: %v", err)
+	}
+
+	// Verify task is failed (default path).
+	var updatedTask model.Task
+	o.db.First(&updatedTask, "id = ?", taskID)
+	if updatedTask.Status != model.StatusFailed {
+		t.Errorf("expected task status failed, got %s", updatedTask.Status)
+	}
+
+	// Verify agent is idle.
+	var updatedAgent model.Agent
+	o.db.First(&updatedAgent, "id = ?", agentID)
+	if updatedAgent.Status != model.AgentIdle {
+		t.Errorf("expected agent status idle, got %s", updatedAgent.Status)
+	}
+	if updatedAgent.CurrentTaskID != nil {
+		t.Error("expected agent CurrentTaskID to be nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 8. Exit info storage
 // ---------------------------------------------------------------------------
 
 func TestProcessAgentResult_StoresExitInfo(t *testing.T) {

@@ -244,6 +244,10 @@ func plannerInstructions() []string {
 		"- Covers the acceptance criteria relevant to that implementation subtask",
 		`- Has agent_type: "coder"`,
 		"- Has NO dependencies on implementation subtasks",
+		"- Lists ALL files it will create or modify in `files`, including stub/interface " +
+			"files needed for compilation. Go test files often require stub implementations " +
+			"in the same package — these MUST appear in the file list so the scheduler " +
+			"can detect overlap and avoid parallel merge conflicts.",
 		"",
 		"### Implementation Subtask Requirements",
 		"",
@@ -258,19 +262,9 @@ func plannerInstructions() []string {
 		"",
 		"### TDD Exceptions",
 		"",
-		"If a subtask genuinely cannot be test-first, you MUST declare it in `tdd_exceptions` with:",
-		"- The subtask index",
-		`- A specific justification (not "too hard to test")`,
-		"",
-		"Valid exceptions:",
-		"- Integration/wiring subtasks connecting already-tested components",
-		"- Research subtasks producing documentation",
-		"- Infrastructure subtasks where the build IS the test",
-		"",
-		"Invalid exceptions:",
-		`- "This is UI code" — UI code can have unit tests`,
-		`- "This is a refactor" — refactors should preserve existing test behavior`,
-		`- "Tests will be added later" — that's not TDD`,
+		"If a subtask genuinely cannot be test-first, declare it in `tdd_exceptions` with the subtask index " +
+			`and a specific justification (not "too hard to test"). Valid: integration wiring, research, ` +
+			"infrastructure where the build IS the test. Invalid: UI code, refactors, \"tests will be added later\".",
 		"",
 		"### Ordering",
 		"",
@@ -279,12 +273,28 @@ func plannerInstructions() []string {
 		"### Example Structure",
 		"",
 		`Subtask 0: "Write tests for X" (phase: test, tests_for: [1])`,
+		`  files: ["internal/pkg/x_test.go", "internal/pkg/x_stub.go"]`,
 		`Subtask 1: "Implement X" (phase: implementation)`,
 		"  -> auto-depends on subtask 0 via tests_for",
 		`Subtask 2: "Write tests for Y" (phase: test, tests_for: [3])`,
+		`  files: ["internal/pkg/y_test.go", "internal/pkg/y_stub.go"]`,
 		`Subtask 3: "Implement Y" (phase: implementation)`,
 		"  -> auto-depends on subtask 2 via tests_for",
 		`Subtask 4: "Integration wiring" (phase: integration, depends: [1, 3])`,
+		"",
+		"Note: test subtasks 0 and 2 both target `internal/pkg/` — the scheduler will " +
+			"detect this overlap and serialize them. If they need the same shared types, " +
+			"use the Shared Foundations pattern below.",
+		"",
+		"### Shared Foundations Pattern",
+		"",
+		"When multiple subtasks need the same new type or interface, create a small " +
+			"foundational subtask that establishes shared types first. Other subtasks " +
+			"depend on it, avoiding duplicate stubs and merge conflicts:",
+		"",
+		`Subtask 0: "Define shared types for pkg" (phase: implementation, files: ["internal/pkg/types.go"])`,
+		`Subtask 1: "Write tests for X" (phase: test, tests_for: [2], depends: [0])`,
+		`Subtask 2: "Implement X" (phase: implementation, depends: [0])`,
 		"",
 		"## Coverage Verification",
 		"",
