@@ -2,78 +2,44 @@
   "subtasks": [
     {
       "agent_type": "coder",
-      "description": "Add tests for a new DeleteTask() method on Orchestrator that deletes a root task along with all its subtasks, agents, comments, and events. Tests should cover:\n1. Deleting a root task with no subtasks (deletes task, its comments, its events)\n2. Deleting a root task with subtasks (cascades: stops agents, deletes subtask comments/events, deletes subtasks, then deletes parent task comments/events and the task itself)\n3. Attempting to delete a non-existent task (returns error)\n4. Deleting a subtask directly via DeleteTask (should work the same as DeleteSubtask — delegates to existing DeleteSubtask method)\n\nFollow the existing test pattern in lifecycle_test.go using setupLifecycleTest() and lifecycleTestDB(). Tests should initially fail since DeleteTask doesn't exist yet.\n\nIMPORTANT: DeleteTask will live in internal/orchestrator/lifecycle.go (a new file), NOT in orchestrator.go.",
-      "estimated_files": [
-        "internal/orchestrator/lifecycle_test.go"
-      ],
+      "description": "Create `internal/tui/help_test.go` with table-driven tests for the `contextActions()` function that will be implemented in subtask 1.\n\nTest cases must cover:\n- **Board focus with different task statuses:** plan_review (expect approve/reject/review/comment/delete), testing_ready (expect test-pass/fail/review/fix/comment/delete), in_progress (expect pause/fix/delete), paused (expect resume), failed (expect retry/fix), backlog (no task-specific actions)\n- **Board focus with no task selected:** should return only global/navigation actions\n- **Agent focus:** should return agent-specific actions (jump to session, archive toggle, filter toggle) but no task actions\n- **Agent focus with tmux session:** should include jump-to-session action\n- **Agent focus without tmux session:** should NOT include jump-to-session\n- **Detail focus:** same task-status-aware actions as board, plus scroll hint\n- **Detail focus in delete mode:** should return delete-mode-specific actions (navigate, confirm delete, cancel)\n- **Global actions always present:** navigation (j/k), panel switching (tab), new task (n), quit (q), help dismiss (?)\n- **Agent-related actions on board/detail:** when agent assigned, show log (l); when agent has tmux session, show jump (g)\n- **Supervisor action always present on board/detail:** S key\n\nThe function signature being tested: `contextActions(focus Focus, task *model.Task, agent *model.Agent, deleteMode bool) []HelpAction`\n\nwhere HelpAction is a struct with Key (string) and Description (string) fields.\n\nTests should verify both the presence/absence of specific actions AND their descriptions. Use table-driven test style per project conventions.",
+      "estimated_files": null,
       "phase": "test",
       "tests_for": [
         1
       ],
-      "title": "Write tests for DeleteTask orchestrator method"
+      "title": "Write tests for context-aware help actions"
     },
     {
       "agent_type": "coder",
-      "description": "Create a new file internal/orchestrator/lifecycle.go and:\n\n1. MOVE the following methods from orchestrator.go into lifecycle.go (this shrinks orchestrator.go which has a shrink-only constraint):\n   - DeleteSubtask()\n   - DeleteComment()\n   - DeletePlanStep()\n\n2. ADD a new DeleteTask(taskID uuid.UUID) method in lifecycle.go:\n   a. Load the task by ID (return error if not found)\n   b. If the task has a ParentTaskID (it's a subtask), delegate to the existing DeleteSubtask() method\n   c. If it's a root task:\n      - Load all subtasks (WHERE parent_task_id = taskID)\n      - For each subtask, call DeleteSubtask() to handle agent cleanup, comment/event deletion\n      - Delete the root task's own comments and events\n      - Delete the root task record itself\n      - Emit 'task_updated' event\n\nThis reuses DeleteSubtask() for agent lifecycle management. The move to lifecycle.go respects the shrink-only constraint on orchestrator.go (baseline: 2917 lines, must not grow).",
-      "estimated_files": [
-        "internal/orchestrator/lifecycle.go",
-        "internal/orchestrator/orchestrator.go"
-      ],
+      "description": "Create `internal/tui/help.go` containing the context-aware help action resolution logic and the help overlay rendering.\n\n**Types to define:**\n- `HelpAction` struct with `Key string` and `Desc string` fields\n\n**Functions to implement:**\n\n1. `contextActions(focus Focus, task *model.Task, agent *model.Agent, deleteMode bool) []HelpAction`\n   - Returns a slice of available actions based on current context\n   - When focus is FocusBoard or FocusDetail:\n     - Always include navigation (j/k), panel switching (tab), new task (n), quit (q)\n     - Include task-status-specific actions matching the logic in detail.go's `availableActions()` method:\n       - StatusPlanReview: approve (a), reject (r), review (v), comment (c), delete (d)\n       - StatusTestingReady: test pass (t), fail test (f), review (v), fix (x), comment (c), delete (d)\n       - StatusInProgress: pause (p), fix (x), delete (d)\n       - StatusPaused: resume (p)\n       - StatusFailed: retry (R), fix (x)\n     - Always include supervisor (S) when a task is selected\n     - Include log (l) when agent is non-nil\n     - Include jump (g) when agent has TmuxSession\n     - For FocusDetail, add scroll hint for j/k instead of navigate\n   - When focus is FocusDetail and deleteMode is true:\n     - Return only: navigate (j/k), confirm delete (enter/y), cancel (esc)\n   - When focus is FocusAgents:\n     - Navigation (j/k), panel switching (tab), archive toggle (A), filter toggle (F), quit (q)\n     - Jump (g) if selected agent has TmuxSession\n   - When focus is FocusCreate or FocusFeedback: return empty (overlays handle their own input)\n\n2. `func (m Model) renderHelpOverlay() string`\n   - Calls `contextActions()` with current model state (m.focus, m.board.Selected(), m.detail.agent, m.detail.deleteMode)\n   - Renders actions in a centered overlay box using lipgloss\n   - Group actions into sections: \"Navigation\", \"Task Actions\", \"Agent Actions\", \"Global\"\n   - Format: two-column layout with key on left (highlighted) and description on right\n   - Use existing panelStyle and overlay centering pattern from renderOverlay()\n   - Title the overlay based on current focus: \"Board Actions\", \"Agent Actions\", \"Detail Actions\"\n\n**Constraints:**\n- File must stay under 800 lines\n- Use gofmt formatting\n- Do not import more than 6 internal packages (this file only needs `internal/model`)",
+      "estimated_files": null,
       "phase": "implementation",
-      "title": "Implement DeleteTask and extract deletion methods to lifecycle.go"
+      "title": "Implement context-aware help system"
     },
     {
       "agent_type": "coder",
-      "description": "Add tests in detail_test.go verifying that:\n1. deletableItems() includes a deleteItemTask entry for the selected task (as the LAST item, after plan steps and comments)\n2. When the task is a subtask (ParentTaskID != nil), it still appears as a deletable item\n3. The deleteItemTask kind is correctly identified by isDeleteTarget() and isDeleteSection()\n4. The task deletion item appears regardless of task status (unlike plan steps which only appear in plan_review)\n\nFollow the existing table-driven test pattern in detail_test.go.",
-      "estimated_files": [
-        "internal/tui/detail_test.go"
-      ],
+      "description": "Create `internal/tui/app_help_test.go` with tests for the help overlay toggle behavior wired into the main app Model.\n\nTest cases must cover:\n\n1. **Toggle on/off:** Create a Model with showHelp=false, send `?` key → showHelp should be true. Send `?` again → showHelp should be false.\n\n2. **Dismiss on Esc:** Create a Model with showHelp=true, send `Esc` key → showHelp should be false.\n\n3. **Dismiss on action key:** Create a Model with showHelp=true, send any action key (e.g., `a`) → showHelp should be false AND the action should NOT be executed (help overlay consumes the key as dismiss).\n\n4. **? works from all focus states:** Test that `?` toggles showHelp when focus is FocusBoard, FocusAgents, and FocusDetail.\n\n5. **Help bar removed from View output:** Create a Model with tasks loaded, render View() → output should NOT contain the old static legend string (e.g., should not contain 'C:clean-sessions'). Should contain '?' as a hint.\n\n6. **Overlay appears in View when showHelp is true:** Create a Model with showHelp=true, render View() → output should contain context-appropriate action text.\n\nNote: Testing View() output requires setting width/height on the Model (e.g., m.width=120, m.height=40) and calling updatePanelSizes(). The Model can be constructed directly since these are package-internal tests.\n\nUse table-driven tests per project conventions. Do NOT create local test helpers that duplicate testutil functionality.",
+      "estimated_files": null,
       "phase": "test",
       "tests_for": [
         3
       ],
-      "title": "Write tests for TUI task deletion in delete mode"
+      "title": "Write tests for help overlay toggle and app wiring"
     },
     {
       "agent_type": "coder",
-      "description": "Extend the existing delete mode in the TUI to support deleting the selected task or subtask:\n\n1. In detail.go:\n   - Add deleteItemTask to the deleteItemKind enum\n   - In deletableItems(), append a deleteItemTask entry as the last item (always present when a task is selected)\n   - In the View rendering, show the task deletion option in delete mode (e.g., render it with a label like '× Delete task' or '× Delete subtask' depending on ParentTaskID)\n\n2. In app.go:\n   - In handleDeleteModeKeys(), add a case for deleteItemTask in the switch on item.kind\n   - If the task is a subtask (ParentTaskID != nil), call orch.DeleteSubtask(taskID)\n   - If the task is a root task, call orch.DeleteTask(taskID)\n   - Run deletion async (same pattern as existing deleteItemComment/deleteItemPlanStep)\n   - After deletion, refresh data to update the board\n\nThe existing 'd' -\u003e delete mode -\u003e select item -\u003e 'y'/'enter' flow provides the confirmation UX naturally.",
-      "estimated_files": [
-        "internal/tui/detail.go",
-        "internal/tui/app.go"
-      ],
+      "description": "Modify `internal/tui/app.go` and `internal/tui/keys.go` to integrate the help overlay and remove the static legend bar.\n\n**CRITICAL CONSTRAINT: app.go is grandfathered at 1345 lines and MUST NOT GROW. Every line added must be offset by a line removed.**\n\n**Changes to app.go:**\n\n1. Add `showHelp bool` field to the `Model` struct (line ~129)\n\n2. In `handleKey()` (line ~285), add help toggle handling BEFORE the focus switch:\n   ```go\n   if msg.String() == \"?\" {\n       m.showHelp = !m.showHelp\n       return m, nil\n   }\n   if m.showHelp {\n       m.showHelp = false\n       return m, nil  // dismiss overlay, consume the key\n   }\n   ```\n\n3. In `View()` (line ~943), add overlay check after the create/feedback overlay checks:\n   ```go\n   if m.showHelp {\n       return m.renderHelpOverlay()\n   }\n   ```\n\n4. Replace the helpBar rendering (line ~963):\n   - Remove: `helpBar := m.renderHelpBar()`\n   - Change the parts append (line ~1055) to inline: `parts = append(parts, helpStyle.Render(\"  ? help  q quit\"))`\n\n5. DELETE the `renderHelpBar()` method (lines 1100-1103) entirely — its logic is replaced by the inline hint and the overlay.\n\n6. To offset line growth: the renderHelpBar deletion (-4 lines) plus the helpBar variable removal (-1 line) should compensate for the additions. Verify with `wc -l` that the final line count is \u003c= 1345.\n\n**Changes to keys.go:**\n\n1. Add `Help` field to `keyMap` struct:\n   ```go\n   Help key.Binding // ? - show help overlay\n   ```\n\n2. Add Help binding in `defaultKeyMap()`:\n   ```go\n   Help: key.NewBinding(\n       key.WithKeys(\"?\"),\n       key.WithHelp(\"?\", \"help\"),\n   ),\n   ```\n\n**Changes to README.md:**\n\nUpdate the Keybindings table (line ~112) to:\n- Add `?` key with description \"Show context-aware help overlay\"\n- Add a note that the help overlay shows only actions relevant to the current panel and selection\n\n**Verification:**\n- `wc -l internal/tui/app.go` must be \u003c= 1345\n- `gofmt -l internal/tui/` must return no output\n- `go build ./...` must succeed\n- `go test ./internal/tui/...` must pass all tests including the new ones from subtask 2",
+      "estimated_files": null,
       "phase": "implementation",
-      "title": "Implement TUI task/subtask deletion via delete mode"
+      "title": "Wire help overlay into app and remove static legend"
     },
     {
       "agent_type": "coder",
-      "description": "Update README.md to document the new task/subtask deletion capability:\n\n1. In the TUI keybindings section, add documentation for the 'd' key delete mode now supporting task and subtask deletion\n2. Note that deleting a root task cascades to all subtasks, agents, comments, and events\n3. Note that the delete confirmation flow (d -\u003e select -\u003e y/enter) applies\n\nKeep the documentation concise and consistent with the existing README style.",
-      "estimated_files": [
-        "README.md"
-      ],
-      "phase": "implementation",
-      "title": "Update documentation for task deletion keybinding"
-    },
-    {
-      "agent_type": "coder",
-      "description": "Verify the complete task deletion flow works end-to-end:\n1. Run go build to confirm compilation\n2. Run go test ./... to confirm all tests pass\n3. Run gofmt -l ./internal/ ./cmd/ to confirm formatting compliance\n4. Verify that orchestrator.go did not grow (deletion methods were moved to lifecycle.go)\n5. Verify that DeleteTask properly cascades through subtasks\n\nIf issues are found, fix them in the appropriate files.",
-      "estimated_files": [
-        "internal/orchestrator/lifecycle.go",
-        "internal/orchestrator/orchestrator.go",
-        "internal/tui/detail.go",
-        "internal/tui/app.go"
-      ],
+      "description": "Integration subtask to verify the help overlay feature works end-to-end.\n\n**Verification steps:**\n\n1. Build the project: `go build -o drem ./cmd/drem`\n2. Run all tests: `go test ./...`\n3. Run architecture constraint checks: verify app.go line count \u003c= 1345, help.go \u003c= 800 lines, gofmt compliance\n4. Verify the static legend string is completely removed from all source files (grep for the old help bar text)\n5. Verify `?` key is handled in the key dispatch chain\n6. Verify the help overlay renders different content for each focus state by inspecting the contextActions logic paths\n\n**Integration wiring verification:**\n- The `showHelp` field on Model is toggled by `?` in handleKey\n- View() checks showHelp and calls renderHelpOverlay() from help.go\n- renderHelpOverlay() calls contextActions() which reads m.focus, m.board.Selected(), m.detail.agent, m.detail.deleteMode\n- The minimal hint line (\"? help  q quit\") replaces the full static legend\n\n**Documentation verification:**\n- README.md keybindings table includes `?` entry\n\nThis subtask does not require complex integration wiring since the feature is self-contained within the tui package. The main purpose is build/test verification and constraint compliance.",
+      "estimated_files": null,
       "phase": "integration",
-      "title": "Integration: verify end-to-end task deletion"
-    }
-  ],
-  "tdd_exceptions": [
-    {
-      "reason": "documentation-only subtask, no testable code changes",
-      "subtask_index": 4
-    },
-    {
-      "reason": "integration verification subtask connecting already-tested components",
-      "subtask_index": 5
+      "title": "Integration: verify end-to-end help overlay behavior"
     }
   ]
 }

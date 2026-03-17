@@ -124,6 +124,7 @@ type Model struct {
 	focus          Focus
 	feedbackAction feedbackAction
 	keys           keyMap
+	showHelp       bool
 	width          int
 	height         int
 	err            error
@@ -286,6 +287,16 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Global quit.
 	if msg.String() == "ctrl+c" {
 		return m, tea.Quit
+	}
+
+	// Help overlay toggle.
+	if msg.String() == "?" {
+		m.showHelp = !m.showHelp
+		return m, nil
+	}
+	if m.showHelp {
+		m.showHelp = false
+		return m, nil // dismiss overlay and consume the key
 	}
 
 	switch m.focus {
@@ -966,6 +977,11 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
+	// Help overlay takes priority over everything.
+	if m.showHelp {
+		return m.renderHelpOverlay()
+	}
+
 	// If the create form or feedback dialog is visible, show them as overlays.
 	if m.focus == FocusCreate {
 		return m.renderOverlay(m.create.View())
@@ -1076,58 +1092,6 @@ func (m Model) View() string {
 	parts = append(parts, helpBar)
 
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
-}
-
-// renderStatusBar shows task counts per status.
-func (m Model) renderStatusBar() string {
-	counts := make(map[model.TaskStatus]int)
-	for _, task := range m.board.tasks {
-		counts[task.Status]++
-	}
-
-	order := []model.TaskStatus{
-		model.StatusBacklog,
-		model.StatusPlanning,
-		model.StatusPlanReview,
-		model.StatusInProgress,
-		model.StatusTestingReady,
-		model.StatusMerging,
-		model.StatusDone,
-		model.StatusFailed,
-	}
-
-	var badges []string
-	for _, s := range order {
-		c := counts[s]
-		if c == 0 {
-			continue
-		}
-		color, ok := statusColors[s]
-		if !ok {
-			color = lipgloss.Color("241")
-		}
-		badge := lipgloss.NewStyle().
-			Foreground(color).
-			Render(fmt.Sprintf("[%s: %d]", strings.ToTitle(string(s)), c))
-		badges = append(badges, badge)
-	}
-
-	if len(badges) == 0 {
-		return subtitleStyle.Render("  No tasks")
-	}
-	return "  " + strings.Join(badges, " ")
-}
-
-// renderHelpBar shows the available key bindings.
-func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  j/k:navigate  tab/C-hjkl:panel  a:approve  r:reject  c:comment  d:del  p:pause  R:retry  v:review  x:fix  S:supervisor  i:shell  C:clean-sessions  g:jump  l:log  L:orch-log  A:archive  F:filter  n:new  q:quit")
-}
-
-// renderOverlay renders content as a centered overlay on a blank screen.
-func (m Model) renderOverlay(content string) string {
-	return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center,
-		panelStyle.Width(m.width*2/3).Render(content),
-	)
 }
 
 // panelBorderColor returns the border color for a panel based on focus.

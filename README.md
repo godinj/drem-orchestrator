@@ -133,6 +133,7 @@ Lists all agents with their type, status, current task, and last heartbeat.
 | `A` | Toggle archived agents |
 | `F` | Toggle task filter |
 | `C` | Clean up dead tmux sessions |
+| `?` | Toggle context-aware help overlay |
 | `q` | Quit |
 
 ## Task Lifecycle
