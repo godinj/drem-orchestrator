@@ -35,7 +35,11 @@ func ProjectDirName(worktreePath string) string {
 	if err != nil {
 		abs = worktreePath
 	}
-	return strings.ReplaceAll(abs, "/", "-")
+	// Claude Code replaces both "/" and "." with "-" when deriving
+	// the project directory name from the absolute path.
+	name := strings.ReplaceAll(abs, "/", "-")
+	name = strings.ReplaceAll(name, ".", "-")
+	return name
 }
 
 // ReadTranscriptUsage reads the latest context window usage from the Claude

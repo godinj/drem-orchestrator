@@ -8,7 +8,7 @@ import (
 
 func TestProjectDirName(t *testing.T) {
 	got := ProjectDirName("/home/godinj/git/drem-canvas.git/feature/abc/agent-xyz")
-	want := "-home-godinj-git-drem-canvas.git-feature-abc-agent-xyz"
+	want := "-home-godinj-git-drem-canvas-git-feature-abc-agent-xyz"
 	if got != want {
 		t.Errorf("ProjectDirName = %q, want %q", got, want)
 	}
