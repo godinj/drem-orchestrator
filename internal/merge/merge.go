@@ -20,8 +20,16 @@ import (
 	"gorm.io/gorm"
 )
 
-// maxMergeRetries is the maximum number of attempts for transient merge failures.
-const maxMergeRetries = 3
+const (
+	// maxMergeRetries is the maximum number of attempts for transient merge failures.
+	maxMergeRetries = 3
+
+	// mergeRetryBackoff is the base delay between transient merge retry attempts (multiplied by attempt number).
+	mergeRetryBackoff = 2 * time.Second
+
+	// buildVerifyTimeout is the maximum time allowed for build verification after a merge.
+	buildVerifyTimeout = 5 * time.Minute
+)
 
 // MergePlan describes a planned merge (analysis only, no side effects).
 type MergePlan struct {
@@ -217,7 +225,7 @@ func mergeWithRebaseAndRetry(wt mergeWorktreeClient, agentBranch, featureWorktre
 				"agent_branch", agentBranch,
 				"stderr", lastResult.GitStderr,
 			)
-			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+			time.Sleep(time.Duration(attempt) * mergeRetryBackoff)
 		}
 	}
 
@@ -391,7 +399,7 @@ func (o *Orchestrator) VerifyBuild(worktreePath string) (bool, string, error) {
 		return true, "no build system detected", nil
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), buildVerifyTimeout)
 	defer cancel()
 
 	c := exec.CommandContext(ctx, cmd, args...)

@@ -19,6 +19,14 @@ import (
 // attaching, since the new binary is already running inside the pane.
 var ErrDashboardRespawned = errors.New("dashboard respawned")
 
+const (
+	// paneCheckInterval is how often WaitForExit and WaitForAgentIdle poll tmux for pane status.
+	paneCheckInterval = 500 * time.Millisecond
+
+	// historyLimit is the tmux scrollback line count set for agent sessions.
+	historyLimit = 50000
+)
+
 // WindowInfo holds metadata about a tmux window.
 type WindowInfo struct {
 	Index  int
@@ -230,7 +238,7 @@ func (m *Manager) WaitForExit(name string) (int, error) {
 			return exitCode, nil
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(paneCheckInterval)
 	}
 }
 
@@ -282,7 +290,7 @@ func (m *Manager) CreateAgentSession(sessionName, cmd, cwd string) error {
 	// Set large scrollback so CaptureAgentPane can retrieve sufficient
 	// context for memory extraction after long-running agents.
 	// Use bare name — session was just created so no prefix collision.
-	_, err = runTmux("set-option", "-t", sessionName, "history-limit", "50000")
+	_, err = runTmux("set-option", "-t", sessionName, "history-limit", strconv.Itoa(historyLimit))
 	if err != nil {
 		return fmt.Errorf("set history-limit for agent session %q: %w", sessionName, err)
 	}
@@ -348,7 +356,7 @@ func (m *Manager) WaitForAgentExit(sessionName string) (int, error) {
 			return exitCode, nil
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(paneCheckInterval)
 	}
 }
 
@@ -434,7 +442,7 @@ func (m *Manager) WaitForAgentIdle(ctx context.Context, sessionName, idleSignalP
 			break
 		}
 
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(paneCheckInterval)
 	}
 
 	if alreadyDead {
@@ -450,7 +458,7 @@ func (m *Manager) WaitForAgentIdle(ctx context.Context, sessionName, idleSignalP
 		// WaitForAgentExit which will handle the error.
 		_ = err
 	}
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(paneCheckInterval)
 	if err := m.SendKeys(sessionName, "Enter"); err != nil {
 		_ = err
 	}

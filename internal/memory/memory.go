@@ -15,6 +15,20 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
+const (
+	// defaultMemoryLimit is the default number of memories to return when no limit is specified.
+	defaultMemoryLimit = 50
+
+	// defaultMaxTokens is the default token budget for BuildAgentContext output (~4 chars per token).
+	defaultMaxTokens = 8000
+
+	// recentMemoryLimit is the number of recent task-specific memories included in agent context.
+	recentMemoryLimit = 20
+
+	// projectDecisionLimit is the number of project-wide decision/lesson memories included in agent context.
+	projectDecisionLimit = 10
+)
+
 // Manager handles agent memory persistence and retrieval.
 type Manager struct {
 	db *gorm.DB
@@ -44,10 +58,10 @@ func (m *Manager) StoreMemory(agentID uuid.UUID, content, memoryType string, tas
 }
 
 // GetMemories retrieves memories with optional filters, ordered by CreatedAt
-// descending. If limit is <= 0, it defaults to 50.
+// descending. If limit is <= 0, it defaults to defaultMemoryLimit.
 func (m *Manager) GetMemories(agentID *uuid.UUID, taskID *uuid.UUID, memoryType string, limit int) ([]model.Memory, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = defaultMemoryLimit
 	}
 
 	q := m.db.Model(&model.Memory{}).Order("created_at DESC")
@@ -76,7 +90,7 @@ func (m *Manager) GetMemories(agentID *uuid.UUID, taskID *uuid.UUID, memoryType 
 // CreatedAt descending.
 func (m *Manager) GetProjectMemories(projectID uuid.UUID, memoryTypes []string, limit int) ([]model.Memory, error) {
 	if limit <= 0 {
-		limit = 50
+		limit = defaultMemoryLimit
 	}
 
 	q := m.db.Model(&model.Memory{}).
@@ -197,7 +211,7 @@ func (m *Manager) CompactAgentMemory(agentID uuid.UUID) (string, error) {
 // If maxTokens is <= 0, it defaults to 8000.
 func (m *Manager) BuildAgentContext(agentID, taskID uuid.UUID, maxTokens int) (string, error) {
 	if maxTokens <= 0 {
-		maxTokens = 8000
+		maxTokens = defaultMaxTokens
 	}
 	maxChars := maxTokens * 4
 
@@ -213,7 +227,7 @@ func (m *Manager) BuildAgentContext(agentID, taskID uuid.UUID, maxTokens int) (s
 		parts = append(parts, "# Agent Memory Summary\n\n"+agent.MemorySummary)
 	}
 
-	// 2. Recent task-specific memories (last 20)
+	// 2. Recent task-specific memories (last recentMemoryLimit)
 	var taskMemories []model.Memory
 	err := m.db.
 		Where("agent_id = ?", agentID).
@@ -221,7 +235,7 @@ func (m *Manager) BuildAgentContext(agentID, taskID uuid.UUID, maxTokens int) (s
 		Where("memory_type NOT LIKE ?", "archived_%").
 		Where("memory_type != ?", "conversation_summary").
 		Order("created_at DESC").
-		Limit(20).
+		Limit(recentMemoryLimit).
 		Find(&taskMemories).Error
 	if err != nil {
 		return "", fmt.Errorf("build agent context: task memories: %w", err)
@@ -237,7 +251,7 @@ func (m *Manager) BuildAgentContext(agentID, taskID uuid.UUID, maxTokens int) (s
 		parts = append(parts, "# Recent Task Memories\n\n"+strings.Join(items, "\n"))
 	}
 
-	// 3. Project-wide decisions and lessons (last 10)
+	// 3. Project-wide decisions and lessons (last projectDecisionLimit)
 	var projectMemories []model.Memory
 	err = m.db.Model(&model.Memory{}).
 		Joins("JOIN agents ON memories.agent_id = agents.id").
@@ -245,7 +259,7 @@ func (m *Manager) BuildAgentContext(agentID, taskID uuid.UUID, maxTokens int) (s
 		Where("agents.id != ?", agentID).
 		Where("memories.memory_type IN ?", []string{"decision", "lesson"}).
 		Order("memories.created_at DESC").
-		Limit(10).
+		Limit(projectDecisionLimit).
 		Find(&projectMemories).Error
 	if err != nil {
 		return "", fmt.Errorf("build agent context: project memories: %w", err)
