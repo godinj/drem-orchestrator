@@ -551,7 +551,7 @@ func TestPlanAgentMerge_Conflicting(t *testing.T) {
 	// PlanAgentMerge runs from the feature worktree. GetChangedFiles uses
 	// featureBranch..HEAD which is empty (HEAD IS featureBranch), so
 	// agentFiles (FilesChanged) will be empty. However the merge-base diff
-	// detects feature-side changes. The intersect requires both sides to
+	// detects feature-side changes. The Intersect requires both sides to
 	// have the file, so PotentialConflicts may be empty. We verify the plan
 	// still provides useful structural information.
 	plan, err := orch.PlanAgentMerge("worktree-agent-plan2", featureDir)
@@ -1128,7 +1128,7 @@ func TestVerifyBuild_NoBuildSystem(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// detectBuildCommand tests
+// DetectBuildCommand tests
 // ---------------------------------------------------------------------------
 
 func TestDetectBuildCommand(t *testing.T) {
@@ -1173,7 +1173,7 @@ func TestDetectBuildCommand(t *testing.T) {
 				}
 			}
 
-			cmd, args := detectBuildCommand(dir)
+			cmd, args := DetectBuildCommand(dir)
 			if tt.wantNoBuild {
 				if cmd != "" {
 					t.Errorf("expected no build command, got %q %v", cmd, args)
@@ -1198,7 +1198,7 @@ func TestDetectBuildCommand(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// fileExists tests
+// FileExists tests
 // ---------------------------------------------------------------------------
 
 func TestFileExists(t *testing.T) {
@@ -1209,23 +1209,23 @@ func TestFileExists(t *testing.T) {
 	if err := os.WriteFile(fpath, []byte("hello"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !fileExists(fpath) {
-		t.Error("fileExists should return true for existing file")
+	if !FileExists(fpath) {
+		t.Error("FileExists should return true for existing file")
 	}
 
 	// File that does not exist
-	if fileExists(filepath.Join(dir, "nope.txt")) {
-		t.Error("fileExists should return false for non-existent file")
+	if FileExists(filepath.Join(dir, "nope.txt")) {
+		t.Error("FileExists should return false for non-existent file")
 	}
 
 	// Directory should return false
-	if fileExists(dir) {
-		t.Error("fileExists should return false for directories")
+	if FileExists(dir) {
+		t.Error("FileExists should return false for directories")
 	}
 }
 
 // ---------------------------------------------------------------------------
-// intersect tests
+// Intersect tests
 // ---------------------------------------------------------------------------
 
 func TestIntersect(t *testing.T) {
@@ -1274,14 +1274,14 @@ func TestIntersect(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := intersect(tt.a, tt.b)
+			got := Intersect(tt.a, tt.b)
 			if len(got) != len(tt.want) {
-				t.Errorf("intersect(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
+				t.Errorf("Intersect(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
 				return
 			}
 			for i, v := range got {
 				if v != tt.want[i] {
-					t.Errorf("intersect(%v, %v)[%d] = %q, want %q", tt.a, tt.b, i, v, tt.want[i])
+					t.Errorf("Intersect(%v, %v)[%d] = %q, want %q", tt.a, tt.b, i, v, tt.want[i])
 				}
 			}
 		})

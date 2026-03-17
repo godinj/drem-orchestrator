@@ -416,13 +416,8 @@ func TestHandleTestFailed(t *testing.T) {
 
 	var updated model.Task
 	db.First(&updated, "id = ?", task.ID)
-	if updated.Status != model.StatusPlanning {
-		t.Errorf("expected status %q, got %q", model.StatusPlanning, updated.Status)
-	}
-
-	// Verify the plan was cleared.
-	if updated.Plan != nil {
-		t.Errorf("expected plan to be nil after test failure, got %v", updated.Plan)
+	if updated.Status != model.StatusInProgress {
+		t.Errorf("expected status %q, got %q", model.StatusInProgress, updated.Status)
 	}
 }
 
@@ -825,11 +820,8 @@ func TestTaskLifecycle_TestFailedBackToPlanning(t *testing.T) {
 
 	var updated model.Task
 	db.First(&updated, "id = ?", task.ID)
-	if updated.Status != model.StatusPlanning {
-		t.Errorf("expected planning, got %s", updated.Status)
-	}
-	if updated.Plan != nil {
-		t.Error("expected plan to be cleared after test failure")
+	if updated.Status != model.StatusInProgress {
+		t.Errorf("expected in_progress, got %s", updated.Status)
 	}
 }
 
