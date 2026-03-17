@@ -233,6 +233,48 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 			}
 		}
 
+		// Content-aware dedup: if the subtask's estimated files already
+		// appear in the integration branch and commit messages match,
+		// fast-track to done without spawning an agent.
+		if estimatedFiles := getEstimatedFiles(sub.Context); len(estimatedFiles) > 0 {
+			featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
+			featureDir := o.worktree.FeatureWorktreePath(featureName)
+			changedFiles, diffErr := getChangedFiles(featureDir, o.worktree.DefaultBranch)
+			if diffErr == nil && len(changedFiles) > 0 {
+				commitMsgs, logErr := getCommitMessages(featureDir, o.worktree.DefaultBranch)
+				if logErr == nil && hasExistingWork(estimatedFiles, changedFiles, commitMsgs, sub.Title) {
+					o.logger.Info("schedule: dedup detected existing work, fast-tracking to done",
+						"subtask_id", sub.ID)
+					transitions := []model.TaskStatus{
+						model.StatusPlanning,
+						model.StatusPlanReview,
+						model.StatusInProgress,
+						model.StatusTestingReady,
+						model.StatusMerging,
+						model.StatusDone,
+					}
+					for _, target := range transitions {
+						if sub.Status == target {
+							continue
+						}
+						evt, tErr := state.TransitionTask(sub, target, "orchestrator",
+							map[string]any{"reason": "dedup-existing-work"})
+						if tErr != nil {
+							continue
+						}
+						if err := o.db.Create(evt).Error; err != nil {
+							o.logger.Error("schedule: save event", "subtask_id", sub.ID, "error", err)
+							break
+						}
+					}
+					if err := o.db.Save(sub).Error; err != nil {
+						o.logger.Error("schedule: save subtask", "subtask_id", sub.ID, "error", err)
+					}
+					continue
+				}
+			}
+		}
+
 		// If subtask was previously assigned an agent, check if its work
 		// is already merged into the feature branch before re-spawning.
 		if sub.AssignedAgentID != nil {
