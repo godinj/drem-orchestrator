@@ -53,10 +53,12 @@ func forbidBindings(t *testing.T, bindings []helpBinding, keys ...string) {
 // task (placed on board + detail), agent, and deleteMode.
 func newTestModel(focus Focus, task *model.Task, agent *model.Agent, deleteMode bool) Model {
 	m := Model{
-		keys:   defaultKeyMap(),
-		focus:  focus,
-		width:  120,
-		height: 40,
+		keys:     defaultKeyMap(),
+		focus:    focus,
+		create:   NewCreateModel(),
+		feedback: NewFeedbackModel(""),
+		width:    120,
+		height:   40,
 		detail: DetailModel{
 			agent:      agent,
 			deleteMode: deleteMode,

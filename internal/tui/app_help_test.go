@@ -10,6 +10,20 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
+// newHelpTestModel builds a minimal Model safe for updatePanelSizes.
+func newHelpTestModel(focus Focus, showHelp bool) Model {
+	m := Model{
+		showHelp: showHelp,
+		keys:     defaultKeyMap(),
+		focus:    focus,
+		create:   NewCreateModel(),
+		feedback: NewFeedbackModel(""),
+		width:    120,
+		height:   40,
+	}
+	return m
+}
+
 func TestHelpOverlayToggle(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -33,13 +47,7 @@ func TestHelpOverlayToggle(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := Model{
-				showHelp: tt.initial,
-				keys:     defaultKeyMap(),
-				focus:    FocusBoard,
-				width:    120,
-				height:   40,
-			}
+			m := newHelpTestModel(FocusBoard, tt.initial)
 			m.updatePanelSizes()
 
 			result, _ := m.Update(tt.key)
@@ -52,13 +60,7 @@ func TestHelpOverlayToggle(t *testing.T) {
 }
 
 func TestHelpOverlayDismissOnEsc(t *testing.T) {
-	m := Model{
-		showHelp: true,
-		keys:     defaultKeyMap(),
-		focus:    FocusBoard,
-		width:    120,
-		height:   40,
-	}
+	m := newHelpTestModel(FocusBoard, true)
 	m.updatePanelSizes()
 
 	result, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
@@ -106,14 +108,8 @@ func TestHelpOverlayDismissOnActionKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := Model{
-				showHelp: true,
-				keys:     defaultKeyMap(),
-				focus:    FocusBoard,
-				agents:   AgentsModel{autoFilter: true},
-				width:    120,
-				height:   40,
-			}
+			m := newHelpTestModel(FocusBoard, true)
+			m.agents.autoFilter = true
 			m.updatePanelSizes()
 
 			result, cmd := m.Update(tt.key)
@@ -143,13 +139,7 @@ func TestHelpToggleFromAllFocusStates(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := Model{
-				showHelp: false,
-				keys:     defaultKeyMap(),
-				focus:    tt.focus,
-				width:    120,
-				height:   40,
-			}
+			m := newHelpTestModel(tt.focus, false)
 			m.updatePanelSizes()
 
 			result, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'?'}})
@@ -162,13 +152,7 @@ func TestHelpToggleFromAllFocusStates(t *testing.T) {
 }
 
 func TestHelpBarRemovedFromView(t *testing.T) {
-	m := Model{
-		showHelp: false,
-		keys:     defaultKeyMap(),
-		focus:    FocusBoard,
-		width:    120,
-		height:   40,
-	}
+	m := newHelpTestModel(FocusBoard, false)
 	m.board.tasks = []model.Task{
 		{ID: uuid.New(), Title: "Test Task", Status: model.StatusBacklog},
 	}
@@ -209,19 +193,9 @@ func TestHelpOverlayAppearsInView(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m := Model{
-				showHelp: true,
-				keys:     defaultKeyMap(),
-				focus:    tt.focus,
-				width:    120,
-				height:   40,
-			}
-			taskStatus := model.StatusPlanReview
-			if tt.focus == FocusDetail {
-				taskStatus = model.StatusPlanReview
-			}
+			m := newHelpTestModel(tt.focus, true)
 			m.board.tasks = []model.Task{
-				{ID: uuid.New(), Title: "Test Task", Status: taskStatus},
+				{ID: uuid.New(), Title: "Test Task", Status: model.StatusPlanReview},
 			}
 			m.updatePanelSizes()
 
