@@ -189,6 +189,17 @@ func CommitUnstagedChanges(worktreePath, message string) (bool, error) {
 	return true, nil
 }
 
+// CleanClaudeArtifacts removes .claude/ directory artifacts from a worktree.
+// These files are never committed and can block git operations like rebase.
+// Returns true if files were cleaned, false if .claude/ was already clean.
+func CleanClaudeArtifacts(worktreePath string) (bool, error) {
+	output, err := RunGit([]string{"clean", "-fd", ".claude/"}, worktreePath)
+	if err != nil {
+		return false, fmt.Errorf("clean claude artifacts: %w", err)
+	}
+	return output != "", nil
+}
+
 // BranchHasNewCommits returns true if sourceBranch has commits that are not
 // yet in the worktree's current HEAD (i.e. there is work to merge).
 func BranchHasNewCommits(worktreePath, sourceBranch string) (bool, error) {
@@ -264,6 +275,9 @@ func RebaseBranch(sourceWorktree, targetWorktree string) (*RebaseResult, error) 
 	if err != nil {
 		return nil, fmt.Errorf("rebase branch: resolve target HEAD: %w", err)
 	}
+
+	// Clean .claude/ artifacts that would block the rebase.
+	CleanClaudeArtifacts(sourceWorktree)
 
 	// Attempt rebase in the source worktree
 	_, rebaseErr := RunGit([]string{"rebase", targetHEAD}, sourceWorktree)

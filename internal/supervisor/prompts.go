@@ -50,7 +50,7 @@ Diagnose the failure and decide whether to retry. Return ONLY a JSON object:
 
 {
   "root_cause": "brief description of what went wrong",
-  "category": "transient|prompt_issue|code_error|environment|unknown",
+  "category": "transient|prompt_issue|code_error|environment|already_complete|unknown",
   "should_retry": true/false,
   "retry_strategy": "same_prompt|modified_prompt|different_approach",
   "prompt_adjustment": "if retry_strategy is modified_prompt, describe what to change",

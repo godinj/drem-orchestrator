@@ -684,6 +684,49 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 				task.Context["prompt_adjustment"] = diagnosis.PromptAdjustment
 			}
 
+			// Fast-track if supervisor determines work is already complete.
+			if isWorkAlreadyCompleteCategory(diagnosis.Category) {
+				o.logSupervisorAction(supervisor.JournalEntry{
+					Timestamp: time.Now(),
+					AgentName: ag.Name,
+					TaskID:    task.ID.String(),
+					TaskTitle: task.Title,
+					Type:      "empty_work_diagnosis",
+					Summary:   diagnosis.RootCause,
+					Details: map[string]string{
+						"Category":   diagnosis.Category,
+						"Agent Type": string(ag.AgentType),
+					},
+					Outcome: "Fast-tracked to DONE — work already complete",
+				})
+				task.Context["done_no_work"] = true
+				// Fast-track to DONE.
+				transitions := []model.TaskStatus{
+					model.StatusTestingReady,
+					model.StatusMerging,
+					model.StatusDone,
+				}
+				for _, target := range transitions {
+					if task.Status == target {
+						continue
+					}
+					evt, tErr := state.TransitionTask(task, target, "orchestrator",
+						map[string]any{"reason": "already-complete-no-work"})
+					if tErr != nil {
+						continue
+					}
+					if err := o.db.Create(evt).Error; err != nil {
+						o.logger.Error("empty work fast-track event", "task_id", task.ID, "error", err)
+						break
+					}
+				}
+				if err := o.db.Save(task).Error; err != nil {
+					return fmt.Errorf("on agent empty work: save task after fast-track: %w", err)
+				}
+				o.emit("task_updated", task)
+				return nil
+			}
+
 			if diagnosis.ShouldRetry && retries < MaxEmptyWorkRetries {
 				o.logSupervisorAction(supervisor.JournalEntry{
 					Timestamp: time.Now(),
@@ -743,4 +786,14 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 	}
 	o.emit("agent_failed", map[string]any{"task_id": task.ID, "agent_id": ag.ID, "reason": "no commits"})
 	return nil
+}
+
+// isWorkAlreadyCompleteCategory returns true if the supervisor diagnosis
+// category indicates the work was already done and no changes were needed.
+func isWorkAlreadyCompleteCategory(category string) bool {
+	switch category {
+	case "already_complete", "no_changes_needed", "work_done":
+		return true
+	}
+	return false
 }

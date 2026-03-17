@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
@@ -384,5 +385,48 @@ func TestMergeWithRetry_SuccessOnFirstAttempt(t *testing.T) {
 
 	if int(attempts.Load()) != 1 {
 		t.Errorf("expected exactly 1 attempt on immediate success, got %d", attempts.Load())
+	}
+}
+
+func TestMergeFeatureIntoMain_AutoCommitsDirtyMain(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	dir := filepath.Dir(bareRepo)
+
+	// Create main worktree
+	mainDir := filepath.Join(dir, "main-wt")
+	testutil.AddWorktree(t, bareRepo, "main", mainDir)
+
+	// Create feature worktree with a commit
+	featureDir := filepath.Join(dir, "feature")
+	testutil.AddWorktree(t, bareRepo, "feature/test-dirty", featureDir)
+	testutil.CommitFile(t, featureDir, "feature-work.txt", "feature work\n", "feature commit")
+
+	// Dirty the main worktree with a journal file (simulating orchestrator artifacts)
+	if err := os.MkdirAll(filepath.Join(mainDir, "journals"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(mainDir, "journals", "supervisor.md"), []byte("journal entry\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := worktree.NewManager(bareRepo, "main")
+	orch := NewOrchestrator(mgr, nil)
+
+	task := &model.Task{
+		WorktreeBranch: "feature/test-dirty",
+	}
+	result, err := orch.MergeFeatureIntoMain(task)
+	if err != nil {
+		t.Fatalf("MergeFeatureIntoMain returned error: %v", err)
+	}
+
+	if !result.Success {
+		t.Fatalf("expected merge to succeed after auto-commit, got conflicts=%v stderr=%s",
+			result.Conflicts, result.GitStderr)
+	}
+
+	// Verify the feature work is in main
+	if _, err := os.Stat(filepath.Join(mainDir, "feature-work.txt")); os.IsNotExist(err) {
+		t.Error("expected feature-work.txt to be in main after merge")
 	}
 }

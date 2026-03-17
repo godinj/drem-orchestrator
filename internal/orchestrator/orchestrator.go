@@ -960,6 +960,28 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 		delete(task.Context, "last_error")
 	}
 
+	// Clear additional failure context keys.
+	if task.Context != nil {
+		delete(task.Context, "failure_diagnosis")
+		delete(task.Context, "failure_category")
+		delete(task.Context, "prompt_adjustment")
+		delete(task.Context, "empty_work")
+		delete(task.Context, "constraint_violations")
+	}
+
+	// Unlink stale agents that still reference this task.
+	var staleAgents []model.Agent
+	if err := o.db.Where("current_task_id = ?", taskID).Find(&staleAgents).Error; err == nil {
+		for i := range staleAgents {
+			staleAgents[i].CurrentTaskID = nil
+			if staleAgents[i].Status == model.AgentDead {
+				staleAgents[i].Status = model.AgentIdle
+			}
+			o.db.Save(&staleAgents[i])
+		}
+	}
+	task.AssignedAgentID = nil
+
 	evt, err := state.TransitionTask(&task, model.StatusBacklog, "user", map[string]any{"action": "retry"})
 	if err != nil {
 		return fmt.Errorf("retry task: transition: %w", err)

@@ -1432,6 +1432,103 @@ func TestDeleteTask_RootWithSubtasksAndAgents(t *testing.T) {
 	}
 }
 
+func TestRetryTask_UnlinksStaleAgents(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	taskID := uuid.New()
+	agentID := uuid.New()
+
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       o.projectID,
+		Title:           "retry-unlink-task",
+		Description:     "task with stale agent",
+		Status:          model.StatusFailed,
+		AssignedAgentID: &agentID,
+		Context:         model.JSONField{"retry_count": float64(2), "last_error": "some error"},
+	}
+	db.Create(&task)
+
+	ag := model.Agent{
+		ID:            agentID,
+		ProjectID:     o.projectID,
+		AgentType:     model.AgentCoder,
+		Name:          "stale-retry-agent",
+		Status:        model.AgentDead,
+		CurrentTaskID: &taskID,
+	}
+	db.Create(&ag)
+
+	err := o.RetryTask(taskID)
+	if err != nil {
+		t.Fatalf("RetryTask error: %v", err)
+	}
+
+	// Task should be in backlog with cleared context.
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.Status != model.StatusBacklog {
+		t.Errorf("expected status backlog, got %s", updated.Status)
+	}
+	if updated.AssignedAgentID != nil {
+		t.Error("expected AssignedAgentID to be nil")
+	}
+
+	// Stale agent should have CurrentTaskID cleared and be idle.
+	var updatedAgent model.Agent
+	db.First(&updatedAgent, "id = ?", agentID)
+	if updatedAgent.CurrentTaskID != nil {
+		t.Error("expected agent CurrentTaskID to be nil")
+	}
+	if updatedAgent.Status != model.AgentIdle {
+		t.Errorf("expected agent status idle, got %s", updatedAgent.Status)
+	}
+}
+
+func TestRetryTask_ClearsFailureContext(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:          taskID,
+		ProjectID:   o.projectID,
+		Title:       "retry-clear-ctx",
+		Description: "task with failure context",
+		Status:      model.StatusFailed,
+		Context: model.JSONField{
+			"retry_count":           float64(1),
+			"last_error":            "error msg",
+			"failure_diagnosis":     "some diagnosis",
+			"failure_category":      "code_error",
+			"prompt_adjustment":     "try harder",
+			"empty_work":            true,
+			"constraint_violations": "violated stuff",
+			"other_key":             "should survive",
+		},
+	}
+	db.Create(&task)
+
+	err := o.RetryTask(taskID)
+	if err != nil {
+		t.Fatalf("RetryTask error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+
+	// These keys should be deleted.
+	for _, key := range []string{"retry_count", "last_error", "failure_diagnosis", "failure_category", "prompt_adjustment", "empty_work", "constraint_violations"} {
+		if _, ok := updated.Context[key]; ok {
+			t.Errorf("expected %q to be cleared from context", key)
+		}
+	}
+
+	// This key should survive.
+	if _, ok := updated.Context["other_key"]; !ok {
+		t.Error("expected other_key to survive retry cleanup")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

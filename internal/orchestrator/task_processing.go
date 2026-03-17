@@ -620,7 +620,24 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 					})
 
 					if analysis.ResolutionStrategy == "spawn_agent" {
-						o.logger.Info("supervisor suggests spawning resolver agent", "task_id", task.ID)
+						o.logger.Info("spawning resolver agent for merge conflict", "task_id", task.ID)
+						// Store conflict context for the fixer agent.
+						task.Context["merge_conflict_files"] = result.Conflicts
+						task.Context["merge_resolution_hints"] = analysis.ResolutionHints
+						// Fail the task (required state transition) then spawn fixer.
+						if err := o.failTask(task, "merge conflicts — spawning resolver agent"); err != nil {
+							return err
+						}
+						if _, fixerErr := o.SpawnFixerSession(task.ID); fixerErr != nil {
+							o.logger.Warn("failed to spawn fixer for merge conflict",
+								"task_id", task.ID, "error", fixerErr)
+						}
+						o.emit("merge_conflict", map[string]any{
+							"task_id":       task.ID,
+							"details":       map[string]any{"conflicts": result.Conflicts},
+							"fixer_spawned": true,
+						})
+						return nil
 					}
 				}
 			}

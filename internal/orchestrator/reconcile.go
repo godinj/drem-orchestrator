@@ -504,15 +504,38 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 					"agent_id", ag.ID, "error", err)
 			}
 		} else {
-			// No work produced — mark agent dead, subtask failed.
+			// No work produced — check if we can retry before failing.
 			ag.Status = model.AgentDead
 			ag.CurrentTaskID = nil
 			if err := o.db.Save(&ag).Error; err != nil {
 				o.logger.Error("reconcile stuck: save agent", "agent_id", ag.ID, "error", err)
 				continue
 			}
-			if err := o.failTask(sub, "agent session died without producing commits"); err != nil {
-				o.logger.Error("reconcile stuck: fail subtask", "subtask_id", sub.ID, "error", err)
+
+			// Auto-retry if under the limit.
+			retryCount := 0
+			if sub.Context != nil {
+				if v, ok := sub.Context["retry_count"].(float64); ok {
+					retryCount = int(v)
+				}
+			}
+			if retryCount < MaxEmptyWorkRetries {
+				o.logger.Info("reconcile stuck: auto-retrying dead agent subtask",
+					"subtask_id", sub.ID, "retry_count", retryCount)
+				sub.AssignedAgentID = nil
+				if sub.Context == nil {
+					sub.Context = make(model.JSONField)
+				}
+				sub.Context["retry_count"] = float64(retryCount + 1)
+				sub.Status = model.StatusBacklog
+				sub.UpdatedAt = time.Now()
+				if err := o.db.Save(sub).Error; err != nil {
+					o.logger.Error("reconcile stuck: save subtask for retry", "subtask_id", sub.ID, "error", err)
+				}
+			} else {
+				if err := o.failTask(sub, "agent session died without producing commits"); err != nil {
+					o.logger.Error("reconcile stuck: fail subtask", "subtask_id", sub.ID, "error", err)
+				}
 			}
 		}
 		fixed++

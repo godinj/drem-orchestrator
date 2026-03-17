@@ -825,11 +825,12 @@ func TestReconcileStuckAgents_SessionDead_NoCommits(t *testing.T) {
 		t.Errorf("expected agent status dead, got %s", updatedAgent.Status)
 	}
 
-	// Subtask should be failed.
+	// Subtask should be auto-retried (backlog) since retry_count starts at 0
+	// which is below MaxEmptyWorkRetries.
 	var updatedTask model.Task
 	db.First(&updatedTask, "id = ?", taskID)
-	if updatedTask.Status != model.StatusFailed {
-		t.Errorf("expected subtask status failed, got %s", updatedTask.Status)
+	if updatedTask.Status != model.StatusBacklog {
+		t.Errorf("expected subtask status backlog (auto-retry), got %s", updatedTask.Status)
 	}
 }
 
@@ -1044,5 +1045,128 @@ func TestRecoverStuckAgents_WithSignalFile(t *testing.T) {
 	db.First(&updatedAgent, "id = ?", agentID)
 	if updatedAgent.Status == model.AgentWorking {
 		t.Error("expected agent to no longer be working after recovery")
+	}
+}
+
+func TestReconcileStuckAgents_AutoRetriesFirst(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "stuck-retry"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      orch.projectID,
+		Title:          "stuck-retry-parent",
+		Description:    "test parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&parent)
+
+	agentID := uuid.New()
+	taskID := uuid.New()
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "stuck-retry-agent",
+		Status:         model.AgentWorking,
+		WorktreeBranch: "", // no commits
+		CurrentTaskID:  &taskID,
+	}
+	db.Create(&ag)
+
+	sub := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "stuck-retry-sub",
+		Description:     "subtask that should auto-retry",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+		Context:         model.JSONField{"retry_count": float64(0)},
+	}
+	db.Create(&sub)
+
+	fixes, err := orch.reconcileStuckAgents()
+	if err != nil {
+		t.Fatalf("reconcileStuckAgents() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix, got %d", fixes)
+	}
+
+	// Subtask should be reset to BACKLOG (auto-retry), not FAILED.
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.Status != model.StatusBacklog {
+		t.Errorf("expected subtask status backlog (auto-retry), got %s", updated.Status)
+	}
+	if updated.AssignedAgentID != nil {
+		t.Error("expected assigned agent to be cleared")
+	}
+	// retry_count should be incremented
+	if v, ok := updated.Context["retry_count"].(float64); !ok || int(v) != 1 {
+		t.Errorf("expected retry_count=1, got %v", updated.Context["retry_count"])
+	}
+}
+
+func TestReconcileStuckAgents_FailsAtLimit(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "stuck-limit"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      orch.projectID,
+		Title:          "stuck-limit-parent",
+		Description:    "test parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&parent)
+
+	agentID := uuid.New()
+	taskID := uuid.New()
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "stuck-limit-agent",
+		Status:         model.AgentWorking,
+		WorktreeBranch: "", // no commits
+		CurrentTaskID:  &taskID,
+	}
+	db.Create(&ag)
+
+	sub := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "stuck-limit-sub",
+		Description:     "subtask at retry limit",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+		Context:         model.JSONField{"retry_count": float64(MaxEmptyWorkRetries)},
+	}
+	db.Create(&sub)
+
+	fixes, err := orch.reconcileStuckAgents()
+	if err != nil {
+		t.Fatalf("reconcileStuckAgents() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix, got %d", fixes)
+	}
+
+	// Subtask should be FAILED (at retry limit).
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected subtask status failed (at limit), got %s", updated.Status)
 	}
 }

@@ -347,7 +347,16 @@ func (o *Orchestrator) MergeFeatureIntoMain(task *model.Task) (*worktree.MergeRe
 		return nil, fmt.Errorf("merge feature into main: check clean: %w", err)
 	}
 	if !clean {
-		return nil, fmt.Errorf("merge feature into main: main worktree %s has uncommitted changes", mainWorktree)
+		committed, commitErr := worktree.CommitUnstagedChanges(
+			mainWorktree, "chore: commit orchestrator artifacts before merge to main")
+		if commitErr != nil {
+			return nil, fmt.Errorf("merge feature into main: auto-commit dirty worktree: %w", commitErr)
+		}
+		if committed {
+			slog.Info("auto-committed artifacts in main worktree before merge",
+				"main_worktree", mainWorktree,
+				"feature_branch", task.WorktreeBranch)
+		}
 	}
 
 	// Perform the merge.

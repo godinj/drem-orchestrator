@@ -1232,4 +1232,29 @@ func TestOnReviewerCompleted_NoReviewJSON(t *testing.T) {
 	}
 }
 
+func TestIsWorkAlreadyCompleteCategory(t *testing.T) {
+	tests := []struct {
+		category string
+		want     bool
+	}{
+		{"already_complete", true},
+		{"no_changes_needed", true},
+		{"work_done", true},
+		{"transient", false},
+		{"prompt_issue", false},
+		{"code_error", false},
+		{"environment", false},
+		{"unknown", false},
+		{"", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.category, func(t *testing.T) {
+			got := isWorkAlreadyCompleteCategory(tc.category)
+			if got != tc.want {
+				t.Errorf("isWorkAlreadyCompleteCategory(%q) = %v, want %v", tc.category, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestFailTask is in lifecycle_test.go
