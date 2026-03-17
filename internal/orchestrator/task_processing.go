@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -621,7 +622,7 @@ func (o *Orchestrator) handlePaused(task *model.Task) error {
 // ---------------------------------------------------------------------------
 
 // HandlePlanApproved creates subtask records from the plan and transitions the
-// task to IN_PROGRESS.
+// task to IN_PROGRESS (or TEST_WRITING for TDD plans).
 func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
@@ -632,11 +633,15 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 		return fmt.Errorf("handle plan approved: task %s is in %s, expected plan_review", taskID, task.Status)
 	}
 
-	// Parse the plan.
-	subtaskPlans, err := parsePlan(task.Plan)
+	// Parse the plan (full format with TDD exceptions).
+	planResult, err := parsePlan(task.Plan)
 	if err != nil {
 		return fmt.Errorf("handle plan approved: %w", err)
 	}
+	subtaskPlans := planResult.Subtasks
+
+	// Auto-generate TDD reverse dependencies from tests_for.
+	merged := MergeTDDDependencies(subtaskPlans)
 
 	// Create subtask records. We need to track created IDs for dependency mapping.
 	createdIDs := make([]uuid.UUID, len(subtaskPlans))
@@ -648,6 +653,9 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 			"agent_type":      sp.AgentType,
 			"estimated_files": sp.EstimatedFiles,
 		}
+		if sp.Phase != "" {
+			ctx["phase"] = sp.Phase
+		}
 
 		sub := model.Task{
 			ID:           subtaskID,
@@ -656,8 +664,9 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 			Title:        sp.Title,
 			Description:  sp.Description,
 			Status:       model.StatusBacklog,
+			Phase:        sp.Phase,
 			Context:      ctx,
-			Priority:     len(subtaskPlans) - i, // higher priority for earlier items
+			Priority:     len(subtaskPlans) - i,
 		}
 
 		if err := o.db.Create(&sub).Error; err != nil {
@@ -665,9 +674,8 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 		}
 	}
 
-	// Second pass: set dependency IDs now that all subtask UUIDs are known.
-	// The plan uses 0-based indices to reference other subtasks.
-	for i, sp := range subtaskPlans {
+	// Second pass: set dependency IDs (including auto-generated TDD deps).
+	for i, sp := range merged {
 		if len(sp.Dependencies) == 0 {
 			continue
 		}
@@ -683,6 +691,33 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 				return fmt.Errorf("handle plan approved: update dependencies for subtask %d: %w", i, err)
 			}
 		}
+	}
+
+	// Third pass: set TestsFor on test-phase subtasks.
+	for i, sp := range subtaskPlans {
+		if len(sp.TestsFor) > 0 {
+			var testsForIDs model.JSONArray
+			for _, idx := range sp.TestsFor {
+				if idx >= 0 && idx < len(createdIDs) {
+					testsForIDs = append(testsForIDs, createdIDs[idx].String())
+				}
+			}
+			if len(testsForIDs) > 0 {
+				o.db.Model(&model.Task{}).Where("id = ?", createdIDs[i]).
+					Update("tests_for", testsForIDs)
+			}
+		}
+	}
+
+	// Store TDD exceptions on the parent task.
+	if len(planResult.TDDExceptions) > 0 {
+		exceptionsJSON, _ := json.Marshal(planResult.TDDExceptions)
+		var exceptionsField any
+		json.Unmarshal(exceptionsJSON, &exceptionsField)
+		if task.TDDExceptions == nil {
+			task.TDDExceptions = make(model.JSONField)
+		}
+		task.TDDExceptions["exceptions"] = exceptionsField
 	}
 
 	// Build wave schedule from the created subtasks.
@@ -714,8 +749,47 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 	// Clear planner agent assignment now that review is complete.
 	task.AssignedAgentID = nil
 
-	// Transition task to IN_PROGRESS.
-	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "plan_approved"})
+	// Write plan.json to the integration worktree and commit it.
+	if task.WorktreeBranch != "" {
+		featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+		featureDir := o.worktree.FeatureWorktreePath(featureName)
+		planJSON, marshalErr := json.MarshalIndent(task.Plan, "", "  ")
+		if marshalErr != nil {
+			o.logger.Warn("handle plan approved: failed to marshal plan for worktree", "error", marshalErr)
+		} else {
+			planPath := filepath.Join(featureDir, "plan.json")
+			if writeErr := os.WriteFile(planPath, planJSON, 0o644); writeErr != nil {
+				o.logger.Warn("handle plan approved: failed to write plan.json to worktree", "error", writeErr)
+			} else {
+				committed, commitErr := worktree.CommitUnstagedChanges(
+					featureDir, "chore: commit plan.json after plan approval")
+				if commitErr != nil {
+					o.logger.Warn("handle plan approved: failed to commit plan.json", "error", commitErr)
+				} else if committed {
+					o.logger.Info("handle plan approved: committed plan.json to integration worktree",
+						"task_id", task.ID)
+				}
+			}
+		}
+	}
+
+	// Determine transition target: TEST_WRITING if plan has test-phase subtasks.
+	hasTestPhase := false
+	for _, sp := range subtaskPlans {
+		if sp.Phase == "test" {
+			hasTestPhase = true
+			break
+		}
+	}
+
+	var targetStatus model.TaskStatus
+	if hasTestPhase {
+		targetStatus = model.StatusTestWriting
+	} else {
+		targetStatus = model.StatusInProgress
+	}
+
+	evt, err := state.TransitionTask(&task, targetStatus, "user", map[string]any{"action": "plan_approved"})
 	if err != nil {
 		return fmt.Errorf("handle plan approved: transition: %w", err)
 	}
@@ -788,9 +862,7 @@ func (o *Orchestrator) HandleTestPassed(taskID uuid.UUID) error {
 	return nil
 }
 
-// HandleTestFailed transitions from TESTING_READY back to PLANNING so the
-// planner agent can read user comments and create new subtasks to address
-// the feedback.
+// HandleTestFailed transitions from TESTING_READY back to IN_PROGRESS.
 func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
@@ -801,11 +873,9 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 		return fmt.Errorf("handle test failed: task %s is in %s, expected testing_ready", taskID, task.Status)
 	}
 
-	// Clear the existing plan so the planner re-plans with user feedback.
-	task.Plan = nil
 	task.AssignedAgentID = nil
 
-	evt, err := state.TransitionTask(&task, model.StatusPlanning, "user", map[string]any{"action": "test_failed"})
+	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_failed"})
 	if err != nil {
 		return fmt.Errorf("handle test failed: transition: %w", err)
 	}
@@ -817,6 +887,192 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
-	o.logger.Info("test failed, task back to planning", "task_id", task.ID)
+	o.logger.Info("test failed, task back to in_progress", "task_id", task.ID)
+	return nil
+}
+
+// HandleTestReviewApproved transitions a task from TEST_REVIEW to IN_PROGRESS.
+func (o *Orchestrator) HandleTestReviewApproved(taskID uuid.UUID) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("handle test review approved: load task: %w", err)
+	}
+
+	if task.Status != model.StatusTestReview {
+		return fmt.Errorf("handle test review approved: task %s is in %s, expected test_review", taskID, task.Status)
+	}
+
+	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_review_approved"})
+	if err != nil {
+		return fmt.Errorf("handle test review approved: transition: %w", err)
+	}
+	if err := o.db.Save(&task).Error; err != nil {
+		return fmt.Errorf("handle test review approved: save task: %w", err)
+	}
+	if err := o.db.Create(evt).Error; err != nil {
+		return fmt.Errorf("handle test review approved: save event: %w", err)
+	}
+
+	o.emit("task_updated", &task)
+	o.logger.Info("test review approved, scheduling implementation", "task_id", task.ID)
+	return nil
+}
+
+// HandleTestReviewRejected marks rejected test subtasks as REJECTED, clones
+// them with feedback, and transitions the parent back to TEST_WRITING.
+// After 3 rejection rounds, pauses the task and spawns a diagnostic agent.
+func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback string) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: load task: %w", err)
+	}
+
+	if task.Status != model.StatusTestReview {
+		return fmt.Errorf("handle test review rejected: task %s is in %s, expected test_review", taskID, task.Status)
+	}
+
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+
+	rejectionCount := 0
+	if v, ok := task.Context["test_rejection_count"].(float64); ok {
+		rejectionCount = int(v)
+	}
+	rejectionCount++
+	task.Context["test_rejection_count"] = float64(rejectionCount)
+
+	feedbackKey := fmt.Sprintf("test_rejection_feedback_%d", rejectionCount)
+	task.Context[feedbackKey] = feedback
+
+	if rejectionCount >= 3 {
+		evt1, err := state.TransitionTask(&task, model.StatusTestWriting, "user", map[string]any{
+			"action": "test_review_rejected_diagnostic",
+			"reason": "3 rejection rounds exceeded",
+		})
+		if err != nil {
+			return fmt.Errorf("handle test review rejected: transition to test_writing: %w", err)
+		}
+		if err := o.db.Create(evt1).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save event1: %w", err)
+		}
+
+		evt2, err := state.TransitionTask(&task, model.StatusPaused, "user", map[string]any{
+			"action": "test_review_rejected_paused",
+			"reason": "3 test rejection rounds exceeded, diagnostic required",
+		})
+		if err != nil {
+			return fmt.Errorf("handle test review rejected: transition to paused: %w", err)
+		}
+		task.Context["paused_from"] = string(model.StatusTestWriting)
+		task.Context["diagnostic_required"] = true
+
+		if err := o.db.Save(&task).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save task: %w", err)
+		}
+		if err := o.db.Create(evt2).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save event2: %w", err)
+		}
+
+		o.emit("task_updated", &task)
+		o.logger.Warn("test review rejected 3 times, task paused for diagnostic",
+			"task_id", task.ID, "rejection_count", rejectionCount)
+
+		if err := o.spawnDiagnosticAgent(&task); err != nil {
+			o.logger.Warn("failed to spawn diagnostic agent", "task_id", task.ID, "error", err)
+		}
+		return nil
+	}
+
+	var doneTestSubtasks []model.Task
+	if err := o.db.Where(
+		"parent_task_id = ? AND phase = ? AND status = ?",
+		task.ID, "test", model.StatusDone,
+	).Find(&doneTestSubtasks).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: query test subtasks: %w", err)
+	}
+
+	for i := range doneTestSubtasks {
+		sub := &doneTestSubtasks[i]
+
+		sub.Status = model.StatusRejected
+		sub.UpdatedAt = time.Now()
+		if err := o.db.Save(sub).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: reject subtask %s: %w", sub.ID, err)
+		}
+
+		rejectEvt := &model.TaskEvent{
+			ID:        uuid.New(),
+			TaskID:    sub.ID,
+			EventType: "status_change",
+			OldValue:  string(model.StatusDone),
+			NewValue:  string(model.StatusRejected),
+			Details:   model.JSONField{"action": "test_review_rejected", "feedback": feedback},
+			Actor:     "user",
+			CreatedAt: time.Now(),
+		}
+		if err := o.db.Create(rejectEvt).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save reject event for %s: %w", sub.ID, err)
+		}
+
+		revisionSuffix := fmt.Sprintf(" (revision %d)", rejectionCount)
+		newDescription := sub.Description + "\n\n## Rejection Feedback\n\n" + feedback
+
+		var newCtx model.JSONField
+		if sub.Context != nil {
+			newCtx = make(model.JSONField, len(sub.Context))
+			for k, v := range sub.Context {
+				newCtx[k] = v
+			}
+		} else {
+			newCtx = make(model.JSONField)
+		}
+
+		replacementID := uuid.New()
+		replacement := model.Task{
+			ID:            replacementID,
+			ProjectID:     sub.ProjectID,
+			ParentTaskID:  sub.ParentTaskID,
+			Title:         sub.Title + revisionSuffix,
+			Description:   newDescription,
+			Status:        model.StatusBacklog,
+			Priority:      sub.Priority,
+			DependencyIDs: sub.DependencyIDs,
+			Phase:         sub.Phase,
+			TestsFor:      sub.TestsFor,
+			Context:       newCtx,
+		}
+
+		if err := o.db.Create(&replacement).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: create replacement for %s: %w", sub.ID, err)
+		}
+
+		o.logger.Info("test subtask rejected and replaced",
+			"original_id", sub.ID,
+			"replacement_id", replacementID,
+			"revision", rejectionCount)
+	}
+
+	evt, err := state.TransitionTask(&task, model.StatusTestWriting, "user", map[string]any{
+		"action":          "test_review_rejected",
+		"rejection_count": rejectionCount,
+		"feedback":        feedback,
+		"subtasks_cloned": len(doneTestSubtasks),
+	})
+	if err != nil {
+		return fmt.Errorf("handle test review rejected: transition to test_writing: %w", err)
+	}
+	if err := o.db.Save(&task).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: save task: %w", err)
+	}
+	if err := o.db.Create(evt).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: save event: %w", err)
+	}
+
+	o.emit("task_updated", &task)
+	o.logger.Info("test review rejected, back to test writing",
+		"task_id", task.ID,
+		"rejection_count", rejectionCount,
+		"subtasks_cloned", len(doneTestSubtasks))
 	return nil
 }

@@ -252,11 +252,11 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	}
 
 	// Validate the plan before transitioning to plan_review.
-	entries, parseErr := parsePlan(task.Plan)
+	planResult, parseErr := parsePlan(task.Plan)
 	if parseErr != nil {
 		o.logger.Warn("plan validation: failed to parse stored plan", "task_id", task.ID, "error", parseErr)
 	} else {
-		validation := ValidatePlan(entries)
+		validation := ValidatePlan(planResult.Subtasks, planResult.TDDExceptions)
 		// Store validation result in task context for TUI display.
 		if task.Context == nil {
 			task.Context = make(model.JSONField)
