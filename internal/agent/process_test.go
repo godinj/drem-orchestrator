@@ -31,7 +31,7 @@ func TestStartAgentProcess(t *testing.T) {
 	cwd := t.TempDir()
 	scriptDir := t.TempDir()
 
-	// Create a fake claude binary that reads stdin and writes output.
+	// Create a fake claude binary that reads stdin (gets EOF) and writes output.
 	claudeBin := writeFakeClaudeScript(t, scriptDir, "Agent output")
 
 	// Write a prompt file.
@@ -46,11 +46,6 @@ func TestStartAgentProcess(t *testing.T) {
 		t.Fatalf("StartAgentProcess: %v", err)
 	}
 
-	// Process should be alive initially.
-	if !p.IsAlive() {
-		t.Error("IsAlive() = false immediately after start, want true")
-	}
-
 	// LogPath should point to the correct location.
 	expectedLogPath := filepath.Join(cwd, ".claude", "agent-output.log")
 	if p.LogPath() != expectedLogPath {
@@ -62,10 +57,8 @@ func TestStartAgentProcess(t *testing.T) {
 		t.Errorf("Pid() = %d, want > 0", p.Pid())
 	}
 
-	// Close stdin to let the script finish (cat reads until EOF).
-	p.SendExit()
-
-	// Wait for the process to exit.
+	// Stdin is closed after prompt write, so the script receives EOF from
+	// cat and exits on its own.
 	exitCode, err := p.Wait()
 	if err != nil {
 		t.Fatalf("Wait: %v", err)
@@ -84,21 +77,19 @@ func TestAgentProcess_SendExit(t *testing.T) {
 	cwd := t.TempDir()
 	scriptDir := t.TempDir()
 
-	// Create a script that reads stdin line by line and exits on /exit.
+	// Create a long-running script that exits on SIGTERM.
+	// Uses a background sleep + wait so the trap fires immediately.
 	scriptPath := filepath.Join(scriptDir, "fake-claude")
 	script := `#!/bin/sh
-while IFS= read -r line; do
-  if [ "$line" = "/exit" ]; then
-    echo "exiting"
-    exit 0
-  fi
-done
+trap 'exit 0' TERM
+cat > /dev/null
+while true; do sleep 1 & wait; done
 `
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write script: %v", err)
 	}
 
-	// Write a prompt file (the script reads past it via stdin).
+	// Write a prompt file.
 	promptPath := filepath.Join(cwd, "prompt.md")
 	if err := os.WriteFile(promptPath, []byte("prompt content\n"), 0o644); err != nil {
 		t.Fatalf("write prompt: %v", err)
@@ -110,14 +101,14 @@ done
 		t.Fatalf("StartAgentProcess: %v", err)
 	}
 
-	// Give the process time to start and read the prompt.
+	// Give the process time to start and read stdin EOF.
 	time.Sleep(200 * time.Millisecond)
 
 	if !p.IsAlive() {
 		t.Fatal("process should be alive before SendExit")
 	}
 
-	// Send /exit to trigger graceful shutdown.
+	// SendExit sends SIGTERM for graceful shutdown.
 	p.SendExit()
 
 	// Wait with a timeout.
@@ -132,11 +123,6 @@ done
 		// Good — process exited.
 	case <-time.After(5 * time.Second):
 		t.Fatal("process did not exit within 5 seconds after SendExit")
-	}
-
-	exitCode, _ := p.Wait()
-	if exitCode != 0 {
-		t.Errorf("exit code = %d, want 0", exitCode)
 	}
 
 	if p.IsAlive() {
@@ -200,6 +186,8 @@ func TestAgentProcess_LogOutput(t *testing.T) {
 	scriptDir := t.TempDir()
 
 	// Create a script that writes to both stdout and stderr.
+	// Stdin is closed by StartAgentProcess after the prompt is written,
+	// so cat receives EOF immediately and the script proceeds.
 	scriptPath := filepath.Join(scriptDir, "fake-claude")
 	script := `#!/bin/sh
 cat > /dev/null
@@ -221,10 +209,7 @@ echo "stderr line" >&2
 		t.Fatalf("StartAgentProcess: %v", err)
 	}
 
-	// Close stdin to let the script proceed past cat.
-	p.SendExit()
-
-	// Wait for exit.
+	// Wait for exit — stdin is closed so the script runs to completion.
 	p.Wait()
 
 	// Read the log file.

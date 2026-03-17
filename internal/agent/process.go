@@ -3,23 +3,22 @@ package agent
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"syscall"
 )
 
 // AgentProcess manages a Claude Code subprocess lifecycle.
 type AgentProcess struct {
-	cmd       *exec.Cmd
-	stdinPipe io.WriteCloser
-	logFile   *os.File
-	logPath   string
-	pid       int
-	done      chan struct{} // closed when cmd.Wait() returns
-	exitCode  int
-	mu        sync.Mutex
+	cmd      *exec.Cmd
+	logFile  *os.File
+	logPath  string
+	pid      int
+	done     chan struct{} // closed when cmd.Wait() returns
+	exitCode int
+	mu       sync.Mutex
 }
 
 // ProcessStarter is a function type for creating agent processes, allowing test injection.
@@ -27,8 +26,10 @@ type ProcessStarter func(ctx context.Context, claudeBin, promptPath, cwd string)
 
 // StartAgentProcess starts a Claude Code subprocess.
 // It creates the command: claudeBin --dangerously-skip-permissions -p -
-// The prompt file content is written to stdin. The pipe is kept open so that
-// /exit can be sent later. stdout+stderr are redirected to <cwd>/.claude/agent-output.log.
+// The prompt file content is written to stdin, then the pipe is closed so that
+// Claude receives EOF and begins processing. In -p mode, graceful shutdown is
+// handled via SIGTERM rather than stdin commands.
+// stdout+stderr are redirected to <cwd>/.claude/agent-output.log.
 func StartAgentProcess(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error) {
 	// 1. Ensure .claude directory exists.
 	claudeDir := filepath.Join(cwd, ".claude")
@@ -64,20 +65,21 @@ func StartAgentProcess(ctx context.Context, claudeBin, promptPath, cwd string) (
 	}
 
 	p := &AgentProcess{
-		cmd:       cmd,
-		stdinPipe: stdinPipe,
-		logFile:   logFile,
-		logPath:   logPath,
-		pid:       cmd.Process.Pid,
-		done:      make(chan struct{}),
+		cmd:     cmd,
+		logFile: logFile,
+		logPath: logPath,
+		pid:     cmd.Process.Pid,
+		done:    make(chan struct{}),
 	}
 
-	// 6. Write prompt content to stdin (in background goroutine).
+	// 6. Write prompt content to stdin and close the pipe so Claude receives
+	// EOF and begins processing. In -p mode, Claude reads the full prompt
+	// from stdin until EOF before starting work.
 	go func() {
+		defer stdinPipe.Close()
 		promptData, err := os.ReadFile(promptPath)
 		if err == nil {
 			_, _ = stdinPipe.Write(promptData)
-			// Don't close the pipe — keep it open for /exit later.
 		}
 	}()
 
@@ -100,19 +102,12 @@ func StartAgentProcess(ctx context.Context, claudeBin, promptPath, cwd string) (
 	return p, nil
 }
 
-// SendExit writes "/exit\n" to the stdin pipe, then closes it.
-// This triggers Claude to exit gracefully when it is in idle mode.
+// SendExit sends SIGTERM to the process for graceful shutdown.
+// In -p mode stdin is closed after the prompt is written, so we use a signal
+// rather than writing /exit to stdin.
 func (p *AgentProcess) SendExit() {
-	p.mu.Lock()
-	pipe := p.stdinPipe
-	p.mu.Unlock()
-	if pipe != nil {
-		// Write /exit command then close the pipe.
-		_, _ = io.WriteString(pipe, "/exit\n")
-		_ = pipe.Close()
-		p.mu.Lock()
-		p.stdinPipe = nil
-		p.mu.Unlock()
+	if p.cmd != nil && p.cmd.Process != nil {
+		_ = p.cmd.Process.Signal(syscall.SIGTERM)
 	}
 }
 
