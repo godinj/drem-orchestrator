@@ -579,7 +579,16 @@ func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, work
 		usage, err := ctxmon.ReadUsageFile(usagePath)
 		if err != nil {
 			slog.Warn("context monitor: read usage file", "agent_id", agentID, "error", err)
-			continue
+		}
+
+		// Fall back to reading the session transcript directly if the
+		// status line script hasn't produced a usage file (e.g. in -p mode).
+		if usage == nil {
+			usage, err = ctxmon.ReadTranscriptUsage(worktreePath)
+			if err != nil {
+				slog.Warn("context monitor: read transcript", "agent_id", agentID, "error", err)
+				continue
+			}
 		}
 
 		// Check compaction signal.
