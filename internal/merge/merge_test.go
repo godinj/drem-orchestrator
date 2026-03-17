@@ -386,3 +386,171 @@ func TestMergeWithRetry_SuccessOnFirstAttempt(t *testing.T) {
 		t.Errorf("expected exactly 1 attempt on immediate success, got %d", attempts.Load())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Pure helper tests
+// ---------------------------------------------------------------------------
+
+func TestIntersect(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []string
+		b    []string
+		want []string
+	}{
+		{
+			name: "overlap",
+			a:    []string{"a", "b", "c"},
+			b:    []string{"b", "c", "d"},
+			want: []string{"b", "c"},
+		},
+		{
+			name: "no overlap",
+			a:    []string{"a", "b"},
+			b:    []string{"c", "d"},
+			want: nil,
+		},
+		{
+			name: "empty first",
+			a:    []string{},
+			b:    []string{"a", "b"},
+			want: nil,
+		},
+		{
+			name: "empty second",
+			a:    []string{"a", "b"},
+			b:    []string{},
+			want: nil,
+		},
+		{
+			name: "both empty",
+			a:    []string{},
+			b:    []string{},
+			want: nil,
+		},
+		{
+			name: "single element match",
+			a:    []string{"a"},
+			b:    []string{"a"},
+			want: []string{"a"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Intersect(tc.a, tc.b)
+			if len(got) != len(tc.want) {
+				t.Fatalf("Intersect(%v, %v) = %v, want %v", tc.a, tc.b, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Errorf("Intersect(%v, %v)[%d] = %q, want %q", tc.a, tc.b, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+func TestDetectBuildCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		files    []string
+		wantCmd  string
+		wantArgs []string
+	}{
+		{
+			name:     "go project",
+			files:    []string{"go.mod"},
+			wantCmd:  "go",
+			wantArgs: []string{"test", "./..."},
+		},
+		{
+			name:     "makefile project",
+			files:    []string{"Makefile"},
+			wantCmd:  "make",
+			wantArgs: []string{"test"},
+		},
+		{
+			name:     "node project",
+			files:    []string{"package.json"},
+			wantCmd:  "npm",
+			wantArgs: []string{"test"},
+		},
+		{
+			name:     "empty directory",
+			files:    nil,
+			wantCmd:  "",
+			wantArgs: nil,
+		},
+		{
+			name:     "go takes priority over makefile",
+			files:    []string{"go.mod", "Makefile"},
+			wantCmd:  "go",
+			wantArgs: []string{"test", "./..."},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, f := range tc.files {
+				if err := os.WriteFile(filepath.Join(dir, f), []byte(""), 0o644); err != nil {
+					t.Fatalf("create file %s: %v", f, err)
+				}
+			}
+			cmd, args := DetectBuildCommand(dir)
+			if cmd != tc.wantCmd {
+				t.Errorf("DetectBuildCommand() cmd = %q, want %q", cmd, tc.wantCmd)
+			}
+			if len(args) != len(tc.wantArgs) {
+				t.Fatalf("DetectBuildCommand() args = %v, want %v", args, tc.wantArgs)
+			}
+			for i := range args {
+				if args[i] != tc.wantArgs[i] {
+					t.Errorf("DetectBuildCommand() args[%d] = %q, want %q", i, args[i], tc.wantArgs[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFileExists(t *testing.T) {
+	dir := t.TempDir()
+
+	// Create a regular file
+	existingFile := filepath.Join(dir, "exists.txt")
+	if err := os.WriteFile(existingFile, []byte("hello"), 0o644); err != nil {
+		t.Fatalf("create file: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		path string
+		want bool
+	}{
+		{
+			name: "existing file",
+			path: existingFile,
+			want: true,
+		},
+		{
+			name: "nonexistent file",
+			path: filepath.Join(dir, "no-such-file.txt"),
+			want: false,
+		},
+		{
+			name: "directory returns false",
+			path: dir,
+			want: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := FileExists(tc.path)
+			if got != tc.want {
+				t.Errorf("FileExists(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}

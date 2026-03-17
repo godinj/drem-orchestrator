@@ -110,7 +110,7 @@ func (o *Orchestrator) PlanAgentMerge(agentBranch, featureWorktree string) (*Mer
 	}
 
 	// Potential conflicts: files changed on both sides.
-	conflicts := intersect(agentFiles, featureFiles)
+	conflicts := Intersect(agentFiles, featureFiles)
 
 	return &MergePlan{
 		SourceBranch:       agentBranch,
@@ -386,7 +386,7 @@ func (o *Orchestrator) MergeFeatureIntoMain(task *model.Task) (*worktree.MergeRe
 // test command with a 5-minute timeout.  It returns whether the build passed,
 // the combined stdout/stderr output, and any execution error.
 func (o *Orchestrator) VerifyBuild(worktreePath string) (bool, string, error) {
-	cmd, args := detectBuildCommand(worktreePath)
+	cmd, args := DetectBuildCommand(worktreePath)
 	if cmd == "" {
 		return true, "no build system detected", nil
 	}
@@ -467,37 +467,37 @@ func (o *Orchestrator) GetMergeStatus(projectID uuid.UUID) (*MergeStatus, error)
 	return status, nil
 }
 
-// detectBuildCommand inspects a worktree path for known build-system markers
-// and returns the command and arguments to run.  Returns ("", nil) when no
-// build system is detected.
-func detectBuildCommand(worktreePath string) (string, []string) {
-	if fileExists(filepath.Join(worktreePath, "go.mod")) {
+// DetectBuildCommand inspects the worktree path for known build system files
+// and returns the command and arguments to run a build.
+// Returns ("", nil) when no build system is detected.
+func DetectBuildCommand(worktreePath string) (string, []string) {
+	if FileExists(filepath.Join(worktreePath, "go.mod")) {
 		return "go", []string{"test", "./..."}
 	}
-	if fileExists(filepath.Join(worktreePath, "pyproject.toml")) {
+	if FileExists(filepath.Join(worktreePath, "pyproject.toml")) {
 		// Prefer uv run pytest; fall back to plain pytest.
 		if _, err := exec.LookPath("uv"); err == nil {
 			return "uv", []string{"run", "pytest"}
 		}
 		return "pytest", nil
 	}
-	if fileExists(filepath.Join(worktreePath, "Makefile")) {
+	if FileExists(filepath.Join(worktreePath, "Makefile")) {
 		return "make", []string{"test"}
 	}
-	if fileExists(filepath.Join(worktreePath, "package.json")) {
+	if FileExists(filepath.Join(worktreePath, "package.json")) {
 		return "npm", []string{"test"}
 	}
 	return "", nil
 }
 
-// fileExists returns true if the path exists and is a regular file.
-func fileExists(path string) bool {
+// FileExists reports whether the named file exists.
+func FileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
 
-// intersect returns elements present in both a and b.
-func intersect(a, b []string) []string {
+// Intersect returns elements present in both slices a and b.
+func Intersect(a, b []string) []string {
 	set := make(map[string]struct{}, len(b))
 	for _, s := range b {
 		set[s] = struct{}{}
