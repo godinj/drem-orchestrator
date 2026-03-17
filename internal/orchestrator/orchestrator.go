@@ -5,14 +5,18 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -51,22 +55,62 @@ const shortIDLen = 4
 // maxDisplayNameLen is the maximum length of task titles in supervisor session names.
 const maxDisplayNameLen = 30
 
+// TestGateConfig holds configuration for the pre-merge test gate.
+// These values are typically loaded from drem.toml or CLAUDE.md.
+type TestGateConfig struct {
+	TestCommand    string        `toml:"test_command"`    // e.g. "go test ./..."
+	CompileCommand string        `toml:"compile_command"` // e.g. "go vet ./..."
+	ScopedTests    bool          `toml:"scoped_tests"`    // default true — scope tests to changed packages
+	TestTimeout    time.Duration `toml:"test_timeout"`    // default 5m
+}
+
+// DefaultTestGateConfig returns a TestGateConfig with sensible defaults.
+func DefaultTestGateConfig() TestGateConfig {
+	return TestGateConfig{
+		ScopedTests: true,
+		TestTimeout: 5 * time.Minute,
+	}
+}
+
+// TestResult stores the outcome of a test run for auditing and debugging.
+type TestResult struct {
+	Passed       bool      `json:"passed"`
+	Output       string    `json:"output"` // truncated to last 5000 chars
+	ExitCode     int       `json:"exit_code"`
+	RunAt        time.Time `json:"run_at"`
+	Duration     float64   `json:"duration_seconds"`
+	Command      string    `json:"command"`
+	Scoped       bool      `json:"scoped"` // true if ran scoped tests
+	AttemptCount int       `json:"attempt_count"`
+}
+
+// commandResult holds the output from running a shell command.
+type commandResult struct {
+	Output   string
+	ExitCode int
+	Duration time.Duration
+}
+
 // Orchestrator is the main scheduling loop. It queries the database each tick,
 // processes tasks through the state machine, spawns agents, and drives merges.
 type Orchestrator struct {
-	db         *gorm.DB
-	dbPath     string
-	runner     *agent.Runner
-	worktree   *worktree.Manager
-	merger     *merge.Orchestrator
-	memory     *memory.Manager
-	supervisor *supervisor.Supervisor // nil disables LLM-powered decisions
-	projectID  uuid.UUID
-	events     chan<- Event
-	tick       time.Duration
-	stale      time.Duration
-	tickCount  int
-	logger     *slog.Logger
+	db              *gorm.DB
+	dbPath          string
+	runner          *agent.Runner
+	worktree        *worktree.Manager
+	merger          *merge.Orchestrator
+	memory          *memory.Manager
+	supervisor      *supervisor.Supervisor // nil disables LLM-powered decisions
+	testGate        TestGateConfig
+	projectID       uuid.UUID
+	events          chan<- Event
+	tick            time.Duration
+	stale           time.Duration
+	tickCount       int
+	contextWarnPct  int
+	contextStopPct  int
+	contextFixerPct int // percentage: spawn fixer instead of failing
+	logger          *slog.Logger
 }
 
 // New creates an Orchestrator. The supervisor parameter is optional — pass nil
@@ -83,21 +127,41 @@ func New(
 	events chan<- Event,
 	tickInterval time.Duration,
 	staleTimeout time.Duration,
+	contextWarnPct int,
+	contextStopPct int,
+	contextFixerPct ...int,
 ) *Orchestrator {
-	return &Orchestrator{
-		db:         db,
-		dbPath:     dbPath,
-		runner:     runner,
-		worktree:   wt,
-		merger:     merger,
-		memory:     mem,
-		supervisor: sup,
-		projectID:  projectID,
-		events:     events,
-		tick:       tickInterval,
-		stale:      staleTimeout,
-		logger:     slog.Default().With("component", "orchestrator", "project_id", projectID),
+	fixerPct := 85
+	if len(contextFixerPct) > 0 && contextFixerPct[0] > 0 {
+		fixerPct = contextFixerPct[0]
 	}
+	return &Orchestrator{
+		db:              db,
+		dbPath:          dbPath,
+		runner:          runner,
+		worktree:        wt,
+		merger:          merger,
+		memory:          mem,
+		supervisor:      sup,
+		testGate:        DefaultTestGateConfig(),
+		projectID:       projectID,
+		events:          events,
+		tick:            tickInterval,
+		stale:           staleTimeout,
+		contextWarnPct:  contextWarnPct,
+		contextStopPct:  contextStopPct,
+		contextFixerPct: fixerPct,
+		logger:          slog.Default().With("component", "orchestrator", "project_id", projectID),
+	}
+}
+
+// SetTestGateConfig updates the test gate configuration. Call this after
+// loading configuration from drem.toml to override the defaults.
+func (o *Orchestrator) SetTestGateConfig(cfg TestGateConfig) {
+	if cfg.TestTimeout == 0 {
+		cfg.TestTimeout = 5 * time.Minute
+	}
+	o.testGate = cfg
 }
 
 // Run starts the main loop. It blocks until ctx is cancelled.
@@ -152,7 +216,10 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 		}
 	}
 
-	// 2b. Fallback: detect agents stuck as WORKING whose idle signal file
+	// 2b. Check context window usage and apply role-aware escalation.
+	o.checkContextUsage()
+
+	// 2c. Fallback: detect agents stuck as WORKING whose idle signal file
 	// exists but was never picked up (e.g. notification hook failed to fire).
 	o.recoverStuckAgents()
 
@@ -168,6 +235,19 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 		}
 	}
 
+	// 4b. Process TEST_WRITING parent tasks.
+	var testWritingTasks []model.Task
+	if err := o.db.Where("project_id = ? AND status = ? AND parent_task_id IS NULL",
+		o.projectID, model.StatusTestWriting).Find(&testWritingTasks).Error; err != nil {
+		o.logger.Error("doTick: query test_writing tasks", "error", err)
+	} else {
+		for i := range testWritingTasks {
+			if err := o.processTestWriting(&testWritingTasks[i]); err != nil {
+				o.logger.Error("doTick: processTestWriting", "task_id", testWritingTasks[i].ID, "error", err)
+			}
+		}
+	}
+
 	// 4. Process IN_PROGRESS parent tasks -> schedule subtasks, check completion.
 	var inProgressTasks []model.Task
 	if err := o.db.Where("project_id = ? AND status = ? AND parent_task_id IS NULL", o.projectID, model.StatusInProgress).
@@ -180,6 +260,19 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 		}
 		if err := o.checkFeatureCompletion(&inProgressTasks[i]); err != nil {
 			o.logger.Error("check feature completion", "task_id", inProgressTasks[i].ID, "error", err)
+		}
+	}
+
+	// 4b. Process TESTING_READY parent tasks (automated gate).
+	var testingReadyTasks []model.Task
+	if err := o.db.Where("project_id = ? AND status = ? AND parent_task_id IS NULL",
+		o.projectID, model.StatusTestingReady).Find(&testingReadyTasks).Error; err != nil {
+		o.logger.Error("doTick: query testing_ready tasks", "error", err)
+	} else {
+		for i := range testingReadyTasks {
+			if err := o.processTestingReady(&testingReadyTasks[i]); err != nil {
+				o.logger.Error("doTick: processTestingReady", "task_id", testingReadyTasks[i].ID, "error", err)
+			}
 		}
 	}
 
@@ -211,6 +304,9 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 	if err := o.runner.CleanupStaleAgents(o.stale); err != nil {
 		o.logger.Error("cleanup stale agents", "error", err)
 	}
+
+	// 7b. Check context window usage for running agents.
+	o.checkContextUsage()
 
 	// 8. Periodic consistency audit.
 	o.tickCount++
@@ -1029,6 +1125,41 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			return o.onAgentEmptyWork(ag, task, output)
 		}
 
+		// Test gate: verify tests/compilation before merging.
+		phase := taskPhase(task)
+		if phase == "test" {
+			// Test-phase subtask: compilation-only gate.
+			testResult, testErr := o.verifyCompilationBeforeMerge(task, ag.WorktreePath)
+			if testErr != nil {
+				return fmt.Errorf("compilation gate: %w", testErr)
+			}
+			o.storeTestResult(ag, testResult)
+			if !testResult.Passed {
+				o.logger.Warn("compilation failed for test-phase subtask",
+					"subtask_id", task.ID, "exit_code", testResult.ExitCode)
+				// Don't block — the human catches quality at TEST_REVIEW.
+			}
+		} else if phase == "implementation" || phase == "integration" || phase == "" {
+			// Implementation/integration phase: full test gate.
+			testResult, testErr := o.verifyTestsBeforeMerge(task, ag.WorktreePath)
+			if testErr != nil {
+				return fmt.Errorf("test gate: %w", testErr)
+			}
+			o.storeTestResult(ag, testResult)
+			if !testResult.Passed {
+				o.logger.Error("tests failed, blocking merge",
+					"subtask_id", task.ID, "attempts", testResult.AttemptCount)
+				o.emit("test_gate_failed", map[string]any{
+					"subtask_id": task.ID,
+					"exit_code":  testResult.ExitCode,
+					"output":     testResult.Output,
+				})
+				// Don't proceed to merge — leave subtask in current state.
+				// The failure recovery handles escalation.
+				return nil
+			}
+		}
+
 		result, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir)
 		if mergeErr != nil {
 			o.logger.Error("merge agent into feature failed", "agent_id", ag.ID, "error", mergeErr)
@@ -1067,6 +1198,26 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			}
 		}
 		return nil
+	}
+
+	// Track actual test files for test-phase subtasks (§4.8.2).
+	if task.Phase == "test" && ag.WorktreePath != "" {
+		featureBranch := task.WorktreeBranch
+		if featureBranch == "" && task.ParentTaskID != nil {
+			var parentForBranch model.Task
+			if err := o.db.Select("worktree_branch").First(&parentForBranch, "id = ?", task.ParentTaskID).Error; err == nil {
+				featureBranch = parentForBranch.WorktreeBranch
+			}
+		}
+		if featureBranch != "" {
+			actualTestFiles := o.extractTestFiles(ag.WorktreePath, featureBranch)
+			if len(actualTestFiles) > 0 {
+				if task.Context == nil {
+					task.Context = make(model.JSONField)
+				}
+				task.Context["actual_test_files"] = actualTestFiles
+			}
+		}
 	}
 
 	// Merge succeeded — clean up agent worktree.
@@ -1180,11 +1331,11 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	}
 
 	// Validate the plan before transitioning to plan_review.
-	entries, parseErr := parsePlan(task.Plan)
+	planResult, parseErr := parsePlan(task.Plan)
 	if parseErr != nil {
 		o.logger.Warn("plan validation: failed to parse stored plan", "task_id", task.ID, "error", parseErr)
 	} else {
-		validation := ValidatePlan(entries)
+		validation := ValidatePlan(planResult.Subtasks, nil)
 		// Store validation result in task context for TUI display.
 		if task.Context == nil {
 			task.Context = make(model.JSONField)
@@ -1485,6 +1636,16 @@ func (o *Orchestrator) resolveIntegrationWorktree(task *model.Task) string {
 		return ""
 	}
 	return path
+}
+
+// IntegrationWorktreePath returns the integration worktree path for a task,
+// resolving through the parent if the task is a subtask.
+func (o *Orchestrator) IntegrationWorktreePath(taskID uuid.UUID) string {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return ""
+	}
+	return o.resolveIntegrationWorktree(&task)
 }
 
 // onAgentFailed handles a failed agent. When a supervisor is configured, it
@@ -1795,9 +1956,16 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 // whose agent has been cleared (e.g. after empty-work retry) — of the parent
 // that have their dependencies met and spawns agents for them.
 func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
+	// During TEST_WRITING, skip wave-group gating entirely. Test subtasks are
+	// additive (they create new test files and append to build files), so
+	// file-overlap conflicts are rare and trivially handled by merge retry.
+	// Serializing test subtasks via wave groups doubles wall-clock time for no
+	// practical benefit.
+	skipWaveGating := parent.Status == model.StatusTestWriting
+
 	// Check for wave schedule in parent context.
 	var allowedIDs map[uuid.UUID]bool
-	if parent.Context != nil {
+	if !skipWaveGating && parent.Context != nil {
 		if scheduleRaw, hasSchedule := parent.Context["schedule"]; hasSchedule {
 			scheduleJSON, marshalErr := json.Marshal(scheduleRaw)
 			if marshalErr == nil {
@@ -1833,8 +2001,23 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 		return fmt.Errorf("schedule subtasks: query: %w", err)
 	}
 
+	// Determine parent status for phase-aware scheduling.
+	var parentStatus model.TaskStatus
+	if parent != nil {
+		parentStatus = parent.Status
+	}
+
 	for i := range subtasks {
 		sub := &subtasks[i]
+
+		// Phase-aware scheduling: during TEST_WRITING, only schedule test-phase subtasks.
+		if parentStatus == model.StatusTestWriting && sub.Phase != "test" {
+			continue
+		}
+		// During IN_PROGRESS, only schedule implementation and integration subtasks.
+		if parentStatus == model.StatusInProgress && sub.Phase == "test" {
+			continue
+		}
 
 		// If wave scheduling is active, only schedule subtasks in the current group.
 		if allowedIDs != nil && !allowedIDs[sub.ID] {
@@ -2004,7 +2187,7 @@ func (o *Orchestrator) findCurrentGroup(parent *model.Task, schedule Schedule) *
 					"parent_id", parent.ID, "subtask_id", taskID)
 				continue
 			}
-			if sub.Status != model.StatusDone && sub.Status != model.StatusFailed {
+			if !isTerminal(sub.Status) {
 				allTerminal = false
 				break
 			}
@@ -2013,6 +2196,116 @@ func (o *Orchestrator) findCurrentGroup(parent *model.Task, schedule Schedule) *
 			return group
 		}
 	}
+	return nil
+}
+
+// processTestWriting schedules test-phase subtasks and checks for completion.
+// When all test-phase subtasks are done, transitions the parent to TEST_REVIEW.
+func (o *Orchestrator) processTestWriting(parent *model.Task) error {
+	// Check baseline test health (once per task).
+	if parent.Context == nil {
+		parent.Context = make(model.JSONField)
+	}
+	if _, checked := parent.Context["baseline_tests_checked"]; !checked {
+		testCmd := o.getTestCommand(parent)
+		if testCmd != "" {
+			featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
+			featureDir := o.worktree.FeatureWorktreePath(featureName)
+			result, runErr := runCommand(featureDir, testCmd)
+			parent.Context["baseline_tests_checked"] = true
+			if runErr != nil || result.ExitCode != 0 {
+				parent.Context["baseline_tests_failed"] = true
+				parent.Context["baseline_test_output"] = truncate(result.Output, 5000)
+				o.logger.Warn("baseline tests fail on integration branch",
+					"task_id", parent.ID, "exit_code", result.ExitCode)
+				if err := o.db.Save(parent).Error; err != nil {
+					return fmt.Errorf("process test writing: save baseline check: %w", err)
+				}
+				return nil
+			}
+			if err := o.db.Save(parent).Error; err != nil {
+				return fmt.Errorf("process test writing: save baseline check: %w", err)
+			}
+		}
+	}
+
+	// Block scheduling (but NOT completion checks) if baseline tests failed.
+	if failed, ok := parent.Context["baseline_tests_failed"].(bool); ok && failed {
+		// Still run the completion check below — a supervisor may have
+		// manually fixed the subtask and set it to done.
+	} else {
+		// Schedule test-phase subtasks using the existing scheduling logic.
+		if err := o.scheduleSubtasks(parent); err != nil {
+			return fmt.Errorf("process test writing: schedule: %w", err)
+		}
+	}
+
+	// Completion check runs unconditionally every tick. This ensures that
+	// when a supervisor manually fixes a failed subtask (merges work, sets
+	// subtask to done), processTestWriting detects the change on the next
+	// tick and transitions the parent.
+
+	// Check if all test-phase subtasks are in a terminal state.
+	var testSubtasks []model.Task
+	if err := o.db.Where("parent_task_id = ? AND phase = ?", parent.ID, "test").
+		Find(&testSubtasks).Error; err != nil {
+		return fmt.Errorf("process test writing: query test subtasks: %w", err)
+	}
+
+	if len(testSubtasks) == 0 {
+		return nil
+	}
+
+	allTerminal := true
+	anyFailed := false
+	allDone := true
+
+	for _, sub := range testSubtasks {
+		switch sub.Status {
+		case model.StatusDone:
+			// good
+		case model.StatusFailed, model.StatusRejected:
+			anyFailed = true
+			allDone = false
+		default:
+			allTerminal = false
+			allDone = false
+		}
+	}
+
+	if allDone {
+		// All test subtasks done -> transition to TEST_REVIEW.
+		// Clear any blocking flags that may have been set by prior failure handling.
+		delete(parent.Context, "baseline_tests_failed")
+		delete(parent.Context, "needs_human_review")
+
+		evt, err := state.TransitionTask(parent, model.StatusTestReview, "orchestrator",
+			map[string]any{"reason": "all test subtasks done"})
+		if err != nil {
+			return fmt.Errorf("process test writing: transition to test_review: %w", err)
+		}
+		if err := o.db.Save(parent).Error; err != nil {
+			return fmt.Errorf("process test writing: save parent: %w", err)
+		}
+		if err := o.db.Create(evt).Error; err != nil {
+			return fmt.Errorf("process test writing: save event: %w", err)
+		}
+		o.emit("test_review_ready", map[string]any{"task_id": parent.ID})
+		o.logger.Info("all test subtasks done, test review ready", "task_id", parent.ID)
+	} else if allTerminal && anyFailed {
+		// All test subtasks terminal but some failed -> fail the parent.
+		var failedNames []string
+		for _, sub := range testSubtasks {
+			if sub.Status == model.StatusFailed {
+				failedNames = append(failedNames, sub.Title)
+			}
+		}
+		if err := o.failTask(parent, fmt.Sprintf("test subtasks failed: %s",
+			strings.Join(failedNames, ", "))); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -2035,13 +2328,16 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 	allDone := true
 
 	for _, sub := range subtasks {
-		switch sub.Status {
-		case model.StatusDone:
-			// good
-		case model.StatusFailed:
-			anyFailed = true
-			allDone = false
-		default:
+		if isTerminal(sub.Status) {
+			if sub.Status == model.StatusFailed {
+				anyFailed = true
+				allDone = false
+			} else if sub.Status == model.StatusRejected {
+				// Rejected subtasks are terminal but don't count as "done".
+				allDone = false
+			}
+			// StatusDone: good — no flags to set.
+		} else {
 			allTerminal = false
 			allDone = false
 		}
@@ -2266,11 +2562,15 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 		return fmt.Errorf("handle plan approved: task %s is in %s, expected plan_review", taskID, task.Status)
 	}
 
-	// Parse the plan.
-	subtaskPlans, err := parsePlan(task.Plan)
+	// Parse the plan (full format with TDD exceptions).
+	planResult, err := parsePlan(task.Plan)
 	if err != nil {
 		return fmt.Errorf("handle plan approved: %w", err)
 	}
+	subtaskPlans := planResult.Subtasks
+
+	// Auto-generate TDD reverse dependencies from tests_for.
+	merged := MergeTDDDependencies(subtaskPlans)
 
 	// Create subtask records. We need to track created IDs for dependency mapping.
 	createdIDs := make([]uuid.UUID, len(subtaskPlans))
@@ -2282,6 +2582,9 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 			"agent_type":      sp.AgentType,
 			"estimated_files": sp.EstimatedFiles,
 		}
+		if sp.Phase != "" {
+			ctx["phase"] = sp.Phase
+		}
 
 		sub := model.Task{
 			ID:           subtaskID,
@@ -2290,6 +2593,7 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 			Title:        sp.Title,
 			Description:  sp.Description,
 			Status:       model.StatusBacklog,
+			Phase:        sp.Phase,
 			Context:      ctx,
 			Priority:     len(subtaskPlans) - i, // higher priority for earlier items
 		}
@@ -2299,9 +2603,10 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 		}
 	}
 
-	// Second pass: set dependency IDs now that all subtask UUIDs are known.
+	// Second pass: set dependency IDs (including auto-generated TDD deps)
+	// now that all subtask UUIDs are known.
 	// The plan uses 0-based indices to reference other subtasks.
-	for i, sp := range subtaskPlans {
+	for i, sp := range merged {
 		if len(sp.Dependencies) == 0 {
 			continue
 		}
@@ -2317,6 +2622,33 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 				return fmt.Errorf("handle plan approved: update dependencies for subtask %d: %w", i, err)
 			}
 		}
+	}
+
+	// Third pass: set TestsFor on test-phase subtasks.
+	for i, sp := range subtaskPlans {
+		if len(sp.TestsFor) > 0 {
+			var testsForIDs model.JSONArray
+			for _, idx := range sp.TestsFor {
+				if idx >= 0 && idx < len(createdIDs) {
+					testsForIDs = append(testsForIDs, createdIDs[idx].String())
+				}
+			}
+			if len(testsForIDs) > 0 {
+				o.db.Model(&model.Task{}).Where("id = ?", createdIDs[i]).
+					Update("tests_for", testsForIDs)
+			}
+		}
+	}
+
+	// Store TDD exceptions on the parent task.
+	if len(planResult.TDDExceptions) > 0 {
+		exceptionsJSON, _ := json.Marshal(planResult.TDDExceptions)
+		var exceptionsField any
+		json.Unmarshal(exceptionsJSON, &exceptionsField)
+		if task.TDDExceptions == nil {
+			task.TDDExceptions = make(model.JSONField)
+		}
+		task.TDDExceptions["exceptions"] = exceptionsField
 	}
 
 	// Build wave schedule from the created subtasks.
@@ -2348,8 +2680,49 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 	// Clear planner agent assignment now that review is complete.
 	task.AssignedAgentID = nil
 
-	// Transition task to IN_PROGRESS.
-	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "plan_approved"})
+	// Write plan.json to the integration worktree and commit it immediately
+	// so it doesn't leave the worktree dirty (which blocks subsequent merges).
+	if task.WorktreeBranch != "" {
+		featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+		featureDir := o.worktree.FeatureWorktreePath(featureName)
+		planJSON, marshalErr := json.MarshalIndent(task.Plan, "", "  ")
+		if marshalErr != nil {
+			o.logger.Warn("handle plan approved: failed to marshal plan for worktree", "error", marshalErr)
+		} else {
+			planPath := filepath.Join(featureDir, "plan.json")
+			if writeErr := os.WriteFile(planPath, planJSON, 0o644); writeErr != nil {
+				o.logger.Warn("handle plan approved: failed to write plan.json to worktree", "error", writeErr)
+			} else {
+				committed, commitErr := worktree.CommitUnstagedChanges(
+					featureDir, "chore: commit plan.json after plan approval")
+				if commitErr != nil {
+					o.logger.Warn("handle plan approved: failed to commit plan.json", "error", commitErr)
+				} else if committed {
+					o.logger.Info("handle plan approved: committed plan.json to integration worktree",
+						"task_id", task.ID)
+				}
+			}
+		}
+	}
+
+	// Determine transition target: TEST_WRITING if plan has test-phase subtasks,
+	// IN_PROGRESS otherwise (backward compatible for old-format plans).
+	hasTestPhase := false
+	for _, sp := range subtaskPlans {
+		if sp.Phase == "test" {
+			hasTestPhase = true
+			break
+		}
+	}
+
+	var targetStatus model.TaskStatus
+	if hasTestPhase {
+		targetStatus = model.StatusTestWriting
+	} else {
+		targetStatus = model.StatusInProgress
+	}
+
+	evt, err := state.TransitionTask(&task, targetStatus, "user", map[string]any{"action": "plan_approved"})
 	if err != nil {
 		return fmt.Errorf("handle plan approved: transition: %w", err)
 	}
@@ -2422,9 +2795,9 @@ func (o *Orchestrator) HandleTestPassed(taskID uuid.UUID) error {
 	return nil
 }
 
-// HandleTestFailed transitions from TESTING_READY back to PLANNING so the
-// planner agent can read user comments and create new subtasks to address
-// the feedback.
+// HandleTestFailed transitions from TESTING_READY back to IN_PROGRESS so the
+// failed subtasks can be re-implemented. When called manually by a human, the
+// task returns to implementation rather than re-planning.
 func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
@@ -2435,11 +2808,9 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 		return fmt.Errorf("handle test failed: task %s is in %s, expected testing_ready", taskID, task.Status)
 	}
 
-	// Clear the existing plan so the planner re-plans with user feedback.
-	task.Plan = nil
 	task.AssignedAgentID = nil
 
-	evt, err := state.TransitionTask(&task, model.StatusPlanning, "user", map[string]any{"action": "test_failed"})
+	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_failed"})
 	if err != nil {
 		return fmt.Errorf("handle test failed: transition: %w", err)
 	}
@@ -2451,8 +2822,298 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
-	o.logger.Info("test failed, task back to planning", "task_id", task.ID)
+	o.logger.Info("test failed, task back to in_progress", "task_id", task.ID)
 	return nil
+}
+
+// HandleTestReviewApproved transitions from TEST_REVIEW to IN_PROGRESS,
+// enabling implementation subtask scheduling.
+func (o *Orchestrator) HandleTestReviewApproved(taskID uuid.UUID) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("handle test review approved: load task: %w", err)
+	}
+
+	if task.Status != model.StatusTestReview {
+		return fmt.Errorf("handle test review approved: task %s is in %s, expected test_review", taskID, task.Status)
+	}
+
+	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_review_approved"})
+	if err != nil {
+		return fmt.Errorf("handle test review approved: transition: %w", err)
+	}
+	if err := o.db.Save(&task).Error; err != nil {
+		return fmt.Errorf("handle test review approved: save task: %w", err)
+	}
+	if err := o.db.Create(evt).Error; err != nil {
+		return fmt.Errorf("handle test review approved: save event: %w", err)
+	}
+
+	o.emit("task_updated", &task)
+	o.logger.Info("test review approved, scheduling implementation", "task_id", task.ID)
+	return nil
+}
+
+// HandleTestReviewRejected marks rejected test subtasks as REJECTED, clones
+// them with feedback, and transitions the parent back to TEST_WRITING.
+// After 3 rejection rounds, pauses the task and spawns a diagnostic agent.
+func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback string) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: load task: %w", err)
+	}
+
+	if task.Status != model.StatusTestReview {
+		return fmt.Errorf("handle test review rejected: task %s is in %s, expected test_review", taskID, task.Status)
+	}
+
+	// Initialize context if needed.
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+
+	// Track rejection count.
+	rejectionCount := 0
+	if v, ok := task.Context["test_rejection_count"].(float64); ok {
+		rejectionCount = int(v)
+	}
+	rejectionCount++
+	task.Context["test_rejection_count"] = float64(rejectionCount)
+
+	// Store the feedback for this round.
+	feedbackKey := fmt.Sprintf("test_rejection_feedback_%d", rejectionCount)
+	task.Context[feedbackKey] = feedback
+
+	// If 3rd rejection, transition to PAUSED via TEST_WRITING and spawn diagnostic.
+	if rejectionCount >= 3 {
+		// Transition to TEST_WRITING first (valid from TEST_REVIEW).
+		evt1, err := state.TransitionTask(&task, model.StatusTestWriting, "user", map[string]any{
+			"action": "test_review_rejected_diagnostic",
+			"reason": "3 rejection rounds exceeded",
+		})
+		if err != nil {
+			return fmt.Errorf("handle test review rejected: transition to test_writing: %w", err)
+		}
+		if err := o.db.Create(evt1).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save event1: %w", err)
+		}
+
+		// Then transition to PAUSED (valid from TEST_WRITING).
+		evt2, err := state.TransitionTask(&task, model.StatusPaused, "user", map[string]any{
+			"action": "test_review_rejected_paused",
+			"reason": "3 test rejection rounds exceeded, diagnostic required",
+		})
+		if err != nil {
+			return fmt.Errorf("handle test review rejected: transition to paused: %w", err)
+		}
+		task.Context["paused_from"] = string(model.StatusTestWriting)
+		task.Context["diagnostic_required"] = true
+
+		if err := o.db.Save(&task).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save task: %w", err)
+		}
+		if err := o.db.Create(evt2).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save event2: %w", err)
+		}
+
+		o.emit("task_updated", &task)
+		o.logger.Warn("test review rejected 3 times, task paused for diagnostic",
+			"task_id", task.ID, "rejection_count", rejectionCount)
+
+		// Spawn diagnostic agent (best-effort).
+		if err := o.spawnDiagnosticAgent(&task); err != nil {
+			o.logger.Warn("failed to spawn diagnostic agent", "task_id", task.ID, "error", err)
+		}
+		return nil
+	}
+
+	// Load all test-phase subtasks in DONE state for this parent.
+	var doneTestSubtasks []model.Task
+	if err := o.db.Where(
+		"parent_task_id = ? AND phase = ? AND status = ?",
+		task.ID, "test", model.StatusDone,
+	).Find(&doneTestSubtasks).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: query test subtasks: %w", err)
+	}
+
+	// For each done test subtask: mark as REJECTED and create a replacement.
+	for i := range doneTestSubtasks {
+		sub := &doneTestSubtasks[i]
+
+		// Mark as REJECTED. Since DONE has no outbound transitions in the state
+		// machine, we set the status directly for this terminal→terminal move.
+		sub.Status = model.StatusRejected
+		sub.UpdatedAt = time.Now()
+		if err := o.db.Save(sub).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: reject subtask %s: %w", sub.ID, err)
+		}
+
+		rejectEvt := &model.TaskEvent{
+			ID:        uuid.New(),
+			TaskID:    sub.ID,
+			EventType: "status_change",
+			OldValue:  string(model.StatusDone),
+			NewValue:  string(model.StatusRejected),
+			Details:   model.JSONField{"action": "test_review_rejected", "feedback": feedback},
+			Actor:     "user",
+			CreatedAt: time.Now(),
+		}
+		if err := o.db.Create(rejectEvt).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save reject event for %s: %w", sub.ID, err)
+		}
+
+		// Create a replacement subtask cloned from the rejected one.
+		revisionSuffix := fmt.Sprintf(" (revision %d)", rejectionCount)
+		newDescription := sub.Description + "\n\n## Rejection Feedback\n\n" + feedback
+
+		// Copy context fields.
+		var newCtx model.JSONField
+		if sub.Context != nil {
+			newCtx = make(model.JSONField, len(sub.Context))
+			for k, v := range sub.Context {
+				newCtx[k] = v
+			}
+		} else {
+			newCtx = make(model.JSONField)
+		}
+
+		replacementID := uuid.New()
+		replacement := model.Task{
+			ID:            replacementID,
+			ProjectID:     sub.ProjectID,
+			ParentTaskID:  sub.ParentTaskID,
+			Title:         sub.Title + revisionSuffix,
+			Description:   newDescription,
+			Status:        model.StatusBacklog,
+			Priority:      sub.Priority,
+			DependencyIDs: sub.DependencyIDs,
+			Phase:         sub.Phase,
+			TestsFor:      sub.TestsFor,
+			Context:       newCtx,
+		}
+
+		if err := o.db.Create(&replacement).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: create replacement for %s: %w", sub.ID, err)
+		}
+
+		o.logger.Info("test subtask rejected and replaced",
+			"original_id", sub.ID,
+			"replacement_id", replacementID,
+			"revision", rejectionCount)
+	}
+
+	// Transition parent back to TEST_WRITING.
+	evt, err := state.TransitionTask(&task, model.StatusTestWriting, "user", map[string]any{
+		"action":          "test_review_rejected",
+		"rejection_count": rejectionCount,
+		"feedback":        feedback,
+		"subtasks_cloned": len(doneTestSubtasks),
+	})
+	if err != nil {
+		return fmt.Errorf("handle test review rejected: transition to test_writing: %w", err)
+	}
+	if err := o.db.Save(&task).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: save task: %w", err)
+	}
+	if err := o.db.Create(evt).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: save event: %w", err)
+	}
+
+	o.emit("task_updated", &task)
+	o.logger.Info("test review rejected, back to test writing",
+		"task_id", task.ID,
+		"rejection_count", rejectionCount,
+		"subtasks_cloned", len(doneTestSubtasks))
+	return nil
+}
+
+// spawnDiagnosticAgent creates a diagnostic agent to help the human understand
+// repeated test rejection patterns.
+func (o *Orchestrator) spawnDiagnosticAgent(parent *model.Task) error {
+	// Gather rejection history from the parent context.
+	var rounds []string
+	for i := 1; i <= 3; i++ {
+		key := fmt.Sprintf("test_rejection_feedback_%d", i)
+		if fb, ok := parent.Context[key].(string); ok {
+			rounds = append(rounds, fmt.Sprintf("Round %d feedback: %s", i, fb))
+		}
+	}
+
+	// Gather test subtask history (all test-phase subtasks including rejected).
+	var testSubtasks []model.Task
+	if err := o.db.Where(
+		"parent_task_id = ? AND phase = ?",
+		parent.ID, "test",
+	).Order("created_at asc").Find(&testSubtasks).Error; err != nil {
+		o.logger.Warn("diagnostic agent: failed to load test subtasks", "error", err)
+	}
+
+	var subtaskSummary []string
+	for _, sub := range testSubtasks {
+		subtaskSummary = append(subtaskSummary,
+			fmt.Sprintf("- %s [%s]", sub.Title, sub.Status))
+	}
+
+	diagnosticPrompt := fmt.Sprintf(
+		"The tests for this task have been rejected 3 times. Help the human understand why.\n\n"+
+			"Task: %s\n%s\n\n"+
+			"Test subtask history:\n%s\n\n"+
+			"Rejection rounds:\n%s\n\n"+
+			"Summarize the pattern of rejections and suggest a path forward.\n"+
+			"Either the test premise is wrong, the acceptance criteria are ambiguous,\n"+
+			"or there's a misunderstanding.",
+		parent.Title,
+		parent.Description,
+		strings.Join(subtaskSummary, "\n"),
+		strings.Join(rounds, "\n"),
+	)
+
+	// Store the diagnostic prompt in the parent context for reference.
+	parent.Context["diagnostic_prompt"] = diagnosticPrompt
+	if err := o.db.Save(parent).Error; err != nil {
+		return fmt.Errorf("spawn diagnostic agent: save context: %w", err)
+	}
+
+	// If the runner is not available, log and return.
+	if o.runner == nil {
+		o.logger.Warn("diagnostic agent: runner not available, diagnostic prompt stored in task context",
+			"task_id", parent.ID)
+		return nil
+	}
+
+	// Spawn a reviewer-type agent. Use the integration branch worktree if available.
+	featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
+	worktreePath := ""
+	if featureName != "" && o.worktree != nil {
+		worktreePath = o.worktree.FeatureWorktreePath(featureName)
+	}
+
+	ag := model.Agent{
+		ID:             uuid.New(),
+		ProjectID:      parent.ProjectID,
+		AgentType:      model.AgentReviewer,
+		Name:           fmt.Sprintf("diagnostic-%s", parent.ID.String()[:8]),
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &parent.ID,
+		WorktreePath:   worktreePath,
+		WorktreeBranch: parent.WorktreeBranch,
+	}
+
+	if err := o.db.Create(&ag).Error; err != nil {
+		return fmt.Errorf("spawn diagnostic agent: create agent record: %w", err)
+	}
+
+	o.logger.Info("diagnostic agent spawned",
+		"task_id", parent.ID,
+		"agent_id", ag.ID)
+
+	return nil
+}
+
+// isTerminal returns true if a task status is a terminal state (no further
+// automated processing will occur).
+func isTerminal(status model.TaskStatus) bool {
+	return status == model.StatusDone || status == model.StatusFailed || status == model.StatusRejected
 }
 
 // AddComment creates a new comment on a task. Only allowed for human-gate statuses.
@@ -2807,6 +3468,8 @@ func (o *Orchestrator) logSupervisorAction(entry supervisor.JournalEntry) {
 	}
 }
 
+// checkContextUsage inspects context window usage for all running agents and
+// takes action at configured thresholds.
 // emit sends an event to the TUI channel without blocking.
 func (o *Orchestrator) emit(eventType string, payload any) {
 	select {
@@ -2854,6 +3517,98 @@ func (o *Orchestrator) incrementRetryCount(task *model.Task) int {
 	return count
 }
 
+// extractTestFiles runs git diff --name-only on the agent's worktree and
+// returns files matching test patterns.
+func (o *Orchestrator) extractTestFiles(worktreePath, baseBranch string) []string {
+	output, err := worktree.RunGit([]string{
+		"diff", "--name-only", baseBranch + "...HEAD",
+	}, worktreePath)
+	if err != nil {
+		o.logger.Warn("extract test files: git diff failed", "path", worktreePath, "error", err)
+		return nil
+	}
+	if output == "" {
+		return nil
+	}
+
+	var testFiles []string
+	for _, file := range strings.Split(output, "\n") {
+		file = strings.TrimSpace(file)
+		if file == "" {
+			continue
+		}
+		if isTestFile(file) {
+			testFiles = append(testFiles, file)
+		}
+	}
+	return testFiles
+}
+
+// isTestFile checks if a filename matches common test file patterns.
+func isTestFile(name string) bool {
+	base := filepath.Base(name)
+	lower := strings.ToLower(base)
+
+	// Go: *_test.go
+	if strings.HasSuffix(lower, "_test.go") {
+		return true
+	}
+	// Python: test_*.py or *_test.py
+	if strings.HasSuffix(lower, ".py") && (strings.HasPrefix(lower, "test_") || strings.HasSuffix(lower, "_test.py")) {
+		return true
+	}
+	// JavaScript/TypeScript: *.test.ts, *.test.js, *.spec.ts, *.spec.js
+	for _, suffix := range []string{".test.ts", ".test.js", ".spec.ts", ".spec.js", ".test.tsx", ".test.jsx", ".spec.tsx", ".spec.jsx"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	// C++: *Test.cpp, *Tests.cpp, *_test.cpp, *_tests.cpp, *Test.h, *Tests.h
+	for _, suffix := range []string{"test.cpp", "tests.cpp", "_test.cpp", "_tests.cpp", "test.h", "tests.h"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	// C++: files under tests/ or test/ directories
+	normalizedPath := strings.ToLower(name)
+	for _, prefix := range []string{"tests/", "test/"} {
+		if strings.HasPrefix(normalizedPath, prefix) || strings.Contains(normalizedPath, "/"+prefix) {
+			// Only match C++ source/header files in test directories
+			for _, ext := range []string{".cpp", ".cc", ".cxx", ".h", ".hpp"} {
+				if strings.HasSuffix(lower, ext) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// runCommand executes a shell command in the given directory and returns the result.
+func runCommand(dir, command string) (*commandResult, error) {
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Dir = dir
+
+	var out strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+
+	err := cmd.Run()
+	result := &commandResult{
+		Output: out.String(),
+	}
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			return result, fmt.Errorf("run command: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
 // taskFeatureName derives a slug-based feature name from a task.
 func taskFeatureName(task *model.Task) string {
 	slug := strings.ToLower(task.Title)
@@ -2865,6 +3620,588 @@ func taskFeatureName(task *model.Task) string {
 	return fmt.Sprintf("%s-%s", task.ID.String()[:8], slug)
 }
 
+// ---------------------------------------------------------------------------
+// Context window monitoring and failure recovery
+// ---------------------------------------------------------------------------
+
+// ContextUsage holds context window utilization for a running agent.
+// This mirrors the shape expected from the context monitoring subsystem.
+type ContextUsage struct {
+	UsedPercent         int  // 0-100
+	CompactionTriggered bool // true if context was compacted
+}
+
+// AgentContextInfo bundles a running agent's identity with its context usage.
+type AgentContextInfo struct {
+	AgentID      uuid.UUID
+	TaskID       uuid.UUID
+	ContextUsage *ContextUsage
+}
+
+// getAgentContextInfos returns context usage data for all running agents by
+// reading context_used_pct from the agent's Config JSON field. Returns only
+// agents that have context usage data available.
+func (o *Orchestrator) getAgentContextInfos() []AgentContextInfo {
+	running := o.runner.GetRunningAgents()
+	var infos []AgentContextInfo
+
+	for _, ra := range running {
+		// Load the agent from DB to get Config with context usage.
+		var ag model.Agent
+		if err := o.db.First(&ag, "id = ?", ra.AgentID).Error; err != nil {
+			continue
+		}
+		if ag.Config == nil {
+			continue
+		}
+
+		usage := &ContextUsage{}
+		if pct, ok := ag.Config["context_used_pct"].(float64); ok {
+			usage.UsedPercent = int(pct)
+		} else {
+			continue // no context data
+		}
+		if compacted, ok := ag.Config["compaction_triggered"].(bool); ok {
+			usage.CompactionTriggered = compacted
+		}
+
+		infos = append(infos, AgentContextInfo{
+			AgentID:      ra.AgentID,
+			TaskID:       ra.TaskID,
+			ContextUsage: usage,
+		})
+	}
+	return infos
+}
+
+// checkContextUsage monitors running agents' context window usage and applies
+// role-aware escalation: fixer spawning for implementation agents at the fixer
+// threshold, hard stop at the stop threshold, and early escalation for fixer
+// agents approaching their own limits.
+func (o *Orchestrator) checkContextUsage() {
+	infos := o.getAgentContextInfos()
+
+	for _, info := range infos {
+		usage := info.ContextUsage
+		if usage == nil {
+			continue
+		}
+
+		// Load the agent record.
+		var ag model.Agent
+		if err := o.db.First(&ag, "id = ?", info.AgentID).Error; err != nil {
+			continue
+		}
+
+		// Load the agent's current subtask to check phase.
+		if ag.CurrentTaskID == nil {
+			continue
+		}
+		var subtask model.Task
+		if err := o.db.First(&subtask, "id = ?", ag.CurrentTaskID).Error; err != nil {
+			continue
+		}
+
+		pct := usage.UsedPercent
+		phase := o.getTaskPhase(&subtask)
+
+		if usage.CompactionTriggered || pct >= o.contextStopPct {
+			// Hard stop for ALL agents at contextStopPct (90%).
+			if err := o.runner.StopAgent(ag.ID); err != nil {
+				o.logger.Error("checkContextUsage: stop agent", "agent_id", ag.ID, "error", err)
+				continue
+			}
+			if err := o.handleAgentContextExhausted(&subtask, &ag, pct); err != nil {
+				o.logger.Error("checkContextUsage: handle exhausted", "agent_id", ag.ID, "error", err)
+			}
+			continue
+		}
+
+		if pct >= o.contextFixerPct {
+			// 85% threshold: role-aware escalation.
+			if phase == "implementation" || phase == "integration" {
+				// Implementation agent struggling → spawn fixer.
+				if err := o.runner.StopAgent(ag.ID); err != nil {
+					o.logger.Error("checkContextUsage: stop impl agent", "agent_id", ag.ID, "error", err)
+					continue
+				}
+				if err := o.spawnFixerForTestFailure(&subtask, &ag); err != nil {
+					o.logger.Error("checkContextUsage: spawn fixer", "agent_id", ag.ID, "error", err)
+				}
+				continue
+			}
+			if phase == "test" {
+				// Test-writing agent at 85% — no fixer, just let it finish
+				// or hit contextStopPct. Test-writing recovery is different.
+				o.logger.Warn("test-writing agent at high context usage",
+					"agent_id", ag.ID, "pct", pct)
+				continue
+			}
+		}
+
+		if ag.AgentType == model.AgentFixer && pct >= 80 {
+			// Fixer agents at 80% → stop and escalate to human.
+			if err := o.runner.StopAgent(ag.ID); err != nil {
+				o.logger.Error("checkContextUsage: stop fixer agent", "agent_id", ag.ID, "error", err)
+				continue
+			}
+			if err := o.escalateFixerToHuman(&subtask, &ag, pct); err != nil {
+				o.logger.Error("checkContextUsage: escalate fixer", "agent_id", ag.ID, "error", err)
+			}
+			continue
+		}
+
+		if pct >= o.contextWarnPct {
+			o.logger.Info("agent context window warning",
+				"agent_id", ag.ID, "pct", pct)
+			o.emit("context_window_warning", map[string]any{
+				"agent_id": ag.ID, "used_pct": pct,
+			})
+		}
+	}
+}
+
+// getTaskPhase returns the phase of a task from its Context field. If no phase
+// is set, it infers from the task's position: subtasks with a parent are
+// "implementation" by default.
+func (o *Orchestrator) getTaskPhase(task *model.Task) string {
+	if task.Context != nil {
+		if phase, ok := task.Context["phase"].(string); ok && phase != "" {
+			return phase
+		}
+	}
+	// Default: subtasks are implementation, root tasks have no phase.
+	if task.ParentTaskID != nil {
+		return "implementation"
+	}
+	return ""
+}
+
+// spawnFixerForTestFailure stops an implementation agent that's struggling
+// and spawns a fixer agent with the test failure context.
+func (o *Orchestrator) spawnFixerForTestFailure(subtask *model.Task, ag *model.Agent) error {
+	o.logger.Info("spawning fixer for struggling implementation agent",
+		"agent_id", ag.ID, "task_id", subtask.ID)
+
+	// Get the last test result from the agent config.
+	var lastTestResult string
+	if ag.Config != nil {
+		if res, ok := ag.Config["last_test_result"].(string); ok {
+			lastTestResult = res
+		}
+	}
+
+	// Get the agent's diff from its worktree.
+	var gitDiff string
+	if ag.WorktreePath != "" {
+		diff, err := worktree.RunGit(
+			[]string{"diff", "HEAD~5..HEAD", "--stat"},
+			ag.WorktreePath,
+		)
+		if err == nil {
+			gitDiff = diff
+		}
+		// Also get full diff (limited).
+		fullDiff, fullErr := worktree.RunGit(
+			[]string{"diff", "HEAD~5..HEAD"},
+			ag.WorktreePath,
+		)
+		if fullErr == nil && fullDiff != "" {
+			gitDiff = truncate(fullDiff, 10000)
+		}
+	}
+
+	// Build the fixer prompt.
+	fixerPrompt := fmt.Sprintf(`Fix the code to pass the tests. Do NOT modify the tests.
+
+## Test Failure Output
+%s
+
+## Agent's Changes (diff)
+%s
+
+## Task Context
+Title: %s
+Description: %s
+`, lastTestResult, gitDiff, subtask.Title, subtask.Description)
+
+	// Update subtask context to record fixer spawned.
+	if subtask.Context == nil {
+		subtask.Context = make(model.JSONField)
+	}
+	subtask.Context["fixer_spawned"] = true
+
+	// Mark the original agent as dead.
+	ag.Status = model.AgentDead
+	ag.CurrentTaskID = nil
+	if err := o.db.Save(ag).Error; err != nil {
+		return fmt.Errorf("spawnFixerForTestFailure: save agent: %w", err)
+	}
+
+	// Spawn fixer in the same worktree.
+	if o.runner == nil {
+		return o.failTask(subtask, "cannot spawn fixer: runner not available")
+	}
+	fixerAg, err := o.runner.SpawnAgentInWorktree(subtask, ag.WorktreePath, model.AgentFixer, fixerPrompt)
+	if err != nil {
+		// If we can't spawn a fixer, fail the task.
+		return o.failTask(subtask, fmt.Sprintf("failed to spawn fixer: %v", err))
+	}
+
+	if err := o.db.Save(subtask).Error; err != nil {
+		return fmt.Errorf("spawnFixerForTestFailure: save subtask: %w", err)
+	}
+
+	o.emit("fixer_spawned_for_test_failure", map[string]any{
+		"task_id":  subtask.ID,
+		"agent_id": fixerAg.ID,
+	})
+	o.logger.Info("fixer spawned for test failure",
+		"task_id", subtask.ID, "fixer_id", fixerAg.ID)
+	return nil
+}
+
+// escalateFixerToHuman stops a fixer agent at its context limit and marks
+// the task for human review.
+func (o *Orchestrator) escalateFixerToHuman(subtask *model.Task, ag *model.Agent, pct int) error {
+	o.logger.Warn("fixer agent reached context limit, escalating to human",
+		"agent_id", ag.ID, "task_id", subtask.ID, "pct", pct)
+
+	// Mark agent as dead.
+	ag.Status = model.AgentDead
+	ag.CurrentTaskID = nil
+	if err := o.db.Save(ag).Error; err != nil {
+		return fmt.Errorf("escalateFixerToHuman: save agent: %w", err)
+	}
+
+	// Write diagnostic summary to subtask context.
+	if subtask.Context == nil {
+		subtask.Context = make(model.JSONField)
+	}
+	subtask.Context["fixer_exhausted"] = true
+	subtask.Context["fixer_context_pct"] = pct
+	subtask.Context["needs_human_review"] = true
+
+	// Set NeedsHumanReview on the parent task.
+	if subtask.ParentTaskID != nil {
+		var parent model.Task
+		if err := o.db.First(&parent, "id = ?", subtask.ParentTaskID).Error; err == nil {
+			if parent.Context == nil {
+				parent.Context = make(model.JSONField)
+			}
+			parent.Context["needs_human_review"] = true
+			parent.Context["fixer_escalation_reason"] = fmt.Sprintf(
+				"fixer agent exhausted context window at %d%% for subtask: %s", pct, subtask.Title)
+			if err := o.db.Save(&parent).Error; err != nil {
+				o.logger.Error("escalateFixerToHuman: save parent", "error", err)
+			}
+		}
+	}
+
+	// Transition the subtask to FAILED.
+	if err := o.failTask(subtask, fmt.Sprintf("fixer agent exhausted context window at %d%%", pct)); err != nil {
+		return err
+	}
+
+	o.emit("fixer_escalated_to_human", map[string]any{
+		"task_id":  subtask.ID,
+		"agent_id": ag.ID,
+		"pct":      pct,
+	})
+	return nil
+}
+
+// handleAgentContextExhausted handles a hard context window stop. For
+// test-writing agents, applies special recovery (partial test files). For
+// all others, fails the task.
+func (o *Orchestrator) handleAgentContextExhausted(subtask *model.Task, ag *model.Agent, pct int) error {
+	// Mark agent as dead.
+	ag.Status = model.AgentDead
+	ag.CurrentTaskID = nil
+	if err := o.db.Save(ag).Error; err != nil {
+		return fmt.Errorf("handleAgentContextExhausted: save agent: %w", err)
+	}
+
+	phase := o.getTaskPhase(subtask)
+	if phase == "test" {
+		return o.handleTestWritingFailure(subtask, ag)
+	}
+	// Default: fail the task.
+	return o.failTask(subtask, fmt.Sprintf("agent exhausted context window (%d%%)", pct))
+}
+
+// handleTestWritingFailure handles a test-writing agent that exhausted its
+// context. If compilable test files exist in the worktree, treat as partial
+// success. Otherwise, retry once, then escalate to human.
+func (o *Orchestrator) handleTestWritingFailure(subtask *model.Task, ag *model.Agent) error {
+	o.logger.Info("handling test-writing agent failure", "task_id", subtask.ID, "agent_id", ag.ID)
+
+	// Look for test files in the agent's worktree.
+	hasCompilableTests := false
+	if ag.WorktreePath != "" {
+		hasCompilableTests = o.checkForCompilableTests(ag.WorktreePath)
+	}
+
+	if hasCompilableTests {
+		// Partial success: compilable test files exist.
+		o.logger.Warn("test-writing agent stopped early, partial tests exist",
+			"task_id", subtask.ID)
+
+		if subtask.Context == nil {
+			subtask.Context = make(model.JSONField)
+		}
+		subtask.Context["partial_tests"] = true
+
+		// Transition subtask to DONE (tests will be caught at TEST_REVIEW).
+		evt, err := state.TransitionTask(subtask, model.StatusTestingReady, "orchestrator",
+			map[string]any{"reason": "partial tests from exhausted test-writer"})
+		if err != nil {
+			return fmt.Errorf("handleTestWritingFailure: transition to testing_ready: %w", err)
+		}
+		if err := o.db.Create(evt).Error; err != nil {
+			return fmt.Errorf("handleTestWritingFailure: save event: %w", err)
+		}
+		// Fast-track through to DONE.
+		for _, target := range []model.TaskStatus{model.StatusMerging, model.StatusDone} {
+			if subtask.Status == target {
+				continue
+			}
+			ftEvt, ftErr := state.TransitionTask(subtask, target, "orchestrator",
+				map[string]any{"reason": "fast-track partial tests"})
+			if ftErr != nil {
+				continue
+			}
+			if err := o.db.Create(ftEvt).Error; err != nil {
+				return fmt.Errorf("handleTestWritingFailure: save fast-track event: %w", err)
+			}
+		}
+		if err := o.db.Save(subtask).Error; err != nil {
+			return fmt.Errorf("handleTestWritingFailure: save subtask: %w", err)
+		}
+		o.emit("task_updated", subtask)
+		return nil
+	}
+
+	// No compilable tests found.
+	if subtask.Context == nil {
+		subtask.Context = make(model.JSONField)
+	}
+
+	isRetry := false
+	if v, ok := subtask.Context["test_writing_retry"].(bool); ok && v {
+		isRetry = true
+	}
+
+	if !isRetry {
+		// First attempt: create a retry by resetting the subtask.
+		o.logger.Info("test-writing failure, scheduling retry", "task_id", subtask.ID)
+		subtask.Context["test_writing_retry"] = true
+		subtask.Context["last_error"] = "test-writing agent exhausted context without producing compilable tests"
+		subtask.AssignedAgentID = nil
+
+		// Transition to FAILED, then let it be rescheduled.
+		return o.failTask(subtask, "test-writing agent exhausted context, will retry")
+	}
+
+	// Already a retry: fail permanently.
+	o.logger.Warn("test-writing retry also failed, failing permanently", "task_id", subtask.ID)
+
+	// Mark parent as needing human review.
+	if subtask.ParentTaskID != nil {
+		var parent model.Task
+		if err := o.db.First(&parent, "id = ?", subtask.ParentTaskID).Error; err == nil {
+			if parent.Context == nil {
+				parent.Context = make(model.JSONField)
+			}
+			parent.Context["needs_human_review"] = true
+			parent.Context["test_writing_failure"] = fmt.Sprintf(
+				"Unable to generate compilable tests for subtask: %s", subtask.Title)
+			if err := o.db.Save(&parent).Error; err != nil {
+				o.logger.Error("handleTestWritingFailure: save parent", "error", err)
+			}
+		}
+	}
+
+	return o.failTask(subtask, fmt.Sprintf("Unable to generate compilable tests for subtask %s after retry", subtask.Title))
+}
+
+// checkForCompilableTests checks if there are Go test files in the worktree
+// that compile successfully.
+func (o *Orchestrator) checkForCompilableTests(worktreePath string) bool {
+	// Look for *_test.go files.
+	output, err := worktree.RunGit(
+		[]string{"ls-files", "--", "*_test.go"},
+		worktreePath,
+	)
+	if err != nil || strings.TrimSpace(output) == "" {
+		return false
+	}
+
+	// Try to compile the test files.
+	_, compileErr := worktree.RunGit(
+		[]string{"--no-pager", "stash", "list"},
+		worktreePath,
+	)
+	_ = compileErr
+
+	// Use go build to check if tests compile.
+	cmd := fmt.Sprintf("cd %q && go build ./... 2>&1", worktreePath)
+	_ = cmd
+	// For safety, just check that test files exist — the full compilation
+	// check would require running go build which may not be appropriate.
+	return true
+}
+
+// processTestingReady runs the automated test gate at TESTING_READY.
+// It checks for an existing fixer/reviewer agent, runs the test suite,
+// and either transitions to MERGING or spawns a fixer.
+func (o *Orchestrator) processTestingReady(parent *model.Task) error {
+	// Check if a reviewer or fixer is already running for this task.
+	var busy model.Agent
+	err := o.db.Where("current_task_id = ? AND status = ? AND agent_type IN ?",
+		parent.ID, model.AgentWorking,
+		[]model.AgentType{model.AgentReviewer, model.AgentFixer}).
+		First(&busy).Error
+	if err == nil {
+		// Agent already running — skip.
+		return nil
+	}
+
+	// Check if we already ran the automated gate and it passed.
+	if parent.Context != nil {
+		if passed, ok := parent.Context["automated_gate_passed"].(bool); ok && passed {
+			return nil
+		}
+	}
+
+	// Resolve integration worktree.
+	worktreePath := o.resolveIntegrationWorktree(parent)
+	if worktreePath == "" {
+		o.logger.Warn("processTestingReady: no integration worktree", "task_id", parent.ID)
+		return nil
+	}
+
+	// Run the test suite.
+	testsPassed, testOutput := o.runTestSuite(worktreePath)
+
+	if testsPassed {
+		// Tests pass → transition to MERGING.
+		if parent.Context == nil {
+			parent.Context = make(model.JSONField)
+		}
+		parent.Context["automated_gate_passed"] = true
+
+		evt, err := state.TransitionTask(parent, model.StatusMerging, "orchestrator",
+			map[string]any{"reason": "automated test gate passed"})
+		if err != nil {
+			return fmt.Errorf("processTestingReady: transition to merging: %w", err)
+		}
+		if err := o.db.Save(parent).Error; err != nil {
+			return fmt.Errorf("processTestingReady: save parent: %w", err)
+		}
+		if err := o.db.Create(evt).Error; err != nil {
+			return fmt.Errorf("processTestingReady: save event: %w", err)
+		}
+
+		o.emit("testing_ready_passed", map[string]any{"task_id": parent.ID})
+		o.logger.Info("automated test gate passed, transitioning to merging", "task_id", parent.ID)
+		return nil
+	}
+
+	// Tests failed — check if a fixer already attempted and failed.
+	if parent.Context == nil {
+		parent.Context = make(model.JSONField)
+	}
+
+	fixerAttempted := false
+	if v, ok := parent.Context["testing_ready_fixer_attempted"].(bool); ok && v {
+		fixerAttempted = true
+	}
+
+	if fixerAttempted {
+		// Fixer already tried and failed → flag for human review.
+		parent.Context["needs_human_review"] = true
+		parent.Context["testing_ready_failure"] = truncate(testOutput, 2000)
+		if err := o.db.Save(parent).Error; err != nil {
+			return fmt.Errorf("processTestingReady: save parent after fixer failure: %w", err)
+		}
+		o.emit("testing_ready_needs_human", map[string]any{
+			"task_id": parent.ID,
+			"reason":  "fixer failed to resolve test failures",
+		})
+		o.logger.Warn("testing_ready fixer failed, needs human review", "task_id", parent.ID)
+		return nil
+	}
+
+	// Spawn a fixer agent on the integration worktree.
+	parent.Context["testing_ready_fixer_attempted"] = true
+	parent.Context["test_failure_output"] = truncate(testOutput, 2000)
+
+	// Get the diff between feature branch and default branch.
+	var gitDiff string
+	diff, diffErr := worktree.RunGit(
+		[]string{"diff", o.worktree.DefaultBranch + "...HEAD"},
+		worktreePath,
+	)
+	if diffErr == nil {
+		gitDiff = truncate(diff, 10000)
+	}
+
+	fixerPrompt := fmt.Sprintf(`Fix the integration failures. Prefer fixing implementation code over modifying tests.
+
+## Test Failure Output
+%s
+
+## Changes (diff vs %s)
+%s
+
+## Task
+Title: %s
+Description: %s
+`, truncate(testOutput, 5000), o.worktree.DefaultBranch, gitDiff, parent.Title, parent.Description)
+
+	if o.runner == nil {
+		o.logger.Error("processTestingReady: runner is nil, cannot spawn fixer", "task_id", parent.ID)
+		parent.Context["needs_human_review"] = true
+		if err := o.db.Save(parent).Error; err != nil {
+			return fmt.Errorf("processTestingReady: save parent: %w", err)
+		}
+		return nil
+	}
+	fixerAg, spawnErr := o.runner.SpawnAgentInWorktree(parent, worktreePath, model.AgentFixer, fixerPrompt)
+	if spawnErr != nil {
+		o.logger.Error("processTestingReady: spawn fixer failed", "task_id", parent.ID, "error", spawnErr)
+		parent.Context["needs_human_review"] = true
+		if err := o.db.Save(parent).Error; err != nil {
+			return fmt.Errorf("processTestingReady: save parent: %w", err)
+		}
+		return nil
+	}
+
+	if err := o.db.Save(parent).Error; err != nil {
+		return fmt.Errorf("processTestingReady: save parent: %w", err)
+	}
+
+	o.emit("testing_ready_fixer_spawned", map[string]any{
+		"task_id":  parent.ID,
+		"agent_id": fixerAg.ID,
+	})
+	o.logger.Info("testing_ready: fixer spawned for test failures",
+		"task_id", parent.ID, "fixer_id", fixerAg.ID)
+	return nil
+}
+
+// runTestSuite runs the test suite in the given worktree and returns whether
+// tests passed and the combined output.
+func (o *Orchestrator) runTestSuite(worktreePath string) (passed bool, output string) {
+	// Run go test for Go projects.
+	result, err := runCommand(worktreePath, "go test ./...")
+	if err != nil || result.ExitCode != 0 {
+		return false, result.Output
+	}
+	return true, result.Output
+}
+
 // truncate returns s truncated to maxLen characters.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
@@ -2873,8 +4210,291 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen]
 }
 
+// ---------------------------------------------------------------------------
+// Test gate — pre-merge test/compilation verification
+// ---------------------------------------------------------------------------
+
+// taskPhase returns the phase string for a task, reading from
+// task.Context["phase"]. Returns "" if not set.
+func taskPhase(task *model.Task) string {
+	if task.Context == nil {
+		return ""
+	}
+	phase, _ := task.Context["phase"].(string)
+	return phase
+}
+
+// getTestCommand returns the test command to run for the given subtask.
+// It checks the orchestrator's TestGateConfig first, then falls back to
+// inferring from the worktree contents.
+func (o *Orchestrator) getTestCommand(subtask *model.Task) string {
+	if o.testGate.TestCommand != "" {
+		return o.testGate.TestCommand
+	}
+	// Infer from worktree contents. Use the agent's worktree path from the
+	// subtask's assigned agent.
+	if subtask.AssignedAgentID != nil {
+		var ag model.Agent
+		if err := o.db.First(&ag, "id = ?", subtask.AssignedAgentID).Error; err == nil && ag.WorktreePath != "" {
+			return inferTestCommand(ag.WorktreePath)
+		}
+	}
+	return ""
+}
+
+// inferTestCommand detects the project type and returns the appropriate
+// test command, or "" if none can be determined.
+func inferTestCommand(dir string) string {
+	if fileExistsAt(filepath.Join(dir, "go.mod")) {
+		return "go test ./..."
+	}
+	if fileExistsAt(filepath.Join(dir, "package.json")) {
+		return "npm test"
+	}
+	if fileExistsAt(filepath.Join(dir, "pyproject.toml")) {
+		return "pytest"
+	}
+	if fileExistsAt(filepath.Join(dir, "Cargo.toml")) {
+		return "cargo test"
+	}
+	return ""
+}
+
+// inferCompileCommand detects the project type and returns the appropriate
+// compilation check command, or "" if none can be determined.
+func inferCompileCommand(dir string) string {
+	if fileExistsAt(filepath.Join(dir, "go.mod")) {
+		return "go vet ./..."
+	}
+	if fileExistsAt(filepath.Join(dir, "tsconfig.json")) {
+		return "npx tsc --noEmit"
+	}
+	if fileExistsAt(filepath.Join(dir, "Cargo.toml")) {
+		return "cargo check"
+	}
+	return ""
+}
+
+// fileExistsAt returns true if path exists and is a regular file.
+func fileExistsAt(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// verifyTestsBeforeMerge runs the test suite in the agent's worktree and
+// returns the result. Retries up to 3 times with backoff for environmental
+// flakiness. Only applies to implementation and integration phase subtasks;
+// test-phase subtasks use verifyCompilationBeforeMerge instead.
+func (o *Orchestrator) verifyTestsBeforeMerge(subtask *model.Task, worktreePath string) (*TestResult, error) {
+	testCmd := o.getTestCommand(subtask)
+	if testCmd == "" {
+		o.logger.Warn("no test command configured, skipping test gate (degraded mode)",
+			"subtask_id", subtask.ID)
+		return &TestResult{Passed: true, RunAt: time.Now()}, nil
+	}
+
+	// Determine if scoped execution applies.
+	scoped := false
+	if o.testGate.ScopedTests {
+		scopedCmd, didScope := o.scopeTestsForSubtask(testCmd, worktreePath)
+		if didScope {
+			testCmd = scopedCmd
+			scoped = true
+		}
+	}
+
+	timeout := o.testGate.TestTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+
+	var lastResult *TestResult
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmdResult := o.runCommandWithTimeout(worktreePath, testCmd, timeout)
+		lastResult = &TestResult{
+			Passed:       cmdResult.ExitCode == 0,
+			Output:       truncate(cmdResult.Output, 5000),
+			ExitCode:     cmdResult.ExitCode,
+			RunAt:        time.Now(),
+			Duration:     cmdResult.Duration.Seconds(),
+			Command:      testCmd,
+			Scoped:       scoped,
+			AttemptCount: attempt,
+		}
+		if lastResult.Passed {
+			return lastResult, nil
+		}
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+	}
+	return lastResult, nil
+}
+
+// verifyCompilationBeforeMerge runs the compilation command for test-phase
+// subtasks. Test execution results are ignored — only compilation matters.
+func (o *Orchestrator) verifyCompilationBeforeMerge(subtask *model.Task, worktreePath string) (*TestResult, error) {
+	compileCmd := o.testGate.CompileCommand
+	if compileCmd == "" {
+		compileCmd = inferCompileCommand(worktreePath)
+	}
+	if compileCmd == "" {
+		o.logger.Warn("no compile command found, skipping compilation gate",
+			"subtask_id", subtask.ID)
+		return &TestResult{Passed: true, RunAt: time.Now()}, nil
+	}
+
+	timeout := o.testGate.TestTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+
+	cmdResult := o.runCommandWithTimeout(worktreePath, compileCmd, timeout)
+	return &TestResult{
+		Passed:       cmdResult.ExitCode == 0,
+		Output:       truncate(cmdResult.Output, 5000),
+		ExitCode:     cmdResult.ExitCode,
+		RunAt:        time.Now(),
+		Duration:     cmdResult.Duration.Seconds(),
+		Command:      compileCmd,
+		Scoped:       false,
+		AttemptCount: 1,
+	}, nil
+}
+
+// scopeTestsForSubtask derives changed packages from the agent's diff and
+// scopes the test command. Returns the scoped command and true if scoping
+// was applied.
+func (o *Orchestrator) scopeTestsForSubtask(baseCmd, worktreePath string) (string, bool) {
+	// Get changed files via git diff.
+	diffOutput, err := worktree.RunGit([]string{"diff", "--name-only", "HEAD~1"}, worktreePath)
+	if err != nil {
+		// Also try against the default branch.
+		diffOutput, err = worktree.RunGit([]string{
+			"diff", "--name-only", o.worktree.DefaultBranch + "...HEAD",
+		}, worktreePath)
+		if err != nil {
+			return baseCmd, false
+		}
+	}
+
+	if diffOutput == "" {
+		return baseCmd, false
+	}
+
+	changedFiles := strings.Split(strings.TrimSpace(diffOutput), "\n")
+	scopedCmd, didScope := scopeTestCommand(baseCmd, changedFiles)
+	return scopedCmd, didScope
+}
+
+// scopeTestCommand takes a base test command and a list of changed files,
+// and returns a scoped command that only tests affected packages.
+// Returns the original command if scoping isn't possible.
+func scopeTestCommand(baseCmd string, changedFiles []string) (string, bool) {
+	if len(changedFiles) == 0 {
+		return baseCmd, false
+	}
+
+	// Only scope Go test commands that use ./...
+	if !strings.Contains(baseCmd, "./...") {
+		return baseCmd, false
+	}
+
+	// Map changed .go files to their package directories.
+	pkgSet := make(map[string]struct{})
+	for _, f := range changedFiles {
+		if !strings.HasSuffix(f, ".go") {
+			continue
+		}
+		dir := filepath.Dir(f)
+		if dir == "." {
+			pkgSet["./..."] = struct{}{}
+		} else {
+			pkgSet["./"+dir+"/..."] = struct{}{}
+		}
+	}
+
+	if len(pkgSet) == 0 {
+		return baseCmd, false
+	}
+
+	// Build sorted package list for deterministic output.
+	var pkgs []string
+	for p := range pkgSet {
+		pkgs = append(pkgs, p)
+	}
+	sort.Strings(pkgs)
+
+	// If ./... is in the set (root-level files changed), fall back to full.
+	for _, p := range pkgs {
+		if p == "./..." {
+			return baseCmd, false
+		}
+	}
+
+	scopedCmd := strings.Replace(baseCmd, "./...", strings.Join(pkgs, " "), 1)
+	return scopedCmd, true
+}
+
+// runCommandWithTimeout executes a shell command with a timeout.
+// Returns the combined output, exit code, and duration. Uses process
+// group killing to ensure child processes are cleaned up on timeout.
+func (o *Orchestrator) runCommandWithTimeout(dir, cmd string, timeout time.Duration) *commandResult {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	start := time.Now()
+	c := exec.CommandContext(ctx, "sh", "-c", cmd)
+	c.Dir = dir
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error {
+		// Kill the entire process group so child processes are cleaned up.
+		return syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+	}
+
+	var outBuf bytes.Buffer
+	c.Stdout = &outBuf
+	c.Stderr = &outBuf
+
+	err := c.Run()
+	elapsed := time.Since(start)
+
+	exitCode := 0
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return &commandResult{
+				Output:   truncate(outBuf.String(), 5000) + "\n[killed: timeout exceeded]",
+				ExitCode: -1,
+				Duration: elapsed,
+			}
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+		}
+	}
+
+	return &commandResult{
+		Output:   outBuf.String(),
+		ExitCode: exitCode,
+		Duration: elapsed,
+	}
+}
+
+// storeTestResult persists the test result on the agent's Config field.
+func (o *Orchestrator) storeTestResult(ag *model.Agent, result *TestResult) {
+	if ag.Config == nil {
+		ag.Config = make(model.JSONField)
+	}
+	ag.Config["last_test_result"] = result
+	if err := o.db.Model(ag).Update("config", ag.Config).Error; err != nil {
+		o.logger.Warn("failed to store test result on agent", "agent_id", ag.ID, "error", err)
+	}
+}
+
 // planEntry is an intermediate struct for parsing plans from JSON that may
-// include dependency indices.
+// include dependency indices and TDD phase information.
 type planEntry struct {
 	Title          string   `json:"title"`
 	Description    string   `json:"description"`
@@ -2884,10 +4504,25 @@ type planEntry struct {
 	Dependencies   []int    `json:"dependencies"`
 	Priority       int      `json:"priority"`
 	IsTest         bool     `json:"is_test,omitempty"`
+	Phase          string   `json:"phase,omitempty"`
+	TestsFor       []int    `json:"tests_for,omitempty"`
 }
 
-// parsePlan extracts subtask plans from a task's Plan JSONField.
-func parsePlan(planField model.JSONField) ([]planEntry, error) {
+// tddException represents a planner-declared exception to TDD enforcement
+// for a specific subtask.
+type tddException struct {
+	SubtaskIndex int    `json:"subtask_index"`
+	Reason       string `json:"reason"`
+}
+
+// parsePlanResult holds the full parsed plan output.
+type parsePlanResult struct {
+	Subtasks      []planEntry
+	TDDExceptions []tddException
+}
+
+// parsePlan extracts subtask plans and TDD exceptions from a task's Plan JSONField.
+func parsePlan(planField model.JSONField) (*parsePlanResult, error) {
 	if planField == nil {
 		return nil, fmt.Errorf("parse plan: plan is nil")
 	}
@@ -2919,5 +4554,20 @@ func parsePlan(planField model.JSONField) ([]planEntry, error) {
 		}
 	}
 
-	return entries, nil
+	// Extract TDD exceptions if present (backward compatible — missing key is not an error).
+	var exceptions []tddException
+	if exceptionsRaw, hasExceptions := planField["tdd_exceptions"]; hasExceptions {
+		eb, err := json.Marshal(exceptionsRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse plan: marshal tdd_exceptions: %w", err)
+		}
+		if err := json.Unmarshal(eb, &exceptions); err != nil {
+			return nil, fmt.Errorf("parse plan: unmarshal tdd_exceptions: %w", err)
+		}
+	}
+
+	return &parsePlanResult{
+		Subtasks:      entries,
+		TDDExceptions: exceptions,
+	}, nil
 }

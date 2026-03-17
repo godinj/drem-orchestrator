@@ -1,6 +1,7 @@
 package model
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/google/uuid"
@@ -21,6 +22,26 @@ func testDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(&Project{}, &Task{}, &Agent{}, &TaskEvent{}, &Memory{}, &TaskComment{}); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
+	// Register UUID callback (mirrors db.registerUUIDCallback).
+	db.Callback().Create().Before("gorm:create").Register("generate_uuid", func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Dest == nil {
+			return
+		}
+		val := reflect.ValueOf(tx.Statement.Dest)
+		if val.Kind() == reflect.Ptr {
+			val = val.Elem()
+		}
+		if val.Kind() != reflect.Struct {
+			return
+		}
+		idField := val.FieldByName("ID")
+		if !idField.IsValid() || idField.Type() != reflect.TypeOf(uuid.UUID{}) {
+			return
+		}
+		if idField.Interface().(uuid.UUID) == uuid.Nil {
+			idField.Set(reflect.ValueOf(uuid.New()))
+		}
+	})
 	return db
 }
 

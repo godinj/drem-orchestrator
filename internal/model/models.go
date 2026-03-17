@@ -37,15 +37,25 @@ type Task struct {
 	TestFeedback    string
 	WorktreeBranch  string
 	PRUrl           string
-	Context         JSONField `gorm:"type:text"`
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
-	Project         Project       `gorm:"foreignKey:ProjectID"`
-	ParentTask      *Task         `gorm:"foreignKey:ParentTaskID"`
-	Subtasks        []Task        `gorm:"foreignKey:ParentTaskID"`
-	AssignedAgent   *Agent        `gorm:"foreignKey:AssignedAgentID"`
-	Events          []TaskEvent   `gorm:"foreignKey:TaskID"`
-	Comments        []TaskComment `gorm:"foreignKey:TaskID"`
+
+	// TDD fields (used for subtasks)
+	Phase    string    `gorm:"default:''"` // "test", "implementation", "integration", or ""
+	TestsFor JSONArray `gorm:"type:text"`  // indices of impl subtasks this test covers (test-phase only)
+
+	// TDD fields (used for parent tasks)
+	TDDExceptions    JSONField `gorm:"type:text"`     // planner-declared TDD exceptions
+	NeedsHumanReview bool      `gorm:"default:false"` // set when fixer escalates to human
+
+	Context JSONField `gorm:"type:text"`
+
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+	Project       Project       `gorm:"foreignKey:ProjectID"`
+	ParentTask    *Task         `gorm:"foreignKey:ParentTaskID"`
+	Subtasks      []Task        `gorm:"foreignKey:ParentTaskID"`
+	AssignedAgent *Agent        `gorm:"foreignKey:AssignedAgentID"`
+	Events        []TaskEvent   `gorm:"foreignKey:TaskID"`
+	Comments      []TaskComment `gorm:"foreignKey:TaskID"`
 }
 
 // Agent represents a Claude Code agent working on tasks.
@@ -106,4 +116,6 @@ type SubtaskPlan struct {
 	Description    string   `json:"description"`
 	AgentType      string   `json:"agent_type"`
 	EstimatedFiles []string `json:"estimated_files"`
+	Phase          string   `json:"phase,omitempty"`
+	TestsFor       []int    `json:"tests_for,omitempty"`
 }

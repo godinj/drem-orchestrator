@@ -54,6 +54,24 @@ func setupTestRepoWithMainBranch(t *testing.T) string {
 	return bareRepoPath
 }
 
+// initBareRepo creates a temporary bare git repo with an initial commit on "main".
+// Wraps testutil helpers for compatibility with existing test files.
+func initBareRepo(t *testing.T) (bareRepoPath string, cleanup func()) {
+	t.Helper()
+	bareRepoPath = setupTestRepoWithMainBranch(t)
+	return bareRepoPath, func() {}
+}
+
+// runGitCmd runs a git command in the given directory and returns the output.
+func runGitCmd(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, err := testutil.RunGit(args, dir)
+	if err != nil {
+		t.Fatalf("git %v in %s failed: %v", args, dir, err)
+	}
+	return out
+}
+
 // createFeatureWorktree creates a feature worktree in the bare repo.
 func createFeatureWorktree(t *testing.T, bareRepoPath, featureName string) string {
 	t.Helper()

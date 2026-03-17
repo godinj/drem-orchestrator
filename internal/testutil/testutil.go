@@ -49,6 +49,29 @@ func NewTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// NewSharedTestDB creates an in-memory SQLite database with cache=shared.
+// Use this for tests that need a single shared in-memory DB.
+func NewSharedTestDB(t *testing.T) *gorm.DB {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	if err := db.AutoMigrate(
+		&model.Project{},
+		&model.Task{},
+		&model.Agent{},
+		&model.TaskEvent{},
+		&model.Memory{},
+		&model.TaskComment{},
+	); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	return db
+}
+
 // ---------------------------------------------------------------------------
 // Git helpers (use os/exec directly to avoid import cycles with worktree)
 // ---------------------------------------------------------------------------

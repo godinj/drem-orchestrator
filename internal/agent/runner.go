@@ -8,6 +8,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -19,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/tmux"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
@@ -56,16 +58,18 @@ type RunningAgent struct {
 	Branch       string
 	TmuxSession  string
 	StartedAt    time.Time
+	ContextUsage *ctxmon.Usage      // latest context window usage; nil until first read
 	cancel       context.CancelFunc // cancels the monitor and heartbeat goroutines
 }
 
 // Runner manages Claude Code agent lifecycles via tmux.
 type Runner struct {
-	db            *gorm.DB
-	tmux          *tmux.Manager
-	worktree      *worktree.Manager
-	claudeBin     string
-	maxConcurrent int
+	db              *gorm.DB
+	tmux            SessionManager
+	tmuxSessionName string // dashboard session name prefix for agent sessions
+	worktree        *worktree.Manager
+	claudeBin       string
+	maxConcurrent   int
 
 	mu          sync.Mutex
 	running     map[uuid.UUID]*RunningAgent
@@ -73,22 +77,28 @@ type Runner struct {
 	semaphore   chan struct{} // buffered channel of size maxConcurrent
 }
 
-// NewRunner creates an agent Runner.
+// NewRunner creates an agent Runner. The tm parameter must implement
+// SessionManager; *tmux.Manager satisfies this interface.
 func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin string, maxConcurrent int) *Runner {
+	var sessionName string
+	if tm != nil {
+		sessionName = tm.SessionName
+	}
 	return &Runner{
-		db:            db,
-		tmux:          tm,
-		worktree:      wt,
-		claudeBin:     claudeBin,
-		maxConcurrent: maxConcurrent,
-		running:       make(map[uuid.UUID]*RunningAgent),
-		completions:   make(chan Completion, maxConcurrent),
-		semaphore:     make(chan struct{}, maxConcurrent),
+		db:              db,
+		tmux:            tm,
+		tmuxSessionName: sessionName,
+		worktree:        wt,
+		claudeBin:       claudeBin,
+		maxConcurrent:   maxConcurrent,
+		running:         make(map[uuid.UUID]*RunningAgent),
+		completions:     make(chan Completion, maxConcurrent),
+		semaphore:       make(chan struct{}, maxConcurrent),
 	}
 }
 
-// agentTypeLabel returns a short human-readable label for an agent type.
-func agentTypeLabel(at model.AgentType) string {
+// AgentTypeLabel returns a human-readable label for the given agent type.
+func AgentTypeLabel(at model.AgentType) string {
 	switch at {
 	case model.AgentPlanner:
 		return "plan"
@@ -105,8 +115,8 @@ func agentTypeLabel(at model.AgentType) string {
 	}
 }
 
-// truncateTitle shortens s to maxLen runes, appending "…" if truncated.
-func truncateTitle(s string, maxLen int) string {
+// TruncateTitle truncates s to maxLen characters, appending "..." if truncated.
+func TruncateTitle(s string, maxLen int) string {
 	runes := []rune(s)
 	if len(runes) <= maxLen {
 		return s
@@ -114,9 +124,8 @@ func truncateTitle(s string, maxLen int) string {
 	return string(runes[:maxLen-1]) + "…"
 }
 
-// sanitizeSessionName replaces tmux-illegal characters ("." and ":") with "-",
-// preserving "/" which is used as a tree separator.
-func sanitizeSessionName(s string) string {
+// SanitizeSessionName removes characters not valid in tmux session names.
+func SanitizeSessionName(s string) string {
 	s = strings.ReplaceAll(s, ".", "-")
 	s = strings.ReplaceAll(s, ":", "-")
 	return s
@@ -139,34 +148,35 @@ func (r *Runner) loadParentTitle(task *model.Task) string {
 // show "code - <parent> > <subtask>". The tmux session nests under the
 // dashboard via "/" separator.
 func (r *Runner) buildAgentNames(task *model.Task, agentType model.AgentType, agentID uuid.UUID) (name, session string) {
-	label := agentTypeLabel(agentType)
+	label := AgentTypeLabel(agentType)
 	shortID := agentID.String()[:shortIDLen]
 
 	if agentType == model.AgentPlanner {
 		title := strings.ReplaceAll(task.Title, "/", "-")
-		title = truncateTitle(title, maxDisplayNameLen)
+		title = TruncateTitle(title, maxDisplayNameLen)
 		name = fmt.Sprintf("%s - %s", label, title)
 	} else {
 		parentTitle := strings.ReplaceAll(r.loadParentTitle(task), "/", "-")
-		parentTitle = truncateTitle(parentTitle, maxDisplayNameLen)
+		parentTitle = TruncateTitle(parentTitle, maxDisplayNameLen)
 		subtaskTitle := strings.ReplaceAll(task.Title, "/", "-")
-		subtaskTitle = truncateTitle(subtaskTitle, maxDisplayNameLen)
+		subtaskTitle = TruncateTitle(subtaskTitle, maxDisplayNameLen)
 		name = fmt.Sprintf("%s - %s > %s", label, parentTitle, subtaskTitle)
 	}
 
-	session = sanitizeSessionName(fmt.Sprintf("%s/%s %s", r.tmux.SessionName, name, shortID))
+	session = SanitizeSessionName(fmt.Sprintf("%s/%s %s", r.tmuxSessionName, name, shortID))
 	return name, session
 }
 
 // TmuxSessionName returns the dashboard tmux session name used as a namespace
 // prefix for agent and supervisor sessions.
 func (r *Runner) TmuxSessionName() string {
-	return r.tmux.SessionName
+	return r.tmuxSessionName
 }
 
-// TmuxManager returns the underlying tmux Manager.
+// TmuxManager returns the underlying tmux Manager. It panics if the
+// SessionManager is not a *tmux.Manager (only possible in test code).
 func (r *Runner) TmuxManager() *tmux.Manager {
-	return r.tmux
+	return r.tmux.(*tmux.Manager)
 }
 
 // ClaudeBin returns the path to the Claude binary.
@@ -285,28 +295,52 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 			len(written), len(prompt))
 	}
 
-	// Write settings.json with an idle_prompt notification hook that creates
-	// a signal file when Claude finishes processing. The orchestrator polls
-	// for this file to detect completion while keeping the TUI alive.
+	// Write the context window status line script.
+	statusScriptPath := filepath.Join(claudeDir, "context-status.sh")
+	statusOutputPath := ctxmon.UsageFilePath(worktreePath)
+	scriptContent := ctxmon.StatusScript(statusOutputPath)
+	if err := os.WriteFile(statusScriptPath, []byte(scriptContent), 0o755); err != nil {
+		return fmt.Errorf("write status script: %w", err)
+	}
+
+	// Build settings.json with idle_prompt notification hook, status line
+	// script, and PreCompact hook for context window monitoring.
 	idleSignal := filepath.Join(claudeDir, "agent-idle")
-	settingsJSON := fmt.Sprintf(`{
-		"hooks": {
-			"Notification": [
-			{
+	compactionSignal := ctxmon.CompactionSignalPath(worktreePath)
+
+	hooks := map[string]any{
+		"Notification": []any{
+			map[string]any{
 				"matcher": "idle_prompt",
-				"hooks": [
-				{
-					"type": "command",
-					"command": "touch %s",
-					"timeout": %d
-				}
-				]
-			}
-			]
-		}
-	}`, idleSignal, idleNotifyTimeoutSecs)
+				"hooks": []any{
+					map[string]any{
+						"type":    "command",
+						"command": fmt.Sprintf("touch %s", idleSignal),
+						"timeout": idleNotifyTimeoutSecs,
+					},
+				},
+			},
+		},
+	}
+	// Merge PreCompact hooks.
+	for k, v := range ctxmon.HooksJSON(compactionSignal) {
+		hooks[k] = v
+	}
+
+	settings := map[string]any{
+		"statusLine": map[string]any{
+			"type":    "command",
+			"command": statusScriptPath,
+		},
+		"hooks": hooks,
+	}
+
+	settingsBytes, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("marshal claude settings: %w", err)
+	}
 	settingsPath := filepath.Join(claudeDir, "settings.json")
-	if err := os.WriteFile(settingsPath, []byte(settingsJSON), 0o644); err != nil {
+	if err := os.WriteFile(settingsPath, settingsBytes, 0o644); err != nil {
 		return fmt.Errorf("write claude settings: %w", err)
 	}
 
@@ -342,6 +376,7 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 	go r.monitorAgent(ctx, agentID, sessionName, worktreePath)
 	go r.heartbeatLoop(ctx, agentID)
 	go r.verifySpawn(agentID, sessionName, spawnVerifyDelay)
+	go r.contextMonitorLoop(ctx, agentID, worktreePath)
 
 	return nil
 }
@@ -437,6 +472,7 @@ func (r *Runner) GetRunningAgents() []RunningAgent {
 			Branch:       ra.Branch,
 			TmuxSession:  ra.TmuxSession,
 			StartedAt:    ra.StartedAt,
+			ContextUsage: ra.ContextUsage,
 		})
 	}
 	return agents
@@ -543,6 +579,88 @@ func (r *Runner) ReapOrphanedSessions() (int, error) {
 	}
 
 	return reaped, nil
+}
+
+// contextMonitorLoop polls the context usage file and compaction signal for
+// a running agent, updating in-memory state and the DB Config field.
+func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, worktreePath string) {
+	usagePath := ctxmon.UsageFilePath(worktreePath)
+	signalPath := ctxmon.CompactionSignalPath(worktreePath)
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		usage, err := ctxmon.ReadUsageFile(usagePath)
+		if err != nil {
+			slog.Warn("context monitor: read usage file", "agent_id", agentID, "error", err)
+		}
+
+		// Fall back to reading the session transcript directly if the
+		// status line script hasn't produced a usage file (e.g. in -p mode).
+		if usage == nil {
+			usage, err = ctxmon.ReadTranscriptUsage(worktreePath)
+			if err != nil {
+				slog.Warn("context monitor: read transcript", "agent_id", agentID, "error", err)
+				continue
+			}
+		}
+
+		// Check compaction signal.
+		compacted := false
+		if _, err := os.Stat(signalPath); err == nil {
+			compacted = true
+			os.Remove(signalPath)
+		}
+
+		if usage == nil && compacted {
+			usage = &ctxmon.Usage{
+				UsedPercent:         100,
+				CompactionTriggered: true,
+				LastUpdated:         time.Now(),
+			}
+		} else if usage != nil && compacted {
+			usage.CompactionTriggered = true
+		}
+
+		if usage == nil {
+			continue
+		}
+
+		// Update in-memory state.
+		r.mu.Lock()
+		ra, ok := r.running[agentID]
+		if ok {
+			ra.ContextUsage = usage
+		}
+		r.mu.Unlock()
+
+		// Persist to DB Config field.
+		configUpdate := model.JSONField{
+			"context_used_pct":    usage.UsedPercent,
+			"context_window_size": usage.ContextWindowSize,
+			"total_cost_usd":      usage.TotalCostUSD,
+		}
+		r.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("config", configUpdate)
+	}
+}
+
+// GetContextUsage returns the latest context window usage for a running agent.
+// Returns nil if the agent is not running or has no usage data yet.
+func (r *Runner) GetContextUsage(agentID uuid.UUID) *ctxmon.Usage {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	ra, ok := r.running[agentID]
+	if !ok {
+		return nil
+	}
+	return ra.ContextUsage
 }
 
 // monitorAgent is a background goroutine that waits for the agent's idle
