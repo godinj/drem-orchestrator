@@ -3,6 +3,8 @@ package prompt
 import (
 	"strings"
 	"testing"
+
+	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
 func TestPlannerInstructionsTDDMandatory(t *testing.T) {
@@ -236,5 +238,258 @@ func TestPlanReviewerPreservesExistingCriteria(t *testing.T) {
 		if !strings.Contains(output, c) {
 			t.Errorf("planReviewerInstructions() missing existing criterion: %q", c)
 		}
+	}
+}
+
+// --- TDD Phase-Aware Coder Prompt Tests ---
+
+func TestCoderInstructions_TestPhase(t *testing.T) {
+	task := &model.Task{
+		Phase: "test",
+		Context: model.JSONField{
+			"estimated_files": []any{"internal/foo/foo_test.go"},
+		},
+	}
+
+	sections := coderInstructions(task)
+	output := strings.Join(sections, "\n")
+
+	mustContain := []string{
+		"writing tests BEFORE implementation",
+		"SHOULD fail",
+		"test:",
+		"FAIL when run",
+		"existing test patterns",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(output, s) {
+			t.Errorf("test-phase coder prompt missing: %q", s)
+		}
+	}
+
+	mustNotContain := []string{
+		"Run the FULL test suite",
+	}
+	for _, s := range mustNotContain {
+		if strings.Contains(output, s) {
+			t.Errorf("test-phase coder prompt should NOT contain: %q", s)
+		}
+	}
+}
+
+func TestCoderInstructions_TestPhase_IncludesEstimatedFiles(t *testing.T) {
+	task := &model.Task{
+		Phase: "test",
+		Context: model.JSONField{
+			"estimated_files": []any{"internal/bar/bar_test.go", "internal/baz/baz_test.go"},
+		},
+	}
+
+	sections := coderInstructions(task)
+	output := strings.Join(sections, "\n")
+
+	if !strings.Contains(output, "Files to create/modify:") {
+		t.Error("test-phase coder prompt missing estimated files section")
+	}
+}
+
+func TestCoderInstructions_ImplPhase_WithActualTestFiles(t *testing.T) {
+	task := &model.Task{
+		Phase: "implementation",
+		Context: model.JSONField{
+			"actual_test_files": []any{
+				"internal/foo/foo_test.go",
+				"internal/bar/bar_test.go",
+			},
+			"estimated_files": []any{
+				"internal/old/old_test.go",
+			},
+		},
+	}
+
+	sections := coderInstructions(task)
+	output := strings.Join(sections, "\n")
+
+	mustContain := []string{
+		"implementing code to pass pre-written tests",
+		"pre-written tests",
+		"Do NOT modify the pre-written tests",
+		"internal/foo/foo_test.go",
+		"internal/bar/bar_test.go",
+		"FULL test suite",
+		"ALL tests must pass",
+		"NEVER modify pre-written TDD tests",
+		"feat:",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(output, s) {
+			t.Errorf("impl-phase coder prompt missing: %q", s)
+		}
+	}
+
+	// Should use actual_test_files, NOT estimated_files.
+	if strings.Contains(output, "internal/old/old_test.go") {
+		t.Error("impl-phase coder prompt should prefer actual_test_files over estimated_files")
+	}
+}
+
+func TestCoderInstructions_ImplPhase_FallbackToEstimatedFiles(t *testing.T) {
+	task := &model.Task{
+		Phase: "implementation",
+		Context: model.JSONField{
+			"estimated_files": []any{
+				"internal/fallback/fallback_test.go",
+			},
+		},
+	}
+
+	sections := coderInstructions(task)
+	output := strings.Join(sections, "\n")
+
+	if !strings.Contains(output, "internal/fallback/fallback_test.go") {
+		t.Error("impl-phase coder prompt should fall back to estimated_files when actual_test_files is missing")
+	}
+	if !strings.Contains(output, "pre-written tests") {
+		t.Error("impl-phase coder prompt missing pre-written tests reference")
+	}
+}
+
+func TestCoderInstructions_ImplPhase_NoTestFiles(t *testing.T) {
+	task := &model.Task{
+		Phase: "implementation",
+	}
+
+	sections := coderInstructions(task)
+	output := strings.Join(sections, "\n")
+
+	// Should still produce valid instructions even without test files.
+	if !strings.Contains(output, "implementing code to pass pre-written tests") {
+		t.Error("impl-phase coder prompt missing core instruction text")
+	}
+	// Should NOT contain the "Pre-written tests exist at:" header since there are no files.
+	if strings.Contains(output, "Pre-written tests exist at:") {
+		t.Error("impl-phase coder prompt should not show test file list when none exist")
+	}
+}
+
+func TestCoderInstructions_DefaultPhase_EmptyString(t *testing.T) {
+	task := &model.Task{
+		Phase: "",
+		Context: model.JSONField{
+			"estimated_files": []any{"internal/pkg/pkg.go"},
+		},
+	}
+
+	sections := coderInstructions(task)
+	output := strings.Join(sections, "\n")
+
+	mustContain := []string{
+		"You are a coder agent",
+		"FULL test suite",
+		"ALL tests must pass",
+		"Do not commit if any test fails",
+		"fix your implementation, not the test",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(output, s) {
+			t.Errorf("default coder prompt missing: %q", s)
+		}
+	}
+}
+
+func TestCoderInstructions_IntegrationPhase(t *testing.T) {
+	task := &model.Task{
+		Phase: "integration",
+		Context: model.JSONField{
+			"estimated_files": []any{"internal/wire/wire.go"},
+		},
+	}
+
+	sections := coderInstructions(task)
+	output := strings.Join(sections, "\n")
+
+	// Integration phase uses the default coder instructions.
+	mustContain := []string{
+		"FULL test suite",
+		"ALL tests must pass",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(output, s) {
+			t.Errorf("integration-phase coder prompt missing: %q", s)
+		}
+	}
+}
+
+func TestFeatureReviewerInstructions_IncludesTestResults(t *testing.T) {
+	opts := Opts{
+		Task:       &model.Task{},
+		AgentType:  model.AgentReviewer,
+		ReviewMode: "feature",
+		GitDiff:    "diff --git a/foo.go b/foo.go\n+// new code",
+	}
+
+	sections := featureReviewerInstructions(opts)
+	output := strings.Join(sections, "\n")
+
+	mustContain := []string{
+		"test_results",
+		"Run the FULL test suite first",
+		"output_summary",
+	}
+	for _, s := range mustContain {
+		if !strings.Contains(output, s) {
+			t.Errorf("feature reviewer prompt missing: %q", s)
+		}
+	}
+}
+
+func TestCoderInstructions_TestPhase_WithTestPlan(t *testing.T) {
+	task := &model.Task{
+		Phase:    "test",
+		TestPlan: "Cover all edge cases for the parser",
+	}
+
+	sections := coderInstructions(task)
+	output := strings.Join(sections, "\n")
+
+	if !strings.Contains(output, "## Test Plan") {
+		t.Error("test-phase coder prompt missing Test Plan section")
+	}
+	if !strings.Contains(output, "Cover all edge cases for the parser") {
+		t.Error("test-phase coder prompt missing test plan content")
+	}
+}
+
+func TestCoderInstructions_ImplPhase_WithTestPlan(t *testing.T) {
+	task := &model.Task{
+		Phase:    "implementation",
+		TestPlan: "Ensure all parser tests pass",
+	}
+
+	sections := coderInstructions(task)
+	output := strings.Join(sections, "\n")
+
+	if !strings.Contains(output, "## Test Plan") {
+		t.Error("impl-phase coder prompt missing Test Plan section")
+	}
+	if !strings.Contains(output, "Ensure all parser tests pass") {
+		t.Error("impl-phase coder prompt missing test plan content")
+	}
+}
+
+func TestCoderInstructions_DefaultPhase_WithTestPlan(t *testing.T) {
+	task := &model.Task{
+		Phase:    "",
+		TestPlan: "Run all unit tests",
+	}
+
+	sections := coderInstructions(task)
+	output := strings.Join(sections, "\n")
+
+	if !strings.Contains(output, "## Test Plan") {
+		t.Error("default coder prompt missing Test Plan section")
+	}
+	if !strings.Contains(output, "Run all unit tests") {
+		t.Error("default coder prompt missing test plan content")
 	}
 }
