@@ -984,16 +984,13 @@ func TestDoTick_QueriesTestWritingTasks(t *testing.T) {
 // getTestCommand tests
 // ---------------------------------------------------------------------------
 
-func TestGetTestCommand_FromContext(t *testing.T) {
+func TestGetTestCommand_FromConfig(t *testing.T) {
 	db := testDB(t)
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
+	o.testGate.TestCommand = "go test -v ./..."
 
-	task := &model.Task{
-		Context: model.JSONField{
-			"test_command": "go test -v ./...",
-		},
-	}
+	task := &model.Task{}
 
 	cmd := o.getTestCommand(task)
 	if cmd != "go test -v ./..." {

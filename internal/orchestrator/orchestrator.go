@@ -5,6 +5,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +49,42 @@ type Event struct {
 // doTick (every N ticks). Set to 0 to disable periodic reconciliation.
 const reconcileInterval = 10
 
+// TestGateConfig holds configuration for the pre-merge test gate.
+// These values are typically loaded from drem.toml or CLAUDE.md.
+type TestGateConfig struct {
+	TestCommand    string        `toml:"test_command"`     // e.g. "go test ./..."
+	CompileCommand string        `toml:"compile_command"`  // e.g. "go vet ./..."
+	ScopedTests    bool          `toml:"scoped_tests"`     // default true — scope tests to changed packages
+	TestTimeout    time.Duration `toml:"test_timeout"`     // default 5m
+}
+
+// DefaultTestGateConfig returns a TestGateConfig with sensible defaults.
+func DefaultTestGateConfig() TestGateConfig {
+	return TestGateConfig{
+		ScopedTests: true,
+		TestTimeout: 5 * time.Minute,
+	}
+}
+
+// TestResult stores the outcome of a test run for auditing and debugging.
+type TestResult struct {
+	Passed       bool      `json:"passed"`
+	Output       string    `json:"output"`           // truncated to last 5000 chars
+	ExitCode     int       `json:"exit_code"`
+	RunAt        time.Time `json:"run_at"`
+	Duration     float64   `json:"duration_seconds"`
+	Command      string    `json:"command"`
+	Scoped       bool      `json:"scoped"`            // true if ran scoped tests
+	AttemptCount int       `json:"attempt_count"`
+}
+
+// commandResult holds the output from running a shell command.
+type commandResult struct {
+	Output   string
+	ExitCode int
+	Duration time.Duration
+}
+
 // Orchestrator is the main scheduling loop. It queries the database each tick,
 // processes tasks through the state machine, spawns agents, and drives merges.
 type Orchestrator struct {
@@ -56,6 +95,7 @@ type Orchestrator struct {
 	merger         *merge.Orchestrator
 	memory         *memory.Manager
 	supervisor     *supervisor.Supervisor // nil disables LLM-powered decisions
+	testGate       TestGateConfig
 	projectID      uuid.UUID
 	events         chan<- Event
 	tick           time.Duration
@@ -91,6 +131,7 @@ func New(
 		merger:         merger,
 		memory:         mem,
 		supervisor:     sup,
+		testGate:       DefaultTestGateConfig(),
 		projectID:      projectID,
 		events:         events,
 		tick:           tickInterval,
@@ -99,6 +140,15 @@ func New(
 		contextStopPct: contextStopPct,
 		logger:         slog.Default().With("component", "orchestrator", "project_id", projectID),
 	}
+}
+
+// SetTestGateConfig updates the test gate configuration. Call this after
+// loading configuration from drem.toml to override the defaults.
+func (o *Orchestrator) SetTestGateConfig(cfg TestGateConfig) {
+	if cfg.TestTimeout == 0 {
+		cfg.TestTimeout = 5 * time.Minute
+	}
+	o.testGate = cfg
 }
 
 // Run starts the main loop. It blocks until ctx is cancelled.
@@ -1044,6 +1094,41 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		}
 		if !hasCommits {
 			return o.onAgentEmptyWork(ag, task, output)
+		}
+
+		// Test gate: verify tests/compilation before merging.
+		phase := taskPhase(task)
+		if phase == "test" {
+			// Test-phase subtask: compilation-only gate.
+			testResult, testErr := o.verifyCompilationBeforeMerge(task, ag.WorktreePath)
+			if testErr != nil {
+				return fmt.Errorf("compilation gate: %w", testErr)
+			}
+			o.storeTestResult(ag, testResult)
+			if !testResult.Passed {
+				o.logger.Warn("compilation failed for test-phase subtask",
+					"subtask_id", task.ID, "exit_code", testResult.ExitCode)
+				// Don't block — the human catches quality at TEST_REVIEW.
+			}
+		} else if phase == "implementation" || phase == "integration" || phase == "" {
+			// Implementation/integration phase: full test gate.
+			testResult, testErr := o.verifyTestsBeforeMerge(task, ag.WorktreePath)
+			if testErr != nil {
+				return fmt.Errorf("test gate: %w", testErr)
+			}
+			o.storeTestResult(ag, testResult)
+			if !testResult.Passed {
+				o.logger.Error("tests failed, blocking merge",
+					"subtask_id", task.ID, "attempts", testResult.AttemptCount)
+				o.emit("test_gate_failed", map[string]any{
+					"subtask_id": task.ID,
+					"exit_code":  testResult.ExitCode,
+					"output":     testResult.Output,
+				})
+				// Don't proceed to merge — leave subtask in current state.
+				// The failure recovery handles escalation.
+				return nil
+			}
 		}
 
 		result, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir)
@@ -2094,8 +2179,7 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 			parent.Context["baseline_tests_checked"] = true
 			if runErr != nil || result.ExitCode != 0 {
 				parent.Context["baseline_tests_failed"] = true
-				output := result.Stdout + result.Stderr
-				parent.Context["baseline_test_output"] = truncate(output, 5000)
+				parent.Context["baseline_test_output"] = truncate(result.Output, 5000)
 				o.logger.Warn("baseline tests fail on integration branch",
 					"task_id", parent.ID, "exit_code", result.ExitCode)
 				if err := o.db.Save(parent).Error; err != nil {
@@ -3469,26 +3553,18 @@ func isTestFile(name string) bool {
 	return false
 }
 
-// commandResult holds the output of running a shell command.
-type commandResult struct {
-	ExitCode int
-	Stdout   string
-	Stderr   string
-}
-
 // runCommand executes a shell command in the given directory and returns the result.
 func runCommand(dir, command string) (*commandResult, error) {
 	cmd := exec.Command("sh", "-c", command)
 	cmd.Dir = dir
 
-	var stdout, stderr strings.Builder
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	var out strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = &out
 
 	err := cmd.Run()
 	result := &commandResult{
-		Stdout: stdout.String(),
-		Stderr: stderr.String(),
+		Output: out.String(),
 	}
 
 	if err != nil {
@@ -3500,43 +3576,6 @@ func runCommand(dir, command string) (*commandResult, error) {
 	}
 
 	return result, nil
-}
-
-// getTestCommand returns the test command for the project. Checks the task
-// context first, falls back to detecting from the project structure.
-// Returns empty string if not found.
-func (o *Orchestrator) getTestCommand(task *model.Task) string {
-	// Check task context for an explicit test command.
-	if task.Context != nil {
-		if cmd, ok := task.Context["test_command"].(string); ok && cmd != "" {
-			return cmd
-		}
-	}
-
-	// Check feature worktree for project type detection.
-	if task.WorktreeBranch == "" {
-		return ""
-	}
-	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
-	featureDir := o.worktree.FeatureWorktreePath(featureName)
-
-	// Check for Go project.
-	if _, err := os.Stat(filepath.Join(featureDir, "go.mod")); err == nil {
-		return "go test ./..."
-	}
-	// Check for Node.js project.
-	if _, err := os.Stat(filepath.Join(featureDir, "package.json")); err == nil {
-		return "npm test"
-	}
-	// Check for Python project.
-	if _, err := os.Stat(filepath.Join(featureDir, "pytest.ini")); err == nil {
-		return "pytest"
-	}
-	if _, err := os.Stat(filepath.Join(featureDir, "setup.py")); err == nil {
-		return "pytest"
-	}
-
-	return ""
 }
 
 // taskFeatureName derives a slug-based feature name from a task.
@@ -3556,6 +3595,289 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen]
+}
+
+// ---------------------------------------------------------------------------
+// Test gate — pre-merge test/compilation verification
+// ---------------------------------------------------------------------------
+
+// taskPhase returns the phase string for a task, reading from
+// task.Context["phase"]. Returns "" if not set.
+func taskPhase(task *model.Task) string {
+	if task.Context == nil {
+		return ""
+	}
+	phase, _ := task.Context["phase"].(string)
+	return phase
+}
+
+// getTestCommand returns the test command to run for the given subtask.
+// It checks the orchestrator's TestGateConfig first, then falls back to
+// inferring from the worktree contents.
+func (o *Orchestrator) getTestCommand(subtask *model.Task) string {
+	if o.testGate.TestCommand != "" {
+		return o.testGate.TestCommand
+	}
+	// Infer from worktree contents. Use the agent's worktree path from the
+	// subtask's assigned agent.
+	if subtask.AssignedAgentID != nil {
+		var ag model.Agent
+		if err := o.db.First(&ag, "id = ?", subtask.AssignedAgentID).Error; err == nil && ag.WorktreePath != "" {
+			return inferTestCommand(ag.WorktreePath)
+		}
+	}
+	return ""
+}
+
+// inferTestCommand detects the project type and returns the appropriate
+// test command, or "" if none can be determined.
+func inferTestCommand(dir string) string {
+	if fileExistsAt(filepath.Join(dir, "go.mod")) {
+		return "go test ./..."
+	}
+	if fileExistsAt(filepath.Join(dir, "package.json")) {
+		return "npm test"
+	}
+	if fileExistsAt(filepath.Join(dir, "pyproject.toml")) {
+		return "pytest"
+	}
+	if fileExistsAt(filepath.Join(dir, "Cargo.toml")) {
+		return "cargo test"
+	}
+	return ""
+}
+
+// inferCompileCommand detects the project type and returns the appropriate
+// compilation check command, or "" if none can be determined.
+func inferCompileCommand(dir string) string {
+	if fileExistsAt(filepath.Join(dir, "go.mod")) {
+		return "go vet ./..."
+	}
+	if fileExistsAt(filepath.Join(dir, "tsconfig.json")) {
+		return "npx tsc --noEmit"
+	}
+	if fileExistsAt(filepath.Join(dir, "Cargo.toml")) {
+		return "cargo check"
+	}
+	return ""
+}
+
+// fileExistsAt returns true if path exists and is a regular file.
+func fileExistsAt(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// verifyTestsBeforeMerge runs the test suite in the agent's worktree and
+// returns the result. Retries up to 3 times with backoff for environmental
+// flakiness. Only applies to implementation and integration phase subtasks;
+// test-phase subtasks use verifyCompilationBeforeMerge instead.
+func (o *Orchestrator) verifyTestsBeforeMerge(subtask *model.Task, worktreePath string) (*TestResult, error) {
+	testCmd := o.getTestCommand(subtask)
+	if testCmd == "" {
+		o.logger.Warn("no test command configured, skipping test gate (degraded mode)",
+			"subtask_id", subtask.ID)
+		return &TestResult{Passed: true, RunAt: time.Now()}, nil
+	}
+
+	// Determine if scoped execution applies.
+	scoped := false
+	if o.testGate.ScopedTests {
+		scopedCmd, didScope := o.scopeTestsForSubtask(testCmd, worktreePath)
+		if didScope {
+			testCmd = scopedCmd
+			scoped = true
+		}
+	}
+
+	timeout := o.testGate.TestTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+
+	var lastResult *TestResult
+	for attempt := 1; attempt <= 3; attempt++ {
+		cmdResult := o.runCommandWithTimeout(worktreePath, testCmd, timeout)
+		lastResult = &TestResult{
+			Passed:       cmdResult.ExitCode == 0,
+			Output:       truncate(cmdResult.Output, 5000),
+			ExitCode:     cmdResult.ExitCode,
+			RunAt:        time.Now(),
+			Duration:     cmdResult.Duration.Seconds(),
+			Command:      testCmd,
+			Scoped:       scoped,
+			AttemptCount: attempt,
+		}
+		if lastResult.Passed {
+			return lastResult, nil
+		}
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
+	}
+	return lastResult, nil
+}
+
+// verifyCompilationBeforeMerge runs the compilation command for test-phase
+// subtasks. Test execution results are ignored — only compilation matters.
+func (o *Orchestrator) verifyCompilationBeforeMerge(subtask *model.Task, worktreePath string) (*TestResult, error) {
+	compileCmd := o.testGate.CompileCommand
+	if compileCmd == "" {
+		compileCmd = inferCompileCommand(worktreePath)
+	}
+	if compileCmd == "" {
+		o.logger.Warn("no compile command found, skipping compilation gate",
+			"subtask_id", subtask.ID)
+		return &TestResult{Passed: true, RunAt: time.Now()}, nil
+	}
+
+	timeout := o.testGate.TestTimeout
+	if timeout == 0 {
+		timeout = 5 * time.Minute
+	}
+
+	cmdResult := o.runCommandWithTimeout(worktreePath, compileCmd, timeout)
+	return &TestResult{
+		Passed:       cmdResult.ExitCode == 0,
+		Output:       truncate(cmdResult.Output, 5000),
+		ExitCode:     cmdResult.ExitCode,
+		RunAt:        time.Now(),
+		Duration:     cmdResult.Duration.Seconds(),
+		Command:      compileCmd,
+		Scoped:       false,
+		AttemptCount: 1,
+	}, nil
+}
+
+// scopeTestsForSubtask derives changed packages from the agent's diff and
+// scopes the test command. Returns the scoped command and true if scoping
+// was applied.
+func (o *Orchestrator) scopeTestsForSubtask(baseCmd, worktreePath string) (string, bool) {
+	// Get changed files via git diff.
+	diffOutput, err := worktree.RunGit([]string{"diff", "--name-only", "HEAD~1"}, worktreePath)
+	if err != nil {
+		// Also try against the default branch.
+		diffOutput, err = worktree.RunGit([]string{
+			"diff", "--name-only", o.worktree.DefaultBranch + "...HEAD",
+		}, worktreePath)
+		if err != nil {
+			return baseCmd, false
+		}
+	}
+
+	if diffOutput == "" {
+		return baseCmd, false
+	}
+
+	changedFiles := strings.Split(strings.TrimSpace(diffOutput), "\n")
+	scopedCmd, didScope := scopeTestCommand(baseCmd, changedFiles)
+	return scopedCmd, didScope
+}
+
+// scopeTestCommand takes a base test command and a list of changed files,
+// and returns a scoped command that only tests affected packages.
+// Returns the original command if scoping isn't possible.
+func scopeTestCommand(baseCmd string, changedFiles []string) (string, bool) {
+	if len(changedFiles) == 0 {
+		return baseCmd, false
+	}
+
+	// Only scope Go test commands that use ./...
+	if !strings.Contains(baseCmd, "./...") {
+		return baseCmd, false
+	}
+
+	// Map changed .go files to their package directories.
+	pkgSet := make(map[string]struct{})
+	for _, f := range changedFiles {
+		if !strings.HasSuffix(f, ".go") {
+			continue
+		}
+		dir := filepath.Dir(f)
+		if dir == "." {
+			pkgSet["./..."] = struct{}{}
+		} else {
+			pkgSet["./"+dir+"/..."] = struct{}{}
+		}
+	}
+
+	if len(pkgSet) == 0 {
+		return baseCmd, false
+	}
+
+	// Build sorted package list for deterministic output.
+	var pkgs []string
+	for p := range pkgSet {
+		pkgs = append(pkgs, p)
+	}
+	sort.Strings(pkgs)
+
+	// If ./... is in the set (root-level files changed), fall back to full.
+	for _, p := range pkgs {
+		if p == "./..." {
+			return baseCmd, false
+		}
+	}
+
+	scopedCmd := strings.Replace(baseCmd, "./...", strings.Join(pkgs, " "), 1)
+	return scopedCmd, true
+}
+
+// runCommandWithTimeout executes a shell command with a timeout.
+// Returns the combined output, exit code, and duration. Uses process
+// group killing to ensure child processes are cleaned up on timeout.
+func (o *Orchestrator) runCommandWithTimeout(dir, cmd string, timeout time.Duration) *commandResult {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	start := time.Now()
+	c := exec.CommandContext(ctx, "sh", "-c", cmd)
+	c.Dir = dir
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	c.Cancel = func() error {
+		// Kill the entire process group so child processes are cleaned up.
+		return syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
+	}
+
+	var outBuf bytes.Buffer
+	c.Stdout = &outBuf
+	c.Stderr = &outBuf
+
+	err := c.Run()
+	elapsed := time.Since(start)
+
+	exitCode := 0
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return &commandResult{
+				Output:   truncate(outBuf.String(), 5000) + "\n[killed: timeout exceeded]",
+				ExitCode: -1,
+				Duration: elapsed,
+			}
+		}
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+		}
+	}
+
+	return &commandResult{
+		Output:   outBuf.String(),
+		ExitCode: exitCode,
+		Duration: elapsed,
+	}
+}
+
+// storeTestResult persists the test result on the agent's Config field.
+func (o *Orchestrator) storeTestResult(ag *model.Agent, result *TestResult) {
+	if ag.Config == nil {
+		ag.Config = make(model.JSONField)
+	}
+	ag.Config["last_test_result"] = result
+	if err := o.db.Model(ag).Update("config", ag.Config).Error; err != nil {
+		o.logger.Warn("failed to store test result on agent", "agent_id", ag.ID, "error", err)
+	}
 }
 
 // planEntry is an intermediate struct for parsing plans from JSON that may
