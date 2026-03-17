@@ -35,7 +35,7 @@ func (s *Supervisor) Evaluate(ctx context.Context, prompt string) (string, error
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, s.claudeBin, "-p", "--dangerously-skip-permissions")
+	cmd := exec.CommandContext(ctx, s.claudeBin, "-p", "--dangerously-skip-permissions", "--effort", "low")
 	cmd.Stdin = strings.NewReader(prompt)
 
 	var stdout, stderr bytes.Buffer

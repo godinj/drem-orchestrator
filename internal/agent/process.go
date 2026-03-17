@@ -45,7 +45,7 @@ func StartAgentProcess(ctx context.Context, claudeBin, promptPath, cwd string) (
 	}
 
 	// 3. Build command: <claudeBin> --dangerously-skip-permissions -p -
-	cmd := exec.CommandContext(ctx, claudeBin, "--dangerously-skip-permissions", "-p", "-")
+	cmd := exec.CommandContext(ctx, claudeBin, "--dangerously-skip-permissions", "--effort", "medium", "-p", "-")
 	cmd.Dir = cwd
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
