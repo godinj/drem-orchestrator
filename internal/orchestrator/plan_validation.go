@@ -1,8 +1,13 @@
 package orchestrator
 
 import (
+	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/godinj/drem-orchestrator/internal/constraints"
 )
 
 // PlanValidationResult contains the outcome of validating a plan.
@@ -531,4 +536,126 @@ func planTouchesDocFiles(subtasks []planEntry) bool {
 		}
 	}
 	return false
+}
+
+// ValidatePlanConstraints checks a plan's estimated_files against the
+// constraint config. Returns warnings for files that target constrained
+// or grandfathered paths. Returns an empty result if cfg is nil.
+func ValidatePlanConstraints(subtasks []planEntry, cfg *constraints.Config, worktreeRoot string) PlanValidationResult {
+	var result PlanValidationResult
+
+	if cfg == nil {
+		result.Valid = true
+		return result
+	}
+
+	for i, sub := range subtasks {
+		files := allFiles(sub)
+		if len(files) == 0 {
+			continue
+		}
+
+		fileSet := make(map[string]bool, len(files))
+		for _, f := range files {
+			fileSet[f] = true
+		}
+
+		// Check max_lines exceptions (shrink-only grandfathered files).
+		for _, mlc := range cfg.MaxLines {
+			for _, exc := range mlc.Exceptions {
+				if exc.Rule != "shrink-only" {
+					continue
+				}
+				if fileSet[exc.Path] {
+					result.Warnings = append(result.Warnings,
+						fmt.Sprintf("Subtask %d (%q) targets grandfathered file %s (shrink-only, baseline: %d lines) — changes must not increase line count",
+							i, sub.Title, exc.Path, exc.BaselineLines))
+				}
+			}
+
+			// Check files near limit (>90% of ceiling) for constraints
+			// without a matching exception.
+			if worktreeRoot == "" {
+				continue
+			}
+			for _, f := range files {
+				if hasLinesException(mlc.Exceptions, f) {
+					continue
+				}
+				if !matchesGlob(mlc.Glob, f) {
+					continue
+				}
+				absPath := filepath.Join(worktreeRoot, f)
+				count, err := countFileLines(absPath)
+				if err != nil {
+					continue // file doesn't exist or unreadable, skip
+				}
+				if mlc.Limit > 0 && count > mlc.Limit*9/10 {
+					result.Warnings = append(result.Warnings,
+						fmt.Sprintf("Subtask %d (%q) targets file %s which is already at %d/%d lines (90%%+ of ceiling)",
+							i, sub.Title, f, count, mlc.Limit))
+				}
+			}
+		}
+
+		// Check max_matches exceptions (shrink-only grandfathered files).
+		for _, mmc := range cfg.MaxMatches {
+			for _, exc := range mmc.Exceptions {
+				if exc.Rule != "shrink-only" {
+					continue
+				}
+				if fileSet[exc.Path] {
+					result.Warnings = append(result.Warnings,
+						fmt.Sprintf("Subtask %d (%q) targets grandfathered file %s (shrink-only, baseline: %d matches for %q) — changes must not increase count",
+							i, sub.Title, exc.Path, exc.BaselineCount, mmc.Name))
+				}
+			}
+		}
+	}
+
+	result.Valid = len(result.Errors) == 0
+	return result
+}
+
+// hasLinesException returns true if the given path has a lines exception.
+func hasLinesException(exceptions []constraints.LinesException, path string) bool {
+	for _, exc := range exceptions {
+		if exc.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesGlob checks if a file path matches a glob pattern. It uses
+// filepath.Match on the full path and, for patterns without directory
+// separators, also on just the base name.
+func matchesGlob(pattern, path string) bool {
+	matched, _ := filepath.Match(pattern, path)
+	if matched {
+		return true
+	}
+	// Try matching just the base name for simple globs like "*.go".
+	if !strings.Contains(pattern, "/") {
+		matched, _ = filepath.Match(pattern, filepath.Base(path))
+		return matched
+	}
+	return false
+}
+
+// countFileLines counts the number of newline characters in a file.
+func countFileLines(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	if len(data) == 0 {
+		return 0, nil
+	}
+	count := bytes.Count(data, []byte{'\n'})
+	// If the file doesn't end with a newline, count the last line too.
+	if data[len(data)-1] != '\n' {
+		count++
+	}
+	return count, nil
 }
