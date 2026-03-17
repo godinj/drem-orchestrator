@@ -1183,11 +1183,11 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	}
 
 	// Validate the plan before transitioning to plan_review.
-	entries, parseErr := parsePlan(task.Plan)
+	planResult, parseErr := parsePlan(task.Plan)
 	if parseErr != nil {
 		o.logger.Warn("plan validation: failed to parse stored plan", "task_id", task.ID, "error", parseErr)
 	} else {
-		validation := ValidatePlan(entries)
+		validation := ValidatePlan(planResult.Subtasks)
 		// Store validation result in task context for TUI display.
 		if task.Context == nil {
 			task.Context = make(model.JSONField)
@@ -2280,10 +2280,11 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 	}
 
 	// Parse the plan.
-	subtaskPlans, err := parsePlan(task.Plan)
+	planResult, err := parsePlan(task.Plan)
 	if err != nil {
 		return fmt.Errorf("handle plan approved: %w", err)
 	}
+	subtaskPlans := planResult.Subtasks
 
 	// Create subtask records. We need to track created IDs for dependency mapping.
 	createdIDs := make([]uuid.UUID, len(subtaskPlans))
@@ -2955,10 +2956,25 @@ type planEntry struct {
 	Dependencies   []int    `json:"dependencies"`
 	Priority       int      `json:"priority"`
 	IsTest         bool     `json:"is_test,omitempty"`
+	Phase          string   `json:"phase,omitempty"`
+	TestsFor       []int    `json:"tests_for,omitempty"`
 }
 
-// parsePlan extracts subtask plans from a task's Plan JSONField.
-func parsePlan(planField model.JSONField) ([]planEntry, error) {
+// tddException represents a planner-declared exception to TDD enforcement
+// for a specific subtask.
+type tddException struct {
+	SubtaskIndex int    `json:"subtask_index"`
+	Reason       string `json:"reason"`
+}
+
+// parsePlanResult holds the full parsed plan output.
+type parsePlanResult struct {
+	Subtasks      []planEntry
+	TDDExceptions []tddException
+}
+
+// parsePlan extracts subtask plans and TDD exceptions from a task's Plan JSONField.
+func parsePlan(planField model.JSONField) (*parsePlanResult, error) {
 	if planField == nil {
 		return nil, fmt.Errorf("parse plan: plan is nil")
 	}
@@ -2990,5 +3006,20 @@ func parsePlan(planField model.JSONField) ([]planEntry, error) {
 		}
 	}
 
-	return entries, nil
+	// Extract TDD exceptions if present (backward compatible — missing key is not an error).
+	var exceptions []tddException
+	if exceptionsRaw, hasExceptions := planField["tdd_exceptions"]; hasExceptions {
+		eb, err := json.Marshal(exceptionsRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse plan: marshal tdd_exceptions: %w", err)
+		}
+		if err := json.Unmarshal(eb, &exceptions); err != nil {
+			return nil, fmt.Errorf("parse plan: unmarshal tdd_exceptions: %w", err)
+		}
+	}
+
+	return &parsePlanResult{
+		Subtasks:      entries,
+		TDDExceptions: exceptions,
+	}, nil
 }
