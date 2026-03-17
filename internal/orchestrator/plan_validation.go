@@ -19,12 +19,6 @@ type fileOverlap struct {
 	Files    []string
 }
 
-// tddException records a subtask that is exempt from TDD requirements.
-type tddException struct {
-	SubtaskIndex int    `json:"subtask_index"`
-	Reason       string `json:"reason"`
-}
-
 // ValidatePlan checks a parsed plan for structural issues.
 // Returns warnings (surfaced at plan_review) and errors (block transition).
 // The exceptions parameter allows specific subtasks to be exempt from TDD
