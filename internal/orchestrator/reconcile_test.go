@@ -20,7 +20,7 @@ import (
 // ready for reconciliation tests.
 func setupReconcileTest(t *testing.T) (*Orchestrator, *gorm.DB, string) {
 	t.Helper()
-	db := testDB(t)
+	db := lifecycleTestDB(t)
 	bareRepo, _ := initBareRepo(t)
 
 	project := model.Project{

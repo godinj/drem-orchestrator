@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
-
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
@@ -29,7 +27,7 @@ import (
 // panic. The supervisor is nil (no LLM calls).
 func agentResultOrchestrator(t *testing.T, bareRepoPath string) (*Orchestrator, *model.Project) {
 	t.Helper()
-	db := testDB(t)
+	db := lifecycleTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	projectID := uuid.New()
 	events := make(chan Event, 100)
@@ -1234,41 +1232,4 @@ func TestOnReviewerCompleted_NoReviewJSON(t *testing.T) {
 	}
 }
 
-func TestFailTask(t *testing.T) {
-	o, _ := agentResultOrchestrator(t, "/tmp/fake")
-
-	taskID := uuid.New()
-	task := model.Task{
-		ID:          taskID,
-		ProjectID:   o.projectID,
-		Title:       "fail-me",
-		Description: "test failTask",
-		Status:      model.StatusInProgress,
-		UpdatedAt:   time.Now(),
-	}
-	o.db.Create(&task)
-
-	err := o.failTask(&task, "test failure reason")
-	if err != nil {
-		t.Fatalf("failTask: %v", err)
-	}
-
-	// Verify task is now failed.
-	var updated model.Task
-	o.db.First(&updated, "id = ?", taskID)
-	if updated.Status != model.StatusFailed {
-		t.Errorf("expected status failed, got %s", updated.Status)
-	}
-
-	// Verify reason is stored.
-	if updated.Context == nil || updated.Context["failure_reason"] != "test failure reason" {
-		t.Error("expected failure_reason in context")
-	}
-
-	// Verify event was created.
-	var events []model.TaskEvent
-	o.db.Where("task_id = ?", taskID).Find(&events)
-	if len(events) == 0 {
-		t.Error("expected at least one task event")
-	}
-}
+// TestFailTask is in lifecycle_test.go

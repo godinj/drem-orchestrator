@@ -16,7 +16,7 @@ func TestPlannerInstructionsContainsNewSections(t *testing.T) {
 		"## Integration Subtask",
 		"## Decomposition Rules",
 		"## File Overlap",
-		"## Test Subtasks",
+		"### Test Subtask Requirements",
 	}
 
 	for _, header := range requiredHeaders {
@@ -88,8 +88,8 @@ func TestPlannerInstructionsTestSubtasksContent(t *testing.T) {
 	output := strings.Join(sections, "\n")
 
 	keyContent := []string{
-		"Depend on ALL implementation subtasks",
-		"implementation subtasks -> test subtask -> integration subtask",
+		"Has NO dependencies on implementation subtasks",
+		"test subtasks -> HUMAN REVIEW -> implementation subtasks -> integration subtask",
 	}
 
 	for _, c := range keyContent {

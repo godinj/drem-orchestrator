@@ -17,7 +17,7 @@ import (
 // and worktree manager are nil/minimal, so only DB-level behavior is exercised.
 func setupSchedulingTest(t *testing.T) (*Orchestrator, *gorm.DB, uuid.UUID) {
 	t.Helper()
-	db := testDB(t)
+	db := lifecycleTestDB(t)
 	projectID := uuid.New()
 	project := model.Project{
 		ID:            projectID,
@@ -59,39 +59,7 @@ func createTask(t *testing.T, db *gorm.DB, projectID uuid.UUID, title string, st
 // processBacklog tests
 // ---------------------------------------------------------------------------
 
-func TestProcessBacklog_TransitionsToPlanning(t *testing.T) {
-	o, db, projectID := setupSchedulingTest(t)
-
-	task := createTask(t, db, projectID, "backlog-task", model.StatusBacklog, nil)
-
-	if err := o.processBacklog(&task); err != nil {
-		t.Fatalf("processBacklog: %v", err)
-	}
-
-	// Reload from DB.
-	var updated model.Task
-	db.First(&updated, "id = ?", task.ID)
-	if updated.Status != model.StatusPlanning {
-		t.Errorf("expected status planning, got %s", updated.Status)
-	}
-
-	// Verify a TaskEvent was created.
-	var events []model.TaskEvent
-	db.Where("task_id = ?", task.ID).Find(&events)
-	if len(events) == 0 {
-		t.Error("expected at least one TaskEvent, got none")
-	}
-	found := false
-	for _, ev := range events {
-		if ev.OldValue == "backlog" && ev.NewValue == "planning" {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Error("expected a status_change event from backlog to planning")
-	}
-}
+// TestProcessBacklog_TransitionsToPlanning is in lifecycle_test.go
 
 func TestProcessBacklog_DetachForReplanning(t *testing.T) {
 	o, db, projectID := setupSchedulingTest(t)
@@ -993,81 +961,5 @@ func TestDoTick_ProcessesMultipleStatuses(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// incrementRetryCount tests
-// ---------------------------------------------------------------------------
-
-func TestIncrementRetryCount(t *testing.T) {
-	o, _, _ := setupSchedulingTest(t)
-
-	task := &model.Task{
-		ID:          uuid.New(),
-		Title:       "retry-test",
-		Description: "test",
-		Status:      model.StatusPlanning,
-	}
-
-	// First increment: 0 -> 1
-	count := o.incrementRetryCount(task)
-	if count != 1 {
-		t.Errorf("expected count 1, got %d", count)
-	}
-
-	// Second increment: 1 -> 2
-	count = o.incrementRetryCount(task)
-	if count != 2 {
-		t.Errorf("expected count 2, got %d", count)
-	}
-
-	// Verify context stores the value correctly.
-	raw, ok := task.Context["retry_count"].(float64)
-	if !ok || int(raw) != 2 {
-		t.Errorf("expected retry_count=2 in context, got %v", task.Context["retry_count"])
-	}
-}
-
-func TestIncrementRetryCount_NilContext(t *testing.T) {
-	o, _, _ := setupSchedulingTest(t)
-
-	task := &model.Task{
-		ID:      uuid.New(),
-		Title:   "nil-ctx-retry",
-		Context: nil,
-	}
-
-	count := o.incrementRetryCount(task)
-	if count != 1 {
-		t.Errorf("expected count 1 from nil context, got %d", count)
-	}
-	if task.Context == nil {
-		t.Error("expected Context to be initialized")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// taskFeatureName tests
-// ---------------------------------------------------------------------------
-
-func TestTaskFeatureName(t *testing.T) {
-	task := &model.Task{
-		ID:    uuid.MustParse("01234567-89ab-cdef-0123-456789abcdef"),
-		Title: "Add User Authentication",
-	}
-	got := taskFeatureName(task)
-	want := "01234567-add-user-authentication"
-	if got != want {
-		t.Errorf("taskFeatureName = %q, want %q", got, want)
-	}
-}
-
-func TestTaskFeatureName_LongTitle(t *testing.T) {
-	task := &model.Task{
-		ID:    uuid.MustParse("01234567-89ab-cdef-0123-456789abcdef"),
-		Title: "This Is A Very Long Title That Should Be Truncated At Forty Characters Or So",
-	}
-	got := taskFeatureName(task)
-	// ID prefix (8 chars) + "-" + slug (truncated to 40 chars)
-	if len(got) > 8+1+40 {
-		t.Errorf("taskFeatureName too long: %q (len=%d)", got, len(got))
-	}
-}
+// TestIncrementRetryCount, TestTaskFeatureName, TestTaskFeatureName_LongTitle
+// are in agent_result_test.go
