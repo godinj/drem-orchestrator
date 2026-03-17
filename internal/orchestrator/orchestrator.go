@@ -2066,7 +2066,7 @@ func (o *Orchestrator) findCurrentGroup(parent *model.Task, schedule Schedule) *
 					"parent_id", parent.ID, "subtask_id", taskID)
 				continue
 			}
-			if sub.Status != model.StatusDone && sub.Status != model.StatusFailed {
+			if !isTerminal(sub.Status) {
 				allTerminal = false
 				break
 			}
@@ -2198,13 +2198,16 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 	allDone := true
 
 	for _, sub := range subtasks {
-		switch sub.Status {
-		case model.StatusDone:
-			// good
-		case model.StatusFailed:
-			anyFailed = true
-			allDone = false
-		default:
+		if isTerminal(sub.Status) {
+			if sub.Status == model.StatusFailed {
+				anyFailed = true
+				allDone = false
+			} else if sub.Status == model.StatusRejected {
+				// Rejected subtasks are terminal but don't count as "done".
+				allDone = false
+			}
+			// StatusDone: good — no flags to set.
+		} else {
 			allTerminal = false
 			allDone = false
 		}
@@ -2668,6 +2671,296 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 	o.emit("task_updated", &task)
 	o.logger.Info("test failed, task back to planning", "task_id", task.ID)
 	return nil
+}
+
+// HandleTestReviewApproved transitions from TEST_REVIEW to IN_PROGRESS,
+// enabling implementation subtask scheduling.
+func (o *Orchestrator) HandleTestReviewApproved(taskID uuid.UUID) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("handle test review approved: load task: %w", err)
+	}
+
+	if task.Status != model.StatusTestReview {
+		return fmt.Errorf("handle test review approved: task %s is in %s, expected test_review", taskID, task.Status)
+	}
+
+	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_review_approved"})
+	if err != nil {
+		return fmt.Errorf("handle test review approved: transition: %w", err)
+	}
+	if err := o.db.Save(&task).Error; err != nil {
+		return fmt.Errorf("handle test review approved: save task: %w", err)
+	}
+	if err := o.db.Create(evt).Error; err != nil {
+		return fmt.Errorf("handle test review approved: save event: %w", err)
+	}
+
+	o.emit("task_updated", &task)
+	o.logger.Info("test review approved, scheduling implementation", "task_id", task.ID)
+	return nil
+}
+
+// HandleTestReviewRejected marks rejected test subtasks as REJECTED, clones
+// them with feedback, and transitions the parent back to TEST_WRITING.
+// After 3 rejection rounds, pauses the task and spawns a diagnostic agent.
+func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback string) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: load task: %w", err)
+	}
+
+	if task.Status != model.StatusTestReview {
+		return fmt.Errorf("handle test review rejected: task %s is in %s, expected test_review", taskID, task.Status)
+	}
+
+	// Initialize context if needed.
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+
+	// Track rejection count.
+	rejectionCount := 0
+	if v, ok := task.Context["test_rejection_count"].(float64); ok {
+		rejectionCount = int(v)
+	}
+	rejectionCount++
+	task.Context["test_rejection_count"] = float64(rejectionCount)
+
+	// Store the feedback for this round.
+	feedbackKey := fmt.Sprintf("test_rejection_feedback_%d", rejectionCount)
+	task.Context[feedbackKey] = feedback
+
+	// If 3rd rejection, transition to PAUSED via TEST_WRITING and spawn diagnostic.
+	if rejectionCount >= 3 {
+		// Transition to TEST_WRITING first (valid from TEST_REVIEW).
+		evt1, err := state.TransitionTask(&task, model.StatusTestWriting, "user", map[string]any{
+			"action": "test_review_rejected_diagnostic",
+			"reason": "3 rejection rounds exceeded",
+		})
+		if err != nil {
+			return fmt.Errorf("handle test review rejected: transition to test_writing: %w", err)
+		}
+		if err := o.db.Create(evt1).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save event1: %w", err)
+		}
+
+		// Then transition to PAUSED (valid from TEST_WRITING).
+		evt2, err := state.TransitionTask(&task, model.StatusPaused, "user", map[string]any{
+			"action": "test_review_rejected_paused",
+			"reason": "3 test rejection rounds exceeded, diagnostic required",
+		})
+		if err != nil {
+			return fmt.Errorf("handle test review rejected: transition to paused: %w", err)
+		}
+		task.Context["paused_from"] = string(model.StatusTestWriting)
+		task.Context["diagnostic_required"] = true
+
+		if err := o.db.Save(&task).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save task: %w", err)
+		}
+		if err := o.db.Create(evt2).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save event2: %w", err)
+		}
+
+		o.emit("task_updated", &task)
+		o.logger.Warn("test review rejected 3 times, task paused for diagnostic",
+			"task_id", task.ID, "rejection_count", rejectionCount)
+
+		// Spawn diagnostic agent (best-effort).
+		if err := o.spawnDiagnosticAgent(&task); err != nil {
+			o.logger.Warn("failed to spawn diagnostic agent", "task_id", task.ID, "error", err)
+		}
+		return nil
+	}
+
+	// Load all test-phase subtasks in DONE state for this parent.
+	var doneTestSubtasks []model.Task
+	if err := o.db.Where(
+		"parent_task_id = ? AND phase = ? AND status = ?",
+		task.ID, "test", model.StatusDone,
+	).Find(&doneTestSubtasks).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: query test subtasks: %w", err)
+	}
+
+	// For each done test subtask: mark as REJECTED and create a replacement.
+	for i := range doneTestSubtasks {
+		sub := &doneTestSubtasks[i]
+
+		// Mark as REJECTED. Since DONE has no outbound transitions in the state
+		// machine, we set the status directly for this terminal→terminal move.
+		sub.Status = model.StatusRejected
+		sub.UpdatedAt = time.Now()
+		if err := o.db.Save(sub).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: reject subtask %s: %w", sub.ID, err)
+		}
+
+		rejectEvt := &model.TaskEvent{
+			ID:        uuid.New(),
+			TaskID:    sub.ID,
+			EventType: "status_change",
+			OldValue:  string(model.StatusDone),
+			NewValue:  string(model.StatusRejected),
+			Details:   model.JSONField{"action": "test_review_rejected", "feedback": feedback},
+			Actor:     "user",
+			CreatedAt: time.Now(),
+		}
+		if err := o.db.Create(rejectEvt).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: save reject event for %s: %w", sub.ID, err)
+		}
+
+		// Create a replacement subtask cloned from the rejected one.
+		revisionSuffix := fmt.Sprintf(" (revision %d)", rejectionCount)
+		newDescription := sub.Description + "\n\n## Rejection Feedback\n\n" + feedback
+
+		// Copy context fields.
+		var newCtx model.JSONField
+		if sub.Context != nil {
+			newCtx = make(model.JSONField, len(sub.Context))
+			for k, v := range sub.Context {
+				newCtx[k] = v
+			}
+		} else {
+			newCtx = make(model.JSONField)
+		}
+
+		replacementID := uuid.New()
+		replacement := model.Task{
+			ID:            replacementID,
+			ProjectID:     sub.ProjectID,
+			ParentTaskID:  sub.ParentTaskID,
+			Title:         sub.Title + revisionSuffix,
+			Description:   newDescription,
+			Status:        model.StatusBacklog,
+			Priority:      sub.Priority,
+			DependencyIDs: sub.DependencyIDs,
+			Phase:         sub.Phase,
+			TestsFor:      sub.TestsFor,
+			Context:       newCtx,
+		}
+
+		if err := o.db.Create(&replacement).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: create replacement for %s: %w", sub.ID, err)
+		}
+
+		o.logger.Info("test subtask rejected and replaced",
+			"original_id", sub.ID,
+			"replacement_id", replacementID,
+			"revision", rejectionCount)
+	}
+
+	// Transition parent back to TEST_WRITING.
+	evt, err := state.TransitionTask(&task, model.StatusTestWriting, "user", map[string]any{
+		"action":          "test_review_rejected",
+		"rejection_count": rejectionCount,
+		"feedback":        feedback,
+		"subtasks_cloned": len(doneTestSubtasks),
+	})
+	if err != nil {
+		return fmt.Errorf("handle test review rejected: transition to test_writing: %w", err)
+	}
+	if err := o.db.Save(&task).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: save task: %w", err)
+	}
+	if err := o.db.Create(evt).Error; err != nil {
+		return fmt.Errorf("handle test review rejected: save event: %w", err)
+	}
+
+	o.emit("task_updated", &task)
+	o.logger.Info("test review rejected, back to test writing",
+		"task_id", task.ID,
+		"rejection_count", rejectionCount,
+		"subtasks_cloned", len(doneTestSubtasks))
+	return nil
+}
+
+// spawnDiagnosticAgent creates a diagnostic agent to help the human understand
+// repeated test rejection patterns.
+func (o *Orchestrator) spawnDiagnosticAgent(parent *model.Task) error {
+	// Gather rejection history from the parent context.
+	var rounds []string
+	for i := 1; i <= 3; i++ {
+		key := fmt.Sprintf("test_rejection_feedback_%d", i)
+		if fb, ok := parent.Context[key].(string); ok {
+			rounds = append(rounds, fmt.Sprintf("Round %d feedback: %s", i, fb))
+		}
+	}
+
+	// Gather test subtask history (all test-phase subtasks including rejected).
+	var testSubtasks []model.Task
+	if err := o.db.Where(
+		"parent_task_id = ? AND phase = ?",
+		parent.ID, "test",
+	).Order("created_at asc").Find(&testSubtasks).Error; err != nil {
+		o.logger.Warn("diagnostic agent: failed to load test subtasks", "error", err)
+	}
+
+	var subtaskSummary []string
+	for _, sub := range testSubtasks {
+		subtaskSummary = append(subtaskSummary,
+			fmt.Sprintf("- %s [%s]", sub.Title, sub.Status))
+	}
+
+	diagnosticPrompt := fmt.Sprintf(
+		"The tests for this task have been rejected 3 times. Help the human understand why.\n\n"+
+			"Task: %s\n%s\n\n"+
+			"Test subtask history:\n%s\n\n"+
+			"Rejection rounds:\n%s\n\n"+
+			"Summarize the pattern of rejections and suggest a path forward.\n"+
+			"Either the test premise is wrong, the acceptance criteria are ambiguous,\n"+
+			"or there's a misunderstanding.",
+		parent.Title,
+		parent.Description,
+		strings.Join(subtaskSummary, "\n"),
+		strings.Join(rounds, "\n"),
+	)
+
+	// Store the diagnostic prompt in the parent context for reference.
+	parent.Context["diagnostic_prompt"] = diagnosticPrompt
+	if err := o.db.Save(parent).Error; err != nil {
+		return fmt.Errorf("spawn diagnostic agent: save context: %w", err)
+	}
+
+	// If the runner is not available, log and return.
+	if o.runner == nil {
+		o.logger.Warn("diagnostic agent: runner not available, diagnostic prompt stored in task context",
+			"task_id", parent.ID)
+		return nil
+	}
+
+	// Spawn a reviewer-type agent. Use the integration branch worktree if available.
+	featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
+	worktreePath := ""
+	if featureName != "" && o.worktree != nil {
+		worktreePath = o.worktree.FeatureWorktreePath(featureName)
+	}
+
+	ag := model.Agent{
+		ID:             uuid.New(),
+		ProjectID:      parent.ProjectID,
+		AgentType:      model.AgentReviewer,
+		Name:           fmt.Sprintf("diagnostic-%s", parent.ID.String()[:8]),
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &parent.ID,
+		WorktreePath:   worktreePath,
+		WorktreeBranch: parent.WorktreeBranch,
+	}
+
+	if err := o.db.Create(&ag).Error; err != nil {
+		return fmt.Errorf("spawn diagnostic agent: create agent record: %w", err)
+	}
+
+	o.logger.Info("diagnostic agent spawned",
+		"task_id", parent.ID,
+		"agent_id", ag.ID)
+
+	return nil
+}
+
+// isTerminal returns true if a task status is a terminal state (no further
+// automated processing will occur).
+func isTerminal(status model.TaskStatus) bool {
+	return status == model.StatusDone || status == model.StatusFailed || status == model.StatusRejected
 }
 
 // AddComment creates a new comment on a task. Only allowed for human-gate statuses.

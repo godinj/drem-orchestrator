@@ -46,13 +46,13 @@ type agentsLoadedMsg struct {
 
 // dataRefreshedMsg is sent after a data refresh from DB completes.
 type dataRefreshedMsg struct {
-	tasks    []model.Task
-	agents   []model.Agent
+	tasks     []model.Task
+	agents    []model.Agent
 	forTaskID *uuid.UUID // which task the detail data was loaded for
-	subtasks []model.Task
-	agent    *model.Agent
-	comments []model.TaskComment
-	deps     []depInfo
+	subtasks  []model.Task
+	agent     *model.Agent
+	comments  []model.TaskComment
+	deps      []depInfo
 }
 
 // logCapturedMsg carries captured tmux pane output.
@@ -91,8 +91,9 @@ type fixerSpawnedMsg struct {
 type feedbackAction int
 
 const (
-	feedbackNone       feedbackAction = iota
-	feedbackAddComment                // add comment to task
+	feedbackNone             feedbackAction = iota
+	feedbackAddComment                      // add comment to task
+	feedbackTestReviewReject                // reject test review with feedback
 )
 
 // Model is the root Bubble Tea model that composes all TUI sub-models.
@@ -534,8 +535,13 @@ func (m Model) handleFeedbackKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		if m.feedbackAction == feedbackAddComment {
+		switch m.feedbackAction {
+		case feedbackAddComment:
 			if err := m.orch.AddComment(selected.ID, "user", body); err != nil {
+				m.err = err
+			}
+		case feedbackTestReviewReject:
+			if err := m.orch.HandleTestReviewRejected(selected.ID, body); err != nil {
 				m.err = err
 			}
 		}
@@ -563,6 +569,10 @@ func (m Model) handleApprove() (tea.Model, tea.Cmd) {
 		if err := m.orch.HandlePlanApproved(selected.ID); err != nil {
 			m.err = err
 		}
+	case model.StatusTestReview:
+		if err := m.orch.HandleTestReviewApproved(selected.ID); err != nil {
+			m.err = err
+		}
 	case model.StatusTestingReady:
 		if err := m.orch.HandleTestPassed(selected.ID); err != nil {
 			m.err = err
@@ -573,7 +583,8 @@ func (m Model) handleApprove() (tea.Model, tea.Cmd) {
 	return m, m.refreshData()
 }
 
-// handleReject rejects the plan (PLAN_REVIEW) or fails testing (TESTING_READY).
+// handleReject rejects the plan (PLAN_REVIEW), fails testing (TESTING_READY),
+// or rejects test review (TEST_REVIEW) with feedback.
 func (m Model) handleReject() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil {
@@ -584,6 +595,13 @@ func (m Model) handleReject() (tea.Model, tea.Cmd) {
 		if err := m.orch.HandlePlanRejected(selected.ID); err != nil {
 			m.err = err
 		}
+	case model.StatusTestReview:
+		// Open feedback dialog for test review rejection (feedback required).
+		m.feedback = NewFeedbackModel("Test Review Rejection Feedback")
+		m.feedback.Show()
+		m.feedbackAction = feedbackTestReviewReject
+		m.focus = FocusFeedback
+		return m, nil
 	case model.StatusTestingReady:
 		if err := m.orch.HandleTestFailed(selected.ID); err != nil {
 			m.err = err
@@ -952,7 +970,7 @@ func (m Model) View() string {
 	agentsWidth := innerWidth - tasksWidth
 
 	// Update panel sizes.
-	m.board.width = tasksWidth - 4  // Account for panel border + padding.
+	m.board.width = tasksWidth - 4 // Account for panel border + padding.
 	m.board.height = upperHeight - 2
 	m.agents.width = agentsWidth - 4
 	m.agents.height = upperHeight - 2
@@ -1172,7 +1190,6 @@ func (m *Model) toggleBoardCollapse() {
 	}
 	m.board.trackSelected()
 }
-
 
 // listenForEvents returns a Cmd that blocks on the events channel and wraps
 // the received orchestrator Event as a tea.Msg.

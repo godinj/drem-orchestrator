@@ -44,8 +44,9 @@ type Task struct {
 	PlanFeedback    string
 	TestPlan        string
 	TestFeedback    string
-	WorktreeBranch  string
-	PRUrl           string
+	WorktreeBranch string
+	PRUrl          string
+
 	// TDD fields (used for subtasks)
 	Phase    string    `gorm:"default:''"` // "test", "implementation", "integration", or ""
 	TestsFor JSONArray `gorm:"type:text"`  // indices of impl subtasks this test covers (test-phase only)
