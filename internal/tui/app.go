@@ -63,7 +63,7 @@ type periodicRefreshMsg struct{}
 // periodicRefreshInterval is how often the TUI re-reads agent data from the
 // DB, so that continuously-updated fields like context_used_pct are visible
 // without waiting for an orchestrator event.
-const periodicRefreshInterval = 5 * time.Second
+const periodicRefreshInterval = 2 * time.Second
 
 // logCapturedMsg carries captured tmux pane output.
 type logCapturedMsg struct {
