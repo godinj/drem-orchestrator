@@ -19,9 +19,17 @@ type fileOverlap struct {
 	Files    []string
 }
 
+// tddException records a subtask that is exempt from TDD requirements.
+type tddException struct {
+	SubtaskIndex int    `json:"subtask_index"`
+	Reason       string `json:"reason"`
+}
+
 // ValidatePlan checks a parsed plan for structural issues.
 // Returns warnings (surfaced at plan_review) and errors (block transition).
-func ValidatePlan(subtasks []planEntry) PlanValidationResult {
+// The exceptions parameter allows specific subtasks to be exempt from TDD
+// requirements; pass nil if no exceptions apply.
+func ValidatePlan(subtasks []planEntry, exceptions []tddException) PlanValidationResult {
 	var result PlanValidationResult
 
 	// 1. Subtask count bounds.
@@ -58,7 +66,205 @@ func ValidatePlan(subtasks []planEntry) PlanValidationResult {
 			"Dependency cycle detected in subtask dependencies")
 	}
 
-	// 5. Test subtask ordering.
+	// 5. TDD validation (only if at least one subtask has a non-empty Phase).
+	if hasTDDPhases(subtasks) {
+		validateTDD(subtasks, exceptions, &result)
+	} else {
+		// Legacy: test subtask ordering check for old-format plans.
+		validateLegacyTestOrdering(subtasks, &result)
+	}
+
+	result.Valid = len(result.Errors) == 0
+	return result
+}
+
+// hasTDDPhases returns true if at least one subtask has a non-empty Phase field.
+func hasTDDPhases(subtasks []planEntry) bool {
+	for _, s := range subtasks {
+		if s.Phase != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// validateTDD runs all TDD-specific validation rules on the plan.
+func validateTDD(subtasks []planEntry, exceptions []tddException, result *PlanValidationResult) {
+	n := len(subtasks)
+
+	// Build exception set: subtask indices that are exempt from TDD.
+	exceptionSet := make(map[int]bool, len(exceptions))
+	for _, ex := range exceptions {
+		exceptionSet[ex.SubtaskIndex] = true
+	}
+
+	// Validate TDD exceptions (§4.3.4).
+	validateTDDExceptions(subtasks, exceptions, result)
+
+	// Collect test and implementation subtasks.
+	var testIndices []int
+	var implIndices []int
+	for i, s := range subtasks {
+		switch s.Phase {
+		case "test":
+			testIndices = append(testIndices, i)
+		case "implementation":
+			implIndices = append(implIndices, i)
+		}
+	}
+
+	// Rule: Require at least one test subtask if there are impl subtasks
+	// and not all impl subtasks are exempted.
+	if len(implIndices) > 0 && len(testIndices) == 0 {
+		allExempted := true
+		for _, idx := range implIndices {
+			if !exceptionSet[idx] {
+				allExempted = false
+				break
+			}
+		}
+		if !allExempted {
+			result.Errors = append(result.Errors,
+				"Plan has no test subtasks but has implementation subtasks without TDD exceptions")
+		}
+	}
+
+	// Build implCoverage: maps impl subtask index -> covering test subtask index.
+	implCoverage := make(map[int]int) // impl index -> test index
+
+	// Validate each test subtask's tests_for entries.
+	for _, ti := range testIndices {
+		testEntry := subtasks[ti]
+
+		// Rule: A test subtask's tests_for must reference exactly one impl subtask (1:1).
+		if len(testEntry.TestsFor) != 1 {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("Test subtask %d ('%s') must reference exactly one implementation subtask in tests_for, got %d",
+					ti, testEntry.Title, len(testEntry.TestsFor)))
+			continue
+		}
+
+		implIdx := testEntry.TestsFor[0]
+
+		// Rule: tests_for must not reference out-of-bounds index.
+		if implIdx < 0 || implIdx >= n {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("Test subtask %d ('%s') tests_for references out-of-bounds subtask index %d",
+					ti, testEntry.Title, implIdx))
+			continue
+		}
+
+		// Rule: tests_for must reference an implementation-phase subtask.
+		if subtasks[implIdx].Phase != "implementation" {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("Test subtask %d ('%s') tests_for references non-implementation subtask %d (phase: %q)",
+					ti, testEntry.Title, implIdx, subtasks[implIdx].Phase))
+			continue
+		}
+
+		// Rule: No duplicate test coverage — two test subtasks must not cover the same impl.
+		if existingTest, exists := implCoverage[implIdx]; exists {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("Duplicate test coverage: test subtasks %d and %d both cover implementation subtask %d",
+					existingTest, ti, implIdx))
+			continue
+		}
+
+		implCoverage[implIdx] = ti
+
+		// Warning: File overlap check between test and impl subtask.
+		testFiles := allFiles(testEntry)
+		implFiles := allFiles(subtasks[implIdx])
+		if len(testFiles) > 0 && len(implFiles) > 0 {
+			if !hasFileOverlap(testFiles, implFiles) {
+				result.Warnings = append(result.Warnings,
+					fmt.Sprintf("Test subtask %d and implementation subtask %d have no file overlap — verify test placement",
+						ti, implIdx))
+			}
+		}
+	}
+
+	// Rule: Every implementation subtask must be covered by a test or have an exception.
+	for _, implIdx := range implIndices {
+		if _, covered := implCoverage[implIdx]; !covered && !exceptionSet[implIdx] {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("Implementation subtask %d ('%s') has no corresponding test subtask and no TDD exception",
+					implIdx, subtasks[implIdx].Title))
+		}
+	}
+
+	// Rule: Validate phase ordering — test must not depend on implementation (§4.3.3).
+	validatePhaseOrdering(subtasks, result)
+}
+
+// validateTDDExceptions validates the TDD exception entries themselves (§4.3.4).
+func validateTDDExceptions(subtasks []planEntry, exceptions []tddException, result *PlanValidationResult) {
+	n := len(subtasks)
+
+	// Count implementation subtasks for the 50% threshold.
+	implCount := 0
+	for _, s := range subtasks {
+		if s.Phase == "implementation" {
+			implCount++
+		}
+	}
+
+	exemptedImplCount := 0
+	for _, ex := range exceptions {
+		// Rule: Exception must not reference out-of-bounds index.
+		if ex.SubtaskIndex < 0 || ex.SubtaskIndex >= n {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("TDD exception references out-of-bounds subtask index %d", ex.SubtaskIndex))
+			continue
+		}
+
+		// Rule: Exception must not reference a test-phase subtask.
+		if subtasks[ex.SubtaskIndex].Phase == "test" {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("TDD exception references test-phase subtask %d ('%s')",
+					ex.SubtaskIndex, subtasks[ex.SubtaskIndex].Title))
+			continue
+		}
+
+		if subtasks[ex.SubtaskIndex].Phase == "implementation" {
+			exemptedImplCount++
+		}
+	}
+
+	// Warning: More than 50% of impl subtasks exempted.
+	if implCount > 0 && exemptedImplCount > 0 {
+		ratio := float64(exemptedImplCount) / float64(implCount)
+		if ratio > 0.5 {
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("More than 50%% of implementation subtasks (%d/%d) are exempted from TDD",
+					exemptedImplCount, implCount))
+		}
+	}
+}
+
+// validatePhaseOrdering checks that test-phase subtasks do not depend on
+// implementation-phase subtasks, enforcing TDD ordering (§4.3.3).
+func validatePhaseOrdering(subtasks []planEntry, result *PlanValidationResult) {
+	for i, s := range subtasks {
+		if s.Phase != "test" {
+			continue
+		}
+		for _, dep := range s.Dependencies {
+			if dep < 0 || dep >= len(subtasks) {
+				continue
+			}
+			if subtasks[dep].Phase == "implementation" {
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("Test subtask %d ('%s') depends on implementation subtask %d ('%s') — tests must run before implementation",
+						i, s.Title, dep, subtasks[dep].Title))
+			}
+		}
+	}
+}
+
+// validateLegacyTestOrdering performs the old-style check for plans without
+// TDD phases: warns if test subtasks don't depend on all implementation subtasks.
+func validateLegacyTestOrdering(subtasks []planEntry, result *PlanValidationResult) {
 	for i, s := range subtasks {
 		if isTestSubtask(s) {
 			missing := findMissingTestDependencies(subtasks, i)
@@ -68,9 +274,78 @@ func ValidatePlan(subtasks []planEntry) PlanValidationResult {
 			}
 		}
 	}
+}
 
-	result.Valid = len(result.Errors) == 0
+// hasFileOverlap returns true if there is at least one common file between
+// the two file lists.
+func hasFileOverlap(filesA, filesB []string) bool {
+	set := make(map[string]bool, len(filesA))
+	for _, f := range filesA {
+		set[f] = true
+	}
+	for _, f := range filesB {
+		if set[f] {
+			return true
+		}
+	}
+	return false
+}
+
+// MergeTDDDependencies takes the parsed plan entries and returns a new slice
+// where each implementation subtask's Dependencies includes its corresponding
+// test subtask (auto-generated from tests_for). Explicit dependencies are
+// preserved; auto-generated ones are added only if not already present.
+func MergeTDDDependencies(subtasks []planEntry) []planEntry {
+	// Make a deep copy of the subtask slice.
+	result := make([]planEntry, len(subtasks))
+	for i, s := range subtasks {
+		result[i] = s
+		// Deep copy slices to avoid mutating the original.
+		if len(s.Dependencies) > 0 {
+			result[i].Dependencies = make([]int, len(s.Dependencies))
+			copy(result[i].Dependencies, s.Dependencies)
+		}
+		if len(s.Files) > 0 {
+			result[i].Files = make([]string, len(s.Files))
+			copy(result[i].Files, s.Files)
+		}
+		if len(s.EstimatedFiles) > 0 {
+			result[i].EstimatedFiles = make([]string, len(s.EstimatedFiles))
+			copy(result[i].EstimatedFiles, s.EstimatedFiles)
+		}
+		if len(s.TestsFor) > 0 {
+			result[i].TestsFor = make([]int, len(s.TestsFor))
+			copy(result[i].TestsFor, s.TestsFor)
+		}
+	}
+
+	// For each test-phase subtask with TestsFor, add the test subtask as a
+	// dependency of the implementation subtask it covers.
+	for testIdx, s := range result {
+		if s.Phase != "test" || len(s.TestsFor) != 1 {
+			continue
+		}
+		implIdx := s.TestsFor[0]
+		if implIdx < 0 || implIdx >= len(result) {
+			continue
+		}
+		// Add testIdx to the impl subtask's dependencies if not already present.
+		if !containsInt(result[implIdx].Dependencies, testIdx) {
+			result[implIdx].Dependencies = append(result[implIdx].Dependencies, testIdx)
+		}
+	}
+
 	return result
+}
+
+// containsInt returns true if the slice contains the given value.
+func containsInt(slice []int, val int) bool {
+	for _, v := range slice {
+		if v == val {
+			return true
+		}
+	}
+	return false
 }
 
 // computeFileOverlaps finds pairs of subtasks that share files.
@@ -180,11 +455,19 @@ func hasCycle(subtasks []planEntry) bool {
 	return false
 }
 
-// isTestSubtask checks if a subtask is a test subtask. It first looks for an
-// explicit "is_test" field in the plan entry, then falls back to checking if
-// the title contains test-related words ("test", "tests", "testing") as whole
-// words — avoiding false matches on unrelated words like "latest", "contest".
+// isTestSubtask checks if a subtask is a test subtask. It first checks the
+// Phase field — when Phase is set, it is authoritative and no fallback is used.
+// Otherwise, it checks the explicit IsTest field, then falls back to checking
+// if the title contains test-related words ("test", "tests", "testing") as
+// whole words — avoiding false matches on unrelated words like "latest", "contest".
 func isTestSubtask(entry planEntry) bool {
+	if entry.Phase == "test" {
+		return true
+	}
+	// If Phase is explicitly set to something other than "test", it takes precedence.
+	if entry.Phase != "" {
+		return false
+	}
 	if entry.IsTest {
 		return true
 	}
