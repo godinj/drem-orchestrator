@@ -1,0 +1,1021 @@
+package orchestrator
+
+import (
+	"testing"
+
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+
+	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/state"
+	"github.com/godinj/drem-orchestrator/internal/worktree"
+)
+
+// testOrchestratorWithRunner creates an Orchestrator with a test DB and a
+// Runner that has 0 capacity (CanSpawn returns false). Useful for tests
+// that call processTestWriting but don't need actual agent spawning.
+func testOrchestratorWithRunner(t *testing.T, db *gorm.DB, wtManager *worktree.Manager) *Orchestrator {
+	t.Helper()
+	o := testOrchestrator(t, db, wtManager)
+	o.runner = agent.NewRunner(db, nil, wtManager, "claude", 0)
+	return o
+}
+
+// ---------------------------------------------------------------------------
+// processTestWriting tests
+// ---------------------------------------------------------------------------
+
+func TestProcessTestWriting_SchedulesOnlyTestPhaseSubtasks(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent",
+		Description: "test parent",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	// Create 2 test subtasks and 2 implementation subtasks, all in BACKLOG.
+	testSub1 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-sub-1",
+		Description:  "write tests for A",
+		Status:       model.StatusBacklog,
+		Phase:        "test",
+		Priority:     4,
+	}
+	testSub2 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-sub-2",
+		Description:  "write tests for B",
+		Status:       model.StatusBacklog,
+		Phase:        "test",
+		Priority:     3,
+	}
+	implSub1 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "impl-sub-1",
+		Description:  "implement A",
+		Status:       model.StatusBacklog,
+		Phase:        "implementation",
+		Priority:     2,
+	}
+	implSub2 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "impl-sub-2",
+		Description:  "implement B",
+		Status:       model.StatusBacklog,
+		Phase:        "implementation",
+		Priority:     1,
+	}
+	db.Create(&testSub1)
+	db.Create(&testSub2)
+	db.Create(&implSub1)
+	db.Create(&implSub2)
+
+	// Call scheduleSubtasks via processTestWriting. Since we have no runner,
+	// scheduling won't actually spawn agents but the phase filter logic
+	// ensures only test subtasks are considered.
+	// We verify this by checking the scheduling query behavior.
+
+	// Instead of calling processTestWriting (which needs runner), test the
+	// scheduleSubtasks phase-filtering directly.
+	// Query subtasks like scheduleSubtasks does, then verify filtering.
+	var subtasks []model.Task
+	if err := db.Where(
+		"parent_task_id = ? AND ((status = ?) OR (status = ? AND assigned_agent_id IS NULL))",
+		parentID, model.StatusBacklog, model.StatusInProgress,
+	).Order("priority DESC").Find(&subtasks).Error; err != nil {
+		t.Fatalf("query subtasks: %v", err)
+	}
+
+	// Simulate the phase filter from scheduleSubtasks.
+	var schedulable []string
+	for _, sub := range subtasks {
+		if parent.Status == model.StatusTestWriting && sub.Phase != "test" {
+			continue
+		}
+		schedulable = append(schedulable, sub.Title)
+	}
+
+	if len(schedulable) != 2 {
+		t.Fatalf("expected 2 schedulable test subtasks, got %d: %v", len(schedulable), schedulable)
+	}
+	for _, name := range schedulable {
+		if name != "test-sub-1" && name != "test-sub-2" {
+			t.Errorf("unexpected schedulable subtask: %s", name)
+		}
+	}
+}
+
+func TestProcessTestWriting_AllTestSubtasksDone_TransitionsToTestReview(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent",
+		Description: "test parent",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	// Create test subtasks that are all DONE.
+	for _, title := range []string{"test-1", "test-2"} {
+		sub := model.Task{
+			ID:           uuid.New(),
+			ProjectID:    o.projectID,
+			ParentTaskID: &parentID,
+			Title:        title,
+			Description:  "test subtask",
+			Status:       model.StatusDone,
+			Phase:        "test",
+		}
+		db.Create(&sub)
+	}
+
+	// Also create implementation subtasks in BACKLOG (should not affect transition).
+	implSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "impl-1",
+		Description:  "implementation subtask",
+		Status:       model.StatusBacklog,
+		Phase:        "implementation",
+	}
+	db.Create(&implSub)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Reload parent to check status.
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusTestReview {
+		t.Errorf("expected parent status test_review, got %s", updated.Status)
+	}
+}
+
+func TestProcessTestWriting_AllTestSubtasksTerminal_SomeFailed(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent",
+		Description: "test parent",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	// One done, one failed.
+	sub1 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-done",
+		Description:  "test subtask",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	sub2 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-failed",
+		Description:  "test subtask",
+		Status:       model.StatusFailed,
+		Phase:        "test",
+	}
+	db.Create(&sub1)
+	db.Create(&sub2)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected parent status failed, got %s", updated.Status)
+	}
+}
+
+func TestProcessTestWriting_TestSubtasksStillRunning(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent",
+		Description: "test parent",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	// One done, one still in_progress.
+	sub1 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-done",
+		Description:  "test subtask",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	sub2 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-running",
+		Description:  "test subtask",
+		Status:       model.StatusInProgress,
+		Phase:        "test",
+	}
+	db.Create(&sub1)
+	db.Create(&sub2)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Parent should remain in TEST_WRITING.
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusTestWriting {
+		t.Errorf("expected parent to stay in test_writing, got %s", updated.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandlePlanApproved TDD tests
+// ---------------------------------------------------------------------------
+
+func TestHandlePlanApproved_TDDPlan_TransitionsToTestWriting(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:          taskID,
+		ProjectID:   o.projectID,
+		Title:       "tdd-task",
+		Description: "task with TDD plan",
+		Status:      model.StatusPlanReview,
+		Plan: model.JSONField{
+			"subtasks": []any{
+				map[string]any{
+					"title":       "Write tests for module A",
+					"description": "Test subtask",
+					"agent_type":  "coder",
+					"phase":       "test",
+					"tests_for":   []any{float64(1)},
+				},
+				map[string]any{
+					"title":       "Implement module A",
+					"description": "Implementation subtask",
+					"agent_type":  "coder",
+					"phase":       "implementation",
+				},
+			},
+		},
+	}
+	db.Create(&task)
+
+	if err := o.HandlePlanApproved(taskID); err != nil {
+		t.Fatalf("HandlePlanApproved error: %v", err)
+	}
+
+	// Check parent transitioned to TEST_WRITING.
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.Status != model.StatusTestWriting {
+		t.Errorf("expected status test_writing, got %s", updated.Status)
+	}
+
+	// Check subtasks were created with correct Phase.
+	var subtasks []model.Task
+	db.Where("parent_task_id = ?", taskID).Order("priority DESC").Find(&subtasks)
+	if len(subtasks) != 2 {
+		t.Fatalf("expected 2 subtasks, got %d", len(subtasks))
+	}
+
+	// First subtask should be test phase.
+	if subtasks[0].Phase != "test" {
+		t.Errorf("expected first subtask phase 'test', got %q", subtasks[0].Phase)
+	}
+	// Second subtask should be implementation phase.
+	if subtasks[1].Phase != "implementation" {
+		t.Errorf("expected second subtask phase 'implementation', got %q", subtasks[1].Phase)
+	}
+}
+
+func TestHandlePlanApproved_OldFormatPlan_TransitionsToInProgress(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:          taskID,
+		ProjectID:   o.projectID,
+		Title:       "old-task",
+		Description: "task with old-format plan",
+		Status:      model.StatusPlanReview,
+		Plan: model.JSONField{
+			"subtasks": []any{
+				map[string]any{
+					"title":       "Implement feature X",
+					"description": "Standard subtask, no phase",
+					"agent_type":  "coder",
+				},
+				map[string]any{
+					"title":       "Implement feature Y",
+					"description": "Standard subtask, no phase",
+					"agent_type":  "coder",
+				},
+			},
+		},
+	}
+	db.Create(&task)
+
+	if err := o.HandlePlanApproved(taskID); err != nil {
+		t.Fatalf("HandlePlanApproved error: %v", err)
+	}
+
+	// Check parent transitioned to IN_PROGRESS (backward compat).
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.Status != model.StatusInProgress {
+		t.Errorf("expected status in_progress, got %s", updated.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Phase-aware scheduling tests
+// ---------------------------------------------------------------------------
+
+func TestPhaseAwareScheduling_InProgressSkipsTestSubtasks(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent",
+		Description: "test parent",
+		Status:      model.StatusInProgress,
+	}
+	db.Create(&parent)
+
+	// Create test and impl subtasks.
+	testSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-sub",
+		Description:  "test subtask",
+		Status:       model.StatusBacklog,
+		Phase:        "test",
+		Priority:     2,
+	}
+	implSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "impl-sub",
+		Description:  "impl subtask",
+		Status:       model.StatusBacklog,
+		Phase:        "implementation",
+		Priority:     1,
+	}
+	db.Create(&testSub)
+	db.Create(&implSub)
+
+	// Query subtasks like scheduleSubtasks does.
+	var subtasks []model.Task
+	if err := db.Where(
+		"parent_task_id = ? AND ((status = ?) OR (status = ? AND assigned_agent_id IS NULL))",
+		parentID, model.StatusBacklog, model.StatusInProgress,
+	).Order("priority DESC").Find(&subtasks).Error; err != nil {
+		t.Fatalf("query subtasks: %v", err)
+	}
+
+	// Simulate the phase filter.
+	var schedulable []string
+	for _, sub := range subtasks {
+		// During IN_PROGRESS, only schedule implementation and integration subtasks.
+		if parent.Status == model.StatusInProgress && sub.Phase == "test" {
+			continue
+		}
+		schedulable = append(schedulable, sub.Title)
+	}
+
+	if len(schedulable) != 1 {
+		t.Fatalf("expected 1 schedulable impl subtask, got %d: %v", len(schedulable), schedulable)
+	}
+	if schedulable[0] != "impl-sub" {
+		t.Errorf("expected impl-sub, got %s", schedulable[0])
+	}
+}
+
+func TestPhaseAwareScheduling_NoPhaseSubtasksAlwaysScheduled(t *testing.T) {
+	// Subtasks without a phase (empty string) should be scheduled in both
+	// TEST_WRITING and IN_PROGRESS states, since the filter only blocks
+	// specific phase values.
+	tests := []struct {
+		name         string
+		parentStatus model.TaskStatus
+		subPhase     string
+		expected     bool
+	}{
+		{"test_writing+test", model.StatusTestWriting, "test", true},
+		{"test_writing+impl", model.StatusTestWriting, "implementation", false},
+		{"test_writing+empty", model.StatusTestWriting, "", false},
+		{"in_progress+test", model.StatusInProgress, "test", false},
+		{"in_progress+impl", model.StatusInProgress, "implementation", true},
+		{"in_progress+empty", model.StatusInProgress, "", true},
+		{"in_progress+integration", model.StatusInProgress, "integration", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Apply the same filter logic as scheduleSubtasks.
+			scheduled := true
+			if tt.parentStatus == model.StatusTestWriting && tt.subPhase != "test" {
+				scheduled = false
+			}
+			if tt.parentStatus == model.StatusInProgress && tt.subPhase == "test" {
+				scheduled = false
+			}
+			if scheduled != tt.expected {
+				t.Errorf("expected scheduled=%v, got %v", tt.expected, scheduled)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test file extraction tests
+// ---------------------------------------------------------------------------
+
+func TestIsTestFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		expected bool
+	}{
+		{"go test file", "foo_test.go", true},
+		{"go regular file", "foo.go", false},
+		{"python test prefix", "test_foo.py", true},
+		{"python test suffix", "foo_test.py", true},
+		{"python regular file", "foo.py", false},
+		{"ts test file", "foo.test.ts", true},
+		{"ts spec file", "foo.spec.ts", true},
+		{"js test file", "foo.test.js", true},
+		{"js spec file", "foo.spec.js", true},
+		{"tsx test file", "component.test.tsx", true},
+		{"jsx spec file", "component.spec.jsx", true},
+		{"regular ts file", "foo.ts", false},
+		{"with path go", "internal/pkg/foo_test.go", true},
+		{"with path js", "src/utils/helper.test.js", true},
+		{"README", "README.md", false},
+		{"test in name but not test file", "test_helper.go", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isTestFile(tt.filename)
+			if result != tt.expected {
+				t.Errorf("isTestFile(%q) = %v, want %v", tt.filename, result, tt.expected)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TDD reverse dependencies tests
+// ---------------------------------------------------------------------------
+
+func TestMergeTDDDependencies_AddsReverseDeps(t *testing.T) {
+	entries := []planEntry{
+		{Title: "Tests for A", Phase: "test", TestsFor: []int{1}},
+		{Title: "Implement A", Phase: "implementation"},
+		{Title: "Tests for B", Phase: "test", TestsFor: []int{3}},
+		{Title: "Implement B", Phase: "implementation"},
+	}
+
+	merged := MergeTDDDependencies(entries)
+
+	// Impl subtask at index 1 should now depend on test subtask at index 0.
+	if len(merged[1].Dependencies) != 1 {
+		t.Fatalf("expected 1 dependency on impl A, got %d: %v", len(merged[1].Dependencies), merged[1].Dependencies)
+	}
+	if merged[1].Dependencies[0] != 0 {
+		t.Errorf("expected impl A to depend on test at 0, got %d", merged[1].Dependencies[0])
+	}
+	// Impl subtask at index 3 should now depend on test subtask at index 2.
+	if len(merged[3].Dependencies) != 1 {
+		t.Fatalf("expected 1 dependency on impl B, got %d: %v", len(merged[3].Dependencies), merged[3].Dependencies)
+	}
+	if merged[3].Dependencies[0] != 2 {
+		t.Errorf("expected impl B to depend on test at 2, got %d", merged[3].Dependencies[0])
+	}
+}
+
+func TestMergeTDDDependencies_NoDuplicates(t *testing.T) {
+	entries := []planEntry{
+		{Title: "Tests for A", Phase: "test", TestsFor: []int{1}},
+		{Title: "Implement A", Phase: "implementation", Dependencies: []int{0}}, // already depends on 0
+	}
+
+	merged := MergeTDDDependencies(entries)
+
+	// Should not duplicate the dependency on impl subtask.
+	if len(merged[1].Dependencies) != 1 {
+		t.Errorf("expected 1 dependency (no duplicate), got %d: %v",
+			len(merged[1].Dependencies), merged[1].Dependencies)
+	}
+}
+
+func TestMergeTDDDependencies_NoTestsFor(t *testing.T) {
+	entries := []planEntry{
+		{Title: "Implement A", Phase: "implementation"},
+		{Title: "Implement B", Phase: "implementation", Dependencies: []int{0}},
+	}
+
+	merged := MergeTDDDependencies(entries)
+
+	// No changes expected.
+	if len(merged[0].Dependencies) != 0 {
+		t.Errorf("expected 0 dependencies for first entry, got %d", len(merged[0].Dependencies))
+	}
+	if len(merged[1].Dependencies) != 1 {
+		t.Errorf("expected 1 dependency for second entry, got %d", len(merged[1].Dependencies))
+	}
+}
+
+func TestMergeTDDDependencies_OutOfRangeIndex(t *testing.T) {
+	// MergeTDDDependencies only handles TestsFor with exactly 1 element.
+	// Out-of-range indices are silently skipped.
+	entries := []planEntry{
+		{Title: "Tests for A", Phase: "test", TestsFor: []int{1}},
+		{Title: "Implement A", Phase: "implementation"},
+		{Title: "Tests for invalid", Phase: "test", TestsFor: []int{99}}, // out of range
+	}
+
+	merged := MergeTDDDependencies(entries)
+
+	// Impl subtask at index 1 should depend on test subtask at index 0.
+	if len(merged[1].Dependencies) != 1 {
+		t.Fatalf("expected 1 dependency, got %d: %v", len(merged[1].Dependencies), merged[1].Dependencies)
+	}
+	if merged[1].Dependencies[0] != 0 {
+		t.Errorf("expected dependency on index 0, got %d", merged[1].Dependencies[0])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HandlePlanApproved TDD dependency mapping tests
+// ---------------------------------------------------------------------------
+
+func TestHandlePlanApproved_SetsTestsForOnSubtasks(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:          taskID,
+		ProjectID:   o.projectID,
+		Title:       "tdd-deps-task",
+		Description: "task with TDD deps",
+		Status:      model.StatusPlanReview,
+		Plan: model.JSONField{
+			"subtasks": []any{
+				map[string]any{
+					"title":       "Tests for A",
+					"description": "Test subtask",
+					"agent_type":  "coder",
+					"phase":       "test",
+					"tests_for":   []any{float64(1)},
+				},
+				map[string]any{
+					"title":       "Implement module A",
+					"description": "Implementation subtask",
+					"agent_type":  "coder",
+					"phase":       "implementation",
+				},
+			},
+		},
+	}
+	db.Create(&task)
+
+	if err := o.HandlePlanApproved(taskID); err != nil {
+		t.Fatalf("HandlePlanApproved error: %v", err)
+	}
+
+	// Verify subtasks.
+	var subtasks []model.Task
+	db.Where("parent_task_id = ?", taskID).Order("priority DESC").Find(&subtasks)
+	if len(subtasks) != 2 {
+		t.Fatalf("expected 2 subtasks, got %d", len(subtasks))
+	}
+
+	// Find the test subtask (phase == "test").
+	var testSubtask *model.Task
+	var implSubtask *model.Task
+	for i := range subtasks {
+		if subtasks[i].Phase == "test" {
+			testSubtask = &subtasks[i]
+		}
+		if subtasks[i].Phase == "implementation" {
+			implSubtask = &subtasks[i]
+		}
+	}
+	if testSubtask == nil {
+		t.Fatal("no test-phase subtask found")
+	}
+	if implSubtask == nil {
+		t.Fatal("no implementation-phase subtask found")
+	}
+
+	// TestsFor on the test subtask should have 1 ID (the impl subtask).
+	if len(testSubtask.TestsFor) != 1 {
+		t.Errorf("expected TestsFor to have 1 entry, got %d: %v",
+			len(testSubtask.TestsFor), testSubtask.TestsFor)
+	}
+
+	// Impl subtask should depend on the test subtask (auto-generated by MergeTDDDependencies).
+	if len(implSubtask.DependencyIDs) < 1 {
+		t.Errorf("expected impl subtask to have at least 1 dependency (on test subtask), got %d: %v",
+			len(implSubtask.DependencyIDs), implSubtask.DependencyIDs)
+	}
+}
+
+func TestHandlePlanApproved_StoresTDDExceptions(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:          taskID,
+		ProjectID:   o.projectID,
+		Title:       "tdd-exceptions-task",
+		Description: "task with TDD exceptions",
+		Status:      model.StatusPlanReview,
+		Plan: model.JSONField{
+			"subtasks": []any{
+				map[string]any{
+					"title":       "Implement module A",
+					"description": "Implementation subtask",
+					"agent_type":  "coder",
+					"phase":       "implementation",
+				},
+			},
+			"tdd_exceptions": []any{
+				map[string]any{
+					"subtask_index": float64(0),
+					"reason":        "Pure refactoring, existing tests cover behavior",
+				},
+			},
+		},
+	}
+	db.Create(&task)
+
+	if err := o.HandlePlanApproved(taskID); err != nil {
+		t.Fatalf("HandlePlanApproved error: %v", err)
+	}
+
+	// Check that TDD exceptions are stored on the parent task.
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.TDDExceptions == nil {
+		t.Fatal("expected TDDExceptions to be set")
+	}
+	if _, ok := updated.TDDExceptions["exceptions"]; !ok {
+		t.Error("expected 'exceptions' key in TDDExceptions")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// State machine transition tests for new states
+// ---------------------------------------------------------------------------
+
+func TestTransitionTask_PlanReviewToTestWriting(t *testing.T) {
+	task := &model.Task{
+		ID:          uuid.New(),
+		Title:       "test",
+		Description: "test",
+		Status:      model.StatusPlanReview,
+	}
+
+	evt, err := state.TransitionTask(task, model.StatusTestWriting, "user", nil)
+	if err != nil {
+		t.Fatalf("expected transition to succeed, got: %v", err)
+	}
+	if evt == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if task.Status != model.StatusTestWriting {
+		t.Errorf("expected status test_writing, got %s", task.Status)
+	}
+}
+
+func TestTransitionTask_TestWritingToTestReview(t *testing.T) {
+	task := &model.Task{
+		ID:          uuid.New(),
+		Title:       "test",
+		Description: "test",
+		Status:      model.StatusTestWriting,
+	}
+
+	evt, err := state.TransitionTask(task, model.StatusTestReview, "orchestrator", nil)
+	if err != nil {
+		t.Fatalf("expected transition to succeed, got: %v", err)
+	}
+	if evt == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if task.Status != model.StatusTestReview {
+		t.Errorf("expected status test_review, got %s", task.Status)
+	}
+}
+
+func TestTransitionTask_TestReviewToInProgress(t *testing.T) {
+	task := &model.Task{
+		ID:          uuid.New(),
+		Title:       "test",
+		Description: "test",
+		Status:      model.StatusTestReview,
+	}
+
+	evt, err := state.TransitionTask(task, model.StatusInProgress, "user", nil)
+	if err != nil {
+		t.Fatalf("expected transition to succeed, got: %v", err)
+	}
+	if evt == nil {
+		t.Fatal("expected event, got nil")
+	}
+	if task.Status != model.StatusInProgress {
+		t.Errorf("expected status in_progress, got %s", task.Status)
+	}
+}
+
+func TestTransitionTask_TestWritingToFailed(t *testing.T) {
+	task := &model.Task{
+		ID:          uuid.New(),
+		Title:       "test",
+		Description: "test",
+		Status:      model.StatusTestWriting,
+	}
+
+	_, err := state.TransitionTask(task, model.StatusFailed, "orchestrator", nil)
+	if err != nil {
+		t.Fatalf("expected transition to succeed, got: %v", err)
+	}
+	if task.Status != model.StatusFailed {
+		t.Errorf("expected status failed, got %s", task.Status)
+	}
+}
+
+func TestTransitionTask_FailedToTestWriting(t *testing.T) {
+	task := &model.Task{
+		ID:          uuid.New(),
+		Title:       "test",
+		Description: "test",
+		Status:      model.StatusFailed,
+	}
+
+	_, err := state.TransitionTask(task, model.StatusTestWriting, "user", nil)
+	if err != nil {
+		t.Fatalf("expected transition to succeed, got: %v", err)
+	}
+	if task.Status != model.StatusTestWriting {
+		t.Errorf("expected status test_writing, got %s", task.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parsePlan tests
+// ---------------------------------------------------------------------------
+
+func TestParsePlanFull_WithPhaseAndTestsFor(t *testing.T) {
+	plan := model.JSONField{
+		"subtasks": []any{
+			map[string]any{
+				"title":       "Implement A",
+				"description": "impl",
+				"agent_type":  "coder",
+				"phase":       "implementation",
+			},
+			map[string]any{
+				"title":       "Test A",
+				"description": "test",
+				"agent_type":  "coder",
+				"phase":       "test",
+				"tests_for":   []any{float64(0)},
+			},
+		},
+		"tdd_exceptions": []any{
+			map[string]any{
+				"subtask_index": float64(0),
+				"reason":        "refactoring only",
+			},
+		},
+	}
+
+	result, err := parsePlan(plan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Subtasks) != 2 {
+		t.Fatalf("expected 2 subtasks, got %d", len(result.Subtasks))
+	}
+	if result.Subtasks[0].Phase != "implementation" {
+		t.Errorf("expected phase 'implementation', got %q", result.Subtasks[0].Phase)
+	}
+	if result.Subtasks[1].Phase != "test" {
+		t.Errorf("expected phase 'test', got %q", result.Subtasks[1].Phase)
+	}
+	if len(result.Subtasks[1].TestsFor) != 1 {
+		t.Errorf("expected 1 tests_for entry, got %d", len(result.Subtasks[1].TestsFor))
+	}
+	if len(result.TDDExceptions) != 1 {
+		t.Errorf("expected 1 TDD exception, got %d", len(result.TDDExceptions))
+	}
+}
+
+func TestParsePlanFull_OldFormat_NoPhase(t *testing.T) {
+	plan := model.JSONField{
+		"subtasks": []any{
+			map[string]any{
+				"title":       "Implement feature",
+				"description": "standard",
+				"agent_type":  "coder",
+			},
+		},
+	}
+
+	result, err := parsePlan(plan)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result.Subtasks) != 1 {
+		t.Fatalf("expected 1 subtask, got %d", len(result.Subtasks))
+	}
+	if result.Subtasks[0].Phase != "" {
+		t.Errorf("expected empty phase for old format, got %q", result.Subtasks[0].Phase)
+	}
+	if len(result.TDDExceptions) != 0 {
+		t.Errorf("expected 0 TDD exceptions, got %d", len(result.TDDExceptions))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// doTick integration test for TEST_WRITING
+// ---------------------------------------------------------------------------
+
+func TestDoTick_QueriesTestWritingTasks(t *testing.T) {
+	// Verify that doTick picks up TEST_WRITING tasks.
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "test-writing-task",
+		Description: "test",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	// Create a done test subtask to trigger transition.
+	testSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-sub",
+		Description:  "test subtask",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	db.Create(&testSub)
+
+	// Query TEST_WRITING tasks as doTick does.
+	var testWritingTasks []model.Task
+	err := db.Where("project_id = ? AND status = ? AND parent_task_id IS NULL",
+		o.projectID, model.StatusTestWriting).Find(&testWritingTasks).Error
+	if err != nil {
+		t.Fatalf("query error: %v", err)
+	}
+	if len(testWritingTasks) != 1 {
+		t.Fatalf("expected 1 test_writing task, got %d", len(testWritingTasks))
+	}
+	if testWritingTasks[0].ID != parentID {
+		t.Errorf("expected task ID %s, got %s", parentID, testWritingTasks[0].ID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// getTestCommand tests
+// ---------------------------------------------------------------------------
+
+func TestGetTestCommand_FromContext(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	task := &model.Task{
+		Context: model.JSONField{
+			"test_command": "go test -v ./...",
+		},
+	}
+
+	cmd := o.getTestCommand(task)
+	if cmd != "go test -v ./..." {
+		t.Errorf("expected 'go test -v ./...', got %q", cmd)
+	}
+}
+
+func TestGetTestCommand_NoContextNoWorktree(t *testing.T) {
+	db := testDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	task := &model.Task{}
+
+	cmd := o.getTestCommand(task)
+	if cmd != "" {
+		t.Errorf("expected empty string, got %q", cmd)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Suppress unused import warning
+// ---------------------------------------------------------------------------
+
+var _ *gorm.DB

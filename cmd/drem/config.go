@@ -23,10 +23,15 @@ type Config struct {
 	ContextWarnPercent  int           `toml:"context_warn_percent"`
 	ContextStopPercent  int           `toml:"context_stop_percent"`
 	LogPath             string        `toml:"log_path"`
+	TestCommand         string        `toml:"test_command"`
+	CompileCommand      string        `toml:"compile_command"`
+	ScopedTests         *bool         `toml:"scoped_tests"` // pointer for default-true detection
+	TestTimeout         time.Duration `toml:"test_timeout"`
 }
 
 // DefaultConfig returns a Config populated with sensible default values.
 func DefaultConfig() Config {
+	scopedDefault := true
 	return Config{
 		DatabasePath:        "./drem.db",
 		BareRepoPath:        "",
@@ -41,6 +46,8 @@ func DefaultConfig() Config {
 		ContextWarnPercent:  75,
 		ContextStopPercent:  90,
 		LogPath:             "./drem.log",
+		TestTimeout:         5 * time.Minute,
+		ScopedTests:         &scopedDefault,
 	}
 }
 

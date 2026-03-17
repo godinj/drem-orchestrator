@@ -46,8 +46,6 @@ type Task struct {
 	TestFeedback    string
 	WorktreeBranch  string
 	PRUrl           string
-	Context         JSONField `gorm:"type:text"`
-
 	// TDD fields (used for subtasks)
 	Phase    string    `gorm:"default:''"` // "test", "implementation", "integration", or ""
 	TestsFor JSONArray `gorm:"type:text"`  // indices of impl subtasks this test covers (test-phase only)
@@ -55,6 +53,8 @@ type Task struct {
 	// TDD fields (used for parent tasks)
 	TDDExceptions    JSONField `gorm:"type:text"`     // planner-declared TDD exceptions
 	NeedsHumanReview bool      `gorm:"default:false"` // set when fixer escalates to human
+
+	Context JSONField `gorm:"type:text"`
 
 	CreatedAt     time.Time
 	UpdatedAt     time.Time

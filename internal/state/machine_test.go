@@ -18,7 +18,7 @@ func TestValidateTransition(t *testing.T) {
 	}{
 		// PLAN_REVIEW now goes to TEST_WRITING, not IN_PROGRESS
 		{"plan_review to test_writing is valid", model.StatusPlanReview, model.StatusTestWriting, false},
-		{"plan_review to in_progress is INVALID", model.StatusPlanReview, model.StatusInProgress, true},
+		{"plan_review to in_progress (backward compat)", model.StatusPlanReview, model.StatusInProgress, false},
 		{"plan_review to planning is valid", model.StatusPlanReview, model.StatusPlanning, false},
 
 		// TEST_WRITING transitions

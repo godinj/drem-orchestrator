@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -165,6 +166,19 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 	for i := range planningTasks {
 		if err := o.processPlanning(&planningTasks[i]); err != nil {
 			o.logger.Error("process planning", "task_id", planningTasks[i].ID, "error", err)
+		}
+	}
+
+	// 4b. Process TEST_WRITING parent tasks.
+	var testWritingTasks []model.Task
+	if err := o.db.Where("project_id = ? AND status = ? AND parent_task_id IS NULL",
+		o.projectID, model.StatusTestWriting).Find(&testWritingTasks).Error; err != nil {
+		o.logger.Error("doTick: query test_writing tasks", "error", err)
+	} else {
+		for i := range testWritingTasks {
+			if err := o.processTestWriting(&testWritingTasks[i]); err != nil {
+				o.logger.Error("doTick: processTestWriting", "task_id", testWritingTasks[i].ID, "error", err)
+			}
 		}
 	}
 
@@ -1072,6 +1086,26 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		return nil
 	}
 
+	// Track actual test files for test-phase subtasks (§4.8.2).
+	if task.Phase == "test" && ag.WorktreePath != "" {
+		featureBranch := task.WorktreeBranch
+		if featureBranch == "" && task.ParentTaskID != nil {
+			var parentForBranch model.Task
+			if err := o.db.Select("worktree_branch").First(&parentForBranch, "id = ?", task.ParentTaskID).Error; err == nil {
+				featureBranch = parentForBranch.WorktreeBranch
+			}
+		}
+		if featureBranch != "" {
+			actualTestFiles := o.extractTestFiles(ag.WorktreePath, featureBranch)
+			if len(actualTestFiles) > 0 {
+				if task.Context == nil {
+					task.Context = make(model.JSONField)
+				}
+				task.Context["actual_test_files"] = actualTestFiles
+			}
+		}
+	}
+
 	// Merge succeeded — clean up agent worktree.
 	if ag.WorktreeBranch != "" {
 		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
@@ -1846,8 +1880,23 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task) error {
 		return fmt.Errorf("schedule subtasks: query: %w", err)
 	}
 
+	// Determine parent status for phase-aware scheduling.
+	var parentStatus model.TaskStatus
+	if parent != nil {
+		parentStatus = parent.Status
+	}
+
 	for i := range subtasks {
 		sub := &subtasks[i]
+
+		// Phase-aware scheduling: during TEST_WRITING, only schedule test-phase subtasks.
+		if parentStatus == model.StatusTestWriting && sub.Phase != "test" {
+			continue
+		}
+		// During IN_PROGRESS, only schedule implementation and integration subtasks.
+		if parentStatus == model.StatusInProgress && sub.Phase == "test" {
+			continue
+		}
 
 		// If wave scheduling is active, only schedule subtasks in the current group.
 		if allowedIDs != nil && !allowedIDs[sub.ID] {
@@ -2026,6 +2075,107 @@ func (o *Orchestrator) findCurrentGroup(parent *model.Task, schedule Schedule) *
 			return group
 		}
 	}
+	return nil
+}
+
+// processTestWriting schedules test-phase subtasks and checks for completion.
+// When all test-phase subtasks are done, transitions the parent to TEST_REVIEW.
+func (o *Orchestrator) processTestWriting(parent *model.Task) error {
+	// Check baseline test health (once per task).
+	if parent.Context == nil {
+		parent.Context = make(model.JSONField)
+	}
+	if _, checked := parent.Context["baseline_tests_checked"]; !checked {
+		testCmd := o.getTestCommand(parent)
+		if testCmd != "" {
+			featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
+			featureDir := o.worktree.FeatureWorktreePath(featureName)
+			result, runErr := runCommand(featureDir, testCmd)
+			parent.Context["baseline_tests_checked"] = true
+			if runErr != nil || result.ExitCode != 0 {
+				parent.Context["baseline_tests_failed"] = true
+				output := result.Stdout + result.Stderr
+				parent.Context["baseline_test_output"] = truncate(output, 5000)
+				o.logger.Warn("baseline tests fail on integration branch",
+					"task_id", parent.ID, "exit_code", result.ExitCode)
+				if err := o.db.Save(parent).Error; err != nil {
+					return fmt.Errorf("process test writing: save baseline check: %w", err)
+				}
+				return nil
+			}
+			if err := o.db.Save(parent).Error; err != nil {
+				return fmt.Errorf("process test writing: save baseline check: %w", err)
+			}
+		}
+	}
+
+	// Block scheduling if baseline tests failed.
+	if failed, ok := parent.Context["baseline_tests_failed"].(bool); ok && failed {
+		return nil
+	}
+
+	// Schedule test-phase subtasks using the existing scheduling logic.
+	if err := o.scheduleSubtasks(parent); err != nil {
+		return fmt.Errorf("process test writing: schedule: %w", err)
+	}
+
+	// Check if all test-phase subtasks are in a terminal state.
+	var testSubtasks []model.Task
+	if err := o.db.Where("parent_task_id = ? AND phase = ?", parent.ID, "test").
+		Find(&testSubtasks).Error; err != nil {
+		return fmt.Errorf("process test writing: query test subtasks: %w", err)
+	}
+
+	if len(testSubtasks) == 0 {
+		return nil
+	}
+
+	allTerminal := true
+	anyFailed := false
+	allDone := true
+
+	for _, sub := range testSubtasks {
+		switch sub.Status {
+		case model.StatusDone:
+			// good
+		case model.StatusFailed, model.StatusRejected:
+			anyFailed = true
+			allDone = false
+		default:
+			allTerminal = false
+			allDone = false
+		}
+	}
+
+	if allDone {
+		// All test subtasks done -> transition to TEST_REVIEW.
+		evt, err := state.TransitionTask(parent, model.StatusTestReview, "orchestrator",
+			map[string]any{"reason": "all test subtasks done"})
+		if err != nil {
+			return fmt.Errorf("process test writing: transition to test_review: %w", err)
+		}
+		if err := o.db.Save(parent).Error; err != nil {
+			return fmt.Errorf("process test writing: save parent: %w", err)
+		}
+		if err := o.db.Create(evt).Error; err != nil {
+			return fmt.Errorf("process test writing: save event: %w", err)
+		}
+		o.emit("test_review_ready", map[string]any{"task_id": parent.ID})
+		o.logger.Info("all test subtasks done, test review ready", "task_id", parent.ID)
+	} else if allTerminal && anyFailed {
+		// All test subtasks terminal but some failed -> fail the parent.
+		var failedNames []string
+		for _, sub := range testSubtasks {
+			if sub.Status == model.StatusFailed {
+				failedNames = append(failedNames, sub.Title)
+			}
+		}
+		if err := o.failTask(parent, fmt.Sprintf("test subtasks failed: %s",
+			strings.Join(failedNames, ", "))); err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -2279,12 +2429,15 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 		return fmt.Errorf("handle plan approved: task %s is in %s, expected plan_review", taskID, task.Status)
 	}
 
-	// Parse the plan.
+	// Parse the plan (full format with TDD exceptions).
 	planResult, err := parsePlan(task.Plan)
 	if err != nil {
 		return fmt.Errorf("handle plan approved: %w", err)
 	}
 	subtaskPlans := planResult.Subtasks
+
+	// Auto-generate TDD reverse dependencies from tests_for.
+	merged := MergeTDDDependencies(subtaskPlans)
 
 	// Create subtask records. We need to track created IDs for dependency mapping.
 	createdIDs := make([]uuid.UUID, len(subtaskPlans))
@@ -2296,6 +2449,9 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 			"agent_type":      sp.AgentType,
 			"estimated_files": sp.EstimatedFiles,
 		}
+		if sp.Phase != "" {
+			ctx["phase"] = sp.Phase
+		}
 
 		sub := model.Task{
 			ID:           subtaskID,
@@ -2304,6 +2460,7 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 			Title:        sp.Title,
 			Description:  sp.Description,
 			Status:       model.StatusBacklog,
+			Phase:        sp.Phase,
 			Context:      ctx,
 			Priority:     len(subtaskPlans) - i, // higher priority for earlier items
 		}
@@ -2313,9 +2470,10 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 		}
 	}
 
-	// Second pass: set dependency IDs now that all subtask UUIDs are known.
+	// Second pass: set dependency IDs (including auto-generated TDD deps)
+	// now that all subtask UUIDs are known.
 	// The plan uses 0-based indices to reference other subtasks.
-	for i, sp := range subtaskPlans {
+	for i, sp := range merged {
 		if len(sp.Dependencies) == 0 {
 			continue
 		}
@@ -2331,6 +2489,33 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 				return fmt.Errorf("handle plan approved: update dependencies for subtask %d: %w", i, err)
 			}
 		}
+	}
+
+	// Third pass: set TestsFor on test-phase subtasks.
+	for i, sp := range subtaskPlans {
+		if len(sp.TestsFor) > 0 {
+			var testsForIDs model.JSONArray
+			for _, idx := range sp.TestsFor {
+				if idx >= 0 && idx < len(createdIDs) {
+					testsForIDs = append(testsForIDs, createdIDs[idx].String())
+				}
+			}
+			if len(testsForIDs) > 0 {
+				o.db.Model(&model.Task{}).Where("id = ?", createdIDs[i]).
+					Update("tests_for", testsForIDs)
+			}
+		}
+	}
+
+	// Store TDD exceptions on the parent task.
+	if len(planResult.TDDExceptions) > 0 {
+		exceptionsJSON, _ := json.Marshal(planResult.TDDExceptions)
+		var exceptionsField any
+		json.Unmarshal(exceptionsJSON, &exceptionsField)
+		if task.TDDExceptions == nil {
+			task.TDDExceptions = make(model.JSONField)
+		}
+		task.TDDExceptions["exceptions"] = exceptionsField
 	}
 
 	// Build wave schedule from the created subtasks.
@@ -2362,8 +2547,24 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 	// Clear planner agent assignment now that review is complete.
 	task.AssignedAgentID = nil
 
-	// Transition task to IN_PROGRESS.
-	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "plan_approved"})
+	// Determine transition target: TEST_WRITING if plan has test-phase subtasks,
+	// IN_PROGRESS otherwise (backward compatible for old-format plans).
+	hasTestPhase := false
+	for _, sp := range subtaskPlans {
+		if sp.Phase == "test" {
+			hasTestPhase = true
+			break
+		}
+	}
+
+	var targetStatus model.TaskStatus
+	if hasTestPhase {
+		targetStatus = model.StatusTestWriting
+	} else {
+		targetStatus = model.StatusInProgress
+	}
+
+	evt, err := state.TransitionTask(&task, targetStatus, "user", map[string]any{"action": "plan_approved"})
 	if err != nil {
 		return fmt.Errorf("handle plan approved: transition: %w", err)
 	}
@@ -2926,6 +3127,125 @@ func (o *Orchestrator) incrementRetryCount(task *model.Task) int {
 	return count
 }
 
+// extractTestFiles runs git diff --name-only on the agent's worktree and
+// returns files matching test patterns.
+func (o *Orchestrator) extractTestFiles(worktreePath, baseBranch string) []string {
+	output, err := worktree.RunGit([]string{
+		"diff", "--name-only", baseBranch + "...HEAD",
+	}, worktreePath)
+	if err != nil {
+		o.logger.Warn("extract test files: git diff failed", "path", worktreePath, "error", err)
+		return nil
+	}
+	if output == "" {
+		return nil
+	}
+
+	var testFiles []string
+	for _, file := range strings.Split(output, "\n") {
+		file = strings.TrimSpace(file)
+		if file == "" {
+			continue
+		}
+		if isTestFile(file) {
+			testFiles = append(testFiles, file)
+		}
+	}
+	return testFiles
+}
+
+// isTestFile checks if a filename matches common test file patterns.
+func isTestFile(name string) bool {
+	base := filepath.Base(name)
+	lower := strings.ToLower(base)
+
+	// Go: *_test.go
+	if strings.HasSuffix(lower, "_test.go") {
+		return true
+	}
+	// Python: test_*.py or *_test.py
+	if strings.HasSuffix(lower, ".py") && (strings.HasPrefix(lower, "test_") || strings.HasSuffix(lower, "_test.py")) {
+		return true
+	}
+	// JavaScript/TypeScript: *.test.ts, *.test.js, *.spec.ts, *.spec.js
+	for _, suffix := range []string{".test.ts", ".test.js", ".spec.ts", ".spec.js", ".test.tsx", ".test.jsx", ".spec.tsx", ".spec.jsx"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// commandResult holds the output of running a shell command.
+type commandResult struct {
+	ExitCode int
+	Stdout   string
+	Stderr   string
+}
+
+// runCommand executes a shell command in the given directory and returns the result.
+func runCommand(dir, command string) (*commandResult, error) {
+	cmd := exec.Command("sh", "-c", command)
+	cmd.Dir = dir
+
+	var stdout, stderr strings.Builder
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	result := &commandResult{
+		Stdout: stdout.String(),
+		Stderr: stderr.String(),
+	}
+
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		} else {
+			return result, fmt.Errorf("run command: %w", err)
+		}
+	}
+
+	return result, nil
+}
+
+// getTestCommand returns the test command for the project. Checks the task
+// context first, falls back to detecting from the project structure.
+// Returns empty string if not found.
+func (o *Orchestrator) getTestCommand(task *model.Task) string {
+	// Check task context for an explicit test command.
+	if task.Context != nil {
+		if cmd, ok := task.Context["test_command"].(string); ok && cmd != "" {
+			return cmd
+		}
+	}
+
+	// Check feature worktree for project type detection.
+	if task.WorktreeBranch == "" {
+		return ""
+	}
+	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+	featureDir := o.worktree.FeatureWorktreePath(featureName)
+
+	// Check for Go project.
+	if _, err := os.Stat(filepath.Join(featureDir, "go.mod")); err == nil {
+		return "go test ./..."
+	}
+	// Check for Node.js project.
+	if _, err := os.Stat(filepath.Join(featureDir, "package.json")); err == nil {
+		return "npm test"
+	}
+	// Check for Python project.
+	if _, err := os.Stat(filepath.Join(featureDir, "pytest.ini")); err == nil {
+		return "pytest"
+	}
+	if _, err := os.Stat(filepath.Join(featureDir, "setup.py")); err == nil {
+		return "pytest"
+	}
+
+	return ""
+}
+
 // taskFeatureName derives a slug-based feature name from a task.
 func taskFeatureName(task *model.Task) string {
 	slug := strings.ToLower(task.Title)
@@ -2946,7 +3266,7 @@ func truncate(s string, maxLen int) string {
 }
 
 // planEntry is an intermediate struct for parsing plans from JSON that may
-// include dependency indices.
+// include dependency indices and TDD phase information.
 type planEntry struct {
 	Title          string   `json:"title"`
 	Description    string   `json:"description"`
