@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -54,6 +55,14 @@ type dataRefreshedMsg struct {
 	comments  []model.TaskComment
 	deps      []depInfo
 }
+
+// periodicRefreshMsg triggers a periodic data refresh from the DB.
+type periodicRefreshMsg struct{}
+
+// periodicRefreshInterval is how often the TUI re-reads agent data from the
+// DB, so that continuously-updated fields like context_used_pct are visible
+// without waiting for an orchestrator event.
+const periodicRefreshInterval = 5 * time.Second
 
 // logCapturedMsg carries captured tmux pane output.
 type logCapturedMsg struct {
@@ -145,12 +154,16 @@ func NewModel(
 	}
 }
 
-// Init returns the initial commands: load tasks, load agents, listen for events.
+// Init returns the initial commands: load tasks, load agents, listen for events,
+// and start the periodic refresh tick.
 func (m Model) Init() tea.Cmd {
 	return tea.Batch(
 		m.loadTasks(),
 		m.loadAgents(),
 		listenForEvents(m.events),
+		tea.Tick(periodicRefreshInterval, func(time.Time) tea.Msg {
+			return periodicRefreshMsg{}
+		}),
 	)
 }
 
@@ -194,6 +207,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case EventMsg:
 		// Orchestrator event: refresh data and re-listen.
 		return m, tea.Batch(m.refreshData(), listenForEvents(m.events))
+
+	case periodicRefreshMsg:
+		// Periodic refresh: re-read DB (picks up context usage updates)
+		// and schedule the next tick.
+		return m, tea.Batch(m.refreshData(), tea.Tick(periodicRefreshInterval, func(time.Time) tea.Msg {
+			return periodicRefreshMsg{}
+		}))
 
 	case logCapturedMsg:
 		// Discard stale log capture if the selection has moved.

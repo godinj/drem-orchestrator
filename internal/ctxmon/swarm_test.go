@@ -97,8 +97,16 @@ func TestSetupDir(t *testing.T) {
 				t.Fatalf("settings.json is not valid JSON: %v", err)
 			}
 
-			if _, ok := settings["statusLineScript"]; !ok {
-				t.Error("settings.json missing statusLineScript key")
+			statusLine, ok := settings["statusLine"].(map[string]any)
+			if !ok {
+				t.Error("settings.json missing statusLine key or not a map")
+			} else {
+				if statusLine["type"] != "command" {
+					t.Errorf("statusLine.type = %v, want command", statusLine["type"])
+				}
+				if _, ok := statusLine["command"]; !ok {
+					t.Error("statusLine missing command key")
+				}
 			}
 
 			hooks, ok := settings["hooks"].(map[string]any)

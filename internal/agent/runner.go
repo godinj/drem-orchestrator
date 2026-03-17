@@ -307,8 +307,11 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 	}
 
 	settings := map[string]any{
-		"statusLineScript": statusScriptPath,
-		"hooks":            hooks,
+		"statusLine": map[string]any{
+			"type":    "command",
+			"command": statusScriptPath,
+		},
+		"hooks": hooks,
 	}
 
 	settingsBytes, err := json.Marshal(settings)

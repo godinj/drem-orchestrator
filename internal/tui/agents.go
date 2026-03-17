@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -143,6 +144,20 @@ func (a AgentsModel) View() string {
 				fmt.Sprintf("    branch: %s", ag.WorktreeBranch),
 			))
 		}
+
+		// Show context window usage if available.
+		if pct, ok := ag.Config["context_used_pct"].(float64); ok {
+			ctxStyle := subtitleStyle
+			switch {
+			case pct >= 90:
+				ctxStyle = lipgloss.NewStyle().Foreground(colorDanger)
+			case pct >= 75:
+				ctxStyle = lipgloss.NewStyle().Foreground(colorWarning)
+			}
+			lines = append(lines, ctxStyle.Render(
+				fmt.Sprintf("    ctx: %d%%", int(pct)),
+			))
+		}
 	}
 
 	// Limit visible lines to height, scrolling to keep the cursor visible.
@@ -157,6 +172,9 @@ func (a AgentsModel) View() string {
 				blockLen++
 			}
 			if ag.WorktreeBranch != "" {
+				blockLen++
+			}
+			if _, ok := ag.Config["context_used_pct"].(float64); ok {
 				blockLen++
 			}
 			if i == a.cursor {

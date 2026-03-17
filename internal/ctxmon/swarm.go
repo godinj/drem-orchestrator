@@ -8,7 +8,7 @@ import (
 )
 
 // SetupDir creates the .claude/ directory inside dir with context monitoring
-// files: a status line script and settings.json with statusLineScript and
+// files: a status line script and settings.json with statusLine and
 // PreCompact hook configuration. This is used by swarm agents to self-configure
 // context monitoring in their worktrees.
 func SetupDir(dir string) error {
@@ -33,10 +33,13 @@ func SetupDir(dir string) error {
 		return fmt.Errorf("setup dir: write script: %w", err)
 	}
 
-	// Build settings.json with statusLineScript and hooks.
+	// Build settings.json with statusLine and hooks.
 	settings := map[string]any{
-		"statusLineScript": scriptPath,
-		"hooks":            HooksJSON(CompactionSignalPath(absDir)),
+		"statusLine": map[string]any{
+			"type":    "command",
+			"command": scriptPath,
+		},
+		"hooks": HooksJSON(CompactionSignalPath(absDir)),
 	}
 
 	data, err := json.MarshalIndent(settings, "", "  ")
