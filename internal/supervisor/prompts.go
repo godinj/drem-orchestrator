@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // SubtaskInfo holds summary information about a subtask for the supervisor prompt.
@@ -323,9 +324,10 @@ func slugify(title string) string {
 }
 
 // JournalFilename returns the standard journal filename for a task title,
-// e.g. "supervisor-journal-automation-lanes-modes.md".
+// e.g. "supervisor-journal-automation-lanes-modes-20060102-150405.md".
 func JournalFilename(taskTitle string) string {
-	return fmt.Sprintf("supervisor-journal-%s.md", slugify(taskTitle))
+	ts := time.Now().Format("20060102-150405")
+	return fmt.Sprintf("supervisor-journal-%s-%s.md", slugify(taskTitle), ts)
 }
 
 // BuildFailurePrompt builds a prompt for diagnosing a build failure.
