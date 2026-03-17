@@ -575,6 +575,21 @@ func (o *Orchestrator) reconcileAlreadyMergedFeatures() (int, error) {
 			continue // not merged yet
 		}
 
+		// Guard: if the task has subtasks but none completed, the feature
+		// branch was never successfully worked on. A branch created from
+		// HEAD with zero commits is trivially an ancestor — don't treat
+		// it as "already merged".
+		var totalSubs, doneSubs int64
+		o.db.Model(&model.Task{}).Where("parent_task_id = ?", task.ID).Count(&totalSubs)
+		if totalSubs > 0 {
+			o.db.Model(&model.Task{}).Where(
+				"parent_task_id = ? AND status = ?", task.ID, model.StatusDone,
+			).Count(&doneSubs)
+			if doneSubs == 0 {
+				continue // has subtasks but none completed — not actually merged
+			}
+		}
+
 		o.logger.Info("reconcile: failed task's feature branch already merged to default, transitioning to done",
 			"task_id", task.ID, "branch", task.WorktreeBranch)
 
