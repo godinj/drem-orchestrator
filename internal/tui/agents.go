@@ -161,6 +161,15 @@ func (a AgentsModel) View() string {
 			))
 		}
 
+		// Exit reason for dead/idle agents.
+		if (ag.Status == model.AgentDead || ag.Status == model.AgentIdle) && ag.Config != nil {
+			if exitReason, ok := ag.Config["exit_reason"].(string); ok {
+				lines = append(lines, subtitleStyle.Render(
+					fmt.Sprintf("    exit: %s", exitReason),
+				))
+			}
+		}
+
 		// Show activity indicator if available.
 		if tool, ok := ag.Config["activity_tool"].(string); ok && tool != "" {
 			target, _ := ag.Config["activity_target"].(string)
@@ -223,6 +232,11 @@ func (a AgentsModel) View() string {
 			}
 			if _, ok := ag.Config["context_used_pct"].(float64); ok {
 				blockLen++
+			}
+			if (ag.Status == model.AgentDead || ag.Status == model.AgentIdle) && ag.Config != nil {
+				if _, ok := ag.Config["exit_reason"].(string); ok {
+					blockLen++
+				}
 			}
 			if tool, ok := ag.Config["activity_tool"].(string); ok && tool != "" {
 				blockLen++

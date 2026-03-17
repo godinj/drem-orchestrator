@@ -297,6 +297,31 @@ The `agentmon` package (`internal/agentmon/`) tails Claude's conversation transc
 
 These signals feed back into the orchestrator's decision loop for automated test gating and failure recovery.
 
+## Agent Exit Logging
+
+When an agent session ends, a Claude Code **Stop hook** captures structured exit information and writes it to a JSONL log file. This gives the orchestrator visibility into why an agent stopped and what it was doing at the time.
+
+**What it captures:**
+- Exit reason (`success`, `error`, `context_limit`, `user_interrupt`, `unknown`)
+- Last tool call before exit (e.g. `Edit`, `Read`, `Bash`)
+- Summary of work done (files modified, commits made)
+- Agent ID and task ID for correlation
+
+**Where logs are stored:**
+Exit entries are appended to `exit-log.jsonl` in the agent's Claude Code project directory (`~/.claude/projects/<project-dir>/exit-log.jsonl`). Each line is a JSON object with fields: `agent_id`, `task_id`, `timestamp`, `exit_reason`, `last_tool`, `last_target`, `files_modified`, `commits_made`, `summary`.
+
+**How it works:**
+1. At spawn time, the orchestrator writes `agent-metadata.json` (containing agent/task IDs) and an `exit-log.sh` hook script to the agent's `.claude/` directory
+2. The agent's `settings.json` includes a `Stop` hook that runs `exit-log.sh` when the session ends
+3. When the agent process exits, the orchestrator reads `exit-log.jsonl`, matches the latest entry for that agent, and populates `ExitInfo` on the completion record
+4. `processAgentResult` stores exit info in the agent's `Config` field (`exit_reason`, `exit_last_tool`, `exit_summary`)
+
+**How it surfaces in the TUI:**
+- The agent detail view shows an "Exit:" line with the reason and last tool (e.g. `Exit: context_limit (last: Read)`) followed by the work summary
+- The agent sidebar shows `exit: <reason>` for dead or idle agents
+
+The Stop hook is configured alongside the existing Notification (idle detection) and PreCompact (context compaction) hooks.
+
 ## Database
 
 Drem uses SQLite in WAL mode for zero-configuration persistence:

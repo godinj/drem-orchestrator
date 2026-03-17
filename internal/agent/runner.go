@@ -48,10 +48,19 @@ const (
 	stopGracePeriod = 5 * time.Second
 )
 
+// ExitInfo holds structured information about why an agent exited, populated
+// from Claude Code hook JSONL entries when available.
+type ExitInfo struct {
+	ExitReason  string `json:"exit_reason"`  // e.g. "success", "error", "context_limit", "user_interrupt"
+	LastTool    string `json:"last_tool"`    // last tool call before exit
+	ExitSummary string `json:"exit_summary"` // summary of work done
+}
+
 // Completion records the result of an agent process exit.
 type Completion struct {
 	AgentID    uuid.UUID
 	ReturnCode int
+	ExitInfo   *ExitInfo // nil when hook didn't fire or no log available
 }
 
 // RunningAgent tracks an active agent process.
@@ -345,8 +354,21 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		return fmt.Errorf("write status script: %w", err)
 	}
 
-	// Build settings.json with idle_prompt notification hook, status line
-	// script, and PreCompact hook for context window monitoring.
+	// Write agent metadata for the exit-log hook.
+	if err := writeAgentMetadata(claudeDir, agentID, taskID); err != nil {
+		return fmt.Errorf("write agent metadata: %w", err)
+	}
+
+	// Generate and write the exit-log hook script.
+	homeDir, _ := os.UserHomeDir()
+	projectDir := filepath.Join(homeDir, ".claude", "projects", ctxmon.ProjectDirName(worktreePath))
+	exitLogScript := generateExitLogScript(agentID, taskID, projectDir)
+	exitLogScriptPath := filepath.Join(claudeDir, "exit-log.sh")
+	if err := os.WriteFile(exitLogScriptPath, []byte(exitLogScript), 0o755); err != nil {
+		return fmt.Errorf("write exit-log script: %w", err)
+	}
+
+	// Build hooks map with idle_prompt notification and PreCompact hooks.
 	idleSignal := filepath.Join(claudeDir, "agent-idle")
 	compactionSignal := ctxmon.CompactionSignalPath(worktreePath)
 
@@ -364,18 +386,12 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 			},
 		},
 	}
-	// Merge PreCompact hooks.
 	for k, v := range ctxmon.HooksJSON(compactionSignal) {
 		hooks[k] = v
 	}
 
-	settings := map[string]any{
-		"statusLine": map[string]any{
-			"type":    "command",
-			"command": statusScriptPath,
-		},
-		"hooks": hooks,
-	}
+	// Build settings.json — adds Stop hook for exit logging.
+	settings := buildSettingsJSON(claudeDir, worktreePath, exitLogScriptPath, hooks)
 
 	settingsBytes, err := json.Marshal(settings)
 	if err != nil {

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -586,6 +587,142 @@ func TestIsDeleteSectionTask(t *testing.T) {
 					tt.queryKind, got, tt.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Exit reason display
+// ---------------------------------------------------------------------------
+
+func TestDetailView_ShowsExitReason(t *testing.T) {
+	// When an agent's Config contains exit_reason, the detail view should
+	// render it in the warnings/info section so supervisors can see why
+	// an agent stopped.
+	agentID := uuid.New()
+	taskID := uuid.New()
+
+	task := &model.Task{
+		ID:          taskID,
+		Title:       "task-with-exit-reason",
+		Description: "a task whose agent exited",
+		Status:      model.StatusFailed,
+		Context: model.JSONField{
+			"failure_reason": "agent exited with non-zero code",
+		},
+	}
+
+	agent := &model.Agent{
+		ID:        agentID,
+		Name:      "test-agent-exit",
+		AgentType: model.AgentCoder,
+		Status:    model.AgentDead,
+		Config: model.JSONField{
+			"exit_reason":    "context_limit",
+			"exit_last_tool": "Read",
+			"exit_summary":   "Was reading large files when context limit hit",
+		},
+	}
+
+	d := DetailModel{
+		task:   task,
+		agent:  agent,
+		width:  120,
+		height: 50,
+	}
+
+	output := d.View()
+
+	// Verify exit reason is rendered in the output.
+	if !strings.Contains(output, "context_limit") {
+		t.Errorf("expected detail view to contain exit_reason 'context_limit', got:\n%s", output)
+	}
+
+	// Verify exit last tool is rendered.
+	if !strings.Contains(output, "Read") {
+		t.Errorf("expected detail view to contain exit_last_tool 'Read', got:\n%s", output)
+	}
+
+	// Verify exit summary is rendered.
+	if !strings.Contains(output, "Was reading large files when context limit hit") {
+		t.Errorf("expected detail view to contain exit_summary, got:\n%s", output)
+	}
+}
+
+func TestDetailView_NoExitReason(t *testing.T) {
+	// When an agent's Config does NOT contain exit_reason, the detail view
+	// should not render any exit info section (backwards compatible).
+	agentID := uuid.New()
+	taskID := uuid.New()
+
+	task := &model.Task{
+		ID:          taskID,
+		Title:       "task-no-exit-reason",
+		Description: "a normal task",
+		Status:      model.StatusInProgress,
+	}
+
+	agent := &model.Agent{
+		ID:        agentID,
+		Name:      "test-agent-normal",
+		AgentType: model.AgentCoder,
+		Status:    model.AgentWorking,
+		Config:    model.JSONField{"pid": float64(12345)},
+	}
+
+	d := DetailModel{
+		task:   task,
+		agent:  agent,
+		width:  120,
+		height: 50,
+	}
+
+	output := d.View()
+
+	// Should not contain any exit reason labels.
+	if strings.Contains(output, "Exit reason") || strings.Contains(output, "exit_reason") {
+		t.Errorf("expected no exit reason in detail view without exit info, got:\n%s", output)
+	}
+}
+
+func TestDetailView_ShowsExitReason_SuccessAgent(t *testing.T) {
+	// Exit info should also render for agents that exited successfully,
+	// e.g. to show what tools they last used and work summary.
+	agentID := uuid.New()
+	taskID := uuid.New()
+
+	task := &model.Task{
+		ID:          taskID,
+		Title:       "task-success-exit",
+		Description: "completed successfully",
+		Status:      model.StatusDone,
+	}
+
+	agent := &model.Agent{
+		ID:        agentID,
+		Name:      "test-agent-success",
+		AgentType: model.AgentCoder,
+		Status:    model.AgentIdle,
+		Config: model.JSONField{
+			"exit_reason":    "success",
+			"exit_last_tool": "Write",
+			"exit_summary":   "Created 2 files, modified 1",
+		},
+	}
+
+	d := DetailModel{
+		task:   task,
+		agent:  agent,
+		width:  120,
+		height: 50,
+	}
+
+	output := d.View()
+
+	if !strings.Contains(output, "success") {
+		t.Errorf("expected detail view to show exit_reason 'success', got:\n%s", output)
+	}
+	if !strings.Contains(output, "Created 2 files, modified 1") {
+		t.Errorf("expected detail view to show exit_summary, got:\n%s", output)
 	}
 }
 

@@ -1246,4 +1246,283 @@ func TestIsWorkAlreadyCompleteCategory(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// 7. Exit info storage
+// ---------------------------------------------------------------------------
+
+func TestProcessAgentResult_StoresExitInfo(t *testing.T) {
+	bareRepoPath := setupTestRepoWithMainBranch(t)
+
+	featureName := "exit-info-store"
+	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
+
+	// Create an agent branch with a commit so the success path proceeds
+	// through merge (same pattern as TestProcessAgentResult_SuccessRouting).
+	agentBranch := "worktree-agent-exitinfo"
+	featureBranch := "feature/" + featureName
+	runGitCmd(t, bareRepoPath, "branch", agentBranch, featureBranch)
+	agentDir := filepath.Join(bareRepoPath, "feature", featureName, "agent-exitinfo")
+	runGitCmd(t, bareRepoPath, "worktree", "add", agentDir, agentBranch)
+	runGitCmd(t, agentDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, agentDir, "config", "user.name", "Test")
+	testFile := filepath.Join(agentDir, "exitinfo-work.txt")
+	os.WriteFile(testFile, []byte("exit info test"), 0o644)
+	runGitCmd(t, agentDir, "add", ".")
+	runGitCmd(t, agentDir, "commit", "-m", "exit info work")
+
+	o, _ := agentResultOrchestrator(t, bareRepoPath)
+	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	o.worktree = wt
+	o.merger = merge.NewOrchestrator(wt, o.db)
+
+	// Create parent task.
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      o.projectID,
+		Title:          "parent-exitinfo",
+		Description:    "parent for exit info test",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: featureBranch,
+	}
+	o.db.Create(&parent)
+
+	// Create agent and subtask.
+	taskID := uuid.New()
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-coder-exitinfo",
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &taskID,
+		WorktreePath:   agentDir,
+		WorktreeBranch: agentBranch,
+	}
+	o.db.Create(&ag)
+
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       o.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "exitinfo-subtask",
+		Description:     "test exit info storage",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+	}
+	o.db.Create(&task)
+
+	// Process a completion WITH ExitInfo populated.
+	err := o.processAgentResult(agent.Completion{
+		AgentID:    agentID,
+		ReturnCode: 0,
+		ExitInfo: &agent.ExitInfo{
+			ExitReason:  "success",
+			LastTool:    "Write",
+			ExitSummary: "Implemented feature X, modified 3 files",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processAgentResult with exit info: %v", err)
+	}
+
+	// Verify exit info was stored in the Agent's Config JSONField.
+	var updatedAgent model.Agent
+	o.db.First(&updatedAgent, "id = ?", agentID)
+
+	if updatedAgent.Config == nil {
+		t.Fatal("expected agent Config to be non-nil after exit info storage")
+	}
+	if reason, ok := updatedAgent.Config["exit_reason"].(string); !ok || reason != "success" {
+		t.Errorf("expected exit_reason='success' in agent Config, got %v", updatedAgent.Config["exit_reason"])
+	}
+	if tool, ok := updatedAgent.Config["exit_last_tool"].(string); !ok || tool != "Write" {
+		t.Errorf("expected exit_last_tool='Write' in agent Config, got %v", updatedAgent.Config["exit_last_tool"])
+	}
+	if summary, ok := updatedAgent.Config["exit_summary"].(string); !ok || summary != "Implemented feature X, modified 3 files" {
+		t.Errorf("expected exit_summary in agent Config, got %v", updatedAgent.Config["exit_summary"])
+	}
+
+	_ = featureDir
+}
+
+func TestProcessAgentResult_NilExitInfo(t *testing.T) {
+	bareRepoPath := setupTestRepoWithMainBranch(t)
+
+	featureName := "nil-exitinfo"
+	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
+
+	// Create an agent branch with a commit.
+	agentBranch := "worktree-agent-nilexitinfo"
+	featureBranch := "feature/" + featureName
+	runGitCmd(t, bareRepoPath, "branch", agentBranch, featureBranch)
+	agentDir := filepath.Join(bareRepoPath, "feature", featureName, "agent-nilexitinfo")
+	runGitCmd(t, bareRepoPath, "worktree", "add", agentDir, agentBranch)
+	runGitCmd(t, agentDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, agentDir, "config", "user.name", "Test")
+	testFile := filepath.Join(agentDir, "nilexitinfo-work.txt")
+	os.WriteFile(testFile, []byte("nil exit info test"), 0o644)
+	runGitCmd(t, agentDir, "add", ".")
+	runGitCmd(t, agentDir, "commit", "-m", "nil exit info work")
+
+	o, _ := agentResultOrchestrator(t, bareRepoPath)
+	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	o.worktree = wt
+	o.merger = merge.NewOrchestrator(wt, o.db)
+
+	// Create parent task.
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      o.projectID,
+		Title:          "parent-nilexitinfo",
+		Description:    "parent for nil exit info test",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: featureBranch,
+	}
+	o.db.Create(&parent)
+
+	// Create agent with pre-existing Config to ensure it's not corrupted.
+	taskID := uuid.New()
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-coder-nilexitinfo",
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &taskID,
+		WorktreePath:   agentDir,
+		WorktreeBranch: agentBranch,
+		Config:         model.JSONField{"pid": float64(12345)},
+	}
+	o.db.Create(&ag)
+
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       o.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "nilexitinfo-subtask",
+		Description:     "test nil exit info preserves behavior",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+	}
+	o.db.Create(&task)
+
+	// Process a completion WITHOUT ExitInfo (nil).
+	err := o.processAgentResult(agent.Completion{
+		AgentID:    agentID,
+		ReturnCode: 0,
+		ExitInfo:   nil,
+	})
+	if err != nil {
+		t.Fatalf("processAgentResult with nil exit info: %v", err)
+	}
+
+	// Verify agent status transitioned normally (idle).
+	var updatedAgent model.Agent
+	o.db.First(&updatedAgent, "id = ?", agentID)
+	if updatedAgent.Status != model.AgentIdle {
+		t.Errorf("expected agent status idle, got %s", updatedAgent.Status)
+	}
+
+	// Verify task was fast-tracked to done (existing behavior unchanged).
+	var updatedTask model.Task
+	o.db.First(&updatedTask, "id = ?", taskID)
+	if updatedTask.Status != model.StatusDone {
+		t.Errorf("expected task status done, got %s", updatedTask.Status)
+	}
+
+	// Verify agent Config was NOT populated with exit info keys.
+	if updatedAgent.Config != nil {
+		if _, ok := updatedAgent.Config["exit_reason"]; ok {
+			t.Error("expected no exit_reason in agent Config when ExitInfo is nil")
+		}
+		if _, ok := updatedAgent.Config["exit_last_tool"]; ok {
+			t.Error("expected no exit_last_tool in agent Config when ExitInfo is nil")
+		}
+		if _, ok := updatedAgent.Config["exit_summary"]; ok {
+			t.Error("expected no exit_summary in agent Config when ExitInfo is nil")
+		}
+	}
+
+	_ = featureDir
+}
+
+func TestProcessAgentResult_StoresExitInfo_OnFailure(t *testing.T) {
+	bareRepoPath := setupTestRepoWithMainBranch(t)
+
+	featureName := "exit-info-fail"
+	createFeatureWorktree(t, bareRepoPath, featureName)
+
+	o, _ := agentResultOrchestrator(t, bareRepoPath)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      o.projectID,
+		Title:          "parent-exitinfo-fail",
+		Description:    "parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	o.db.Create(&parent)
+
+	taskID := uuid.New()
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:            agentID,
+		ProjectID:     o.projectID,
+		AgentType:     model.AgentCoder,
+		Name:          "test-coder-exitinfo-fail",
+		Status:        model.AgentWorking,
+		CurrentTaskID: &taskID,
+		WorktreePath:  "/tmp/fake-exitinfo-fail",
+	}
+	o.db.Create(&ag)
+
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       o.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "exitinfo-fail-subtask",
+		Description:     "test exit info on failure path",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+	}
+	o.db.Create(&task)
+
+	// Process a failed completion WITH ExitInfo.
+	err := o.processAgentResult(agent.Completion{
+		AgentID:    agentID,
+		ReturnCode: 1,
+		ExitInfo: &agent.ExitInfo{
+			ExitReason:  "error",
+			LastTool:    "Bash",
+			ExitSummary: "Build failed with compilation errors",
+		},
+	})
+	if err != nil {
+		t.Fatalf("processAgentResult failure with exit info: %v", err)
+	}
+
+	// Verify exit info was stored in agent Config even on failure path.
+	var updatedAgent model.Agent
+	o.db.First(&updatedAgent, "id = ?", agentID)
+
+	if updatedAgent.Config == nil {
+		t.Fatal("expected agent Config to be non-nil after failed exit with info")
+	}
+	if reason, ok := updatedAgent.Config["exit_reason"].(string); !ok || reason != "error" {
+		t.Errorf("expected exit_reason='error' in agent Config, got %v", updatedAgent.Config["exit_reason"])
+	}
+	if tool, ok := updatedAgent.Config["exit_last_tool"].(string); !ok || tool != "Bash" {
+		t.Errorf("expected exit_last_tool='Bash' in agent Config, got %v", updatedAgent.Config["exit_last_tool"])
+	}
+	if summary, ok := updatedAgent.Config["exit_summary"].(string); !ok || summary != "Build failed with compilation errors" {
+		t.Errorf("expected exit_summary in agent Config, got %v", updatedAgent.Config["exit_summary"])
+	}
+}
+
 // TestFailTask is in lifecycle_test.go

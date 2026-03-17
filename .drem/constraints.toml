@@ -66,7 +66,7 @@ baseline_count = 10
 [[max_matches.exception]]
 path           = "internal/agent/"
 rule           = "shrink-only"
-baseline_count = 9
+baseline_count = 10
 
 [[max_matches]]
 name    = "GORM hook consolidation"

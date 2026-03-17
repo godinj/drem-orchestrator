@@ -177,8 +177,16 @@ done:
 
 	exitCode, _ := proc.Wait()
 
+	// Build completion and enrich with exit log data.
+	comp := Completion{AgentID: agentID, ReturnCode: exitCode}
+	homeDir, _ := os.UserHomeDir()
+	if homeDir != "" {
+		projectDir := filepath.Join(homeDir, ".claude", "projects", ctxmon.ProjectDirName(worktreePath))
+		enrichCompletion(&comp, projectDir)
+	}
+
 	// Send completion.
-	r.completions <- Completion{AgentID: agentID, ReturnCode: exitCode}
+	r.completions <- comp
 
 	// Remove from running map.
 	r.mu.Lock()

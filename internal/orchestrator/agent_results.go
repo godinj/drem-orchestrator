@@ -28,6 +28,16 @@ func (o *Orchestrator) processAgentResult(comp agent.Completion) error {
 		return fmt.Errorf("process agent result: load agent: %w", err)
 	}
 
+	// Store exit info in agent Config before routing to success/failure handlers.
+	if comp.ExitInfo != nil {
+		if ag.Config == nil {
+			ag.Config = make(model.JSONField)
+		}
+		ag.Config["exit_reason"] = comp.ExitInfo.ExitReason
+		ag.Config["exit_last_tool"] = comp.ExitInfo.LastTool
+		ag.Config["exit_summary"] = comp.ExitInfo.ExitSummary
+	}
+
 	if ag.CurrentTaskID == nil {
 		o.logger.Warn("completed agent has no current task", "agent_id", ag.ID)
 		return nil
@@ -65,8 +75,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		}
 	}
 
-	// Merge agent branch into feature.
-	// Subtasks don't carry WorktreeBranch — resolve from the parent task.
+	// Merge agent branch into feature (resolve from parent if subtask).
 	featureBranch := task.WorktreeBranch
 	if featureBranch == "" && task.ParentTaskID != nil {
 		var parent model.Task
@@ -86,7 +95,6 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			hasCommits = true // assume there are commits on error
 		}
 		if !hasCommits {
-			// Agent may have made changes but failed to commit. Rescue them.
 			committed, rescueErr := worktree.CommitUnstagedChanges(
 				ag.WorktreePath,
 				fmt.Sprintf("Auto-commit uncommitted agent work for task: %s", task.Title),
@@ -120,8 +128,6 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 	}
 
 	if !merged {
-		// Merge failed — keep the agent worktree/branch intact so work is not lost.
-		// Transition the subtask to failed so it can be retried or manually resolved.
 		ag.Status = model.AgentIdle
 		ag.CurrentTaskID = nil
 		if err := o.db.Save(ag).Error; err != nil {
@@ -201,7 +207,6 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		task.Context["scores"] = scoreImplGate(implScorePassed, implScoreFailed, implChangedFiles, "")
 	}
 
-	// Merge succeeded — clean up agent worktree.
 	if ag.WorktreeBranch != "" {
 		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
 			o.logger.Warn("cleanup agent worktree failed", "agent_id", ag.ID, "error", err)
@@ -789,12 +794,6 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 	return nil
 }
 
-// isWorkAlreadyCompleteCategory returns true if the supervisor diagnosis
-// category indicates the work was already done and no changes were needed.
 func isWorkAlreadyCompleteCategory(category string) bool {
-	switch category {
-	case "already_complete", "no_changes_needed", "work_done":
-		return true
-	}
-	return false
+	return category == "already_complete" || category == "no_changes_needed" || category == "work_done"
 }

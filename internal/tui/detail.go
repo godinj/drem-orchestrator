@@ -261,6 +261,21 @@ func (d DetailModel) View() string {
 		}
 	}
 
+	// Exit info from agent Config.
+	if d.agent != nil && d.agent.Config != nil {
+		if exitReason, ok := d.agent.Config["exit_reason"].(string); ok {
+			exitStyle := lipgloss.NewStyle().Foreground(colorWarning)
+			exitLine := fmt.Sprintf("Exit: %s", exitReason)
+			if tool, ok := d.agent.Config["exit_last_tool"].(string); ok && tool != "" {
+				exitLine += fmt.Sprintf(" (last: %s)", tool)
+			}
+			sections = append(sections, exitStyle.Render(exitLine))
+			if summary, ok := d.agent.Config["exit_summary"].(string); ok && summary != "" {
+				sections = append(sections, subtitleStyle.Render("  "+summary))
+			}
+		}
+	}
+
 	// Comment thread.
 	if len(d.comments) > 0 {
 		commentHeader := fmt.Sprintf("Comments (%d):", len(d.comments))
