@@ -834,6 +834,108 @@ func TestReconcileStuckAgents_SessionDead_NoCommits(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// reconcileAlreadyMergedFeatures
+// ---------------------------------------------------------------------------
+
+func TestReconcileAlreadyMergedFeatures_Merged(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	// Create a main worktree so MainWorktreePath() works.
+	mainDir := filepath.Join(bareRepo, "main")
+	runGitCmd(t, bareRepo, "worktree", "add", mainDir, "main")
+
+	// Create a feature branch with a commit.
+	featureName := "already-merged"
+	featureDir := createFeatureWorktree(t, bareRepo, featureName)
+	testFile := filepath.Join(featureDir, "merged-work.txt")
+	if err := os.WriteFile(testFile, []byte("merged work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, featureDir, "add", ".")
+	runGitCmd(t, featureDir, "commit", "-m", "feature work")
+
+	// Merge the feature branch into main (simulating a supervisor merge).
+	runGitCmd(t, mainDir, "merge", "feature/"+featureName, "--no-edit")
+
+	// Create a FAILED parent task pointing to the (now-merged) feature branch.
+	task := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      orch.projectID,
+		Title:          "already-merged-task",
+		Description:    "task whose branch was merged by supervisor",
+		Status:         model.StatusFailed,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileAlreadyMergedFeatures()
+	if err != nil {
+		t.Fatalf("reconcileAlreadyMergedFeatures() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix, got %d", fixes)
+	}
+
+	// Task should be transitioned to DONE.
+	var updated model.Task
+	db.First(&updated, "id = ?", task.ID)
+	if updated.Status != model.StatusDone {
+		t.Errorf("expected task status done, got %s", updated.Status)
+	}
+
+	// Verify a status_change event was recorded.
+	var event model.TaskEvent
+	db.Where("task_id = ? AND new_value = ?", task.ID, string(model.StatusDone)).First(&event)
+	if event.ID == uuid.Nil {
+		t.Error("expected a status_change event to done")
+	}
+}
+
+func TestReconcileAlreadyMergedFeatures_NotMerged(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	// Create a main worktree.
+	mainDir := filepath.Join(bareRepo, "main")
+	runGitCmd(t, bareRepo, "worktree", "add", mainDir, "main")
+
+	// Create a feature branch with a commit but do NOT merge into main.
+	featureName := "not-merged"
+	featureDir := createFeatureWorktree(t, bareRepo, featureName)
+	testFile := filepath.Join(featureDir, "unmerged-work.txt")
+	if err := os.WriteFile(testFile, []byte("unmerged work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, featureDir, "add", ".")
+	runGitCmd(t, featureDir, "commit", "-m", "unmerged feature work")
+
+	// Create a FAILED parent task.
+	task := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      orch.projectID,
+		Title:          "not-merged-task",
+		Description:    "task whose branch was not merged",
+		Status:         model.StatusFailed,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileAlreadyMergedFeatures()
+	if err != nil {
+		t.Fatalf("reconcileAlreadyMergedFeatures() error: %v", err)
+	}
+	if fixes != 0 {
+		t.Errorf("expected 0 fixes (branch not merged), got %d", fixes)
+	}
+
+	// Task should remain FAILED.
+	var updated model.Task
+	db.First(&updated, "id = ?", task.ID)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected task to stay failed, got %s", updated.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // recoverStuckAgents
 // ---------------------------------------------------------------------------
 

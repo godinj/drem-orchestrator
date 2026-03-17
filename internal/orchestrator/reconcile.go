@@ -15,11 +15,12 @@ import (
 
 // ReconcileResult describes the fixes applied by a single Reconcile run.
 type ReconcileResult struct {
-	StaleSubtasksReset     int
-	OrphanedSubtasksFixed  int
-	EmptyFeaturesFailed    int
-	OrphanWorktreesCleaned int
-	StuckAgentsRecovered   int
+	StaleSubtasksReset        int
+	OrphanedSubtasksFixed     int
+	EmptyFeaturesFailed       int
+	OrphanWorktreesCleaned    int
+	StuckAgentsRecovered      int
+	AlreadyMergedFeaturesFixed int
 }
 
 // ReapOrphanedSessions kills tmux agent sessions that have no active agent
@@ -65,7 +66,13 @@ func (o *Orchestrator) Reconcile() (int, error) {
 		r.StuckAgentsRecovered = n
 	}
 
-	total := r.StaleSubtasksReset + r.OrphanedSubtasksFixed + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned + r.StuckAgentsRecovered
+	if n, err := o.reconcileAlreadyMergedFeatures(); err != nil {
+		return 0, fmt.Errorf("reconcile already-merged features: %w", err)
+	} else {
+		r.AlreadyMergedFeaturesFixed = n
+	}
+
+	total := r.StaleSubtasksReset + r.OrphanedSubtasksFixed + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned + r.StuckAgentsRecovered + r.AlreadyMergedFeaturesFixed
 	if total > 0 {
 		o.emit("reconcile", r)
 	}
@@ -508,6 +515,80 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 				o.logger.Error("reconcile stuck: fail subtask", "subtask_id", sub.ID, "error", err)
 			}
 		}
+		fixed++
+	}
+	return fixed, nil
+}
+
+// reconcileAlreadyMergedFeatures finds FAILED parent tasks whose feature
+// branch is already an ancestor of the default branch (i.e. was merged
+// manually or by a supervisor). These tasks are transitioned directly to DONE
+// since their work is already on the default branch.
+func (o *Orchestrator) reconcileAlreadyMergedFeatures() (int, error) {
+	var tasks []model.Task
+	if err := o.db.Where(
+		"project_id = ? AND status = ? AND parent_task_id IS NULL AND worktree_branch != ''",
+		o.projectID, model.StatusFailed,
+	).Find(&tasks).Error; err != nil {
+		return 0, err
+	}
+
+	mainWorktree, err := o.worktree.MainWorktreePath()
+	if err != nil {
+		// No main worktree available (e.g. in tests) — skip this check.
+		return 0, nil
+	}
+
+	fixed := 0
+	for i := range tasks {
+		task := &tasks[i]
+
+		// Check if the feature branch tip is an ancestor of the default branch HEAD.
+		_, err := worktree.RunGit(
+			[]string{"merge-base", "--is-ancestor", task.WorktreeBranch, "HEAD"},
+			mainWorktree,
+		)
+		if err != nil {
+			continue // not merged yet
+		}
+
+		o.logger.Info("reconcile: failed task's feature branch already merged to default, transitioning to done",
+			"task_id", task.ID, "branch", task.WorktreeBranch)
+
+		// Bypass the state machine (failed -> done is not a valid transition)
+		// since the work is provably on the default branch.
+		now := time.Now()
+		event := &model.TaskEvent{
+			ID:        uuid.New(),
+			TaskID:    task.ID,
+			EventType: "status_change",
+			OldValue:  string(task.Status),
+			NewValue:  string(model.StatusDone),
+			Details:   model.JSONField{"reason": "reconcile-already-merged-to-default"},
+			Actor:     "orchestrator",
+			CreatedAt: now,
+		}
+		task.Status = model.StatusDone
+		task.UpdatedAt = now
+
+		if err := o.db.Save(task).Error; err != nil {
+			o.logger.Error("reconcile: save already-merged task", "task_id", task.ID, "error", err)
+			continue
+		}
+		if err := o.db.Create(event).Error; err != nil {
+			o.logger.Error("reconcile: save event for already-merged task", "task_id", task.ID, "error", err)
+			continue
+		}
+
+		// Clean up the feature worktree since the branch is merged.
+		featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+		if featureName != "" {
+			if err := o.worktree.RemoveFeature(featureName); err != nil {
+				o.logger.Warn("reconcile: cleanup merged feature worktree", "task_id", task.ID, "error", err)
+			}
+		}
+
+		o.emit("task_updated", task)
 		fixed++
 	}
 	return fixed, nil
