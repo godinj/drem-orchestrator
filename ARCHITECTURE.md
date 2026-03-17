@@ -17,7 +17,7 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
 
 ## Structural Limits
 
-### File length ceiling: 800 lines `[not yet enforced]`
+### File length ceiling: 800 lines `[enforced]`
 
 No `.go` source file (non-test) may exceed 800 lines. If adding code would
 breach this limit, extract into a separate file in the same package first.
@@ -28,7 +28,7 @@ Any change to a grandfathered file that increases its line count is a violation.
 **Compliance test:** `wc -l` on the changed file; must be <= 800 (or <= previous
 count for grandfathered files).
 
-### Function count ceiling: 20 exported functions per file `[not yet enforced]`
+### Function count ceiling: 20 exported functions per file `[enforced]`
 
 No single file may define more than 20 exported functions or methods. If
 exceeded, split into a focused file within the same package.
@@ -39,7 +39,7 @@ rule.
 **Compliance test:** `grep -c '^func ' file.go`; must be <= 20 (or <= previous
 count for grandfathered files).
 
-### Package import ceiling: 6 internal imports `[not yet enforced]`
+### Package import ceiling: 6 internal imports `[enforced]`
 
 No package may import more than 6 other `internal/` packages. If exceeded,
 the package is accumulating too many responsibilities — extract a sub-concern
@@ -54,7 +54,7 @@ must be <= 6 (or <= previous count for grandfathered packages).
 
 ## Formatting
 
-### gofmt compliance: 100% `[not yet enforced]`
+### gofmt compliance: 100% `[enforced]`
 
 All `.go` files must pass `gofmt -l` with no output. Do not commit
 unformatted code.
@@ -85,7 +85,7 @@ same commit as the new usage.
 **Compliance test:** `grep` for the pattern across the codebase; count must stay
 below 3.
 
-### testutil is the single source for test infrastructure `[not yet enforced]`
+### testutil is the single source for test infrastructure `[enforced]`
 
 All test database creation must use `testutil.NewTestDB` or
 `testutil.NewSharedTestDB`. All git repo setup must use `testutil.SetupBareRepo`,
@@ -144,7 +144,7 @@ various `time.Duration` literals, retry count `3` in multiple places.
 
 ## Models
 
-### No duplicate GORM hooks `[not yet enforced]`
+### No duplicate GORM hooks `[enforced]`
 
 GORM lifecycle hooks (BeforeCreate, BeforeUpdate, etc.) that share identical
 logic across model types must be consolidated. Use either a shared embedded
@@ -160,7 +160,7 @@ Project, Task, Agent, TaskEvent, Memory, TaskComment.
 
 ## Test Infrastructure
 
-### Test factory functions in testutil `[not yet enforced]`
+### Test factory functions in testutil `[enforced]`
 
 Common test entity creation (projects, tasks, agents) must use shared factory
 functions from `internal/testutil/`. Do not define `createTestProject`,
@@ -185,8 +185,16 @@ records, it should not call `SetupBareRepo` or `AddWorktree`.
 
 ## Graduation Path
 
-When a constitution rule can be reliably detected by a script:
+When a constitution rule can be reliably detected:
 
-1. Add the check to `scripts/check_constitution.sh`
+1. Add the constraint to `.drem/constraints.toml` using the appropriate type
+   (`command`, `max_lines`, `max_matches`, or `no_match`)
 2. Mark the rule in this document as `[enforced]`
-3. The rule stays in the document for context but the hook is now authoritative
+3. The constraint system automatically enforces the rule at:
+   - **Plan validation** -- warns when plans target constrained files
+   - **Post-agent gate** -- checks file-based constraints after each agent merge
+   - **Integration gate** -- runs all constraints before testing_ready
+4. Run manually: `bash scripts/check_constitution.sh`
+
+The rule stays in this document for context, but `.drem/constraints.toml` is now
+the authoritative enforcement definition.
