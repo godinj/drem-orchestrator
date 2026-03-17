@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -34,7 +35,7 @@ func TestIntegrationGate_NoConstraintsConfig(t *testing.T) {
 	runGitCmd(t, featureDir, "add", ".")
 	runGitCmd(t, featureDir, "commit", "-m", "add code")
 
-	db := testDB(t)
+	db := testutil.NewTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -96,10 +97,9 @@ func TestIntegrationGate_ConstraintsPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	constraintsToml := `
-[[constraint]]
+[[max_lines]]
 name = "file size check"
-type = "max_lines"
-pattern = "*.go"
+glob = "*.go"
 limit = 1000
 `
 	if err := os.WriteFile(filepath.Join(dremDir, "constraints.toml"), []byte(constraintsToml), 0o644); err != nil {
@@ -109,7 +109,7 @@ limit = 1000
 	runGitCmd(t, featureDir, "add", ".")
 	runGitCmd(t, featureDir, "commit", "-m", "add code and constraints")
 
-	db := testDB(t)
+	db := testutil.NewTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -168,9 +168,9 @@ func TestIntegrationGate_ConstraintsFail(t *testing.T) {
 		t.Fatal(err)
 	}
 	constraintsToml := `
-[[constraint]]
+[[no_match]]
 name = "no debug TODOs"
-type = "no_match"
+glob = "*.go"
 pattern = "TODO: remove this debug"
 `
 	if err := os.WriteFile(filepath.Join(dremDir, "constraints.toml"), []byte(constraintsToml), 0o644); err != nil {
@@ -180,7 +180,7 @@ pattern = "TODO: remove this debug"
 	runGitCmd(t, featureDir, "add", ".")
 	runGitCmd(t, featureDir, "commit", "-m", "add code with debug TODO")
 
-	db := testDB(t)
+	db := testutil.NewTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -256,10 +256,9 @@ func TestIntegrationGate_ViolationsClearedOnPass(t *testing.T) {
 		t.Fatal(err)
 	}
 	constraintsToml := `
-[[constraint]]
+[[max_lines]]
 name = "file size check"
-type = "max_lines"
-pattern = "*.go"
+glob = "*.go"
 limit = 1000
 `
 	if err := os.WriteFile(filepath.Join(dremDir, "constraints.toml"), []byte(constraintsToml), 0o644); err != nil {
@@ -269,7 +268,7 @@ limit = 1000
 	runGitCmd(t, featureDir, "add", ".")
 	runGitCmd(t, featureDir, "commit", "-m", "add clean code")
 
-	db := testDB(t)
+	db := testutil.NewTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
@@ -339,9 +338,8 @@ func TestIntegrationGate_CommandConstraintFails(t *testing.T) {
 	}
 	// "false" is a standard Unix command that always exits with 1.
 	constraintsToml := `
-[[constraint]]
+[[command]]
 name = "always-fail check"
-type = "command"
 run = "false"
 `
 	if err := os.WriteFile(filepath.Join(dremDir, "constraints.toml"), []byte(constraintsToml), 0o644); err != nil {
@@ -351,7 +349,7 @@ run = "false"
 	runGitCmd(t, featureDir, "add", ".")
 	runGitCmd(t, featureDir, "commit", "-m", "add code and failing command constraint")
 
-	db := testDB(t)
+	db := testutil.NewTestDB(t)
 	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
 	o := testOrchestrator(t, db, wt)
 
