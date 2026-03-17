@@ -430,3 +430,136 @@ func TestMergeFeatureIntoMain_AutoCommitsDirtyMain(t *testing.T) {
 		t.Error("expected feature-work.txt to be in main after merge")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests for intersect()
+// ---------------------------------------------------------------------------
+
+func TestIntersect(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []string
+		b    []string
+		want []string
+	}{
+		{
+			name: "overlapping",
+			a:    []string{"x", "y", "z"},
+			b:    []string{"y", "z", "w"},
+			want: []string{"y", "z"},
+		},
+		{
+			name: "no overlap",
+			a:    []string{"a", "b"},
+			b:    []string{"c", "d"},
+			want: nil,
+		},
+		{
+			name: "empty a",
+			a:    []string{},
+			b:    []string{"x"},
+			want: nil,
+		},
+		{
+			name: "empty b",
+			a:    []string{"x"},
+			b:    []string{},
+			want: nil,
+		},
+		{
+			name: "both empty",
+			a:    []string{},
+			b:    []string{},
+			want: nil,
+		},
+		{
+			name: "identical",
+			a:    []string{"a", "b"},
+			b:    []string{"a", "b"},
+			want: []string{"a", "b"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := intersect(tt.a, tt.b)
+			if len(got) != len(tt.want) {
+				t.Fatalf("intersect(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("intersect(%v, %v)[%d] = %q, want %q", tt.a, tt.b, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests for detectBuildCommand()
+// ---------------------------------------------------------------------------
+
+func TestDetectBuildCommand(t *testing.T) {
+	tests := []struct {
+		name     string
+		files    []string // marker files to create in the temp dir
+		wantCmd  string
+		wantArgs []string
+	}{
+		{
+			name:     "go.mod present",
+			files:    []string{"go.mod"},
+			wantCmd:  "go",
+			wantArgs: []string{"test", "./..."},
+		},
+		{
+			name:     "Makefile present",
+			files:    []string{"Makefile"},
+			wantCmd:  "make",
+			wantArgs: []string{"test"},
+		},
+		{
+			name:     "package.json present",
+			files:    []string{"package.json"},
+			wantCmd:  "npm",
+			wantArgs: []string{"test"},
+		},
+		{
+			name:     "nothing present",
+			files:    nil,
+			wantCmd:  "",
+			wantArgs: nil,
+		},
+		{
+			name:     "go.mod takes priority over Makefile",
+			files:    []string{"go.mod", "Makefile"},
+			wantCmd:  "go",
+			wantArgs: []string{"test", "./..."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, f := range tt.files {
+				path := filepath.Join(dir, f)
+				if err := os.WriteFile(path, nil, 0o644); err != nil {
+					t.Fatalf("create marker file %s: %v", f, err)
+				}
+			}
+
+			gotCmd, gotArgs := detectBuildCommand(dir)
+			if gotCmd != tt.wantCmd {
+				t.Errorf("detectBuildCommand() cmd = %q, want %q", gotCmd, tt.wantCmd)
+			}
+			if len(gotArgs) != len(tt.wantArgs) {
+				t.Fatalf("detectBuildCommand() args = %v, want %v", gotArgs, tt.wantArgs)
+			}
+			for i := range gotArgs {
+				if gotArgs[i] != tt.wantArgs[i] {
+					t.Errorf("detectBuildCommand() args[%d] = %q, want %q", i, gotArgs[i], tt.wantArgs[i])
+				}
+			}
+		})
+	}
+}
