@@ -94,7 +94,7 @@ The new required ordering is:
 
 Test subtasks:
 - Run first, against the feature branch
-- Each test subtask corresponds to one or more implementation subtasks
+- Each test subtask corresponds to exactly one implementation subtask (strict 1:1)
 - Tests are expected to _fail_ at this point (they test unimplemented behavior)
 - The human reviews test quality, coverage, and intent — not passage
 
@@ -109,7 +109,10 @@ Implementation subtasks:
 
 #### 4.2.1 Plan JSON Schema Extension
 
-Each subtask gains a `phase` field and test subtasks gain a `tests_for` field:
+Each subtask gains a `phase` field and test subtasks gain a `tests_for` field.
+The `tests_for` field auto-generates a reverse dependency — the implementation
+subtask does not need an explicit `dependencies` entry for its test subtask
+(see §4.3.2):
 
 ```json
 {
@@ -129,7 +132,7 @@ Each subtask gains a `phase` field and test subtasks gain a `tests_for` field:
       "files": ["internal/track/automation.go", "internal/track/renderer.go"],
       "phase": "implementation",
       "agent_type": "coder",
-      "dependencies": [0]
+      "dependencies": []
     },
     {
       "title": "Integration wiring",
@@ -172,27 +175,57 @@ The planner must explicitly declare these in `tdd_exceptions` with a justificati
 
 Extend `ValidatePlan()` in `internal/orchestrator/plan_validation.go`:
 
-#### 4.3.1 Require Test Phase Subtasks
+#### 4.3.1 Require 1:1 Test-to-Implementation Mapping
+
+Every implementation subtask must have exactly one corresponding test subtask.
+This strict 1:1 mapping protects against subtle regressions — each test subtask
+is scoped tightly to its implementation, making it clear what broke and when.
 
 ```
 ERROR if: No subtasks have phase "test" AND no tdd_exceptions cover all implementation subtasks.
-WARNING if: An implementation subtask has no corresponding test subtask and no tdd_exception.
+ERROR if: An implementation subtask has no corresponding test subtask and no tdd_exception.
+ERROR if: A test subtask's tests_for references more than one implementation subtask (enforce 1:1).
+ERROR if: Two test subtasks reference the same implementation subtask (no duplicates).
 ```
 
-#### 4.3.2 Validate Phase Ordering
+#### 4.3.2 `tests_for` Implies Reverse Dependency
+
+The `tests_for` field on a test subtask is the **source of truth** for the
+test-to-implementation relationship. The orchestrator auto-generates the
+reverse dependency: if test subtask T has `tests_for: [I]`, then
+implementation subtask I automatically depends on T. The planner does NOT
+need to declare this dependency explicitly in the `dependencies` field of the
+implementation subtask — if it does, it's treated as redundant (not an error).
+
+This means:
+- Planners declare `tests_for` on test subtasks and `dependencies` for
+  inter-implementation ordering only
+- The orchestrator's dependency resolver merges auto-generated TDD
+  dependencies with explicit `dependencies` before scheduling
+
+#### 4.3.3 Validate Phase Ordering
 
 ```
 ERROR if: A "test" phase subtask depends on an "implementation" phase subtask (tests must come first).
-ERROR if: An "implementation" phase subtask does NOT depend on at least one "test" phase subtask (unless exempted).
+ERROR if: An "implementation" phase subtask has no corresponding test subtask (via tests_for) and no tdd_exception.
 WARNING if: A test subtask's tests_for references don't cover all files in the corresponding impl subtask.
 ```
 
-#### 4.3.3 Validate TDD Exceptions
+#### 4.3.4 Validate TDD Exceptions
 
 ```
 WARNING if: More than 50% of implementation subtasks are exempted (suggests the planner is avoiding TDD).
 ERROR if: A tdd_exception references a subtask that has phase "test" (nonsensical).
 ```
+
+#### 4.3.5 Test Gate Applicability
+
+The automated test gate at merge time applies **only to implementation and
+integration phase subtasks**. Test-phase subtasks are expected to produce
+intentionally-failing tests (the implementation doesn't exist yet), so they
+skip the merge-time test verification. The gate for test-phase subtasks is
+limited to: tests compile, and failures are for the right reasons (missing
+implementation, not syntax errors).
 
 ---
 
@@ -239,7 +272,18 @@ At `TEST_REVIEW`, the human reviews:
 
 The human can:
 - **Approve** → Transition to `IN_PROGRESS`, schedule implementation subtasks
-- **Reject with feedback** → Transition back to `TEST_WRITING`, spawn new test agents with the feedback as prompt adjustment
+- **Reject with feedback** → Transition back to `TEST_WRITING` with the
+  following behavior:
+  1. The rejected test subtasks are marked `REJECTED` (a terminal state for
+     that subtask instance — it is NOT re-run)
+  2. New test subtasks are created as replacements, cloned from the rejected
+     ones but with the human's feedback appended to the description
+  3. The new test agents work on top of the integration branch, which already
+     contains the merged (but rejected) test code — they can see and revise it
+  4. The `tests_for` references on the new test subtasks point to the same
+     implementation subtasks as the originals
+  5. When all replacement test subtasks complete, the parent transitions back
+     to `TEST_REVIEW` for another round of human review
 
 #### 4.4.4 `IN_PROGRESS` Changes
 
@@ -262,11 +306,16 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) {
 
 ### 4.5 Per-Agent Test Gate at Merge Time
 
-Every coder agent's branch must pass tests before it can merge into the feature branch. This applies to both test-phase and implementation-phase subtasks.
+The merge-time test gate applies to **implementation and integration phase
+subtasks only**. Test-phase subtasks skip this gate (their tests are expected
+to fail — see §4.3.5).
 
 #### 4.5.1 Test Execution in Agent Prompt
 
-Update coder instructions to make test execution mandatory, not optional:
+Update coder instructions to make test execution mandatory, not optional.
+The rule is simple: **always fix implementation, not tests.** If there is a
+genuine problem with a test, it will surface when the agent hits the context
+window limit and escalates to a fixer/human.
 
 ```markdown
 ## After Implementation
@@ -276,34 +325,56 @@ Update coder instructions to make test execution mandatory, not optional:
 3. ALL tests must pass. Do not commit if any test fails.
 4. If a test fails:
    - If it's a test you wrote or modified: fix it
-   - If it's a pre-existing test broken by your changes: fix your code, not the test
-   - If it's a flaky test unrelated to your changes: report it in your commit message but do NOT skip it
+   - If it's a pre-existing test broken by your changes: fix your implementation, not the test
+   - NEVER modify pre-written TDD tests. Fix your code to match the tests.
 5. Commit your changes with a descriptive message
 6. Do NOT push to remote
 ```
 
-#### 4.5.2 Test Result Verification at Merge
+#### 4.5.2 Pre-Existing Test Health
 
-Before merging an agent's branch, the orchestrator verifies tests passed:
+If there are pre-existing broken or flaky tests in the codebase, they should
+ideally be caught and addressed before doing any work. The orchestrator can
+detect this by running the test suite on the integration branch _before_
+scheduling any subtasks (during the `PLAN_REVIEW → TEST_WRITING` transition).
+If tests fail on a clean branch, the task is blocked with a diagnostic until
+the pre-existing failures are resolved.
+
+#### 4.5.3 Test Result Verification at Merge
+
+Before merging an agent's branch, the orchestrator verifies tests passed.
+A retry allowance handles environmental flakiness (filesystem timing, network):
 
 ```go
 func (o *Orchestrator) verifyTestsBeforeMerge(agent *model.Agent, subtask *model.Task) (*TestResult, error) {
-    // 1. Run the project's test command in the agent's worktree
     testCmd := o.getTestCommand(subtask) // from CLAUDE.md
-    result := o.runCommand(agent.WorktreePath, testCmd)
 
-    // 2. Parse results
-    return &TestResult{
-        Passed:   result.ExitCode == 0,
-        Output:   result.Stdout,
-        ExitCode: result.ExitCode,
-    }, nil
+    // Retry up to 3 times to handle environmental flakiness.
+    // Tests must pass — but transient env issues (timing, filesystem)
+    // get a few attempts before we block the merge.
+    var lastResult *TestResult
+    for attempt := 1; attempt <= 3; attempt++ {
+        result := o.runCommand(agent.WorktreePath, testCmd)
+        lastResult = &TestResult{
+            Passed:   result.ExitCode == 0,
+            Output:   result.Stdout,
+            ExitCode: result.ExitCode,
+        }
+        if lastResult.Passed {
+            return lastResult, nil
+        }
+        if attempt < 3 {
+            time.Sleep(time.Duration(attempt) * 2 * time.Second)
+        }
+    }
+    return lastResult, nil // all retries exhausted — block merge
 }
 ```
 
-If tests fail, the merge is blocked and the agent is notified (see §4.6).
+If tests fail after retries, the merge is blocked and the agent is notified
+(see §4.6).
 
-#### 4.5.3 Test Result Storage
+#### 4.5.4 Test Result Storage
 
 Store test results on the agent record for debugging and audit:
 
@@ -341,22 +412,77 @@ When a coder agent's tests fail:
 
 #### 4.6.2 Context Window Monitoring
 
-The orchestrator already monitors agent heartbeats. Extend this to track context window usage:
+**Implemented** in `internal/ctxmon/` (commit fb390a9).
 
-```go
-// Poll the agent's context usage via the idle signal or a status file
-// Claude Code writes .claude/context-usage.json with:
-// { "used_tokens": N, "max_tokens": M }
+The orchestrator monitors each agent's context window usage via Claude Code's
+built-in `statusLineScript` setting. A shell script (`ctxmon.StatusScript`)
+is installed at `.claude/context-status.sh` in each agent's worktree. Claude
+Code calls it with status JSON on stdin after every turn, and the script
+extracts token counts + usage percentage into `.claude/context-usage.json`.
 
-func (o *Orchestrator) checkContextWindow(agent *model.Agent) float64 {
-    usagePath := filepath.Join(agent.WorktreePath, ".claude", "context-usage.json")
-    // Parse and return used/max as a ratio
-}
+A `PreCompact` hook writes a signal file (`.claude/compaction-triggered`)
+when Claude Code auto-compacts, providing an additional hard signal that the
+agent has hit its context limit.
+
+The `contextMonitorLoop` goroutine (one per agent, 5-second polling interval)
+reads the usage file and compaction signal, updating both in-memory state
+(`RunningAgent.ContextUsage`) and the DB (`agent.Config`). The orchestrator's
+`checkContextUsage()` runs on every tick and takes action at two thresholds:
+
+| Threshold | Default | Action |
+|-----------|---------|--------|
+| `context_warn_percent` | 75% | Log warning, emit `context_window_warning` event |
+| `context_stop_percent` | 90% | Stop agent, fail task, emit `context_window_exceeded` event |
+| Compaction triggered | N/A | Stop agent immediately (context at limit) |
+
+Both thresholds are configurable in `drem.toml` (`context_warn_percent`,
+`context_stop_percent`).
+
+**TDD-specific escalation (to be built on this infrastructure):**
+
+For the TDD enforcement flow, we layer graduated escalation on top of the
+existing monitoring:
+
+- **Implementation agents at `context_warn_percent` (75%)**: Log warning.
+  The agent is likely struggling with test failures. No action yet.
+- **Implementation agents at 85%**: Stop agent. Spawn a fixer with the test
+  failure output and the agent's diff. Instruction: "Fix the code to pass
+  these tests. Do NOT modify the tests."
+- **Fixer agents at 80%**: Stop fixer. Escalate to human review with a
+  diagnostic summary.
+
+This requires a new intermediate threshold (`context_fixer_percent`, default
+85) and logic in `checkContextUsage()` to distinguish agent roles and spawn
+fixers instead of immediately failing the task.
+
+#### 4.6.3 Test-Writing Phase Failure
+
+When a test-writing agent itself fails (e.g., can't produce compilable tests,
+exhausts its context window, or produces tests with syntax errors):
+
+```
+1. Agent reaches context_stop_percent → orchestrator stops it
+2. Orchestrator inspects the agent's worktree:
+   a. If test files exist and compile → treat as partial success:
+      - Mark the test subtask as DONE
+      - Log a warning that the agent was stopped early
+      - The human will catch quality issues at TEST_REVIEW
+   b. If no compilable test files exist → mark subtask as FAILED:
+      - Spawn a new test-writing agent with:
+        - The original subtask description
+        - The failed agent's error output (last 2000 chars)
+        - Instruction: "A previous agent failed to write these tests. Start fresh."
+      - If the retry also fails → mark the parent task as FAILED with
+        diagnostic: "Unable to generate compilable tests for subtask N"
+        and escalate to human
 ```
 
-The 85%/80% thresholds trigger escalation. These values are configurable in project settings.
+No fixer agent is spawned for test-writing failures — unlike implementation
+failures, there is no "fix the code to match the tests" framing available.
+The test-writing agent IS the creative step; retrying with context is the
+right recovery, and the human gate at `TEST_REVIEW` catches quality issues.
 
-#### 4.6.3 Integration Test Failure (at `TESTING_READY`)
+#### 4.6.4 Integration Test Failure (at `TESTING_READY`)
 
 When the automated test suite fails on the integration branch:
 
@@ -382,12 +508,15 @@ Replace the current soft test guidance with mandatory TDD instructions:
 ```markdown
 ## Test-Driven Development (MANDATORY)
 
-Every implementation subtask MUST have a corresponding test subtask that runs FIRST.
+Every implementation subtask MUST have exactly ONE corresponding test subtask
+that runs FIRST. This is a strict 1:1 mapping — no test subtask may cover
+multiple implementation subtasks. This protects against subtle regressions
+by keeping each test tightly scoped to its implementation.
 
 ### Test Subtask Requirements
 
-For each implementation subtask, create a test subtask that:
-- Has phase: "test" and tests_for: [<impl subtask index>]
+For each implementation subtask, create exactly one test subtask that:
+- Has phase: "test" and tests_for: [<impl subtask index>] (exactly one index)
 - Writes tests that define the expected behavior BEFORE implementation
 - Tests should initially FAIL (they test unimplemented behavior)
 - Covers the acceptance criteria relevant to that implementation subtask
@@ -398,8 +527,12 @@ For each implementation subtask, create a test subtask that:
 
 Each implementation subtask must:
 - Have phase: "implementation"
-- Depend on its corresponding test subtask(s)
 - Make the pre-written tests pass
+- NEVER modify the pre-written tests — always fix implementation to match tests
+
+Note: you do NOT need to add the test subtask to the implementation subtask's
+`dependencies` — this dependency is auto-generated from `tests_for`. Only use
+`dependencies` for ordering between implementation subtasks themselves.
 
 ### TDD Exceptions
 
@@ -424,9 +557,11 @@ test subtasks → HUMAN REVIEW → implementation subtasks → integration subta
 ### Example Structure
 
 Subtask 0: "Write tests for automation curve rendering" (phase: test, tests_for: [1])
-Subtask 1: "Implement automation curve rendering" (phase: implementation, depends: [0])
+Subtask 1: "Implement automation curve rendering" (phase: implementation)
+  → auto-depends on subtask 0 via tests_for
 Subtask 2: "Write tests for automation parameter binding" (phase: test, tests_for: [3])
-Subtask 3: "Implement automation parameter binding" (phase: implementation, depends: [2])
+Subtask 3: "Implement automation parameter binding" (phase: implementation)
+  → auto-depends on subtask 2 via tests_for
 Subtask 4: "Integration wiring" (phase: integration, depends: [1, 3])
 ```
 
@@ -457,7 +592,24 @@ After writing tests:
 4. Commit with message: "test: <what these tests verify>"
 ```
 
-#### 4.8.2 Implementation-Phase Coder
+#### 4.8.2 Test File Tracking
+
+The plan's `files` field is a prediction of what the test agent will create.
+The actual test files may differ. To provide accurate file paths to the
+implementation-phase coder:
+
+1. When a test-phase agent completes, the orchestrator runs `git diff
+   --name-only` on the agent's branch against the integration branch base
+2. Files matching test patterns (e.g., `*_test.go`, `*_test.py`,
+   `test_*.py`, `*.test.ts`) are recorded in the subtask's context:
+   `subtask.Context["actual_test_files"]`
+3. The implementation-phase coder prompt is populated from
+   `actual_test_files`, not the plan's `files` field
+
+If the diff produces no test-pattern files, the orchestrator falls back to
+the plan's `files` field and logs a warning.
+
+#### 4.8.3 Implementation-Phase Coder
 
 When a coder agent is working on an implementation-phase subtask:
 
@@ -466,7 +618,7 @@ When a coder agent is working on an implementation-phase subtask:
 
 You are implementing code to pass pre-written tests (TDD).
 
-Pre-written tests exist at: <list of test files from the test subtask>
+Pre-written tests exist at: <list of test files from actual_test_files>
 
 Your implementation should:
 1. Read the pre-written tests first to understand expected behavior
@@ -533,7 +685,7 @@ Ordered by dependency. Each phase builds on the previous.
 | Item | Files | Description |
 |------|-------|-------------|
 | 1a | `internal/state/machine.go` | Add `TEST_WRITING` and `TEST_REVIEW` states and transitions |
-| 1b | `internal/model/task.go` | Add `StatusTestWriting`, `StatusTestReview` constants |
+| 1b | `internal/model/task.go` | Add `StatusTestWriting`, `StatusTestReview` constants; add `StatusRejected` for subtasks rejected at `TEST_REVIEW` |
 | 1c | `internal/orchestrator/plan_validation.go` | Add phase validation, TDD exception validation, test ordering checks |
 | 1d | `internal/orchestrator/orchestrator.go` | Parse `phase`, `tests_for`, `tdd_exceptions` from plan JSON |
 
@@ -543,25 +695,28 @@ Ordered by dependency. Each phase builds on the previous.
 |------|-------|-------------|
 | 2a | `internal/prompt/prompt.go` | Rewrite `plannerInstructions()` with mandatory TDD guidance |
 | 2b | `internal/prompt/prompt.go` | Add test-phase coder instructions variant |
-| 2c | `internal/orchestrator/orchestrator.go` | Add `processTestWriting()` — schedule test-phase subtasks only |
-| 2d | `internal/orchestrator/orchestrator.go` | Add `TEST_WRITING → TEST_REVIEW` transition on all test subtasks done |
+| 2c | `internal/orchestrator/orchestrator.go` | Add baseline test health check — run test suite on integration branch before scheduling test subtasks; block with diagnostic if pre-existing tests fail |
+| 2d | `internal/orchestrator/orchestrator.go` | Add `processTestWriting()` — schedule test-phase subtasks only |
+| 2e | `internal/orchestrator/orchestrator.go` | Add `TEST_WRITING → TEST_REVIEW` transition on all test subtasks done |
 
 ### Phase 3: Human Test Review Gate
 
 | Item | Files | Description |
 |------|-------|-------------|
-| 3a | `internal/orchestrator/orchestrator.go` | Add `HandleTestReviewApproved()` / `HandleTestReviewRejected()` |
+| 3a | `internal/orchestrator/orchestrator.go` | Add `HandleTestReviewApproved()` / `HandleTestReviewRejected()` — rejection marks old test subtasks `REJECTED`, clones new ones with feedback, transitions back to `TEST_WRITING` |
 | 3b | `internal/prompt/prompt.go` | Update plan reviewer to assess TDD quality |
-| 3c | `internal/tui/` | Surface `TEST_WRITING` and `TEST_REVIEW` states in the dashboard |
+| 3c | `internal/tui/` | Surface `TEST_WRITING` and `TEST_REVIEW` states in dashboard — status colors, `a`/`r` keybindings for approve/reject at `TEST_REVIEW` (mirroring existing `PLAN_REVIEW` UX), rejection prompts for feedback text |
 
 ### Phase 4: Per-Agent Test Gate
 
-| Item | Files | Description |
-|------|-------|-------------|
-| 4a | `internal/orchestrator/orchestrator.go` | Add `verifyTestsBeforeMerge()` — run test command, check exit code |
-| 4b | `internal/prompt/prompt.go` | Update implementation-phase coder instructions (tests mandatory, no flaky tolerance) |
-| 4c | `internal/agent/runner.go` | Add context window monitoring via status file |
-| 4d | `internal/orchestrator/orchestrator.go` | Add 85% context window → fixer escalation logic |
+| Item | Files | Description | Status |
+|------|-------|-------------|--------|
+| 4a | `internal/orchestrator/orchestrator.go` | Add `verifyTestsBeforeMerge()` — run test command, check exit code | |
+| 4b | `internal/prompt/prompt.go` | Update implementation-phase coder instructions (tests mandatory, no flaky tolerance) | |
+| 4c | `internal/ctxmon/`, `internal/agent/runner.go`, `internal/orchestrator/orchestrator.go` | Context window monitoring via status line script + PreCompact hook | **Done** (fb390a9) |
+| 4d | `internal/orchestrator/orchestrator.go` | Add `context_fixer_percent` threshold (85%) and role-aware fixer escalation | |
+| 4e | `internal/orchestrator/orchestrator.go` | Add test file tracking — `git diff --name-only` after test-phase agent completes, store `actual_test_files` in subtask context | |
+| 4f | `internal/orchestrator/orchestrator.go` | Add test-writing failure recovery — retry once with error context, then fail to human (see §4.6.3) | |
 
 ### Phase 5: Automated `TESTING_READY` Gate
 
@@ -582,13 +737,15 @@ We will eat our own dogfood: implement this PRD using TDD, even before the orche
 | Component | Tests |
 |-----------|-------|
 | State machine | `TEST_WRITING` and `TEST_REVIEW` transitions valid/invalid |
-| Plan validation | Plans without test subtasks rejected; phase ordering enforced; TDD exceptions validated |
+| Plan validation | Plans without test subtasks rejected; phase ordering enforced; TDD exceptions validated; `tests_for` auto-generates reverse dependency |
 | Phase parsing | Plan JSON with `phase`, `tests_for`, `tdd_exceptions` parses correctly |
 | `processTestWriting()` | Only test-phase subtasks scheduled; impl subtasks remain in backlog |
 | `verifyTestsBeforeMerge()` | Tests pass → merge proceeds; tests fail → merge blocked |
 | Context window check | 85%+ → triggers fixer; below threshold → no action |
 | Test-phase prompt | Contains TDD-specific instructions; does NOT contain "run tests if applicable" |
-| Impl-phase prompt | References pre-written test files; mandates all tests pass |
+| Impl-phase prompt | References pre-written test files from `actual_test_files`; mandates all tests pass |
+| Test file tracking | `git diff --name-only` extracts test files; falls back to plan `files` if none found |
+| Baseline health check | Pre-existing test failures block `TEST_WRITING` with diagnostic |
 
 ### Integration Tests
 
@@ -598,7 +755,9 @@ We will eat our own dogfood: implement this PRD using TDD, even before the orche
 | Plan with test subtasks | Test subtasks scheduled first, impl subtasks wait |
 | Test subtask completes → all tests done | Parent transitions to `TEST_REVIEW` |
 | Human approves tests | Parent transitions to `IN_PROGRESS`, impl subtasks scheduled |
-| Human rejects tests with feedback | Parent transitions to `TEST_WRITING`, new test agents spawn with feedback |
+| Human rejects tests with feedback | Old test subtasks marked `REJECTED`, new ones cloned with feedback, parent transitions to `TEST_WRITING` |
+| Test-writing agent exhausts context (compilable tests exist) | Subtask marked DONE, warning logged, human catches quality at `TEST_REVIEW` |
+| Test-writing agent exhausts context (no compilable tests) | Retry with error context; second failure → parent FAILED, human escalation |
 | Impl agent's tests fail | Merge blocked, agent retries |
 | Impl agent hits 85% context | Fixer spawned with test failure context |
 | Fixer hits 80% context | Fixer stopped, human review requested |
@@ -627,14 +786,17 @@ We will eat our own dogfood: implement this PRD using TDD, even before the orche
 
 ---
 
-## 9. Open Questions
+## 9. Resolved Questions
 
-1. **Test subtask granularity**: Should there be one test subtask per implementation subtask (1:1), or can a single test subtask cover multiple impl subtasks? The current design allows both via `tests_for: [1, 2]`. Is 1:1 worth enforcing?
+All open questions have been resolved. Decisions are recorded here for
+traceability and reflected in the design sections above.
 
-2. **Context window monitoring mechanism**: Claude Code doesn't currently write a `context-usage.json` file. We may need to approximate this via the conversation token count from the idle signal, or by monitoring the tmux pane output for context warnings. What's the most reliable signal available?
+1. ~~**Test subtask granularity**~~ — **Resolved: strict 1:1 mapping enforced.** Each implementation subtask gets exactly one test subtask. `tests_for` must reference exactly one index. This protects against subtle regressions by keeping test scope tightly coupled to implementation scope. See §4.3.1 and §4.7.
 
-3. **Test failure attribution**: When a pre-written test fails during implementation, how does the orchestrator determine whether it's the implementation that's wrong (expected) vs. the test that's wrong (unexpected)? Current design says "always fix implementation, not tests" — is that too rigid?
+2. ~~**Context window monitoring mechanism**~~ — **Resolved: status line script.** Implemented in `internal/ctxmon/` (commit fb390a9). Uses Claude Code's `statusLineScript` setting to extract token usage from the built-in status JSON, plus a `PreCompact` hook for compaction detection. No API proxy needed. See §4.6.2.
 
-4. **Flaky test detection**: The PRD says "no flaky tests" but some test flakiness is environmental (timing, filesystem). Should there be a distinction between deterministic test failures (block merge) and environmental flakiness (retry N times before blocking)?
+3. ~~**Test failure attribution**~~ — **Resolved: always fix implementation, not tests.** This is the correct default for TDD. If there is a genuine problem with a test, it will surface when the agent exhausts its context window and escalates to a fixer/human — at which point a human can make the judgement call. See §4.5.1.
 
-5. **Test-phase agents seeing failing tests**: Test-phase agents write tests that _should_ fail. But the post-completion test gate will see failures. How do we distinguish "expected failures" (TDD, no implementation yet) from "unexpected failures" (broken test code)? Likely answer: skip the merge-time test gate for test-phase subtasks, only enforce it for implementation-phase subtasks.
+4. ~~**Flaky test detection**~~ — **Resolved: retry allowance for environmental flakiness, but tests must pass.** The merge-time test gate retries up to 3 times with backoff to handle transient environmental issues (filesystem timing, network). But all tests must ultimately pass — no skipping. Pre-existing broken or flaky tests should be caught and addressed before work begins (baseline test health check at `PLAN_REVIEW → TEST_WRITING` transition). See §4.5.2 and §4.5.3.
+
+5. ~~**Test-phase merge gate**~~ — **Resolved: skip test gate for test-phase subtasks.** Test-phase agents produce intentionally-failing tests. The merge-time test gate applies only to implementation and integration phase subtasks. Test-phase subtasks are gated on: tests compile, and failures are for the right reasons (missing implementation, not syntax errors). See §4.3.5.

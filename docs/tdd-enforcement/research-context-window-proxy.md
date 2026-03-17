@@ -1,7 +1,7 @@
 # Research: API Proxy for Claude Code Context Window Monitoring
 
 **Date**: 2026-03-11
-**Status**: Research needed
+**Status**: Superseded — implemented via status line script in `internal/ctxmon/` (commit fb390a9). API proxy approach was not needed.
 **Context**: [PRD: TDD Enforcement](prd-tdd-enforcement.md) — §4.6.2 Context Window Monitoring
 
 ---
