@@ -357,8 +357,11 @@ func (d DetailModel) availableActions() string {
 	parts = append(parts, "[S]upervisor")
 
 	// Agent-specific actions.
-	if d.agent != nil && d.agent.TmuxSession != "" {
-		parts = append(parts, "[g] jump to agent", "[l] view log")
+	if d.agent != nil {
+		parts = append(parts, "[l] view log")
+		if d.agent.TmuxSession != "" {
+			parts = append(parts, "[g] jump to agent")
+		}
 	}
 
 	return strings.Join(parts, "  ")

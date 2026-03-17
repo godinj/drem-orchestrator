@@ -595,6 +595,11 @@ func (o *Orchestrator) IntegrationWorktreePath(taskID uuid.UUID) string {
 	return o.resolveIntegrationWorktree(&task)
 }
 
+// GetAgentOutput returns the output log content for the given agent.
+func (o *Orchestrator) GetAgentOutput(agentID uuid.UUID) (string, error) {
+	return o.runner.GetAgentOutput(agentID)
+}
+
 func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 	// Check baseline test health (once per task).
 	if parent.Context == nil {
@@ -912,11 +917,11 @@ func (o *Orchestrator) DeleteSubtask(subtaskID uuid.UUID) error {
 		// StopAgent is best-effort — the agent may already be dead.
 		if err := o.runner.StopAgent(agentID); err != nil {
 			o.logger.Debug("stop agent during subtask delete (may be already stopped)", "agent_id", agentID, "error", err)
-			// StopAgent failed (agent not in running map) — kill tmux session
+			// StopAgent failed (agent not in running map) — kill stale process
 			// directly for idle/dead agents that still have one.
 			var ag model.Agent
-			if dbErr := o.db.First(&ag, "id = ?", agentID).Error; dbErr == nil && ag.TmuxSession != "" {
-				_ = o.runner.TmuxManager().KillAgentSession(ag.TmuxSession)
+			if dbErr := o.db.First(&ag, "id = ?", agentID).Error; dbErr == nil {
+				o.runner.KillStaleProcess(&ag)
 			}
 		}
 		// Mark agent as dead in DB regardless.

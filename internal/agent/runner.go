@@ -1,9 +1,9 @@
-// Package agent manages Claude Code agent lifecycles via tmux sessions.
+// Package agent manages Claude Code agent lifecycles.
 //
-// It spawns agents in per-agent tmux sessions, monitors their execution, tracks
-// heartbeats, and handles graceful shutdown. Each agent runs in its own git
-// worktree with its own tmux session, allowing full visibility, interactivity,
-// and persistence independent of the dashboard lifecycle.
+// Headless agents (planners, coders, reviewers, fixers) run as direct
+// subprocesses. Interactive sessions (supervisors, shells) still use tmux.
+// Each agent runs in its own git worktree with full visibility and persistence
+// independent of the dashboard lifecycle.
 package agent
 
 import (
@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/agentmon"
 	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/tmux"
@@ -27,9 +28,9 @@ import (
 )
 
 const (
-	// maxCaptureLines is the number of tmux scrollback lines to capture when
-	// reading agent output from interactive TUI sessions.
-	maxCaptureLines = 500
+	// maxLogTailBytes is the maximum number of bytes to read from the tail of
+	// an agent's output log file when capturing output.
+	maxLogTailBytes = 64 * 1024
 
 	// shortIDLen is the number of characters used from a UUID for display purposes.
 	shortIDLen = 4
@@ -40,8 +41,11 @@ const (
 	// idleNotifyTimeoutSecs is the hook timeout (in seconds) for the idle_prompt notification command.
 	idleNotifyTimeoutSecs = 5
 
-	// spawnVerifyDelay is the delay before checking that a newly spawned agent's tmux session is alive.
-	spawnVerifyDelay = 10 * time.Second
+	// sendExitGracePeriod is how long to wait after SendExit before killing.
+	sendExitGracePeriod = 30 * time.Second
+
+	// stopGracePeriod is how long StopAgent waits after SendExit before Kill.
+	stopGracePeriod = 5 * time.Second
 )
 
 // Completion records the result of an agent process exit.
@@ -57,16 +61,22 @@ type RunningAgent struct {
 	WorktreePath string
 	Branch       string
 	TmuxSession  string
+	Process      *AgentProcess // subprocess handle; nil for supervisors
+	LogPath      string        // path to agent-output.log
 	StartedAt    time.Time
 	ContextUsage *ctxmon.Usage      // latest context window usage; nil until first read
+	ActivityMon  *agentmon.Monitor  // activity monitor; nil until started
+	Activity     *agentmon.Activity // latest activity snapshot; nil until first scan
 	cancel       context.CancelFunc // cancels the monitor and heartbeat goroutines
 }
 
-// Runner manages Claude Code agent lifecycles via tmux.
+// Runner manages Claude Code agent lifecycles. Headless agents run as
+// subprocesses; supervisors and shells still use tmux.
 type Runner struct {
 	db              *gorm.DB
-	tmux            SessionManager
-	tmuxSessionName string // dashboard session name prefix for agent sessions
+	startProcess    ProcessStarter // creates subprocess; overridable for tests
+	tmuxMgr         *tmux.Manager  // for supervisors/shells only
+	tmuxSessionName string         // dashboard session name prefix
 	worktree        *worktree.Manager
 	claudeBin       string
 	maxConcurrent   int
@@ -77,8 +87,8 @@ type Runner struct {
 	semaphore   chan struct{} // buffered channel of size maxConcurrent
 }
 
-// NewRunner creates an agent Runner. The tm parameter must implement
-// SessionManager; *tmux.Manager satisfies this interface.
+// NewRunner creates an agent Runner. Headless agents are started via
+// StartAgentProcess; supervisors and shells use the tmux Manager.
 func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin string, maxConcurrent int) *Runner {
 	var sessionName string
 	if tm != nil {
@@ -86,7 +96,8 @@ func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin st
 	}
 	return &Runner{
 		db:              db,
-		tmux:            tm,
+		startProcess:    StartAgentProcess,
+		tmuxMgr:         tm,
 		tmuxSessionName: sessionName,
 		worktree:        wt,
 		claudeBin:       claudeBin,
@@ -173,10 +184,10 @@ func (r *Runner) TmuxSessionName() string {
 	return r.tmuxSessionName
 }
 
-// TmuxManager returns the underlying tmux Manager. It panics if the
-// SessionManager is not a *tmux.Manager (only possible in test code).
+// TmuxManager returns the underlying tmux Manager for supervisor/shell
+// operations. Returns nil if no tmux manager is configured (test code).
 func (r *Runner) TmuxManager() *tmux.Manager {
-	return r.tmux.(*tmux.Manager)
+	return r.tmuxMgr
 }
 
 // ClaudeBin returns the path to the Claude binary.
@@ -254,10 +265,42 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 		return nil, fmt.Errorf("spawn agent: create db record: %w", err)
 	}
 
-	// Write prompt, build command, create tmux session, start monitoring.
+	// Write prompt, start subprocess, begin monitoring.
 	if err := r.startAgent(agent.ID, task.ID, worktreePath, branch, sessionName, prompt); err != nil {
 		r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("status", model.AgentDead)
 		return nil, fmt.Errorf("spawn agent: start: %w", err)
+	}
+
+	// Store PID in agent Config for orphan cleanup.
+	r.mu.Lock()
+	ra := r.running[agent.ID]
+	r.mu.Unlock()
+	if ra != nil && ra.Process != nil {
+		r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("config", model.JSONField{
+			"pid": ra.Process.Pid(),
+		})
+	}
+
+	// Create activity monitor with estimated files from task context.
+	var estimatedFiles []string
+	if task.Context != nil {
+		if raw, ok := task.Context["estimated_files"]; ok {
+			switch v := raw.(type) {
+			case []any:
+				for _, f := range v {
+					if s, ok := f.(string); ok {
+						estimatedFiles = append(estimatedFiles, s)
+					}
+				}
+			case []string:
+				estimatedFiles = v
+			}
+		}
+	}
+	if ra != nil {
+		r.mu.Lock()
+		ra.ActivityMon = agentmon.NewMonitor(worktreePath, estimatedFiles)
+		r.mu.Unlock()
 	}
 
 	slog.Info("agent spawned",
@@ -272,9 +315,8 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 	return agent, nil
 }
 
-// startAgent performs the common steps shared by SpawnAgent and Spawn:
-// write prompt file, build command, create tmux session, store RunningAgent,
-// launch monitor and heartbeat goroutines.
+// startAgent writes the prompt file and settings, starts the agent as a
+// subprocess, stores the RunningAgent, and launches monitoring goroutines.
 func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, sessionName, prompt string) error {
 	// Ensure .claude directory exists.
 	claudeDir := filepath.Join(worktreePath, ".claude")
@@ -344,16 +386,10 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		return fmt.Errorf("write claude settings: %w", err)
 	}
 
-	// Build the claude command. Use pipe-based delivery to avoid shell
-	// argument length limits and special character truncation from $(cat ...).
-	cmd := fmt.Sprintf(
-		"cat %q | %s --dangerously-skip-permissions -p -",
-		promptPath, r.claudeBin,
-	)
-
-	// Create tmux session for this agent.
-	if err := r.tmux.CreateAgentSession(sessionName, cmd, worktreePath); err != nil {
-		return fmt.Errorf("create tmux session: %w", err)
+	// Start agent as a subprocess.
+	proc, err := r.startProcess(context.Background(), r.claudeBin, promptPath, worktreePath)
+	if err != nil {
+		return fmt.Errorf("start subprocess: %w", err)
 	}
 
 	// Context for monitor and heartbeat goroutines.
@@ -365,6 +401,8 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		WorktreePath: worktreePath,
 		Branch:       branch,
 		TmuxSession:  sessionName,
+		Process:      proc,
+		LogPath:      proc.LogPath(),
 		StartedAt:    time.Now(),
 		cancel:       cancel,
 	}
@@ -373,40 +411,15 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 	r.running[agentID] = ra
 	r.mu.Unlock()
 
-	go r.monitorAgent(ctx, agentID, sessionName, worktreePath)
+	go r.monitorAgent(ctx, agentID, proc, worktreePath)
 	go r.heartbeatLoop(ctx, agentID)
-	go r.verifySpawn(agentID, sessionName, spawnVerifyDelay)
 	go r.contextMonitorLoop(ctx, agentID, worktreePath)
 
 	return nil
 }
 
-// verifySpawn checks that the agent's tmux session is alive after a
-// short delay. If the session doesn't exist, it sends a failure
-// completion so the orchestrator can handle the dead agent.
-func (r *Runner) verifySpawn(agentID uuid.UUID, sessionName string, delay time.Duration) {
-	time.Sleep(delay)
-
-	r.mu.Lock()
-	_, stillTracked := r.running[agentID]
-	r.mu.Unlock()
-	if !stillTracked {
-		return // already completed or stopped
-	}
-
-	alive, err := r.tmux.IsAgentSessionAlive(sessionName)
-	if err != nil || !alive {
-		slog.Error("agent failed spawn verification",
-			"agent_id", agentID,
-			"session", sessionName,
-			"error", err,
-		)
-		r.completions <- Completion{AgentID: agentID, ReturnCode: 1}
-	}
-}
-
 // StopAgent performs a graceful shutdown of an agent: cancels goroutines,
-// closes the tmux window, updates the DB, and releases capacity.
+// stops the subprocess, updates the DB, and releases capacity.
 func (r *Runner) StopAgent(agentID uuid.UUID) error {
 	r.mu.Lock()
 	ra, ok := r.running[agentID]
@@ -420,10 +433,17 @@ func (r *Runner) StopAgent(agentID uuid.UUID) error {
 	// Cancel monitor and heartbeat goroutines.
 	ra.cancel()
 
-	// Kill the tmux session (idempotent).
-	if err := r.tmux.KillAgentSession(ra.TmuxSession); err != nil {
-		// Log but don't fail — best effort.
-		_ = err
+	// Gracefully stop the subprocess.
+	if ra.Process != nil {
+		ra.Process.SendExit()
+		// Wait briefly for graceful exit.
+		timer := time.NewTimer(stopGracePeriod)
+		select {
+		case <-ra.Process.done:
+			timer.Stop()
+		case <-timer.C:
+			ra.Process.Kill()
+		}
 	}
 
 	// Update agent DB status to DEAD.
@@ -437,25 +457,77 @@ func (r *Runner) StopAgent(agentID uuid.UUID) error {
 	return nil
 }
 
-// GetAgentOutput captures the agent's tmux pane output. For running agents it
-// reads from the in-memory session name; for finished agents it looks up the
-// session name from the DB. Returns an empty string if no session is available.
+// GetAgentOutput reads the agent's output log file. For running agents it
+// reads from the in-memory log path; for finished agents it looks up the
+// agent from the DB and reads from the worktree's log file.
 func (r *Runner) GetAgentOutput(agentID uuid.UUID) (string, error) {
 	r.mu.Lock()
 	ra, ok := r.running[agentID]
 	r.mu.Unlock()
 
-	if !ok {
+	var logPath string
+	if ok {
+		logPath = ra.LogPath
+	} else {
 		var agent model.Agent
 		if err := r.db.First(&agent, "id = ?", agentID).Error; err != nil {
 			return "", fmt.Errorf("get agent output: agent %s not found: %w", agentID, err)
 		}
-		if agent.TmuxSession == "" {
+		if agent.WorktreePath == "" {
 			return "", nil
 		}
-		return r.tmux.CaptureAgentPane(agent.TmuxSession, maxCaptureLines)
+		logPath = filepath.Join(agent.WorktreePath, ".claude", "agent-output.log")
 	}
-	return r.tmux.CaptureAgentPane(ra.TmuxSession, maxCaptureLines)
+
+	return readLogTail(logPath, maxLogTailBytes)
+}
+
+// readLogTail reads the last maxBytes from a file and returns them as a string.
+func readLogTail(path string, maxBytes int64) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read log: %w", err)
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("read log: stat: %w", err)
+	}
+
+	offset := info.Size() - maxBytes
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > 0 {
+		if _, err := f.Seek(offset, 0); err != nil {
+			return "", fmt.Errorf("read log: seek: %w", err)
+		}
+	}
+
+	data := make([]byte, info.Size()-offset)
+	n, err := f.Read(data)
+	if err != nil && err.Error() != "EOF" {
+		return "", fmt.Errorf("read log: read: %w", err)
+	}
+	return string(data[:n]), nil
+}
+
+// KillStaleProcess kills a stale agent by PID from the agent's Config.
+// Used by the orchestrator when StopAgent fails (agent not in running map).
+func (r *Runner) KillStaleProcess(ag *model.Agent) {
+	if ag.Config != nil {
+		if pidVal, ok := ag.Config["pid"].(float64); ok && pidVal > 0 {
+			pid := int(pidVal)
+			proc, err := os.FindProcess(pid)
+			if err == nil {
+				_ = proc.Kill()
+			}
+		}
+	}
 }
 
 // GetRunningAgents returns a copy of all currently running agent entries.
@@ -471,8 +543,11 @@ func (r *Runner) GetRunningAgents() []RunningAgent {
 			WorktreePath: ra.WorktreePath,
 			Branch:       ra.Branch,
 			TmuxSession:  ra.TmuxSession,
+			Process:      ra.Process,
+			LogPath:      ra.LogPath,
 			StartedAt:    ra.StartedAt,
 			ContextUsage: ra.ContextUsage,
+			Activity:     ra.Activity,
 		})
 	}
 	return agents
@@ -515,10 +590,8 @@ func (r *Runner) CleanupStaleAgents(timeout time.Duration) error {
 				continue
 			}
 		} else {
-			// Not in our running map — kill tmux session if it exists and update DB.
-			if agent.TmuxSession != "" {
-				_ = r.tmux.KillAgentSession(agent.TmuxSession)
-			}
+			// Not in our running map — kill by PID and update DB.
+			r.KillStaleProcess(&agent)
 			r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("status", model.AgentDead)
 		}
 	}
@@ -526,12 +599,15 @@ func (r *Runner) CleanupStaleAgents(timeout time.Duration) error {
 	return nil
 }
 
-// ReapOrphanedSessions kills tmux agent sessions that are not associated with
-// any active (WORKING) agent. This is exposed for manual invocation (e.g. via
-// a TUI keybinding or CLI command) — it is intentionally NOT called
-// automatically to avoid destroying worktrees before merges complete.
+// ReapOrphanedSessions kills tmux sessions (supervisors) that are not
+// associated with any active work. Headless agents no longer create tmux
+// sessions, so this only cleans up supervisor/shell sessions.
 func (r *Runner) ReapOrphanedSessions() (int, error) {
-	sessions, err := r.tmux.ListAgentSessions()
+	if r.tmuxMgr == nil {
+		return 0, nil
+	}
+
+	sessions, err := r.tmuxMgr.ListAgentSessions()
 	if err != nil {
 		return 0, err
 	}
@@ -539,42 +615,14 @@ func (r *Runner) ReapOrphanedSessions() (int, error) {
 		return 0, nil
 	}
 
-	// Build the set of tmux session names for agents still actively working.
-	var activeAgents []model.Agent
-	if err := r.db.Where("status = ?", model.AgentWorking).Find(&activeAgents).Error; err != nil {
-		return 0, fmt.Errorf("query active agents: %w", err)
-	}
-
-	activeSessions := make(map[string]bool, len(activeAgents))
-	for _, a := range activeAgents {
-		if a.TmuxSession != "" {
-			activeSessions[a.TmuxSession] = true
-		}
-	}
-
-	// Also keep sessions for agents in the running map (may not have been
-	// persisted to DB yet).
-	r.mu.Lock()
-	for _, ra := range r.running {
-		activeSessions[ra.TmuxSession] = true
-	}
-	r.mu.Unlock()
-
 	reaped := 0
 	for _, sess := range sessions {
-		if activeSessions[sess] {
-			continue
-		}
-		// Supervisor sessions are interactive and not tracked as agents.
-		if strings.Contains(sess, "/supervisor ") {
-			continue
-		}
 		// Only reap sessions whose process has exited.
-		alive, err := r.tmux.IsAgentSessionAlive(sess)
+		alive, err := r.tmuxMgr.IsAgentSessionAlive(sess)
 		if err != nil || alive {
 			continue
 		}
-		_ = r.tmux.KillAgentSession(sess)
+		_ = r.tmuxMgr.KillAgentSession(sess)
 		reaped++
 	}
 
@@ -633,19 +681,47 @@ func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, work
 			continue
 		}
 
-		// Update in-memory state.
+		// Scan activity monitor alongside context usage.
 		r.mu.Lock()
 		ra, ok := r.running[agentID]
 		if ok {
 			ra.ContextUsage = usage
 		}
+		var actMon *agentmon.Monitor
+		if ok && ra.ActivityMon != nil {
+			actMon = ra.ActivityMon
+		}
 		r.mu.Unlock()
+
+		var activity *agentmon.Activity
+		if actMon != nil {
+			act, scanErr := actMon.Scan()
+			if scanErr != nil {
+				slog.Warn("context monitor: activity scan", "agent_id", agentID, "error", scanErr)
+			} else if act != nil {
+				activity = act
+				r.mu.Lock()
+				if ra, ok := r.running[agentID]; ok {
+					ra.Activity = activity
+				}
+				r.mu.Unlock()
+			}
+		}
 
 		// Persist to DB Config field.
 		configUpdate := model.JSONField{
 			"context_used_pct":    usage.UsedPercent,
 			"context_window_size": usage.ContextWindowSize,
 			"total_cost_usd":      usage.TotalCostUSD,
+		}
+		if activity != nil {
+			configUpdate["activity_tool"] = activity.LastTool
+			configUpdate["activity_target"] = activity.LastTarget
+			configUpdate["activity_files_touched"] = len(activity.FilesTouched)
+			configUpdate["activity_committed"] = activity.HasCommit
+			configUpdate["activity_phase"] = activity.Phase
+			configUpdate["activity_file_progress"] = activity.FileProgress
+			configUpdate["activity_stuck_score"] = activity.StuckScore
 		}
 		r.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("config", configUpdate)
 	}
@@ -663,24 +739,51 @@ func (r *Runner) GetContextUsage(agentID uuid.UUID) *ctxmon.Usage {
 	return ra.ContextUsage
 }
 
-// monitorAgent is a background goroutine that waits for the agent's idle
-// signal file (created by the idle_prompt notification hook) and then
-// gracefully exits the Claude TUI. Falls back to WaitForAgentExit if
-// the idle signal approach fails.
-func (r *Runner) monitorAgent(ctx context.Context, agentID uuid.UUID, sessionName, worktreePath string) {
+// monitorAgent is a background goroutine that waits for the agent subprocess
+// to become idle (via the idle signal file) or exit, then gracefully shuts it
+// down and sends a completion.
+func (r *Runner) monitorAgent(ctx context.Context, agentID uuid.UUID, proc *AgentProcess, worktreePath string) {
 	idleSignal := filepath.Join(worktreePath, ".claude", "agent-idle")
 
-	exitCode, err := r.tmux.WaitForAgentIdle(ctx, sessionName, idleSignal)
-	if err != nil {
-		exitCode = -1
+	// Poll for idle signal or process exit.
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return // StopAgent was called
+		case <-proc.done:
+			// Process exited on its own.
+			goto done
+		case <-ticker.C:
+			if _, err := os.Stat(idleSignal); err == nil {
+				// Idle signal detected — send /exit and wait.
+				proc.SendExit()
+				timer := time.NewTimer(sendExitGracePeriod)
+				select {
+				case <-proc.done:
+					timer.Stop()
+				case <-timer.C:
+					proc.Kill()
+				case <-ctx.Done():
+					timer.Stop()
+					return
+				}
+				goto done
+			}
+		}
 	}
 
-	// If the context was cancelled (StopAgent), don't send a completion.
+done:
+	// If context was cancelled during exit, don't send completion.
 	select {
 	case <-ctx.Done():
 		return
 	default:
 	}
+
+	exitCode, _ := proc.Wait()
 
 	// Send completion.
 	r.completions <- Completion{AgentID: agentID, ReturnCode: exitCode}

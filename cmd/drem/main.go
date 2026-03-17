@@ -1,5 +1,9 @@
 // Package main is the entry point for the Drem Orchestrator CLI. It wires
 // together the database, orchestrator, tmux manager, and Bubble Tea TUI.
+//
+// The dashboard runs inside a tmux session to support interactive supervisor
+// and shell sessions (switch-client). Headless agents (planners, coders,
+// reviewers, fixers) run as direct subprocesses — no tmux overhead.
 package main
 
 import (

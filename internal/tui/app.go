@@ -251,16 +251,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reviewerSpawnedMsg:
 		if msg.err != nil {
 			m.err = fmt.Errorf("reviewer: %w", msg.err)
-		} else {
-			_ = m.tmux.FocusAgentSession(msg.sessionName)
 		}
 		return m, m.refreshData()
 
 	case fixerSpawnedMsg:
 		if msg.err != nil {
 			m.err = fmt.Errorf("fixer: %w", msg.err)
-		} else {
-			_ = m.tmux.FocusAgentSession(msg.sessionName)
 		}
 		return m, m.refreshData()
 
@@ -420,9 +416,17 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "g":
-		// Jump to the selected agent's tmux session.
-		if ag := m.agents.Selected(); ag != nil && ag.TmuxSession != "" {
-			_ = m.tmux.FocusAgentSession(ag.TmuxSession)
+		// Jump to the selected agent's tmux session (supervisors only)
+		// or show log for headless agents.
+		if ag := m.agents.Selected(); ag != nil {
+			if ag.TmuxSession != "" {
+				alive, _ := m.tmux.IsAgentSessionAlive(ag.TmuxSession)
+				if alive {
+					_ = m.tmux.FocusAgentSession(ag.TmuxSession)
+					return m, nil
+				}
+			}
+			// For headless agents or dead sessions, no action from agent panel.
 		}
 		return m, nil
 
@@ -690,10 +694,11 @@ func (m Model) handleRetry() (tea.Model, tea.Cmd) {
 	return m, m.refreshData()
 }
 
-// handleJump focuses the tmux window of the selected task's agent.
+// handleJump focuses the tmux window of the selected task's agent (supervisors)
+// or shows log output for headless agents.
 func (m Model) handleJump() (tea.Model, tea.Cmd) {
 	ag := m.detail.agent
-	if ag == nil || ag.TmuxSession == "" {
+	if ag == nil {
 		if m.detail.task != nil && m.detail.task.Status == model.StatusPlanReview {
 			m.err = fmt.Errorf("agent session ended; plan is shown in the detail panel")
 		} else {
@@ -701,29 +706,22 @@ func (m Model) handleJump() (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	}
-	// Verify the session still exists before attempting to focus it.
-	alive, err := m.tmux.IsAgentSessionAlive(ag.TmuxSession)
-	if err != nil || !alive {
-		m.err = fmt.Errorf("agent session %q no longer exists", ag.TmuxSession)
-		return m, nil
-	}
-	if err := m.tmux.FocusAgentSession(ag.TmuxSession); err != nil {
-		m.err = fmt.Errorf("jump to agent: %w", err)
-	}
-	return m, nil
+	// Headless agents don't have interactive tmux sessions.
+	// Show their log output in the detail panel instead.
+	return m.handleLog()
 }
 
-// handleLog captures the pane output from the selected task's agent.
+// handleLog reads the output log for the selected task's agent.
 func (m Model) handleLog() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
-	if selected == nil || m.detail.agent == nil || m.detail.agent.TmuxSession == "" {
+	if selected == nil || m.detail.agent == nil {
 		return m, nil
 	}
 	taskID := selected.ID
-	sessionName := m.detail.agent.TmuxSession
-	tmuxMgr := m.tmux
+	agentID := m.detail.agent.ID
+	orch := m.orch
 	return m, func() tea.Msg {
-		text, err := tmuxMgr.CaptureAgentPane(sessionName, 50)
+		text, err := orch.GetAgentOutput(agentID)
 		return logCapturedMsg{forTaskID: taskID, text: text, err: err}
 	}
 }

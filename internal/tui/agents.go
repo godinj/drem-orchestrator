@@ -158,6 +158,51 @@ func (a AgentsModel) View() string {
 				fmt.Sprintf("    ctx: %d%%", int(pct)),
 			))
 		}
+
+		// Show activity indicator if available.
+		if tool, ok := ag.Config["activity_tool"].(string); ok && tool != "" {
+			target, _ := ag.Config["activity_target"].(string)
+			progress, _ := ag.Config["activity_file_progress"].(string)
+			committed, _ := ag.Config["activity_committed"].(bool)
+			phase, _ := ag.Config["activity_phase"].(string)
+			stuckScore := 0
+			if ss, ok := ag.Config["activity_stuck_score"].(float64); ok {
+				stuckScore = int(ss)
+			}
+
+			// Truncate target for display.
+			if len(target) > 30 {
+				target = "…" + target[len(target)-29:]
+			}
+
+			actLine := fmt.Sprintf("    ▸ %s %s", tool, target)
+			if progress != "" {
+				actLine += " | " + progress
+			}
+			if committed {
+				actLine += " | committed"
+			} else {
+				actLine += " | no commit"
+			}
+
+			// Color by phase.
+			actStyle := subtitleStyle
+			switch phase {
+			case "exploring":
+				actStyle = lipgloss.NewStyle().Foreground(colorInfo)
+			case "implementing":
+				actStyle = lipgloss.NewStyle().Foreground(colorWarning)
+			case "testing":
+				actStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("14")) // cyan
+			case "fixing":
+				actStyle = lipgloss.NewStyle().Foreground(colorDanger)
+			}
+			if stuckScore > 0 {
+				actStyle = lipgloss.NewStyle().Foreground(colorDanger)
+			}
+
+			lines = append(lines, actStyle.Render(actLine))
+		}
 	}
 
 	// Limit visible lines to height, scrolling to keep the cursor visible.
@@ -175,6 +220,9 @@ func (a AgentsModel) View() string {
 				blockLen++
 			}
 			if _, ok := ag.Config["context_used_pct"].(float64); ok {
+				blockLen++
+			}
+			if tool, ok := ag.Config["activity_tool"].(string); ok && tool != "" {
 				blockLen++
 			}
 			if i == a.cursor {

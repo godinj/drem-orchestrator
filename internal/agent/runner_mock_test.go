@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 
@@ -17,101 +16,36 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
-// mockSessionManager implements SessionManager for testing without tmux.
-type mockSessionManager struct {
-	mu sync.Mutex
-
-	// CreateAgentSession behavior.
-	createCalled  bool
-	createSession string
-	createCmd     string
-	createCwd     string
-	createErr     error
-
-	// IsAgentSessionAlive behavior.
-	aliveSessions map[string]bool
-	aliveErr      error
-
-	// KillAgentSession behavior.
-	killedSessions []string
-	killErr        error
-
-	// CaptureAgentPane behavior.
-	capturedOutput map[string]string
-	captureErr     error
-
-	// ListAgentSessions behavior.
-	listedSessions []string
-	listErr        error
-
-	// WaitForAgentIdle behavior.
-	waitExitCode int
-	waitErr      error
-}
-
-func newMockSessionManager() *mockSessionManager {
-	return &mockSessionManager{
-		aliveSessions:  make(map[string]bool),
-		capturedOutput: make(map[string]string),
+// mockProcessStarter returns a ProcessStarter that creates a real subprocess
+// using a short-lived shell script as the "claude binary".
+func mockProcessStarter(exitCode int, startErr error) ProcessStarter {
+	return func(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error) {
+		if startErr != nil {
+			return nil, startErr
+		}
+		// Use StartAgentProcess with a simple script that reads stdin and exits.
+		return StartAgentProcess(ctx, claudeBin, promptPath, cwd)
 	}
 }
 
-func (m *mockSessionManager) CreateAgentSession(sessionName, cmd, cwd string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.createCalled = true
-	m.createSession = sessionName
-	m.createCmd = cmd
-	m.createCwd = cwd
-	return m.createErr
-}
-
-func (m *mockSessionManager) IsAgentSessionAlive(sessionName string) (bool, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.aliveErr != nil {
-		return false, m.aliveErr
+// mockProcessStarterBlocking returns a ProcessStarter whose processes block
+// until their idle signal file is created, simulating a real agent.
+func mockProcessStarterBlocking() ProcessStarter {
+	return func(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error) {
+		return StartAgentProcess(ctx, claudeBin, promptPath, cwd)
 	}
-	return m.aliveSessions[sessionName], nil
 }
 
-func (m *mockSessionManager) KillAgentSession(sessionName string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.killedSessions = append(m.killedSessions, sessionName)
-	return m.killErr
-}
-
-func (m *mockSessionManager) CaptureAgentPane(sessionName string, lines int) (string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.captureErr != nil {
-		return "", m.captureErr
+// writeFakeClaudeBin creates a shell script that acts as a fake Claude binary.
+// It reads stdin (the prompt) and then exits with the given code.
+func writeFakeClaudeBin(t *testing.T, dir string, exitCode int) string {
+	t.Helper()
+	binPath := filepath.Join(dir, "fake-claude")
+	script := fmt.Sprintf("#!/bin/sh\ncat > /dev/null\nexit %d\n", exitCode)
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude bin: %v", err)
 	}
-	return m.capturedOutput[sessionName], nil
-}
-
-func (m *mockSessionManager) ListAgentSessions() ([]string, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.listErr != nil {
-		return nil, m.listErr
-	}
-	return m.listedSessions, nil
-}
-
-func (m *mockSessionManager) WaitForAgentIdle(ctx context.Context, sessionName, idleSignalPath string) (int, error) {
-	m.mu.Lock()
-	exitCode := m.waitExitCode
-	waitErr := m.waitErr
-	m.mu.Unlock()
-
-	// Block until context is cancelled, simulating a long-running wait.
-	<-ctx.Done()
-	if waitErr != nil {
-		return -1, waitErr
-	}
-	return exitCode, ctx.Err()
+	return binPath
 }
 
 // mockTestDB creates an in-memory SQLite database with auto-migration for tests.
@@ -143,14 +77,29 @@ func mockTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// newMockRunner creates a Runner backed by a mock SessionManager and in-memory DB.
-func newMockRunner(t *testing.T, mock *mockSessionManager, db *gorm.DB) *Runner {
+// newMockRunner creates a Runner backed by a mock ProcessStarter and in-memory DB.
+func newMockRunner(t *testing.T, db *gorm.DB, claudeBin string) *Runner {
 	t.Helper()
 	return &Runner{
 		db:              db,
-		tmux:            mock,
+		startProcess:    StartAgentProcess,
 		tmuxSessionName: "test-session",
-		claudeBin:       "/usr/bin/true",
+		claudeBin:       claudeBin,
+		maxConcurrent:   4,
+		running:         make(map[uuid.UUID]*RunningAgent),
+		completions:     make(chan Completion, 4),
+		semaphore:       make(chan struct{}, 4),
+	}
+}
+
+// newMockRunnerWithStarter creates a Runner with a custom ProcessStarter.
+func newMockRunnerWithStarter(t *testing.T, db *gorm.DB, starter ProcessStarter) *Runner {
+	t.Helper()
+	return &Runner{
+		db:              db,
+		startProcess:    starter,
+		tmuxSessionName: "test-session",
+		claudeBin:       "/bin/false",
 		maxConcurrent:   4,
 		running:         make(map[uuid.UUID]*RunningAgent),
 		completions:     make(chan Completion, 4),
@@ -188,18 +137,15 @@ func createTestTask(t *testing.T, db *gorm.DB, projectID uuid.UUID) *model.Task 
 	return task
 }
 
-func TestSpawnAgentInWorktree_MockTmux(t *testing.T) {
-	mock := newMockSessionManager()
+func TestSpawnAgentInWorktree_Subprocess(t *testing.T) {
 	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+	r := newMockRunner(t, db, claudeBin)
 
 	project := createTestProject(t, db)
 	task := createTestTask(t, db, project.ID)
-
-	// Mark the mock session as alive so verifySpawn doesn't fire a completion.
-	mock.mu.Lock()
-	mock.aliveSessions["*"] = true // will be set properly after we know the session name
-	mock.mu.Unlock()
 
 	worktreeDir := t.TempDir()
 	prompt := "You are a coding agent. Implement the auth module."
@@ -208,11 +154,6 @@ func TestSpawnAgentInWorktree_MockTmux(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SpawnAgentInWorktree: %v", err)
 	}
-
-	// Mark the actual session alive for verifySpawn.
-	mock.mu.Lock()
-	mock.aliveSessions[agent.TmuxSession] = true
-	mock.mu.Unlock()
 
 	// Verify agent DB record was created.
 	var dbAgent model.Agent
@@ -229,18 +170,8 @@ func TestSpawnAgentInWorktree_MockTmux(t *testing.T) {
 		t.Errorf("agent worktree = %q, want %q", dbAgent.WorktreePath, worktreeDir)
 	}
 	if dbAgent.TmuxSession == "" {
-		t.Error("agent tmux session is empty")
+		t.Error("agent session name is empty")
 	}
-
-	// Verify the mock's CreateAgentSession was called.
-	mock.mu.Lock()
-	if !mock.createCalled {
-		t.Error("CreateAgentSession was not called")
-	}
-	if mock.createCwd != worktreeDir {
-		t.Errorf("CreateAgentSession cwd = %q, want %q", mock.createCwd, worktreeDir)
-	}
-	mock.mu.Unlock()
 
 	// Verify prompt file was written to worktree.
 	promptPath := filepath.Join(worktreeDir, ".claude", "agent-prompt.md")
@@ -258,24 +189,28 @@ func TestSpawnAgentInWorktree_MockTmux(t *testing.T) {
 		t.Error("settings.json not written")
 	}
 
-	// Verify agent is in the running map.
+	// Verify agent is in the running map with a Process.
 	r.mu.Lock()
-	_, inRunning := r.running[agent.ID]
+	ra, inRunning := r.running[agent.ID]
 	r.mu.Unlock()
 	if !inRunning {
 		t.Error("agent not found in running map")
+	}
+	if ra != nil && ra.Process == nil {
+		t.Error("agent running entry has nil Process")
 	}
 
 	// Clean up: stop the agent to cancel background goroutines.
 	_ = r.StopAgent(agent.ID)
 }
 
-func TestSpawnAgentInWorktree_SessionFailure(t *testing.T) {
-	mock := newMockSessionManager()
-	mock.createErr = fmt.Errorf("tmux not available")
-
+func TestSpawnAgentInWorktree_ProcessFailure(t *testing.T) {
 	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
+
+	starter := func(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error) {
+		return nil, fmt.Errorf("process start failed")
+	}
+	r := newMockRunnerWithStarter(t, db, starter)
 
 	project := createTestProject(t, db)
 	task := createTestTask(t, db, project.ID)
@@ -292,7 +227,7 @@ func TestSpawnAgentInWorktree_SessionFailure(t *testing.T) {
 	}
 
 	// Verify the error is propagated with context.
-	if !contains(err.Error(), "tmux not available") {
+	if !contains(err.Error(), "process start failed") {
 		t.Errorf("error should contain cause, got: %v", err)
 	}
 
@@ -315,10 +250,12 @@ func TestSpawnAgentInWorktree_SessionFailure(t *testing.T) {
 	}
 }
 
-func TestStopAgent_MockTmux(t *testing.T) {
-	mock := newMockSessionManager()
+func TestStopAgent_Subprocess(t *testing.T) {
 	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+	r := newMockRunner(t, db, claudeBin)
 
 	project := createTestProject(t, db)
 	agentID := uuid.New()
@@ -339,7 +276,7 @@ func TestStopAgent_MockTmux(t *testing.T) {
 		t.Fatalf("create agent: %v", err)
 	}
 
-	// Add to running map with a cancel func.
+	// Add to running map with a cancel func (no real process).
 	_, cancel := context.WithCancel(context.Background())
 	r.mu.Lock()
 	r.running[agentID] = &RunningAgent{
@@ -355,16 +292,6 @@ func TestStopAgent_MockTmux(t *testing.T) {
 	if err := r.StopAgent(agentID); err != nil {
 		t.Fatalf("StopAgent: %v", err)
 	}
-
-	// Verify KillAgentSession was called with the correct session name.
-	mock.mu.Lock()
-	if len(mock.killedSessions) != 1 {
-		t.Fatalf("expected 1 killed session, got %d", len(mock.killedSessions))
-	}
-	if mock.killedSessions[0] != sessionName {
-		t.Errorf("killed session = %q, want %q", mock.killedSessions[0], sessionName)
-	}
-	mock.mu.Unlock()
 
 	// Verify DB record updated to dead.
 	var updatedAgent model.Agent
@@ -385,9 +312,8 @@ func TestStopAgent_MockTmux(t *testing.T) {
 }
 
 func TestStopAgent_NotFound(t *testing.T) {
-	mock := newMockSessionManager()
 	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
+	r := newMockRunner(t, db, "/bin/true")
 
 	unknownID := uuid.New()
 	err := r.StopAgent(unknownID)
@@ -397,34 +323,31 @@ func TestStopAgent_NotFound(t *testing.T) {
 	if !contains(err.Error(), "not running") {
 		t.Errorf("error should indicate agent is not running, got: %v", err)
 	}
-
-	// Verify no kill calls were made.
-	mock.mu.Lock()
-	if len(mock.killedSessions) != 0 {
-		t.Errorf("expected no killed sessions, got %d", len(mock.killedSessions))
-	}
-	mock.mu.Unlock()
 }
 
-func TestGetAgentOutput_MockTmux(t *testing.T) {
-	mock := newMockSessionManager()
+func TestGetAgentOutput_FromLogFile(t *testing.T) {
 	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
+	r := newMockRunner(t, db, "/bin/true")
 
 	agentID := uuid.New()
-	sessionName := "test-session/code - output a1b2"
+	worktreeDir := t.TempDir()
 	expectedOutput := "Agent is processing task...\nDone!"
 
-	// Set up captured output in mock.
-	mock.mu.Lock()
-	mock.capturedOutput[sessionName] = expectedOutput
-	mock.mu.Unlock()
+	// Write a log file.
+	claudeDir := filepath.Join(worktreeDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	logPath := filepath.Join(claudeDir, "agent-output.log")
+	if err := os.WriteFile(logPath, []byte(expectedOutput), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
 
 	// Add agent to running map.
 	r.mu.Lock()
 	r.running[agentID] = &RunningAgent{
-		AgentID:     agentID,
-		TmuxSession: sessionName,
+		AgentID: agentID,
+		LogPath: logPath,
 	}
 	r.mu.Unlock()
 
@@ -438,9 +361,8 @@ func TestGetAgentOutput_MockTmux(t *testing.T) {
 }
 
 func TestGetAgentOutput_NotRunning(t *testing.T) {
-	mock := newMockSessionManager()
 	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
+	r := newMockRunner(t, db, "/bin/true")
 
 	unknownID := uuid.New()
 
@@ -455,32 +377,36 @@ func TestGetAgentOutput_NotRunning(t *testing.T) {
 }
 
 func TestGetAgentOutput_NotRunning_InDB(t *testing.T) {
-	mock := newMockSessionManager()
 	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
+	r := newMockRunner(t, db, "/bin/true")
 
 	project := createTestProject(t, db)
 	agentID := uuid.New()
-	sessionName := "test-session/code - db-output a1b2"
 	expectedOutput := "Output from DB agent"
+
+	// Create a worktree with a log file.
+	worktreeDir := t.TempDir()
+	claudeDir := filepath.Join(worktreeDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	logPath := filepath.Join(claudeDir, "agent-output.log")
+	if err := os.WriteFile(logPath, []byte(expectedOutput), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
 
 	// Create agent in DB but not in running map (finished agent).
 	dbAgent := &model.Agent{
-		ID:          agentID,
-		ProjectID:   project.ID,
-		AgentType:   model.AgentCoder,
-		Name:        "code - db-output",
-		Status:      model.AgentDead,
-		TmuxSession: sessionName,
+		ID:           agentID,
+		ProjectID:    project.ID,
+		AgentType:    model.AgentCoder,
+		Name:         "code - db-output",
+		Status:       model.AgentDead,
+		WorktreePath: worktreeDir,
 	}
 	if err := db.Create(dbAgent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
-
-	// Set up captured output in mock.
-	mock.mu.Lock()
-	mock.capturedOutput[sessionName] = expectedOutput
-	mock.mu.Unlock()
 
 	output, err := r.GetAgentOutput(agentID)
 	if err != nil {
@@ -491,23 +417,21 @@ func TestGetAgentOutput_NotRunning_InDB(t *testing.T) {
 	}
 }
 
-func TestCleanupStaleAgents_MockTmux(t *testing.T) {
-	mock := newMockSessionManager()
+func TestCleanupStaleAgents_Subprocess(t *testing.T) {
 	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
+	r := newMockRunner(t, db, "/bin/true")
 
 	project := createTestProject(t, db)
 
 	// Create a stale agent: heartbeat older than the timeout.
 	staleTime := time.Now().Add(-10 * time.Minute)
-	staleSession := "test-session/code - stale a1b2"
 	staleAgent := &model.Agent{
 		ID:          uuid.New(),
 		ProjectID:   project.ID,
 		AgentType:   model.AgentCoder,
 		Name:        "code - stale",
 		Status:      model.AgentWorking,
-		TmuxSession: staleSession,
+		TmuxSession: "test-session/code - stale a1b2",
 		HeartbeatAt: &staleTime,
 	}
 	if err := db.Create(staleAgent).Error; err != nil {
@@ -517,22 +441,6 @@ func TestCleanupStaleAgents_MockTmux(t *testing.T) {
 	// Run cleanup with a 5-minute timeout (stale agent's heartbeat is 10 min old).
 	if err := r.CleanupStaleAgents(5 * time.Minute); err != nil {
 		t.Fatalf("CleanupStaleAgents: %v", err)
-	}
-
-	// Verify KillAgentSession was called for the stale agent's session.
-	mock.mu.Lock()
-	killed := mock.killedSessions
-	mock.mu.Unlock()
-
-	found := false
-	for _, s := range killed {
-		if s == staleSession {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("expected stale session %q to be killed, killed: %v", staleSession, killed)
 	}
 
 	// Verify DB record updated to dead.
@@ -546,9 +454,8 @@ func TestCleanupStaleAgents_MockTmux(t *testing.T) {
 }
 
 func TestCleanupStaleAgents_NoneStale(t *testing.T) {
-	mock := newMockSessionManager()
 	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
+	r := newMockRunner(t, db, "/bin/true")
 
 	project := createTestProject(t, db)
 
@@ -567,17 +474,8 @@ func TestCleanupStaleAgents_NoneStale(t *testing.T) {
 		t.Fatalf("create fresh agent: %v", err)
 	}
 
-	// Run cleanup with a 5-minute timeout.
 	if err := r.CleanupStaleAgents(5 * time.Minute); err != nil {
 		t.Fatalf("CleanupStaleAgents: %v", err)
-	}
-
-	// Verify no kill calls were made.
-	mock.mu.Lock()
-	killedCount := len(mock.killedSessions)
-	mock.mu.Unlock()
-	if killedCount != 0 {
-		t.Errorf("expected no killed sessions, got %d", killedCount)
 	}
 
 	// Verify agent is still working.
@@ -590,162 +488,11 @@ func TestCleanupStaleAgents_NoneStale(t *testing.T) {
 	}
 }
 
-func TestReapOrphanedSessions_MockTmux(t *testing.T) {
-	mock := newMockSessionManager()
-	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
-
-	// Set up mock: two sessions listed, neither is alive (process exited).
-	orphan1 := "test-session/code - orphan1 a1b2"
-	orphan2 := "test-session/code - orphan2 c3d4"
-	mock.mu.Lock()
-	mock.listedSessions = []string{orphan1, orphan2}
-	mock.aliveSessions[orphan1] = false
-	mock.aliveSessions[orphan2] = false
-	mock.mu.Unlock()
-
-	// No matching agents in DB or running map.
-
-	reaped, err := r.ReapOrphanedSessions()
-	if err != nil {
-		t.Fatalf("ReapOrphanedSessions: %v", err)
-	}
-	if reaped != 2 {
-		t.Errorf("reaped = %d, want 2", reaped)
-	}
-
-	// Verify both sessions were killed.
-	mock.mu.Lock()
-	killed := mock.killedSessions
-	mock.mu.Unlock()
-
-	if len(killed) != 2 {
-		t.Fatalf("expected 2 killed sessions, got %d: %v", len(killed), killed)
-	}
-
-	killedSet := make(map[string]bool)
-	for _, s := range killed {
-		killedSet[s] = true
-	}
-	if !killedSet[orphan1] {
-		t.Errorf("orphan1 %q was not killed", orphan1)
-	}
-	if !killedSet[orphan2] {
-		t.Errorf("orphan2 %q was not killed", orphan2)
-	}
-}
-
-func TestReapOrphanedSessions_NoOrphans(t *testing.T) {
-	mock := newMockSessionManager()
-	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
-
-	project := createTestProject(t, db)
-
-	activeSession := "test-session/code - active a1b2"
-
-	// Create a working agent in DB for the active session.
-	now := time.Now()
-	activeAgent := &model.Agent{
-		ID:          uuid.New(),
-		ProjectID:   project.ID,
-		AgentType:   model.AgentCoder,
-		Name:        "code - active",
-		Status:      model.AgentWorking,
-		TmuxSession: activeSession,
-		HeartbeatAt: &now,
-	}
-	if err := db.Create(activeAgent).Error; err != nil {
-		t.Fatalf("create active agent: %v", err)
-	}
-
-	// Set up mock: the active session is listed.
-	mock.mu.Lock()
-	mock.listedSessions = []string{activeSession}
-	mock.aliveSessions[activeSession] = true
-	mock.mu.Unlock()
-
-	reaped, err := r.ReapOrphanedSessions()
-	if err != nil {
-		t.Fatalf("ReapOrphanedSessions: %v", err)
-	}
-	if reaped != 0 {
-		t.Errorf("reaped = %d, want 0 (no orphans)", reaped)
-	}
-
-	// Verify no kill calls were made.
-	mock.mu.Lock()
-	killedCount := len(mock.killedSessions)
-	mock.mu.Unlock()
-	if killedCount != 0 {
-		t.Errorf("expected no killed sessions, got %d", killedCount)
-	}
-}
-
-// TestReapOrphanedSessions_SkipsSupervisor verifies that supervisor sessions
-// are not reaped even if they have no matching DB records.
-func TestReapOrphanedSessions_SkipsSupervisor(t *testing.T) {
-	mock := newMockSessionManager()
-	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
-
-	supervisorSession := "test-session/supervisor - plan a1b2"
-	orphanSession := "test-session/code - orphan c3d4"
-
-	mock.mu.Lock()
-	mock.listedSessions = []string{supervisorSession, orphanSession}
-	mock.aliveSessions[supervisorSession] = false
-	mock.aliveSessions[orphanSession] = false
-	mock.mu.Unlock()
-
-	reaped, err := r.ReapOrphanedSessions()
-	if err != nil {
-		t.Fatalf("ReapOrphanedSessions: %v", err)
-	}
-
-	// Only the orphan should be reaped, not the supervisor.
-	if reaped != 1 {
-		t.Errorf("reaped = %d, want 1 (supervisor should be skipped)", reaped)
-	}
-
-	mock.mu.Lock()
-	killed := mock.killedSessions
-	mock.mu.Unlock()
-
-	if len(killed) != 1 || killed[0] != orphanSession {
-		t.Errorf("killed sessions = %v, want [%q]", killed, orphanSession)
-	}
-}
-
-// TestReapOrphanedSessions_AliveNotReaped verifies that sessions whose
-// processes are still alive are not reaped.
-func TestReapOrphanedSessions_AliveNotReaped(t *testing.T) {
-	mock := newMockSessionManager()
-	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
-
-	aliveOrphan := "test-session/code - alive-orphan a1b2"
-
-	mock.mu.Lock()
-	mock.listedSessions = []string{aliveOrphan}
-	mock.aliveSessions[aliveOrphan] = true // process is still alive
-	mock.mu.Unlock()
-
-	reaped, err := r.ReapOrphanedSessions()
-	if err != nil {
-		t.Fatalf("ReapOrphanedSessions: %v", err)
-	}
-	if reaped != 0 {
-		t.Errorf("reaped = %d, want 0 (alive sessions should not be reaped)", reaped)
-	}
-}
-
 // TestCleanupStaleAgents_InRunningMap tests cleanup of a stale agent that
 // is also present in the running map (uses StopAgent path).
 func TestCleanupStaleAgents_InRunningMap(t *testing.T) {
-	mock := newMockSessionManager()
 	db := mockTestDB(t)
-	r := newMockRunner(t, mock, db)
+	r := newMockRunner(t, db, "/bin/true")
 
 	project := createTestProject(t, db)
 
