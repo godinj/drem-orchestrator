@@ -1,65 +1,24 @@
 package prompt
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
-func TestPlannerInstructionsTDDMandatory(t *testing.T) {
-	sections := plannerInstructions()
-	output := strings.Join(sections, "\n")
-
-	requiredPhrases := []string{
-		"MUST have exactly ONE",
-		"test subtask",
-		`phase: "test"`,
-		"tests_for",
-		"tdd_exceptions",
-		"BEFORE implementation",
-		"Tests should initially FAIL",
-		"NEVER modify the pre-written tests",
-	}
-
-	for _, phrase := range requiredPhrases {
-		if !strings.Contains(output, phrase) {
-			t.Errorf("plannerInstructions() missing TDD phrase: %q", phrase)
-		}
-	}
-}
-
-func TestPlannerInstructionsNoOldTestOrdering(t *testing.T) {
-	sections := plannerInstructions()
-	output := strings.Join(sections, "\n")
-
-	forbiddenPhrases := []string{
-		"Depend on ALL implementation subtasks",
-		"is_test",
-	}
-
-	for _, phrase := range forbiddenPhrases {
-		if strings.Contains(output, phrase) {
-			t.Errorf("plannerInstructions() still contains old test ordering phrase: %q", phrase)
-		}
-	}
-}
-
-func TestPlannerInstructionsContainsTDDSections(t *testing.T) {
+func TestPlannerInstructionsContainsNewSections(t *testing.T) {
 	sections := plannerInstructions()
 	output := strings.Join(sections, "\n")
 
 	requiredHeaders := []string{
-		"## Test-Driven Development (MANDATORY)",
-		"### Test Subtask Requirements",
-		"### Implementation Subtask Requirements",
-		"### TDD Exceptions",
-		"### Ordering",
-		"### Example Structure",
 		"## Coverage Verification",
 		"## Integration Subtask",
 		"## Decomposition Rules",
 		"## File Overlap",
+		"## Test Subtasks",
 	}
 
 	for _, header := range requiredHeaders {
@@ -73,6 +32,7 @@ func TestPlannerInstructionsPreservesExistingContent(t *testing.T) {
 	sections := plannerInstructions()
 	output := strings.Join(sections, "\n")
 
+	// Verify existing content is still present.
 	existingContent := []string{
 		"You are a planner agent",
 		"plan.json",
@@ -93,6 +53,7 @@ func TestPlannerInstructionsDecompositionRulesContent(t *testing.T) {
 	sections := plannerInstructions()
 	output := strings.Join(sections, "\n")
 
+	// Verify key decomposition guidance is present.
 	keyGuidance := []string{
 		"Decompose along functional boundaries",
 		"Decompose by code layer",
@@ -115,7 +76,6 @@ func TestPlannerInstructionsIntegrationSubtaskContent(t *testing.T) {
 		"Wires together the components",
 		"dependencies on ALL other implementation subtasks",
 		"end-to-end functionality",
-		`phase: "integration"`,
 	}
 
 	for _, c := range keyContent {
@@ -125,371 +85,364 @@ func TestPlannerInstructionsIntegrationSubtaskContent(t *testing.T) {
 	}
 }
 
-func TestPlannerInstructionsTDDExceptions(t *testing.T) {
+func TestPlannerInstructionsTestSubtasksContent(t *testing.T) {
 	sections := plannerInstructions()
 	output := strings.Join(sections, "\n")
 
-	validExceptions := []string{
-		"Integration/wiring subtasks",
-		"Research subtasks",
-		"Infrastructure subtasks",
+	keyContent := []string{
+		"Depend on ALL implementation subtasks",
+		"implementation subtasks -> test subtask -> integration subtask",
 	}
 
-	for _, exc := range validExceptions {
-		if !strings.Contains(output, exc) {
-			t.Errorf("plannerInstructions() missing valid exception: %q", exc)
-		}
-	}
-
-	invalidExceptions := []string{
-		"This is UI code",
-		"This is a refactor",
-		"Tests will be added later",
-	}
-
-	for _, exc := range invalidExceptions {
-		if !strings.Contains(output, exc) {
-			t.Errorf("plannerInstructions() missing invalid exception example: %q", exc)
-		}
-	}
-}
-
-func TestPlannerInstructionsExampleStructure(t *testing.T) {
-	sections := plannerInstructions()
-	output := strings.Join(sections, "\n")
-
-	exampleContent := []string{
-		"Write tests for X",
-		"Implement X",
-		"auto-depends on subtask 0 via tests_for",
-		"Integration wiring",
-		`phase: integration`,
-	}
-
-	for _, c := range exampleContent {
+	for _, c := range keyContent {
 		if !strings.Contains(output, c) {
-			t.Errorf("plannerInstructions() missing example structure content: %q", c)
+			t.Errorf("plannerInstructions() missing test subtask guidance: %q", c)
 		}
 	}
 }
 
-func TestPlannerInstructionsPlanJSONSchema(t *testing.T) {
-	sections := plannerInstructions()
+func TestResearcherInstructions(t *testing.T) {
+	sections := researcherInstructions()
+	if len(sections) == 0 {
+		t.Fatal("researcherInstructions() returned empty slice")
+	}
+
 	output := strings.Join(sections, "\n")
 
-	schemaFields := []string{
-		`"phase"`,
-		`"tests_for"`,
-		`"tdd_exceptions"`,
-		`"subtask_index"`,
-		`"justification"`,
+	expected := []string{
+		"researcher agent",
+		"Investigate",
+		"research-report.md",
+		"Summary of findings",
+		"Detailed analysis",
+		"Recommendations",
 	}
 
-	for _, field := range schemaFields {
-		if !strings.Contains(output, field) {
-			t.Errorf("plannerInstructions() plan.json schema missing field: %q", field)
-		}
-	}
-}
-
-func TestPlanReviewerIncludesTDDAssessment(t *testing.T) {
-	opts := Opts{
-		ReviewMode: "plan",
-		PlanJSON:   `{"subtasks": []}`,
-	}
-	sections := planReviewerInstructions(opts)
-	output := strings.Join(sections, "\n")
-
-	requiredPhrases := []string{
-		"tdd_assessment",
-		"TDD structure",
-		"Test quality",
-		"TDD exceptions",
-		"exceptions_justified",
-		"test_coverage_adequate",
-	}
-
-	for _, phrase := range requiredPhrases {
+	for _, phrase := range expected {
 		if !strings.Contains(output, phrase) {
-			t.Errorf("planReviewerInstructions() missing TDD assessment phrase: %q", phrase)
+			t.Errorf("researcherInstructions() missing expected phrase: %q", phrase)
 		}
 	}
 }
 
-func TestPlanReviewerPreservesExistingCriteria(t *testing.T) {
+func TestFixerInstructions(t *testing.T) {
 	opts := Opts{
-		ReviewMode: "plan",
-		PlanJSON:   `{"subtasks": []}`,
+		Diagnosis:     "nil pointer dereference in handler.go line 42",
+		AffectedFiles: []string{"internal/handler.go", "internal/handler_test.go"},
+		SuggestedFix:  "Add nil check before accessing request.Body",
 	}
-	sections := planReviewerInstructions(opts)
+
+	sections := fixerInstructions(opts)
+	if len(sections) == 0 {
+		t.Fatal("fixerInstructions() returned empty slice")
+	}
+
 	output := strings.Join(sections, "\n")
 
-	existingCriteria := []string{
-		"Coverage",
-		"File overlap",
-		"Integration",
-		"Decomposition quality",
-		"Dependency correctness",
-		"review.json",
-		"recommendation",
+	// Verify fixer-specific directives.
+	fixerPhrases := []string{
+		"fixer agent",
+		"targeted fix",
+		"Apply ONLY the fix",
+		"minimal",
 	}
-
-	for _, c := range existingCriteria {
-		if !strings.Contains(output, c) {
-			t.Errorf("planReviewerInstructions() missing existing criterion: %q", c)
-		}
-	}
-}
-
-// --- TDD Phase-Aware Coder Prompt Tests ---
-
-func TestCoderInstructions_TestPhase(t *testing.T) {
-	task := &model.Task{
-		Phase: "test",
-		Context: model.JSONField{
-			"estimated_files": []any{"internal/foo/foo_test.go"},
-		},
-	}
-
-	sections := coderInstructions(task)
-	output := strings.Join(sections, "\n")
-
-	mustContain := []string{
-		"writing tests BEFORE implementation",
-		"SHOULD fail",
-		"test:",
-		"FAIL when run",
-		"existing test patterns",
-	}
-	for _, s := range mustContain {
-		if !strings.Contains(output, s) {
-			t.Errorf("test-phase coder prompt missing: %q", s)
+	for _, phrase := range fixerPhrases {
+		if !strings.Contains(output, phrase) {
+			t.Errorf("fixerInstructions() missing fixer directive: %q", phrase)
 		}
 	}
 
-	mustNotContain := []string{
-		"Run the FULL test suite",
+	// Verify opts context is included.
+	if !strings.Contains(output, opts.Diagnosis) {
+		t.Error("fixerInstructions() missing diagnosis from opts")
 	}
-	for _, s := range mustNotContain {
-		if strings.Contains(output, s) {
-			t.Errorf("test-phase coder prompt should NOT contain: %q", s)
+	for _, f := range opts.AffectedFiles {
+		if !strings.Contains(output, f) {
+			t.Errorf("fixerInstructions() missing affected file: %q", f)
 		}
 	}
+	if !strings.Contains(output, opts.SuggestedFix) {
+		t.Error("fixerInstructions() missing suggested fix from opts")
+	}
 }
 
-func TestCoderInstructions_TestPhase_IncludesEstimatedFiles(t *testing.T) {
-	task := &model.Task{
-		Phase: "test",
-		Context: model.JSONField{
-			"estimated_files": []any{"internal/bar/bar_test.go", "internal/baz/baz_test.go"},
-		},
+func TestFixerInstructionsEmptyOpts(t *testing.T) {
+	sections := fixerInstructions(Opts{})
+	if len(sections) == 0 {
+		t.Fatal("fixerInstructions() with empty opts returned empty slice")
 	}
 
-	sections := coderInstructions(task)
 	output := strings.Join(sections, "\n")
 
-	if !strings.Contains(output, "Files to create/modify:") {
-		t.Error("test-phase coder prompt missing estimated files section")
+	// Should still contain base fixer directives even with empty opts.
+	if !strings.Contains(output, "fixer agent") {
+		t.Error("fixerInstructions() with empty opts missing 'fixer agent'")
+	}
+	// Should not contain Diagnosis/Affected/Suggested headers when empty.
+	if strings.Contains(output, "## Diagnosis") {
+		t.Error("fixerInstructions() with empty opts should not include Diagnosis section")
 	}
 }
 
-func TestCoderInstructions_ImplPhase_WithActualTestFiles(t *testing.T) {
-	task := &model.Task{
-		Phase: "implementation",
-		Context: model.JSONField{
-			"actual_test_files": []any{
-				"internal/foo/foo_test.go",
-				"internal/bar/bar_test.go",
+func TestDefaultInstructions(t *testing.T) {
+	sections := defaultInstructions()
+	if len(sections) == 0 {
+		t.Fatal("defaultInstructions() returned empty slice")
+	}
+
+	output := strings.Join(sections, "\n")
+
+	if !strings.Contains(output, "Complete the task") {
+		t.Error("defaultInstructions() missing generic fallback guidance")
+	}
+	if !strings.Contains(output, "Commit your changes") {
+		t.Error("defaultInstructions() missing commit instruction")
+	}
+}
+
+func TestReadBuildCommands(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T) string // returns worktree path
+		contains string                    // expected substring in result
+		empty    bool                      // expect empty result
+	}{
+		{
+			name: "go project with CLAUDE.md",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				dir := t.TempDir()
+				content := "# My Project\n\n## Build\n\n```bash\ngo build ./...\ngo test ./...\n```\n"
+				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return dir
 			},
-			"estimated_files": []any{
-				"internal/old/old_test.go",
+			contains: "go build",
+		},
+		{
+			name: "makefile project",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				dir := t.TempDir()
+				content := "# Project\n\n```bash\nmake build\nmake test\n```\n"
+				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return dir
 			},
+			contains: "make",
 		},
-	}
-
-	sections := coderInstructions(task)
-	output := strings.Join(sections, "\n")
-
-	mustContain := []string{
-		"implementing code to pass pre-written tests",
-		"pre-written tests",
-		"Do NOT modify the pre-written tests",
-		"internal/foo/foo_test.go",
-		"internal/bar/bar_test.go",
-		"FULL test suite",
-		"ALL tests must pass",
-		"NEVER modify pre-written TDD tests",
-		"feat:",
-	}
-	for _, s := range mustContain {
-		if !strings.Contains(output, s) {
-			t.Errorf("impl-phase coder prompt missing: %q", s)
-		}
-	}
-
-	// Should use actual_test_files, NOT estimated_files.
-	if strings.Contains(output, "internal/old/old_test.go") {
-		t.Error("impl-phase coder prompt should prefer actual_test_files over estimated_files")
-	}
-}
-
-func TestCoderInstructions_ImplPhase_FallbackToEstimatedFiles(t *testing.T) {
-	task := &model.Task{
-		Phase: "implementation",
-		Context: model.JSONField{
-			"estimated_files": []any{
-				"internal/fallback/fallback_test.go",
+		{
+			name: "npm project",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				dir := t.TempDir()
+				content := "# Node Project\n\n```bash\nnpm install\nnpm test\n```\n"
+				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return dir
 			},
+			contains: "npm",
+		},
+		{
+			name: "empty directory without CLAUDE.md",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				return t.TempDir()
+			},
+			empty: true,
+		},
+		{
+			name: "nonexistent directory",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				return "/nonexistent/path/that/does/not/exist"
+			},
+			empty: true,
+		},
+		{
+			name: "empty worktree path",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				return ""
+			},
+			empty: true,
+		},
+		{
+			name: "CLAUDE.md without bash block",
+			setup: func(t *testing.T) string {
+				t.Helper()
+				dir := t.TempDir()
+				content := "# Project\n\nNo code blocks here.\n"
+				if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0644); err != nil {
+					t.Fatal(err)
+				}
+				return dir
+			},
+			empty: true,
 		},
 	}
 
-	sections := coderInstructions(task)
-	output := strings.Join(sections, "\n")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			path := tc.setup(t)
+			result := readBuildCommands(path)
 
-	if !strings.Contains(output, "internal/fallback/fallback_test.go") {
-		t.Error("impl-phase coder prompt should fall back to estimated_files when actual_test_files is missing")
-	}
-	if !strings.Contains(output, "pre-written tests") {
-		t.Error("impl-phase coder prompt missing pre-written tests reference")
-	}
-}
-
-func TestCoderInstructions_ImplPhase_NoTestFiles(t *testing.T) {
-	task := &model.Task{
-		Phase: "implementation",
-	}
-
-	sections := coderInstructions(task)
-	output := strings.Join(sections, "\n")
-
-	// Should still produce valid instructions even without test files.
-	if !strings.Contains(output, "implementing code to pass pre-written tests") {
-		t.Error("impl-phase coder prompt missing core instruction text")
-	}
-	// Should NOT contain the "Pre-written tests exist at:" header since there are no files.
-	if strings.Contains(output, "Pre-written tests exist at:") {
-		t.Error("impl-phase coder prompt should not show test file list when none exist")
+			if tc.empty {
+				if result != "" {
+					t.Errorf("readBuildCommands() = %q, want empty string", result)
+				}
+				return
+			}
+			if !strings.Contains(result, tc.contains) {
+				t.Errorf("readBuildCommands() = %q, want substring %q", result, tc.contains)
+			}
+		})
 	}
 }
 
-func TestCoderInstructions_DefaultPhase_EmptyString(t *testing.T) {
-	task := &model.Task{
-		Phase: "",
-		Context: model.JSONField{
-			"estimated_files": []any{"internal/pkg/pkg.go"},
+// helper builds a minimal Opts for Generate tests.
+func minimalOpts(agentType model.AgentType) Opts {
+	return Opts{
+		AgentType: agentType,
+		Task: &model.Task{
+			Title:       "Test task",
+			Description: "A task for testing prompt generation",
 		},
+		Project: &model.Project{
+			Name:         "test-project",
+			BareRepoPath: "/tmp/test.git",
+		},
+		WorktreePath: "/tmp/worktrees/test-branch",
+	}
+}
+
+func TestGenerate_Planner(t *testing.T) {
+	result := Generate(minimalOpts(model.AgentPlanner))
+
+	if result == "" {
+		t.Fatal("Generate() returned empty string for planner")
 	}
 
-	sections := coderInstructions(task)
-	output := strings.Join(sections, "\n")
-
-	mustContain := []string{
-		"You are a coder agent",
-		"FULL test suite",
-		"ALL tests must pass",
-		"Do not commit if any test fails",
-		"fix your implementation, not the test",
+	expected := []string{
+		"planner",
+		"Test task",
+		"plan.json",
+		"## Instructions",
+		"test-project",
 	}
-	for _, s := range mustContain {
-		if !strings.Contains(output, s) {
-			t.Errorf("default coder prompt missing: %q", s)
+
+	for _, phrase := range expected {
+		if !strings.Contains(result, phrase) {
+			t.Errorf("Generate(planner) missing expected phrase: %q", phrase)
 		}
 	}
 }
 
-func TestCoderInstructions_IntegrationPhase(t *testing.T) {
-	task := &model.Task{
-		Phase: "integration",
-		Context: model.JSONField{
-			"estimated_files": []any{"internal/wire/wire.go"},
-		},
+func TestGenerate_Coder(t *testing.T) {
+	result := Generate(minimalOpts(model.AgentCoder))
+
+	if result == "" {
+		t.Fatal("Generate() returned empty string for coder")
 	}
 
-	sections := coderInstructions(task)
-	output := strings.Join(sections, "\n")
-
-	// Integration phase uses the default coder instructions.
-	mustContain := []string{
-		"FULL test suite",
-		"ALL tests must pass",
+	expected := []string{
+		"coder",
+		"Test task",
+		"## Instructions",
+		"Implement",
+		"Commit your changes",
 	}
-	for _, s := range mustContain {
-		if !strings.Contains(output, s) {
-			t.Errorf("integration-phase coder prompt missing: %q", s)
+
+	for _, phrase := range expected {
+		if !strings.Contains(result, phrase) {
+			t.Errorf("Generate(coder) missing expected phrase: %q", phrase)
 		}
 	}
 }
 
-func TestFeatureReviewerInstructions_IncludesTestResults(t *testing.T) {
-	opts := Opts{
-		Task:       &model.Task{},
-		AgentType:  model.AgentReviewer,
-		ReviewMode: "feature",
-		GitDiff:    "diff --git a/foo.go b/foo.go\n+// new code",
+func TestGenerate_Researcher(t *testing.T) {
+	result := Generate(minimalOpts(model.AgentResearcher))
+
+	if result == "" {
+		t.Fatal("Generate() returned empty string for researcher")
 	}
 
-	sections := featureReviewerInstructions(opts)
-	output := strings.Join(sections, "\n")
-
-	mustContain := []string{
-		"test_results",
-		"Run the FULL test suite first",
-		"output_summary",
+	expected := []string{
+		"researcher",
+		"Test task",
+		"research-report.md",
+		"Investigate",
 	}
-	for _, s := range mustContain {
-		if !strings.Contains(output, s) {
-			t.Errorf("feature reviewer prompt missing: %q", s)
+
+	for _, phrase := range expected {
+		if !strings.Contains(result, phrase) {
+			t.Errorf("Generate(researcher) missing expected phrase: %q", phrase)
 		}
 	}
 }
 
-func TestCoderInstructions_TestPhase_WithTestPlan(t *testing.T) {
-	task := &model.Task{
-		Phase:    "test",
-		TestPlan: "Cover all edge cases for the parser",
+func TestGenerate_DefaultAgent(t *testing.T) {
+	opts := minimalOpts("unknown")
+	result := Generate(opts)
+
+	if result == "" {
+		t.Fatal("Generate() returned empty string for unknown agent type")
 	}
 
-	sections := coderInstructions(task)
-	output := strings.Join(sections, "\n")
-
-	if !strings.Contains(output, "## Test Plan") {
-		t.Error("test-phase coder prompt missing Test Plan section")
-	}
-	if !strings.Contains(output, "Cover all edge cases for the parser") {
-		t.Error("test-phase coder prompt missing test plan content")
+	if !strings.Contains(result, "Complete the task") {
+		t.Error("Generate(unknown) missing default instructions")
 	}
 }
 
-func TestCoderInstructions_ImplPhase_WithTestPlan(t *testing.T) {
-	task := &model.Task{
-		Phase:    "implementation",
-		TestPlan: "Ensure all parser tests pass",
+func TestGenerate_WithMemories(t *testing.T) {
+	opts := minimalOpts(model.AgentCoder)
+	opts.Memories = []model.Memory{
+		{MemoryType: "lesson", Content: "Always check nil pointers"},
 	}
 
-	sections := coderInstructions(task)
-	output := strings.Join(sections, "\n")
+	result := Generate(opts)
 
-	if !strings.Contains(output, "## Test Plan") {
-		t.Error("impl-phase coder prompt missing Test Plan section")
+	if !strings.Contains(result, "## Prior Context") {
+		t.Error("Generate() with memories missing Prior Context section")
 	}
-	if !strings.Contains(output, "Ensure all parser tests pass") {
-		t.Error("impl-phase coder prompt missing test plan content")
+	if !strings.Contains(result, "Always check nil pointers") {
+		t.Error("Generate() with memories missing memory content")
 	}
 }
 
-func TestCoderInstructions_DefaultPhase_WithTestPlan(t *testing.T) {
-	task := &model.Task{
-		Phase:    "",
-		TestPlan: "Run all unit tests",
+func TestGenerate_WithBuildCommands(t *testing.T) {
+	dir := t.TempDir()
+	content := "# Project\n\n```bash\ngo test ./...\n```\n"
+	if err := os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
 	}
 
-	sections := coderInstructions(task)
-	output := strings.Join(sections, "\n")
+	opts := minimalOpts(model.AgentCoder)
+	opts.WorktreePath = dir
 
-	if !strings.Contains(output, "## Test Plan") {
-		t.Error("default coder prompt missing Test Plan section")
+	result := Generate(opts)
+
+	if !strings.Contains(result, "## Build & Verify") {
+		t.Error("Generate() with CLAUDE.md missing Build & Verify section")
 	}
-	if !strings.Contains(output, "Run all unit tests") {
-		t.Error("default coder prompt missing test plan content")
+	if !strings.Contains(result, "go test") {
+		t.Error("Generate() with CLAUDE.md missing build commands")
+	}
+}
+
+func TestGenerate_ReviewerCompletion(t *testing.T) {
+	opts := minimalOpts(model.AgentReviewer)
+	opts.ReviewMode = "feature"
+
+	result := Generate(opts)
+
+	if !strings.Contains(result, "review.json") {
+		t.Error("Generate(reviewer) missing review.json in completion")
+	}
+	if !strings.Contains(result, "Do NOT commit") {
+		t.Error("Generate(reviewer) missing 'Do NOT commit' instruction")
 	}
 }
