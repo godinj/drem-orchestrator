@@ -66,10 +66,14 @@ type Runner struct {
 // NewRunner creates an agent Runner. The tm parameter must implement
 // SessionManager; *tmux.Manager satisfies this interface.
 func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin string, maxConcurrent int) *Runner {
+	var sessionName string
+	if tm != nil {
+		sessionName = tm.SessionName
+	}
 	return &Runner{
 		db:              db,
 		tmux:            tm,
-		tmuxSessionName: tm.SessionName,
+		tmuxSessionName: sessionName,
 		worktree:        wt,
 		claudeBin:       claudeBin,
 		maxConcurrent:   maxConcurrent,
