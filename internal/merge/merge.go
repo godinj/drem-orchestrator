@@ -29,6 +29,10 @@ const (
 
 	// buildVerifyTimeout is the maximum time allowed for build verification after a merge.
 	buildVerifyTimeout = 5 * time.Minute
+
+	// commitLogLimit is the maximum number of commits to retrieve when
+	// examining an agent branch for merge analysis.
+	commitLogLimit = 50
 )
 
 // MergePlan describes a planned merge (analysis only, no side effects).
@@ -92,7 +96,7 @@ func (o *Orchestrator) PlanAgentMerge(agentBranch, featureWorktree string) (*Mer
 	}
 
 	// Commits on the agent branch since it diverged from the feature.
-	commits, err := worktree.GetCommitLog(featureWorktree, featureBranch, 50)
+	commits, err := worktree.GetCommitLog(featureWorktree, featureBranch, commitLogLimit)
 	if err != nil {
 		// If there are no commits to merge, that is not an error.
 		commits = nil

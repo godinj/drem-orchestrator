@@ -62,11 +62,11 @@ func (s *Supervisor) EvaluateJSON(ctx context.Context, prompt string, target any
 
 	jsonStr := extractJSON(raw)
 	if jsonStr == "" {
-		return fmt.Errorf("supervisor evaluate json: no JSON found in response: %s", truncateForPrompt(raw, 200))
+		return fmt.Errorf("supervisor evaluate json: no JSON found in response: %s", truncateForPrompt(raw, truncJSONPreview))
 	}
 
 	if err := json.Unmarshal([]byte(jsonStr), target); err != nil {
-		return fmt.Errorf("supervisor evaluate json: unmarshal: %w\nraw json: %s", err, truncateForPrompt(jsonStr, 500))
+		return fmt.Errorf("supervisor evaluate json: unmarshal: %w\nraw json: %s", err, truncateForPrompt(jsonStr, truncJSONRawPreview))
 	}
 
 	return nil

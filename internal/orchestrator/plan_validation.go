@@ -10,6 +10,10 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/constraints"
 )
 
+// maxTDDExceptionRatio is the proportion of implementation subtasks that can be
+// exempted from TDD before a plan-level warning is raised.
+const maxTDDExceptionRatio = 0.5
+
 // PlanValidationResult contains the outcome of validating a plan.
 type PlanValidationResult struct {
 	Valid    bool     `json:"valid"`
@@ -243,7 +247,7 @@ func validateTDDExceptions(subtasks []planEntry, exceptions []tddException, resu
 	// Warning: More than 50% of impl subtasks exempted.
 	if implCount > 0 && exemptedImplCount > 0 {
 		ratio := float64(exemptedImplCount) / float64(implCount)
-		if ratio > 0.5 {
+		if ratio > maxTDDExceptionRatio {
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("More than 50%% of implementation subtasks (%d/%d) are exempted from TDD",
 					exemptedImplCount, implCount))

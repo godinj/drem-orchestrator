@@ -8,6 +8,20 @@ import (
 	"time"
 )
 
+// Prompt truncation limits — max characters kept for each field when building
+// supervisor prompts. Larger fields get more budget because they carry more
+// diagnostic signal; smaller fields are summaries or single-line errors.
+const (
+	truncTaskDesc       = 1000
+	truncAgentOutput    = 3000
+	truncLastError      = 500
+	truncDiffOutput     = 4000
+	truncOnDemandDesc   = 2000
+	truncBuildOutput    = 4000
+	truncJSONPreview    = 200
+	truncJSONRawPreview = 500
+)
+
 // SubtaskInfo holds summary information about a subtask for the supervisor prompt.
 type SubtaskInfo struct {
 	ID     string
@@ -57,10 +71,10 @@ Diagnose the failure and decide whether to retry. Return ONLY a JSON object:
   "max_additional_retries": 1-3
 }`,
 		taskTitle,
-		truncateForPrompt(taskDesc, 1000),
+		truncateForPrompt(taskDesc, truncTaskDesc),
 		agentType,
-		truncateForPrompt(agentOutput, 3000),
-		truncateForPrompt(lastError, 500),
+		truncateForPrompt(agentOutput, truncAgentOutput),
+		truncateForPrompt(lastError, truncLastError),
 	)
 }
 
@@ -88,7 +102,7 @@ Analyze the conflicts and suggest a resolution strategy. Return ONLY a JSON obje
 		sourceBranch,
 		targetBranch,
 		strings.Join(conflicts, ", "),
-		truncateForPrompt(diffOutput, 4000),
+		truncateForPrompt(diffOutput, truncDiffOutput),
 	)
 }
 
@@ -109,7 +123,7 @@ func OnDemandPrompt(opts OnDemandOpts) string {
 `,
 		opts.TaskID,
 		opts.TaskTitle,
-		truncateForPrompt(opts.TaskDesc, 2000),
+		truncateForPrompt(opts.TaskDesc, truncOnDemandDesc),
 		opts.Status,
 		opts.Branch,
 	)
@@ -366,6 +380,6 @@ Diagnose the build failure and suggest a fix. Return ONLY a JSON object:
 }`,
 		worktreePath,
 		strings.Join(changedFiles, "\n"),
-		truncateForPrompt(buildOutput, 4000),
+		truncateForPrompt(buildOutput, truncBuildOutput),
 	)
 }
