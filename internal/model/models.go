@@ -118,4 +118,25 @@ type SubtaskPlan struct {
 	EstimatedFiles []string `json:"estimated_files"`
 	Phase          string   `json:"phase,omitempty"`
 	TestsFor       []int    `json:"tests_for,omitempty"`
+
+	// Depth metadata (populated by planner when designing for depth)
+	ModuleBoundaries []ModuleBoundary `json:"module_boundaries,omitempty"`
+	InterfaceShapes  []InterfaceShape `json:"interface_shapes,omitempty"`
+}
+
+// ModuleBoundary describes a module boundary defined in a plan subtask.
+// It captures the planner's intent about what a module encapsulates and
+// where its boundary lies.
+type ModuleBoundary struct {
+	Package     string `json:"package"`     // e.g., "internal/constraints/depth"
+	Description string `json:"description"` // what this module encapsulates
+	Exports     int    `json:"exports"`     // expected number of exported symbols
+}
+
+// InterfaceShape describes the intended public interface of a module.
+// It captures the planner's commitment to a specific API surface.
+type InterfaceShape struct {
+	Package   string   `json:"package"`   // e.g., "internal/constraints/depth"
+	Functions []string `json:"functions"` // expected exported function signatures
+	Types     []string `json:"types"`     // expected exported type names
 }

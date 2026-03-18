@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
@@ -486,4 +487,350 @@ func TestTaskCommentBeforeCreate(t *testing.T) {
 			t.Errorf("ID = %v, want %v", loaded.ID, presetID)
 		}
 	})
+}
+
+func TestSubtaskPlanDepthMetadata(t *testing.T) {
+	tests := []struct {
+		name string
+		plan SubtaskPlan
+		// wantBoundaries and wantShapes indicate expected nil-ness after round-trip
+		wantBoundariesNil bool
+		wantShapesNil     bool
+	}{
+		{
+			name: "with depth metadata round-trips through JSON",
+			plan: SubtaskPlan{
+				Title:          "Add depth analysis",
+				Description:    "Implement depth constraint engine",
+				AgentType:      "coder",
+				EstimatedFiles: []string{"internal/constraints/depth/depth.go"},
+				Phase:          "implementation",
+				TestsFor:       []int{0},
+				ModuleBoundaries: []ModuleBoundary{
+					{
+						Package:     "internal/constraints/depth",
+						Description: "Module depth analysis and enforcement",
+						Exports:     3,
+					},
+				},
+				InterfaceShapes: []InterfaceShape{
+					{
+						Package:   "internal/constraints/depth",
+						Functions: []string{"Analyze(root string) (Report, error)", "Check(report Report, limit int) []Violation"},
+						Types:     []string{"Report", "Violation"},
+					},
+				},
+			},
+			wantBoundariesNil: false,
+			wantShapesNil:     false,
+		},
+		{
+			name: "legacy plan without depth metadata unmarshals with nil slices",
+			plan: SubtaskPlan{
+				Title:          "Legacy subtask",
+				Description:    "A plan from before depth metadata existed",
+				AgentType:      "coder",
+				EstimatedFiles: []string{"main.go"},
+			},
+			wantBoundariesNil: true,
+			wantShapesNil:     true,
+		},
+		{
+			name: "multiple module boundaries and interface shapes",
+			plan: SubtaskPlan{
+				Title:          "Multi-module subtask",
+				Description:    "A subtask spanning multiple modules",
+				AgentType:      "coder",
+				EstimatedFiles: []string{"internal/a/a.go", "internal/b/b.go"},
+				ModuleBoundaries: []ModuleBoundary{
+					{Package: "internal/a", Description: "First module", Exports: 2},
+					{Package: "internal/b", Description: "Second module", Exports: 5},
+				},
+				InterfaceShapes: []InterfaceShape{
+					{Package: "internal/a", Functions: []string{"New() *A"}, Types: []string{"A"}},
+					{Package: "internal/b", Functions: []string{"Run(ctx context.Context) error"}, Types: []string{"Runner", "Config"}},
+				},
+			},
+			wantBoundariesNil: false,
+			wantShapesNil:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.plan)
+			if err != nil {
+				t.Fatalf("marshal SubtaskPlan: %v", err)
+			}
+
+			var got SubtaskPlan
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("unmarshal SubtaskPlan: %v", err)
+			}
+
+			if got.Title != tt.plan.Title {
+				t.Errorf("Title = %q, want %q", got.Title, tt.plan.Title)
+			}
+			if got.Description != tt.plan.Description {
+				t.Errorf("Description = %q, want %q", got.Description, tt.plan.Description)
+			}
+
+			if tt.wantBoundariesNil {
+				if got.ModuleBoundaries != nil {
+					t.Errorf("ModuleBoundaries = %v, want nil", got.ModuleBoundaries)
+				}
+			} else {
+				if !reflect.DeepEqual(got.ModuleBoundaries, tt.plan.ModuleBoundaries) {
+					t.Errorf("ModuleBoundaries = %v, want %v", got.ModuleBoundaries, tt.plan.ModuleBoundaries)
+				}
+			}
+
+			if tt.wantShapesNil {
+				if got.InterfaceShapes != nil {
+					t.Errorf("InterfaceShapes = %v, want nil", got.InterfaceShapes)
+				}
+			} else {
+				if !reflect.DeepEqual(got.InterfaceShapes, tt.plan.InterfaceShapes) {
+					t.Errorf("InterfaceShapes = %v, want %v", got.InterfaceShapes, tt.plan.InterfaceShapes)
+				}
+			}
+		})
+	}
+}
+
+func TestModuleBoundaryJSON(t *testing.T) {
+	tests := []struct {
+		name     string
+		boundary ModuleBoundary
+	}{
+		{
+			name: "full boundary",
+			boundary: ModuleBoundary{
+				Package:     "internal/constraints/depth",
+				Description: "Depth analysis engine",
+				Exports:     4,
+			},
+		},
+		{
+			name: "zero exports",
+			boundary: ModuleBoundary{
+				Package:     "internal/util",
+				Description: "Internal utilities",
+				Exports:     0,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.boundary)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+
+			var got ModuleBoundary
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+
+			if !reflect.DeepEqual(got, tt.boundary) {
+				t.Errorf("round-trip = %+v, want %+v", got, tt.boundary)
+			}
+		})
+	}
+}
+
+func TestInterfaceShapeJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		shape InterfaceShape
+	}{
+		{
+			name: "full shape",
+			shape: InterfaceShape{
+				Package:   "internal/constraints/depth",
+				Functions: []string{"Analyze(root string) (Report, error)", "Check(r Report, limit int) []Violation"},
+				Types:     []string{"Report", "Violation"},
+			},
+		},
+		{
+			name: "types only",
+			shape: InterfaceShape{
+				Package:   "internal/model",
+				Functions: nil,
+				Types:     []string{"ModuleBoundary", "InterfaceShape"},
+			},
+		},
+		{
+			name: "functions only",
+			shape: InterfaceShape{
+				Package:   "internal/util",
+				Functions: []string{"Must(err error)"},
+				Types:     nil,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.shape)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+
+			var got InterfaceShape
+			if err := json.Unmarshal(data, &got); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+
+			if !reflect.DeepEqual(got, tt.shape) {
+				t.Errorf("round-trip = %+v, want %+v", got, tt.shape)
+			}
+		})
+	}
+}
+
+func TestSubtaskPlanDepthMetadataGORMRoundTrip(t *testing.T) {
+	db := testDB(t)
+
+	proj := Project{Name: "depth-gorm-test", BareRepoPath: "/tmp/test"}
+	if err := db.Create(&proj).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	subtasks := []SubtaskPlan{
+		{
+			Title:          "With depth metadata",
+			Description:    "Has boundaries and shapes",
+			AgentType:      "coder",
+			EstimatedFiles: []string{"internal/depth/depth.go"},
+			Phase:          "implementation",
+			ModuleBoundaries: []ModuleBoundary{
+				{Package: "internal/depth", Description: "Depth engine", Exports: 3},
+			},
+			InterfaceShapes: []InterfaceShape{
+				{
+					Package:   "internal/depth",
+					Functions: []string{"Analyze(root string) (Report, error)"},
+					Types:     []string{"Report"},
+				},
+			},
+		},
+		{
+			Title:          "Without depth metadata",
+			Description:    "Legacy subtask, no boundaries or shapes",
+			AgentType:      "coder",
+			EstimatedFiles: []string{"main.go"},
+		},
+	}
+
+	// Marshal the subtask plan list into a JSONField for storage in Task.Plan.
+	planData, err := json.Marshal(map[string]any{"subtasks": subtasks})
+	if err != nil {
+		t.Fatalf("marshal plan: %v", err)
+	}
+	var planField JSONField
+	if err := json.Unmarshal(planData, &planField); err != nil {
+		t.Fatalf("unmarshal to JSONField: %v", err)
+	}
+
+	task := Task{
+		ProjectID:   proj.ID,
+		Title:       "Depth metadata GORM round-trip",
+		Description: "Verify depth metadata survives GORM serialization",
+		Plan:        planField,
+	}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	// Reload from DB.
+	var loaded Task
+	if err := db.First(&loaded, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+
+	if loaded.Plan == nil {
+		t.Fatal("Plan is nil after reload")
+	}
+
+	// Re-extract subtasks from the loaded plan.
+	rawSubtasks, ok := loaded.Plan["subtasks"]
+	if !ok {
+		t.Fatal("Plan missing 'subtasks' key after reload")
+	}
+
+	// GORM/JSON round-trip goes through map[string]any, so re-marshal and unmarshal
+	// to get typed SubtaskPlan values.
+	subtaskBytes, err := json.Marshal(rawSubtasks)
+	if err != nil {
+		t.Fatalf("re-marshal subtasks: %v", err)
+	}
+	var loadedSubtasks []SubtaskPlan
+	if err := json.Unmarshal(subtaskBytes, &loadedSubtasks); err != nil {
+		t.Fatalf("unmarshal subtasks: %v", err)
+	}
+
+	if len(loadedSubtasks) != 2 {
+		t.Fatalf("expected 2 subtasks, got %d", len(loadedSubtasks))
+	}
+
+	// Subtask 0: should have depth metadata.
+	s0 := loadedSubtasks[0]
+	if len(s0.ModuleBoundaries) != 1 {
+		t.Errorf("subtask 0: ModuleBoundaries length = %d, want 1", len(s0.ModuleBoundaries))
+	} else {
+		b := s0.ModuleBoundaries[0]
+		if b.Package != "internal/depth" {
+			t.Errorf("subtask 0: boundary Package = %q, want %q", b.Package, "internal/depth")
+		}
+		if b.Exports != 3 {
+			t.Errorf("subtask 0: boundary Exports = %d, want 3", b.Exports)
+		}
+	}
+	if len(s0.InterfaceShapes) != 1 {
+		t.Errorf("subtask 0: InterfaceShapes length = %d, want 1", len(s0.InterfaceShapes))
+	} else {
+		iface := s0.InterfaceShapes[0]
+		if iface.Package != "internal/depth" {
+			t.Errorf("subtask 0: shape Package = %q, want %q", iface.Package, "internal/depth")
+		}
+		if len(iface.Functions) != 1 || iface.Functions[0] != "Analyze(root string) (Report, error)" {
+			t.Errorf("subtask 0: shape Functions = %v, unexpected", iface.Functions)
+		}
+	}
+
+	// Subtask 1: should have nil depth metadata (legacy).
+	s1 := loadedSubtasks[1]
+	if s1.ModuleBoundaries != nil {
+		t.Errorf("subtask 1: ModuleBoundaries = %v, want nil", s1.ModuleBoundaries)
+	}
+	if s1.InterfaceShapes != nil {
+		t.Errorf("subtask 1: InterfaceShapes = %v, want nil", s1.InterfaceShapes)
+	}
+}
+
+func TestSubtaskPlanLegacyJSONBackwardCompatible(t *testing.T) {
+	// Simulate a legacy JSON payload that predates depth metadata fields.
+	legacyJSON := `{
+		"title": "Old subtask",
+		"description": "Before depth fields existed",
+		"agent_type": "coder",
+		"estimated_files": ["main.go"]
+	}`
+
+	var plan SubtaskPlan
+	if err := json.Unmarshal([]byte(legacyJSON), &plan); err != nil {
+		t.Fatalf("unmarshal legacy JSON: %v", err)
+	}
+
+	if plan.Title != "Old subtask" {
+		t.Errorf("Title = %q, want %q", plan.Title, "Old subtask")
+	}
+	if plan.ModuleBoundaries != nil {
+		t.Errorf("ModuleBoundaries = %v, want nil", plan.ModuleBoundaries)
+	}
+	if plan.InterfaceShapes != nil {
+		t.Errorf("InterfaceShapes = %v, want nil", plan.InterfaceShapes)
+	}
 }
