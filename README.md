@@ -134,7 +134,8 @@ Lists all agents with their type, status, current task, and last heartbeat.
 | `F` | Toggle task filter |
 | `C` | Clean up dead tmux sessions |
 | `?` | Toggle context-aware help overlay |
-| `q` | Quit |
+
+> **Exiting:** The TUI does not have a quit key. To exit, kill the tmux session (e.g. `tmux kill-session`).
 
 ## Task Lifecycle
 

@@ -8,9 +8,9 @@ import (
 
 // handleKey dispatches key messages based on the current focus.
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Global quit.
+	// ctrl+c is suppressed — exit by killing the tmux session.
 	if msg.String() == "ctrl+c" {
-		return m, tea.Quit
+		return m, nil
 	}
 
 	// Help overlay toggle.
@@ -45,9 +45,6 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "q":
-		return m, tea.Quit
-
 	case "j", "down", "k", "up":
 		prevCursor := m.board.cursor
 		var cmd tea.Cmd
@@ -132,9 +129,6 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 // handleAgentKeys handles keys when the agent panel is focused.
 func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q":
-		return m, tea.Quit
-
 	case "j", "down", "k", "up":
 		var cmd tea.Cmd
 		m.agents, cmd = m.agents.Update(msg)
@@ -186,8 +180,6 @@ func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
-	case "q":
-		return m, tea.Quit
 	case "tab":
 		m.focus = FocusBoard
 		return m, nil

@@ -22,8 +22,7 @@ func (m Model) contextActions() []helpBinding {
 	// Global bindings shown in every context.
 	global := []helpBinding{
 		{"?", "close help"},
-		{"q", "quit"},
-		{"ctrl+c", "force quit"},
+		{"tmux", "kill tmux session to exit"},
 	}
 
 	// Navigation bindings common to most panels.
@@ -224,7 +223,7 @@ func (m Model) renderStatusBar() string {
 
 // renderHelpBar shows a minimal hint directing users to the help overlay.
 func (m Model) renderHelpBar() string {
-	return helpStyle.Render("  ? help  q quit")
+	return helpStyle.Render("  ? help")
 }
 
 // renderOverlay renders content as a centered overlay on a blank screen.
