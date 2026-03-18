@@ -317,9 +317,20 @@ Append a markdown section in this format:
 
 This documentation is critical for improving the orchestrator. Be specific about what the orchestrator got wrong or couldn't handle, so the workflow can be iterated on.
 
+## IMPORTANT: Commit Your Journal
+
+After writing your journal entry, you MUST commit it before ending your session:
+
+%s
+git add journals/
+git commit -m "chore: commit supervisor journal files"
+%s
+
+Do not leave journal files as uncommitted changes — they will be lost or create noise for the next operation.
 `,
 		filepath.Join(opts.JournalDir, JournalFilename(opts.TaskTitle)),
 		"```markdown", opts.TaskID, "```",
+		"```bash", "```",
 	)
 
 	return b.String()

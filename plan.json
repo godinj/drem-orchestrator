@@ -1,0 +1,156 @@
+{
+  "coverage": [
+    {
+      "criterion": "Configure a Claude Code hook that fires when an agent session ends (Stop event)",
+      "subtask_indices": [
+        2,
+        3
+      ]
+    },
+    {
+      "criterion": "Hook writes structured JSONL entry to project-dir with: agent ID, task ID, exit reason, last tool call/target, summary of work, timestamp",
+      "subtask_indices": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "criterion": "Orchestrator reads JSONL entries when agent session is gone, providing structured reason for agent death",
+      "subtask_indices": [
+        4,
+        5
+      ]
+    },
+    {
+      "criterion": "Surface exit reason in TUI agent detail view for supervisor visibility",
+      "subtask_indices": [
+        4,
+        5
+      ]
+    },
+    {
+      "criterion": "Documentation of the new agent exit logging feature",
+      "subtask_indices": [
+        6
+      ]
+    }
+  ],
+  "subtasks": [
+    {
+      "agent_type": "coder",
+      "dependencies": [],
+      "description": "Create tests in internal/agentmon/exitlog_test.go that define the expected behavior of the exit log subsystem BEFORE implementation. Tests should cover:\n\n1. TestParseExitLogEntry — parse a valid JSONL line into an ExitLogEntry struct with fields: AgentID, TaskID, Timestamp, ExitReason, LastTool, LastTarget, FilesModified, CommitsMade, Summary.\n2. TestWriteExitLogEntry — write an ExitLogEntry to a JSONL file and verify the output format.\n3. TestReadExitLog — read multiple entries from a JSONL file, verify correct parsing and ordering.\n4. TestReadExitLog_MissingFile — returns nil/empty slice and no error when file doesn't exist.\n5. TestReadExitLog_MalformedLines — gracefully skips malformed lines while parsing valid ones.\n\nThe ExitLogEntry struct should contain: AgentID (string), TaskID (string), Timestamp (time.Time), ExitReason (string — one of 'success', 'error', 'context_limit', 'user_interrupt', 'unknown'), LastTool (string), LastTarget (string), FilesModified ([]string), CommitsMade (int), Summary (string).\n\nThe JSONL file should be written to \u003cprojectDir\u003e/exit-log.jsonl.\n\nAll tests should initially FAIL since the implementation doesn't exist yet.\n\nUse testutil helpers where applicable (t.TempDir for file paths). Do NOT define local test helpers that duplicate testutil functionality.",
+      "files": [
+        "internal/agentmon/exitlog_test.go"
+      ],
+      "phase": "test",
+      "priority": 1,
+      "tests_for": [
+        1
+      ],
+      "title": "Write tests for exit log model and JSONL reader/writer"
+    },
+    {
+      "agent_type": "coder",
+      "dependencies": [],
+      "description": "Create internal/agentmon/exitlog.go with the exit log data model and JSONL read/write functions. This file lives in the agentmon package so that the agent/ package (which already imports agentmon) can use it without adding a new internal/ import.\n\nImplement:\n1. ExitLogEntry struct with JSON tags: agent_id, task_id, timestamp, exit_reason, last_tool, last_target, files_modified, commits_made, summary.\n2. ExitReason string constants: ExitSuccess, ExitError, ExitContextLimit, ExitUserInterrupt, ExitUnknown.\n3. WriteExitLogEntry(projectDir string, entry ExitLogEntry) error — appends a single JSONL line to \u003cprojectDir\u003e/exit-log.jsonl. Creates file if it doesn't exist. Uses json.Marshal + file append.\n4. ReadExitLog(projectDir string) ([]ExitLogEntry, error) — reads all entries from exit-log.jsonl. Returns empty slice (not error) if file doesn't exist. Skips malformed lines with a logged warning.\n5. ExitLogPath(projectDir string) string — returns the path to exit-log.jsonl.\n\nKeep the file well under 200 lines. Use encoding/json from stdlib. No new internal/ imports needed (agentmon already imports ctxmon, but this file won't need it).\n\nMake the pre-written tests in exitlog_test.go pass. Do NOT modify the tests.",
+      "files": [
+        "internal/agentmon/exitlog.go"
+      ],
+      "phase": "implementation",
+      "priority": 1,
+      "tests_for": null,
+      "title": "Implement exit log model and JSONL reader/writer in agentmon"
+    },
+    {
+      "agent_type": "coder",
+      "dependencies": [],
+      "description": "Create tests in internal/agent/hook_test.go that define the expected behavior of the hook infrastructure BEFORE implementation. Tests should cover:\n\n1. TestGenerateExitLogScript — verify that generateExitLogScript(agentID, taskID, projectDir) returns a valid bash script that:\n   - Reads the latest .jsonl transcript from projectDir\n   - Extracts last tool_use entry (tool name and target)\n   - Reads agent-metadata.json for agent_id and task_id\n   - Writes a JSONL line to \u003cprojectDir\u003e/exit-log.jsonl\n   - Is executable (starts with #!/bin/bash)\n\n2. TestWriteAgentMetadata — verify that writeAgentMetadata(claudeDir, agentID, taskID) writes a JSON file at \u003cclaudeDir\u003e/agent-metadata.json containing {\"agent_id\": \"\u003cuuid\u003e\", \"task_id\": \"\u003cuuid\u003e\"}.\n\n3. TestSettingsJSONIncludesStopHook — verify that the settings.json generation includes a Stop hook entry pointing to the exit-log script path, in addition to the existing Notification and PreCompact hooks.\n\n4. TestEnrichCompletionWithExitLog — verify that enrichCompletion reads exit log entries from the project dir and populates Completion.ExitInfo with the latest matching entry for the agent.\n\nUse t.TempDir() for paths. All tests should initially FAIL.\n\nIMPORTANT: The Completion struct enhancement adds an ExitInfo field (pointer to ExitLogEntry from agentmon package). This avoids adding a new internal/ import to the agent package since it already imports agentmon.",
+      "files": [
+        "internal/agent/hook_test.go"
+      ],
+      "phase": "test",
+      "priority": 1,
+      "tests_for": [
+        3
+      ],
+      "title": "Write tests for Stop hook configuration, metadata file, and exit log script generation"
+    },
+    {
+      "agent_type": "coder",
+      "dependencies": [
+        1
+      ],
+      "description": "Modify internal/agent/runner.go and create internal/agent/hooks.go to add the Stop hook infrastructure.\n\nIn internal/agent/hooks.go (new file, ~120 lines):\n1. generateExitLogScript(agentID, taskID, projectDir string) string — returns a bash script that:\n   - Finds the latest .jsonl in projectDir\n   - Uses tail + grep + basic JSON extraction to get last tool_use name and target\n   - Reads agent-metadata.json for structured IDs\n   - Counts modified files via git diff in the worktree\n   - Appends a JSONL entry to \u003cprojectDir\u003e/exit-log.jsonl\n   - Handles missing files gracefully (|| true patterns)\n2. writeAgentMetadata(claudeDir string, agentID, taskID uuid.UUID) error — writes agent-metadata.json.\n3. stopHookEntry(scriptPath string) map[string]any — returns the Stop hook config for settings.json.\n4. enrichCompletion(comp *Completion, projectDir string, agentID uuid.UUID) — reads exit log via agentmon.ReadExitLog, finds the latest entry matching agentID, sets comp.ExitInfo.\n\nIn internal/agent/runner.go (modify):\n1. Enhance Completion struct: add ExitInfo *agentmon.ExitLogEntry field.\n2. In the worktree setup section (near line 348-387), after building the hooks map:\n   - Call writeAgentMetadata to write agent-metadata.json\n   - Generate exit-log.sh script and write to claudeDir\n   - Add Stop hook to the hooks map via stopHookEntry\n3. In the completion path (where Completion is sent to channel), call enrichCompletion to populate ExitInfo from the exit log JSONL.\n\nConstraints:\n- runner.go is 630 lines; keep additions minimal (~20 lines of wiring)\n- hooks.go should stay under 150 lines\n- No new internal/ imports (agentmon is already imported)\n- Use ctxmon.ProjectDirName to derive projectDir from worktreePath (ctxmon already imported)\n\nMake the pre-written tests in hook_test.go pass. Do NOT modify the tests.",
+      "files": [
+        "internal/agent/hooks.go",
+        "internal/agent/runner.go"
+      ],
+      "phase": "implementation",
+      "priority": 2,
+      "tests_for": null,
+      "title": "Implement Stop hook, metadata, exit log script, and Completion enrichment"
+    },
+    {
+      "agent_type": "coder",
+      "dependencies": [],
+      "description": "Create tests that define the expected behavior of exit reason surfacing BEFORE implementation.\n\nIn internal/orchestrator/agent_results_test.go (add to existing test file):\n1. TestProcessAgentResult_StoresExitInfo — when a Completion has ExitInfo populated, verify that processAgentResult stores the exit_reason, exit_last_tool, and exit_summary in the Agent.Config JSONField.\n2. TestProcessAgentResult_NilExitInfo — when ExitInfo is nil (hook didn't fire or no log), verify existing behavior is unchanged.\n\nIn internal/tui/detail_test.go (add to existing test file, or create if none exists):\n3. TestDetailView_ShowsExitReason — verify that when an agent's Config contains exit_reason, the detail view renders it in the warnings/info section. Test by constructing a model.Task with the appropriate Context and verifying the rendered output contains the exit reason string.\n\nUse testutil.NewTestDB, testutil.CreateAgent, testutil.CreateTask etc. Do NOT create local test helpers. All tests should initially FAIL.",
+      "files": [
+        "internal/orchestrator/agent_results_test.go",
+        "internal/tui/detail_test.go"
+      ],
+      "phase": "test",
+      "priority": 1,
+      "tests_for": [
+        5
+      ],
+      "title": "Write tests for orchestrator exit reason storage and TUI display"
+    },
+    {
+      "agent_type": "coder",
+      "dependencies": [
+        3
+      ],
+      "description": "Wire the exit log data from Completion through to the database and TUI.\n\nIn internal/orchestrator/agent_results.go (modify — MUST stay at or below 799 lines):\n1. In processAgentResult (line 25-45), after loading the agent, if comp.ExitInfo != nil, store key fields into ag.Config:\n   - ag.Config[\"exit_reason\"] = comp.ExitInfo.ExitReason\n   - ag.Config[\"exit_last_tool\"] = comp.ExitInfo.LastTool\n   - ag.Config[\"exit_summary\"] = comp.ExitInfo.Summary\n   Then save the agent. This is ~8 lines added to an existing function.\n2. To stay within the 799-line ceiling, look for any dead code, overly verbose logging, or duplicate comments that can be condensed. If no room exists, extract a small helper to reduce line count elsewhere.\n\nIn internal/tui/detail.go (modify):\n1. In the warnings/info section (near line 246-251 where failure_reason is shown), add a block that checks the agent's Config for exit_reason:\n   - If the associated agent has Config[\"exit_reason\"] set, display it: 'Exit: \u003creason\u003e (last: \u003ctool\u003e → \u003ctarget\u003e)'\n   - Only show when the task status is failed or the agent status is dead/idle\n\nIn internal/tui/agents.go (modify):\n1. In the agent sidebar rendering, when agent status is dead or idle, show exit reason if available in Config, e.g., a small 'exit: \u003creason\u003e' line below the session/branch info.\n\nMake the pre-written tests pass. Do NOT modify the tests.\n\nConstraints:\n- agent_results.go MUST NOT exceed 799 lines (current: 799)\n- No new internal/ imports in orchestrator/ or tui/\n- Use existing Agent.Config JSONField pattern (already used for activity_tool, activity_phase, etc.)",
+      "files": [
+        "internal/orchestrator/agent_results.go",
+        "internal/tui/detail.go",
+        "internal/tui/agents.go"
+      ],
+      "phase": "implementation",
+      "priority": 3,
+      "tests_for": null,
+      "title": "Store exit info in Agent.Config and display in TUI"
+    },
+    {
+      "agent_type": "coder",
+      "dependencies": [
+        1,
+        3,
+        5
+      ],
+      "description": "Final integration subtask that verifies all components work together end-to-end and updates documentation.\n\n1. Verify the full data flow:\n   - Agent spawns → settings.json includes Stop hook → agent-metadata.json written\n   - Agent exits → Stop hook fires exit-log.sh → exit-log.jsonl written to project-dir\n   - Orchestrator drains completion → enrichCompletion reads exit-log.jsonl → ExitInfo populated\n   - processAgentResult stores exit info in Agent.Config\n   - TUI detail view displays exit reason\n\n2. Run full test suite: go test ./... — all tests must pass.\n\n3. Run constitution checks: bash scripts/check_constitution.sh\n   - Verify no file length violations\n   - Verify no new internal/ import ceiling violations\n   - Verify gofmt compliance\n\n4. Update documentation:\n   - Add a section to README.md (or relevant docs) describing the agent exit logging feature:\n     - What it captures (exit reason, last tool, summary)\n     - Where logs are stored (~/.claude/projects/\u003cdir\u003e/exit-log.jsonl)\n     - How it surfaces in the TUI\n   - Document the Stop hook configuration in the hooks documentation if any exists\n\n5. Verify no regressions in existing hook behavior (idle_prompt, PreCompact still work).\n\nThis subtask connects the independently-built components and ensures the feature works as a whole. It should NOT introduce new business logic — only wiring, verification, and documentation.",
+      "files": [
+        "internal/agent/runner.go",
+        "internal/agent/hooks.go",
+        "internal/agentmon/exitlog.go",
+        "internal/orchestrator/agent_results.go",
+        "internal/tui/detail.go",
+        "internal/tui/agents.go",
+        "README.md"
+      ],
+      "phase": "integration",
+      "priority": 4,
+      "tests_for": null,
+      "title": "Integration wiring, end-to-end verification, and documentation"
+    }
+  ],
+  "tdd_exceptions": [
+    {
+      "justification": "Integration wiring connecting already-tested components. The individual units (exit log read/write, hook generation, completion enrichment, TUI rendering) are all tested by their respective test subtasks. This subtask only verifies they connect correctly and adds documentation.",
+      "subtask_index": 6
+    }
+  ]
+}

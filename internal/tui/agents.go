@@ -11,11 +11,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
-const (
-	maxBranchDisplayLen = 30
-	ctxDangerPct        = 90 // context usage % shown in red
-	ctxWarningPct       = 75 // context usage % shown in orange
-)
+const maxBranchDisplayLen = 30
 
 // AgentsModel renders the agent sidebar.
 type AgentsModel struct {
@@ -155,9 +151,9 @@ func (a AgentsModel) View() string {
 		if pct, ok := ag.Config["context_used_pct"].(float64); ok {
 			ctxStyle := subtitleStyle
 			switch {
-			case pct >= ctxDangerPct:
+			case pct >= 90:
 				ctxStyle = lipgloss.NewStyle().Foreground(colorDanger)
-			case pct >= ctxWarningPct:
+			case pct >= 75:
 				ctxStyle = lipgloss.NewStyle().Foreground(colorWarning)
 			}
 			lines = append(lines, ctxStyle.Render(

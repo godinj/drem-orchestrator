@@ -39,7 +39,6 @@ const MaxPlannerRetries = 3
 
 const (
 	defaultContextFixerPct = 85
-	fixerEscalatePct       = 80 // fixer agents at this % → stop and escalate to human
 	maxTestOutputLen       = 5000
 	maxGitDiffLen          = 10000
 	maxCmdOutputLen        = 5000
@@ -1416,7 +1415,7 @@ func (o *Orchestrator) checkContextUsage() {
 			}
 		}
 
-		if ag.AgentType == model.AgentFixer && pct >= fixerEscalatePct {
+		if ag.AgentType == model.AgentFixer && pct >= 80 {
 			// Fixer agents at 80% → stop and escalate to human.
 			if err := o.runner.StopAgent(ag.ID); err != nil {
 				o.logger.Error("checkContextUsage: stop fixer agent", "agent_id", ag.ID, "error", err)

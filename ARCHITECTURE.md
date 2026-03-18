@@ -22,9 +22,8 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
 No `.go` source file (non-test) may exceed 800 lines. If adding code would
 breach this limit, extract into a separate file in the same package first.
 
-`orchestrator.go` (2,249 lines, down from 4,567) is grandfathered but must
-shrink, not grow. Any change to a grandfathered file that increases its line
-count is a violation.
+`orchestrator.go` (4,567 lines) is grandfathered but must shrink, not grow.
+Any change to a grandfathered file that increases its line count is a violation.
 
 **Compliance test:** `wc -l` on the changed file; must be <= 800 (or <= previous
 count for grandfathered files).
@@ -34,8 +33,8 @@ count for grandfathered files).
 No single file may define more than 20 exported functions or methods. If
 exceeded, split into a focused file within the same package.
 
-`orchestrator.go` (2 exported functions, down from 84) is grandfathered under
-the same shrink-only rule.
+`orchestrator.go` (84 functions) is grandfathered under the same shrink-only
+rule.
 
 **Compliance test:** `grep -c '^func ' file.go`; must be <= 20 (or <= previous
 count for grandfathered files).
@@ -61,6 +60,8 @@ All `.go` files must pass `gofmt -l` with no output. Do not commit
 unformatted code.
 
 **Compliance test:** `gofmt -l ./internal/ ./cmd/` returns no results.
+
+**Current violations:** 11 files have formatting drift.
 
 ---
 
@@ -101,6 +102,11 @@ grep -rn 'func setupBareRepo\|func initBareRepo\|func addWorktree\|func commitFi
 ```
 Both must return no results.
 
+**Current violations:** `merge/merge_test.go` (3 duplicate git helpers),
+`orchestrator/orchestrator_test.go` (2 duplicate git helpers),
+`orchestrator/lifecycle_test.go` (1 duplicate DB init),
+`agent/runner_mock_test.go` (1 duplicate DB init).
+
 ---
 
 ## Interfaces & Coupling
@@ -115,8 +121,8 @@ depend on concrete types from other packages when an interface would suffice.
 dependency (runner, manager, supervisor) should have a corresponding interface
 at the consumption site.
 
-**Current state:** 1 interface exists (`mergeWorktreeClient` in merge.go).
-Orchestrator depends on concrete internal types.
+**Current state:** Only 2 interfaces exist (`SessionManager`,
+`mergeWorktreeClient`). Orchestrator depends on 8 concrete internal types.
 
 ---
 
@@ -131,9 +137,8 @@ literals for these values.
 **Compliance test:** `grep` for bare numbers used as timeouts, retry limits, or
 thresholds in non-test `.go` files; new occurrences must use named constants.
 
-Context thresholds (`contextFixerPct`, `contextStopPct`, `contextWarnPct`,
-`fixerEscalatePct`) are now named constants/fields. Remaining cases are
-file-permission literals and display thresholds.
+**Current violations:** `85` (context fixer threshold), `50` (memory limit),
+various `time.Duration` literals, retry count `3` in multiple places.
 
 ---
 
@@ -148,7 +153,8 @@ struct with a single hook or a GORM callback registered once at DB init time.
 **Compliance test:** `grep -c 'func.*BeforeCreate' internal/model/models.go`;
 should be 1 (shared) not 6 (per-type).
 
-All GORM hooks are now consolidated.
+**Current violations:** 6 identical `BeforeCreate` UUID generation hooks on
+Project, Task, Agent, TaskEvent, Memory, TaskComment.
 
 ---
 
