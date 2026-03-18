@@ -151,20 +151,6 @@ func (a AgentsModel) View() string {
 			))
 		}
 
-		// Show context window usage if available.
-		if pct, ok := ag.Config["context_used_pct"].(float64); ok {
-			ctxStyle := subtitleStyle
-			switch {
-			case pct >= ctxDangerPct:
-				ctxStyle = lipgloss.NewStyle().Foreground(colorDanger)
-			case pct >= ctxWarningPct:
-				ctxStyle = lipgloss.NewStyle().Foreground(colorWarning)
-			}
-			lines = append(lines, ctxStyle.Render(
-				fmt.Sprintf("    ctx: %d%%", int(pct)),
-			))
-		}
-
 		// Exit reason for dead/idle agents.
 		if (ag.Status == model.AgentDead || ag.Status == model.AgentIdle) && ag.Config != nil {
 			if exitReason, ok := ag.Config["exit_reason"].(string); ok {
@@ -216,7 +202,32 @@ func (a AgentsModel) View() string {
 				actStyle = lipgloss.NewStyle().Foreground(colorDanger)
 			}
 
-			lines = append(lines, actStyle.Render(actLine))
+			// Append ctx% inline if available.
+			if pct, ok := ag.Config["context_used_pct"].(float64); ok {
+				ctxStyle := subtitleStyle
+				switch {
+				case pct >= ctxDangerPct:
+					ctxStyle = lipgloss.NewStyle().Foreground(colorDanger)
+				case pct >= ctxWarningPct:
+					ctxStyle = lipgloss.NewStyle().Foreground(colorWarning)
+				}
+				ctxSuffix := fmt.Sprintf(" | ctx: %d%%", int(pct))
+				lines = append(lines, actStyle.Render(actLine)+ctxStyle.Render(ctxSuffix))
+			} else {
+				lines = append(lines, actStyle.Render(actLine))
+			}
+		} else if pct, ok := ag.Config["context_used_pct"].(float64); ok {
+			// Fallback: show ctx standalone when no activity data.
+			ctxStyle := subtitleStyle
+			switch {
+			case pct >= ctxDangerPct:
+				ctxStyle = lipgloss.NewStyle().Foreground(colorDanger)
+			case pct >= ctxWarningPct:
+				ctxStyle = lipgloss.NewStyle().Foreground(colorWarning)
+			}
+			lines = append(lines, ctxStyle.Render(
+				fmt.Sprintf("    ctx: %d%%", int(pct)),
+			))
 		}
 	}
 
@@ -234,15 +245,18 @@ func (a AgentsModel) View() string {
 			if ag.WorktreeBranch != "" {
 				blockLen++
 			}
-			if _, ok := ag.Config["context_used_pct"].(float64); ok {
-				blockLen++
-			}
 			if (ag.Status == model.AgentDead || ag.Status == model.AgentIdle) && ag.Config != nil {
 				if _, ok := ag.Config["exit_reason"].(string); ok {
 					blockLen++
 				}
 			}
+			_, hasCTX := ag.Config["context_used_pct"].(float64)
+			hasActivity := false
 			if tool, ok := ag.Config["activity_tool"].(string); ok && tool != "" {
+				hasActivity = true
+				blockLen++
+			}
+			if !hasActivity && hasCTX {
 				blockLen++
 			}
 			if i == a.cursor {
