@@ -1,0 +1,68 @@
+{
+  "subtasks": [
+    {
+      "title": "Write tests for inline ctx display",
+      "description": "Add View() rendering tests to agents_test.go that verify context percentage appears inline on the activity metrics line rather than on its own separate line.\n\nTest cases:\n1. Agent with both activity data and ctx%: output should contain a single line with both the tool/target/progress AND ctx% (e.g., '▸ Read foo | 3/5 files | no commit | ctx: 85%')\n2. Agent with ctx% but NO activity data: ctx% should still appear as a standalone detail line (fallback behavior)\n3. Agent with activity data but NO ctx%: activity line should render normally without ctx suffix\n4. Ctx% at warning threshold (>=75): verify warning-colored rendering is present\n5. Ctx% at danger threshold (>=90): verify danger-colored rendering is present\n6. Scroll block height calculation: agent with activity+ctx should NOT count ctx as a separate line (block height should be smaller than before)\n\nThe tests call View() on an AgentsModel with crafted agents and check the output string for expected patterns. Tests will initially FAIL because ctx is still rendered on a separate line.",
+      "agent_type": "coder",
+      "phase": "test",
+      "tests_for": [1],
+      "files": [
+        "internal/tui/agents_test.go"
+      ],
+      "dependencies": [],
+      "priority": 1
+    },
+    {
+      "title": "Move ctx% inline with activity metrics",
+      "description": "Modify the View() method in agents.go to render context percentage inline on the activity line instead of as a separate line.\n\nChanges to internal/tui/agents.go:\n1. Remove the standalone ctx block (lines 153-166) that appends a separate '    ctx: N%' line\n2. In the activity line rendering section (lines 177-220), after building actLine with tool/target/progress/committed, append ' | ctx: N%' if context_used_pct is available in ag.Config\n3. Apply the same color thresholds: if ctx >= 90% use colorDanger for the ctx portion, if >= 75% use colorWarning\n4. For agents that have ctx% but no activity data, keep a fallback that renders ctx on its own line (preserves visibility when agent has no activity yet)\n5. Update the scroll block height calculation (lines 237-239) to no longer count ctx as a separate line when activity is present\n\nThe implementation must make the pre-written tests pass without modifying them.",
+      "agent_type": "coder",
+      "phase": "implementation",
+      "files": [
+        "internal/tui/agents.go"
+      ],
+      "dependencies": [],
+      "priority": 1
+    },
+    {
+      "title": "Integration: verify inline ctx and update docs",
+      "description": "Final integration verification:\n1. Run all TUI tests to confirm nothing is broken\n2. Verify the change works correctly with the scroll calculation (no off-by-one in agent block heights)\n3. Check that the README TUI section is still accurate — if it describes the ctx display format, update it to reflect the inline behavior\n\nThis subtask is simple integration wiring — the feature is a single-file UI change with no cross-package dependencies. The integration subtask exists primarily to verify tests pass end-to-end and documentation is current.",
+      "agent_type": "coder",
+      "phase": "integration",
+      "files": [
+        "internal/tui/agents.go",
+        "internal/tui/agents_test.go",
+        "README.md"
+      ],
+      "dependencies": [1],
+      "priority": 2
+    }
+  ],
+  "tdd_exceptions": [
+    {
+      "subtask_index": 2,
+      "justification": "Integration wiring: runs existing tests end-to-end and updates documentation. No new logic to test."
+    }
+  ],
+  "coverage": [
+    {
+      "criterion": "Context % appears on the same line as other agent metrics (activity line), not on a separate line",
+      "subtask_indices": [0, 1]
+    },
+    {
+      "criterion": "Context % color coding (warning at 75%, danger at 90%) is preserved in inline display",
+      "subtask_indices": [0, 1]
+    },
+    {
+      "criterion": "Fallback: ctx% still visible when no activity data exists",
+      "subtask_indices": [0, 1]
+    },
+    {
+      "criterion": "Scroll calculation updated to reflect reduced line count per agent",
+      "subtask_indices": [0, 1]
+    },
+    {
+      "criterion": "Documentation updated if README describes ctx display format",
+      "subtask_indices": [2]
+    }
+  ]
+}
