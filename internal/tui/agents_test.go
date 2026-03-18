@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -371,4 +372,227 @@ func TestAgentsModel_Selected(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestViewCtxInlineWithActivity verifies that context percentage is rendered
+// inline on the activity metrics line (not as a separate line) when activity
+// data is present.
+func TestViewCtxInlineWithActivity(t *testing.T) {
+	t.Run("ctx appears inline with activity data", func(t *testing.T) {
+		a := AgentsModel{
+			agents: []model.Agent{
+				{
+					ID:     uuid.New(),
+					Name:   "agent-1",
+					Status: model.AgentWorking,
+					Config: model.JSONField{
+						"activity_tool":          "Read",
+						"activity_target":        "foo",
+						"activity_file_progress": "3/5 files",
+						"activity_committed":     false,
+						"context_used_pct":       float64(85),
+					},
+				},
+			},
+			width: 120,
+		}
+		output := a.View()
+
+		// The activity line should contain ctx inline.
+		found := false
+		for _, line := range strings.Split(output, "\n") {
+			if strings.Contains(line, "▸") && strings.Contains(line, "ctx: 85%") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected ctx: 85%% inline on activity line (▸), got:\n%s", output)
+		}
+
+		// There should NOT be a standalone ctx line.
+		for _, line := range strings.Split(output, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "ctx: 85%" && !strings.Contains(line, "▸") {
+				t.Errorf("ctx: 85%% should not appear as a standalone line, got:\n%s", output)
+			}
+		}
+	})
+
+	t.Run("ctx appears standalone when no activity data", func(t *testing.T) {
+		a := AgentsModel{
+			agents: []model.Agent{
+				{
+					ID:     uuid.New(),
+					Name:   "agent-2",
+					Status: model.AgentWorking,
+					Config: model.JSONField{
+						"context_used_pct": float64(50),
+					},
+				},
+			},
+			width: 120,
+		}
+		output := a.View()
+
+		// With no activity, ctx should appear as a standalone detail line.
+		foundStandalone := false
+		for _, line := range strings.Split(output, "\n") {
+			trimmed := strings.TrimSpace(line)
+			if trimmed == "ctx: 50%" || strings.HasSuffix(trimmed, "ctx: 50%") {
+				foundStandalone = true
+				break
+			}
+		}
+		if !foundStandalone {
+			t.Errorf("expected standalone ctx: 50%% line when no activity, got:\n%s", output)
+		}
+	})
+
+	t.Run("activity without ctx renders normally", func(t *testing.T) {
+		a := AgentsModel{
+			agents: []model.Agent{
+				{
+					ID:     uuid.New(),
+					Name:   "agent-3",
+					Status: model.AgentWorking,
+					Config: model.JSONField{
+						"activity_tool":          "Read",
+						"activity_target":        "bar",
+						"activity_file_progress": "1/2 files",
+						"activity_committed":     true,
+					},
+				},
+			},
+			width: 120,
+		}
+		output := a.View()
+
+		// Activity line should exist without ctx suffix.
+		foundActivity := false
+		for _, line := range strings.Split(output, "\n") {
+			if strings.Contains(line, "▸") && strings.Contains(line, "Read") {
+				foundActivity = true
+				if strings.Contains(line, "ctx:") {
+					t.Errorf("activity line should not contain ctx when no ctx data, got: %s", line)
+				}
+			}
+		}
+		if !foundActivity {
+			t.Errorf("expected activity line with ▸, got:\n%s", output)
+		}
+	})
+
+	t.Run("ctx at warning threshold inline", func(t *testing.T) {
+		a := AgentsModel{
+			agents: []model.Agent{
+				{
+					ID:     uuid.New(),
+					Name:   "agent-warn",
+					Status: model.AgentWorking,
+					Config: model.JSONField{
+						"activity_tool":          "Edit",
+						"activity_target":        "main.go",
+						"activity_file_progress": "2/3 files",
+						"activity_committed":     false,
+						"context_used_pct":       float64(75),
+					},
+				},
+			},
+			width: 120,
+		}
+		output := a.View()
+
+		found := false
+		for _, line := range strings.Split(output, "\n") {
+			if strings.Contains(line, "▸") && strings.Contains(line, "ctx: 75%") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected ctx: 75%% inline on activity line at warning threshold, got:\n%s", output)
+		}
+	})
+
+	t.Run("ctx at danger threshold inline", func(t *testing.T) {
+		a := AgentsModel{
+			agents: []model.Agent{
+				{
+					ID:     uuid.New(),
+					Name:   "agent-danger",
+					Status: model.AgentWorking,
+					Config: model.JSONField{
+						"activity_tool":          "Bash",
+						"activity_target":        "test.sh",
+						"activity_file_progress": "5/5 files",
+						"activity_committed":     true,
+						"context_used_pct":       float64(95),
+					},
+				},
+			},
+			width: 120,
+		}
+		output := a.View()
+
+		found := false
+		for _, line := range strings.Split(output, "\n") {
+			if strings.Contains(line, "▸") && strings.Contains(line, "ctx: 95%") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("expected ctx: 95%% inline on activity line at danger threshold, got:\n%s", output)
+		}
+	})
+
+	t.Run("ctx inline does not add extra lines vs no ctx", func(t *testing.T) {
+		// Agent with activity AND ctx%.
+		withCtx := AgentsModel{
+			agents: []model.Agent{
+				{
+					ID:     uuid.New(),
+					Name:   "agent-ctx",
+					Status: model.AgentWorking,
+					Config: model.JSONField{
+						"activity_tool":          "Read",
+						"activity_target":        "foo",
+						"activity_file_progress": "1/1 files",
+						"activity_committed":     false,
+						"context_used_pct":       float64(60),
+					},
+				},
+			},
+			width: 120,
+		}
+
+		// Agent with activity but NO ctx%.
+		withoutCtx := AgentsModel{
+			agents: []model.Agent{
+				{
+					ID:     uuid.New(),
+					Name:   "agent-noctx",
+					Status: model.AgentWorking,
+					Config: model.JSONField{
+						"activity_tool":          "Read",
+						"activity_target":        "foo",
+						"activity_file_progress": "1/1 files",
+						"activity_committed":     false,
+					},
+				},
+			},
+			width: 120,
+		}
+
+		linesWithCtx := strings.Split(withCtx.View(), "\n")
+		linesWithoutCtx := strings.Split(withoutCtx.View(), "\n")
+
+		if len(linesWithCtx) != len(linesWithoutCtx) {
+			t.Errorf("agent with ctx should have same line count as without ctx when activity present\n"+
+				"with ctx (%d lines):\n%s\n\nwithout ctx (%d lines):\n%s",
+				len(linesWithCtx), withCtx.View(),
+				len(linesWithoutCtx), withoutCtx.View())
+		}
+	})
 }
