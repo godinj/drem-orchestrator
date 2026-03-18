@@ -33,3 +33,32 @@ type BuildFailureDiagnosis struct {
 	SuggestedFix  string   `json:"suggested_fix"`
 	CanAutoFix    bool     `json:"can_auto_fix"`
 }
+
+// PlanDepthReview is the supervisor's evaluation of a plan that failed
+// the depth score. It determines whether the plan can be adjusted or
+// the task concept is fundamentally flawed.
+type PlanDepthReview struct {
+	Assessment      string   `json:"assessment"`       // "adjustable" or "fundamentally_shallow"
+	ShallowAreas    []string `json:"shallow_areas"`    // specific subtasks or modules that lack depth
+	Recommendations []string `json:"recommendations"`  // actionable steps to improve depth
+	RejectionReason string   `json:"rejection_reason"` // human-readable explanation for the task comment
+}
+
+// DepthConstraintDiagnosis is the supervisor's evaluation of depth constraint
+// failures on the integration worktree. It identifies where violations occurred
+// and recommends next steps.
+type DepthConstraintDiagnosis struct {
+	Violations      []DepthViolation `json:"violations"`
+	RootCause       string           `json:"root_cause"`       // why depth constraints failed
+	Recommendation  string           `json:"recommendation"`   // what to do next
+	RejectionReason string           `json:"rejection_reason"` // for the task comment
+}
+
+// DepthViolation describes a single depth constraint violation.
+type DepthViolation struct {
+	Package     string `json:"package"`      // e.g., "internal/orchestrator"
+	Metric      string `json:"metric"`       // "export_ratio" or "pass_through_count"
+	ActualValue string `json:"actual_value"` // e.g., "0.25" or "7"
+	Limit       string `json:"limit"`        // e.g., "0.15" or "3"
+	Suggestion  string `json:"suggestion"`   // specific fix suggestion
+}

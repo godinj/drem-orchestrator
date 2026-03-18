@@ -346,6 +346,91 @@ func JournalFilename(taskTitle string) string {
 	return fmt.Sprintf("supervisor-journal-%s-%s.md", slugify(taskTitle), ts)
 }
 
+// PlanDepthReviewPrompt builds a prompt for reviewing a plan that failed the depth score.
+func PlanDepthReviewPrompt(taskTitle, taskDesc, planJSON string, depthScore float64) string {
+	return fmt.Sprintf(`You are a supervisor evaluating a plan that failed the depth score threshold.
+
+## Task
+- **Title**: %s
+- **Description**: %s
+
+## Plan (JSON)
+%s
+
+## Depth Score
+%.2f (below threshold — the plan lacks sufficient architectural depth)
+
+## Instructions
+Evaluate whether this plan can be improved to achieve adequate depth, or whether the task concept is inherently shallow and should be rejected.
+
+Specifically:
+1. Identify which subtasks or modules lack depth (e.g., thin wrappers, pass-through functions, trivial glue code).
+2. Determine if the plan can be restructured to add meaningful depth (e.g., richer abstractions, internal logic, encapsulation).
+3. If the plan is adjustable, provide actionable recommendations. If the task is fundamentally shallow, explain why.
+
+Return ONLY a JSON object:
+
+{
+  "assessment": "adjustable|fundamentally_shallow",
+  "shallow_areas": ["subtask or module that lacks depth", ...],
+  "recommendations": ["actionable step to improve depth", ...],
+  "rejection_reason": "human-readable explanation for the task comment"
+}`,
+		taskTitle,
+		truncateForPrompt(taskDesc, truncTaskDesc),
+		truncateForPrompt(planJSON, truncDiffOutput),
+		depthScore,
+	)
+}
+
+// DepthConstraintDiagnosisPrompt builds a prompt for diagnosing depth constraint failures.
+func DepthConstraintDiagnosisPrompt(taskTitle string, constraintReport string, diffOutput string) string {
+	return fmt.Sprintf(`You are a supervisor diagnosing depth constraint failures on an integration worktree.
+
+## Task
+- **Title**: %s
+
+## Constraint Report
+%s
+
+## Diff Output
+%s
+
+## Instructions
+Analyze the depth constraint violations and identify the root cause. For each violation, explain why it occurred and suggest a specific fix.
+
+Common depth violations include:
+- **High export ratio**: Too many exported symbols relative to internal logic. Fix by internalizing functions, merging small packages, or adding unexported helpers.
+- **Pass-through functions**: Functions that simply delegate to another package without adding logic. Fix by inlining the delegation, adding validation/transformation, or removing the indirection.
+
+For each violation, provide:
+- The package where the violation occurred
+- The metric that was violated (export_ratio or pass_through_count)
+- The actual value vs. the limit
+- A specific suggestion to fix it (e.g., "internalize function X", "merge packages Y and Z", "add validation logic before delegating")
+
+Return ONLY a JSON object:
+
+{
+  "violations": [
+    {
+      "package": "internal/example",
+      "metric": "export_ratio|pass_through_count",
+      "actual_value": "0.25",
+      "limit": "0.15",
+      "suggestion": "specific fix suggestion"
+    }
+  ],
+  "root_cause": "why depth constraints failed overall",
+  "recommendation": "what to do next (e.g., re-plan, targeted refactor)",
+  "rejection_reason": "human-readable explanation for the task comment"
+}`,
+		taskTitle,
+		truncateForPrompt(constraintReport, truncBuildOutput),
+		truncateForPrompt(diffOutput, truncDiffOutput),
+	)
+}
+
 // BuildFailurePrompt builds a prompt for diagnosing a build failure.
 func BuildFailurePrompt(worktreePath, buildOutput string, changedFiles []string) string {
 	return fmt.Sprintf(`You are a supervisor diagnosing a build failure after merge.
