@@ -314,6 +314,23 @@ The `agentmon` package (`internal/agentmon/`) tails Claude's conversation transc
 
 These signals feed back into the orchestrator's decision loop for automated test gating and failure recovery.
 
+## Context Monitor (ctxmon)
+
+The `ctxmon` binary (`cmd/ctxmon/`) is a standalone CLI for configuring and querying context window monitoring in agent worktrees. It is used by the `/swarm` skill to set up monitoring before agents start and to check usage while they run.
+
+```bash
+# Build
+go build -o ctxmon ./cmd/ctxmon
+
+# Set up monitoring in a worktree (creates .claude/ with hook scripts)
+ctxmon setup /path/to/worktree
+
+# Query current context usage (JSON output)
+ctxmon status /path/to/worktree
+```
+
+The `status` command returns JSON with `used_percent`, `remaining_percent`, and a `compaction_triggered` flag. If no usage data has been recorded yet, it exits with code 2.
+
 ## Agent Exit Logging
 
 When an agent session ends, a Claude Code **Stop hook** captures structured exit information and writes it to a JSONL log file. This gives the orchestrator visibility into why an agent stopped and what it was doing at the time.
