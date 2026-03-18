@@ -201,7 +201,7 @@ func TestContextActions_BoardFocusNoTask(t *testing.T) {
 	actions := m.contextActions()
 
 	// Global/navigation actions should still be present.
-	requireBindings(t, actions, "j/k", "tab", "q", "?")
+	requireBindings(t, actions, "j/k", "tab", "?")
 
 	// No task-specific actions when no task is selected.
 	forbidBindings(t, actions, "a", "r", "t", "f", "p", "R", "x", "d", "c", "S", "l", "g")
@@ -246,7 +246,7 @@ func TestContextActions_AgentFocus(t *testing.T) {
 			requireBindings(t, actions, tt.wantKeys...)
 
 			// Global actions are always present.
-			requireBindings(t, actions, "j/k", "tab", "q", "?")
+			requireBindings(t, actions, "j/k", "tab", "?")
 		})
 	}
 }
@@ -305,7 +305,7 @@ func TestContextActions_DetailFocus(t *testing.T) {
 			requireBindings(t, actions, tt.wantKeys...)
 
 			// Global actions present.
-			requireBindings(t, actions, "j/k", "tab", "q", "?")
+			requireBindings(t, actions, "j/k", "tab", "?")
 
 			// Detail focus should have a scroll hint.
 			found := false
@@ -378,7 +378,7 @@ func TestContextActions_GlobalActionsAlwaysPresent(t *testing.T) {
 		},
 	}
 
-	globalKeys := []string{"j/k", "tab", "q", "?"}
+	globalKeys := []string{"j/k", "tab", "?"}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -395,11 +395,6 @@ func TestContextActions_GlobalActionsAlwaysPresent(t *testing.T) {
 			tabDesc := bindingDesc(actions, "tab")
 			if tabDesc == "" {
 				t.Error("tab should have a description")
-			}
-
-			qDesc := bindingDesc(actions, "q")
-			if !containsSubstring(qDesc, "quit") {
-				t.Errorf("q description %q should contain 'quit'", qDesc)
 			}
 
 			helpDesc := bindingDesc(actions, "?")

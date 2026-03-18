@@ -168,6 +168,76 @@ func TestHelpBarRemovedFromView(t *testing.T) {
 	}
 }
 
+func TestCtrlCDoesNotQuit(t *testing.T) {
+	tests := []struct {
+		name  string
+		focus Focus
+	}{
+		{"FocusBoard", FocusBoard},
+		{"FocusAgents", FocusAgents},
+		{"FocusDetail", FocusDetail},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newHelpTestModel(tt.focus, false)
+			m.updatePanelSizes()
+
+			_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+			if cmd != nil {
+				t.Errorf("ctrl+c should not produce a command (got non-nil cmd) in %s", tt.name)
+			}
+		})
+	}
+}
+
+func TestQKeyDoesNotQuit(t *testing.T) {
+	tests := []struct {
+		name  string
+		focus Focus
+	}{
+		{"FocusBoard", FocusBoard},
+		{"FocusAgents", FocusAgents},
+		{"FocusDetail", FocusDetail},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newHelpTestModel(tt.focus, false)
+			m.updatePanelSizes()
+
+			_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
+			if cmd != nil {
+				t.Errorf("q should not produce a command (got non-nil cmd) in %s", tt.name)
+			}
+		})
+	}
+}
+
+func TestEscDoesNotQuit(t *testing.T) {
+	tests := []struct {
+		name  string
+		focus Focus
+	}{
+		{"FocusBoard", FocusBoard},
+		{"FocusAgents", FocusAgents},
+		{"FocusDetail", FocusDetail},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newHelpTestModel(tt.focus, false)
+			m.updatePanelSizes()
+
+			result, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+			got := result.(Model)
+			if cmd != nil {
+				t.Errorf("esc should not produce a command (got non-nil cmd) in %s", tt.name)
+			}
+			if got.focus != tt.focus {
+				t.Errorf("esc should not change focus in %s, but focus changed", tt.name)
+			}
+		})
+	}
+}
+
 func TestHelpOverlayAppearsInView(t *testing.T) {
 	tests := []struct {
 		name        string
