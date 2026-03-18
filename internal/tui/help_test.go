@@ -532,6 +532,73 @@ func TestContextActions_SupervisorAlwaysOnBoardDetail(t *testing.T) {
 	}
 }
 
+func TestHelpOverlay_NoQuitBinding(t *testing.T) {
+	focusStates := []struct {
+		name  string
+		focus Focus
+	}{
+		{"FocusBoard", FocusBoard},
+		{"FocusAgents", FocusAgents},
+		{"FocusDetail", FocusDetail},
+		{"FocusCreate", FocusCreate},
+		{"FocusFeedback", FocusFeedback},
+	}
+
+	task := &model.Task{
+		ID:     uuid.New(),
+		Status: model.StatusBacklog,
+	}
+
+	for _, fs := range focusStates {
+		t.Run(fs.name, func(t *testing.T) {
+			var taskArg *model.Task
+			// Provide a task for focus states that use it.
+			if fs.focus == FocusBoard || fs.focus == FocusDetail {
+				taskArg = task
+			}
+			m := buildTestModel(fs.focus, taskArg, nil, false)
+			actions := m.contextActions()
+
+			for _, b := range actions {
+				if b.Key == "q" && containsSubstring(b.Desc, "quit") {
+					t.Errorf("binding q with quit description should not exist, got Key=%q Desc=%q", b.Key, b.Desc)
+				}
+				if b.Key == "ctrl+c" && containsSubstring(b.Desc, "quit") {
+					t.Errorf("binding ctrl+c with quit description should not exist, got Key=%q Desc=%q", b.Key, b.Desc)
+				}
+			}
+		})
+	}
+}
+
+func TestHelpOverlay_ShowsTmuxExitGuidance(t *testing.T) {
+	m := buildTestModel(FocusBoard, nil, nil, false)
+	actions := m.contextActions()
+
+	found := false
+	for _, b := range actions {
+		if containsSubstring(b.Key, "tmux") || containsSubstring(b.Desc, "tmux") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("contextActions should include tmux exit guidance (a binding mentioning 'tmux' in Key or Desc)")
+	}
+}
+
+func TestHelpBar_NoQuitReference(t *testing.T) {
+	m := buildTestModel(FocusBoard, nil, nil, false)
+	bar := m.renderHelpBar()
+
+	if containsSubstring(bar, "q quit") {
+		t.Errorf("help bar should not contain 'q quit', got %q", bar)
+	}
+	if !containsSubstring(bar, "? help") {
+		t.Errorf("help bar should contain '? help', got %q", bar)
+	}
+}
+
 // containsSubstring reports whether s contains substr (case-insensitive).
 func containsSubstring(s, substr string) bool {
 	return len(s) >= len(substr) &&
