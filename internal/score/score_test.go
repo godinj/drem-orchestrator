@@ -183,6 +183,258 @@ func TestScorePlan_Documentation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// ScorePlan Depth tests
+// ---------------------------------------------------------------------------
+
+func TestScorePlan_Depth(t *testing.T) {
+	tests := []struct {
+		name      string
+		entries   []PlanEntry
+		wantDepth float64
+	}{
+		{
+			name: "full depth metadata — boundaries, interfaces, exports <= 20",
+			entries: []PlanEntry{
+				{
+					Title: "impl storage layer",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						ModuleBoundaries: []ModuleBoundary{
+							{Package: "internal/storage", Description: "Persistence layer", Exports: 5},
+						},
+						InterfaceShapes: []InterfaceShape{
+							{Package: "internal/storage", Functions: []string{"Get", "Put"}, Types: []string{"Store"}},
+						},
+					},
+				},
+			},
+			wantDepth: 1.0,
+		},
+		{
+			name: "no depth metadata at all",
+			entries: []PlanEntry{
+				{Title: "impl A", Phase: "implementation"},
+				{Title: "impl B", Phase: "implementation"},
+			},
+			wantDepth: 0.0,
+		},
+		{
+			name: "boundaries but no interface shapes",
+			entries: []PlanEntry{
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						ModuleBoundaries: []ModuleBoundary{
+							{Package: "internal/foo", Description: "Foo module", Exports: 3},
+						},
+					},
+				},
+			},
+			wantDepth: 2.0 / 3.0, // boundaries(1) + interfaces(0) + deep(1) = 2/3
+		},
+		{
+			name: "interface shapes but no boundaries",
+			entries: []PlanEntry{
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						InterfaceShapes: []InterfaceShape{
+							{Package: "internal/bar", Functions: []string{"Do"}, Types: []string{"Handler"}},
+						},
+					},
+				},
+			},
+			wantDepth: 1.0 / 3.0, // boundaries(0) + interfaces(1) + deep(0, no boundary subtasks) = 1/3
+		},
+		{
+			name: "boundaries with excessive exports (> 20)",
+			entries: []PlanEntry{
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						ModuleBoundaries: []ModuleBoundary{
+							{Package: "internal/wide", Description: "Wide module", Exports: 25},
+						},
+						InterfaceShapes: []InterfaceShape{
+							{Package: "internal/wide", Functions: []string{"A", "B"}, Types: []string{"C"}},
+						},
+					},
+				},
+			},
+			wantDepth: 2.0 / 3.0, // boundaries(1) + interfaces(1) + deep(0, exports>20) = 2/3
+		},
+		{
+			name: "mixed subtasks — some with depth metadata, some without",
+			entries: []PlanEntry{
+				{Title: "test A", Phase: "test"},
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						ModuleBoundaries: []ModuleBoundary{
+							{Package: "internal/core", Description: "Core logic", Exports: 4},
+						},
+						InterfaceShapes: []InterfaceShape{
+							{Package: "internal/core", Functions: []string{"Run"}, Types: []string{"Engine"}},
+						},
+					},
+				},
+				{Title: "impl B", Phase: "implementation"},
+				{Title: "integration", Phase: "integration"},
+			},
+			wantDepth: 1.0, // at least one subtask provides valid boundaries + interfaces + deep
+		},
+		{
+			name: "empty DepthMeta (no boundaries, no interfaces)",
+			entries: []PlanEntry{
+				{
+					Title:     "impl A",
+					Phase:     "implementation",
+					DepthMeta: &DepthMeta{},
+				},
+			},
+			wantDepth: 0.0,
+		},
+		{
+			name: "boundary with empty Package — not counted",
+			entries: []PlanEntry{
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						ModuleBoundaries: []ModuleBoundary{
+							{Package: "", Description: "Missing package", Exports: 3},
+						},
+					},
+				},
+			},
+			wantDepth: 0.0,
+		},
+		{
+			name: "boundary with empty Description — not counted",
+			entries: []PlanEntry{
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						ModuleBoundaries: []ModuleBoundary{
+							{Package: "internal/foo", Description: "", Exports: 3},
+						},
+					},
+				},
+			},
+			wantDepth: 0.0,
+		},
+		{
+			name: "interface shape with empty Package — not counted",
+			entries: []PlanEntry{
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						InterfaceShapes: []InterfaceShape{
+							{Package: "", Functions: []string{"Do"}, Types: []string{"T"}},
+						},
+					},
+				},
+			},
+			wantDepth: 0.0,
+		},
+		{
+			name: "interface shape with no functions or types — not counted",
+			entries: []PlanEntry{
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						InterfaceShapes: []InterfaceShape{
+							{Package: "internal/foo"},
+						},
+					},
+				},
+			},
+			wantDepth: 0.0,
+		},
+		{
+			name: "multiple boundary subtasks — one deep, one not",
+			entries: []PlanEntry{
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						ModuleBoundaries: []ModuleBoundary{
+							{Package: "internal/a", Description: "Module A", Exports: 5},
+						},
+						InterfaceShapes: []InterfaceShape{
+							{Package: "internal/a", Functions: []string{"Run"}, Types: []string{}},
+						},
+					},
+				},
+				{
+					Title: "impl B",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						ModuleBoundaries: []ModuleBoundary{
+							{Package: "internal/b", Description: "Module B", Exports: 30},
+						},
+					},
+				},
+			},
+			wantDepth: 2.0 / 3.0, // boundaries(1) + interfaces(1) + deep(0, subtask B fails) = 2/3
+		},
+		{
+			name: "exports exactly 20 — passes deep decomposition",
+			entries: []PlanEntry{
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						ModuleBoundaries: []ModuleBoundary{
+							{Package: "internal/edge", Description: "Edge case", Exports: 20},
+						},
+						InterfaceShapes: []InterfaceShape{
+							{Package: "internal/edge", Functions: []string{"Handle"}, Types: []string{}},
+						},
+					},
+				},
+			},
+			wantDepth: 1.0,
+		},
+		{
+			name: "exports zero — fails deep decomposition (must be specified > 0)",
+			entries: []PlanEntry{
+				{
+					Title: "impl A",
+					Phase: "implementation",
+					DepthMeta: &DepthMeta{
+						ModuleBoundaries: []ModuleBoundary{
+							{Package: "internal/zero", Description: "Zero exports", Exports: 0},
+						},
+						InterfaceShapes: []InterfaceShape{
+							{Package: "internal/zero", Functions: []string{"X"}, Types: []string{}},
+						},
+					},
+				},
+			},
+			wantDepth: 2.0 / 3.0, // boundaries(1) + interfaces(1) + deep(0, exports=0) = 2/3
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := PlanScoreInput{Entries: tt.entries}
+			got := ScorePlan(input)
+			if !approxEqual(got.Depth, tt.wantDepth) {
+				t.Errorf("Depth = %v, want %v", got.Depth, tt.wantDepth)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // ScoreImplementation tests
 // ---------------------------------------------------------------------------
 
@@ -308,6 +560,19 @@ func TestScoreImplementation_Documentation(t *testing.T) {
 	}
 }
 
+func TestScoreImplementation_Depth(t *testing.T) {
+	input := ImplScoreInput{
+		ConstraintsPassed: 5,
+		ConstraintsFailed: 0,
+		ChangedFiles:      []string{"internal/foo/foo.go"},
+		CoverageOutput:    "coverage: 80.0% of statements",
+	}
+	got := ScoreImplementation(input)
+	if !approxEqual(got.Depth, 0.0) {
+		t.Errorf("ScoreImplementation Depth = %v, want 0.0 (not evaluated at impl time)", got.Depth)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // FormatScores tests
 // ---------------------------------------------------------------------------
@@ -320,18 +585,19 @@ func TestFormatScores(t *testing.T) {
 	}{
 		{
 			name:  "all dimensions present with percentages",
-			score: StepScore{TDD: 0.85, Constitution: 1.0, Documentation: 0.0},
+			score: StepScore{TDD: 0.85, Constitution: 1.0, Documentation: 0.0, Depth: 0.67},
 			wantSubstr: []string{
 				"TDD: 85%",
 				"Constitution: 100%",
 				"Docs: 0%",
+				"Depth: 67%",
 			},
 		},
 		{
-			name:  "exact format: pipe-separated",
-			score: StepScore{TDD: 0.85, Constitution: 1.0, Documentation: 0.0},
+			name:  "exact format: pipe-separated with depth",
+			score: StepScore{TDD: 0.85, Constitution: 1.0, Documentation: 0.0, Depth: 1.0},
 			wantSubstr: []string{
-				"TDD: 85% | Constitution: 100% | Docs: 0%",
+				"TDD: 85% | Constitution: 100% | Docs: 0% | Depth: 100%",
 			},
 		},
 	}
@@ -353,7 +619,7 @@ func TestFormatScores(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScoresToMap(t *testing.T) {
-	score := StepScore{TDD: 0.85, Constitution: 1.0, Documentation: 0.5}
+	score := StepScore{TDD: 0.85, Constitution: 1.0, Documentation: 0.5, Depth: 0.33}
 	m := ScoresToMap(score)
 
 	// Round-trip through JSON
@@ -371,6 +637,7 @@ func TestScoresToMap(t *testing.T) {
 		"tdd":           0.85,
 		"constitution":  1.0,
 		"documentation": 0.5,
+		"depth":         0.33,
 	}
 	for key, want := range checks {
 		got, ok := decoded[key].(float64)

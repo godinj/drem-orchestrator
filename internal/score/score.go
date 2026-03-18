@@ -14,6 +14,27 @@ type StepScore struct {
 	TDD           float64
 	Constitution  float64
 	Documentation float64
+	Depth         float64
+}
+
+// ModuleBoundary describes a package-level boundary for depth scoring.
+type ModuleBoundary struct {
+	Package     string
+	Description string
+	Exports     int
+}
+
+// InterfaceShape describes the public API surface of a module for depth scoring.
+type InterfaceShape struct {
+	Package   string
+	Functions []string
+	Types     []string
+}
+
+// DepthMeta carries module boundary and interface shape info for depth scoring.
+type DepthMeta struct {
+	ModuleBoundaries []ModuleBoundary
+	InterfaceShapes  []InterfaceShape
 }
 
 // PlanEntry represents a single subtask in a plan.
@@ -24,6 +45,7 @@ type PlanEntry struct {
 	EstimatedFiles []string
 	TestsFor       []int
 	Dependencies   []int
+	DepthMeta      *DepthMeta // nil for plans without depth metadata
 }
 
 // TDDException marks a subtask as exempt from the test-before-impl requirement.
@@ -67,6 +89,7 @@ func ScorePlan(input PlanScoreInput) StepScore {
 		TDD:           scorePlanTDD(input.Entries, input.TDDExceptions),
 		Constitution:  scorePlanConstitution(input.ValidationResult),
 		Documentation: scorePlanDocumentation(input.Entries),
+		Depth:         scorePlanDepth(input.Entries),
 	}
 }
 
@@ -149,15 +172,93 @@ func scorePlanDocumentation(entries []PlanEntry) float64 {
 	return 0.0
 }
 
+// scorePlanDepth scores plan depth on three equally-weighted sub-criteria:
+//  1. Module boundaries defined — at least one subtask has valid ModuleBoundaries.
+//  2. Interface shapes specified — at least one subtask has valid InterfaceShapes.
+//  3. Deep decomposition — all boundary-defining subtasks keep Exports ≤ 20.
+func scorePlanDepth(entries []PlanEntry) float64 {
+	hasBoundaries := false
+	hasInterfaces := false
+
+	// Track deep decomposition: only evaluated on subtasks that define boundaries.
+	boundarySubtaskCount := 0
+	deepSubtaskCount := 0
+
+	for _, entry := range entries {
+		if entry.DepthMeta == nil {
+			continue
+		}
+
+		// Check module boundaries.
+		for _, b := range entry.DepthMeta.ModuleBoundaries {
+			if b.Package != "" && b.Description != "" {
+				hasBoundaries = true
+				break
+			}
+		}
+
+		// Check interface shapes.
+		for _, s := range entry.DepthMeta.InterfaceShapes {
+			if s.Package != "" && (len(s.Functions) > 0 || len(s.Types) > 0) {
+				hasInterfaces = true
+				break
+			}
+		}
+
+		// Deep decomposition: for subtasks with valid boundaries, check Exports.
+		hasValidBoundary := false
+		allDeep := true
+		for _, b := range entry.DepthMeta.ModuleBoundaries {
+			if b.Package != "" && b.Description != "" {
+				hasValidBoundary = true
+				if b.Exports <= 0 || b.Exports > 20 {
+					allDeep = false
+				}
+			}
+		}
+		if hasValidBoundary {
+			boundarySubtaskCount++
+			if allDeep {
+				deepSubtaskCount++
+			}
+		}
+	}
+
+	var score float64
+	criteria := 0.0
+
+	// Criterion 1: boundaries defined.
+	criteria++
+	if hasBoundaries {
+		score += 1.0
+	}
+
+	// Criterion 2: interfaces specified.
+	criteria++
+	if hasInterfaces {
+		score += 1.0
+	}
+
+	// Criterion 3: deep decomposition.
+	criteria++
+	if boundarySubtaskCount > 0 && deepSubtaskCount == boundarySubtaskCount {
+		score += 1.0
+	}
+
+	return score / criteria
+}
+
 // coverageRegex matches "coverage: 85.0% of statements" lines.
 var coverageRegex = regexp.MustCompile(`coverage:\s+([\d.]+)%\s+of\s+statements`)
 
 // ScoreImplementation scores an implementation at testing_ready time.
+// Depth is not evaluated at implementation time (enforced at plan review).
 func ScoreImplementation(input ImplScoreInput) StepScore {
 	return StepScore{
 		TDD:           scoreImplTDD(input.CoverageOutput),
 		Constitution:  scoreImplConstitution(input.ConstraintsPassed, input.ConstraintsFailed),
 		Documentation: scoreImplDocumentation(input.ChangedFiles),
+		Depth:         0.0,
 	}
 }
 
@@ -222,10 +323,11 @@ func isDocFile(path string) bool {
 
 // FormatScores renders scores as human-readable text.
 func FormatScores(s StepScore) string {
-	return fmt.Sprintf("TDD: %d%% | Constitution: %d%% | Docs: %d%%",
+	return fmt.Sprintf("TDD: %d%% | Constitution: %d%% | Docs: %d%% | Depth: %d%%",
 		int(s.TDD*100+0.5),
 		int(s.Constitution*100+0.5),
 		int(s.Documentation*100+0.5),
+		int(s.Depth*100+0.5),
 	)
 }
 
@@ -235,6 +337,7 @@ func ScoresToMap(s StepScore) map[string]any {
 		"tdd":           s.TDD,
 		"constitution":  s.Constitution,
 		"documentation": s.Documentation,
+		"depth":         s.Depth,
 		"formatted":     FormatScores(s),
 	}
 }
