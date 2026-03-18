@@ -4,6 +4,7 @@
 package prompt
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -120,7 +121,7 @@ func Generate(opts Opts) string {
 	case model.AgentPlanner:
 		sections = append(sections, plannerInstructions()...)
 	case model.AgentCoder:
-		sections = append(sections, coderInstructions(opts.Task)...)
+		sections = append(sections, coderInstructions(opts)...)
 	case model.AgentResearcher:
 		sections = append(sections, researcherInstructions()...)
 	case model.AgentReviewer:
@@ -203,7 +204,13 @@ func plannerInstructions() []string {
 		`      "tests_for": [1],`,
 		`      "files": ["path/to/file1.go", "path/to/file2.go"],`,
 		`      "dependencies": [],`,
-		`      "priority": 1`,
+		`      "priority": 1,`,
+		`      "module_boundaries": [`,
+		`        {"package": "internal/foo", "description": "what it encapsulates", "exports": 5}`,
+		"      ],",
+		`      "interface_shapes": [`,
+		`        {"package": "internal/foo", "functions": ["DoThing(ctx context.Context) error"], "types": ["Config", "Result"]}`,
+		"      ]",
 		"    }",
 		"  ],",
 		`  "tdd_exceptions": [`,
@@ -342,25 +349,48 @@ func plannerInstructions() []string {
 		"",
 		"When multiple subtasks must modify the same file (e.g., a registry or router), prefer having ONE subtask own that file and other subtasks depend on it, rather than having all subtasks append to it independently.",
 		"",
+		"## Module Depth Requirements",
+		"",
+		"You MUST design for depth. Every subtask that creates or modifies a Go package MUST specify:",
+		"",
+		"1. **Module boundaries** in the subtask's `module_boundaries` field:",
+		"   - `package`: the Go package path (e.g., \"internal/constraints/depth\")",
+		"   - `description`: what this module encapsulates (one sentence)",
+		"   - `exports`: the expected number of exported symbols (aim for ≤ 10)",
+		"",
+		"2. **Interface shapes** in the subtask's `interface_shapes` field:",
+		"   - `package`: the Go package path",
+		"   - `functions`: list of exported function signatures (e.g., \"Analyze(worktreeRoot, pkgPath string) (*DepthReport, error)\")",
+		"   - `types`: list of exported type names (e.g., \"DepthReport\", \"PassThrough\")",
+		"",
+		"A deep module has a LOT of functionality behind a SIMPLE interface:",
+		"- Few exported symbols relative to total implementation (export ratio ≤ 0.15)",
+		"- No pass-through functions that just delegate to another package",
+		"- Rich internal logic that justifies the module's existence",
+		"",
+		"If you cannot define module boundaries for a subtask, explain why in the description.",
+		"Do NOT create shallow modules that redistribute complexity through pass-through interfaces.",
+		"",
 	}
 }
 
 // coderInstructions returns prompt sections for coder agents, dispatching
 // by the task's Phase field to provide TDD-specific guidance.
-func coderInstructions(task *model.Task) []string {
-	switch task.Phase {
+func coderInstructions(opts Opts) []string {
+	switch opts.Task.Phase {
 	case "test":
-		return testPhaseCoderInstructions(task)
+		return testPhaseCoderInstructions(opts)
 	case "implementation":
-		return implPhaseCoderInstructions(task)
+		return implPhaseCoderInstructions(opts)
 	default:
-		return defaultCoderInstructions(task)
+		return defaultCoderInstructions(opts)
 	}
 }
 
 // testPhaseCoderInstructions returns instructions for writing tests BEFORE
 // implementation (TDD test phase).
-func testPhaseCoderInstructions(task *model.Task) []string {
+func testPhaseCoderInstructions(opts Opts) []string {
+	task := opts.Task
 	var sections []string
 
 	sections = append(sections, "## Instructions", "")
@@ -416,12 +446,16 @@ func testPhaseCoderInstructions(task *model.Task) []string {
 		sections = append(sections, task.TestPlan, "")
 	}
 
+	// Depth guidance from plan or generic fallback.
+	sections = append(sections, depthGuidanceFromPlan(opts))
+
 	return sections
 }
 
 // implPhaseCoderInstructions returns instructions for implementing code to
 // pass pre-written tests (TDD implementation phase).
-func implPhaseCoderInstructions(task *model.Task) []string {
+func implPhaseCoderInstructions(opts Opts) []string {
+	task := opts.Task
 	var sections []string
 
 	// Resolve test file paths: prefer actual_test_files, fall back to estimated_files.
@@ -486,12 +520,16 @@ func implPhaseCoderInstructions(task *model.Task) []string {
 		sections = append(sections, task.TestPlan, "")
 	}
 
+	// Depth guidance from plan or generic fallback.
+	sections = append(sections, depthGuidanceFromPlan(opts))
+
 	return sections
 }
 
 // defaultCoderInstructions returns generic coder instructions for subtasks
 // with no phase set (backward compatibility) and integration-phase subtasks.
-func defaultCoderInstructions(task *model.Task) []string {
+func defaultCoderInstructions(opts Opts) []string {
+	task := opts.Task
 	var sections []string
 
 	sections = append(sections, "## Instructions", "")
@@ -526,7 +564,141 @@ func defaultCoderInstructions(task *model.Task) []string {
 		sections = append(sections, task.TestPlan, "")
 	}
 
+	// Depth guidance from plan or generic fallback.
+	sections = append(sections, depthGuidanceFromPlan(opts))
+
 	return sections
+}
+
+// depthGuidanceFromPlan extracts depth guidance from the parent task's plan
+// for the current subtask. Returns empty string if no depth metadata exists.
+func depthGuidanceFromPlan(opts Opts) string {
+	if opts.ParentCtx == nil {
+		return genericDepthGuidance()
+	}
+
+	planRaw, ok := opts.ParentCtx["plan"]
+	if !ok {
+		return genericDepthGuidance()
+	}
+
+	// The plan may be stored as a string (JSON) or already parsed as a map.
+	var planJSON string
+	switch v := planRaw.(type) {
+	case string:
+		planJSON = v
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return genericDepthGuidance()
+		}
+		planJSON = string(data)
+	}
+
+	if planJSON == "" {
+		return genericDepthGuidance()
+	}
+
+	// Parse the plan to extract subtasks with depth metadata.
+	var plan struct {
+		Subtasks []struct {
+			Title            string `json:"title"`
+			ModuleBoundaries []struct {
+				Package     string `json:"package"`
+				Description string `json:"description"`
+				Exports     int    `json:"exports"`
+			} `json:"module_boundaries"`
+			InterfaceShapes []struct {
+				Package   string   `json:"package"`
+				Functions []string `json:"functions"`
+				Types     []string `json:"types"`
+			} `json:"interface_shapes"`
+		} `json:"subtasks"`
+	}
+
+	if err := json.Unmarshal([]byte(planJSON), &plan); err != nil {
+		return genericDepthGuidance()
+	}
+
+	// Find the subtask matching the current task by title.
+	var matchedBoundaries []struct {
+		Package     string `json:"package"`
+		Description string `json:"description"`
+		Exports     int    `json:"exports"`
+	}
+	var matchedShapes []struct {
+		Package   string   `json:"package"`
+		Functions []string `json:"functions"`
+		Types     []string `json:"types"`
+	}
+
+	taskTitle := ""
+	if opts.Task != nil {
+		taskTitle = opts.Task.Title
+	}
+
+	for _, st := range plan.Subtasks {
+		if taskTitle != "" && st.Title == taskTitle {
+			matchedBoundaries = st.ModuleBoundaries
+			matchedShapes = st.InterfaceShapes
+			break
+		}
+	}
+
+	// If no matching subtask or no depth metadata, try to gather all depth
+	// metadata from the plan as general guidance.
+	if len(matchedBoundaries) == 0 && len(matchedShapes) == 0 {
+		// Collect depth metadata from all subtasks.
+		for _, st := range plan.Subtasks {
+			matchedBoundaries = append(matchedBoundaries, st.ModuleBoundaries...)
+			matchedShapes = append(matchedShapes, st.InterfaceShapes...)
+		}
+	}
+
+	if len(matchedBoundaries) == 0 && len(matchedShapes) == 0 {
+		return genericDepthGuidance()
+	}
+
+	var lines []string
+	lines = append(lines, "## Depth Guidance (from plan)", "")
+	lines = append(lines, "This subtask defines the following module boundaries:", "")
+
+	for _, mb := range matchedBoundaries {
+		lines = append(lines, fmt.Sprintf(
+			"- **%s**: %s Expected exports: %d.",
+			mb.Package, mb.Description, mb.Exports,
+		))
+	}
+	lines = append(lines, "")
+
+	for _, is := range matchedShapes {
+		lines = append(lines, fmt.Sprintf("Target interface shape for `%s`:", is.Package))
+		if len(is.Functions) > 0 {
+			lines = append(lines, fmt.Sprintf("- Functions: `%s`", strings.Join(is.Functions, "`, `")))
+		}
+		if len(is.Types) > 0 {
+			lines = append(lines, fmt.Sprintf("- Types: `%s`", strings.Join(is.Types, "`, `")))
+		}
+		lines = append(lines, "")
+	}
+
+	lines = append(lines, "Keep your implementation aligned with these boundaries. Do not add exports beyond what is specified.", "")
+
+	return strings.Join(lines, "\n")
+}
+
+// genericDepthGuidance returns a generic depth guidance section when no
+// plan-level depth metadata is available.
+func genericDepthGuidance() string {
+	return strings.Join([]string{
+		"## Depth Guidance",
+		"",
+		"Keep modules deep: maximize functionality behind simple interfaces.",
+		"- Aim for export ratio ≤ 0.15 (exported symbols / total LOC)",
+		"- Avoid pass-through functions that just delegate to another package",
+		"- Every exported symbol should justify its existence",
+		"",
+	}, "\n")
 }
 
 // researcherInstructions returns prompt sections for researcher agents.
