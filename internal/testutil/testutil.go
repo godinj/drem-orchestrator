@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/driver/sqlite"
@@ -17,6 +18,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/supervisor"
 )
 
 // ---------------------------------------------------------------------------
@@ -252,4 +254,23 @@ func CreateAgent(t *testing.T, db *gorm.DB, taskID uuid.UUID, agentType model.Ag
 		t.Fatalf("create test agent: %v", err)
 	}
 	return ag
+}
+
+// ---------------------------------------------------------------------------
+// Supervisor mock helpers
+// ---------------------------------------------------------------------------
+
+// NewMockSupervisor creates a supervisor backed by a fake claude binary that
+// echoes the given response string. Useful for testing supervisor-dependent
+// code paths without calling the real LLM.
+func NewMockSupervisor(t *testing.T, response string) *supervisor.Supervisor {
+	t.Helper()
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "fake-claude")
+	// Use printf to avoid echo adding a trailing newline interpretation issue.
+	script := fmt.Sprintf("#!/bin/sh\ncat <<'FAKE_EOF'\n%s\nFAKE_EOF\n", response)
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude bin: %v", err)
+	}
+	return supervisor.New(bin, 5*time.Second)
 }

@@ -458,3 +458,4 @@ Diagnose the build failure and suggest a fix. Return ONLY a JSON object:
 		truncateForPrompt(buildOutput, truncBuildOutput),
 	)
 }
+

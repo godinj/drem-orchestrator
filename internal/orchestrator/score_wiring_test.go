@@ -93,7 +93,7 @@ func TestComputePlanScores_FullCoverage(t *testing.T) {
 
 	// Verify ScoresToMap produces the expected keys.
 	m := score.ScoresToMap(scores)
-	for _, key := range []string{"tdd", "constitution", "documentation", "formatted"} {
+	for _, key := range []string{"tdd", "constitution", "documentation", "depth", "formatted"} {
 		if _, ok := m[key]; !ok {
 			t.Errorf("ScoresToMap missing key %q", key)
 		}

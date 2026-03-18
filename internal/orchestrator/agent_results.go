@@ -357,7 +357,12 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 		}
 
 		// Compute step scores for the plan review gate.
-		task.Context["scores"] = scorePlanGate(planResult.Subtasks, planResult.TDDExceptions, validation)
+		scores := scorePlanGate(planResult.Subtasks, planResult.TDDExceptions, validation)
+		task.Context["scores"] = scores
+
+		// Depth score gate: if depth score is below threshold, request
+		// supervisor diagnosis before human review (advisory only).
+		o.checkPlanDepthGate(task, scores)
 	}
 
 	// Clean up planner agent worktree.

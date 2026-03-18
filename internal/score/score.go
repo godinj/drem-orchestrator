@@ -341,3 +341,4 @@ func ScoresToMap(s StepScore) map[string]any {
 		"formatted":     FormatScores(s),
 	}
 }
+

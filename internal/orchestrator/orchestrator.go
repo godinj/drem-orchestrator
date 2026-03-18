@@ -708,8 +708,7 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 				} else if report.Failed > 0 {
 					o.logger.Warn("constraint violations at integration gate, blocking test_review",
 						"task_id", parent.ID, "failed", report.Failed)
-
-					// Store violations in task context for TUI visibility.
+					o.checkDepthConstraintFailures(parent, report, featureDir)
 					if parent.Context == nil {
 						parent.Context = make(model.JSONField)
 					}

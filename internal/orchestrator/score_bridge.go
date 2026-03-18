@@ -20,12 +20,14 @@ func scorePlanGate(subtasks []planEntry, exceptions []tddException, validation P
 	tdd := planTDDScore(subtasks, exceptions)
 	constitution := planConstitutionScore(validation)
 	doc := planDocScore(subtasks)
+	depth := planDepthScore(subtasks)
 
 	return map[string]any{
 		"tdd":           tdd,
 		"constitution":  constitution,
 		"documentation": doc,
-		"formatted":     formatScoreLine(tdd, constitution, doc),
+		"depth":         depth,
+		"formatted":     formatScoreLine(tdd, constitution, doc, depth),
 	}
 }
 
@@ -37,12 +39,15 @@ func scoreImplGate(constraintsPassed, constraintsFailed int, changedFiles []stri
 	tdd := implTDDScore(coverageOutput)
 	constitution := implConstitutionScore(constraintsPassed, constraintsFailed)
 	doc := implDocScore(changedFiles)
+	// Implementation gate does not have plan-level depth info; default to 1.0.
+	depth := 1.0
 
 	return map[string]any{
 		"tdd":           tdd,
 		"constitution":  constitution,
 		"documentation": doc,
-		"formatted":     formatScoreLine(tdd, constitution, doc),
+		"depth":         depth,
+		"formatted":     formatScoreLine(tdd, constitution, doc, depth),
 	}
 }
 
@@ -172,10 +177,27 @@ func isDocPath(path string) bool {
 	return false
 }
 
-func formatScoreLine(tdd, constitution, doc float64) string {
-	return fmt.Sprintf("TDD: %d%% | Constitution: %d%% | Docs: %d%%",
+func formatScoreLine(tdd, constitution, doc, depth float64) string {
+	return fmt.Sprintf("TDD: %d%% | Constitution: %d%% | Docs: %d%% | Depth: %d%%",
 		int(tdd*100+0.5),
 		int(constitution*100+0.5),
 		int(doc*100+0.5),
+		int(depth*100+0.5),
 	)
+}
+
+// planDepthScore computes a depth score for a plan. Plans where more subtasks
+// specify estimated files score higher, indicating better module-boundary
+// awareness. Mirrors score.scorePlanDepth.
+func planDepthScore(entries []planEntry) float64 {
+	if len(entries) == 0 {
+		return 1.0
+	}
+	withFiles := 0
+	for _, e := range entries {
+		if len(e.EstimatedFiles) > 0 {
+			withFiles++
+		}
+	}
+	return float64(withFiles) / float64(len(entries))
 }

@@ -510,6 +510,10 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 					o.logger.Warn("constraint violations at integration gate, blocking testing_ready",
 						"task_id", parent.ID, "failed", report.Failed)
 
+					// Check for depth-specific constraint failures and
+					// request supervisor diagnosis (advisory only).
+					o.checkDepthConstraintFailures(parent, report, featureDir)
+
 					if parent.Context == nil {
 						parent.Context = make(model.JSONField)
 					}
