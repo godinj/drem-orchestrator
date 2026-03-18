@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/godinj/drem-orchestrator/internal/constraints/depth"
 )
 
 // Evaluate runs all constraints in the config against the given worktree root.
@@ -124,6 +126,14 @@ func evalFileConstraints(cfg *Config, worktreeRoot string, fileSet map[string]bo
 		r, err := evalNoMatch(c, worktreeRoot, fileSet)
 		if err != nil {
 			return nil, fmt.Errorf("evaluating no_match %q: %w", c.Name, err)
+		}
+		results = append(results, r)
+	}
+
+	for _, c := range cfg.Depth {
+		r, err := evalDepth(c, worktreeRoot, fileSet)
+		if err != nil {
+			return nil, fmt.Errorf("evaluating depth %q: %w", c.Name, err)
 		}
 		results = append(results, r)
 	}
@@ -419,6 +429,111 @@ func findMatchesException(exceptions []MatchesException, path string) (MatchesEx
 		}
 	}
 	return MatchesException{}, false
+}
+
+func evalDepth(c DepthConstraint, worktreeRoot string, fileSet map[string]bool) (Result, error) {
+	result := Result{
+		Name:   c.Name,
+		Type:   "depth",
+		Passed: true,
+	}
+
+	files, err := globFiles(worktreeRoot, c.Glob, c.Exclude)
+	if err != nil {
+		return result, fmt.Errorf("globbing %q: %w", c.Glob, err)
+	}
+
+	// Group files by directory to identify package paths.
+	// Key: directory path (e.g. "internal/orchestrator"), value: list of file names.
+	pkgFiles := make(map[string][]string)
+	for _, relPath := range files {
+		dir := filepath.Dir(relPath)
+		pkgFiles[dir] = append(pkgFiles[dir], filepath.Base(relPath))
+	}
+
+	for dir, names := range pkgFiles {
+		// Skip packages that only have test files.
+		hasNonTest := false
+		for _, name := range names {
+			if !strings.HasSuffix(name, "_test.go") {
+				hasNonTest = true
+				break
+			}
+		}
+		if !hasNonTest {
+			continue
+		}
+
+		// In plan validation mode, only evaluate packages containing at least
+		// one file in fileSet.
+		if fileSet != nil {
+			relevant := false
+			for _, name := range names {
+				if fileSet[filepath.Join(dir, name)] {
+					relevant = true
+					break
+				}
+			}
+			if !relevant {
+				continue
+			}
+		}
+
+		report, err := depth.Analyze(worktreeRoot, dir)
+		if err != nil {
+			return result, fmt.Errorf("analyzing depth of %s: %w", dir, err)
+		}
+
+		exc, grandfathered := findDepthException(c.Exceptions, dir)
+
+		// Check export ratio.
+		if grandfathered {
+			if report.ExportRatio > exc.BaselineRatio {
+				result.Passed = false
+				result.Messages = append(result.Messages,
+					fmt.Sprintf("%s has export ratio %.4f, exceeds shrink-only baseline of %.4f",
+						dir, report.ExportRatio, exc.BaselineRatio))
+			}
+		} else {
+			if report.ExportRatio > c.MaxExportRatio {
+				result.Passed = false
+				result.Messages = append(result.Messages,
+					fmt.Sprintf("%s has export ratio %.4f, exceeds limit of %.4f",
+						dir, report.ExportRatio, c.MaxExportRatio))
+			}
+		}
+
+		// Check pass-through count.
+		ptCount := len(report.PassThroughFuncs)
+		if grandfathered {
+			if ptCount > exc.BaselinePassThrus {
+				result.Passed = false
+				result.Messages = append(result.Messages,
+					fmt.Sprintf("%s has %d pass-throughs, exceeds shrink-only baseline of %d",
+						dir, ptCount, exc.BaselinePassThrus))
+			}
+		} else {
+			if ptCount > c.MaxPassThroughs {
+				result.Passed = false
+				result.Messages = append(result.Messages,
+					fmt.Sprintf("%s has %d pass-throughs, exceeds limit of %d",
+						dir, ptCount, c.MaxPassThroughs))
+			}
+		}
+	}
+
+	return result, nil
+}
+
+func findDepthException(exceptions []DepthException, dir string) (DepthException, bool) {
+	// Match against directory path with trailing slash (e.g. "internal/tui/").
+	dirWithSlash := dir + "/"
+	for _, e := range exceptions {
+		if e.Path == dir || e.Path == dirWithSlash {
+			return e, true
+		}
+	}
+	return DepthException{}, false
 }
 
 func evalNoMatch(c NoMatchConstraint, worktreeRoot string, fileSet map[string]bool) (Result, error) {

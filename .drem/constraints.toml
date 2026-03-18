@@ -93,3 +93,18 @@ name         = "Test factories outside testutil"
 glob         = "internal/**/*_test.go"
 exclude_path = ["internal/testutil/"]
 pattern      = "func createTest|func newTest|func mockTestDB|func lifecycleTestDB"
+
+# ── Module Depth ─────────────────────────────────────────────
+
+[[depth]]
+name              = "Export ratio ceiling"
+glob              = "internal/**/*.go"
+exclude           = ["*_test.go"]
+max_export_ratio  = 0.15
+max_pass_throughs = 3
+
+[[depth.exception]]
+path               = "internal/tui/"
+rule               = "grandfathered"
+baseline_ratio     = 1.0
+baseline_pass_thrus = 100

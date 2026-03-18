@@ -17,6 +17,7 @@ type Config struct {
 	MaxLines     []MaxLinesConstraint   `toml:"max_lines"`
 	MaxMatches   []MaxMatchesConstraint `toml:"max_matches"`
 	NoMatch      []NoMatchConstraint    `toml:"no_match"`
+	Depth        []DepthConstraint      `toml:"depth"`
 }
 
 // CommandConstraint runs an arbitrary shell command and checks its result.
@@ -69,6 +70,24 @@ type NoMatchConstraint struct {
 	Glob        string   `toml:"glob"`
 	ExcludePath []string `toml:"exclude_path"`
 	Pattern     string   `toml:"pattern"`
+}
+
+// DepthConstraint enforces module depth heuristics on Go packages.
+type DepthConstraint struct {
+	Name            string           `toml:"name"`
+	Glob            string           `toml:"glob"`              // glob to find Go packages (matches directories)
+	Exclude         []string         `toml:"exclude"`           // patterns to exclude
+	MaxExportRatio  float64          `toml:"max_export_ratio"`  // ceiling for exported symbols / total LOC
+	MaxPassThroughs int              `toml:"max_pass_throughs"` // max pass-through functions per package
+	Exceptions      []DepthException `toml:"exception"`
+}
+
+// DepthException grandfathers a package for depth constraints.
+type DepthException struct {
+	Path              string  `toml:"path"`
+	Rule              string  `toml:"rule"`                // "grandfathered"
+	BaselineRatio     float64 `toml:"baseline_ratio"`      // current export ratio (shrink-only)
+	BaselinePassThrus int     `toml:"baseline_pass_thrus"` // current pass-through count (shrink-only)
 }
 
 // LoadConfig reads and parses .drem/constraints.toml from the given worktree root.
