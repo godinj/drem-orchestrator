@@ -723,7 +723,7 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 						}
 					}
 					if hasDepthFailure {
-						o.checkDepthConstraintFailures(parent, constraints.FormatReport(report), featureDir)
+						o.checkDepthConstraintFailures(parent, report, featureDir)
 					}
 					if parent.Context == nil {
 						parent.Context = make(model.JSONField)

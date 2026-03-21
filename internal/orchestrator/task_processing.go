@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/state"
+	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -579,7 +581,7 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 						}
 					}
 					if hasDepthFailure {
-						o.checkDepthConstraintFailures(parent, constraints.FormatReport(report), featureDir)
+						o.checkDepthConstraintFailures(parent, report, featureDir)
 					}
 
 					if parent.Context == nil {

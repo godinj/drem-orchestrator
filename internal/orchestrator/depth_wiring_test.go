@@ -196,7 +196,7 @@ func TestCheckDepthConstraintFailures_WithDepthFailure(t *testing.T) {
 		Failed: 1,
 	}
 
-	o.checkDepthConstraintFailures(&task, constraints.FormatReport(report), "/tmp/feature")
+	o.checkDepthConstraintFailures(&task, report, "/tmp/feature")
 
 	// depth_diagnosis should be stored.
 	diagnosis, ok := task.Context["depth_diagnosis"]
@@ -257,7 +257,7 @@ func TestCheckDepthConstraintFailures_AllPass(t *testing.T) {
 		}
 	}
 	if hasDepthFailure {
-		o.checkDepthConstraintFailures(&task, constraints.FormatReport(report), "/tmp/feature")
+		o.checkDepthConstraintFailures(&task, report, "/tmp/feature")
 	}
 
 	// No depth_diagnosis should be stored.
@@ -311,7 +311,7 @@ func TestCheckDepthConstraintFailures_NonDepthFailure(t *testing.T) {
 		}
 	}
 	if hasDepthFailure {
-		o.checkDepthConstraintFailures(&task, constraints.FormatReport(report), "/tmp/feature")
+		o.checkDepthConstraintFailures(&task, report, "/tmp/feature")
 	}
 
 	// No depth_diagnosis should be stored (failure is not depth-type).

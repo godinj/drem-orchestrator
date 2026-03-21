@@ -15,10 +15,10 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
+	"github.com/google/uuid"
 )
 
-// MaxEmptyWorkRetries is the number of times a subtask will be rescheduled
-// after an agent completes without committing any changes.
+// MaxEmptyWorkRetries is the maximum reschedule count after an agent commits nothing.
 const MaxEmptyWorkRetries = 2
 
 // processAgentResult handles a completed agent process.
@@ -391,8 +391,7 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	return nil
 }
 
-// onReviewerCompleted handles a completed reviewer agent by parsing its
-// review.json output and storing it in the task context.
+// onReviewerCompleted handles a completed reviewer agent by parsing its review.json.
 func (o *Orchestrator) onReviewerCompleted(ag *model.Agent, task *model.Task) error {
 	// Mark agent as idle.
 	ag.Status = model.AgentIdle
@@ -793,4 +792,9 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 
 func isWorkAlreadyCompleteCategory(category string) bool {
 	return category == "already_complete" || category == "no_changes_needed" || category == "work_done"
+}
+
+// synthesizeCompletion sends a synthetic success completion through processAgentResult.
+func (o *Orchestrator) synthesizeCompletion(agentID uuid.UUID) error {
+	return o.processAgentResult(agent.Completion{AgentID: agentID, ReturnCode: 0})
 }
