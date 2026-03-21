@@ -135,7 +135,7 @@ Lists all agents with their type, status, current task, and last heartbeat.
 | `r` | Reject plan (send back for revision) |
 | `t` | Pass test |
 | `f` | Fail test |
-| `c` | Add comment / feedback |
+| `c` | Add comment / feedback, or answer a clarification question |
 | `d` | Delete mode — select a comment, plan step, task, or subtask to remove (`d` → select → `y`/`Enter`). Deleting a root task cascades to all subtasks, agents, comments, and events |
 | `g` | Jump to agent's tmux window |
 | `l` | View agent log |
@@ -154,14 +154,14 @@ Lists all agents with their type, status, current task, and last heartbeat.
 ## Task Lifecycle
 
 ```
-                                        ┌─────────────────────────────────────────────────────┐
-                                        │             (revise plan)                            │
-                                        ▼                                                     │
-backlog ──► planning ──► plan_review ──► test_writing ──► test_review ──► in_progress ──► testing_ready ──► merging ──► done
-              │              │               │                │               │                │               │
-              ▼              ▼               ▼                ▼               ▼                ▼               ▼
-           failed         planning       failed/paused    test_writing    failed/paused     in_progress     failed
-                        (revise plan)                     (revise tests)                  (needs changes)
+                                                          ┌─────────────────────────────────────────────────────┐
+                                                          │             (revise plan)                            │
+                                                          ▼                                                     │
+backlog ──► planning ──► needs_clarification ──► plan_review ──► test_writing ──► test_review ──► in_progress ──► testing_ready ──► merging ──► done
+              │                  │                    │               │                │               │                │               │
+              ▼                  ▼                    ▼               ▼                ▼               ▼                ▼               ▼
+           failed             planning             planning       failed/paused    test_writing    failed/paused     in_progress     failed
+                          (replan with context)   (revise plan)                    (revise tests)                  (needs changes)
 
                           plan_review ─────────────────────────────────► in_progress
                                                                      (skip TDD path)
@@ -175,8 +175,11 @@ backlog ──► planning ──► plan_review ──► test_writing ──�
                           rejected   (terminal — set when subtasks are rejected at a review gate)
 ```
 
+If no assumptions need clarification, the task skips `needs_clarification` and moves directly from `planning` to `plan_review`.
+
 - **backlog** -- Waiting for dependencies to be met
 - **planning** -- Planner agent is decomposing the task
+- **needs_clarification** -- Plan assumptions need human input; the TUI shows clarification questions
 - **plan_review** -- Human gate: approve the subtask plan or send it back
 - **test_writing** -- Test agent is writing tests before implementation begins (TDD)
 - **test_review** -- Human gate: verify written tests before implementation
@@ -187,6 +190,23 @@ backlog ──► planning ──► plan_review ──► test_writing ──�
 - **failed** -- Something went wrong (can be retried back to backlog)
 - **paused** -- Manually paused by user
 - **rejected** -- Task rejected at a review gate (terminal)
+
+### Plan Clarification
+
+After a planner agent generates a plan, the system evaluates the plan's assumptions to determine if any are risky or unclear. If so, the task enters a clarification loop where you are asked targeted questions before the plan proceeds to review. If no assumptions need clarification, the task skips straight to plan review.
+
+**When it triggers:** After `planning` completes and before `plan_review`. The task moves to `needs_clarification` state. The supervisor evaluates each assumption's risk level; high-risk assumptions with user-facing impact generate questions.
+
+**TUI interaction:**
+
+- When a task is in `needs_clarification`, the detail panel shows the current question
+- Press `c` to answer the current question
+- Type your answer and press Enter to submit
+- Type `/done` to finish the clarification round early (skipping remaining questions)
+- The system may ask follow-up questions based on your answers
+- Once all questions are answered, the plan either proceeds to `plan_review` or goes back to `planning` for replanning with your clarification context
+
+**Behind the scenes:** The supervisor evaluates each assumption in the plan and assigns a risk level. High-risk assumptions that have user-facing impact generate clarification questions. Answers are deduplicated and fed back into the planning context so the planner can incorporate them. If answers reveal that the original plan was based on incorrect assumptions, the task returns to `planning` for a revised plan rather than proceeding to review.
 
 ### Step Scores
 
