@@ -443,6 +443,7 @@ func TestDeletableItemsTaskAppearsRegardlessOfStatus(t *testing.T) {
 	statuses := []model.TaskStatus{
 		model.StatusBacklog,
 		model.StatusPlanning,
+		model.StatusNeedsClarification,
 		model.StatusPlanReview,
 		model.StatusTestWriting,
 		model.StatusTestReview,
@@ -798,5 +799,100 @@ func TestIsDeleteSection(t *testing.T) {
 					tt.queryKind, got, tt.want)
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Clarification questions display
+// ---------------------------------------------------------------------------
+
+func TestDetailView_ShowsClarificationQuestions(t *testing.T) {
+	task := &model.Task{
+		ID:          uuid.New(),
+		Title:       "task-needs-clarification",
+		Description: "a task needing clarification",
+		Status:      model.StatusNeedsClarification,
+		Context: model.JSONField{
+			"clarification_questions": []any{
+				"What framework should we use?",
+				"Should we support pagination?",
+			},
+			"clarification_current_question": "What framework should we use?",
+		},
+	}
+
+	d := DetailModel{
+		task:   task,
+		width:  120,
+		height: 50,
+	}
+
+	output := d.View()
+
+	if !strings.Contains(output, "Clarification Needed:") {
+		t.Errorf("expected 'Clarification Needed:' header, got:\n%s", output)
+	}
+	if !strings.Contains(output, "1. What framework should we use?") {
+		t.Errorf("expected first question to be listed, got:\n%s", output)
+	}
+	if !strings.Contains(output, "2. Should we support pagination?") {
+		t.Errorf("expected second question to be listed, got:\n%s", output)
+	}
+	if !strings.Contains(output, "Current question:") {
+		t.Errorf("expected 'Current question:' label, got:\n%s", output)
+	}
+	if !strings.Contains(output, "What framework should we use?") {
+		t.Errorf("expected current question text, got:\n%s", output)
+	}
+	if !strings.Contains(output, "[c] to answer") {
+		t.Errorf("expected hint about [c] to answer, got:\n%s", output)
+	}
+}
+
+func TestDetailView_NoClarificationForOtherStatuses(t *testing.T) {
+	// Clarification section should not appear for non-needs_clarification tasks,
+	// even if they have clarification_questions in context.
+	task := &model.Task{
+		ID:          uuid.New(),
+		Title:       "task-in-progress",
+		Description: "a normal task",
+		Status:      model.StatusInProgress,
+		Context: model.JSONField{
+			"clarification_questions":        []any{"Some question?"},
+			"clarification_current_question": "Some question?",
+		},
+	}
+
+	d := DetailModel{
+		task:   task,
+		width:  120,
+		height: 50,
+	}
+
+	output := d.View()
+
+	if strings.Contains(output, "Clarification Needed:") {
+		t.Errorf("did not expect 'Clarification Needed:' for in_progress task, got:\n%s", output)
+	}
+}
+
+func TestAvailableActions_NeedsClarification(t *testing.T) {
+	task := &model.Task{
+		ID:     uuid.New(),
+		Status: model.StatusNeedsClarification,
+	}
+
+	d := DetailModel{
+		task:  task,
+		width: 120,
+	}
+
+	actions := d.availableActions()
+
+	if !strings.Contains(actions, "[c]larify") {
+		t.Errorf("expected [c]larify action for needs_clarification, got: %s", actions)
+	}
+	if !strings.Contains(actions, "[p]ause") {
+		t.Errorf("expected [p]ause action for needs_clarification, got: %s", actions)
 	}
 }

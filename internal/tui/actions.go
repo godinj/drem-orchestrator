@@ -176,11 +176,28 @@ func (m Model) handleOrchLog() (tea.Model, tea.Cmd) {
 }
 
 // handleAddComment opens the feedback dialog to add a comment.
+// For tasks in StatusNeedsClarification, it opens as a clarification answer dialog.
 func (m Model) handleAddComment() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil || !selected.Status.IsHumanGate() {
 		return m, nil
 	}
+
+	if selected.Status == model.StatusNeedsClarification {
+		title := "Answer Clarification Question"
+		if selected.Context != nil {
+			if current, ok := selected.Context["clarification_current_question"].(string); ok {
+				title = "Q: " + current
+			}
+		}
+		m.feedback = NewFeedbackModel(title)
+		m.feedback.SetWidth(m.width*2/3 - 4)
+		m.feedback.Show()
+		m.feedbackAction = feedbackClarificationAnswer
+		m.focus = FocusFeedback
+		return m, nil
+	}
+
 	m.feedback = NewFeedbackModel("Add Comment")
 	m.feedback.SetWidth(m.width*2/3 - 4)
 	m.feedback.Show()

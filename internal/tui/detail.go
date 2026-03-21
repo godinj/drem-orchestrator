@@ -197,6 +197,31 @@ func (d DetailModel) View() string {
 		}
 	}
 
+	// Clarification questions (for needs_clarification status).
+	if d.task.Status == model.StatusNeedsClarification && d.task.Context != nil {
+		clarStyle := lipgloss.NewStyle().Foreground(colorWarning)
+		sections = append(sections, clarStyle.Render("Clarification Needed:"))
+
+		// Show all questions with answered/pending indicators.
+		if questions, ok := d.task.Context["clarification_questions"].([]any); ok {
+			for i, q := range questions {
+				if qs, ok := q.(string); ok {
+					prefix := "  ? "
+					sections = append(sections, fmt.Sprintf("%s%d. %s", prefix, i+1, qs))
+				}
+			}
+		}
+
+		// Highlight the current question.
+		if current, ok := d.task.Context["clarification_current_question"].(string); ok {
+			currentStyle := lipgloss.NewStyle().Foreground(colorInfo).Bold(true)
+			sections = append(sections, "")
+			sections = append(sections, currentStyle.Render("Current question:"))
+			sections = append(sections, currentStyle.Render("  "+current))
+			sections = append(sections, subtitleStyle.Render("  Press [c] to answer, or type /done to accept plan as-is"))
+		}
+	}
+
 	// Review results from reviewer agent.
 	if d.task.Context != nil {
 		if review, ok := d.task.Context["review"].(map[string]any); ok {
@@ -380,6 +405,8 @@ func (d DetailModel) availableActions() string {
 		parts = append(parts, "[p]ause", "[x]fix", "[d]elete")
 	case model.StatusPaused:
 		parts = append(parts, "[p] resume", "[d]elete")
+	case model.StatusNeedsClarification:
+		parts = append(parts, "[c]larify (answer question)", "[p]ause")
 	case model.StatusFailed:
 		parts = append(parts, "[R]etry", "[x]fix", "[d]elete")
 	}

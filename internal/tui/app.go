@@ -100,9 +100,10 @@ type fixerSpawnedMsg struct {
 type feedbackAction int
 
 const (
-	feedbackNone             feedbackAction = iota
-	feedbackAddComment                      // add comment to task
-	feedbackTestReviewReject                // reject test review with feedback
+	feedbackNone                feedbackAction = iota
+	feedbackAddComment                         // add comment to task
+	feedbackTestReviewReject                   // reject test review with feedback
+	feedbackClarificationAnswer                // answer a clarification question
 )
 
 // Model is the root Bubble Tea model that composes all TUI sub-models.

@@ -292,6 +292,14 @@ func (m Model) handleFeedbackKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err := m.orch.AddComment(selected.ID, "user", body); err != nil {
 				m.err = err
 			}
+		case feedbackClarificationAnswer:
+			// Route to clarification handler and also save as a comment for visibility.
+			if err := m.orch.HandleClarificationAnswer(selected.ID, body); err != nil {
+				m.err = err
+			}
+			if err := m.orch.AddComment(selected.ID, "user", body); err != nil {
+				m.err = err
+			}
 		case feedbackTestReviewReject:
 			if err := m.orch.HandleTestReviewRejected(selected.ID, body); err != nil {
 				m.err = err
