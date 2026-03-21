@@ -319,7 +319,7 @@ Append a markdown section in this format:
 This documentation is critical for improving the orchestrator. Be specific about what the orchestrator got wrong or couldn't handle, so the workflow can be iterated on.
 
 `,
-		filepath.Join(opts.JournalDir, JournalFilename(opts.TaskTitle)),
+		filepath.Join(opts.JournalDir, journalFilename(opts.TaskTitle)),
 		"```markdown", opts.TaskID, "```",
 	)
 
@@ -339,9 +339,9 @@ func slugify(title string) string {
 	return s
 }
 
-// JournalFilename returns the standard journal filename for a task title,
+// journalFilename returns the standard journal filename for a task title,
 // e.g. "supervisor-journal-automation-lanes-modes-20060102-150405.md".
-func JournalFilename(taskTitle string) string {
+func journalFilename(taskTitle string) string {
 	ts := time.Now().Format("20060102-150405")
 	return fmt.Sprintf("supervisor-journal-%s-%s.md", slugify(taskTitle), ts)
 }

@@ -10,9 +10,9 @@ type FailureDiagnosis struct {
 	MaxAdditionalRetries int    `json:"max_additional_retries"`
 }
 
-// FeedbackIntegration is the supervisor's synthesis of user feedback
+// feedbackIntegration is the supervisor's synthesis of user feedback
 // (plan rejection or test failure) into actionable guidance.
-type FeedbackIntegration struct {
+type feedbackIntegration struct {
 	Summary           string   `json:"summary"`
 	KeyIssues         []string `json:"key_issues"`
 	SuggestedApproach string   `json:"suggested_approach"`
@@ -48,7 +48,7 @@ type PlanDepthReview struct {
 // failures on the integration worktree. It identifies where violations occurred
 // and recommends next steps.
 type DepthConstraintDiagnosis struct {
-	Violations      []DepthViolation `json:"violations"`
+	Violations      []depthViolation `json:"violations"`
 	RootCause       string           `json:"root_cause"`       // why depth constraints failed
 	Recommendation  string           `json:"recommendation"`   // what to do next
 	RejectionReason string           `json:"rejection_reason"` // for the task comment
@@ -66,8 +66,8 @@ type MissedAssumption struct {
 	Reasoning string `json:"reasoning"`
 }
 
-// DepthViolation describes a single depth constraint violation.
-type DepthViolation struct {
+// depthViolation describes a single depth constraint violation.
+type depthViolation struct {
 	Package     string `json:"package"`      // e.g., "internal/orchestrator"
 	Metric      string `json:"metric"`       // "export_ratio" or "pass_through_count"
 	ActualValue string `json:"actual_value"` // e.g., "0.25" or "7"

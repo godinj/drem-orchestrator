@@ -29,9 +29,9 @@ func New(claudeBin string, timeout time.Duration) *Supervisor {
 	}
 }
 
-// Evaluate runs `claude -p --dangerously-skip-permissions` with the given
+// evaluate runs `claude -p --dangerously-skip-permissions` with the given
 // prompt on stdin and returns the raw text response.
-func (s *Supervisor) Evaluate(ctx context.Context, prompt string) (string, error) {
+func (s *Supervisor) evaluate(ctx context.Context, prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
@@ -55,7 +55,7 @@ func (s *Supervisor) Evaluate(ctx context.Context, prompt string) (string, error
 // EvaluateJSON calls Evaluate, extracts the first JSON object from the
 // response, and unmarshals it into target.
 func (s *Supervisor) EvaluateJSON(ctx context.Context, prompt string, target any) error {
-	raw, err := s.Evaluate(ctx, prompt)
+	raw, err := s.evaluate(ctx, prompt)
 	if err != nil {
 		return err
 	}

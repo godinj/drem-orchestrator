@@ -155,7 +155,7 @@ func TestNew(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Evaluate()
+// 2. evaluate()
 // ---------------------------------------------------------------------------
 
 func TestEvaluate_Success(t *testing.T) {
@@ -163,12 +163,12 @@ func TestEvaluate_Success(t *testing.T) {
 	bin := writeFakeClaudeBin(t, dir, "hello", 0)
 
 	s := New(bin, 5*time.Second)
-	got, err := s.Evaluate(context.Background(), "test prompt")
+	got, err := s.evaluate(context.Background(), "test prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got != "hello" {
-		t.Errorf("Evaluate() = %q, want %q", got, "hello")
+		t.Errorf("evaluate() = %q, want %q", got, "hello")
 	}
 }
 
@@ -177,7 +177,7 @@ func TestEvaluate_NonZeroExit(t *testing.T) {
 	bin := writeFakeClaudeBin(t, dir, "oops", 1)
 
 	s := New(bin, 5*time.Second)
-	_, err := s.Evaluate(context.Background(), "test prompt")
+	_, err := s.evaluate(context.Background(), "test prompt")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -195,7 +195,7 @@ func TestEvaluate_Timeout(t *testing.T) {
 	}
 
 	s := New(bin, 100*time.Millisecond)
-	_, err := s.Evaluate(context.Background(), "test prompt")
+	_, err := s.evaluate(context.Background(), "test prompt")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -593,7 +593,7 @@ func TestOnDemandPrompt_DatabaseSection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. slugify and JournalFilename
+// 7. slugify and journalFilename
 // ---------------------------------------------------------------------------
 
 func TestSlugify(t *testing.T) {
@@ -620,7 +620,7 @@ func TestSlugify(t *testing.T) {
 }
 
 func TestJournalFilename(t *testing.T) {
-	filename := JournalFilename("Automation Lanes & Modes")
+	filename := journalFilename("Automation Lanes & Modes")
 
 	if !strings.HasPrefix(filename, "supervisor-journal-") {
 		t.Errorf("filename %q should start with 'supervisor-journal-'", filename)
@@ -860,7 +860,7 @@ func TestPlanDepthReview_FundamentallyShallow(t *testing.T) {
 
 func TestDepthConstraintDiagnosis_JSONRoundTrip(t *testing.T) {
 	original := DepthConstraintDiagnosis{
-		Violations: []DepthViolation{
+		Violations: []depthViolation{
 			{
 				Package:     "internal/orchestrator",
 				Metric:      "export_ratio",
@@ -925,7 +925,7 @@ func TestDepthConstraintDiagnosis_JSONRoundTrip(t *testing.T) {
 
 func TestDepthConstraintDiagnosis_EmptyViolations(t *testing.T) {
 	diagnosis := DepthConstraintDiagnosis{
-		Violations:      []DepthViolation{},
+		Violations:      []depthViolation{},
 		RootCause:       "false positive",
 		Recommendation:  "no action needed",
 		RejectionReason: "",
