@@ -23,6 +23,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/merge"
@@ -114,6 +115,8 @@ type Orchestrator struct {
 	merger          *merge.Orchestrator
 	memory          *memory.Manager
 	supervisor      *supervisor.Supervisor // nil disables LLM-powered decisions
+	bugreport       *bugreport.Service     // nil disables bug report ingestion
+	bugreportDir    string                 // path to .drem/bug-reports/ drop directory
 	testGate        TestGateConfig
 	projectID       uuid.UUID
 	events          chan<- Event
@@ -128,6 +131,7 @@ type Orchestrator struct {
 
 // New creates an Orchestrator. The supervisor parameter is optional — pass nil
 // to disable LLM-powered decision points and fall back to existing behavior.
+// The bugSvc parameter is optional — pass nil to disable bug report ingestion.
 func New(
 	db *gorm.DB,
 	dbPath string,
@@ -142,6 +146,8 @@ func New(
 	staleTimeout time.Duration,
 	contextWarnPct int,
 	contextStopPct int,
+	bugSvc *bugreport.Service,
+	bugDir string,
 	contextFixerPct ...int,
 ) *Orchestrator {
 	fixerPct := defaultContextFixerPct
@@ -156,6 +162,8 @@ func New(
 		merger:          merger,
 		memory:          mem,
 		supervisor:      sup,
+		bugreport:       bugSvc,
+		bugreportDir:    bugDir,
 		testGate:        DefaultTestGateConfig(),
 		projectID:       projectID,
 		events:          events,
@@ -193,9 +201,27 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	}
 }
 
+// ingestBugReports scans the bug report drop directory and inserts valid
+// reports into the database. Errors are logged and do not halt the tick.
+func (o *Orchestrator) ingestBugReports() {
+	if o.bugreport == nil {
+		return
+	}
+	n, err := o.bugreport.Ingest(o.bugreportDir, o.projectID)
+	if err != nil {
+		o.logger.Warn("bug report ingestion error", "error", err)
+	}
+	if n > 0 {
+		o.logger.Info("ingested bug reports", "count", n)
+	}
+}
+
 // doTick is a single iteration of the orchestrator loop.
 func (o *Orchestrator) doTick(ctx context.Context) {
 	_ = ctx // reserved for future use
+
+	// 0. Ingest any pending bug reports from the drop directory.
+	o.ingestBugReports()
 
 	// 1. Process BACKLOG tasks -> transition to PLANNING.
 	// Root tasks with unmet dependencies remain in BACKLOG (pending).
@@ -1088,7 +1114,6 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 		DBPath:        o.dbPath,
 		BareRepoPath:  o.worktree.BareRepoPath,
 		DefaultBranch: o.worktree.DefaultBranch,
-		JournalDir:    o.journalDir(),
 		Subtasks:      stInfos,
 	})
 
@@ -1123,21 +1148,6 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 		return "", fmt.Errorf("spawn supervisor: create session: %w", err)
 	}
 
-	o.logSupervisorAction(supervisor.JournalEntry{
-		Timestamp: time.Now(),
-		AgentName: "supervisor",
-		TaskID:    taskID.String(),
-		TaskTitle: task.Title,
-		Type:      "on_demand_session",
-		Summary:   "Interactive supervisor session spawned",
-		Details: map[string]string{
-			"Status":  string(task.Status),
-			"Branch":  task.WorktreeBranch,
-			"Session": sessionName,
-		},
-		Outcome: "Session started — supervisor will document findings in this journal",
-	})
-
 	o.logger.Info("supervisor session spawned", "task_id", taskID, "session", sessionName)
 	return sessionName, nil
 }
@@ -1145,20 +1155,6 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
-
-// journalDir returns the path to the supervisor journal directory.
-func (o *Orchestrator) journalDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "git", "drem-orchestrator.git", "journals")
-}
-
-// logSupervisorAction writes a supervisor intervention to the journal directory.
-// Errors are logged but do not propagate — journaling is best-effort.
-func (o *Orchestrator) logSupervisorAction(entry supervisor.JournalEntry) {
-	if err := supervisor.WriteJournalEntry(o.journalDir(), entry); err != nil {
-		o.logger.Warn("failed to write supervisor journal", "error", err)
-	}
-}
 
 // checkContextUsage inspects context window usage for all running agents and
 // takes action at configured thresholds.

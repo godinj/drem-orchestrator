@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
@@ -59,25 +58,7 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 					task.Context["build_affected_files"] = diagnosis.AffectedFiles
 					task.Context["build_can_auto_fix"] = diagnosis.CanAutoFix
 
-					canAutoFix := "no"
-					if diagnosis.CanAutoFix {
-						canAutoFix = "yes"
 					}
-					o.logSupervisorAction(supervisor.JournalEntry{
-						Timestamp: time.Now(),
-						AgentName: "orchestrator",
-						TaskID:    task.ID.String(),
-						TaskTitle: task.Title,
-						Type:      "build_failure",
-						Summary:   diagnosis.RootCause,
-						Details: map[string]string{
-							"Suggested Fix":  diagnosis.SuggestedFix,
-							"Affected Files": strings.Join(diagnosis.AffectedFiles, ", "),
-							"Can Auto-Fix":   canAutoFix,
-						},
-						Outcome: "Merge failed — build verification error",
-					})
-				}
 			} else {
 				// Merge conflict analysis.
 				var analysis supervisor.MergeConflictAnalysis
@@ -96,20 +77,6 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 					task.Context["merge_conflict_severity"] = analysis.Severity
 					task.Context["merge_conflict_strategy"] = analysis.ResolutionStrategy
 					task.Context["merge_conflict_hints"] = analysis.ResolutionHints
-
-					o.logSupervisorAction(supervisor.JournalEntry{
-						Timestamp: time.Now(),
-						AgentName: "orchestrator",
-						TaskID:    task.ID.String(),
-						TaskTitle: task.Title,
-						Type:      "merge_conflict",
-						Summary:   fmt.Sprintf("Severity: %s — Strategy: %s", analysis.Severity, analysis.ResolutionStrategy),
-						Details: map[string]string{
-							"Resolution Hints": analysis.ResolutionHints,
-							"Conflicts":        strings.Join(result.Conflicts, ", "),
-						},
-						Outcome: fmt.Sprintf("Merge failed — recommended strategy: %s", analysis.ResolutionStrategy),
-					})
 
 					if analysis.ResolutionStrategy == "spawn_agent" {
 						o.logger.Info("spawning resolver agent for merge conflict", "task_id", task.ID)

@@ -28,6 +28,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleCreateKeys(msg)
 	case FocusFeedback:
 		return m.handleFeedbackKeys(msg)
+	case FocusBugReports:
+		return m.handleBugReportKeys(msg)
 	case FocusAgents:
 		return m.handleAgentKeys(msg)
 	case FocusDetail:
@@ -121,6 +123,9 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.agents.autoFilter = !m.agents.autoFilter
 		m.agents.clampAgentCursor()
 		return m, nil
+	case "b":
+		m.focus = FocusBugReports
+		return m, m.loadBugReports()
 	}
 
 	return m, nil
@@ -272,13 +277,33 @@ func (m Model) handleCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleFeedbackKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
+		wasBugReport := m.feedbackAction == feedbackBugReportComment
 		m.feedback.Hide()
 		m.feedbackAction = feedbackNone
-		m.focus = FocusBoard
+		if wasBugReport {
+			m.focus = FocusBugReports
+		} else {
+			m.focus = FocusBoard
+		}
 		return m, nil
 
 	case "enter":
 		body := m.feedback.Value()
+
+		// Bug report comments use a different model (not board.Selected).
+		if m.feedbackAction == feedbackBugReportComment {
+			bugReport := m.bugreports.Selected()
+			if bugReport != nil && m.bugreportSvc != nil && body != "" {
+				if err := m.bugreportSvc.AddComment(bugReport.ID, "user", body); err != nil {
+					m.err = err
+				}
+			}
+			m.feedback.Hide()
+			m.feedbackAction = feedbackNone
+			m.focus = FocusBugReports
+			return m, m.loadBugReports()
+		}
+
 		selected := m.board.Selected()
 		if selected == nil || body == "" {
 			m.feedback.Hide()

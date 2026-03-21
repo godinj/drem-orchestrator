@@ -65,6 +65,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.TaskEvent{},
 		&model.Memory{},
 		&model.TaskComment{},
+		&model.BugReport{},
+		&model.BugReportComment{},
 	)
 }
 

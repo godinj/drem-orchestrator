@@ -77,6 +77,20 @@ func (m Model) contextActions() []helpBinding {
 			{"enter", "submit feedback"},
 			{"esc", "cancel"},
 		}, global...)
+
+	case FocusBugReports:
+		bindings := []helpBinding{
+			{"j/k", "navigate"},
+			{"enter", "toggle detail"},
+			{"a", "acknowledge"},
+			{"p", "promote to task"},
+			{"D", "dismiss"},
+			{"x", "delete (with confirm)"},
+			{"c", "add comment"},
+			{"/", "toggle filter"},
+			{"b/esc", "back to dashboard"},
+		}
+		return append(bindings, global...)
 	}
 
 	return global
@@ -99,6 +113,7 @@ func (m Model) boardContextBindings() []helpBinding {
 	// Always-available board actions.
 	bindings = append(bindings,
 		helpBinding{"n", "new task"},
+		helpBinding{"b", "bug reports"},
 		helpBinding{"A", "toggle archived agents"},
 		helpBinding{"F", "toggle task filter"},
 		helpBinding{"C", "clean dead sessions"},
@@ -256,6 +271,8 @@ func (m Model) renderHelpOverlay() string {
 		title = "Help — New Task"
 	case FocusFeedback:
 		title = "Help — Feedback"
+	case FocusBugReports:
+		title = "Help — Bug Reports"
 	}
 
 	titleRendered := titleStyle.Render(title)

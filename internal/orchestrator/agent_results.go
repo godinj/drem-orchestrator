@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/constraints"
@@ -516,42 +515,12 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 					maxRetries = retries + diagnosis.MaxAdditionalRetries
 				}
 				if retries >= maxRetries {
-					o.logSupervisorAction(supervisor.JournalEntry{
-						Timestamp: time.Now(),
-						AgentName: ag.Name,
-						TaskID:    task.ID.String(),
-						TaskTitle: task.Title,
-						Type:      "failure_diagnosis",
-						Summary:   diagnosis.RootCause,
-						Details: map[string]string{
-							"Category":   diagnosis.Category,
-							"Strategy":   diagnosis.RetryStrategy,
-							"Agent Type": string(ag.AgentType),
-						},
-						Outcome: fmt.Sprintf("Failed after %d retries — max retries exceeded", retries),
-					})
 					if err := o.failTask(task, fmt.Sprintf("agent failed after %d retries (supervisor: %s)", retries, diagnosis.RootCause)); err != nil {
 						return err
 					}
 					o.emit("agent_failed", map[string]any{"task_id": task.ID, "agent_id": ag.ID, "diagnosis": diagnosis.RootCause})
 					return nil
 				}
-
-				o.logSupervisorAction(supervisor.JournalEntry{
-					Timestamp: time.Now(),
-					AgentName: ag.Name,
-					TaskID:    task.ID.String(),
-					TaskTitle: task.Title,
-					Type:      "failure_diagnosis",
-					Summary:   diagnosis.RootCause,
-					Details: map[string]string{
-						"Category":          diagnosis.Category,
-						"Strategy":          diagnosis.RetryStrategy,
-						"Prompt Adjustment": diagnosis.PromptAdjustment,
-						"Agent Type":        string(ag.AgentType),
-					},
-					Outcome: fmt.Sprintf("Retrying (attempt %d)", retries),
-				})
 
 				// For planners, stay in PLANNING. For coders/researchers,
 				// stay in current parent status (IN_PROGRESS) to be rescheduled.
@@ -568,19 +537,6 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 				return nil
 			}
 
-			o.logSupervisorAction(supervisor.JournalEntry{
-				Timestamp: time.Now(),
-				AgentName: ag.Name,
-				TaskID:    task.ID.String(),
-				TaskTitle: task.Title,
-				Type:      "failure_diagnosis",
-				Summary:   diagnosis.RootCause,
-				Details: map[string]string{
-					"Category":   diagnosis.Category,
-					"Agent Type": string(ag.AgentType),
-				},
-				Outcome: "No retry recommended — falling through to default behavior",
-			})
 		}
 	}
 
@@ -688,19 +644,6 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 
 			// Fast-track if supervisor determines work is already complete.
 			if isWorkAlreadyCompleteCategory(diagnosis.Category) {
-				o.logSupervisorAction(supervisor.JournalEntry{
-					Timestamp: time.Now(),
-					AgentName: ag.Name,
-					TaskID:    task.ID.String(),
-					TaskTitle: task.Title,
-					Type:      "empty_work_diagnosis",
-					Summary:   diagnosis.RootCause,
-					Details: map[string]string{
-						"Category":   diagnosis.Category,
-						"Agent Type": string(ag.AgentType),
-					},
-					Outcome: "Fast-tracked to DONE — work already complete",
-				})
 				task.Context["done_no_work"] = true
 				// Fast-track to DONE.
 				transitions := []model.TaskStatus{
@@ -730,19 +673,6 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 			}
 
 			if diagnosis.ShouldRetry && retries < MaxEmptyWorkRetries {
-				o.logSupervisorAction(supervisor.JournalEntry{
-					Timestamp: time.Now(),
-					AgentName: ag.Name,
-					TaskID:    task.ID.String(),
-					TaskTitle: task.Title,
-					Type:      "empty_work_diagnosis",
-					Summary:   diagnosis.RootCause,
-					Details: map[string]string{
-						"Prompt Adjustment": diagnosis.PromptAdjustment,
-						"Agent Type":        string(ag.AgentType),
-					},
-					Outcome: fmt.Sprintf("Retrying (attempt %d of %d)", retries, MaxEmptyWorkRetries),
-				})
 				task.AssignedAgentID = nil
 				if err := o.db.Save(task).Error; err != nil {
 					return fmt.Errorf("on agent empty work: save task for retry: %w", err)
@@ -754,18 +684,6 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 				return nil
 			}
 
-			o.logSupervisorAction(supervisor.JournalEntry{
-				Timestamp: time.Now(),
-				AgentName: ag.Name,
-				TaskID:    task.ID.String(),
-				TaskTitle: task.Title,
-				Type:      "empty_work_diagnosis",
-				Summary:   diagnosis.RootCause,
-				Details: map[string]string{
-					"Agent Type": string(ag.AgentType),
-				},
-				Outcome: "No retry — will fail or fall through",
-			})
 		}
 	}
 

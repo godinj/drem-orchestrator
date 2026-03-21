@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -77,20 +76,6 @@ func (o *Orchestrator) checkPlanDepthGate(task *model.Task, scores map[string]an
 		}
 	}
 
-	o.logSupervisorAction(supervisor.JournalEntry{
-		Timestamp: time.Now(),
-		AgentName: "orchestrator",
-		TaskID:    task.ID.String(),
-		TaskTitle: task.Title,
-		Type:      "depth_review",
-		Summary:   fmt.Sprintf("Plan depth score %.0f%% below threshold %.0f%%", depthScore*100, depthScoreThreshold*100),
-		Details: map[string]string{
-			"Assessment":       review.Assessment,
-			"Rejection Reason": review.RejectionReason,
-		},
-		Outcome: "Depth review completed, plan proceeds to human review",
-	})
-
 	o.logger.Info("plan depth review completed",
 		"task_id", task.ID, "depth_score", depthScore, "assessment", review.Assessment)
 }
@@ -159,20 +144,6 @@ func (o *Orchestrator) checkDepthConstraintFailures(task *model.Task, report *co
 			o.logger.Warn("failed to create depth diagnosis comment", "task_id", task.ID, "error", err)
 		}
 	}
-
-	o.logSupervisorAction(supervisor.JournalEntry{
-		Timestamp: time.Now(),
-		AgentName: "orchestrator",
-		TaskID:    task.ID.String(),
-		TaskTitle: task.Title,
-		Type:      "depth_constraint_diagnosis",
-		Summary:   diagnosis.RejectionReason,
-		Details: map[string]string{
-			"Root Cause":     diagnosis.RootCause,
-			"Recommendation": diagnosis.Recommendation,
-		},
-		Outcome: "Depth constraint diagnosis completed",
-	})
 
 	o.logger.Info("depth constraint diagnosis completed",
 		"task_id", task.ID, "rejection_reason", diagnosis.RejectionReason)

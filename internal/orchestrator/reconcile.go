@@ -674,36 +674,8 @@ func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task
 						"task_id", task.ID, "error", fixerErr)
 				}
 
-				o.logSupervisorAction(supervisor.JournalEntry{
-					Timestamp: time.Now(),
-					AgentName: ag.Name,
-					TaskID:    task.ID.String(),
-					TaskTitle: task.Title,
-					Type:      "merge_conflict",
-					Summary:   fmt.Sprintf("Severity: %s — Strategy: %s", analysis.Severity, analysis.ResolutionStrategy),
-					Details: map[string]string{
-						"Resolution Hints": analysis.ResolutionHints,
-						"Conflicts":        strings.Join(result.Conflicts, ", "),
-					},
-					Outcome: "Spawning resolver agent for agent-to-feature merge conflict",
-				})
 				return nil
 			}
-
-			// Non-spawn strategy — log and fall through to default.
-			o.logSupervisorAction(supervisor.JournalEntry{
-				Timestamp: time.Now(),
-				AgentName: ag.Name,
-				TaskID:    task.ID.String(),
-				TaskTitle: task.Title,
-				Type:      "merge_conflict",
-				Summary:   fmt.Sprintf("Severity: %s — Strategy: %s", analysis.Severity, analysis.ResolutionStrategy),
-				Details: map[string]string{
-					"Resolution Hints": analysis.ResolutionHints,
-					"Conflicts":        strings.Join(result.Conflicts, ", "),
-				},
-				Outcome: fmt.Sprintf("Merge failed — recommended strategy: %s", analysis.ResolutionStrategy),
-			})
 		}
 	}
 

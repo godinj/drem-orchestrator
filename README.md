@@ -147,9 +147,138 @@ Lists all agents with their type, status, current task, and last heartbeat.
 | `A` | Toggle archived agents |
 | `F` | Toggle task filter |
 | `C` | Clean up dead tmux sessions |
+| `b` | Open bug report screen |
 | `?` | Toggle context-aware help overlay |
 
 > **Exiting:** The TUI does not have a quit key. To exit, kill the tmux session (e.g. `tmux kill-session`).
+
+## Bug Reports
+
+Bug reports are structured problem reports filed by agents during their work. When an agent encounters a broken build, flaky test, unclear requirement, constraint violation, or other issue, it writes a JSON file that the orchestrator ingests and surfaces in a dedicated TUI screen. Human operators triage these reports and optionally promote them into tasks.
+
+### Filing Bug Reports
+
+Agents file bug reports by writing a JSON file to `.drem/bug-reports/<uuid>.json`. The orchestrator scans this directory every tick (default 5s), validates each file, inserts valid reports into the database, and deletes the source file. Invalid files are moved to `.drem/bug-reports/failed/` for debugging.
+
+**JSON schema:**
+
+```json
+{
+  "title": "Short descriptive title",
+  "description": "What went wrong — be specific",
+  "category": "tooling|merge_conflict|requirements|constraint_violation|upstream_code|test_failure|environment|other",
+  "severity": "blocking|degraded|informational",
+  "reproduction_context": "File paths, commands run, error output — enough to reproduce",
+  "agent_id": "<agent UUID>",
+  "task_id": "<task UUID>"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `title` | Yes | Short descriptive title for the problem |
+| `description` | Yes | What went wrong — be specific about symptoms and impact |
+| `category` | Yes | Problem classification (see values below) |
+| `severity` | Yes | Impact level (see values below) |
+| `reproduction_context` | No | File paths, commands, error output — enough to reproduce |
+| `agent_id` | No | UUID of the filing agent (read from `.claude/agent-metadata.json`) |
+| `task_id` | No | UUID of the task the agent was working on |
+
+**Category values:**
+
+| Value | Meaning |
+|-------|---------|
+| `tooling` | Build tools, CLI tools, or infrastructure problems |
+| `merge_conflict` | Git merge conflicts during agent work |
+| `requirements` | Unclear, contradictory, or incomplete requirements |
+| `constraint_violation` | Quality constraint failures the agent cannot resolve |
+| `upstream_code` | Bugs or issues in existing code the agent depends on |
+| `test_failure` | Flaky or unexpectedly failing tests |
+| `environment` | Environment setup, dependency, or configuration problems |
+| `other` | Anything not covered by the above categories |
+
+**Severity values:**
+
+| Value | Meaning |
+|-------|---------|
+| `blocking` | Agent cannot continue its work |
+| `degraded` | Agent worked around the problem but it remains |
+| `informational` | Observed issue with no immediate impact |
+
+**Example:**
+
+```json
+{
+  "title": "go vet fails on internal/merge package",
+  "description": "Running go vet ./internal/merge/... reports 'unreachable code' in merge.go line 245. The dead code was introduced by a recent refactor. Agent worked around it by skipping the vet step but the issue should be fixed.",
+  "category": "tooling",
+  "severity": "degraded",
+  "reproduction_context": "cd /path/to/worktree && go vet ./internal/merge/...\n\nOutput:\ninternal/merge/merge.go:245:2: unreachable code",
+  "agent_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "task_id": "98765432-dcba-0987-6543-210fedcba987"
+}
+```
+
+### Bug Report TUI Screen
+
+Press `b` from the main dashboard to open the bug report screen. The screen shows a scrollable list of reports with columns for severity icon, category tag, title, status, and relative timestamp.
+
+**Severity icons in the list:**
+- `!` (red, bold) -- blocking
+- `~` (yellow) -- degraded
+- `·` (gray) -- informational
+
+**Keybindings:**
+
+| Key | Action |
+|-----|--------|
+| `b` | Toggle bug report screen (return to dashboard) |
+| `j/k` or `Up/Down` | Navigate list (or scroll detail pane when open) |
+| `Enter` | Toggle detail view for selected report |
+| `a` | Acknowledge report |
+| `p` | Promote to task (opens `$EDITOR`) |
+| `D` | Dismiss report |
+| `x` | Delete report (prompts `y/n` confirmation) |
+| `c` | Add comment (opens feedback overlay) |
+| `/` | Toggle filter mode |
+| `Esc` | Return to dashboard |
+
+### Bug Report Lifecycle
+
+```
+open ──→ acknowledged ──→ promoted
+  │          │
+  │          └──→ dismissed
+  │
+  ├──→ promoted
+  └──→ dismissed
+```
+
+| Status | Meaning |
+|--------|---------|
+| `open` | Newly filed, not yet reviewed |
+| `acknowledged` | Operator has seen the report but is not taking immediate action |
+| `promoted` | Converted into a task (linked via `PromotedTaskID`) |
+| `dismissed` | Hidden from the default view but retained in the database |
+
+Hard-delete (`x` with confirmation) permanently removes the report and its comments from the database. This is separate from dismissal.
+
+**Promotion workflow:** Press `p` on a report to start promotion. A temporary file is created pre-populated with the report's title (first line) and description (remaining lines). `$EDITOR` opens for refinement. On save, a new task is created in `backlog` status with the edited title and description. The bug report transitions to `promoted` status and stores a reference to the created task.
+
+### Filtering
+
+Press `/` to enter filter mode. Use `Tab` to cycle between filter dimensions and `j/k` to cycle values within a dimension. Press `Enter` to apply or `Esc` to cancel.
+
+**Filter dimensions:**
+
+| Dimension | Values |
+|-----------|--------|
+| Category | `all`, `tooling`, `merge_conflict`, `requirements`, `constraint_violation`, `upstream_code`, `test_failure`, `environment`, `other` |
+| Severity | `all`, `blocking`, `degraded`, `informational` |
+| Status | `all`, `open`, `acknowledged`, `promoted`, `dismissed` |
+| Dismissed | `yes` / `no` (default `no` -- dismissed reports are hidden) |
+
+Active filters are shown as badges in the header (e.g., `[cat:tooling sev:blocking]`).
 
 ## Task Lifecycle
 
@@ -300,11 +429,12 @@ More details.
 ```
 cmd/drem/              Entry point, config parsing, tmux session bootstrap
 internal/
-├── model/             GORM models (Task, Agent, Project, Memory, TaskEvent, TaskComment)
+├── model/             GORM models (Task, Agent, Project, Memory, TaskEvent, TaskComment, BugReport)
 ├── db/                SQLite init, WAL mode, auto-migrations
 ├── state/             Task status state machine with validated transitions
 ├── orchestrator/      Main tick loop, task scheduling, dependency resolution
 ├── agent/             Agent spawning, heartbeat monitoring, completion tracking
+├── bugreport/         Bug report ingestion, lifecycle management, and promotion
 ├── tmux/              tmux session/window management wrapper
 ├── worktree/          Git worktree lifecycle (create, merge, cleanup)
 ├── merge/             Rebase-before-merge orchestration, conflict detection

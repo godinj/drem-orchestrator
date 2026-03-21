@@ -20,6 +20,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/merge"
@@ -171,8 +172,18 @@ func main() {
 		sup = supervisor.New(cfg.ClaudeBin, cfg.SupervisorTimeout)
 	}
 
+	// Create bug report drop directory and service.
+	bugReportDir := filepath.Join(cfg.BareRepoPath, ".drem", "bug-reports")
+	if err := os.MkdirAll(bugReportDir, 0o755); err != nil {
+		log.Fatalf("create bug report directory: %v", err)
+	}
+	bugReportSvc := bugreport.New(database)
+
 	events := make(chan orchestrator.Event, 100)
-	orch := orchestrator.New(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, events, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, cfg.ContextFixerPercent)
+	orch := orchestrator.New(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, events, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.ContextFixerPercent)
+
+	// Init bug report service.
+	bugreportSvc := bugreport.New(database)
 
 	// Start orchestrator in background.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -180,7 +191,7 @@ func main() {
 
 	// Start TUI (blocks until quit).
 	p := tea.NewProgram(
-		tui.NewModel(database, orch, tmux, project.ID, events, cfg.LogPath),
+		tui.NewModel(database, orch, tmux, project.ID, events, cfg.LogPath, bugreportSvc),
 		tea.WithAltScreen(),
 	)
 	if _, err := p.Run(); err != nil {

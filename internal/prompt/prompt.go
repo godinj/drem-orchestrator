@@ -136,6 +136,9 @@ func Generate(opts Opts) string {
 		sections = append(sections, defaultInstructions()...)
 	}
 
+	// 5b. Bug Report Filing — applies to all agent types
+	sections = append(sections, bugReportInstructions()...)
+
 	// 6. Prior Context — Agent memories
 	if len(opts.Memories) > 0 {
 		sections = append(sections, "## Prior Context", "")
@@ -615,6 +618,45 @@ func researcherInstructions() []string {
 		"2. Detailed analysis",
 		"3. Recommendations",
 		"4. References to relevant files/code",
+		"",
+	}
+}
+
+// bugReportInstructions returns prompt sections instructing agents how to
+// file structured bug reports. This section is included for all agent types.
+func bugReportInstructions() []string {
+	return []string{
+		"## Bug Report Filing",
+		"",
+		"If you encounter any of the following during your work, file a bug report:",
+		"- Broken builds or failing dependencies",
+		"- Flaky or unexpectedly failing tests",
+		"- Unclear or contradictory requirements",
+		"- Constraint violations you cannot resolve",
+		"- Upstream code issues",
+		"- Environment problems",
+		"",
+		"To file a bug report, write a JSON file to `.drem/bug-reports/<uuid>.json` with this schema:",
+		"",
+		"```json",
+		"{",
+		`  "title": "Short descriptive title",`,
+		`  "description": "What went wrong — be specific",`,
+		`  "category": "tooling|merge_conflict|requirements|constraint_violation|upstream_code|test_failure|environment|other",`,
+		`  "severity": "blocking|degraded|informational",`,
+		`  "reproduction_context": "File paths, commands run, error output — enough to reproduce",`,
+		`  "agent_id": "<your agent ID from the metadata file>",`,
+		`  "task_id": "<your current task ID>"`,
+		"}",
+		"```",
+		"",
+		"Severity guide:",
+		"- blocking: You cannot continue your work",
+		"- degraded: You worked around it but the problem remains",
+		"- informational: You observed it but it has no immediate impact",
+		"",
+		"File the report and continue your work — do not stop to spawn a new agent.",
+		"Read your agent ID from `.claude/agent-metadata.json` in your worktree.",
 		"",
 	}
 }

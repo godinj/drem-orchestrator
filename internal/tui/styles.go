@@ -64,6 +64,9 @@ var (
 	statusBadge   = lipgloss.NewStyle().Padding(0, 1)
 	panelStyle    = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 	helpStyle     = lipgloss.NewStyle().Foreground(colorSecondary)
+
+	// Bug report screen styles.
+	bugCategoryStyle = lipgloss.NewStyle().Foreground(colorInfo)
 )
 
 // StatusBadge renders a colored status badge for a task status.

@@ -11,7 +11,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
@@ -1201,7 +1200,7 @@ func TestDeleteComment_NotFound(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Emit / logSupervisorAction coverage (internal helpers)
+// Emit coverage (internal helpers)
 // ---------------------------------------------------------------------------
 
 func TestEmit(t *testing.T) {
@@ -2430,28 +2429,6 @@ func TestProcessTestingReady_NoWorktree(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// logSupervisorAction test
-// ---------------------------------------------------------------------------
-
-func TestLogSupervisorAction(t *testing.T) {
-	db := testutil.NewTestDB(t)
-	dir := t.TempDir()
-	o := &Orchestrator{
-		db:     db,
-		dbPath: dir + "/test.db",
-		logger: slog.Default().With("component", "test"),
-	}
-
-	// Should not panic — writes to journal directory.
-	o.logSupervisorAction(supervisor.JournalEntry{
-		Timestamp: time.Now(),
-		AgentName: "test-agent",
-		Type:      "test_action",
-		Summary:   "test summary",
-	})
-}
-
-// ---------------------------------------------------------------------------
 // processBacklog with PlanFeedback and no old subtasks
 // ---------------------------------------------------------------------------
 
@@ -2788,7 +2765,7 @@ func TestNew(t *testing.T) {
 	projectID := uuid.New()
 
 	o := New(db, "/tmp/test.db", nil, wt, nil, nil, nil, projectID, events,
-		time.Second, 30*time.Minute, 75, 90)
+		time.Second, 30*time.Minute, 75, 90, nil, "")
 	if o == nil {
 		t.Fatal("expected non-nil orchestrator")
 	}
@@ -2798,7 +2775,7 @@ func TestNew(t *testing.T) {
 
 	// With custom fixer pct.
 	o2 := New(db, "/tmp/test.db", nil, wt, nil, nil, nil, projectID, events,
-		time.Second, 30*time.Minute, 75, 90, 95)
+		time.Second, 30*time.Minute, 75, 90, nil, "", 95)
 	if o2.contextFixerPct != 95 {
 		t.Errorf("expected fixer pct 95, got %d", o2.contextFixerPct)
 	}

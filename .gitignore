@@ -26,6 +26,7 @@ ui/dist/
 # UV
 uv.lock
 .claude/
+.drem/bug-reports/
 
 # Runtime / build
 drem

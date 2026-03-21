@@ -901,3 +901,37 @@ func TestReadBuildCommands(t *testing.T) {
 		})
 	}
 }
+
+// ── 13. Bug report instructions for all agent types ────────────────────────
+
+func TestGenerate_BugReportInstructionsAllAgentTypes(t *testing.T) {
+	agentTypes := []struct {
+		name      string
+		agentType model.AgentType
+	}{
+		{"planner", model.AgentPlanner},
+		{"coder", model.AgentCoder},
+		{"researcher", model.AgentResearcher},
+		{"reviewer", model.AgentReviewer},
+		{"fixer", model.AgentFixer},
+	}
+
+	for _, at := range agentTypes {
+		t.Run(at.name, func(t *testing.T) {
+			opts := minimalOpts()
+			opts.AgentType = at.agentType
+
+			output := Generate(opts)
+
+			if !strings.Contains(output, "Bug Report Filing") {
+				t.Errorf("Generate() for %s agent missing 'Bug Report Filing' section", at.name)
+			}
+			requiredFields := []string{"category", "severity", "reproduction_context"}
+			for _, field := range requiredFields {
+				if !strings.Contains(output, field) {
+					t.Errorf("Generate() for %s agent missing JSON schema field %q", at.name, field)
+				}
+			}
+		})
+	}
+}

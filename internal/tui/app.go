@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
@@ -30,6 +31,8 @@ const (
 	FocusCreate
 	// FocusFeedback means the feedback dialog is focused.
 	FocusFeedback
+	// FocusBugReports means the bug report screen is focused.
+	FocusBugReports
 )
 
 // EventMsg wraps an orchestrator Event as a tea.Msg.
@@ -104,6 +107,7 @@ const (
 	feedbackAddComment                         // add comment to task
 	feedbackTestReviewReject                   // reject test review with feedback
 	feedbackClarificationAnswer                // answer a clarification question
+	feedbackBugReportComment                   // add comment to bug report
 )
 
 // Model is the root Bubble Tea model that composes all TUI sub-models.
@@ -114,12 +118,14 @@ type Model struct {
 	projectID uuid.UUID
 	events    <-chan orchestrator.Event
 
-	board    BoardModel
-	agents   AgentsModel
-	detail   DetailModel
-	create   CreateModel
-	feedback FeedbackModel
+	board      BoardModel
+	agents     AgentsModel
+	detail     DetailModel
+	create     CreateModel
+	feedback   FeedbackModel
+	bugreports BugReportsModel
 
+	bugreportSvc   *bugreport.Service
 	logPath        string
 	focus          Focus
 	feedbackAction feedbackAction
@@ -138,21 +144,24 @@ func NewModel(
 	projectID uuid.UUID,
 	events <-chan orchestrator.Event,
 	logPath string,
+	bugreportSvc *bugreport.Service,
 ) Model {
 	return Model{
-		db:        db,
-		orch:      orch,
-		tmux:      tmux,
-		projectID: projectID,
-		events:    events,
-		logPath:   logPath,
-		board:     NewBoardModel(),
-		agents:    NewAgentsModel(),
-		detail:    NewDetailModel(),
-		create:    NewCreateModel(),
-		feedback:  NewFeedbackModel("Feedback"),
-		focus:     FocusBoard,
-		keys:      defaultKeyMap(),
+		db:           db,
+		orch:         orch,
+		tmux:         tmux,
+		projectID:    projectID,
+		events:       events,
+		logPath:      logPath,
+		bugreportSvc: bugreportSvc,
+		board:        NewBoardModel(),
+		agents:       NewAgentsModel(),
+		detail:       NewDetailModel(),
+		create:       NewCreateModel(),
+		feedback:     NewFeedbackModel("Feedback"),
+		bugreports:   NewBugReportsModel(db, bugreportSvc, projectID),
+		focus:        FocusBoard,
+		keys:         defaultKeyMap(),
 	}
 }
 
@@ -275,6 +284,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.refreshData()
 
+	case bugReportsLoadedMsg:
+		m.bugreports.reports = msg.reports
+		// Clamp cursor to the new filtered list size.
+		filtered := m.bugreports.filteredReports()
+		if m.bugreports.cursor >= len(filtered) {
+			m.bugreports.cursor = len(filtered) - 1
+		}
+		if m.bugreports.cursor < 0 {
+			m.bugreports.cursor = 0
+		}
+		m.bugreports.adjustScroll()
+		return m, nil
+
+	case bugReportActionMsg:
+		if msg.err != nil {
+			m.err = msg.err
+		}
+		// Refresh the bug report list after an action.
+		return m, m.loadBugReports()
+
+	case bugReportDetailLoadedMsg:
+		m.bugreports.selectedReport = msg.report
+		m.bugreports.comments = msg.comments
+		return m, nil
+
+	case editorFinishedMsg:
+		return m.handleEditorFinished(msg)
+
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	}
@@ -299,6 +336,11 @@ func (m Model) View() string {
 	}
 	if m.focus == FocusFeedback {
 		return m.renderOverlay(m.feedback.View())
+	}
+
+	// Bug reports screen replaces the main dashboard.
+	if m.focus == FocusBugReports {
+		return m.renderBugReportsScreen()
 	}
 
 	// Title bar.
@@ -510,6 +552,30 @@ func (m *Model) toggleBoardCollapse() {
 		}
 	}
 	m.board.trackSelected()
+}
+
+// renderBugReportsScreen renders the full-screen bug report view.
+func (m Model) renderBugReportsScreen() string {
+	// Update bug report panel sizes.
+	innerWidth := m.width - 4 // account for border + padding
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+	m.bugreports.width = innerWidth
+	m.bugreports.height = m.height - 4 // account for border
+
+	content := m.bugreports.View()
+
+	// Error line.
+	if m.err != nil {
+		content += "\n" + lipglossRender(colorDanger, fmt.Sprintf("Error: %v", m.err))
+	}
+
+	return panelStyle.
+		Width(m.width - 2).
+		Height(m.height - 2).
+		BorderForeground(colorPrimary).
+		Render(content)
 }
 
 // listenForEvents returns a Cmd that blocks on the events channel and wraps
