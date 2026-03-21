@@ -8,24 +8,26 @@ import "fmt"
 type TaskStatus string
 
 const (
-	StatusBacklog      TaskStatus = "backlog"
-	StatusPlanning     TaskStatus = "planning"
-	StatusPlanReview   TaskStatus = "plan_review"
-	StatusTestWriting  TaskStatus = "test_writing"
-	StatusTestReview   TaskStatus = "test_review"
-	StatusInProgress   TaskStatus = "in_progress"
-	StatusTestingReady TaskStatus = "testing_ready"
-	StatusMerging      TaskStatus = "merging"
-	StatusPaused       TaskStatus = "paused"
-	StatusDone         TaskStatus = "done"
-	StatusFailed       TaskStatus = "failed"
-	StatusRejected     TaskStatus = "rejected"
+	StatusBacklog            TaskStatus = "backlog"
+	StatusPlanning           TaskStatus = "planning"
+	StatusNeedsClarification TaskStatus = "needs_clarification"
+	StatusPlanReview         TaskStatus = "plan_review"
+	StatusTestWriting        TaskStatus = "test_writing"
+	StatusTestReview         TaskStatus = "test_review"
+	StatusInProgress         TaskStatus = "in_progress"
+	StatusTestingReady       TaskStatus = "testing_ready"
+	StatusMerging            TaskStatus = "merging"
+	StatusPaused             TaskStatus = "paused"
+	StatusDone               TaskStatus = "done"
+	StatusFailed             TaskStatus = "failed"
+	StatusRejected           TaskStatus = "rejected"
 )
 
 // allTaskStatuses lists every valid TaskStatus value for parsing.
 var allTaskStatuses = []TaskStatus{
 	StatusBacklog,
 	StatusPlanning,
+	StatusNeedsClarification,
 	StatusPlanReview,
 	StatusTestWriting,
 	StatusTestReview,
@@ -58,7 +60,7 @@ func (s TaskStatus) IsActionable() bool {
 // the task can proceed.
 func (s TaskStatus) IsHumanGate() bool {
 	switch s {
-	case StatusPlanReview, StatusTestReview, StatusTestingReady:
+	case StatusPlanReview, StatusTestReview, StatusTestingReady, StatusNeedsClarification:
 		return true
 	default:
 		return false

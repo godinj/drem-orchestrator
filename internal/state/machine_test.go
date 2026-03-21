@@ -46,6 +46,14 @@ func TestValidateTransition(t *testing.T) {
 		{"rejected to in_progress is INVALID", model.StatusRejected, model.StatusInProgress, true},
 		{"rejected to test_writing is INVALID", model.StatusRejected, model.StatusTestWriting, true},
 
+		// NEEDS_CLARIFICATION transitions
+		{"planning to needs_clarification is valid", model.StatusPlanning, model.StatusNeedsClarification, false},
+		{"needs_clarification to planning is valid (replan)", model.StatusNeedsClarification, model.StatusPlanning, false},
+		{"needs_clarification to plan_review is valid (skip/done)", model.StatusNeedsClarification, model.StatusPlanReview, false},
+		{"needs_clarification to in_progress is INVALID", model.StatusNeedsClarification, model.StatusInProgress, true},
+		{"needs_clarification to failed is INVALID", model.StatusNeedsClarification, model.StatusFailed, true},
+		{"paused to needs_clarification is valid", model.StatusPaused, model.StatusNeedsClarification, false},
+
 		// Existing transitions that should still work
 		{"backlog to planning", model.StatusBacklog, model.StatusPlanning, false},
 		{"backlog to paused", model.StatusBacklog, model.StatusPaused, false},
@@ -117,6 +125,28 @@ func TestTransitionTask_TestWritingToTestReview(t *testing.T) {
 	}
 	if event.ID == uuid.Nil {
 		t.Error("event.ID should not be nil")
+	}
+}
+
+func TestNeedsClarification_IsHumanGate(t *testing.T) {
+	if !model.StatusNeedsClarification.IsHumanGate() {
+		t.Error("StatusNeedsClarification.IsHumanGate() = false, want true")
+	}
+}
+
+func TestNeedsClarification_IsNotActionable(t *testing.T) {
+	if model.StatusNeedsClarification.IsActionable() {
+		t.Error("StatusNeedsClarification.IsActionable() = true, want false")
+	}
+}
+
+func TestParseTaskStatus_NeedsClarification(t *testing.T) {
+	status, err := model.ParseTaskStatus("needs_clarification")
+	if err != nil {
+		t.Fatalf("ParseTaskStatus(\"needs_clarification\") returned error: %v", err)
+	}
+	if status != model.StatusNeedsClarification {
+		t.Errorf("ParseTaskStatus(\"needs_clarification\") = %q, want %q", status, model.StatusNeedsClarification)
 	}
 }
 
