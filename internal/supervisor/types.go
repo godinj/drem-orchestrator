@@ -75,25 +75,3 @@ type DepthViolation struct {
 	Suggestion  string `json:"suggestion"`   // specific fix suggestion
 }
 
-// AssumptionCrossCheck is the supervisor's cross-check of planner assumptions
-// against the task description. It identifies missed or incorrect assumptions.
-type AssumptionCrossCheck struct {
-	MissedAssumptions    []MissedAssumption    `json:"missed_assumptions"`
-	IncorrectAssumptions []IncorrectAssumption `json:"incorrect_assumptions"`
-	OverallRisk          string                `json:"overall_risk"` // "low", "medium", "high"
-}
-
-// MissedAssumption describes an assumption the planner made implicitly
-// but did not surface in the plan.
-type MissedAssumption struct {
-	Text     string `json:"text"`
-	Risk     string `json:"risk"`     // "low", "medium", "high"
-	Question string `json:"question"` // question to ask the user
-}
-
-// IncorrectAssumption describes an assumption that appears wrong given
-// the task description.
-type IncorrectAssumption struct {
-	AssumptionID string `json:"assumption_id"`
-	Reason       string `json:"reason"`
-}
