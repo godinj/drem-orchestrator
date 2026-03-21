@@ -15,6 +15,103 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
 
 ---
 
+## Package Map
+
+### `cmd/` — CLI entry points
+
+- `cmd/drem/` — Main orchestrator CLI: project init, task import, agent lifecycle, TUI dashboard
+- `cmd/check-constraints/` — CLI wrapper for running constitution constraint checks (`bash scripts/check_constitution.sh`)
+- `cmd/ctxmon/` — CLI for setting up and querying context window monitoring in agent worktrees
+
+### `internal/` — Core packages
+
+- `agent/` — Agent lifecycle management: spawning, heartbeat, status tracking, and teardown of Claude Code agents
+- `agentmon/` — Agent transcript monitoring: tails Claude conversation JSONL, extracts test results, build errors, git operations, and context usage signals
+- `constraints/` — Constitution constraint engine: loads `.drem/constraints.toml`, evaluates `command`, `max_lines`, `max_matches`, `no_match`, and `depth` rules
+- `ctxmon/` — Context window monitoring: tracks agent token usage, triggers compaction and fixer escalation
+- `db/` — Database initialization and migration helpers for the Drem Orchestrator
+- `memory/` — Agent memory persistence, retrieval, compaction, and extraction from agent output
+- `merge/` — Worktree merge logic: merges agent worktree branches back into the integration branch
+- `model/` — GORM models, enums (task statuses, agent types), and custom JSON types
+- `orchestrator/` — Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch
+- `prompt/` — Prompt builder: constructs markdown prompt strings piped to Claude Code agent sessions
+- `score/` — Quality scoring: computes TDD, Constitution, Documentation, and Depth scores for plans and implementations
+- `state/` — Task status state machine: defines valid transitions between task lifecycle states
+- `supervisor/` — Agent supervisor: monitors running agents, detects stalls, triggers recovery
+- `taskimport/` — Markdown task file parser: bulk-creates tasks from structured Markdown
+- `testutil/` — Shared test infrastructure: database factories, git repo setup, mock supervisor
+- `tmux/` — Go wrapper around the tmux CLI for managing sessions and windows used to host agents
+- `tui/` — Bubble Tea TUI dashboard: real-time view of projects, tasks, agents, and logs
+- `worktree/` — Git worktree management: creation, cleanup, and branch tracking for agent workspaces
+
+---
+
+## Task Lifecycle
+
+Tasks move through the following states (defined in `internal/model/enums.go`):
+
+```
+                          ┌──────────────────────────────────────────┐
+                          │              rejected                   │
+                          │            (terminal)                   │
+                          └──────────────────────────────────────────┘
+                                ▲              ▲
+                                │              │
+backlog ──► planning ──► plan_review ──► test_writing ──► test_review ──► in_progress ──► testing_ready ──► merging ──► done
+                                                                              │                               │
+                                                                              ▼                               ▼
+                                                                           paused                          failed
+```
+
+| Status          | Description                                                                 |
+|-----------------|-----------------------------------------------------------------------------|
+| `backlog`       | Task created, not yet started                                               |
+| `planning`      | Planner agent is generating a plan                                          |
+| `plan_review`   | Human gate: plan awaits approval before proceeding                          |
+| `test_writing`  | TDD phase: test agent is writing tests based on the approved plan           |
+| `test_review`   | Human gate: written tests await approval before implementation              |
+| `in_progress`   | Coder agent is implementing the task                                        |
+| `testing_ready` | Human gate: implementation complete, awaiting final test/review             |
+| `merging`       | Orchestrator is merging the agent worktree into the integration branch      |
+| `paused`        | Task suspended by user or orchestrator                                      |
+| `done`          | Task completed and merged successfully                                      |
+| `failed`        | Task encountered an unrecoverable error                                     |
+| `rejected`      | Task rejected at a review gate                                              |
+
+**Actionable states** (orchestrator can take automated action): `backlog`, `planning`, `test_writing`, `in_progress`, `merging`.
+
+**Human gates** (require human approval to proceed): `plan_review`, `test_review`, `testing_ready`.
+
+---
+
+## Configuration
+
+Configuration is loaded from a TOML file (see `cmd/drem/config.go`). Missing values
+use the defaults shown below.
+
+| Option                  | TOML key                | Type       | Default        | Description                                        |
+|-------------------------|-------------------------|------------|----------------|----------------------------------------------------|
+| Database path           | `database_path`         | string     | `./drem.db`    | Path to the SQLite database file                   |
+| Bare repo path          | `bare_repo_path`        | string     | `""`           | Path to the bare git repository                    |
+| Default branch          | `default_branch`        | string     | `master`       | Default git branch name                            |
+| Claude binary           | `claude_bin`            | string     | `claude`       | Path to the Claude Code CLI binary                 |
+| Max concurrent agents   | `max_concurrent_agents` | int        | `5`            | Maximum number of agents running simultaneously    |
+| Tick interval           | `tick_interval`         | duration   | `5s`           | Orchestrator main loop tick interval               |
+| Heartbeat interval      | `heartbeat_interval`    | duration   | `30s`          | How often agents send heartbeats                   |
+| Stale timeout           | `stale_timeout`         | duration   | `5m`           | Time before a silent agent is considered stale     |
+| Supervisor enabled      | `supervisor_enabled`    | bool       | `true`         | Whether the agent supervisor is active             |
+| Supervisor timeout      | `supervisor_timeout`    | duration   | `2m`           | Timeout for supervisor health checks               |
+| Context warn percent    | `context_warn_percent`  | int        | `75`           | Context usage % that triggers a warning            |
+| Context stop percent    | `context_stop_percent`  | int        | `90`           | Context usage % that triggers a hard stop          |
+| Context fixer percent   | `context_fixer_percent` | int        | `85`           | Context usage % that triggers fixer escalation     |
+| Log path                | `log_path`              | string     | `./drem.log`   | Path to the orchestrator log file                  |
+| Test command            | `test_command`          | string     | `""`           | Build/test command for the project                 |
+| Compile command         | `compile_command`       | string     | `""`           | Compile command for the project                    |
+| Scoped tests            | `scoped_tests`          | bool       | `true`         | Whether to run tests scoped to subtask file changes|
+| Test timeout            | `test_timeout`          | duration   | `5m`           | Timeout for test command execution                 |
+
+---
+
 ## Structural Limits
 
 ### File length ceiling: 800 lines `[enforced]`
@@ -182,7 +279,7 @@ records, it should not call `SetupBareRepo` or `AddWorktree`.
 When a constitution rule can be reliably detected:
 
 1. Add the constraint to `.drem/constraints.toml` using the appropriate type
-   (`command`, `max_lines`, `max_matches`, or `no_match`)
+   (`command`, `max_lines`, `max_matches`, `no_match`, or `depth`)
 2. Mark the rule in this document as `[enforced]`
 3. The constraint system automatically enforces the rule at:
    - **Plan validation** -- warns when plans target constrained files
