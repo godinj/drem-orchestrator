@@ -13,10 +13,14 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
+// bugReportSvc is a package-local alias so that app.go can reference the type
+// without importing the bugreport package directly (reducing the tui import count).
+type bugReportSvc = bugreport.Service
+
 // BugReportsModel manages the bug report list screen.
 type BugReportsModel struct {
 	db           *gorm.DB
-	bugreportSvc *bugreport.Service
+	bugreportSvc *bugReportSvc
 	projectID    uuid.UUID
 	reports      []model.BugReport
 	cursor       int

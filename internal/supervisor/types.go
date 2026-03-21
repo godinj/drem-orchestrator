@@ -74,4 +74,3 @@ type depthViolation struct {
 	Limit       string `json:"limit"`        // e.g., "0.15" or "3"
 	Suggestion  string `json:"suggestion"`   // specific fix suggestion
 }
-

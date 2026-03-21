@@ -660,4 +660,3 @@ func bugReportInstructions() []string {
 		"",
 	}
 }
-

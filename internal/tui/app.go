@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
@@ -125,7 +124,7 @@ type Model struct {
 	feedback   FeedbackModel
 	bugreports BugReportsModel
 
-	bugreportSvc   *bugreport.Service
+	bugreportSvc   *bugReportSvc
 	logPath        string
 	focus          Focus
 	feedbackAction feedbackAction
@@ -144,7 +143,7 @@ func NewModel(
 	projectID uuid.UUID,
 	events <-chan orchestrator.Event,
 	logPath string,
-	bugreportSvc *bugreport.Service,
+	bugreportSvc *bugReportSvc,
 ) Model {
 	return Model{
 		db:           db,

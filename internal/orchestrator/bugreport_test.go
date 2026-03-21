@@ -16,10 +16,10 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
-// newTestOrchestratorWithBugReports creates an Orchestrator wired to a real
+// setupOrchestratorWithBugReports creates an Orchestrator wired to a real
 // bugreport.Service backed by an in-memory DB. It returns the orchestrator,
 // the DB-backed bug report service, the project ID, and the temp drop directory.
-func newTestOrchestratorWithBugReports(t *testing.T) (*Orchestrator, *bugreport.Service, uuid.UUID) {
+func setupOrchestratorWithBugReports(t *testing.T) (*Orchestrator, *bugreport.Service, uuid.UUID) {
 	t.Helper()
 
 	// Use db.Init to get the UUID-generation callback registered.
@@ -79,7 +79,7 @@ func writeBugReportFile(t *testing.T, dir string, bf bugreport.BugReportFile) st
 // ---------------------------------------------------------------------------
 
 func TestIngestBugReports_ValidFile(t *testing.T) {
-	orch, bugSvc, projectID := newTestOrchestratorWithBugReports(t)
+	orch, bugSvc, projectID := setupOrchestratorWithBugReports(t)
 
 	// Write a valid bug report JSON file.
 	filePath := writeBugReportFile(t, orch.bugreportDir, bugreport.BugReportFile{
@@ -121,7 +121,7 @@ func TestIngestBugReports_ValidFile(t *testing.T) {
 }
 
 func TestIngestBugReports_MultipleFiles(t *testing.T) {
-	orch, bugSvc, projectID := newTestOrchestratorWithBugReports(t)
+	orch, bugSvc, projectID := setupOrchestratorWithBugReports(t)
 
 	// Write two valid bug report files.
 	writeBugReportFile(t, orch.bugreportDir, bugreport.BugReportFile{
@@ -149,7 +149,7 @@ func TestIngestBugReports_MultipleFiles(t *testing.T) {
 }
 
 func TestIngestBugReports_InvalidFileMovedToFailed(t *testing.T) {
-	orch, bugSvc, projectID := newTestOrchestratorWithBugReports(t)
+	orch, bugSvc, projectID := setupOrchestratorWithBugReports(t)
 
 	// Write an invalid JSON file (missing required fields).
 	invalidPath := filepath.Join(orch.bugreportDir, "bad-report.json")
@@ -176,7 +176,7 @@ func TestIngestBugReports_InvalidFileMovedToFailed(t *testing.T) {
 }
 
 func TestIngestBugReports_EmptyDirectory(t *testing.T) {
-	orch, _, _ := newTestOrchestratorWithBugReports(t)
+	orch, _, _ := setupOrchestratorWithBugReports(t)
 
 	// Should not panic or error with empty directory.
 	orch.ingestBugReports()
@@ -206,7 +206,7 @@ func TestIngestBugReports_NilService(t *testing.T) {
 }
 
 func TestIngestBugReports_NonJsonFilesIgnored(t *testing.T) {
-	orch, bugSvc, projectID := newTestOrchestratorWithBugReports(t)
+	orch, bugSvc, projectID := setupOrchestratorWithBugReports(t)
 
 	// Write a non-JSON file that should be ignored.
 	txtPath := filepath.Join(orch.bugreportDir, "readme.txt")

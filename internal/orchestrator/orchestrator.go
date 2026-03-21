@@ -2180,3 +2180,71 @@ func (o *Orchestrator) storeTestResult(ag *model.Agent, result *TestResult) {
 		o.logger.Warn("failed to store test result on agent", "agent_id", ag.ID, "error", err)
 	}
 }
+
+// depthScoreThreshold is the minimum depth score (0.0–1.0) a plan must achieve
+// to proceed to human review without supervisor diagnosis.
+const depthScoreThreshold = 0.5
+
+// checkPlanDepthGate evaluates the plan's depth score and, if below threshold,
+// requests a supervisor diagnosis. The diagnosis is stored as a system comment
+// and in the task context. This is advisory only — the plan always proceeds to
+// human review regardless of the supervisor outcome.
+func (o *Orchestrator) checkPlanDepthGate(task *model.Task, scores map[string]any) {
+	depthScore, ok := scores["depth"].(float64)
+	if !ok {
+		return // no depth score available
+	}
+
+	if depthScore >= depthScoreThreshold {
+		return // depth is acceptable
+	}
+
+	if o.supervisor == nil {
+		o.logger.Warn("plan depth score below threshold but no supervisor configured",
+			"task_id", task.ID, "depth_score", depthScore)
+		return
+	}
+
+	// Serialize plan for the supervisor prompt.
+	planJSON := ""
+	if task.Plan != nil {
+		if data, err := json.MarshalIndent(task.Plan, "", "  "); err == nil {
+			planJSON = string(data)
+		}
+	}
+
+	var review supervisor.PlanDepthReview
+	prompt := supervisor.PlanDepthReviewPrompt(task.Title, task.Description, planJSON, depthScore)
+
+	if err := o.supervisor.EvaluateJSON(context.Background(), prompt, &review); err != nil {
+		o.logger.Warn("supervisor plan depth review failed, continuing",
+			"task_id", task.ID, "error", err)
+		return
+	}
+
+	// Store the review in task context.
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context["depth_review"] = map[string]any{
+		"assessment":       review.Assessment,
+		"shallow_areas":    review.ShallowAreas,
+		"recommendations":  review.Recommendations,
+		"rejection_reason": review.RejectionReason,
+	}
+
+	// Add supervisor diagnosis as a system comment on the task.
+	if review.RejectionReason != "" {
+		comment := model.TaskComment{
+			TaskID: task.ID,
+			Author: "system",
+			Body:   fmt.Sprintf("[Depth Review] Score: %.0f%% — %s", depthScore*100, review.RejectionReason),
+		}
+		if err := o.db.Create(&comment).Error; err != nil {
+			o.logger.Warn("failed to create depth review comment", "task_id", task.ID, "error", err)
+		}
+	}
+
+	o.logger.Info("plan depth review completed",
+		"task_id", task.ID, "depth_score", depthScore, "assessment", review.Assessment)
+}

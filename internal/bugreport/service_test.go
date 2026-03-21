@@ -145,10 +145,10 @@ func TestGet_NotFound(t *testing.T) {
 
 func TestStateTransitions(t *testing.T) {
 	tests := []struct {
-		name     string
-		from     model.BugReportStatus
-		action   string // "acknowledge", "dismiss", or "promote"
-		wantErr  bool
+		name    string
+		from    model.BugReportStatus
+		action  string // "acknowledge", "dismiss", or "promote"
+		wantErr bool
 	}{
 		// Valid transitions from open.
 		{"open->acknowledged", model.BugStatusOpen, "acknowledge", false},

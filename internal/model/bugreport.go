@@ -25,11 +25,11 @@ type BugReport struct {
 	UpdatedAt           time.Time
 
 	// Associations
-	Agent       *Agent             `gorm:"foreignKey:AgentID"`
-	Task        *Task              `gorm:"foreignKey:TaskID"`
-	Project     Project            `gorm:"foreignKey:ProjectID"`
-	PromotedTask *Task             `gorm:"foreignKey:PromotedTaskID"`
-	Comments    []BugReportComment `gorm:"foreignKey:BugReportID"`
+	Agent        *Agent             `gorm:"foreignKey:AgentID"`
+	Task         *Task              `gorm:"foreignKey:TaskID"`
+	Project      Project            `gorm:"foreignKey:ProjectID"`
+	PromotedTask *Task              `gorm:"foreignKey:PromotedTaskID"`
+	Comments     []BugReportComment `gorm:"foreignKey:BugReportID"`
 }
 
 // BugReportComment stores a user or system comment on a bug report.
