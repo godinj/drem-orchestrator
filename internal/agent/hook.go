@@ -89,9 +89,13 @@ func buildSettingsJSON(claudeDir, worktreePath, exitLogScriptPath string, existi
 	// Add Stop hook for exit logging.
 	existingHooks["Stop"] = []any{
 		map[string]any{
-			"type":    "command",
-			"command": exitLogScriptPath,
-			"timeout": exitLogScriptTimeout,
+			"hooks": []any{
+				map[string]any{
+					"type":    "command",
+					"command": exitLogScriptPath,
+					"timeout": exitLogScriptTimeout,
+				},
+			},
 		},
 	}
 

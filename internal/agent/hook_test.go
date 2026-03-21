@@ -213,15 +213,32 @@ func TestSettingsJSONIncludesStopHook(t *testing.T) {
 		}
 	})
 
-	t.Run("Stop hook has command type", func(t *testing.T) {
-		stopHooks, ok := hooks["Stop"]
+	t.Run("Stop hook has correct matcher-hooks structure", func(t *testing.T) {
+		stopRaw, ok := hooks["Stop"]
 		if !ok {
 			t.Skip("no Stop hook found")
 		}
-		stopBytes, _ := json.Marshal(stopHooks)
-		stopStr := string(stopBytes)
-		if !strings.Contains(stopStr, `"command"`) {
-			t.Errorf("Stop hook should be command type, got %s", stopStr)
+		stopArr, ok := stopRaw.([]any)
+		if !ok || len(stopArr) == 0 {
+			t.Fatalf("Stop hook should be a non-empty array, got %T", stopRaw)
+		}
+		matcher, ok := stopArr[0].(map[string]any)
+		if !ok {
+			t.Fatalf("Stop hook entry should be an object, got %T", stopArr[0])
+		}
+		hooksArr, ok := matcher["hooks"].([]any)
+		if !ok || len(hooksArr) == 0 {
+			t.Fatalf("Stop hook entry must have a 'hooks' array, got keys: %v", matcher)
+		}
+		cmd, ok := hooksArr[0].(map[string]any)
+		if !ok {
+			t.Fatalf("hooks[0] should be an object, got %T", hooksArr[0])
+		}
+		if cmd["type"] != "command" {
+			t.Errorf("hook type = %v, want \"command\"", cmd["type"])
+		}
+		if cmd["command"] != exitLogScriptPath {
+			t.Errorf("hook command = %v, want %q", cmd["command"], exitLogScriptPath)
 		}
 	})
 }
