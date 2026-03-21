@@ -80,7 +80,14 @@ heartbeat_interval    = "30s"
 stale_timeout         = "5m"
 supervisor_enabled    = true
 supervisor_timeout    = "2m"
+context_warn_percent  = 75
+context_stop_percent  = 90
+context_fixer_percent = 85
 log_path              = "./drem.log"
+test_command          = ""
+compile_command       = ""
+scoped_tests          = true
+test_timeout          = "5m"
 ```
 
 | Setting | Description |
@@ -95,7 +102,14 @@ log_path              = "./drem.log"
 | `stale_timeout` | Time without heartbeat before an agent is marked dead |
 | `supervisor_enabled` | Enable LLM-powered decision layer for plan validation and failure diagnosis |
 | `supervisor_timeout` | Timeout for supervisor LLM calls |
+| `context_warn_percent` | Context usage % that triggers a warning (default 75) |
+| `context_stop_percent` | Context usage % that triggers a hard stop (default 90) |
+| `context_fixer_percent` | Context usage % that triggers fixer agent escalation (default 85) |
 | `log_path` | Log file (kept separate from TUI output) |
+| `test_command` | Command to run tests (e.g., `go test ./...`); empty = no test step |
+| `compile_command` | Command to compile the project; empty = no compile step |
+| `scoped_tests` | Run tests scoped to subtask file changes only (default true) |
+| `test_timeout` | Timeout for test command execution (default 5m) |
 
 ## TUI Dashboard
 
@@ -140,22 +154,39 @@ Lists all agents with their type, status, current task, and last heartbeat.
 ## Task Lifecycle
 
 ```
-backlog ──► planning ──► plan_review ──► in_progress ──► testing_ready ──► merging ──► done
-              │              │               │                │               │
-              ▼              ▼               ▼                ▼               ▼
-           failed         planning       failed/paused     in_progress     failed
-                        (revise plan)                    (needs changes)
+                                        ┌─────────────────────────────────────────────────────┐
+                                        │             (revise plan)                            │
+                                        ▼                                                     │
+backlog ──► planning ──► plan_review ──► test_writing ──► test_review ──► in_progress ──► testing_ready ──► merging ──► done
+              │              │               │                │               │                │               │
+              ▼              ▼               ▼                ▼               ▼                ▼               ▼
+           failed         planning       failed/paused    test_writing    failed/paused     in_progress     failed
+                        (revise plan)                     (revise tests)                  (needs changes)
+
+                          plan_review ─────────────────────────────────► in_progress
+                                                                     (skip TDD path)
+
+                          test_review ──► planning
+                                       (full replan)
+
+                          paused ──► backlog / planning / in_progress / test_writing
+                          failed ──► backlog / in_progress / test_writing
+
+                          rejected   (terminal — set when subtasks are rejected at a review gate)
 ```
 
 - **backlog** -- Waiting for dependencies to be met
 - **planning** -- Planner agent is decomposing the task
 - **plan_review** -- Human gate: approve the subtask plan or send it back
+- **test_writing** -- Test agent is writing tests before implementation begins (TDD)
+- **test_review** -- Human gate: verify written tests before implementation
 - **in_progress** -- Coder/researcher agents are working on subtasks
 - **testing_ready** -- Human gate: verify the work meets acceptance criteria
 - **merging** -- Agent branches are being merged into the feature integration branch
 - **done** -- All work merged successfully
 - **failed** -- Something went wrong (can be retried back to backlog)
 - **paused** -- Manually paused by user
+- **rejected** -- Task rejected at a review gate (terminal)
 
 ### Step Scores
 
