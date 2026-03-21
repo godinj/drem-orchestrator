@@ -223,6 +223,32 @@ The depth score uses three equally-weighted sub-criteria when `depth_meta` is pr
 
 Scores appear in the TUI board as compact badges (T:85 C:100 D:0 Dp:67) and in the detail panel as a full score line.
 
+**Reading the badge**: Scores appear as compact badges in the task board: `T:85 C:100 D:42 Dp:67`
+- `T` = TDD coverage
+- `C` = Constitution compliance
+- `D` = Documentation coverage
+- `Dp` = Depth score
+
+**Score ranges**:
+
+| Range | Meaning | Action |
+|-------|---------|--------|
+| 80-100 | Strong | No action needed |
+| 60-79 | Acceptable | Monitor — may improve as subtasks complete |
+| 40-59 | Concerning | Review the plan/implementation for gaps |
+| 0-39 | Weak | Address before approving |
+
+**What to do when a score is low**:
+
+- **Low TDD (T)**: At plan review — check that implementation subtasks have corresponding test subtasks. At testing_ready — check `go test -cover` output for the affected packages.
+- **Low Constitution (C)**: Run `bash scripts/check_constitution.sh` to see which constraints are failing. Common causes: file too long, too many exports, formatting issues.
+- **Low Documentation (D)**: Ensure at least one subtask touches documentation files (README, doc comments, guides). At testing_ready, check whether changed files include any `.md` updates.
+- **Low Depth (Dp)**: At plan review — check that subtasks include `depth_meta` with module boundaries and interface shapes. Plans without `depth_meta` fall back to a file-coverage ratio which tends to score lower.
+
+**Scores at different gates**:
+- **Plan review**: Scores are predictive (based on plan structure, not actual code). TDD measures test subtask coverage. Depth evaluates module decomposition quality.
+- **Testing ready**: Scores are measured (based on actual code). TDD uses real `go test -cover` output. Constitution runs actual constraint checks.
+
 ## Agent Types
 
 | Type | Purpose |
