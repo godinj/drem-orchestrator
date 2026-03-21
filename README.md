@@ -344,7 +344,133 @@ The optional supervisor is an LLM-powered evaluation layer (`internal/supervisor
 
 The supervisor returns structured JSON with a verdict (approve/reject/retry/escalate) and reasoning. Its output is stored in `task.Context` and displayed in the detail panel. Configure via `supervisor_enabled` and `supervisor_timeout` in `drem.toml`.
 
-The supervisor also powers **depth enforcement gates**: `checkPlanDepthGate` evaluates plan depth scores against a threshold and requests supervisor diagnosis for shallow plans, while `checkDepthConstraintFailures` diagnoses depth-specific constraint violations at the integration gate. Both are advisory only. These functions live in `internal/orchestrator/agent_merge.go` alongside the merge conflict recovery logic.
+## Quality Constraints
+
+Quality constraints are automated checks that enforce your project's structural and coding standards. They act as a machine-readable constitution: define your rules once and the orchestrator enforces them throughout the agent workflow.
+
+### Where Constraints Are Defined
+
+Constraints live in `.drem/constraints.toml` at the root of your bare repo. The file uses TOML array-of-tables syntax (`[[type]]`) with one entry per rule. It is committed to the repo and available in every worktree.
+
+### Constraint Types
+
+Five constraint types are available. Examples below are taken from this project's `.drem/constraints.toml`.
+
+#### `[[command]]` -- Shell Command
+
+Run a shell command in the worktree root. Passes if the exit code is 0. Set `expect = "empty_output"` to pass only when stdout is empty.
+
+```toml
+[[command]]
+name   = "gofmt compliance"
+run    = "gofmt -l ./internal/ ./cmd/"
+expect = "empty_output"
+```
+
+#### `[[max_lines]]` -- File Length Ceiling
+
+Enforce a maximum line count on files matching a glob pattern. Test files and other patterns can be excluded.
+
+```toml
+[[max_lines]]
+name    = "File length ceiling"
+glob    = "internal/**/*.go"
+exclude = ["*_test.go"]
+limit   = 800
+
+[[max_lines.exception]]
+path           = "internal/orchestrator/orchestrator.go"
+rule           = "shrink-only"
+baseline_lines = 2250
+```
+
+#### `[[max_matches]]` -- Regex Match Count
+
+Count regex matches per file (`scope = "file"`) or per directory (`scope = "directory"`). Fails if the count exceeds `limit`.
+
+```toml
+[[max_matches]]
+name    = "Exported function count"
+glob    = "internal/**/*.go"
+exclude = ["*_test.go"]
+pattern = "^func [A-Z]"
+limit   = 20
+scope   = "file"
+```
+
+#### `[[no_match]]` -- Forbidden Pattern
+
+A regex pattern that must match zero times in the target files. Use `exclude_path` to exempt specific directories.
+
+```toml
+[[no_match]]
+name         = "DB init outside testutil"
+glob         = "internal/**/*_test.go"
+exclude_path = ["internal/testutil/", "internal/model/"]
+pattern      = "gorm\\.Open\\(sqlite"
+```
+
+#### `[[depth]]` -- Module Depth Enforcement
+
+Enforce export ratio and pass-through limits across packages. Keeps the internal API surface small.
+
+```toml
+[[depth]]
+name              = "Export ratio ceiling"
+glob              = "internal/**/*.go"
+exclude           = ["*_test.go"]
+max_export_ratio  = 0.15
+max_pass_throughs = 3
+```
+
+### Running Checks Manually
+
+```bash
+bash scripts/check_constitution.sh
+```
+
+This evaluates all constraints defined in `.drem/constraints.toml` and prints a PASS/FAIL report for each rule.
+
+### Automatic Enforcement
+
+The orchestrator evaluates constraints at three gates during the agent workflow:
+
+- **Plan validation** -- When a planner agent produces a plan, the validator checks whether `estimated_files` target constrained or grandfathered files. Warnings appear at `plan_review` so you can catch problems before agents start working.
+- **Post-agent gate** -- After each agent completes, file-based constraints (`max_lines`, `max_matches`, `no_match`, `depth`) are evaluated on the agent's worktree before merging into the integration branch. Violations fail the subtask with feedback so the next attempt knows what to fix.
+- **Integration gate** -- Before a parent task can transition to `testing_ready`, all constraints (including `command` constraints like `gofmt` and `go vet`) are evaluated on the integration worktree. Violations block the transition.
+
+The supervisor also powers **depth enforcement gates**: plan depth scores are evaluated against a threshold, and depth-specific constraint violations receive supervisor diagnosis at the integration gate. Both are advisory only.
+
+### Adding Exceptions
+
+Use `[[<type>.exception]]` sub-tables to modify how a constraint applies to a specific file or directory. Two exception rules are supported:
+
+- **`shrink-only`** -- The metric (line count, match count, export ratio) must not exceed a declared baseline. The file is exempt from the general limit but must stay at or below its baseline value. Any change that increases the metric above the baseline is a violation.
+
+  ```toml
+  [[max_lines.exception]]
+  path           = "internal/orchestrator/orchestrator.go"
+  rule           = "shrink-only"
+  baseline_lines = 2250
+  ```
+
+- **`grandfathered`** -- The file or directory is fully exempt from the constraint. Use sparingly for legacy code that cannot be refactored yet.
+
+  ```toml
+  [[depth.exception]]
+  path               = "internal/tui/"
+  rule               = "grandfathered"
+  baseline_ratio     = 1.0
+  baseline_pass_thrus = 100
+  ```
+
+### Context Files
+
+The top-level `context_files` key lists files that are included verbatim in planner and coder agent prompts, giving agents architectural awareness:
+
+```toml
+context_files = ["ARCHITECTURE.md"]
+```
 
 ## Merge Conflict Prevention
 
@@ -564,26 +690,14 @@ Reconciliation results can be observed in the log file. When any fixes are appli
 
 ### Running the Constitution Check
 
-The constitution check enforces structural quality constraints defined in `.drem/constraints.toml`:
+See [Quality Constraints](#quality-constraints) for details on constraint definitions, types, and enforcement gates. To run checks manually:
 
 ```bash
 bash scripts/check_constitution.sh
 ```
 
-This runs `go run ./cmd/check-constraints/...` which evaluates 10 rules:
+See [Quality Constraints](#quality-constraints) for details on what this checks and how to configure it.
 
-1. **gofmt compliance** -- all Go files under `internal/` and `cmd/` must be formatted
-2. **go vet** -- `go vet ./...` must pass
-3. **File length ceiling** -- no non-test `.go` file exceeds 800 lines (with per-file exceptions)
-4. **Exported function count** -- no file has more than 20 exported functions (with exceptions)
-5. **Internal import ceiling** -- no directory exceeds 6 internal imports (with exceptions)
-6. **GORM hook consolidation** -- at most 1 `BeforeCreate` hook in models
-7. **No DB init outside testutil** -- test files must not call `gorm.Open(sqlite` directly
-8. **No git helpers outside testutil** -- test files must not define ad-hoc git setup helpers
-9. **No test factories outside testutil** -- test files must not define ad-hoc test factories
-10. **Export ratio ceiling** -- exported symbols per LOC must stay below 0.15 (with per-file exceptions)
-
-A passing run means all 10 checks report OK. Any failure prints the violating files and counts.
 
 ### Inspecting the Database
 
