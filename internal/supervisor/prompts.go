@@ -431,6 +431,55 @@ Return ONLY a JSON object:
 	)
 }
 
+// AssumptionCrossCheckPrompt builds a prompt for the supervisor to review a plan
+// and identify assumptions the planner may have missed.
+func AssumptionCrossCheckPrompt(taskTitle, taskDesc, planJSON string, reportedAssumptions string) string {
+	assumptionNote := reportedAssumptions
+	if assumptionNote == "" {
+		assumptionNote = "(The planner reported NO assumptions. Be extra thorough — it is unlikely " +
+			"that a non-trivial plan involves zero inferred decisions.)"
+	}
+
+	return fmt.Sprintf(`You are a supervisor reviewing a planner's self-reported assumptions.
+
+## Task
+- **Title**: %s
+- **Description**: %s
+
+## Plan (JSON)
+%s
+
+## Planner's Self-Reported Assumptions
+%s
+
+## Instructions
+Review the plan and identify decisions the planner made WITHOUT explicit specification from the task description that were NOT reported as assumptions.
+
+Look for:
+1. Technology or library choices not specified in the task
+2. Architectural patterns or approaches the planner selected
+3. Scoping decisions — things included or excluded without being told to
+4. Interpretations of ambiguous requirements
+5. Ordering or phasing decisions not dictated by the task
+
+Return ONLY a JSON object:
+
+{
+  "missed_assumptions": [
+    {
+      "decision": "what the planner decided without being told to",
+      "reasoning": "why this is an assumption the planner missed"
+    }
+  ],
+  "assessment": "thorough|some_gaps|many_gaps"
+}`,
+		taskTitle,
+		truncateForPrompt(taskDesc, truncTaskDesc),
+		truncateForPrompt(planJSON, truncDiffOutput),
+		assumptionNote,
+	)
+}
+
 // BuildFailurePrompt builds a prompt for diagnosing a build failure.
 func BuildFailurePrompt(worktreePath, buildOutput string, changedFiles []string) string {
 	return fmt.Sprintf(`You are a supervisor diagnosing a build failure after merge.

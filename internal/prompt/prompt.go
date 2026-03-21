@@ -67,7 +67,7 @@ func Generate(opts Opts) string {
 		for key, value := range opts.Task.Context {
 			// Skip keys that are injected as dedicated sections below.
 			switch key {
-			case "prompt_adjustment":
+			case "prompt_adjustment", "clarification_context", "clarification_session":
 				continue
 			}
 			sections = append(sections, fmt.Sprintf("- **%s**: %v", key, value))
@@ -80,6 +80,13 @@ func Generate(opts Opts) string {
 		if adj, ok := opts.Task.Context["prompt_adjustment"].(string); ok && adj != "" {
 			sections = append(sections, "## Additional Guidance from Prior Attempt", "")
 			sections = append(sections, adj, "")
+		}
+	}
+
+	// Clarification context from prior clarification loop.
+	if opts.Task.Context != nil {
+		if clarCtx, ok := opts.Task.Context["clarification_context"].(string); ok && clarCtx != "" {
+			sections = append(sections, clarCtx, "")
 		}
 	}
 
@@ -221,6 +228,13 @@ func plannerInstructions() []string {
 		`      "criterion": "description of the acceptance criterion",`,
 		`      "subtask_indices": [0, 2]`,
 		"    }",
+		"  ],",
+		`  "assumptions": [`,
+		"    {",
+		`      "decision": "what you decided",`,
+		`      "alternatives": ["other option 1", "other option 2"],`,
+		`      "why_chosen": "why you picked this over the alternatives"`,
+		"    }",
 		"  ]",
 		"}",
 		"```",
@@ -311,6 +325,26 @@ func plannerInstructions() []string {
 			"or adds new capabilities, verify that at least one subtask updates " +
 			"the relevant README or documentation. This can be a dedicated subtask " +
 			"or a step within the integration subtask.",
+		"",
+		"## Assumption Reporting",
+		"",
+		"For each decision in your plan, evaluate whether the task description explicitly specified " +
+			"it or whether you inferred it. Report ALL inferred decisions in the `assumptions` field.",
+		"",
+		"An assumption is any decision where:",
+		"- The task description did not specify the approach and you chose one",
+		"- You selected a specific technology, library, or pattern that wasn't mentioned",
+		"- You made a scoping decision (included or excluded something not explicitly addressed)",
+		"- You interpreted an ambiguous requirement in a specific way",
+		"",
+		"For each assumption, provide:",
+		"- `decision`: what you decided (e.g., \"Using Redis for the cache layer\")",
+		"- `alternatives`: other reasonable options you considered (at least one)",
+		"- `why_chosen`: your reasoning for this choice over the alternatives",
+		"",
+		"If the task description is fully specified with no room for interpretation, the " +
+			"assumptions array may be empty. But err on the side of reporting — if in doubt, " +
+			"it's an assumption.",
 		"",
 		"## Integration Subtask",
 		"",

@@ -54,6 +54,18 @@ type DepthConstraintDiagnosis struct {
 	RejectionReason string           `json:"rejection_reason"` // for the task comment
 }
 
+// AssumptionCrossCheck holds the supervisor's assessment of missed assumptions.
+type AssumptionCrossCheck struct {
+	MissedAssumptions []MissedAssumption `json:"missed_assumptions"`
+	Assessment        string             `json:"assessment"` // thorough, some_gaps, many_gaps
+}
+
+// MissedAssumption describes a single assumption the planner failed to report.
+type MissedAssumption struct {
+	Decision  string `json:"decision"`
+	Reasoning string `json:"reasoning"`
+}
+
 // DepthViolation describes a single depth constraint violation.
 type DepthViolation struct {
 	Package     string `json:"package"`      // e.g., "internal/orchestrator"
