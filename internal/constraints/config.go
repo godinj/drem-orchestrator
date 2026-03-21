@@ -13,15 +13,15 @@ import (
 // Config is the top-level structure of .drem/constraints.toml.
 type Config struct {
 	ContextFiles []string               `toml:"context_files"`
-	Commands     []CommandConstraint    `toml:"command"`
+	Commands     []commandConstraint    `toml:"command"`
 	MaxLines     []MaxLinesConstraint   `toml:"max_lines"`
 	MaxMatches   []MaxMatchesConstraint `toml:"max_matches"`
-	NoMatch      []NoMatchConstraint    `toml:"no_match"`
-	Depth        []DepthConstraint      `toml:"depth"`
+	NoMatch      []noMatchConstraint    `toml:"no_match"`
+	Depth        []depthConstraint      `toml:"depth"`
 }
 
-// CommandConstraint runs an arbitrary shell command and checks its result.
-type CommandConstraint struct {
+// commandConstraint runs an arbitrary shell command and checks its result.
+type commandConstraint struct {
 	Name   string `toml:"name"`
 	Run    string `toml:"run"`
 	Expect string `toml:"expect"` // "exit_zero" (default) or "empty_output"
@@ -63,27 +63,27 @@ type MatchesException struct {
 	BaselineCount int    `toml:"baseline_count"`
 }
 
-// NoMatchConstraint asserts that a regex pattern does not appear in any file
+// noMatchConstraint asserts that a regex pattern does not appear in any file
 // matching the glob.
-type NoMatchConstraint struct {
+type noMatchConstraint struct {
 	Name        string   `toml:"name"`
 	Glob        string   `toml:"glob"`
 	ExcludePath []string `toml:"exclude_path"`
 	Pattern     string   `toml:"pattern"`
 }
 
-// DepthConstraint enforces module depth heuristics on Go packages.
-type DepthConstraint struct {
+// depthConstraint enforces module depth heuristics on Go packages.
+type depthConstraint struct {
 	Name            string           `toml:"name"`
 	Glob            string           `toml:"glob"`              // glob to find Go packages (matches directories)
 	Exclude         []string         `toml:"exclude"`           // patterns to exclude
 	MaxExportRatio  float64          `toml:"max_export_ratio"`  // ceiling for exported symbols / total LOC
 	MaxPassThroughs int              `toml:"max_pass_throughs"` // max pass-through functions per package
-	Exceptions      []DepthException `toml:"exception"`
+	Exceptions      []depthException `toml:"exception"`
 }
 
-// DepthException grandfathers a package for depth constraints.
-type DepthException struct {
+// depthException grandfathers a package for depth constraints.
+type depthException struct {
 	Path              string  `toml:"path"`
 	Rule              string  `toml:"rule"`                // "grandfathered"
 	BaselineRatio     float64 `toml:"baseline_ratio"`      // current export ratio (shrink-only)

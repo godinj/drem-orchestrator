@@ -252,14 +252,14 @@ func TestEvalMaxMatches(t *testing.T) {
 func TestEvalNoMatch(t *testing.T) {
 	tests := []struct {
 		name       string
-		constraint NoMatchConstraint
+		constraint noMatchConstraint
 		files      map[string]string
 		wantPass   bool
 		wantMsg    string
 	}{
 		{
 			name: "file with no matches passes",
-			constraint: NoMatchConstraint{
+			constraint: noMatchConstraint{
 				Name:    "no forbidden",
 				Glob:    "**/*.go",
 				Pattern: "forbidden",
@@ -271,7 +271,7 @@ func TestEvalNoMatch(t *testing.T) {
 		},
 		{
 			name: "file with match fails",
-			constraint: NoMatchConstraint{
+			constraint: noMatchConstraint{
 				Name:    "no forbidden",
 				Glob:    "**/*.go",
 				Pattern: "forbidden",
@@ -284,7 +284,7 @@ func TestEvalNoMatch(t *testing.T) {
 		},
 		{
 			name: "file under exclude_path is skipped",
-			constraint: NoMatchConstraint{
+			constraint: noMatchConstraint{
 				Name:        "no forbidden",
 				Glob:        "**/*.go",
 				ExcludePath: []string{"src/util/"},
@@ -330,13 +330,13 @@ func TestEvalNoMatch(t *testing.T) {
 func TestEvalCommand(t *testing.T) {
 	tests := []struct {
 		name       string
-		constraint CommandConstraint
+		constraint commandConstraint
 		wantPass   bool
 		wantMsg    string
 	}{
 		{
 			name: "command exits zero passes",
-			constraint: CommandConstraint{
+			constraint: commandConstraint{
 				Name:   "true",
 				Run:    "true",
 				Expect: "exit_zero",
@@ -345,7 +345,7 @@ func TestEvalCommand(t *testing.T) {
 		},
 		{
 			name: "command exits non-zero fails",
-			constraint: CommandConstraint{
+			constraint: commandConstraint{
 				Name:   "false",
 				Run:    "echo 'failure message' && false",
 				Expect: "exit_zero",
@@ -355,7 +355,7 @@ func TestEvalCommand(t *testing.T) {
 		},
 		{
 			name: "empty_output with empty stdout passes",
-			constraint: CommandConstraint{
+			constraint: commandConstraint{
 				Name:   "empty",
 				Run:    "true",
 				Expect: "empty_output",
@@ -364,7 +364,7 @@ func TestEvalCommand(t *testing.T) {
 		},
 		{
 			name: "empty_output with non-empty stdout fails",
-			constraint: CommandConstraint{
+			constraint: commandConstraint{
 				Name:   "notempty",
 				Run:    "echo 'some output'",
 				Expect: "empty_output",
@@ -409,7 +409,7 @@ func TestEvaluateFiles(t *testing.T) {
 	writeFile(t, root, "src/b.go", strings.Repeat("line\n", 100))
 
 	cfg := &Config{
-		Commands: []CommandConstraint{
+		Commands: []commandConstraint{
 			{Name: "should be skipped", Run: "false", Expect: "exit_zero"},
 		},
 		MaxLines: []MaxLinesConstraint{

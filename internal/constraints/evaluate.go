@@ -63,7 +63,7 @@ func buildReport(results []Result) *Report {
 	return report
 }
 
-func evalCommand(c CommandConstraint, worktreeRoot string) (Result, error) {
+func evalCommand(c commandConstraint, worktreeRoot string) (Result, error) {
 	cmd := exec.Command("bash", "-c", c.Run)
 	cmd.Dir = worktreeRoot
 
@@ -431,7 +431,7 @@ func findMatchesException(exceptions []MatchesException, path string) (MatchesEx
 	return MatchesException{}, false
 }
 
-func evalDepth(c DepthConstraint, worktreeRoot string, fileSet map[string]bool) (Result, error) {
+func evalDepth(c depthConstraint, worktreeRoot string, fileSet map[string]bool) (Result, error) {
 	result := Result{
 		Name:   c.Name,
 		Type:   "depth",
@@ -525,7 +525,7 @@ func evalDepth(c DepthConstraint, worktreeRoot string, fileSet map[string]bool) 
 	return result, nil
 }
 
-func findDepthException(exceptions []DepthException, dir string) (DepthException, bool) {
+func findDepthException(exceptions []depthException, dir string) (depthException, bool) {
 	// Match against directory path with trailing slash (e.g. "internal/tui/").
 	dirWithSlash := dir + "/"
 	for _, e := range exceptions {
@@ -533,10 +533,10 @@ func findDepthException(exceptions []DepthException, dir string) (DepthException
 			return e, true
 		}
 	}
-	return DepthException{}, false
+	return depthException{}, false
 }
 
-func evalNoMatch(c NoMatchConstraint, worktreeRoot string, fileSet map[string]bool) (Result, error) {
+func evalNoMatch(c noMatchConstraint, worktreeRoot string, fileSet map[string]bool) (Result, error) {
 	result := Result{
 		Name:   c.Name,
 		Type:   "no_match",

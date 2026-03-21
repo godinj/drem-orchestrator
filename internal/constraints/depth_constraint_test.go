@@ -9,7 +9,7 @@ import (
 func TestEvalDepth(t *testing.T) {
 	tests := []struct {
 		name       string
-		constraint DepthConstraint
+		constraint depthConstraint
 		files      map[string]string // relPath -> content
 		fileSet    map[string]bool   // nil for full evaluation
 		wantPass   bool
@@ -17,7 +17,7 @@ func TestEvalDepth(t *testing.T) {
 	}{
 		{
 			name: "package within export ratio limit passes",
-			constraint: DepthConstraint{
+			constraint: depthConstraint{
 				Name:            "export ratio",
 				Glob:            "src/**/*.go",
 				Exclude:         []string{"*_test.go"},
@@ -62,7 +62,7 @@ func helper() {}
 		},
 		{
 			name: "package exceeding export ratio fails",
-			constraint: DepthConstraint{
+			constraint: depthConstraint{
 				Name:            "export ratio",
 				Glob:            "src/**/*.go",
 				Exclude:         []string{"*_test.go"},
@@ -85,7 +85,7 @@ func E() {}
 		},
 		{
 			name: "package with too many pass-throughs fails",
-			constraint: DepthConstraint{
+			constraint: depthConstraint{
 				Name:            "pass-throughs",
 				Glob:            "src/**/*.go",
 				Exclude:         []string{"*_test.go"},
@@ -111,7 +111,7 @@ func PrintB(s string) {
 		},
 		{
 			name: "pass-throughs within limit passes",
-			constraint: DepthConstraint{
+			constraint: depthConstraint{
 				Name:            "pass-throughs",
 				Glob:            "src/**/*.go",
 				Exclude:         []string{"*_test.go"},
@@ -132,13 +132,13 @@ func PrintA(s string) {
 		},
 		{
 			name: "grandfathered exception allows existing violations",
-			constraint: DepthConstraint{
+			constraint: depthConstraint{
 				Name:            "export ratio with exception",
 				Glob:            "src/**/*.go",
 				Exclude:         []string{"*_test.go"},
 				MaxExportRatio:  0.01, // very strict
 				MaxPassThroughs: 0,    // very strict
-				Exceptions: []DepthException{
+				Exceptions: []depthException{
 					{
 						Path:              "src/legacy/",
 						Rule:              "grandfathered",
@@ -162,13 +162,13 @@ func C() { fmt.Println("c") }
 		},
 		{
 			name: "grandfathered exception rejects growth beyond baseline",
-			constraint: DepthConstraint{
+			constraint: depthConstraint{
 				Name:            "export ratio with exception",
 				Glob:            "src/**/*.go",
 				Exclude:         []string{"*_test.go"},
 				MaxExportRatio:  0.01,
 				MaxPassThroughs: 0,
-				Exceptions: []DepthException{
+				Exceptions: []depthException{
 					{
 						Path:              "src/legacy/",
 						Rule:              "grandfathered",
@@ -193,7 +193,7 @@ func E() {}
 		},
 		{
 			name: "test-only package is skipped",
-			constraint: DepthConstraint{
+			constraint: depthConstraint{
 				Name:            "skip test packages",
 				Glob:            "src/**/*.go",
 				MaxExportRatio:  0.01, // very strict
@@ -212,7 +212,7 @@ func TestMore() {}
 		},
 		{
 			name: "test files excluded from analysis",
-			constraint: DepthConstraint{
+			constraint: depthConstraint{
 				Name:            "exclude test files",
 				Glob:            "src/**/*.go",
 				Exclude:         []string{"*_test.go"},
@@ -257,7 +257,7 @@ func TestExportedH() {}
 		},
 		{
 			name: "fileSet restricts evaluation to relevant packages",
-			constraint: DepthConstraint{
+			constraint: depthConstraint{
 				Name:            "fileset mode",
 				Glob:            "src/**/*.go",
 				Exclude:         []string{"*_test.go"},
@@ -361,7 +361,7 @@ func helper2() {}
 func helper3() {}
 `)
 
-	constraint := DepthConstraint{
+	constraint := depthConstraint{
 		Name:            "fileset scoping",
 		Glob:            "src/**/*.go",
 		Exclude:         []string{"*_test.go"},
@@ -384,7 +384,7 @@ func helper3() {}
 }
 
 func TestFindDepthException(t *testing.T) {
-	exceptions := []DepthException{
+	exceptions := []depthException{
 		{Path: "internal/tui/", Rule: "grandfathered", BaselineRatio: 1.0, BaselinePassThrus: 100},
 		{Path: "internal/legacy", Rule: "grandfathered", BaselineRatio: 0.5, BaselinePassThrus: 10},
 	}
