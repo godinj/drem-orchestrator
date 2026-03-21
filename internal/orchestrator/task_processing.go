@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/clarification"
 	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
@@ -55,8 +56,70 @@ func (o *Orchestrator) processBacklog(task *model.Task) error {
 // them to PLAN_REVIEW (if a plan exists), monitoring an assigned planner agent,
 // or spawning a new planner.
 func (o *Orchestrator) processPlanning(task *model.Task) error {
-	// 1. If plan already exists, transition to PLAN_REVIEW.
+	// 1. If plan already exists, evaluate for clarification needs.
 	if task.Plan != nil {
+		// Parse plan to extract assumptions.
+		planResult, err := parsePlan(task.Plan)
+		if err != nil {
+			o.logger.Warn("process planning: parse plan for assumptions failed", "task_id", task.ID, "error", err)
+			// Fall through to plan_review without clarification.
+		}
+
+		var assumptions []clarification.Assumption
+		if planResult != nil {
+			assumptions = planResult.Assumptions
+		}
+
+		// Supervisor cross-check for missed assumptions (if supervisor available).
+		var supervisorAnalysis string
+		if o.supervisor != nil && planResult != nil {
+			planJSON, _ := json.Marshal(task.Plan)
+			assumptionsJSON, _ := json.Marshal(assumptions)
+			crossCheckPrompt := supervisor.AssumptionCrossCheckPrompt(
+				task.Title, task.Description, string(planJSON), string(assumptionsJSON),
+			)
+			var crossCheck supervisor.AssumptionCrossCheck
+			if err := o.supervisor.EvaluateJSON(context.Background(), crossCheckPrompt, &crossCheck); err != nil {
+				o.logger.Warn("supervisor assumption cross-check failed", "task_id", task.ID, "error", err)
+			} else {
+				analysisJSON, _ := json.Marshal(crossCheck.MissedAssumptions)
+				supervisorAnalysis = string(analysisJSON)
+			}
+		}
+
+		// Evaluate whether clarification is needed.
+		planJSON, _ := json.Marshal(task.Plan)
+		evalResult, evalErr := clarification.Evaluate(string(planJSON), assumptions, supervisorAnalysis)
+		if evalErr != nil {
+			o.logger.Warn("clarification evaluate failed", "task_id", task.ID, "error", evalErr)
+		}
+
+		if evalResult != nil && evalResult.NeedsClarification {
+			// Transition to NEEDS_CLARIFICATION.
+			if task.Context == nil {
+				task.Context = make(model.JSONField)
+			}
+			task.Context["clarification_session"] = evalResult.SessionData
+			task.Context["clarification_questions"] = evalResult.Questions
+			if len(evalResult.Questions) > 0 {
+				task.Context["clarification_current_question"] = evalResult.Questions[0]
+			}
+
+			event, err := state.TransitionTask(task, model.StatusNeedsClarification, "orchestrator", nil)
+			if err != nil {
+				return fmt.Errorf("process planning: transition to needs_clarification: %w", err)
+			}
+			if err := o.db.Save(task).Error; err != nil {
+				return fmt.Errorf("process planning: save task: %w", err)
+			}
+			if err := o.db.Create(event).Error; err != nil {
+				return fmt.Errorf("process planning: save event: %w", err)
+			}
+			o.emit("needs_clarification", map[string]any{"task_id": task.ID, "questions": evalResult.Questions})
+			return nil
+		}
+
+		// No clarification needed — proceed to plan_review.
 		event, err := state.TransitionTask(task, model.StatusPlanReview, "orchestrator", nil)
 		if err != nil {
 			return fmt.Errorf("process planning: transition to plan_review: %w", err)

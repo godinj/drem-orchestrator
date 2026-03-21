@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/clarification"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
@@ -504,6 +505,7 @@ type tddException struct {
 type parsePlanResult struct {
 	Subtasks      []planEntry
 	TDDExceptions []tddException
+	Assumptions   []clarification.Assumption // extracted from plan.json "assumptions" field
 }
 
 // parsePlan extracts subtask plans and TDD exceptions from a task's Plan JSONField.
@@ -551,8 +553,87 @@ func parsePlan(planField model.JSONField) (*parsePlanResult, error) {
 		}
 	}
 
+	// Extract assumptions if present (backward compatible — missing key means empty slice).
+	var assumptions []clarification.Assumption
+	if assumptionsRaw, hasAssumptions := planField["assumptions"]; hasAssumptions {
+		ab, err := json.Marshal(assumptionsRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse plan: marshal assumptions: %w", err)
+		}
+		if err := json.Unmarshal(ab, &assumptions); err != nil {
+			return nil, fmt.Errorf("parse plan: unmarshal assumptions: %w", err)
+		}
+	}
+
 	return &parsePlanResult{
 		Subtasks:      entries,
 		TDDExceptions: exceptions,
+		Assumptions:   assumptions,
 	}, nil
+}
+
+// HandleClarificationAnswer processes a user's answer to a clarification question.
+// Called by the TUI when the user submits a comment on a NEEDS_CLARIFICATION task.
+func (o *Orchestrator) HandleClarificationAnswer(taskID uuid.UUID, answer string) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("handle clarification answer: load task: %w", err)
+	}
+
+	if task.Status != model.StatusNeedsClarification {
+		return fmt.Errorf("handle clarification answer: task %s is in %s, expected needs_clarification", taskID, task.Status)
+	}
+
+	if task.Context == nil {
+		return fmt.Errorf("handle clarification answer: task %s has no context", taskID)
+	}
+
+	sessionData, ok := task.Context["clarification_session"]
+	if !ok {
+		return fmt.Errorf("handle clarification answer: no clarification_session in context")
+	}
+
+	updatedSession, done, nextQuestion, err := clarification.ProcessAnswer(sessionData, answer)
+	if err != nil {
+		return fmt.Errorf("handle clarification answer: process answer: %w", err)
+	}
+	task.Context["clarification_session"] = updatedSession
+
+	if done {
+		// All questions answered — build replan context and transition back to planning.
+		replanCtx, err := clarification.ReplanContext(updatedSession)
+		if err != nil {
+			return fmt.Errorf("handle clarification answer: replan context: %w", err)
+		}
+		task.Context["clarification_context"] = replanCtx
+
+		// Clear the plan so the planner re-plans with clarification context.
+		task.Plan = nil
+
+		event, err := state.TransitionTask(&task, model.StatusPlanning, "user", map[string]any{
+			"action": "clarification_complete",
+		})
+		if err != nil {
+			return fmt.Errorf("handle clarification answer: transition to planning: %w", err)
+		}
+		if err := o.db.Save(&task).Error; err != nil {
+			return fmt.Errorf("handle clarification answer: save task: %w", err)
+		}
+		if err := o.db.Create(event).Error; err != nil {
+			return fmt.Errorf("handle clarification answer: save event: %w", err)
+		}
+		o.emit("task_updated", &task)
+		o.logger.Info("clarification complete, replanning", "task_id", task.ID)
+		return nil
+	}
+
+	// More questions remain — store next question and save.
+	task.Context["clarification_current_question"] = nextQuestion
+	if err := o.db.Save(&task).Error; err != nil {
+		return fmt.Errorf("handle clarification answer: save task: %w", err)
+	}
+	o.emit("task_updated", &task)
+	o.logger.Info("clarification answer received, next question",
+		"task_id", task.ID, "next_question", nextQuestion)
+	return nil
 }

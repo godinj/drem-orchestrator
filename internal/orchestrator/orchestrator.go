@@ -301,6 +301,11 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 		}
 	}
 
+	// 5b. Handle NEEDS_CLARIFICATION tasks.
+	// Human gate — no automated processing. The TUI handles user input
+	// via HandleClarificationAnswer(). Nothing to do here; the case is
+	// present so the orchestrator does not log warnings about unhandled statuses.
+
 	// 6. Handle PAUSED tasks -> stop agents.
 	var pausedTasks []model.Task
 	if err := o.db.Where("project_id = ? AND status = ?", o.projectID, model.StatusPaused).
