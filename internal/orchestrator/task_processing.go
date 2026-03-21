@@ -512,7 +512,16 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 
 					// Check for depth-specific constraint failures and
 					// request supervisor diagnosis (advisory only).
-					o.checkDepthConstraintFailures(parent, report, featureDir)
+					hasDepthFailure := false
+					for _, r := range report.Results {
+						if !r.Passed && r.Type == "depth" {
+							hasDepthFailure = true
+							break
+						}
+					}
+					if hasDepthFailure {
+						o.checkDepthConstraintFailures(parent, constraints.FormatReport(report), featureDir)
+					}
 
 					if parent.Context == nil {
 						parent.Context = make(model.JSONField)

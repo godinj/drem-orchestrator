@@ -159,15 +159,18 @@ backlog ──► planning ──► plan_review ──► in_progress ──►
 
 ### Step Scores
 
-Every plan and implementation is scored on three dimensions when ready for human review:
+Every plan and implementation is scored on four dimensions when ready for human review:
 
 | Dimension | Plan Review | Implementation Review |
 |-----------|------------|----------------------|
 | **TDD** | % of implementation subtasks covered by test subtasks | `go test -cover` average across packages |
 | **Constitution** | Plan validation pass rate (errors=0%, warnings reduce score) | Constraint check pass/fail ratio |
 | **Documentation** | Whether any subtask touches doc files | Whether changed files include documentation |
+| **Depth** | Three-criterion evaluation of module boundaries, interface shapes, and deep decomposition | Constraint-based depth checks |
 
-Scores appear in the TUI board as compact badges (T:85 C:100 D:0) and in the detail panel as a full score line.
+The depth score uses three equally-weighted sub-criteria when `depth_meta` is present in plan subtasks: (1) at least one subtask defines valid module boundaries, (2) at least one subtask specifies interface shapes, and (3) all boundary-defining subtasks keep exports in (0, 20]. Plans without `depth_meta` fall back to a file-coverage ratio. The scoring logic lives in `internal/orchestrator/score_bridge.go` (bridge) and `internal/score/` (canonical), with parity tests ensuring both agree.
+
+Scores appear in the TUI board as compact badges (T:85 C:100 D:0 Dp:67) and in the detail panel as a full score line.
 
 ## Agent Types
 
@@ -228,7 +231,7 @@ internal/
 ├── tmux/              tmux session/window management wrapper
 ├── worktree/          Git worktree lifecycle (create, merge, cleanup)
 ├── merge/             Rebase-before-merge orchestration, conflict detection
-├── prompt/            Agent prompt generation (markdown, per agent type)
+├── prompt/            Agent prompt generation (markdown, per agent type; helpers in prompt_helpers.go)
 ├── memory/            Agent memory persistence and compaction
 ├── supervisor/        Optional LLM-powered decision layer (plan validation, failure diagnosis)
 ├── taskimport/        Markdown task parsing and import
@@ -263,6 +266,8 @@ The optional supervisor is an LLM-powered evaluation layer (`internal/supervisor
 - **Manual trigger** — users can press `S` in the TUI to request a supervisor evaluation of any task
 
 The supervisor returns structured JSON with a verdict (approve/reject/retry/escalate) and reasoning. Its output is stored in `task.Context` and displayed in the detail panel. Configure via `supervisor_enabled` and `supervisor_timeout` in `drem.toml`.
+
+The supervisor also powers **depth enforcement gates**: `checkPlanDepthGate` evaluates plan depth scores against a threshold and requests supervisor diagnosis for shallow plans, while `checkDepthConstraintFailures` diagnoses depth-specific constraint violations at the integration gate. Both are advisory only. These functions live in `internal/orchestrator/agent_merge.go` alongside the merge conflict recovery logic.
 
 ## Merge Conflict Prevention
 
@@ -488,7 +493,7 @@ The constitution check enforces structural quality constraints defined in `.drem
 bash scripts/check_constitution.sh
 ```
 
-This runs `go run ./cmd/check-constraints/...` which evaluates 9 rules:
+This runs `go run ./cmd/check-constraints/...` which evaluates 10 rules:
 
 1. **gofmt compliance** -- all Go files under `internal/` and `cmd/` must be formatted
 2. **go vet** -- `go vet ./...` must pass
@@ -499,8 +504,9 @@ This runs `go run ./cmd/check-constraints/...` which evaluates 9 rules:
 7. **No DB init outside testutil** -- test files must not call `gorm.Open(sqlite` directly
 8. **No git helpers outside testutil** -- test files must not define ad-hoc git setup helpers
 9. **No test factories outside testutil** -- test files must not define ad-hoc test factories
+10. **Export ratio ceiling** -- exported symbols per LOC must stay below 0.15 (with per-file exceptions)
 
-A passing run means all 9 checks report OK. Any failure prints the violating files and counts.
+A passing run means all 10 checks report OK. Any failure prints the violating files and counts.
 
 ### Inspecting the Database
 

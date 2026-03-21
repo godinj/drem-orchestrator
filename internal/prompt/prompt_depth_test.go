@@ -37,7 +37,7 @@ func TestPlannerPromptSchemaIncludesDepthFields(t *testing.T) {
 	schemaFields := []string{
 		`"module_boundaries"`,
 		`"interface_shapes"`,
-		`"package": "internal/foo"`,
+		`"package": "pkg/foo"`,
 		`"description": "what it encapsulates"`,
 		`"exports": 5`,
 		`"functions": ["DoThing(ctx context.Context) error"]`,

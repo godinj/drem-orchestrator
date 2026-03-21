@@ -21,6 +21,24 @@ func computePlanScores(subtasks []planEntry, exceptions []tddException, validati
 			TestsFor:       s.TestsFor,
 			Dependencies:   s.Dependencies,
 		}
+		if s.DepthMeta != nil {
+			dm := &score.DepthMeta{}
+			for _, b := range s.DepthMeta.ModuleBoundaries {
+				dm.ModuleBoundaries = append(dm.ModuleBoundaries, score.ModuleBoundary{
+					Package:     b.Package,
+					Description: b.Description,
+					Exports:     b.Exports,
+				})
+			}
+			for _, iface := range s.DepthMeta.InterfaceShapes {
+				dm.InterfaceShapes = append(dm.InterfaceShapes, score.InterfaceShape{
+					Package:   iface.Package,
+					Functions: iface.Functions,
+					Types:     iface.Types,
+				})
+			}
+			entries[i].DepthMeta = dm
+		}
 	}
 
 	scoreExceptions := make([]score.TDDException, len(exceptions))
@@ -237,6 +255,104 @@ func TestComputePlanScores_Integration(t *testing.T) {
 			}
 			if !scoreApproxEqual(got.Documentation, tt.wantDoc) {
 				t.Errorf("Documentation = %v, want %v", got.Documentation, tt.wantDoc)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 5: Depth scoring parity — bridge and canonical must agree
+// ---------------------------------------------------------------------------
+
+func TestDepthScoreParity(t *testing.T) {
+	tests := []struct {
+		name      string
+		subtasks  []planEntry
+		wantDepth float64
+	}{
+		{
+			name: "all 3 criteria met → 1.0",
+			subtasks: []planEntry{
+				{
+					Title: "impl A", Phase: "implementation",
+					EstimatedFiles: []string{"internal/foo/foo.go"},
+					DepthMeta: &depthMeta{
+						ModuleBoundaries: []moduleBoundary{
+							{Package: "internal/foo", Description: "handles foo logic", Exports: 5},
+						},
+						InterfaceShapes: []interfaceShape{
+							{Package: "internal/foo", Functions: []string{"Run"}, Types: []string{"Runner"}},
+						},
+					},
+				},
+			},
+			wantDepth: 1.0,
+		},
+		{
+			name: "boundaries only no interfaces → 0.67",
+			subtasks: []planEntry{
+				{
+					Title: "impl B", Phase: "implementation",
+					EstimatedFiles: []string{"internal/bar/bar.go"},
+					DepthMeta: &depthMeta{
+						ModuleBoundaries: []moduleBoundary{
+							{Package: "internal/bar", Description: "bar module", Exports: 10},
+						},
+					},
+				},
+			},
+			wantDepth: 2.0 / 3.0, // boundaries yes, interfaces no, deep yes (Exports ≤ 20) → 2/3
+		},
+		{
+			name: "no DepthMeta → current behavior",
+			subtasks: []planEntry{
+				{Title: "impl C", Phase: "implementation", EstimatedFiles: []string{"internal/baz/baz.go"}},
+				{Title: "impl D", Phase: "implementation"},
+			},
+			wantDepth: 0.5, // fallback to file-coverage: 1/2 entries have files
+		},
+		{
+			name: "exports > 20 violates deep decomposition → 0.67",
+			subtasks: []planEntry{
+				{
+					Title: "impl E", Phase: "implementation",
+					EstimatedFiles: []string{"internal/qux/qux.go"},
+					DepthMeta: &depthMeta{
+						ModuleBoundaries: []moduleBoundary{
+							{Package: "internal/qux", Description: "qux module", Exports: 25},
+						},
+						InterfaceShapes: []interfaceShape{
+							{Package: "internal/qux", Functions: []string{"Process"}, Types: []string{"Processor"}},
+						},
+					},
+				},
+			},
+			wantDepth: 2.0 / 3.0, // boundaries yes, interfaces yes, deep no → 2/3
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Canonical score via score package.
+			canonical := computePlanScores(tt.subtasks, nil, PlanValidationResult{Valid: true})
+
+			if !scoreApproxEqual(canonical.Depth, tt.wantDepth) {
+				t.Errorf("canonical Depth = %v, want %v", canonical.Depth, tt.wantDepth)
+			}
+
+			// Bridge score via scorePlanGate.
+			bridge := scorePlanGate(tt.subtasks, nil, PlanValidationResult{Valid: true})
+			bridgeDepth, ok := bridge["depth"].(float64)
+			if !ok {
+				t.Fatalf("bridge depth not a float64: %T", bridge["depth"])
+			}
+
+			if !scoreApproxEqual(bridgeDepth, tt.wantDepth) {
+				t.Errorf("bridge depth = %v, want %v", bridgeDepth, tt.wantDepth)
+			}
+
+			if !scoreApproxEqual(bridgeDepth, canonical.Depth) {
+				t.Errorf("PARITY MISMATCH: bridge=%v canonical=%v", bridgeDepth, canonical.Depth)
 			}
 		})
 	}

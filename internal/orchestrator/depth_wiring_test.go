@@ -196,7 +196,7 @@ func TestCheckDepthConstraintFailures_WithDepthFailure(t *testing.T) {
 		Failed: 1,
 	}
 
-	o.checkDepthConstraintFailures(&task, report, "/tmp/feature")
+	o.checkDepthConstraintFailures(&task, constraints.FormatReport(report), "/tmp/feature")
 
 	// depth_diagnosis should be stored.
 	diagnosis, ok := task.Context["depth_diagnosis"]
@@ -247,7 +247,18 @@ func TestCheckDepthConstraintFailures_AllPass(t *testing.T) {
 		Failed: 0,
 	}
 
-	o.checkDepthConstraintFailures(&task, report, "/tmp/feature")
+	// With the refactored API, the caller checks for depth failures before
+	// calling checkDepthConstraintFailures. Since all pass, it is not called.
+	hasDepthFailure := false
+	for _, r := range report.Results {
+		if !r.Passed && r.Type == "depth" {
+			hasDepthFailure = true
+			break
+		}
+	}
+	if hasDepthFailure {
+		o.checkDepthConstraintFailures(&task, constraints.FormatReport(report), "/tmp/feature")
+	}
 
 	// No depth_diagnosis should be stored.
 	if _, ok := task.Context["depth_diagnosis"]; ok {
@@ -289,7 +300,19 @@ func TestCheckDepthConstraintFailures_NonDepthFailure(t *testing.T) {
 		Failed: 1,
 	}
 
-	o.checkDepthConstraintFailures(&task, report, "/tmp/feature")
+	// With the refactored API, the caller checks for depth failures before
+	// calling checkDepthConstraintFailures. Since this is not a depth failure,
+	// the function is not called.
+	hasDepthFailure := false
+	for _, r := range report.Results {
+		if !r.Passed && r.Type == "depth" {
+			hasDepthFailure = true
+			break
+		}
+	}
+	if hasDepthFailure {
+		o.checkDepthConstraintFailures(&task, constraints.FormatReport(report), "/tmp/feature")
+	}
 
 	// No depth_diagnosis should be stored (failure is not depth-type).
 	if _, ok := task.Context["depth_diagnosis"]; ok {

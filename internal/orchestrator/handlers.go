@@ -476,3 +476,83 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 		"subtasks_cloned", len(doneTestSubtasks))
 	return nil
 }
+
+// planEntry is an intermediate struct for parsing plans from JSON that may
+// include dependency indices and TDD phase information.
+type planEntry struct {
+	Title          string     `json:"title"`
+	Description    string     `json:"description"`
+	AgentType      string     `json:"agent_type"`
+	EstimatedFiles []string   `json:"estimated_files"`
+	Files          []string   `json:"files"`
+	Dependencies   []int      `json:"dependencies"`
+	Priority       int        `json:"priority"`
+	IsTest         bool       `json:"is_test,omitempty"`
+	Phase          string     `json:"phase,omitempty"`
+	TestsFor       []int      `json:"tests_for,omitempty"`
+	DepthMeta      *depthMeta `json:"depth_meta,omitempty"`
+}
+
+// tddException represents a planner-declared exception to TDD enforcement
+// for a specific subtask.
+type tddException struct {
+	SubtaskIndex int    `json:"subtask_index"`
+	Reason       string `json:"reason"`
+}
+
+// parsePlanResult holds the full parsed plan output.
+type parsePlanResult struct {
+	Subtasks      []planEntry
+	TDDExceptions []tddException
+}
+
+// parsePlan extracts subtask plans and TDD exceptions from a task's Plan JSONField.
+func parsePlan(planField model.JSONField) (*parsePlanResult, error) {
+	if planField == nil {
+		return nil, fmt.Errorf("parse plan: plan is nil")
+	}
+
+	// The plan is stored as {"subtasks": [...]}.
+	subtasksRaw, ok := planField["subtasks"]
+	if !ok {
+		return nil, fmt.Errorf("parse plan: no subtasks key in plan")
+	}
+
+	// Marshal back to JSON and unmarshal into planEntry slice.
+	b, err := json.Marshal(subtasksRaw)
+	if err != nil {
+		return nil, fmt.Errorf("parse plan: marshal subtasks: %w", err)
+	}
+
+	var entries []planEntry
+	if err := json.Unmarshal(b, &entries); err != nil {
+		return nil, fmt.Errorf("parse plan: unmarshal subtasks: %w", err)
+	}
+
+	// Normalize: use "files" as fallback for "estimated_files".
+	for i := range entries {
+		if len(entries[i].EstimatedFiles) == 0 && len(entries[i].Files) > 0 {
+			entries[i].EstimatedFiles = entries[i].Files
+		}
+		if entries[i].AgentType == "" {
+			entries[i].AgentType = string(model.AgentCoder)
+		}
+	}
+
+	// Extract TDD exceptions if present (backward compatible — missing key is not an error).
+	var exceptions []tddException
+	if exceptionsRaw, hasExceptions := planField["tdd_exceptions"]; hasExceptions {
+		eb, err := json.Marshal(exceptionsRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse plan: marshal tdd_exceptions: %w", err)
+		}
+		if err := json.Unmarshal(eb, &exceptions); err != nil {
+			return nil, fmt.Errorf("parse plan: unmarshal tdd_exceptions: %w", err)
+		}
+	}
+
+	return &parsePlanResult{
+		Subtasks:      entries,
+		TDDExceptions: exceptions,
+	}, nil
+}

@@ -172,11 +172,40 @@ func scorePlanDocumentation(entries []PlanEntry) float64 {
 	return 0.0
 }
 
-// scorePlanDepth scores plan depth on three equally-weighted sub-criteria:
+// scorePlanDepth scores plan depth on three equally-weighted sub-criteria
+// when DepthMeta is available:
 //  1. Module boundaries defined — at least one subtask has valid ModuleBoundaries.
 //  2. Interface shapes specified — at least one subtask has valid InterfaceShapes.
 //  3. Deep decomposition — all boundary-defining subtasks keep Exports ≤ 20.
+//
+// When no subtask has DepthMeta, falls back to the file-coverage ratio
+// (fraction of entries with EstimatedFiles). This handles legacy plans that
+// predate the DepthMeta requirement.
 func scorePlanDepth(entries []PlanEntry) float64 {
+	if len(entries) == 0 {
+		return 1.0
+	}
+
+	// Check if any entry has DepthMeta.
+	hasAnyDepthMeta := false
+	for _, entry := range entries {
+		if entry.DepthMeta != nil {
+			hasAnyDepthMeta = true
+			break
+		}
+	}
+
+	// Fallback: file-coverage ratio when no DepthMeta is present.
+	if !hasAnyDepthMeta {
+		var withFiles int
+		for _, entry := range entries {
+			if len(entry.EstimatedFiles) > 0 {
+				withFiles++
+			}
+		}
+		return float64(withFiles) / float64(len(entries))
+	}
+
 	hasBoundaries := false
 	hasInterfaces := false
 
@@ -341,4 +370,3 @@ func ScoresToMap(s StepScore) map[string]any {
 		"formatted":     FormatScores(s),
 	}
 }
-

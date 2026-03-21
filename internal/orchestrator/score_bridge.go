@@ -186,18 +186,118 @@ func formatScoreLine(tdd, constitution, doc, depth float64) string {
 	)
 }
 
-// planDepthScore computes a depth score for a plan. Plans where more subtasks
-// specify estimated files score higher, indicating better module-boundary
-// awareness. Mirrors score.scorePlanDepth.
+// moduleBoundary describes a package boundary in a plan subtask's depth metadata.
+// Local mirror of score.ModuleBoundary to avoid importing internal/score.
+type moduleBoundary struct {
+	Package     string `json:"package"`
+	Description string `json:"description"`
+	Exports     int    `json:"exports"`
+}
+
+// interfaceShape describes an interface contract in a plan subtask's depth metadata.
+// Local mirror of score.InterfaceShape to avoid importing internal/score.
+type interfaceShape struct {
+	Package   string   `json:"package"`
+	Functions []string `json:"functions"`
+	Types     []string `json:"types"`
+}
+
+// depthMeta holds depth-related metadata for a plan subtask.
+// Local mirror of score.DepthMeta to avoid importing internal/score.
+type depthMeta struct {
+	ModuleBoundaries []moduleBoundary `json:"module_boundaries"`
+	InterfaceShapes  []interfaceShape `json:"interface_shapes"`
+}
+
+// planDepthScore scores plan depth on three equally-weighted sub-criteria
+// when DepthMeta is available:
+//  1. Module boundaries defined — at least one subtask has valid ModuleBoundaries.
+//  2. Interface shapes specified — at least one subtask has valid InterfaceShapes.
+//  3. Deep decomposition — all boundary-defining subtasks keep Exports in (0, 20].
+//
+// When no subtask has DepthMeta, falls back to the file-coverage ratio
+// (fraction of entries with EstimatedFiles). This handles legacy plans that
+// predate the DepthMeta requirement.
+//
+// Mirrors score.scorePlanDepth.
 func planDepthScore(entries []planEntry) float64 {
 	if len(entries) == 0 {
 		return 1.0
 	}
-	withFiles := 0
-	for _, e := range entries {
-		if len(e.EstimatedFiles) > 0 {
-			withFiles++
+
+	// Check if any entry has DepthMeta.
+	hasAnyDepthMeta := false
+	for _, entry := range entries {
+		if entry.DepthMeta != nil {
+			hasAnyDepthMeta = true
+			break
 		}
 	}
-	return float64(withFiles) / float64(len(entries))
+
+	// Fallback: file-coverage ratio when no DepthMeta is present.
+	if !hasAnyDepthMeta {
+		var withFiles int
+		for _, entry := range entries {
+			if len(entry.EstimatedFiles) > 0 {
+				withFiles++
+			}
+		}
+		return float64(withFiles) / float64(len(entries))
+	}
+
+	// Three-criterion scoring with DepthMeta.
+	hasBoundaries := false
+	hasInterfaces := false
+
+	boundarySubtaskCount := 0
+	deepSubtaskCount := 0
+
+	for _, entry := range entries {
+		if entry.DepthMeta == nil {
+			continue
+		}
+
+		for _, b := range entry.DepthMeta.ModuleBoundaries {
+			if b.Package != "" && b.Description != "" {
+				hasBoundaries = true
+				break
+			}
+		}
+
+		for _, s := range entry.DepthMeta.InterfaceShapes {
+			if s.Package != "" && (len(s.Functions) > 0 || len(s.Types) > 0) {
+				hasInterfaces = true
+				break
+			}
+		}
+
+		hasValidBoundary := false
+		allDeep := true
+		for _, b := range entry.DepthMeta.ModuleBoundaries {
+			if b.Package != "" && b.Description != "" {
+				hasValidBoundary = true
+				if b.Exports <= 0 || b.Exports > 20 {
+					allDeep = false
+				}
+			}
+		}
+		if hasValidBoundary {
+			boundarySubtaskCount++
+			if allDeep {
+				deepSubtaskCount++
+			}
+		}
+	}
+
+	var s float64
+	if hasBoundaries {
+		s += 1.0
+	}
+	if hasInterfaces {
+		s += 1.0
+	}
+	if boundarySubtaskCount > 0 && deepSubtaskCount == boundarySubtaskCount {
+		s += 1.0
+	}
+	return s / 3.0
 }
