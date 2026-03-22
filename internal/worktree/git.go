@@ -214,6 +214,32 @@ func CleanClaudeArtifacts(worktreePath string) (bool, error) {
 	return output != "", nil
 }
 
+// UntrackEphemeralFiles removes orchestrator-generated ephemeral files
+// (plan.json) from git tracking if they are currently tracked. The files
+// remain on disk so agents can still read them. Returns true if a commit
+// was created to untrack the files.
+func UntrackEphemeralFiles(worktreePath string) (bool, error) {
+	ephemeralFiles := []string{"plan.json"}
+	var untracked bool
+	for _, f := range ephemeralFiles {
+		out, err := RunGit([]string{"ls-files", f}, worktreePath)
+		if err != nil || out == "" {
+			continue
+		}
+		if _, err := RunGit([]string{"rm", "--cached", f}, worktreePath); err != nil {
+			return false, fmt.Errorf("untrack ephemeral file %s: %w", f, err)
+		}
+		untracked = true
+	}
+	if !untracked {
+		return false, nil
+	}
+	if _, err := RunGit([]string{"commit", "-m", "chore: untrack ephemeral files before merge"}, worktreePath); err != nil {
+		return false, fmt.Errorf("commit ephemeral file removal: %w", err)
+	}
+	return true, nil
+}
+
 // BranchHasNewCommits returns true if sourceBranch has commits that are not
 // yet in the worktree's current HEAD (i.e. there is work to merge).
 func BranchHasNewCommits(worktreePath, sourceBranch string) (bool, error) {

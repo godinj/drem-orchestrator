@@ -59,6 +59,83 @@ func TestCleanClaudeArtifacts_NoOpWhenClean(t *testing.T) {
 	}
 }
 
+func TestUntrackEphemeralFiles_TrackedPlanJson(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	dir := filepath.Dir(bareRepo)
+
+	wtDir := filepath.Join(dir, "wt")
+	testutil.AddWorktree(t, bareRepo, "test-untrack-tracked", wtDir)
+
+	// Commit plan.json so it's tracked.
+	testutil.CommitFile(t, wtDir, "plan.json", `{"subtasks":[]}`, "add plan")
+
+	removed, err := UntrackEphemeralFiles(wtDir)
+	if err != nil {
+		t.Fatalf("UntrackEphemeralFiles: %v", err)
+	}
+	if !removed {
+		t.Error("expected removed=true when plan.json is tracked")
+	}
+
+	// plan.json should still exist on disk.
+	if _, err := os.Stat(filepath.Join(wtDir, "plan.json")); err != nil {
+		t.Error("expected plan.json to remain on disk after untracking")
+	}
+
+	// plan.json should no longer be tracked.
+	out, _ := RunGit([]string{"ls-files", "plan.json"}, wtDir)
+	if out != "" {
+		t.Error("expected plan.json to be untracked after UntrackEphemeralFiles")
+	}
+
+	// The removal should be committed (no staged changes).
+	if _, err := RunGit([]string{"diff", "--cached", "--quiet"}, wtDir); err != nil {
+		t.Error("expected no staged changes after UntrackEphemeralFiles commit")
+	}
+}
+
+func TestUntrackEphemeralFiles_UntrackedPlanJson(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	dir := filepath.Dir(bareRepo)
+
+	wtDir := filepath.Join(dir, "wt")
+	testutil.AddWorktree(t, bareRepo, "test-untrack-untracked", wtDir)
+
+	// Write plan.json but don't commit it (untracked).
+	if err := os.WriteFile(filepath.Join(wtDir, "plan.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := UntrackEphemeralFiles(wtDir)
+	if err != nil {
+		t.Fatalf("UntrackEphemeralFiles: %v", err)
+	}
+	if removed {
+		t.Error("expected removed=false when plan.json is not tracked")
+	}
+
+	// File should still exist on disk.
+	if _, err := os.Stat(filepath.Join(wtDir, "plan.json")); err != nil {
+		t.Error("expected plan.json to remain on disk")
+	}
+}
+
+func TestUntrackEphemeralFiles_NoPlanJson(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	dir := filepath.Dir(bareRepo)
+
+	wtDir := filepath.Join(dir, "wt")
+	testutil.AddWorktree(t, bareRepo, "test-untrack-none", wtDir)
+
+	removed, err := UntrackEphemeralFiles(wtDir)
+	if err != nil {
+		t.Fatalf("UntrackEphemeralFiles: %v", err)
+	}
+	if removed {
+		t.Error("expected removed=false when no plan.json exists")
+	}
+}
+
 func TestRebaseBranch_WithClaudeArtifacts(t *testing.T) {
 	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)

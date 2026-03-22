@@ -140,9 +140,9 @@ func (o *Orchestrator) PlanAgentMerge(agentBranch, featureWorktree string) (*Mer
 // (no file conflicts) are retried up to maxMergeRetries times with backoff.
 // Real conflicts (from rebase or merge) are returned immediately without retry.
 //
-// If the feature worktree has uncommitted changes (e.g. plan.json or .claude/
-// artifacts), they are auto-committed before the merge to avoid blocking on
-// dirty worktree errors.
+// If the feature worktree has uncommitted changes (e.g. .claude/ artifacts),
+// they are auto-committed before the merge to avoid blocking on dirty worktree
+// errors. Ephemeral files (plan.json) are untracked to prevent merge conflicts.
 func (o *Orchestrator) MergeAgentIntoFeature(agentBranch, featureWorktree string) (*worktree.MergeResult, error) {
 	clean, err := worktree.IsClean(featureWorktree)
 	if err != nil {
@@ -165,6 +165,15 @@ func (o *Orchestrator) MergeAgentIntoFeature(agentBranch, featureWorktree string
 			slog.Warn("feature worktree has uncommitted changes that could not be auto-committed",
 				"feature_worktree", featureWorktree)
 		}
+	}
+
+	// Untrack ephemeral files (plan.json) to prevent merge conflicts.
+	if removed, rmErr := worktree.UntrackEphemeralFiles(featureWorktree); rmErr != nil {
+		slog.Warn("failed to untrack ephemeral files before agent merge",
+			"feature_worktree", featureWorktree, "error", rmErr)
+	} else if removed {
+		slog.Info("untracked ephemeral files before agent merge",
+			"feature_worktree", featureWorktree, "agent_branch", agentBranch)
 	}
 
 	return mergeWithRebaseAndRetry(o.wt, agentBranch, featureWorktree)
@@ -359,6 +368,19 @@ func (o *Orchestrator) MergeFeatureIntoMain(task *model.Task) (*worktree.MergeRe
 		if committed {
 			slog.Info("auto-committed artifacts in main worktree before merge",
 				"main_worktree", mainWorktree,
+				"feature_branch", task.WorktreeBranch)
+		}
+	}
+
+	// Untrack ephemeral files (plan.json) from the feature branch so they
+	// don't get merged into main.
+	featureWorktree, findErr := o.wt.FindWorktreeByBranch(task.WorktreeBranch)
+	if findErr == nil {
+		if removed, rmErr := worktree.UntrackEphemeralFiles(featureWorktree); rmErr != nil {
+			slog.Warn("failed to untrack ephemeral files before feature merge",
+				"feature_branch", task.WorktreeBranch, "error", rmErr)
+		} else if removed {
+			slog.Info("untracked ephemeral files before feature merge",
 				"feature_branch", task.WorktreeBranch)
 		}
 	}

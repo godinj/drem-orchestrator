@@ -1478,10 +1478,10 @@ func TestMergeAutoCommitsDirtyWorktree(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test: HandlePlanApproved writes and commits plan.json to integration worktree
+// Test: HandlePlanApproved writes plan.json to integration worktree without tracking it
 // ---------------------------------------------------------------------------
 
-func TestHandlePlanApproved_CommitsPlanJSON(t *testing.T) {
+func TestHandlePlanApproved_WritesPlanJSONUntracked(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "test-plan-commit"
@@ -1499,7 +1499,7 @@ func TestHandlePlanApproved_CommitsPlanJSON(t *testing.T) {
 		ID:             taskID,
 		ProjectID:      o.projectID,
 		Title:          "plan-commit-task",
-		Description:    "verify plan.json is committed",
+		Description:    "verify plan.json is written but not tracked",
 		Status:         model.StatusPlanReview,
 		WorktreeBranch: "feature/" + featureName,
 		Plan: model.JSONField{
@@ -1526,19 +1526,16 @@ func TestHandlePlanApproved_CommitsPlanJSON(t *testing.T) {
 		t.Fatalf("HandlePlanApproved error: %v", err)
 	}
 
-	// Verify plan.json exists in the feature worktree.
+	// Verify plan.json exists on disk in the feature worktree.
 	planPath := filepath.Join(featureDir, "plan.json")
 	if _, err := os.Stat(planPath); os.IsNotExist(err) {
-		t.Fatal("expected plan.json to exist in feature worktree")
+		t.Fatal("expected plan.json to exist on disk in feature worktree")
 	}
 
-	// Verify the worktree is clean (plan.json was committed).
-	clean, err := worktree.IsClean(featureDir)
-	if err != nil {
-		t.Fatalf("check clean: %v", err)
-	}
-	if !clean {
-		t.Error("expected clean worktree after plan.json commit")
+	// Verify plan.json is NOT tracked by git.
+	out, _ := worktree.RunGit([]string{"ls-files", "plan.json"}, featureDir)
+	if out != "" {
+		t.Error("expected plan.json to NOT be tracked by git")
 	}
 
 	// Verify the plan.json content is valid JSON matching the task plan.
@@ -1552,6 +1549,75 @@ func TestHandlePlanApproved_CommitsPlanJSON(t *testing.T) {
 	}
 	if _, ok := planContent["subtasks"]; !ok {
 		t.Error("expected plan.json to contain 'subtasks' key")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test: HandlePlanApproved untracks previously-tracked plan.json
+// ---------------------------------------------------------------------------
+
+func TestHandlePlanApproved_UntracksLegacyPlanJSON(t *testing.T) {
+	bareRepoPath := setupTestRepoWithMainBranch(t)
+
+	featureName := "test-plan-untrack"
+	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
+
+	// Simulate a legacy state: plan.json is tracked (committed).
+	testutil.CommitFile(t, featureDir, "plan.json", `{"subtasks":[]}`, "legacy plan commit")
+	out, _ := worktree.RunGit([]string{"ls-files", "plan.json"}, featureDir)
+	if out == "" {
+		t.Fatal("precondition: plan.json should be tracked before test")
+	}
+
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
+	db.Create(&project)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:             taskID,
+		ProjectID:      o.projectID,
+		Title:          "plan-untrack-task",
+		Description:    "verify legacy plan.json gets untracked",
+		Status:         model.StatusPlanReview,
+		WorktreeBranch: "feature/" + featureName,
+		Plan: model.JSONField{
+			"subtasks": []any{
+				map[string]any{
+					"title":       "Write tests",
+					"description": "Test subtask",
+					"agent_type":  "coder",
+					"phase":       "test",
+					"tests_for":   []any{float64(1)},
+				},
+				map[string]any{
+					"title":       "Implement",
+					"description": "Impl subtask",
+					"agent_type":  "coder",
+					"phase":       "implementation",
+				},
+			},
+		},
+	}
+	db.Create(&task)
+
+	if err := o.HandlePlanApproved(taskID); err != nil {
+		t.Fatalf("HandlePlanApproved error: %v", err)
+	}
+
+	// Verify plan.json exists on disk (updated content).
+	planPath := filepath.Join(featureDir, "plan.json")
+	if _, err := os.Stat(planPath); os.IsNotExist(err) {
+		t.Fatal("expected plan.json to exist on disk")
+	}
+
+	// Verify plan.json is no longer tracked.
+	out, _ = worktree.RunGit([]string{"ls-files", "plan.json"}, featureDir)
+	if out != "" {
+		t.Error("expected plan.json to be untracked after HandlePlanApproved")
 	}
 }
 

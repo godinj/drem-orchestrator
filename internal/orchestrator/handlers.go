@@ -150,7 +150,9 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 	// Clear planner agent assignment now that review is complete.
 	task.AssignedAgentID = nil
 
-	// Write plan.json to the integration worktree and commit it.
+	// Write plan.json to the integration worktree as an untracked file.
+	// Agents can read it from disk but it must not be committed — tracked
+	// plan.json causes merge conflicts between feature branches.
 	if task.WorktreeBranch != "" {
 		featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(featureName)
@@ -161,15 +163,13 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 			planPath := filepath.Join(featureDir, "plan.json")
 			if writeErr := os.WriteFile(planPath, planJSON, 0o644); writeErr != nil {
 				o.logger.Warn("handle plan approved: failed to write plan.json to worktree", "error", writeErr)
-			} else {
-				committed, commitErr := worktree.CommitUnstagedChanges(
-					featureDir, "chore: commit plan.json after plan approval")
-				if commitErr != nil {
-					o.logger.Warn("handle plan approved: failed to commit plan.json", "error", commitErr)
-				} else if committed {
-					o.logger.Info("handle plan approved: committed plan.json to integration worktree",
-						"task_id", task.ID)
-				}
+			}
+			// If plan.json was previously tracked, untrack it.
+			if removed, rmErr := worktree.UntrackEphemeralFiles(featureDir); rmErr != nil {
+				o.logger.Warn("handle plan approved: failed to untrack plan.json", "error", rmErr)
+			} else if removed {
+				o.logger.Info("handle plan approved: untracked plan.json in integration worktree",
+					"task_id", task.ID)
 			}
 		}
 	}
