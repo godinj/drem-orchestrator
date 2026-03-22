@@ -414,6 +414,12 @@ func (o *Orchestrator) reconcileOrphanWorktrees() (int, error) {
 		}
 
 		for _, awt := range agentWorktrees {
+			if !strings.HasPrefix(awt.Branch, "worktree-agent-") {
+				o.logger.Warn("reconcile: skipping non-agent branch in orphan cleanup",
+					"branch", awt.Branch, "feature", parent.WorktreeBranch)
+				continue
+			}
+
 			if activeBranches[awt.Branch] {
 				continue // agent is actively working
 			}

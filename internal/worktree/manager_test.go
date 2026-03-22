@@ -664,6 +664,172 @@ func TestMigrateToGroupedLayout(t *testing.T) {
 	}
 }
 
+func TestRemoveAgentWorktree_ProtectedBranchGuard(t *testing.T) {
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
+	mgr := NewManager(bareRepo, defaultBranch)
+
+	// Find the main worktree path so we can verify it survives
+	mainWorktreePath, err := mgr.MainWorktreePath()
+	if err != nil {
+		t.Fatalf("MainWorktreePath failed: %v", err)
+	}
+
+	// Create a feature worktree to use as a non-agent branch target
+	featureInfo, err := mgr.CreateFeature("protected-test")
+	if err != nil {
+		t.Fatalf("CreateFeature failed: %v", err)
+	}
+
+	t.Run("refuses default branch", func(t *testing.T) {
+		err := mgr.RemoveAgentWorktree(defaultBranch)
+		if err == nil {
+			t.Fatal("expected error when removing default branch, got nil")
+		}
+		if !strings.Contains(err.Error(), "non-agent branch") {
+			t.Errorf("expected error about non-agent branch, got: %v", err)
+		}
+
+		// Verify the main worktree is still intact
+		if _, statErr := os.Stat(mainWorktreePath); os.IsNotExist(statErr) {
+			t.Fatal("main worktree was deleted — catastrophic failure")
+		}
+
+		// Verify the default branch still exists
+		_, branchErr := RunGit([]string{"rev-parse", "--verify", defaultBranch}, bareRepo)
+		if branchErr != nil {
+			t.Fatalf("default branch %q was deleted: %v", defaultBranch, branchErr)
+		}
+	})
+
+	t.Run("refuses feature branch", func(t *testing.T) {
+		err := mgr.RemoveAgentWorktree(featureInfo.Branch)
+		if err == nil {
+			t.Fatal("expected error when removing feature branch, got nil")
+		}
+		if !strings.Contains(err.Error(), "non-agent branch") {
+			t.Errorf("expected error about non-agent branch, got: %v", err)
+		}
+
+		// Verify the feature worktree is still intact
+		if _, statErr := os.Stat(featureInfo.Path); os.IsNotExist(statErr) {
+			t.Fatal("feature worktree was deleted")
+		}
+
+		// Verify the feature branch still exists
+		_, branchErr := RunGit([]string{"rev-parse", "--verify", featureInfo.Branch}, bareRepo)
+		if branchErr != nil {
+			t.Fatalf("feature branch %q was deleted: %v", featureInfo.Branch, branchErr)
+		}
+	})
+
+	t.Run("allows valid agent branch", func(t *testing.T) {
+		// Create an agent worktree
+		_, createErr := mgr.CreateFeature("agent-guard-test")
+		if createErr != nil {
+			t.Fatalf("CreateFeature failed: %v", createErr)
+		}
+		agentInfo, createErr := mgr.CreateAgentWorktree("agent-guard-test")
+		if createErr != nil {
+			t.Fatalf("CreateAgentWorktree failed: %v", createErr)
+		}
+
+		// Verify it has the right prefix
+		if !strings.HasPrefix(agentInfo.Branch, "worktree-agent-") {
+			t.Fatalf("agent branch %q doesn't have expected prefix", agentInfo.Branch)
+		}
+
+		// Remove should succeed
+		err := mgr.RemoveAgentWorktree(agentInfo.Branch)
+		if err != nil {
+			t.Fatalf("RemoveAgentWorktree failed for valid agent branch: %v", err)
+		}
+
+		// Verify the directory is gone
+		if _, statErr := os.Stat(agentInfo.Path); !os.IsNotExist(statErr) {
+			t.Error("agent worktree directory still exists after removal")
+		}
+	})
+}
+
+func TestListAgentWorktrees_BranchResolution(t *testing.T) {
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
+	mgr := NewManager(bareRepo, defaultBranch)
+
+	// Create a feature and an agent worktree
+	_, err := mgr.CreateFeature("branch-resolve")
+	if err != nil {
+		t.Fatalf("CreateFeature failed: %v", err)
+	}
+	agentInfo, err := mgr.CreateAgentWorktree("branch-resolve")
+	if err != nil {
+		t.Fatalf("CreateAgentWorktree failed: %v", err)
+	}
+
+	t.Run("normal agent returns correct branch", func(t *testing.T) {
+		agents, listErr := mgr.ListAgentWorktrees("branch-resolve")
+		if listErr != nil {
+			t.Fatalf("ListAgentWorktrees failed: %v", listErr)
+		}
+		if len(agents) != 1 {
+			t.Fatalf("expected 1 agent, got %d", len(agents))
+		}
+		if agents[0].Branch != agentInfo.Branch {
+			t.Errorf("expected branch %q, got %q", agentInfo.Branch, agents[0].Branch)
+		}
+		if !strings.HasPrefix(agents[0].Branch, "worktree-agent-") {
+			t.Errorf("branch %q should have worktree-agent- prefix", agents[0].Branch)
+		}
+	})
+
+	t.Run("deleted-branch agent is skipped", func(t *testing.T) {
+		// Create a second agent so we can delete its branch
+		agent2, createErr := mgr.CreateAgentWorktree("branch-resolve")
+		if createErr != nil {
+			t.Fatalf("CreateAgentWorktree (2) failed: %v", createErr)
+		}
+
+		// Simulate the state where an agent worktree's branch was already
+		// deleted by a previous cleanup pass: detach HEAD in the worktree
+		// (so git allows deleting the branch), then delete the branch.
+		headSHA, _ := RunGit([]string{"rev-parse", "HEAD"}, agent2.Path)
+		_, detachErr := RunGit([]string{"checkout", "--detach", headSHA}, agent2.Path)
+		if detachErr != nil {
+			t.Fatalf("failed to detach HEAD: %v", detachErr)
+		}
+		_, delErr := RunGit([]string{"branch", "-D", agent2.Branch}, bareRepo)
+		if delErr != nil {
+			t.Fatalf("failed to delete agent branch: %v", delErr)
+		}
+
+		agents, listErr := mgr.ListAgentWorktrees("branch-resolve")
+		if listErr != nil {
+			t.Fatalf("ListAgentWorktrees failed: %v", listErr)
+		}
+
+		// The agent whose branch was deleted must be skipped entirely.
+		// It should NOT appear with branch="master" (default fallback),
+		// branch="HEAD" (detached HEAD), or any other non-agent branch.
+		for _, a := range agents {
+			if !strings.HasPrefix(a.Branch, "worktree-agent-") {
+				t.Errorf("agent at %s reported branch=%q; "+
+					"agents with deleted branches should be skipped, not listed with fallback branch",
+					a.Path, a.Branch)
+			}
+		}
+
+		// Only the first agent (whose branch is intact) should remain
+		if len(agents) != 1 {
+			t.Errorf("expected exactly 1 agent (with intact branch), got %d", len(agents))
+		}
+		if len(agents) == 1 && agents[0].Branch != agentInfo.Branch {
+			t.Errorf("expected surviving agent to have branch %q, got %q",
+				agentInfo.Branch, agents[0].Branch)
+		}
+	})
+}
+
 func TestSyncAll(t *testing.T) {
 	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
 	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)

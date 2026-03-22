@@ -288,9 +288,16 @@ func (m *Manager) CreateAgentWorktree(featureName string) (*AgentWorktreeInfo, e
 	}, nil
 }
 
+const agentBranchPrefix = "worktree-agent-"
+
 // RemoveAgentWorktree removes an agent worktree by its branch name.
 // Uses ListWorktrees() to find the path for the given branch.
+// Refuses to remove the default branch or any non-agent branch.
 func (m *Manager) RemoveAgentWorktree(branch string) error {
+	if !strings.HasPrefix(branch, agentBranchPrefix) {
+		return fmt.Errorf("remove agent worktree: refusing to remove non-agent branch %q", branch)
+	}
+
 	// Find the worktree path for this branch
 	worktrees, err := m.ListWorktrees()
 	if err != nil {
@@ -327,6 +334,8 @@ func (m *Manager) RemoveAgentWorktree(branch string) error {
 
 // ListAgentWorktrees lists agent worktrees inside a feature group directory
 // by scanning feature/<name>/agent-* directories.
+// Uses git worktree list --porcelain from the bare repo for reliable branch
+// resolution. Worktrees with detached HEAD or non-agent branches are skipped.
 func (m *Manager) ListAgentWorktrees(featureName string) ([]AgentWorktreeInfo, error) {
 	branch := ensurePrefix(featureName)
 	fn := strings.TrimPrefix(branch, featurePrefix)
@@ -334,6 +343,17 @@ func (m *Manager) ListAgentWorktrees(featureName string) ([]AgentWorktreeInfo, e
 
 	if _, err := os.Stat(groupDir); os.IsNotExist(err) {
 		return nil, nil
+	}
+
+	// Build a map of worktree path -> WorktreeInfo from porcelain output.
+	// This gives us the branch from git metadata, not HEAD resolution.
+	allWorktrees, err := m.ListWorktrees()
+	if err != nil {
+		return nil, fmt.Errorf("list agent worktrees: %w", err)
+	}
+	wtByPath := make(map[string]WorktreeInfo, len(allWorktrees))
+	for _, wt := range allWorktrees {
+		wtByPath[wt.Path] = wt
 	}
 
 	entries, err := os.ReadDir(groupDir)
@@ -349,20 +369,21 @@ func (m *Manager) ListAgentWorktrees(featureName string) ([]AgentWorktreeInfo, e
 
 		agentDir := filepath.Join(groupDir, entry.Name())
 
-		head, headErr := RunGit([]string{"rev-parse", "HEAD"}, agentDir)
-		if headErr != nil {
+		wt, ok := wtByPath[agentDir]
+		if !ok {
+			// Not registered as a git worktree; skip
 			continue
 		}
 
-		agentBranch, branchErr := RunGit([]string{"rev-parse", "--abbrev-ref", "HEAD"}, agentDir)
-		if branchErr != nil {
+		// Skip worktrees with detached HEAD (empty branch) or non-agent branches
+		if !strings.HasPrefix(wt.Branch, agentBranchPrefix) {
 			continue
 		}
 
 		agents = append(agents, AgentWorktreeInfo{
 			Path:          agentDir,
-			Branch:        agentBranch,
-			Head:          head,
+			Branch:        wt.Branch,
+			Head:          wt.Head,
 			ParentFeature: branch,
 		})
 	}

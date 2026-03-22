@@ -1171,3 +1171,242 @@ func TestReconcileStuckAgents_FailsAtLimit(t *testing.T) {
 		t.Errorf("expected subtask status failed (at limit), got %s", updated.Status)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// reconcileOrphanWorktrees — orphan worktree guard
+// ---------------------------------------------------------------------------
+
+// createAgentWorktree creates a worktree at feature/<featureName>/agent-<agentSuffix>
+// on the given branch. If addCommit is true, an extra commit is added ahead of the
+// feature branch. Unlike createAgentBranch, this does NOT merge the agent branch
+// into the feature — it leaves it "orphan" for reconciliation testing.
+func createAgentWorktree(t *testing.T, bareRepoPath, featureName, agentSuffix, branchName string, addCommit bool) string {
+	t.Helper()
+	agentDir := filepath.Join(bareRepoPath, "feature", featureName, "agent-"+agentSuffix)
+	featureBranch := "feature/" + featureName
+
+	// Create branch from the feature branch.
+	if _, err := worktree.RunGit([]string{"branch", branchName, featureBranch}, bareRepoPath); err != nil {
+		t.Fatalf("create branch %s: %v", branchName, err)
+	}
+	if err := os.MkdirAll(filepath.Dir(agentDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := worktree.RunGit([]string{"worktree", "add", agentDir, branchName}, bareRepoPath); err != nil {
+		t.Fatalf("add worktree %s: %v", branchName, err)
+	}
+	worktree.RunGit([]string{"config", "user.email", "test@test.com"}, agentDir)
+	worktree.RunGit([]string{"config", "user.name", "Test"}, agentDir)
+
+	if addCommit {
+		testFile := filepath.Join(agentDir, "agent-work.txt")
+		if err := os.WriteFile(testFile, []byte("agent work"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := worktree.RunGit([]string{"add", "."}, agentDir); err != nil {
+			t.Fatalf("git add: %v", err)
+		}
+		if _, err := worktree.RunGit([]string{"commit", "-m", "agent work commit"}, agentDir); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	}
+
+	return agentDir
+}
+
+func TestReconcileOrphanWorktrees_RemovesEmptyAgentWorktree(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "orphan-wt-empty"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	// Create an agent worktree with no extra commits (same as feature branch).
+	agentBranch := "worktree-agent-empty1"
+	createAgentWorktree(t, bareRepo, featureName, "empty1", agentBranch, false)
+
+	parent := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      orch.projectID,
+		Title:          "orphan-wt-parent",
+		Description:    "parent with orphan agent worktree",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&parent)
+
+	fixes, err := orch.reconcileOrphanWorktrees()
+	if err != nil {
+		t.Fatalf("reconcileOrphanWorktrees() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix (orphan empty agent worktree removed), got %d", fixes)
+	}
+
+	// Verify the agent branch was deleted.
+	_, branchErr := worktree.RunGit([]string{"rev-parse", "--verify", agentBranch}, bareRepo)
+	if branchErr == nil {
+		t.Errorf("expected agent branch %q to be deleted, but it still exists", agentBranch)
+	}
+}
+
+func TestReconcileOrphanWorktrees_SkipsNonAgentBranch(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "orphan-wt-noagent"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	// Create a worktree in the agent directory structure, but with a
+	// non-agent branch name. This simulates the bug where
+	// ListAgentWorktrees resolves HEAD to the default branch.
+	nonAgentBranch := "rogue-branch"
+	rogueDir := createAgentWorktree(t, bareRepo, featureName, "rogue", nonAgentBranch, false)
+
+	parent := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      orch.projectID,
+		Title:          "orphan-wt-noagent-parent",
+		Description:    "parent with rogue non-agent worktree",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&parent)
+
+	fixes, err := orch.reconcileOrphanWorktrees()
+	if err != nil {
+		t.Fatalf("reconcileOrphanWorktrees() error: %v", err)
+	}
+	if fixes != 0 {
+		t.Errorf("expected 0 fixes (non-agent branch must be skipped), got %d", fixes)
+	}
+
+	// Verify the non-agent branch still exists.
+	_, branchErr := worktree.RunGit([]string{"rev-parse", "--verify", nonAgentBranch}, bareRepo)
+	if branchErr != nil {
+		t.Errorf("non-agent branch %q was deleted — reconciler must not remove non-agent branches", nonAgentBranch)
+	}
+
+	// Verify the worktree directory still exists.
+	if _, err := os.Stat(rogueDir); os.IsNotExist(err) {
+		t.Errorf("rogue worktree directory was removed — reconciler must not remove non-agent worktrees")
+	}
+}
+
+func TestReconcileOrphanWorktrees_PreservesAgentWithCommits(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "orphan-wt-commits"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	// Create an agent worktree WITH commits ahead of the feature branch.
+	agentBranch := "worktree-agent-haswork"
+	agentDir := createAgentWorktree(t, bareRepo, featureName, "haswork", agentBranch, true)
+
+	parent := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      orch.projectID,
+		Title:          "orphan-wt-commits-parent",
+		Description:    "parent with agent that has real work",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&parent)
+
+	fixes, err := orch.reconcileOrphanWorktrees()
+	if err != nil {
+		t.Fatalf("reconcileOrphanWorktrees() error: %v", err)
+	}
+	if fixes != 0 {
+		t.Errorf("expected 0 fixes (agent has commits), got %d", fixes)
+	}
+
+	// Verify the agent branch still exists.
+	_, branchErr := worktree.RunGit([]string{"rev-parse", "--verify", agentBranch}, bareRepo)
+	if branchErr != nil {
+		t.Errorf("agent branch %q was deleted — should be preserved (has commits)", agentBranch)
+	}
+
+	// Verify the worktree directory still exists.
+	if _, err := os.Stat(agentDir); os.IsNotExist(err) {
+		t.Errorf("agent worktree directory was removed — should be preserved (has commits)")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Integration: end-to-end protection against master/main deletion
+// ---------------------------------------------------------------------------
+
+// TestReconcile_ProtectsMainWorktreeFromOrphanCleanup reproduces the exact
+// observed failure: an agent worktree whose branch was already deleted causes
+// reconcileOrphanWorktrees to misidentify and destroy the default branch.
+//
+// Scenario:
+//  1. Bare repo with a main worktree checked out
+//  2. Feature with an agent worktree
+//  3. Agent branch deleted (simulating prior cleanup that left the directory)
+//  4. DB records: parent task with worktree_branch, no WORKING agents
+//  5. Full Reconcile() runs
+//
+// Asserts: main worktree dir exists, main branch exists, HEAD → main, no error.
+func TestReconcile_ProtectsMainWorktreeFromOrphanCleanup(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	// 1. Create a main worktree (simulates production layout where the
+	//    default branch has a checked-out worktree in the bare repo).
+	mainWorktreeDir := filepath.Join(bareRepo, "main")
+	runGitCmd(t, bareRepo, "worktree", "add", mainWorktreeDir, "main")
+
+	// 2. Create a feature with an agent worktree.
+	featureName := "e2e-master-protect"
+	createFeatureWorktree(t, bareRepo, featureName)
+	agentBranch := "worktree-agent-deadbeef"
+	agentDir := createAgentWorktree(t, bareRepo, featureName, "deadbeef", agentBranch, false)
+
+	// 3. Delete the agent branch (simulating a previous cleanup that removed
+	//    the branch but left the worktree directory orphaned).
+	//    First detach HEAD in the agent worktree so the branch can be deleted.
+	headCommit := runGitCmd(t, agentDir, "rev-parse", "HEAD")
+	runGitCmd(t, agentDir, "checkout", "--detach", headCommit)
+	runGitCmd(t, bareRepo, "branch", "-D", agentBranch)
+
+	// 4. Create DB records: parent task referencing the feature, no working agents.
+	parent := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      orch.projectID,
+		Title:          "e2e-protect-parent",
+		Description:    "parent task for e2e master protection test",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&parent)
+
+	// 5. Run the full Reconcile() — this is the code path that previously
+	//    destroyed the master worktree.
+	fixes, err := orch.Reconcile()
+
+	// 6. Verify: no error.
+	if err != nil {
+		t.Fatalf("Reconcile() returned error: %v", err)
+	}
+
+	// The orphaned agent worktree has a detached HEAD with no agent branch,
+	// so ListAgentWorktrees should skip it entirely — expect 0 fixes from
+	// orphan cleanup.
+	_ = fixes
+
+	// Verify: main worktree directory still exists on disk.
+	if _, statErr := os.Stat(mainWorktreeDir); os.IsNotExist(statErr) {
+		t.Fatal("main worktree directory was deleted — this is the critical bug")
+	}
+
+	// Verify: main branch still exists.
+	_, branchErr := worktree.RunGit([]string{"rev-parse", "--verify", "refs/heads/main"}, bareRepo)
+	if branchErr != nil {
+		t.Fatal("main branch was deleted from bare repo — this is the critical bug")
+	}
+
+	// Verify: bare repo HEAD still points to the default branch.
+	headRef := runGitCmd(t, bareRepo, "symbolic-ref", "--short", "HEAD")
+	if headRef != "main" {
+		t.Errorf("expected HEAD to point to main, got %q", headRef)
+	}
+}
