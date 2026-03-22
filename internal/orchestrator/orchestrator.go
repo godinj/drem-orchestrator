@@ -202,7 +202,8 @@ func (o *Orchestrator) Run(ctx context.Context) {
 }
 
 // ingestBugReports scans the bug report drop directory and inserts valid
-// reports into the database. Errors are logged and do not halt the tick.
+// reports into the database. After ingestion, newly inserted reports are
+// classified and promoted into tasks. Errors are logged and do not halt the tick.
 func (o *Orchestrator) ingestBugReports() {
 	if o.bugreport == nil {
 		return
@@ -213,6 +214,100 @@ func (o *Orchestrator) ingestBugReports() {
 	}
 	if n > 0 {
 		o.logger.Info("ingested bug reports", "count", n)
+		o.classifyNewBugReports()
+	}
+}
+
+// classifyNewBugReports queries for unclassified (open, no PromotedTaskID) bug
+// reports and runs the classifier on each. Creates a quickfix or standard task
+// based on the classification result.
+func (o *Orchestrator) classifyNewBugReports() {
+	openStatus := model.BugStatusOpen
+	reports, err := o.bugreport.List(bugreport.ListFilters{
+		Status:    &openStatus,
+		ProjectID: &o.projectID,
+	})
+	if err != nil {
+		o.logger.Warn("classify new bug reports: list open reports", "error", err)
+		return
+	}
+
+	for i := range reports {
+		report := &reports[i]
+
+		// Skip already-promoted reports.
+		if report.PromotedTaskID != nil {
+			continue
+		}
+
+		result, err := o.classifyBugReport(report)
+		if err != nil {
+			o.logger.Warn("classify new bug reports: classifier error",
+				"report_id", report.ID, "error", err)
+			continue
+		}
+		if result == nil {
+			// No supervisor configured — skip classification, leave for manual triage.
+			continue
+		}
+
+		// Determine task category from classification result.
+		category := model.CategoryStandard
+		if result.Category == "quickfix" {
+			category = model.CategoryQuickFix
+		}
+
+		// Build enriched description combining classifier output with bug report context.
+		enrichedDescription := fmt.Sprintf("%s\n\n--- Bug Report Context ---\nCategory: %s\nSeverity: %s\nOriginal: %s\nReproduction: %s\nRationale: %s",
+			result.Description,
+			report.Category,
+			report.Severity,
+			report.Description,
+			report.ReproductionContext,
+			result.Rationale,
+		)
+
+		// Create the task.
+		task := &model.Task{
+			ID:          uuid.New(),
+			ProjectID:   o.projectID,
+			Title:       result.Title,
+			Description: enrichedDescription,
+			Status:      model.StatusBacklog,
+			Category:    category,
+		}
+
+		// Store target files in task context if provided.
+		if len(result.TargetFiles) > 0 {
+			task.Context = model.JSONField{"target_files": result.TargetFiles}
+		}
+
+		if err := o.db.Create(task).Error; err != nil {
+			o.logger.Warn("classify new bug reports: create task",
+				"report_id", report.ID, "error", err)
+			continue
+		}
+
+		// Update the bug report: mark as promoted and link to the new task.
+		report.PromotedTaskID = &task.ID
+		report.Status = model.BugStatusPromoted
+		if err := o.db.Save(report).Error; err != nil {
+			o.logger.Warn("classify new bug reports: update bug report",
+				"report_id", report.ID, "error", err)
+			continue
+		}
+
+		o.emit("bugreport_classified", map[string]any{
+			"task_id":   task.ID,
+			"report_id": report.ID,
+			"category":  result.Category,
+		})
+
+		o.logger.Info("classified bug report",
+			"report_id", report.ID,
+			"category", result.Category,
+			"task_id", task.ID,
+		)
 	}
 }
 
@@ -294,11 +389,23 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 		o.logger.Error("query in_progress tasks", "error", err)
 	}
 	for i := range inProgressTasks {
-		if err := o.scheduleSubtasks(&inProgressTasks[i]); err != nil {
-			o.logger.Error("schedule subtasks", "task_id", inProgressTasks[i].ID, "error", err)
+		task := &inProgressTasks[i]
+		if task.Category.IsQuickFix() {
+			// Quick fix tasks are top-level with no subtasks.
+			// Agent completion is handled by processAgentResult (step 2).
+			// If agent is done and task is still in_progress, transition to merging.
+			if task.AssignedAgentID == nil {
+				if err := o.transitionQuickFixToMerging(task); err != nil {
+					o.logger.Error("quickfix to merging", "task_id", task.ID, "error", err)
+				}
+			}
+			continue
 		}
-		if err := o.checkFeatureCompletion(&inProgressTasks[i]); err != nil {
-			o.logger.Error("check feature completion", "task_id", inProgressTasks[i].ID, "error", err)
+		if err := o.scheduleSubtasks(task); err != nil {
+			o.logger.Error("schedule subtasks", "task_id", task.ID, "error", err)
+		}
+		if err := o.checkFeatureCompletion(task); err != nil {
+			o.logger.Error("check feature completion", "task_id", task.ID, "error", err)
 		}
 	}
 
@@ -1052,7 +1159,11 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 }
 
 // CreateTask creates a new task in BACKLOG.
-func (o *Orchestrator) CreateTask(title, description string, priority int) (*model.Task, error) {
+func (o *Orchestrator) CreateTask(title, description string, priority int, quickFix bool) (*model.Task, error) {
+	category := model.CategoryStandard
+	if quickFix {
+		category = model.CategoryQuickFix
+	}
 	task := &model.Task{
 		ID:          uuid.New(),
 		ProjectID:   o.projectID,
@@ -1060,6 +1171,7 @@ func (o *Orchestrator) CreateTask(title, description string, priority int) (*mod
 		Description: description,
 		Status:      model.StatusBacklog,
 		Priority:    priority,
+		Category:    category,
 	}
 
 	if err := o.db.Create(task).Error; err != nil {

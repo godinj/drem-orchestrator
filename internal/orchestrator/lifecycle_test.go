@@ -1020,7 +1020,7 @@ func TestTaskLifecycle_PauseWhileInProgress_ResumeAndComplete(t *testing.T) {
 func TestCreateTask(t *testing.T) {
 	o, db := setupLifecycleTest(t)
 
-	task, err := o.CreateTask("new-task", "A brand new task", 5)
+	task, err := o.CreateTask("new-task", "A brand new task", 5, false)
 	if err != nil {
 		t.Fatalf("CreateTask: unexpected error: %v", err)
 	}

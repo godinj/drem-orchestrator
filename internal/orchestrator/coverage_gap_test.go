@@ -3566,7 +3566,7 @@ func TestGetComments_NotFound(t *testing.T) {
 func TestCreateTask_DefaultPriority(t *testing.T) {
 	o, db := setupLifecycleTest(t)
 
-	task, err := o.CreateTask("zero-priority", "A task with 0 priority", 0)
+	task, err := o.CreateTask("zero-priority", "A task with 0 priority", 0, false)
 	if err != nil {
 		t.Fatalf("CreateTask error: %v", err)
 	}

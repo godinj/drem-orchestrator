@@ -22,26 +22,38 @@ func TestCreateUpdate_TabSwitchesFocus(t *testing.T) {
 		t.Errorf("focused = %d, want 1 after tab", got.focused)
 	}
 
+	// Tab to quickfix
+	got, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
+	if got.focused != 2 {
+		t.Errorf("focused = %d, want 2 after second tab", got.focused)
+	}
+
 	// Tab back to title
 	got, _ = got.Update(tea.KeyMsg{Type: tea.KeyTab})
 	if got.focused != 0 {
-		t.Errorf("focused = %d, want 0 after second tab", got.focused)
+		t.Errorf("focused = %d, want 0 after third tab", got.focused)
 	}
 }
 
 func TestCreateUpdate_ShiftTabSwitchesFocus(t *testing.T) {
 	c := NewCreateModel()
 
-	// Shift+tab from title goes to description
+	// Shift+tab from title goes to quickfix (wraps around)
 	got, _ := c.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if got.focused != 2 {
+		t.Errorf("focused = %d, want 2 after shift+tab from title", got.focused)
+	}
+
+	// Shift+tab from quickfix goes to description
+	got, _ = got.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	if got.focused != 1 {
-		t.Errorf("focused = %d, want 1 after shift+tab", got.focused)
+		t.Errorf("focused = %d, want 1 after shift+tab from quickfix", got.focused)
 	}
 
 	// Shift+tab from description goes back to title
 	got, _ = got.Update(tea.KeyMsg{Type: tea.KeyShiftTab})
 	if got.focused != 0 {
-		t.Errorf("focused = %d, want 0 after second shift+tab", got.focused)
+		t.Errorf("focused = %d, want 0 after shift+tab from description", got.focused)
 	}
 }
 
@@ -73,7 +85,7 @@ func TestCreateReset(t *testing.T) {
 	if c.err != nil {
 		t.Error("err should be nil after reset")
 	}
-	title, desc := c.Value()
+	title, desc, _ := c.Value()
 	if title != "" {
 		t.Errorf("title = %q, want empty after reset", title)
 	}

@@ -251,7 +251,7 @@ func (m Model) handleCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case "enter":
-		title, desc := m.create.Value()
+		title, desc, quickFix := m.create.Value()
 		if title == "" {
 			m.create.err = fmt.Errorf("title is required")
 			return m, nil
@@ -259,7 +259,7 @@ func (m Model) handleCreateKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if desc == "" {
 			desc = title // Use title as description if empty.
 		}
-		_, err := m.orch.CreateTask(title, desc, 0)
+		_, err := m.orch.CreateTask(title, desc, 0, quickFix)
 		if err != nil {
 			m.create.err = err
 			return m, nil

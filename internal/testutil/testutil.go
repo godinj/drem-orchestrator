@@ -232,9 +232,28 @@ func CreateTask(t *testing.T, db *gorm.DB, projectID uuid.UUID, title string, st
 		Title:       title,
 		Description: title,
 		Status:      status,
+		Category:    model.CategoryStandard,
 	}
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatalf("create test task: %v", err)
+	}
+	return task
+}
+
+// CreateQuickFixTask creates a test task with CategoryQuickFix in the database
+// and returns it.
+func CreateQuickFixTask(t *testing.T, db *gorm.DB, projectID uuid.UUID, title string, status model.TaskStatus) *model.Task {
+	t.Helper()
+	task := &model.Task{
+		ID:          uuid.New(),
+		ProjectID:   projectID,
+		Title:       title,
+		Description: title,
+		Status:      status,
+		Category:    model.CategoryQuickFix,
+	}
+	if err := db.Create(task).Error; err != nil {
+		t.Fatalf("create quick fix task: %v", err)
 	}
 	return task
 }

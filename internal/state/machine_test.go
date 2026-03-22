@@ -150,6 +150,31 @@ func TestParseTaskStatus_NeedsClarification(t *testing.T) {
 	}
 }
 
+func TestValidateTransition_BacklogToInProgress(t *testing.T) {
+	// Quick fix tasks need backlog → in_progress to skip planning.
+	if err := ValidateTransition(model.StatusBacklog, model.StatusInProgress); err != nil {
+		t.Errorf("ValidateTransition(backlog, in_progress) = %v, want nil", err)
+	}
+}
+
+func TestValidateTransition_BacklogExistingTargetsStillWork(t *testing.T) {
+	// Ensure the existing backlog transitions are not broken.
+	tests := []struct {
+		name   string
+		target model.TaskStatus
+	}{
+		{"backlog to planning", model.StatusPlanning},
+		{"backlog to paused", model.StatusPaused},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := ValidateTransition(model.StatusBacklog, tc.target); err != nil {
+				t.Errorf("ValidateTransition(backlog, %q) = %v, want nil", tc.target, err)
+			}
+		})
+	}
+}
+
 func TestTransitionTask_InvalidTransition(t *testing.T) {
 	task := &model.Task{
 		ID:     uuid.New(),

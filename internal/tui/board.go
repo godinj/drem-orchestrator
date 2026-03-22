@@ -266,6 +266,12 @@ func (b BoardModel) View() string {
 
 		title := task.Title
 
+		// Show quickfix label for quick fix tasks.
+		if task.Category.IsQuickFix() {
+			title = lipgloss.NewStyle().Foreground(colorInfo).Render("[QF]") + " " + title
+			tw -= 5 // account for "[QF] " prefix
+		}
+
 		// Show collapse/expand indicator for parent tasks with children.
 		if entry.hasChildren {
 			if entry.collapsed {

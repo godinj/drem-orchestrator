@@ -48,7 +48,7 @@ func TestCreateModel_Value(t *testing.T) {
 			m.titleInput.SetValue(tt.title)
 			m.descInput.SetValue(tt.desc)
 
-			gotTitle, gotDesc := m.Value()
+			gotTitle, gotDesc, _ := m.Value()
 			if gotTitle != tt.wantTitle {
 				t.Errorf("title = %q, want %q", gotTitle, tt.wantTitle)
 			}
@@ -64,7 +64,7 @@ func TestCreateModel_DescriptionWraps(t *testing.T) {
 	multiLine := "First line\nSecond line\nThird line"
 	m.descInput.SetValue(multiLine)
 
-	_, desc := m.Value()
+	_, desc, _ := m.Value()
 	if !strings.Contains(desc, "\n") {
 		t.Errorf("description should preserve newlines for multi-line content, got %q", desc)
 	}

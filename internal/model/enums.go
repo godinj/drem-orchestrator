@@ -78,6 +78,38 @@ func ParseTaskStatus(s string) (TaskStatus, error) {
 	return "", fmt.Errorf("unknown task status: %q", s)
 }
 
+// TaskCategory distinguishes the lifecycle pipeline a task follows.
+type TaskCategory string
+
+const (
+	CategoryStandard TaskCategory = "standard"
+	CategoryQuickFix TaskCategory = "quickfix"
+)
+
+// allTaskCategories lists every valid TaskCategory value for parsing.
+var allTaskCategories = []TaskCategory{CategoryStandard, CategoryQuickFix}
+
+// String returns the string representation of a TaskCategory.
+func (c TaskCategory) String() string {
+	return string(c)
+}
+
+// ParseTaskCategory converts a raw string to a TaskCategory, returning an error
+// if the string does not match any known value.
+func ParseTaskCategory(s string) (TaskCategory, error) {
+	for _, tc := range allTaskCategories {
+		if string(tc) == s {
+			return tc, nil
+		}
+	}
+	return "", fmt.Errorf("unknown task category: %q", s)
+}
+
+// IsQuickFix returns true if the category is quickfix.
+func (c TaskCategory) IsQuickFix() bool {
+	return c == CategoryQuickFix
+}
+
 // AgentType identifies the role of a Claude Code agent.
 type AgentType string
 

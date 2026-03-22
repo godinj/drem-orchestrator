@@ -21,17 +21,18 @@ type Project struct {
 
 // Task represents a unit of work tracked by the orchestrator.
 type Task struct {
-	ID              uuid.UUID  `gorm:"type:text;primaryKey"`
-	ProjectID       uuid.UUID  `gorm:"type:text;not null;index"`
-	ParentTaskID    *uuid.UUID `gorm:"type:text;index"`
-	Title           string     `gorm:"not null"`
-	Description     string     `gorm:"not null"`
-	Status          TaskStatus `gorm:"not null;default:backlog"`
-	Priority        int        `gorm:"default:0"`
-	Labels          JSONArray  `gorm:"type:text"`
-	DependencyIDs   JSONArray  `gorm:"type:text"`
-	AssignedAgentID *uuid.UUID `gorm:"type:text"`
-	Plan            JSONField  `gorm:"type:text"`
+	ID              uuid.UUID    `gorm:"type:text;primaryKey"`
+	ProjectID       uuid.UUID    `gorm:"type:text;not null;index"`
+	ParentTaskID    *uuid.UUID   `gorm:"type:text;index"`
+	Title           string       `gorm:"not null"`
+	Description     string       `gorm:"not null"`
+	Status          TaskStatus   `gorm:"not null;default:backlog"`
+	Category        TaskCategory `gorm:"not null;default:standard"`
+	Priority        int          `gorm:"default:0"`
+	Labels          JSONArray    `gorm:"type:text"`
+	DependencyIDs   JSONArray    `gorm:"type:text"`
+	AssignedAgentID *uuid.UUID   `gorm:"type:text"`
+	Plan            JSONField    `gorm:"type:text"`
 	PlanFeedback    string
 	TestPlan        string
 	TestFeedback    string

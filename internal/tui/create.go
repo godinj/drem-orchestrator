@@ -14,7 +14,8 @@ import (
 type CreateModel struct {
 	titleInput textinput.Model
 	descInput  textarea.Model
-	focused    int // 0=title, 1=desc
+	quickFix   bool // true when "quick fix" checkbox is checked
+	focused    int  // 0=title, 1=desc, 2=quickfix
 	err        error
 }
 
@@ -46,29 +47,46 @@ func (c CreateModel) Update(msg tea.Msg) (CreateModel, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "tab", "shift+tab":
-			// Toggle between title and description fields.
-			if c.focused == 0 {
-				c.focused = 1
-				c.titleInput.Blur()
-				c.descInput.Focus()
-			} else {
-				c.focused = 0
-				c.descInput.Blur()
-				c.titleInput.Focus()
-			}
+		case "tab":
+			c.focused = (c.focused + 1) % 3
+			c.updateFocus()
 			return c, nil
+		case "shift+tab":
+			c.focused = (c.focused + 2) % 3
+			c.updateFocus()
+			return c, nil
+		case " ":
+			if c.focused == 2 {
+				c.quickFix = !c.quickFix
+				return c, nil
+			}
 		}
 	}
 
 	// Delegate to the focused input.
 	var cmd tea.Cmd
-	if c.focused == 0 {
+	switch c.focused {
+	case 0:
 		c.titleInput, cmd = c.titleInput.Update(msg)
-	} else {
+	case 1:
 		c.descInput, cmd = c.descInput.Update(msg)
 	}
 	return c, cmd
+}
+
+// updateFocus sets focus/blur on inputs based on the current focused field.
+func (c *CreateModel) updateFocus() {
+	switch c.focused {
+	case 0:
+		c.titleInput.Focus()
+		c.descInput.Blur()
+	case 1:
+		c.titleInput.Blur()
+		c.descInput.Focus()
+	default:
+		c.titleInput.Blur()
+		c.descInput.Blur()
+	}
 }
 
 // View renders the task creation form.
@@ -79,8 +97,19 @@ func (c CreateModel) View() string {
 	b.WriteString(fmt.Sprintf("  Title:       %s\n", c.titleInput.View()))
 	b.WriteString("  Description:\n")
 	b.WriteString(fmt.Sprintf("  %s\n", c.descInput.View()))
+
+	checkbox := "[ ]"
+	if c.quickFix {
+		checkbox = "[x]"
+	}
+	qfLabel := fmt.Sprintf("  Quick fix:   %s", checkbox)
+	if c.focused == 2 {
+		qfLabel = lipgloss.NewStyle().Bold(true).Render(qfLabel)
+	}
+	b.WriteString(qfLabel + "\n")
+
 	b.WriteString("\n")
-	b.WriteString(helpStyle.Render("  [tab] switch field  [enter] create  [esc] cancel"))
+	b.WriteString(helpStyle.Render("  [tab] switch field  [space] toggle  [enter] create  [esc] cancel"))
 	if c.err != nil {
 		b.WriteString("\n")
 		b.WriteString(lipglossRender(colorDanger, fmt.Sprintf("  Error: %v", c.err)))
@@ -88,15 +117,16 @@ func (c CreateModel) View() string {
 	return b.String()
 }
 
-// Value returns the entered title and description.
-func (c CreateModel) Value() (title, description string) {
-	return strings.TrimSpace(c.titleInput.Value()), strings.TrimSpace(c.descInput.Value())
+// Value returns the entered title, description, and quickfix flag.
+func (c CreateModel) Value() (title, description string, quickFix bool) {
+	return strings.TrimSpace(c.titleInput.Value()), strings.TrimSpace(c.descInput.Value()), c.quickFix
 }
 
 // Reset clears the form inputs for reuse.
 func (c *CreateModel) Reset() {
 	c.titleInput.Reset()
 	c.descInput.Reset()
+	c.quickFix = false
 	c.focused = 0
 	c.titleInput.Focus()
 	c.descInput.Blur()
