@@ -8,6 +8,7 @@ import "fmt"
 type TaskStatus string
 
 const (
+	StatusClassifying        TaskStatus = "classifying"
 	StatusBacklog            TaskStatus = "backlog"
 	StatusPlanning           TaskStatus = "planning"
 	StatusNeedsClarification TaskStatus = "needs_clarification"
@@ -25,6 +26,7 @@ const (
 
 // allTaskStatuses lists every valid TaskStatus value for parsing.
 var allTaskStatuses = []TaskStatus{
+	StatusClassifying,
 	StatusBacklog,
 	StatusPlanning,
 	StatusNeedsClarification,
@@ -49,7 +51,7 @@ func (s TaskStatus) String() string {
 // automated action (scheduling agents, merging, etc.).
 func (s TaskStatus) IsActionable() bool {
 	switch s {
-	case StatusBacklog, StatusPlanning, StatusInProgress, StatusTestWriting, StatusMerging:
+	case StatusClassifying, StatusBacklog, StatusPlanning, StatusInProgress, StatusTestWriting, StatusMerging:
 		return true
 	default:
 		return false
@@ -120,6 +122,7 @@ const (
 	AgentResearcher   AgentType = "researcher"
 	AgentReviewer     AgentType = "reviewer"
 	AgentFixer        AgentType = "fixer"
+	AgentClassifier   AgentType = "classifier"
 )
 
 // allAgentTypes lists every valid AgentType value for parsing.
@@ -130,6 +133,7 @@ var allAgentTypes = []AgentType{
 	AgentResearcher,
 	AgentReviewer,
 	AgentFixer,
+	AgentClassifier,
 }
 
 // String returns the string representation of an AgentType.

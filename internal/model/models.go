@@ -29,6 +29,7 @@ type Task struct {
 	Status          TaskStatus   `gorm:"not null;default:backlog"`
 	Category        TaskCategory `gorm:"not null;default:standard"`
 	Priority        int          `gorm:"default:0"`
+	ComplexityScore int          `gorm:"default:0"`
 	Labels          JSONArray    `gorm:"type:text"`
 	DependencyIDs   JSONArray    `gorm:"type:text"`
 	AssignedAgentID *uuid.UUID   `gorm:"type:text"`
