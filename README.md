@@ -88,6 +88,8 @@ test_command          = ""
 compile_command       = ""
 scoped_tests          = true
 test_timeout          = "5m"
+tmux_socket           = "drem"
+tmux_config_file      = "tmux.conf"
 ```
 
 | Setting | Description |
@@ -110,6 +112,33 @@ test_timeout          = "5m"
 | `compile_command` | Command to compile the project; empty = no compile step |
 | `scoped_tests` | Run tests scoped to subtask file changes only (default true) |
 | `test_timeout` | Timeout for test command execution (default 5m) |
+| `tmux_socket` | Dedicated tmux server socket name (default `drem`) |
+| `tmux_config_file` | Repo-local tmux config path, relative to bare repo (default `tmux.conf`) |
+
+## Tmux Isolation
+
+Drem runs in a **dedicated tmux server** separate from your personal tmux sessions. This means drem's sessions, windows, and configuration never collide with your own.
+
+- **Socket**: All tmux commands use `-L drem` (configurable via `tmux_socket`), creating an independent server.
+- **Config**: A repo-local `tmux.conf` is loaded via `-f`, so drem has its own status bar theme and settings without touching `~/.tmux.conf`.
+- **Visual distinction**: The default config uses a blue/cyan status bar with a `[drem]` prefix so you can immediately tell you're in a drem session.
+
+To interact with the drem tmux server directly:
+
+```bash
+# List drem sessions
+tmux -L drem list-sessions
+
+# Attach to the drem server
+tmux -L drem attach
+```
+
+To override, set `tmux_socket` and/or `tmux_config_file` in `drem.toml`:
+
+```toml
+tmux_socket      = "my-custom-socket"
+tmux_config_file = "my-tmux.conf"   # resolved relative to bare_repo_path
+```
 
 ## TUI Dashboard
 

@@ -92,6 +92,15 @@ func main() {
 
 	sessionName := "󱇯 dash " + projectName
 
+	// Resolve tmux config file path relative to bare repo.
+	tmuxConfPath := filepath.Join(cfg.BareRepoPath, cfg.TmuxConfigFile)
+
+	// Tmux options used by both outer and inner invocations.
+	tmuxOpts := []tmuxpkg.Option{
+		tmuxpkg.WithSocket(cfg.TmuxSocket),
+		tmuxpkg.WithConfigFile(tmuxConfPath),
+	}
+
 	// Self-respawn: if DREM_SESSION is not set, we are the outer invocation.
 	// Create the tmux session with ourselves as the dashboard command, then
 	// attach (replacing this process).
@@ -106,7 +115,7 @@ func main() {
 		dashCmd := fmt.Sprintf("DREM_SESSION='%s' %s --config %s --repo %s",
 			sessionName, exe, *configPath, cfg.BareRepoPath)
 
-		tmux := tmuxpkg.NewManager(sessionName)
+		tmux := tmuxpkg.NewManager(sessionName, tmuxOpts...)
 		if err := tmux.EnsureSession(dashCmd); err != nil {
 			if !errors.Is(err, tmuxpkg.ErrDashboardRespawned) {
 				log.Fatalf("tmux: %v", err)
@@ -154,7 +163,7 @@ func main() {
 	}
 
 	// Init components.
-	tmux := tmuxpkg.NewManager(sessionName)
+	tmux := tmuxpkg.NewManager(sessionName, tmuxOpts...)
 	wt := worktree.NewManager(cfg.BareRepoPath, cfg.DefaultBranch)
 
 	// Migrate old-layout worktrees to grouped layout.

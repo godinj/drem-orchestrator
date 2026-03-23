@@ -37,14 +37,21 @@ type WindowInfo struct {
 // Manager manages a tmux session for the orchestrator.
 type Manager struct {
 	SessionName string // e.g., "drem-myproject"
+	Socket      string // tmux -L socket name (empty = default server)
+	ConfigFile  string // tmux -f config path (empty = default config)
 }
 
 // NewManager creates a Manager for the given session name. The name is
 // sanitised to replace characters that tmux silently mangles (dots, colons)
 // with hyphens, preventing has-session / new-session mismatches.
-func NewManager(sessionName string) *Manager {
+// Functional options (WithSocket, WithConfigFile) configure server isolation.
+func NewManager(sessionName string, opts ...Option) *Manager {
 	s := strings.NewReplacer(".", "-", ":", "-").Replace(sessionName)
-	return &Manager{SessionName: s}
+	m := &Manager{SessionName: s}
+	for _, opt := range opts {
+		opt(m)
+	}
+	return m
 }
 
 // exactTarget returns the session name prefixed with "=" so that tmux -t
@@ -63,14 +70,14 @@ func (m *Manager) exactTarget() string {
 func (m *Manager) EnsureSession(dashboardCmd string) error {
 	// Check if session already exists (exact match to avoid prefix collisions
 	// with agent sessions like "dash foo-planner-abc123").
-	_, err := runTmux("has-session", "-t", m.exactTarget())
+	_, err := m.run("has-session", "-t", m.exactTarget())
 	if err == nil {
 		// Session exists. Respawn dashboard if its process has exited
 		// (e.g., user quit the TUI and rebuilt the binary).
 		if dashboardCmd != "" {
 			alive, aliveErr := m.IsWindowAlive("dashboard")
 			if aliveErr == nil && !alive {
-				_, _ = runTmux("respawn-pane", "-k", "-t", m.SessionName+":dashboard", dashboardCmd)
+				_, _ = m.run("respawn-pane", "-k", "-t", m.SessionName+":dashboard", dashboardCmd)
 				return ErrDashboardRespawned
 			}
 		}
@@ -82,7 +89,7 @@ func (m *Manager) EnsureSession(dashboardCmd string) error {
 	if dashboardCmd != "" {
 		args = append(args, dashboardCmd)
 	}
-	_, err = runTmux(args...)
+	_, err = m.run(args...)
 	if err != nil {
 		return fmt.Errorf("ensure session %q: %w", m.SessionName, err)
 	}
@@ -93,7 +100,7 @@ func (m *Manager) EnsureSession(dashboardCmd string) error {
 	// (after-new-window) because session-level remain-on-exit does not
 	// reliably propagate to windows created with an explicit command.
 	// Use bare name here — session was just created so no prefix collision.
-	_, err = runTmux("set-hook", "-t", m.SessionName, "after-new-window", "set-option -p remain-on-exit on")
+	_, err = m.run("set-hook", "-t", m.SessionName, "after-new-window", "set-option -p remain-on-exit on")
 	if err != nil {
 		return fmt.Errorf("set after-new-window hook for session %q: %w", m.SessionName, err)
 	}
@@ -107,7 +114,7 @@ func (m *Manager) EnsureSession(dashboardCmd string) error {
 // remain-on-exit on the pane, so it stays around after the command exits,
 // allowing WaitForExit to read the exit code.
 func (m *Manager) CreateWindow(name, cmd, cwd string) error {
-	_, err := runTmux("new-window", "-t", m.exactTarget(), "-n", name, "-c", cwd, cmd)
+	_, err := m.run("new-window", "-t", m.exactTarget(), "-n", name, "-c", cwd, cmd)
 	if err != nil {
 		return fmt.Errorf("create window %q: %w", name, err)
 	}
@@ -118,7 +125,7 @@ func (m *Manager) CreateWindow(name, cmd, cwd string) error {
 // error is silently ignored (idempotent close).
 func (m *Manager) CloseWindow(name string) error {
 	target := fmt.Sprintf("%s:%s", m.exactTarget(), name)
-	_, err := runTmux("kill-window", "-t", target)
+	_, err := m.run("kill-window", "-t", target)
 	if err != nil {
 		// Ignore "window not found" errors for idempotent behavior.
 		if strings.Contains(err.Error(), "can't find window") ||
@@ -134,7 +141,7 @@ func (m *Manager) CloseWindow(name string) error {
 // ListWindows lists all windows in the session. Each entry includes the window
 // index, name, and whether it is the currently active window.
 func (m *Manager) ListWindows() ([]WindowInfo, error) {
-	out, err := runTmux("list-windows", "-t", m.exactTarget(), "-F", "#{window_index}:#{window_name}:#{window_active}")
+	out, err := m.run("list-windows", "-t", m.exactTarget(), "-F", "#{window_index}:#{window_name}:#{window_active}")
 	if err != nil {
 		return nil, fmt.Errorf("list windows: %w", err)
 	}
@@ -177,7 +184,7 @@ func (m *Manager) ListWindows() ([]WindowInfo, error) {
 // sufficient (no cross-session switch-client needed).
 func (m *Manager) FocusWindow(name string) error {
 	target := fmt.Sprintf("%s:%s", m.exactTarget(), name)
-	_, err := runTmux("select-window", "-t", target)
+	_, err := m.run("select-window", "-t", target)
 	if err != nil {
 		return fmt.Errorf("focus window %q: %w", name, err)
 	}
@@ -189,7 +196,7 @@ func (m *Manager) FocusWindow(name string) error {
 // scrollback to capture.
 func (m *Manager) CapturePane(name string, lines int) (string, error) {
 	target := fmt.Sprintf("%s:%s", m.SessionName, name)
-	out, err := runTmux("capture-pane", "-t", target, "-p", "-S", fmt.Sprintf("-%d", lines))
+	out, err := m.run("capture-pane", "-t", target, "-p", "-S", fmt.Sprintf("-%d", lines))
 	if err != nil {
 		return "", fmt.Errorf("capture pane %q: %w", name, err)
 	}
@@ -201,7 +208,7 @@ func (m *Manager) CapturePane(name string, lines int) (string, error) {
 // (pane_dead is 1). Returns false, nil if the window doesn't exist.
 func (m *Manager) IsWindowAlive(name string) (bool, error) {
 	target := fmt.Sprintf("%s:%s", m.exactTarget(), name)
-	out, err := runTmux("list-panes", "-t", target, "-F", "#{pane_dead}")
+	out, err := m.run("list-panes", "-t", target, "-F", "#{pane_dead}")
 	if err != nil {
 		// Window does not exist — not alive.
 		if strings.Contains(err.Error(), "can't find window") ||
@@ -222,7 +229,7 @@ func (m *Manager) WaitForExit(name string) (int, error) {
 	target := fmt.Sprintf("%s:%s", m.exactTarget(), name)
 
 	for {
-		out, err := runTmux("list-panes", "-t", target, "-F", "#{pane_dead}:#{pane_dead_status}")
+		out, err := m.run("list-panes", "-t", target, "-F", "#{pane_dead}:#{pane_dead_status}")
 		if err != nil {
 			// If the window disappeared entirely, treat as an error.
 			return -1, fmt.Errorf("wait for exit %q: %w", name, err)
@@ -244,7 +251,7 @@ func (m *Manager) WaitForExit(name string) (int, error) {
 
 // KillSession destroys the entire tmux session. Used on shutdown.
 func (m *Manager) KillSession() error {
-	_, err := runTmux("kill-session", "-t", m.exactTarget())
+	_, err := m.run("kill-session", "-t", m.exactTarget())
 	if err != nil {
 		return fmt.Errorf("kill session %q: %w", m.SessionName, err)
 	}
@@ -261,9 +268,17 @@ func (m *Manager) Attach() error {
 	if err != nil {
 		return fmt.Errorf("find tmux binary: %w", err)
 	}
-	argv := []string{"tmux", "attach-session", "-t", m.exactTarget()}
+	argv := []string{"tmux"}
+	if m.Socket != "" {
+		argv = append(argv, "-L", m.Socket)
+	}
+	if m.ConfigFile != "" {
+		argv = append(argv, "-f", m.ConfigFile)
+	}
 	if os.Getenv("TMUX") != "" {
-		argv = []string{"tmux", "switch-client", "-t", m.exactTarget()}
+		argv = append(argv, "switch-client", "-t", m.exactTarget())
+	} else {
+		argv = append(argv, "attach-session", "-t", m.exactTarget())
 	}
 	return syscall.Exec(tmuxBin, argv, syscall.Environ())
 }
@@ -281,8 +296,12 @@ func (m *Manager) CreateAgentSession(sessionName, cmd, cwd string) error {
 	// Both execute in the same shell, so there is no race — even commands
 	// that exit instantly (like "true") will have remain-on-exit set before
 	// the pane dies.
-	wrapped := fmt.Sprintf("tmux set-option -p remain-on-exit on; %s", cmd)
-	_, err := runTmux("new-session", "-d", "-s", sessionName, "-c", cwd, wrapped)
+	innerTmux := "tmux"
+	if m.Socket != "" {
+		innerTmux = fmt.Sprintf("tmux -L %s", m.Socket)
+	}
+	wrapped := fmt.Sprintf("%s set-option -p remain-on-exit on; %s", innerTmux, cmd)
+	_, err := m.run("new-session", "-d", "-s", sessionName, "-c", cwd, wrapped)
 	if err != nil {
 		return fmt.Errorf("create agent session %q: %w", sessionName, err)
 	}
@@ -290,7 +309,7 @@ func (m *Manager) CreateAgentSession(sessionName, cmd, cwd string) error {
 	// Set large scrollback so CaptureAgentPane can retrieve sufficient
 	// context for memory extraction after long-running agents.
 	// Use bare name — session was just created so no prefix collision.
-	_, err = runTmux("set-option", "-t", sessionName, "history-limit", strconv.Itoa(historyLimit))
+	_, err = m.run("set-option", "-t", sessionName, "history-limit", strconv.Itoa(historyLimit))
 	if err != nil {
 		return fmt.Errorf("set history-limit for agent session %q: %w", sessionName, err)
 	}
@@ -302,7 +321,7 @@ func (m *Manager) CreateAgentSession(sessionName, cmd, cwd string) error {
 // name and working directory. Unlike CreateAgentSession, it does not set
 // remain-on-exit or large scrollback — it's a regular shell for the user.
 func (m *Manager) CreateShellSession(sessionName, cwd string) error {
-	_, err := runTmux("new-session", "-d", "-s", sessionName, "-c", cwd)
+	_, err := m.run("new-session", "-d", "-s", sessionName, "-c", cwd)
 	if err != nil {
 		return fmt.Errorf("create shell session %q: %w", sessionName, err)
 	}
@@ -312,7 +331,7 @@ func (m *Manager) CreateShellSession(sessionName, cwd string) error {
 // KillAgentSession destroys an agent's tmux session. If the session does not
 // exist, the error is silently ignored (idempotent).
 func (m *Manager) KillAgentSession(sessionName string) error {
-	_, err := runTmux("kill-session", "-t", "="+sessionName)
+	_, err := m.run("kill-session", "-t", "="+sessionName)
 	if err != nil {
 		if strings.Contains(err.Error(), "can't find session") ||
 			strings.Contains(err.Error(), "session not found") ||
@@ -329,7 +348,7 @@ func (m *Manager) KillAgentSession(sessionName string) error {
 // running. Returns true if the process is alive (pane_dead is 0), false if it
 // has exited. Returns false, nil if the session doesn't exist.
 func (m *Manager) IsAgentSessionAlive(sessionName string) (bool, error) {
-	out, err := runTmux("list-panes", "-t", "="+sessionName, "-F", "#{pane_dead}")
+	out, err := m.run("list-panes", "-t", "="+sessionName, "-F", "#{pane_dead}")
 	if err != nil {
 		if strings.Contains(err.Error(), "can't find session") ||
 			strings.Contains(err.Error(), "session not found") ||
@@ -363,7 +382,7 @@ func (m *Manager) WaitForAgentExit(sessionName string) (int, error) {
 // checkPaneDead checks whether a tmux pane's process has exited. Returns the
 // exit code, whether the pane is dead, and any error from the tmux query.
 func (m *Manager) checkPaneDead(sessionName string) (exitCode int, dead bool, err error) {
-	out, err := runTmux("list-panes", "-t", "="+sessionName, "-F", "#{pane_dead}:#{pane_dead_status}")
+	out, err := m.run("list-panes", "-t", "="+sessionName, "-F", "#{pane_dead}:#{pane_dead_status}")
 	if err != nil {
 		return -1, false, err
 	}
@@ -384,7 +403,7 @@ func (m *Manager) checkPaneDead(sessionName string) (exitCode int, dead bool, er
 // CaptureAgentPane captures the visible content of an agent session's pane.
 // The lines parameter controls how many lines of scrollback to capture.
 func (m *Manager) CaptureAgentPane(sessionName string, lines int) (string, error) {
-	out, err := runTmux("capture-pane", "-t", sessionName, "-p", "-S", fmt.Sprintf("-%d", lines))
+	out, err := m.run("capture-pane", "-t", sessionName, "-p", "-S", fmt.Sprintf("-%d", lines))
 	if err != nil {
 		return "", fmt.Errorf("capture agent pane %q: %w", sessionName, err)
 	}
@@ -394,7 +413,7 @@ func (m *Manager) CaptureAgentPane(sessionName string, lines int) (string, error
 // CaptureAgentPaneFull captures the entire scrollback of an agent session's
 // pane. Used by the orchestrator for memory extraction on completion.
 func (m *Manager) CaptureAgentPaneFull(sessionName string) (string, error) {
-	out, err := runTmux("capture-pane", "-t", sessionName, "-p", "-S", "-")
+	out, err := m.run("capture-pane", "-t", sessionName, "-p", "-S", "-")
 	if err != nil {
 		return "", fmt.Errorf("capture agent pane full %q: %w", sessionName, err)
 	}
@@ -405,7 +424,7 @@ func (m *Manager) CaptureAgentPaneFull(sessionName string) (string, error) {
 // Used to gracefully exit the Claude TUI after detecting completion.
 func (m *Manager) SendKeys(sessionName string, keys ...string) error {
 	args := append([]string{"send-keys", "-t", sessionName}, keys...)
-	_, err := runTmux(args...)
+	_, err := m.run(args...)
 	if err != nil {
 		return fmt.Errorf("send keys to %q: %w", sessionName, err)
 	}
@@ -471,7 +490,7 @@ func (m *Manager) WaitForAgentIdle(ctx context.Context, sessionName, idleSignalP
 // performs a cross-session switch-client, allowing the user to jump from the
 // dashboard session to any agent session.
 func (m *Manager) FocusAgentSession(sessionName string) error {
-	_, err := runTmux("switch-client", "-t", "="+sessionName)
+	_, err := m.run("switch-client", "-t", "="+sessionName)
 	if err != nil {
 		return fmt.Errorf("focus agent session %q: %w", sessionName, err)
 	}
@@ -483,7 +502,7 @@ func (m *Manager) FocusAgentSession(sessionName string) error {
 // the manager's session name followed by "/" as a prefix
 // (e.g. "󱇯 dash myproject/code - Auth > Implement JWT a1b2").
 func (m *Manager) ListAgentSessions() ([]string, error) {
-	out, err := runTmux("list-sessions", "-F", "#{session_name}")
+	out, err := m.run("list-sessions", "-F", "#{session_name}")
 	if err != nil {
 		if strings.Contains(err.Error(), "no server running") ||
 			strings.Contains(err.Error(), "no sessions") {
@@ -501,6 +520,20 @@ func (m *Manager) ListAgentSessions() ([]string, error) {
 		}
 	}
 	return sessions, nil
+}
+
+// run executes a tmux command with the Manager's global flags (-L, -f)
+// prepended before the subcommand arguments.
+func (m *Manager) run(args ...string) (string, error) {
+	var full []string
+	if m.Socket != "" {
+		full = append(full, "-L", m.Socket)
+	}
+	if m.ConfigFile != "" {
+		full = append(full, "-f", m.ConfigFile)
+	}
+	full = append(full, args...)
+	return runTmux(full...)
 }
 
 // runTmux executes a tmux command and returns stdout. On failure, the error

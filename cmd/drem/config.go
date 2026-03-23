@@ -28,6 +28,8 @@ type Config struct {
 	ScopedTests         *bool         `toml:"scoped_tests"` // pointer for default-true detection
 	TestTimeout         time.Duration `toml:"test_timeout"`
 	ContextFixerPercent int           `toml:"context_fixer_percent"`
+	TmuxSocket          string        `toml:"tmux_socket"`
+	TmuxConfigFile      string        `toml:"tmux_config_file"`
 }
 
 // DefaultConfig returns a Config populated with sensible default values.
@@ -50,6 +52,8 @@ func DefaultConfig() Config {
 		TestTimeout:         5 * time.Minute,
 		ScopedTests:         &scopedDefault,
 		ContextFixerPercent: 85,
+		TmuxSocket:          "drem",
+		TmuxConfigFile:      "tmux.conf",
 	}
 }
 

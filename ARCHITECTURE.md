@@ -110,6 +110,8 @@ use the defaults shown below.
 | Compile command         | `compile_command`       | string     | `""`           | Compile command for the project                    |
 | Scoped tests            | `scoped_tests`          | bool       | `true`         | Whether to run tests scoped to subtask file changes|
 | Test timeout            | `test_timeout`          | duration   | `5m`           | Timeout for test command execution                 |
+| Tmux socket             | `tmux_socket`           | string     | `drem`         | Dedicated tmux server socket name (-L flag)        |
+| Tmux config file        | `tmux_config_file`      | string     | `tmux.conf`    | Repo-local tmux config file path (relative to bare repo) |
 
 ---
 
