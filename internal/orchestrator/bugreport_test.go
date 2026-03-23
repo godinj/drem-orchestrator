@@ -115,8 +115,8 @@ func TestIngestBugReports_ValidFile(t *testing.T) {
 	if reports[0].Severity != model.BugSeverityBlocking {
 		t.Errorf("severity = %q, want %q", reports[0].Severity, model.BugSeverityBlocking)
 	}
-	if reports[0].Status != model.BugStatusOpen {
-		t.Errorf("status = %q, want %q", reports[0].Status, model.BugStatusOpen)
+	if reports[0].Status != model.BugStatusPromoted {
+		t.Errorf("status = %q, want %q", reports[0].Status, model.BugStatusPromoted)
 	}
 }
 

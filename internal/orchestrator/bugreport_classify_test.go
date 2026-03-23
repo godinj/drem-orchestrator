@@ -13,15 +13,13 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	dbpkg "github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/supervisor"
-	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // setupClassifyIntegrationTest creates an Orchestrator wired to a real
-// bugreport.Service and an optional mock supervisor. It returns the
-// orchestrator, the bug report service, and the project ID.
-func setupClassifyIntegrationTest(t *testing.T, sup *supervisor.Supervisor) (*Orchestrator, *bugreport.Service, uuid.UUID) {
+// bugreport.Service. It returns the orchestrator, the bug report service,
+// and the project ID.
+func setupClassifyIntegrationTest(t *testing.T, _ interface{}) (*Orchestrator, *bugreport.Service, uuid.UUID) {
 	t.Helper()
 
 	gormDB, err := dbpkg.Init(":memory:")
@@ -51,7 +49,6 @@ func setupClassifyIntegrationTest(t *testing.T, sup *supervisor.Supervisor) (*Or
 		worktree:        wt,
 		bugreport:       bugSvc,
 		bugreportDir:    dropDir,
-		supervisor:      sup,
 		events:          events,
 		contextWarnPct:  75,
 		contextStopPct:  90,
@@ -77,17 +74,10 @@ func writeClassifyBugReportFile(t *testing.T, dir string, bf bugreport.BugReport
 }
 
 func TestClassifyNewBugReports_CreatesQuickFixTask(t *testing.T) {
-	mockResp := `{
-		"category": "quickfix",
-		"title": "Fix line length in orchestrator.go",
-		"description": "Line 42 exceeds the 120-char limit. Wrap the long call.",
-		"target_files": ["internal/orchestrator/orchestrator.go"],
-		"rationale": "Single constraint violation with clear file reference."
-	}`
-	sup := testutil.NewMockSupervisor(t, mockResp)
-	orch, bugSvc, projectID := setupClassifyIntegrationTest(t, sup)
+	// After the refactor, all tasks are created in CLASSIFYING with CategoryStandard.
+	// The classifier agent will determine the actual category later.
+	orch, bugSvc, projectID := setupClassifyIntegrationTest(t, nil)
 
-	// Write a bug report file and ingest it.
 	writeClassifyBugReportFile(t, orch.bugreportDir, bugreport.BugReportFile{
 		Title:               "Line too long in orchestrator.go",
 		Description:         "orchestrator.go line 42 is 135 chars, limit is 120",
@@ -98,7 +88,6 @@ func TestClassifyNewBugReports_CreatesQuickFixTask(t *testing.T) {
 
 	orch.ingestBugReports()
 
-	// Verify a task was created with CategoryQuickFix.
 	var tasks []model.Task
 	if err := orch.db.Where("project_id = ?", projectID).Find(&tasks).Error; err != nil {
 		t.Fatalf("query tasks: %v", err)
@@ -107,22 +96,11 @@ func TestClassifyNewBugReports_CreatesQuickFixTask(t *testing.T) {
 		t.Fatalf("expected 1 task, got %d", len(tasks))
 	}
 	task := tasks[0]
-	if task.Category != model.CategoryQuickFix {
-		t.Errorf("task category = %q, want %q", task.Category, model.CategoryQuickFix)
+	if task.Status != model.StatusClassifying {
+		t.Errorf("task status = %q, want %q", task.Status, model.StatusClassifying)
 	}
-	if task.Status != model.StatusBacklog {
-		t.Errorf("task status = %q, want %q", task.Status, model.StatusBacklog)
-	}
-	if task.Title != "Fix line length in orchestrator.go" {
-		t.Errorf("task title = %q, want %q", task.Title, "Fix line length in orchestrator.go")
-	}
-
-	// Verify description includes bug report context.
-	if !strings.Contains(task.Description, "Bug Report Context") {
-		t.Errorf("task description should contain bug report context, got: %s", task.Description)
-	}
-	if !strings.Contains(task.Description, "constraint_violation") {
-		t.Errorf("task description should contain original category, got: %s", task.Description)
+	if task.Title != "Line too long in orchestrator.go" {
+		t.Errorf("task title = %q, want %q", task.Title, "Line too long in orchestrator.go")
 	}
 
 	// Verify bug report was promoted and linked.
@@ -146,15 +124,8 @@ func TestClassifyNewBugReports_CreatesQuickFixTask(t *testing.T) {
 }
 
 func TestClassifyNewBugReports_CreatesStandardTask(t *testing.T) {
-	mockResp := `{
-		"category": "standard",
-		"title": "Refactor agent lifecycle management",
-		"description": "The agent lifecycle spans multiple files and needs architectural changes.",
-		"target_files": ["internal/orchestrator/orchestrator.go", "internal/agent/runner.go"],
-		"rationale": "Multi-file change requiring design review and planning."
-	}`
-	sup := testutil.NewMockSupervisor(t, mockResp)
-	orch, _, projectID := setupClassifyIntegrationTest(t, sup)
+	// After the refactor, all tasks are created in CLASSIFYING with CategoryStandard.
+	orch, _, projectID := setupClassifyIntegrationTest(t, nil)
 
 	writeClassifyBugReportFile(t, orch.bugreportDir, bugreport.BugReportFile{
 		Title:       "Agent lifecycle has race condition",
@@ -172,13 +143,17 @@ func TestClassifyNewBugReports_CreatesStandardTask(t *testing.T) {
 	if len(tasks) != 1 {
 		t.Fatalf("expected 1 task, got %d", len(tasks))
 	}
+	if tasks[0].Status != model.StatusClassifying {
+		t.Errorf("task status = %q, want %q", tasks[0].Status, model.StatusClassifying)
+	}
 	if tasks[0].Category != model.CategoryStandard {
 		t.Errorf("task category = %q, want %q", tasks[0].Category, model.CategoryStandard)
 	}
 }
 
 func TestClassifyNewBugReports_NilSupervisor_SkipsClassification(t *testing.T) {
-	// No supervisor — classifier returns nil, reports stay open.
+	// After the refactor, tasks are created even without a supervisor — the
+	// classifier agent handles classification later.
 	orch, bugSvc, projectID := setupClassifyIntegrationTest(t, nil)
 
 	writeClassifyBugReportFile(t, orch.bugreportDir, bugreport.BugReportFile{
@@ -190,16 +165,19 @@ func TestClassifyNewBugReports_NilSupervisor_SkipsClassification(t *testing.T) {
 
 	orch.ingestBugReports()
 
-	// No tasks should be created.
+	// A task should be created in CLASSIFYING.
 	var tasks []model.Task
 	if err := orch.db.Where("project_id = ?", projectID).Find(&tasks).Error; err != nil {
 		t.Fatalf("query tasks: %v", err)
 	}
-	if len(tasks) != 0 {
-		t.Errorf("expected 0 tasks, got %d", len(tasks))
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].Status != model.StatusClassifying {
+		t.Errorf("task status = %q, want %q", tasks[0].Status, model.StatusClassifying)
 	}
 
-	// Bug report should remain open.
+	// Bug report should be promoted.
 	reports, err := bugSvc.List(bugreport.ListFilters{ProjectID: &projectID})
 	if err != nil {
 		t.Fatalf("list bug reports: %v", err)
@@ -207,36 +185,38 @@ func TestClassifyNewBugReports_NilSupervisor_SkipsClassification(t *testing.T) {
 	if len(reports) != 1 {
 		t.Fatalf("expected 1 bug report, got %d", len(reports))
 	}
-	if reports[0].Status != model.BugStatusOpen {
-		t.Errorf("bug report status = %q, want %q", reports[0].Status, model.BugStatusOpen)
+	if reports[0].Status != model.BugStatusPromoted {
+		t.Errorf("bug report status = %q, want %q", reports[0].Status, model.BugStatusPromoted)
 	}
 }
 
 func TestClassifyNewBugReports_ClassifierError_SkipsReport(t *testing.T) {
-	// Mock supervisor returns invalid JSON that will cause a parse error.
-	mockResp := `not valid json at all`
-	sup := testutil.NewMockSupervisor(t, mockResp)
-	orch, bugSvc, projectID := setupClassifyIntegrationTest(t, sup)
+	// After the refactor, there's no classifier error path — tasks are always
+	// created in CLASSIFYING. This test verifies the task is created.
+	orch, bugSvc, projectID := setupClassifyIntegrationTest(t, nil)
 
 	writeClassifyBugReportFile(t, orch.bugreportDir, bugreport.BugReportFile{
 		Title:       "Failing classifier test",
-		Description: "this should fail classification",
+		Description: "this should create a task in classifying",
 		Category:    "tooling",
 		Severity:    "degraded",
 	})
 
 	orch.ingestBugReports()
 
-	// No tasks should be created.
+	// Task should be created in CLASSIFYING.
 	var tasks []model.Task
 	if err := orch.db.Where("project_id = ?", projectID).Find(&tasks).Error; err != nil {
 		t.Fatalf("query tasks: %v", err)
 	}
-	if len(tasks) != 0 {
-		t.Errorf("expected 0 tasks, got %d", len(tasks))
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].Status != model.StatusClassifying {
+		t.Errorf("task status = %q, want %q", tasks[0].Status, model.StatusClassifying)
 	}
 
-	// Bug report should remain open.
+	// Bug report should be promoted.
 	reports, err := bugSvc.List(bugreport.ListFilters{ProjectID: &projectID})
 	if err != nil {
 		t.Fatalf("list bug reports: %v", err)
@@ -244,21 +224,15 @@ func TestClassifyNewBugReports_ClassifierError_SkipsReport(t *testing.T) {
 	if len(reports) != 1 {
 		t.Fatalf("expected 1 bug report, got %d", len(reports))
 	}
-	if reports[0].Status != model.BugStatusOpen {
-		t.Errorf("bug report status = %q, want %q", reports[0].Status, model.BugStatusOpen)
+	if reports[0].Status != model.BugStatusPromoted {
+		t.Errorf("bug report status = %q, want %q", reports[0].Status, model.BugStatusPromoted)
 	}
 }
 
 func TestClassifyNewBugReports_TargetFilesStoredInContext(t *testing.T) {
-	mockResp := `{
-		"category": "quickfix",
-		"title": "Fix import order",
-		"description": "Reorder imports in main.go",
-		"target_files": ["cmd/main.go", "internal/util/helper.go"],
-		"rationale": "Simple formatting fix."
-	}`
-	sup := testutil.NewMockSupervisor(t, mockResp)
-	orch, _, projectID := setupClassifyIntegrationTest(t, sup)
+	// After the refactor, bug report context is stored directly (not target_files
+	// from classifier). Verify context contains bug report metadata.
+	orch, _, projectID := setupClassifyIntegrationTest(t, nil)
 
 	writeClassifyBugReportFile(t, orch.bugreportDir, bugreport.BugReportFile{
 		Title:       "Import order wrong",
@@ -281,31 +255,18 @@ func TestClassifyNewBugReports_TargetFilesStoredInContext(t *testing.T) {
 	if task.Context == nil {
 		t.Fatal("task context should not be nil")
 	}
-	targetFiles, ok := task.Context["target_files"]
-	if !ok {
-		t.Fatal("task context should contain target_files key")
-	}
 
-	// The JSON field stores target_files as []interface{}.
-	files, ok := targetFiles.([]interface{})
-	if !ok {
-		t.Fatalf("target_files should be a slice, got %T", targetFiles)
-	}
-	if len(files) != 2 {
-		t.Errorf("expected 2 target files, got %d", len(files))
+	// Context should contain bug report metadata.
+	wantKeys := []string{"title", "category", "severity", "description"}
+	for _, key := range wantKeys {
+		if _, ok := task.Context[key]; !ok {
+			t.Errorf("task context missing key %q", key)
+		}
 	}
 }
 
 func TestClassifyNewBugReports_AlreadyPromotedSkipped(t *testing.T) {
-	mockResp := `{
-		"category": "quickfix",
-		"title": "Should not be created",
-		"description": "This task should not be created because the report is already promoted.",
-		"target_files": [],
-		"rationale": "Already promoted."
-	}`
-	sup := testutil.NewMockSupervisor(t, mockResp)
-	orch, bugSvc, projectID := setupClassifyIntegrationTest(t, sup)
+	orch, bugSvc, projectID := setupClassifyIntegrationTest(t, nil)
 
 	// Manually create a bug report that is already promoted.
 	existingTaskID := uuid.New()
@@ -335,7 +296,6 @@ func TestClassifyNewBugReports_AlreadyPromotedSkipped(t *testing.T) {
 	}
 
 	// Also write a new bug report file to trigger ingestion + classification.
-	// This ensures classifyNewBugReports is actually called.
 	writeClassifyBugReportFile(t, orch.bugreportDir, bugreport.BugReportFile{
 		Title:       "New bug to trigger classification",
 		Description: "this will be classified",
@@ -345,7 +305,7 @@ func TestClassifyNewBugReports_AlreadyPromotedSkipped(t *testing.T) {
 
 	orch.ingestBugReports()
 
-	// Count total tasks — should be 2: the pre-existing one plus the newly classified one.
+	// Count total tasks — should be 2: the pre-existing one plus the newly created one.
 	// The already-promoted report should NOT have created an additional task.
 	var tasks []model.Task
 	if err := orch.db.Where("project_id = ?", projectID).Find(&tasks).Error; err != nil {

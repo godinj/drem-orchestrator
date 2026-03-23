@@ -219,8 +219,8 @@ func (o *Orchestrator) ingestBugReports() {
 }
 
 // classifyNewBugReports queries for unclassified (open, no PromotedTaskID) bug
-// reports and runs the classifier on each. Creates a quickfix or standard task
-// based on the classification result.
+// reports and creates a task in CLASSIFYING for each. The classifier agent will
+// pick up these tasks and determine category, complexity, and target files.
 func (o *Orchestrator) classifyNewBugReports() {
 	openStatus := model.BugStatusOpen
 	reports, err := o.bugreport.List(bugreport.ListFilters{
@@ -240,46 +240,24 @@ func (o *Orchestrator) classifyNewBugReports() {
 			continue
 		}
 
-		result, err := o.classifyBugReport(report)
-		if err != nil {
-			o.logger.Warn("classify new bug reports: classifier error",
-				"report_id", report.ID, "error", err)
-			continue
-		}
-		if result == nil {
-			// No supervisor configured — skip classification, leave for manual triage.
-			continue
+		// Store bug report context for the classifier agent.
+		ctx := model.JSONField{
+			"title":                 report.Title,
+			"category":              string(report.Category),
+			"severity":              string(report.Severity),
+			"description":           report.Description,
+			"reproduction_context":  report.ReproductionContext,
 		}
 
-		// Determine task category from classification result.
-		category := model.CategoryStandard
-		if result.Category == "quickfix" {
-			category = model.CategoryQuickFix
-		}
-
-		// Build enriched description combining classifier output with bug report context.
-		enrichedDescription := fmt.Sprintf("%s\n\n--- Bug Report Context ---\nCategory: %s\nSeverity: %s\nOriginal: %s\nReproduction: %s\nRationale: %s",
-			result.Description,
-			report.Category,
-			report.Severity,
-			report.Description,
-			report.ReproductionContext,
-			result.Rationale,
-		)
-
-		// Create the task.
+		// Create the task in CLASSIFYING for the classifier agent.
 		task := &model.Task{
 			ID:          uuid.New(),
 			ProjectID:   o.projectID,
-			Title:       result.Title,
-			Description: enrichedDescription,
-			Status:      model.StatusBacklog,
-			Category:    category,
-		}
-
-		// Store target files in task context if provided.
-		if len(result.TargetFiles) > 0 {
-			task.Context = model.JSONField{"target_files": result.TargetFiles}
+			Title:       report.Title,
+			Description: report.Description,
+			Status:      model.StatusClassifying,
+			Category:    model.CategoryStandard,
+			Context:     ctx,
 		}
 
 		if err := o.db.Create(task).Error; err != nil {
@@ -300,12 +278,10 @@ func (o *Orchestrator) classifyNewBugReports() {
 		o.emit("bugreport_classified", map[string]any{
 			"task_id":   task.ID,
 			"report_id": report.ID,
-			"category":  result.Category,
 		})
 
-		o.logger.Info("classified bug report",
+		o.logger.Info("bug report promoted to classifying",
 			"report_id", report.ID,
-			"category", result.Category,
 			"task_id", task.ID,
 		)
 	}
@@ -1158,20 +1134,17 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 	return nil
 }
 
-// CreateTask creates a new task in BACKLOG.
-func (o *Orchestrator) CreateTask(title, description string, priority int, quickFix bool) (*model.Task, error) {
-	category := model.CategoryStandard
-	if quickFix {
-		category = model.CategoryQuickFix
-	}
+// CreateTask creates a new task in CLASSIFYING. The classifier agent will
+// determine the actual category and complexity score.
+func (o *Orchestrator) CreateTask(title, description string, priority int) (*model.Task, error) {
 	task := &model.Task{
 		ID:          uuid.New(),
 		ProjectID:   o.projectID,
 		Title:       title,
 		Description: description,
-		Status:      model.StatusBacklog,
+		Status:      model.StatusClassifying,
 		Priority:    priority,
-		Category:    category,
+		Category:    model.CategoryStandard,
 	}
 
 	if err := o.db.Create(task).Error; err != nil {
@@ -1181,6 +1154,31 @@ func (o *Orchestrator) CreateTask(title, description string, priority int, quick
 	o.emit("task_created", task)
 	o.logger.Info("task created", "task_id", task.ID, "title", title)
 	return task, nil
+}
+
+// OverrideClassification transitions a CLASSIFYING task to BACKLOG with the
+// specified category and complexity score. This powers the human override
+// from the TUI.
+func (o *Orchestrator) OverrideClassification(taskID uuid.UUID, category model.TaskCategory, complexityScore int) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("override classification: find task: %w", err)
+	}
+	if task.Status != model.StatusClassifying {
+		return fmt.Errorf("override classification: task %s is in %s, not classifying", taskID, task.Status)
+	}
+
+	task.Status = model.StatusBacklog
+	task.Category = category
+	task.ComplexityScore = complexityScore
+
+	if err := o.db.Save(&task).Error; err != nil {
+		return fmt.Errorf("override classification: save task: %w", err)
+	}
+
+	o.emit("task_updated", &task)
+	o.logger.Info("classification overridden", "task_id", taskID, "category", category, "complexity", complexityScore)
+	return nil
 }
 
 // SpawnSupervisorSession creates an interactive Claude session in a tmux

@@ -1020,13 +1020,13 @@ func TestTaskLifecycle_PauseWhileInProgress_ResumeAndComplete(t *testing.T) {
 func TestCreateTask(t *testing.T) {
 	o, db := setupLifecycleTest(t)
 
-	task, err := o.CreateTask("new-task", "A brand new task", 5, false)
+	task, err := o.CreateTask("new-task", "A brand new task", 5)
 	if err != nil {
 		t.Fatalf("CreateTask: unexpected error: %v", err)
 	}
 
-	if task.Status != model.StatusBacklog {
-		t.Errorf("expected status %q, got %q", model.StatusBacklog, task.Status)
+	if task.Status != model.StatusClassifying {
+		t.Errorf("expected status %q, got %q", model.StatusClassifying, task.Status)
 	}
 	if task.Title != "new-task" {
 		t.Errorf("expected title %q, got %q", "new-task", task.Title)
