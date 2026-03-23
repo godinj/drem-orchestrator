@@ -3,6 +3,8 @@ package tui
 import (
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestCreateModel_SetWidth(t *testing.T) {
@@ -56,6 +58,46 @@ func TestCreateModel_Value(t *testing.T) {
 				t.Errorf("description = %q, want %q", gotDesc, tt.wantDesc)
 			}
 		})
+	}
+}
+
+// TestCreateModel_NoQuickFixInView verifies that the task creation form does
+// NOT render a "Quick fix" checkbox. After the classifier agent replaces the
+// one-shot classifier, the quick fix concept is removed from task creation.
+func TestCreateModel_NoQuickFixInView(t *testing.T) {
+	m := NewCreateModel()
+	view := m.View()
+
+	if strings.Contains(view, "Quick fix") {
+		t.Errorf("View() should not contain 'Quick fix' checkbox, got:\n%s", view)
+	}
+	if strings.Contains(view, "[ ]") || strings.Contains(view, "[x]") {
+		t.Errorf("View() should not render any checkbox, got:\n%s", view)
+	}
+}
+
+// TestCreateModel_TwoFocusableFields verifies that tab cycles through exactly
+// 2 fields (title, description) — not 3. The quick fix checkbox field is
+// removed from the tab cycle.
+func TestCreateModel_TwoFocusableFields(t *testing.T) {
+	m := NewCreateModel()
+
+	// Initially focused on field 0 (title).
+	if m.focused != 0 {
+		t.Fatalf("initial focus = %d, want 0", m.focused)
+	}
+
+	// Tab once: should move to field 1 (description).
+	tabMsg := tea.KeyMsg{Type: tea.KeyTab}
+	m, _ = m.Update(tabMsg)
+	if m.focused != 1 {
+		t.Errorf("after 1 tab, focus = %d, want 1", m.focused)
+	}
+
+	// Tab again: should wrap back to field 0 (title), not go to field 2.
+	m, _ = m.Update(tabMsg)
+	if m.focused != 0 {
+		t.Errorf("after 2 tabs, focus = %d, want 0 (wrap around 2 fields)", m.focused)
 	}
 }
 

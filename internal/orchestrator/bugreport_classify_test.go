@@ -365,3 +365,114 @@ func TestClassifyNewBugReports_AlreadyPromotedSkipped(t *testing.T) {
 			existingTaskID, *reloadedReport.PromotedTaskID)
 	}
 }
+
+// TestClassifyNewBugReports_CreatesTaskInClassifying verifies that after the
+// one-shot classifier is removed, classifyNewBugReports creates a task in
+// StatusClassifying (not StatusBacklog) with no inline LLM call. A nil
+// supervisor must NOT prevent task creation — the task is created for the
+// classifier agent to pick up later.
+func TestClassifyNewBugReports_CreatesTaskInClassifying(t *testing.T) {
+	// Nil supervisor: no LLM call should be made. The refactored code
+	// should create a task in CLASSIFYING regardless.
+	orch, bugSvc, projectID := setupClassifyIntegrationTest(t, nil)
+
+	writeClassifyBugReportFile(t, orch.bugreportDir, bugreport.BugReportFile{
+		Title:               "Flaky test in agent_test.go",
+		Description:         "TestAgentHeartbeat fails intermittently under load",
+		Category:            "test_failure",
+		Severity:            "degraded",
+		ReproductionContext: "go test -count=10 ./internal/agent/...",
+	})
+
+	orch.ingestBugReports()
+
+	// A task should have been created even though supervisor is nil.
+	var tasks []model.Task
+	if err := orch.db.Where("project_id = ?", projectID).Find(&tasks).Error; err != nil {
+		t.Fatalf("query tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+
+	task := tasks[0]
+
+	// The task must be in CLASSIFYING, not BACKLOG.
+	if task.Status != model.StatusClassifying {
+		t.Errorf("task status = %q, want %q", task.Status, model.StatusClassifying)
+	}
+
+	// The bug report must be linked and promoted.
+	reports, err := bugSvc.List(bugreport.ListFilters{ProjectID: &projectID})
+	if err != nil {
+		t.Fatalf("list bug reports: %v", err)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("expected 1 bug report, got %d", len(reports))
+	}
+	report := reports[0]
+	if report.Status != model.BugStatusPromoted {
+		t.Errorf("bug report status = %q, want %q", report.Status, model.BugStatusPromoted)
+	}
+	if report.PromotedTaskID == nil {
+		t.Fatal("bug report PromotedTaskID should not be nil")
+	}
+	if *report.PromotedTaskID != task.ID {
+		t.Errorf("bug report PromotedTaskID = %s, want %s", *report.PromotedTaskID, task.ID)
+	}
+}
+
+// TestClassifyNewBugReports_StoresBugReportContext verifies that after the
+// refactor, classifyNewBugReports stores full bug report metadata in the
+// task's Context field so the classifier agent has everything it needs.
+func TestClassifyNewBugReports_StoresBugReportContext(t *testing.T) {
+	orch, _, projectID := setupClassifyIntegrationTest(t, nil)
+
+	writeClassifyBugReportFile(t, orch.bugreportDir, bugreport.BugReportFile{
+		Title:               "Memory leak in worktree cleanup",
+		Description:         "Worktree temp dirs accumulate after agent teardown",
+		Category:            "upstream_code",
+		Severity:            "blocking",
+		ReproductionContext: "du -sh /tmp/drem-* after 10 agent cycles",
+	})
+
+	orch.ingestBugReports()
+
+	var tasks []model.Task
+	if err := orch.db.Where("project_id = ?", projectID).Find(&tasks).Error; err != nil {
+		t.Fatalf("query tasks: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+
+	task := tasks[0]
+	if task.Context == nil {
+		t.Fatal("task context should not be nil")
+	}
+
+	// The context must contain all bug report fields for the classifier agent.
+	wantKeys := []string{"title", "category", "severity", "description", "reproduction_context"}
+	for _, key := range wantKeys {
+		if _, ok := task.Context[key]; !ok {
+			t.Errorf("task context missing key %q", key)
+		}
+	}
+
+	// Spot-check values match the bug report.
+	if got, ok := task.Context["title"].(string); !ok || got != "Memory leak in worktree cleanup" {
+		t.Errorf("context[title] = %v, want %q", task.Context["title"], "Memory leak in worktree cleanup")
+	}
+	if got, ok := task.Context["category"].(string); !ok || got != "upstream_code" {
+		t.Errorf("context[category] = %v, want %q", task.Context["category"], "upstream_code")
+	}
+	if got, ok := task.Context["severity"].(string); !ok || got != "blocking" {
+		t.Errorf("context[severity] = %v, want %q", task.Context["severity"], "blocking")
+	}
+	if got, ok := task.Context["description"].(string); !ok || !strings.Contains(got, "Worktree temp dirs") {
+		t.Errorf("context[description] = %v, want to contain %q", task.Context["description"], "Worktree temp dirs")
+	}
+	if got, ok := task.Context["reproduction_context"].(string); !ok || !strings.Contains(got, "du -sh") {
+		t.Errorf("context[reproduction_context] = %v, want to contain %q", task.Context["reproduction_context"], "du -sh")
+	}
+}

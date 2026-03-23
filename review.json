@@ -1,0 +1,25 @@
+{
+  "coverage": "full",
+  "uncovered_criteria": [],
+  "file_overlap_risk": "medium",
+  "overlapping_pairs": [
+    {"a": 1, "b": 2, "files": ["internal/orchestrator/classifying.go"]},
+    {"a": 4, "b": 5, "files": ["internal/orchestrator/orchestrator.go"]}
+  ],
+  "integration_gap": false,
+  "tdd_assessment": {
+    "test_coverage_adequate": true,
+    "exceptions_justified": true,
+    "issues": [
+      "Subtask 2 (implement classifier orchestration) depends on [0] but should depend on [0, 1] to enforce TDD red-green ordering — without this, the implementation subtask could run before or in parallel with its test subtask (subtask 1).",
+      "Subtask 4 (implement entry point refactor) depends on [0] but should depend on [0, 3] for the same TDD ordering reason — its test subtask (subtask 3) must run first.",
+      "Existing classifier_test.go (tests for classifyBugReport, enrichQuickFixDescription) is not addressed by any subtask. Subtask 4 removes classifier.go but does not mention removing or updating classifier_test.go — those tests will fail to compile after the old code is deleted."
+    ]
+  },
+  "issues": [
+    "Missing TDD dependencies: subtask 2 should depend on [0, 1], subtask 4 should depend on [0, 3]. Without these, test-first ordering is not enforced and the stubs in classifying.go (written by subtask 1) may conflict with subtask 2 running in parallel.",
+    "classifier_test.go is orphaned: subtask 4 removes classifier.go (classifyBugReport, enrichQuickFixDescription, ClassificationResult, enrichmentResult) but does not list classifier_test.go in its files list. The existing tests reference the removed types and will break compilation. Subtask 4 must also delete or rewrite classifier_test.go.",
+    "Subtask 4 is large (5 files across 2 packages: orchestrator and TUI). The plan acknowledges this tradeoff to stay under the subtask limit, which is reasonable, but the implementer should be aware of the scope."
+  ],
+  "recommendation": "revise"
+}
