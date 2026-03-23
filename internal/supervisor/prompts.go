@@ -2,10 +2,7 @@ package supervisor
 
 import (
 	"fmt"
-	"path/filepath"
-	"regexp"
 	"strings"
-	"time"
 )
 
 // Prompt truncation limits — max characters kept for each field when building
@@ -40,7 +37,6 @@ type OnDemandOpts struct {
 	DBPath        string
 	BareRepoPath  string
 	DefaultBranch string
-	JournalDir    string
 	Subtasks      []SubtaskInfo
 }
 
@@ -295,55 +291,9 @@ Common tasks you may be asked to perform:
 - Add comments/feedback to tasks for the next agent attempt
 - Transition tasks to unblock the pipeline
 
-## IMPORTANT: Document Your Work
-
-Before you finish your session, you MUST append a summary of what you did to the supervisor journal file. This journal is reviewed to iterate on the orchestrator workflow.
-
-**Journal file:** %s
-
-Append a markdown section in this format:
-
-%s
-## <timestamp> — on_demand_session
-
-- **Task**: <task title> (%s)
-- **Problem**: What was wrong when you started
-- **Actions Taken**: What you did to fix it (be specific — commands run, files edited, DB updates made)
-- **Root Cause**: Why the orchestrator workflow couldn't handle this automatically
-- **Suggested Improvement**: How the orchestrator could be improved to handle this case without manual intervention
-- **Outcome**: Final state after your intervention
-
----
-%s
-
-This documentation is critical for improving the orchestrator. Be specific about what the orchestrator got wrong or couldn't handle, so the workflow can be iterated on.
-
-`,
-		filepath.Join(opts.JournalDir, journalFilename(opts.TaskTitle)),
-		"```markdown", opts.TaskID, "```",
-	)
+`)
 
 	return b.String()
-}
-
-var nonAlnum = regexp.MustCompile(`[^a-z0-9]+`)
-
-// slugify converts a title like "Automation Lanes & Modes" to "automation-lanes-modes".
-func slugify(title string) string {
-	s := strings.ToLower(strings.TrimSpace(title))
-	s = nonAlnum.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	if s == "" {
-		s = "unknown"
-	}
-	return s
-}
-
-// journalFilename returns the standard journal filename for a task title,
-// e.g. "supervisor-journal-automation-lanes-modes-20060102-150405.md".
-func journalFilename(taskTitle string) string {
-	ts := time.Now().Format("20060102-150405")
-	return fmt.Sprintf("supervisor-journal-%s-%s.md", slugify(taskTitle), ts)
 }
 
 // PlanDepthReviewPrompt builds a prompt for reviewing a plan that failed the depth score.

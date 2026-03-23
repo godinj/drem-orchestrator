@@ -364,7 +364,6 @@ func TestOnDemandPrompt_BasicFields(t *testing.T) {
 		DBPath:        "/tmp/drem.db",
 		BareRepoPath:  "/repos/project.git",
 		DefaultBranch: "main",
-		JournalDir:    "/journals",
 	})
 
 	checks := []string{
@@ -391,7 +390,6 @@ func TestOnDemandPrompt_WithSubtasks(t *testing.T) {
 		DefaultBranch: "main",
 		BareRepoPath:  "/repos/project.git",
 		DBPath:        "/tmp/drem.db",
-		JournalDir:    "/journals",
 		Subtasks: []SubtaskInfo{
 			{ID: "sub-1", Title: "Subtask One", Status: "done", Branch: "agent/sub1"},
 			{ID: "sub-2", Title: "Subtask Two", Status: "in_progress", Branch: "agent/sub2"},
@@ -423,7 +421,6 @@ func TestOnDemandPrompt_NoSubtasks(t *testing.T) {
 		DefaultBranch: "main",
 		BareRepoPath:  "/repos/project.git",
 		DBPath:        "/tmp/drem.db",
-		JournalDir:    "/journals",
 		Subtasks:      nil,
 	})
 
@@ -441,7 +438,6 @@ func TestOnDemandPrompt_DatabaseSection(t *testing.T) {
 		DefaultBranch: "main",
 		BareRepoPath:  "/repos/project.git",
 		DBPath:        "/data/orchestrator.db",
-		JournalDir:    "/journals",
 	})
 
 	checks := []string{
@@ -457,48 +453,7 @@ func TestOnDemandPrompt_DatabaseSection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// 7. slugify and journalFilename
-// ---------------------------------------------------------------------------
-
-func TestSlugify(t *testing.T) {
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{name: "basic words", input: "Hello World", want: "hello-world"},
-		{name: "special chars", input: "Foo & Bar!", want: "foo-bar"},
-		{name: "empty string", input: "", want: "unknown"},
-		{name: "only dashes", input: "---", want: "unknown"},
-		{name: "mixed case with numbers", input: "Task 42 Done", want: "task-42-done"},
-		{name: "leading trailing spaces", input: "  hello  ", want: "hello"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := slugify(tt.input)
-			if got != tt.want {
-				t.Errorf("slugify(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestJournalFilename(t *testing.T) {
-	filename := journalFilename("Automation Lanes & Modes")
-
-	if !strings.HasPrefix(filename, "supervisor-journal-") {
-		t.Errorf("filename %q should start with 'supervisor-journal-'", filename)
-	}
-	if !strings.HasSuffix(filename, ".md") {
-		t.Errorf("filename %q should end with '.md'", filename)
-	}
-	if !strings.Contains(filename, "automation-lanes-modes") {
-		t.Errorf("filename %q should contain slugified title 'automation-lanes-modes'", filename)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// 8. PlanDepthReviewPrompt
+// 7. PlanDepthReviewPrompt
 // ---------------------------------------------------------------------------
 
 func TestPlanDepthReviewPrompt_ContainsRequiredFields(t *testing.T) {
