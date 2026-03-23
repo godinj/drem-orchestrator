@@ -1,28 +1,219 @@
 {
   "subtasks": [
     {
+      "title": "Add shared types: StatusClassifying, AgentClassifier, ComplexityScore",
+      "description": "Add the foundational types needed by all other subtasks:\n\n1. In internal/model/enums.go:\n   - Add StatusClassifying TaskStatus = \"classifying\" (before StatusBacklog in the constants block and allTaskStatuses slice)\n   - Add AgentClassifier AgentType = \"classifier\" to the AgentType constants and allAgentTypes slice\n   - Add StatusClassifying to IsActionable() (orchestrator can spawn agents for it)\n\n2. In internal/model/models.go:\n   - Add ComplexityScore int field to Task struct with gorm:\"default:0\"\n\n3. In internal/state/machine.go:\n   - Add StatusClassifying to ValidTransitions with targets: [StatusBacklog, StatusFailed, StatusPaused]\n   - Add StatusClassifying as a valid target from StatusPaused (resume to re-classify)\n   - Add StatusClassifying as a valid target from StatusFailed (re-classification after failure)\n\nThese are pure type/constant additions with no logic changes.",
       "agent_type": "coder",
-      "description": "Add View() rendering tests to agents_test.go that verify context percentage appears inline on the activity metrics line rather than on its own separate line.\n\nTest cases:\n1. Agent with both activity data and ctx%: output should contain a single line matching '▸ Read foo | 3/5 files | no commit | ctx: 85%' — the ctx portion must be on the SAME line as the tool/target, not a separate line. Verify the output does NOT contain a standalone '    ctx: 85%' line.\n2. Agent with ctx% but NO activity data: ctx% should still appear as a standalone detail line (fallback behavior, e.g., '    ctx: 50%').\n3. Agent with activity data but NO ctx%: activity line should render normally without ctx suffix.\n4. Ctx% at warning threshold (\u003e=75): verify the rendered line contains 'ctx: 75%' inline with activity.\n5. Ctx% at danger threshold (\u003e=90): verify the rendered line contains 'ctx: 95%' inline with activity.\n6. Scroll block height: an agent with BOTH activity and ctx% should produce the same number of output lines as an agent with activity but no ctx%. This proves ctx no longer adds a separate line when activity is present.\n\nColor rendering detail: since the activity line uses phase-based colors and ctx uses threshold-based colors, the implementation will render the ctx suffix as a separately-styled string concatenated to the activity string. Tests should verify the ctx text appears on the activity line by checking that '| ctx: N%' appears in the line starting with '▸'.\n\nThe tests call View() on an AgentsModel with crafted agents and check the output string. Tests will initially FAIL because ctx is still rendered on a separate line.\n\nIMPORTANT: Use a helper like ptr() for uuid pointers — it already exists in agents_test.go (check for existing helper at bottom of file, or in testutil). Set width to a large value (e.g., 120) so truncation doesn't interfere.",
-      "estimated_files": null,
-      "phase": "test",
-      "tests_for": [
-        1
-      ],
-      "title": "Write tests for inline ctx display"
-    },
-    {
-      "agent_type": "coder",
-      "description": "Modify the View() method in agents.go to render context percentage inline on the activity line instead of as a separate line.\n\nDetailed changes to internal/tui/agents.go View() method:\n\n1. REMOVE the standalone ctx block (current lines 153-166) that appends a separate '    ctx: N%' line.\n\n2. In the activity line rendering section (current lines 177-220):\n   a. After building actLine with tool/target/progress/committed (line ~201), check if context_used_pct exists in ag.Config.\n   b. If it exists, build a ctx suffix string like ' | ctx: N%'.\n   c. Determine the ctx style based on thresholds (\u003e=90 danger, \u003e=75 warning, else subtitleStyle).\n   d. Render the activity portion with actStyle and the ctx suffix with ctxStyle, then concatenate them into one line before appending to lines.\n   e. The concatenation approach: `actStyle.Render(actLine) + ctxStyle.Render(ctxSuffix)` — this produces a single string with mixed ANSI colors on one line.\n\n3. ADD a fallback block AFTER the activity section: if there was NO activity line but context_used_pct exists, render ctx on its own standalone line (same as current behavior). This handles agents that have ctx data but haven't started any tool activity yet.\n\n4. UPDATE the scroll block height calculation (current lines 229-254):\n   - When activity is present, do NOT count ctx as a separate line (it's now part of the activity line).\n   - When activity is absent but ctx exists, still count it as a line.\n   - The logic: `hasActivity \u0026\u0026 hasCTX` = no extra line for ctx. `!hasActivity \u0026\u0026 hasCTX` = +1 line for ctx.\n\nThe implementation must make the pre-written tests pass without modifying them.",
-      "estimated_files": null,
       "phase": "implementation",
-      "title": "Move ctx% inline with activity metrics"
+      "tests_for": [],
+      "files": [
+        "internal/model/enums.go",
+        "internal/model/models.go",
+        "internal/state/machine.go"
+      ],
+      "dependencies": [],
+      "priority": 1,
+      "module_boundaries": [
+        {"package": "internal/model", "description": "GORM models, enums, and custom JSON types for the database layer", "exports": 5},
+        {"package": "internal/state", "description": "Task status state machine with valid transitions", "exports": 3}
+      ],
+      "interface_shapes": [
+        {"package": "internal/model", "functions": [], "types": ["StatusClassifying", "AgentClassifier"]},
+        {"package": "internal/state", "functions": [], "types": []}
+      ]
     },
     {
+      "title": "Write tests for classifier agent orchestration",
+      "description": "Write tests for processClassifyingTasks and classifier result handling. Create classifying_test.go with test cases:\n\n1. TestProcessClassifyingTasks_SpawnsAgentForUnassignedTask: Create a task in CLASSIFYING with no AssignedAgentID. Call processClassifyingTasks(). Assert an agent record is created in DB with AgentClassifier type and task.AssignedAgentID is set.\n\n2. TestProcessClassifyingTasks_SkipsAssignedTask: Task in CLASSIFYING with existing AssignedAgentID is skipped (no new agent created).\n\n3. TestOnClassifierCompleted_Success: Simulate classifier agent completion. Write a valid classification.json to the agent's worktree path with {category: \"quickfix\", complexity_score: 3, title: \"Refined title\", description: \"Enriched desc\", target_files: [\"path/to/file.go\"], rationale: \"Evidence-based reason\"}. Call onClassifierCompleted. Assert task transitions to BACKLOG with Category=quickfix, ComplexityScore=3, enriched Title/Description, target_files and rationale in Context.\n\n4. TestOnClassifierCompleted_NeedsClarification: Write classification.json with {needs_clarification: true, questions: [\"What file?\", \"Expected behavior?\"]}. Call onClassifierCompleted. Assert task stays in CLASSIFYING, questions stored in task.Context[\"clarification_questions\"].\n\n5. TestOnClassifierCompleted_MalformedOutput: No classification.json exists (or malformed JSON). Call onClassifierCompleted. Assert task stays in CLASSIFYING, task.Context[\"human_triage\"] is true.\n\n6. TestOnClassifierFailed_ParksForTriage: Call onClassifierFailed. Assert task stays in CLASSIFYING (NOT transitioned to FAILED), task.Context[\"human_triage\"] is true, error details stored.\n\nCreate classifying.go with stub implementations to allow tests to compile:\n- func (o *Orchestrator) processClassifyingTasks() {}\n- func (o *Orchestrator) onClassifierCompleted(ag *model.Agent, task *model.Task) error { return nil }\n- func (o *Orchestrator) onClassifierFailed(ag *model.Agent, task *model.Task) error { return nil }\n- type ClassifierOutput struct with all fields\n\nUse testutil.NewTestDB, testutil.CreateTask, testutil.CreateAgent for setup. Follow the pattern in bugreport_classify_test.go for orchestrator test setup (creating Orchestrator struct directly with test dependencies).",
       "agent_type": "coder",
-      "description": "Final integration verification:\n1. Run all TUI tests (`go test ./internal/tui/...`) to confirm nothing is broken.\n2. Verify the change works correctly with the scroll calculation — no off-by-one in agent block heights.\n3. Check if README.md describes the TUI ctx display format. If it does, update it to reflect that ctx% now appears inline on the activity metrics line. If README doesn't mention ctx display, no update needed.\n\nThis subtask is simple integration wiring — the feature is a single-file UI change with no cross-package dependencies.",
-      "estimated_files": null,
+      "phase": "test",
+      "tests_for": [2],
+      "files": [
+        "internal/orchestrator/classifying_test.go",
+        "internal/orchestrator/classifying.go"
+      ],
+      "dependencies": [0],
+      "priority": 1,
+      "module_boundaries": [],
+      "interface_shapes": []
+    },
+    {
+      "title": "Implement classifier agent orchestration",
+      "description": "Implement the core classifier agent functionality:\n\n1. internal/orchestrator/classifying.go (replace stubs):\n   - ClassifierOutput struct: Category string, ComplexityScore int, Title string, Description string, TargetFiles []string, Rationale string, NeedsClarification bool, Questions []string\n   - processClassifyingTasks(): Query tasks WHERE status=CLASSIFYING AND assigned_agent_id IS NULL AND parent_task_id IS NULL. For each task, build classifier prompt via prompt.Generate with AgentType=AgentClassifier, get the main worktree path, call runner.SpawnClassifierAgent, update task.AssignedAgentID.\n   - onClassifierCompleted(ag, task): Read classification.json from ag.WorktreePath. Parse into ClassifierOutput. Three outcomes:\n     (a) Success (NeedsClarification=false, valid fields): Update task.Title, task.Description, task.Category, task.ComplexityScore, store target_files and rationale in task.Context. Transition to BACKLOG via state.TransitionTask.\n     (b) NeedsClarification=true: Store questions in task.Context[\"clarification_questions\"]. Keep CLASSIFYING. Clear AssignedAgentID for potential re-spawn.\n     (c) Parse failure (no file or invalid JSON): Set task.Context[\"human_triage\"]=true. Keep CLASSIFYING.\n     Always clean up classifier worktree and mark agent as idle.\n   - onClassifierFailed(ag, task): Store error in task.Context, set human_triage=true. Keep CLASSIFYING. Clean up worktree. Mark agent as dead. No retry, no fallback.\n\n2. internal/orchestrator/agent_results.go:\n   - In onAgentCompleted switch: add case model.AgentClassifier -> return o.onClassifierCompleted(ag, task)\n   - In onAgentFailed: add early return for AgentClassifier -> return o.onClassifierFailed(ag, task) before the existing planner/coder logic.\n\n3. internal/prompt/prompt.go:\n   - Add classifier case to Generate(): when AgentType==AgentClassifier, build a prompt that instructs the agent to:\n     * Read the task title and description (or bug report context from task.Context)\n     * Explore the codebase: grep for relevant identifiers, read candidate files, count affected files\n     * Produce classification.json with structured output matching ClassifierOutput\n     * If too ambiguous, produce classification.json with needs_clarification=true and questions\n     * Enforce read-only behavior (do not modify any files except classification.json)\n     * Run at medium effort\n\n4. internal/agent/runner.go:\n   - Add SpawnClassifierAgent(task *model.Task, prompt string) (*model.Agent, error) that:\n     * Creates a classifier worktree via o.worktree.CreateClassifierWorktree()\n     * Spawns the agent WITHOUT acquiring the semaphore (bypass maxConcurrent)\n     * Passes --effort medium to the claude binary\n     * Follows the same agent setup pattern (write prompt, metadata, settings, start subprocess)\n   - Extract semaphore acquisition from spawnNewAgent into a flag or separate internal method to enable bypass.\n\n5. internal/worktree/manager.go:\n   - Add CreateClassifierWorktree() (*WorktreeInfo, error): creates a worktree at <bare>/classifiers/agent-<uuid>/ from the default branch using git worktree add. Returns WorktreeInfo with Path and Branch.\n   - Add RemoveClassifierWorktree(branch string) error: removes the classifier worktree.\n\nAcceptance criteria: classifier agents spawn for CLASSIFYING tasks, don't count against maxConcurrent, produce structured classification via classification.json, and handle all three outcomes correctly.",
+      "agent_type": "coder",
+      "phase": "implementation",
+      "tests_for": [],
+      "files": [
+        "internal/orchestrator/classifying.go",
+        "internal/orchestrator/agent_results.go",
+        "internal/prompt/prompt.go",
+        "internal/agent/runner.go",
+        "internal/worktree/manager.go"
+      ],
+      "dependencies": [0],
+      "priority": 1,
+      "module_boundaries": [
+        {"package": "internal/orchestrator", "description": "Core orchestrator loop with classifier agent lifecycle management added to existing tick phases", "exports": 2},
+        {"package": "internal/agent", "description": "Agent lifecycle management including classifier agent spawning without concurrency limits", "exports": 8},
+        {"package": "internal/worktree", "description": "Git worktree management including lightweight classifier worktrees from default branch", "exports": 10}
+      ],
+      "interface_shapes": [
+        {"package": "internal/orchestrator", "functions": ["processClassifyingTasks()", "onClassifierCompleted(ag *model.Agent, task *model.Task) error", "onClassifierFailed(ag *model.Agent, task *model.Task) error"], "types": ["ClassifierOutput"]},
+        {"package": "internal/agent", "functions": ["SpawnClassifierAgent(task *model.Task, prompt string) (*model.Agent, error)"], "types": []},
+        {"package": "internal/worktree", "functions": ["CreateClassifierWorktree() (*WorktreeInfo, error)", "RemoveClassifierWorktree(branch string) error"], "types": []}
+      ]
+    },
+    {
+      "title": "Write tests for entry point refactor and TUI changes",
+      "description": "Write tests that define the expected behavior after removing the one-shot classifier and updating entry points. All tests should compile against current code and FAIL at assertion (red phase).\n\n1. internal/orchestrator/bugreport_classify_test.go (add new test functions, do NOT modify existing tests):\n   - TestClassifyNewBugReports_CreatesTaskInClassifying: Set up orchestrator with NO supervisor (nil). Create a bug report via bugreport.Service. Call classifyNewBugReports(). Query the DB for tasks. Assert a task was created with Status=StatusClassifying (not StatusBacklog). Assert the bug report is linked (PromotedTaskID set, Status=BugStatusPromoted). Assert no supervisor LLM call was made.\n   - TestClassifyNewBugReports_StoresBugReportContext: After classifyNewBugReports(), assert that the created task's Context contains bug report details (title, category, severity, description, reproduction_context) for the classifier agent to use.\n\n2. internal/tui/create_test.go (new file):\n   - TestCreateModel_NoQuickFixInView: Create a NewCreateModel(). Call View(). Assert the output does NOT contain the string \"Quick fix\" or any checkbox rendering. This test fails with current code because View() renders a quickFix checkbox.\n   - TestCreateModel_TwoFocusableFields: Create form, send multiple tab key messages. Assert that focus cycles through exactly 2 fields (title, desc) not 3. This fails because current code cycles through 3.\n\nIMPORTANT: Do NOT test CreateTask signature changes directly — the signature refactor is handled by the implementation subtask which will also update existing tests. The test subtask focuses on BEHAVIORAL assertions that compile with current code.\n\nIMPORTANT: Do NOT modify existing test functions. Add NEW test functions only. Existing tests that assert StatusBacklog will be updated by the implementation subtask.",
+      "agent_type": "coder",
+      "phase": "test",
+      "tests_for": [4],
+      "files": [
+        "internal/orchestrator/bugreport_classify_test.go",
+        "internal/tui/create_test.go"
+      ],
+      "dependencies": [0],
+      "priority": 1,
+      "module_boundaries": [],
+      "interface_shapes": []
+    },
+    {
+      "title": "Implement entry point refactor, TUI changes, and old code removal",
+      "description": "Refactor all task creation entry points to use CLASSIFYING status and remove the one-shot classifier.\n\n1. internal/orchestrator/classifier.go:\n   - Remove classifyBugReport(), enrichQuickFixDescription(), ClassificationResult struct, enrichmentResult struct.\n   - The file can be left with just the package declaration or deleted entirely.\n\n2. internal/orchestrator/orchestrator.go:\n   - Refactor classifyNewBugReports(): Remove the call to classifyBugReport(). For each open bug report without PromotedTaskID, create a task with Status=StatusClassifying (not StatusBacklog). Do NOT call any LLM/supervisor. Store bug report context in task.Context: {\"bug_report\": {title, category, severity, description, reproduction_context}} for the classifier agent to use later. Mark bug report as promoted and link via PromotedTaskID.\n   - Refactor CreateTask(): Remove the quickFix bool parameter. New signature: CreateTask(title, description string, priority int) (*model.Task, error). All new tasks get Status=StatusClassifying. Category defaults to CategoryStandard (classifier agent will determine the actual category).\n   - Update existing tests that call CreateTask with 4 args to use 3 args. Update tests that assert StatusBacklog to assert StatusClassifying where appropriate.\n   - Add OverrideClassification(taskID uuid.UUID, category model.TaskCategory, complexityScore int) error: transitions a CLASSIFYING task to BACKLOG with the specified category and complexity score. This powers the human override from the TUI.\n\n3. internal/tui/create.go:\n   - Remove quickFix bool field from CreateModel struct.\n   - Update NewCreateModel(): remove quickFix initialization.\n   - Update Update(): remove space-toggle for quickFix checkbox. Change tab cycling from mod 3 to mod 2 (only title and desc fields).\n   - Update View(): remove Quick fix checkbox rendering and related styling. Update help text.\n   - Update Value(): return (string, string) instead of (string, string, bool). Remove quickFix from return.\n   - Update Reset(): remove quickFix = false.\n\n4. internal/tui/keyhandlers.go:\n   - Update the enter handler for create form: change call from CreateTask(title, desc, 0, quickFix) to CreateTask(title, desc, 0).\n   - Add a key handler for human override of classification: when viewing a CLASSIFYING task, allow setting category and complexity score and calling OverrideClassification.\n\n5. internal/tui/board.go:\n   - Add CLASSIFYING to the status display/column rendering.\n   - Update any references to quickFix in task display.\n   - Add visual indicator for tasks needing human triage (Context[\"human_triage\"]=true).\n   - Add display of clarification questions when present.\n\nAcceptance criteria: All task creation paths create tasks in CLASSIFYING. Old one-shot classifier code is removed. TUI has no quick fix checkbox. Human override is available for CLASSIFYING tasks.",
+      "agent_type": "coder",
+      "phase": "implementation",
+      "tests_for": [],
+      "files": [
+        "internal/orchestrator/classifier.go",
+        "internal/orchestrator/orchestrator.go",
+        "internal/tui/create.go",
+        "internal/tui/keyhandlers.go",
+        "internal/tui/board.go"
+      ],
+      "dependencies": [0],
+      "priority": 1,
+      "module_boundaries": [
+        {"package": "internal/orchestrator", "description": "Core orchestrator with unified CLASSIFYING entry point for all new tasks, old one-shot classifier removed", "exports": 2},
+        {"package": "internal/tui", "description": "Bubble Tea TUI dashboard with CLASSIFYING status support, no quickFix checkbox, and human override for classification", "exports": 5}
+      ],
+      "interface_shapes": [
+        {"package": "internal/orchestrator", "functions": ["CreateTask(title, description string, priority int) (*model.Task, error)", "OverrideClassification(taskID uuid.UUID, category model.TaskCategory, complexityScore int) error"], "types": []},
+        {"package": "internal/tui", "functions": ["Value() (string, string)"], "types": ["CreateModel"]}
+      ]
+    },
+    {
+      "title": "Integration: wire processClassifyingTasks into doTick and update docs",
+      "description": "Wire the classifier agent lifecycle into the orchestrator tick loop and update documentation.\n\n1. internal/orchestrator/orchestrator.go:\n   - In doTick(): Add a call to o.processClassifyingTasks() AFTER bug report ingestion (which creates tasks in CLASSIFYING) and BEFORE the BACKLOG processing section. This ensures CLASSIFYING tasks get agents spawned before any BACKLOG processing.\n   - The insertion point is between the ingestBugReports/classifyNewBugReports block and the backlog query. Add a comment: '// 0b. Process CLASSIFYING tasks -> spawn classifier agents.'\n   - Verify end-to-end flow: bug report ingestion -> task created in CLASSIFYING -> processClassifyingTasks spawns classifier agent -> agent completes with classification.json -> onClassifierCompleted transitions to BACKLOG -> normal lifecycle continues.\n\n2. ARCHITECTURE.md:\n   - Update the Task Lifecycle diagram to include CLASSIFYING before BACKLOG:\n     classifying -> backlog -> planning -> ...\n   - Add CLASSIFYING to the status table with description: 'Classifier agent is analyzing task scope and complexity'\n   - Add CLASSIFYING to the Actionable states list.\n   - Add AgentClassifier to the Package Map description for agent/.\n   - Update Configuration section if any new config options are added.\n\n3. README.md:\n   - Update any lifecycle references to include the CLASSIFYING state.\n   - Document the classifier agent behavior and complexity scoring.\n\n4. Verify all existing tests pass. Run go test ./... and fix any compilation issues from the refactored interfaces (CreateTask signature changes, Value() return changes, etc.).\n\nThis subtask connects processClassifyingTasks (from subtask 2) with the refactored entry points (from subtask 4) and ensures the complete flow works end-to-end.",
+      "agent_type": "coder",
       "phase": "integration",
-      "title": "Integration: verify inline ctx and update docs"
+      "tests_for": [],
+      "files": [
+        "internal/orchestrator/orchestrator.go",
+        "ARCHITECTURE.md",
+        "README.md"
+      ],
+      "dependencies": [2, 4],
+      "priority": 2,
+      "module_boundaries": [
+        {"package": "internal/orchestrator", "description": "Core orchestrator loop with CLASSIFYING phase integrated into tick lifecycle between ingestion and backlog processing", "exports": 2}
+      ],
+      "interface_shapes": [
+        {"package": "internal/orchestrator", "functions": ["doTick(ctx context.Context)"], "types": []}
+      ]
+    }
+  ],
+  "tdd_exceptions": [
+    {
+      "subtask_index": 0,
+      "justification": "Adding enum constants (StatusClassifying, AgentClassifier), a model field (ComplexityScore), and state machine entries — pure type definitions with no logic. The build IS the test; if the types are wrong, nothing compiles."
+    },
+    {
+      "subtask_index": 5,
+      "justification": "Integration wiring connecting already-tested components: a single-line processClassifyingTasks() call in doTick, and documentation updates. The doTick call is a single line addition; end-to-end verification uses existing tests."
+    }
+  ],
+  "coverage": [
+    {
+      "criterion": "New tasks enter CLASSIFYING and get a classifier agent spawned",
+      "subtask_indices": [0, 2, 4, 5]
+    },
+    {
+      "criterion": "Classifier agent explores codebase and returns structured classification",
+      "subtask_indices": [2]
+    },
+    {
+      "criterion": "Successful classification transitions task to BACKLOG with category, complexity score, enriched description, target files, and rationale populated",
+      "subtask_indices": [2]
+    },
+    {
+      "criterion": "Clarification requests keep task in CLASSIFYING with questions in TUI",
+      "subtask_indices": [2, 4]
+    },
+    {
+      "criterion": "Agent failures park task for human triage (no fallback to one-shot)",
+      "subtask_indices": [2]
+    },
+    {
+      "criterion": "Classifier agents do not count against maxConcurrent",
+      "subtask_indices": [2]
+    },
+    {
+      "criterion": "TUI task creation has no quick fix checkbox",
+      "subtask_indices": [4]
+    },
+    {
+      "criterion": "Human can override classification from TUI before task leaves CLASSIFYING",
+      "subtask_indices": [4]
+    },
+    {
+      "criterion": "Old one-shot classifier code is removed",
+      "subtask_indices": [4]
+    },
+    {
+      "criterion": "All existing tests pass; new tests cover processClassifyingTasks, classifier result handling, and bug report ingestion refactor",
+      "subtask_indices": [1, 3, 5]
+    },
+    {
+      "criterion": "README/docs updated to reflect the new lifecycle state",
+      "subtask_indices": [5]
+    }
+  ],
+  "assumptions": [
+    {
+      "decision": "Use lightweight git worktrees from the default branch for classifier agents instead of running directly in the main worktree",
+      "alternatives": ["Run classifier agents directly in the main worktree (conflicts when multiple classifiers run concurrently on .claude/ files)", "Use temp directories with symlinks to repo content", "Serialize classifier agents to run one at a time in the main worktree"],
+      "why_chosen": "The agent runner requires a unique directory per agent for its .claude/ config files (prompt, metadata, settings, hooks). Creating a lightweight git worktree from the default branch provides isolation with minimal overhead and matches existing agent patterns (planner, coder). The PRD's 'no worktree overhead' intent is about avoiding full feature worktree setup, not prohibiting git worktrees entirely."
+    },
+    {
+      "decision": "Classifier agent writes classification.json to its worktree rather than parsing output from stdout",
+      "alternatives": ["Parse structured JSON from agent output log (like supervisor.extractJSON)", "Have agent write to a temp file outside the repo"],
+      "why_chosen": "Writing classification.json matches the existing pattern: planners write plan.json, reviewers write review.json. Parsing from stdout is fragile when the agent produces exploratory output before the final JSON. Since each classifier gets its own worktree, writing a file is clean and reliable."
+    },
+    {
+      "decision": "Classifier agent failures keep the task in CLASSIFYING (parked for human triage) rather than transitioning to FAILED",
+      "alternatives": ["Transition to FAILED on classifier failure", "Retry classifier agent automatically"],
+      "why_chosen": "The PRD explicitly states 'no fallback to one-shot' and 'parked for human triage.' Keeping the task in CLASSIFYING (not FAILED) leaves it visible in the classification queue for human action. FAILED is a terminal-ish state that requires explicit recovery, making triage harder."
+    },
+    {
+      "decision": "Add SpawnClassifierAgent as a new method on Runner rather than modifying existing spawn methods with flags",
+      "alternatives": ["Add a skipSemaphore flag to spawnNewAgent", "Add an options struct to SpawnAgent with concurrency settings"],
+      "why_chosen": "A dedicated method keeps the concurrency bypass explicit and isolated. Modifying existing methods risks accidental misuse where non-classifier agents bypass limits. The new method encapsulates classifier-specific behavior (no semaphore, medium effort, worktree from default branch)."
+    },
+    {
+      "decision": "Bundle TUI changes (quickFix removal, human override) with the entry point refactor subtask rather than as a separate subtask",
+      "alternatives": ["Separate TUI subtask with its own test subtask (would exceed 8 subtask limit)", "Handle TUI changes in integration subtask"],
+      "why_chosen": "The TUI changes are tightly coupled with the CreateTask refactor (both remove quickFix). Bundling them avoids additional file overlap complexity and keeps the total subtask count at 6 (under the 8 limit). The TUI changes are small enough (remove checkbox, update Value() signature, add override key) to include without bloating the subtask."
+    },
+    {
+      "decision": "Store classifier worktrees in <bare>/classifiers/agent-<uuid>/ hierarchy",
+      "alternatives": ["Store under feature/<task-feature>/agent-<uuid>/", "Store in system temp directory"],
+      "why_chosen": "Classifiers are not tied to a specific feature — they classify tasks before any feature branch exists. A dedicated classifiers/ directory keeps them organized and follows the bare repo hierarchy convention (feature/, classifiers/). System temp directories would scatter worktrees outside the repo structure, making cleanup harder."
+    },
+    {
+      "decision": "OverrideClassification method on Orchestrator rather than direct DB updates from TUI",
+      "alternatives": ["TUI updates task fields directly via GORM", "Add override as a TUI-only operation without orchestrator method"],
+      "why_chosen": "Routing through the orchestrator ensures the state machine transition (CLASSIFYING -> BACKLOG) is validated, events are recorded, and the change is emitted for other subscribers. Direct DB updates would bypass state validation and event logging."
     }
   ]
 }
