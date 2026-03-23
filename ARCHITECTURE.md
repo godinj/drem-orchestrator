@@ -25,7 +25,7 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
 
 ### `internal/` — Core packages
 
-- `agent/` — Agent lifecycle management: spawning, heartbeat, status tracking, and teardown of Claude Code agents
+- `agent/` — Agent lifecycle management: spawning, heartbeat, status tracking, and teardown of Claude Code agents (planner, coder, researcher, reviewer, fixer, classifier)
 - `agentmon/` — Agent transcript monitoring: tails Claude conversation JSONL, extracts test results, build errors, git operations, and context usage signals
 - `constraints/` — Constitution constraint engine: loads `.drem/constraints.toml`, evaluates `command`, `max_lines`, `max_matches`, `no_match`, and `depth` rules
 - `ctxmon/` — Context window monitoring: tracks agent token usage, triggers compaction and fixer escalation
@@ -51,20 +51,21 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
 Tasks move through the following states (defined in `internal/model/enums.go`):
 
 ```
-                          ┌──────────────────────────────────────────┐
-                          │              rejected                   │
-                          │            (terminal)                   │
-                          └──────────────────────────────────────────┘
-                                ▲              ▲
-                                │              │
-backlog ──► planning ──► plan_review ──► test_writing ──► test_review ──► in_progress ──► testing_ready ──► merging ──► done
-                                                                              │                               │
-                                                                              ▼                               ▼
-                                                                           paused                          failed
+                                    ┌──────────────────────────────────────────┐
+                                    │              rejected                   │
+                                    │            (terminal)                   │
+                                    └──────────────────────────────────────────┘
+                                          ▲              ▲
+                                          │              │
+classifying ──► backlog ──► planning ──► plan_review ──► test_writing ──► test_review ──► in_progress ──► testing_ready ──► merging ──► done
+                                                                                              │                               │
+                                                                                              ▼                               ▼
+                                                                                           paused                          failed
 ```
 
 | Status          | Description                                                                 |
 |-----------------|-----------------------------------------------------------------------------|
+| `classifying`   | Classifier agent is analyzing task scope and complexity                      |
 | `backlog`       | Task created, not yet started                                               |
 | `planning`      | Planner agent is generating a plan                                          |
 | `plan_review`   | Human gate: plan awaits approval before proceeding                          |
@@ -78,7 +79,7 @@ backlog ──► planning ──► plan_review ──► test_writing ──�
 | `failed`        | Task encountered an unrecoverable error                                     |
 | `rejected`      | Task rejected at a review gate                                              |
 
-**Actionable states** (orchestrator can take automated action): `backlog`, `planning`, `test_writing`, `in_progress`, `merging`.
+**Actionable states** (orchestrator can take automated action): `classifying`, `backlog`, `planning`, `test_writing`, `in_progress`, `merging`.
 
 **Human gates** (require human approval to proceed): `plan_review`, `test_review`, `testing_ready`.
 

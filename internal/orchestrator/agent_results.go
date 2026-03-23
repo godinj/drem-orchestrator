@@ -62,6 +62,8 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		return o.onReviewerCompleted(ag, task)
 	case model.AgentFixer:
 		return o.onFixerCompleted(ag, task)
+	case model.AgentClassifier:
+		return o.onClassifierCompleted(ag, task)
 	}
 
 	// Extract memories from agent output.
@@ -451,6 +453,13 @@ func (o *Orchestrator) onFixerCompleted(ag *model.Agent, task *model.Task) error
 // what prompt adjustments). Without a supervisor, planners retry up to
 // MaxPlannerRetries and coders/researchers hard-fail.
 func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
+	// Classifier agents have their own failure handling — they stay in
+	// CLASSIFYING and get parked for human triage instead of transitioning
+	// to FAILED.
+	if ag.AgentType == model.AgentClassifier {
+		return o.onClassifierFailed(ag, task)
+	}
+
 	// Read agent output for error details.
 	output, err := o.runner.GetAgentOutput(ag.ID)
 	if err != nil {

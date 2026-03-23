@@ -283,14 +283,14 @@ Active filters are shown as badges in the header (e.g., `[cat:tooling sev:blocki
 ## Task Lifecycle
 
 ```
-                                                          ┌─────────────────────────────────────────────────────┐
-                                                          │             (revise plan)                            │
-                                                          ▼                                                     │
-backlog ──► planning ──► needs_clarification ──► plan_review ──► test_writing ──► test_review ──► in_progress ──► testing_ready ──► merging ──► done
-              │                  │                    │               │                │               │                │               │
-              ▼                  ▼                    ▼               ▼                ▼               ▼                ▼               ▼
-           failed             planning             planning       failed/paused    test_writing    failed/paused     in_progress     failed
-                          (replan with context)   (revise plan)                    (revise tests)                  (needs changes)
+                                                                        ┌─────────────────────────────────────────────────────┐
+                                                                        │             (revise plan)                            │
+                                                                        ▼                                                     │
+classifying ──► backlog ──► planning ──► needs_clarification ──► plan_review ──► test_writing ──► test_review ──► in_progress ──► testing_ready ──► merging ──► done
+                              │                  │                    │               │                │               │                │               │
+                              ▼                  ▼                    ▼               ▼                ▼               ▼                ▼               ▼
+                           failed             planning             planning       failed/paused    test_writing    failed/paused     in_progress     failed
+                                          (replan with context)   (revise plan)                    (revise tests)                  (needs changes)
 
                           plan_review ─────────────────────────────────► in_progress
                                                                      (skip TDD path)
@@ -298,14 +298,15 @@ backlog ──► planning ──► needs_clarification ──► plan_review �
                           test_review ──► planning
                                        (full replan)
 
-                          paused ──► backlog / planning / in_progress / test_writing
-                          failed ──► backlog / in_progress / test_writing
+                          paused ──► classifying / backlog / planning / in_progress / test_writing
+                          failed ──► classifying / backlog / in_progress / test_writing
 
                           rejected   (terminal — set when subtasks are rejected at a review gate)
 ```
 
-If no assumptions need clarification, the task skips `needs_clarification` and moves directly from `planning` to `plan_review`.
+New tasks start in `classifying` where a classifier agent explores the codebase to determine scope, complexity, and category. If no assumptions need clarification, the task skips `needs_clarification` and moves directly from `planning` to `plan_review`.
 
+- **classifying** -- Classifier agent is analyzing task scope and complexity (produces category, complexity score, target files)
 - **backlog** -- Waiting for dependencies to be met
 - **planning** -- Planner agent is decomposing the task
 - **needs_clarification** -- Plan assumptions need human input; the TUI shows clarification questions
@@ -316,7 +317,7 @@ If no assumptions need clarification, the task skips `needs_clarification` and m
 - **testing_ready** -- Human gate: verify the work meets acceptance criteria
 - **merging** -- Agent branches are being merged into the feature integration branch
 - **done** -- All work merged successfully
-- **failed** -- Something went wrong (can be retried back to backlog)
+- **failed** -- Something went wrong (can be retried back to classifying or backlog)
 - **paused** -- Manually paused by user
 - **rejected** -- Task rejected at a review gate (terminal)
 

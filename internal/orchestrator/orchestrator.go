@@ -242,11 +242,11 @@ func (o *Orchestrator) classifyNewBugReports() {
 
 		// Store bug report context for the classifier agent.
 		ctx := model.JSONField{
-			"title":                 report.Title,
-			"category":              string(report.Category),
-			"severity":              string(report.Severity),
-			"description":           report.Description,
-			"reproduction_context":  report.ReproductionContext,
+			"title":                report.Title,
+			"category":             string(report.Category),
+			"severity":             string(report.Severity),
+			"description":          report.Description,
+			"reproduction_context": report.ReproductionContext,
 		}
 
 		// Create the task in CLASSIFYING for the classifier agent.
@@ -289,11 +289,11 @@ func (o *Orchestrator) classifyNewBugReports() {
 
 // doTick is a single iteration of the orchestrator loop.
 func (o *Orchestrator) doTick(ctx context.Context) {
-	_ = ctx // reserved for future use
-
+	_ = ctx
 	// 0. Ingest any pending bug reports from the drop directory.
 	o.ingestBugReports()
-
+	// 0b. Process CLASSIFYING tasks -> spawn classifier agents.
+	o.processClassifyingTasks()
 	// 1. Process BACKLOG tasks -> transition to PLANNING.
 	// Root tasks with unmet dependencies remain in BACKLOG (pending).
 	var backlogTasks []model.Task
