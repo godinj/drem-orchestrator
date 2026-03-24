@@ -150,8 +150,9 @@ func (o *Orchestrator) reconcileStaleSubtasks() (int, error) {
 // is idle or dead — meaning the agent finished but the completion signal was
 // lost before the subtask could be transitioned. For each orphaned subtask,
 // it attempts to merge any remaining agent work into the feature branch and
-// fast-tracks the subtask to DONE. If the agent branch has no mergeable work
-// and the feature branch is empty, the subtask is reset to BACKLOG.
+// transitions the subtask to TESTING_READY so the normal quality gate can
+// verify build and test correctness. If the agent branch has no mergeable
+// work and the feature branch is empty, the subtask is reset to BACKLOG.
 func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 	var subtasks []model.Task
 	if err := o.db.Where(
@@ -202,13 +203,11 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 			fn := strings.TrimPrefix(featureBranch, "feature/")
 			featureDir := o.worktree.FeatureWorktreePath(fn)
 			if o.isWorkAlreadyMerged(sub, featureDir) {
-				o.logger.Info("reconcile: work already merged, fast-tracking to done",
+				o.logger.Info("reconcile: work already merged, transitioning to quality gate",
 					"subtask_id", sub.ID, "agent_id", ag.ID)
-				// Fast-track to done since work is already in the feature branch.
+				// Transition to testing_ready so the quality gate verifies build/tests.
 				transitions := []model.TaskStatus{
 					model.StatusTestingReady,
-					model.StatusMerging,
-					model.StatusDone,
 				}
 				for _, target := range transitions {
 					if sub.Status == target {
@@ -302,20 +301,18 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 			}
 		}
 
-		// Fast-track subtask to DONE.
+		// Transition subtask to testing_ready so the quality gate verifies build/tests.
 		transitions := []model.TaskStatus{
 			model.StatusTestingReady,
-			model.StatusMerging,
-			model.StatusDone,
 		}
 		for _, target := range transitions {
 			if sub.Status == target {
 				continue
 			}
 			evt, err := state.TransitionTask(sub, target, "orchestrator",
-				map[string]any{"reason": "reconcile-fasttrack"})
+				map[string]any{"reason": "reconcile-merged"})
 			if err != nil {
-				o.logger.Debug("reconcile fast-track skip",
+				o.logger.Debug("reconcile transition skip",
 					"subtask_id", sub.ID, "from", sub.Status, "to", target, "error", err)
 				continue
 			}
