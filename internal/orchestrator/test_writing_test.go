@@ -1622,6 +1622,275 @@ func TestHandlePlanApproved_UntracksLegacyPlanJSON(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// onAgentCompleted → test_writing parent advancement tests
+// ---------------------------------------------------------------------------
+
+// TestOnAgentCompleted_TestWritingParent_AllTestSubtasksDone verifies that when
+// onAgentCompleted processes the last test subtask (fast-tracking it to done)
+// and all other test subtasks are already done, the parent task transitions
+// from test_writing to test_review.
+func TestOnAgentCompleted_TestWritingParent_AllTestSubtasksDone(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-tw",
+		Description: "parent in test_writing",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	// One test subtask already done.
+	doneSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-already-done",
+		Description:  "test subtask",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	db.Create(&doneSub)
+
+	// The last test subtask — still in_progress, assigned to an agent.
+	lastSubID := uuid.New()
+	agentID := uuid.New()
+	lastSub := model.Task{
+		ID:              lastSubID,
+		ProjectID:       o.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "test-last-running",
+		Description:     "test subtask",
+		Status:          model.StatusInProgress,
+		Phase:           "test",
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&lastSub)
+
+	// Implementation subtask in backlog (should not block test_writing → test_review).
+	implSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "impl-sub",
+		Description:  "impl subtask",
+		Status:       model.StatusBacklog,
+		Phase:        "implementation",
+	}
+	db.Create(&implSub)
+
+	// Agent with empty worktree paths to skip merge/git operations.
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-coder",
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &lastSubID,
+		WorktreePath:   "",
+		WorktreeBranch: "",
+	}
+	db.Create(&ag)
+
+	if err := o.onAgentCompleted(&ag, &lastSub); err != nil {
+		t.Fatalf("onAgentCompleted error: %v", err)
+	}
+
+	// Verify the subtask was fast-tracked to done.
+	var updatedSub model.Task
+	db.First(&updatedSub, "id = ?", lastSubID)
+	if updatedSub.Status != model.StatusDone {
+		t.Fatalf("expected subtask status done, got %s", updatedSub.Status)
+	}
+
+	// Verify the parent transitioned from test_writing to test_review.
+	var updatedParent model.Task
+	db.First(&updatedParent, "id = ?", parentID)
+	if updatedParent.Status != model.StatusTestReview {
+		t.Errorf("expected parent status test_review, got %s", updatedParent.Status)
+	}
+}
+
+// TestOnAgentCompleted_TestWritingParent_SomeTestSubtasksRunning verifies that
+// when onAgentCompleted processes a test subtask but other test subtasks are
+// still in_progress, the parent stays in test_writing.
+func TestOnAgentCompleted_TestWritingParent_SomeTestSubtasksRunning(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-tw-partial",
+		Description: "parent in test_writing",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	// One test subtask already done.
+	doneSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-done",
+		Description:  "test subtask",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	db.Create(&doneSub)
+
+	// The subtask being completed by this agent.
+	completingSubID := uuid.New()
+	agentID := uuid.New()
+	completingSub := model.Task{
+		ID:              completingSubID,
+		ProjectID:       o.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "test-completing",
+		Description:     "test subtask",
+		Status:          model.StatusInProgress,
+		Phase:           "test",
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&completingSub)
+
+	// Another test subtask still running.
+	stillRunning := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-still-running",
+		Description:  "test subtask",
+		Status:       model.StatusInProgress,
+		Phase:        "test",
+	}
+	db.Create(&stillRunning)
+
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-coder",
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &completingSubID,
+		WorktreePath:   "",
+		WorktreeBranch: "",
+	}
+	db.Create(&ag)
+
+	if err := o.onAgentCompleted(&ag, &completingSub); err != nil {
+		t.Fatalf("onAgentCompleted error: %v", err)
+	}
+
+	// Verify the completing subtask was fast-tracked to done.
+	var updatedSub model.Task
+	db.First(&updatedSub, "id = ?", completingSubID)
+	if updatedSub.Status != model.StatusDone {
+		t.Fatalf("expected subtask status done, got %s", updatedSub.Status)
+	}
+
+	// Parent should remain in test_writing (not all test subtasks are done).
+	var updatedParent model.Task
+	db.First(&updatedParent, "id = ?", parentID)
+	if updatedParent.Status != model.StatusTestWriting {
+		t.Errorf("expected parent to stay in test_writing, got %s", updatedParent.Status)
+	}
+}
+
+// TestOnAgentCompleted_TestWritingParent_InProgressParentUnchanged is a
+// regression guard verifying that onAgentCompleted still calls
+// checkFeatureCompletion correctly for in_progress parents. When all subtasks
+// are done and the parent is in_progress, it should transition to testing_ready.
+func TestOnAgentCompleted_TestWritingParent_InProgressParentUnchanged(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-ip",
+		Description: "parent in in_progress",
+		Status:      model.StatusInProgress,
+	}
+	db.Create(&parent)
+
+	// One subtask already done.
+	doneSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "impl-done",
+		Description:  "implementation subtask",
+		Status:       model.StatusDone,
+		Phase:        "implementation",
+	}
+	db.Create(&doneSub)
+
+	// The last subtask — in_progress, assigned to agent.
+	lastSubID := uuid.New()
+	agentID := uuid.New()
+	lastSub := model.Task{
+		ID:              lastSubID,
+		ProjectID:       o.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "impl-last",
+		Description:     "implementation subtask",
+		Status:          model.StatusInProgress,
+		Phase:           "implementation",
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&lastSub)
+
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-coder",
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &lastSubID,
+		WorktreePath:   "",
+		WorktreeBranch: "",
+	}
+	db.Create(&ag)
+
+	if err := o.onAgentCompleted(&ag, &lastSub); err != nil {
+		t.Fatalf("onAgentCompleted error: %v", err)
+	}
+
+	// Verify subtask fast-tracked to done.
+	var updatedSub model.Task
+	db.First(&updatedSub, "id = ?", lastSubID)
+	if updatedSub.Status != model.StatusDone {
+		t.Fatalf("expected subtask status done, got %s", updatedSub.Status)
+	}
+
+	// Parent should transition from in_progress to testing_ready via
+	// checkFeatureCompletion (existing behavior, regression guard).
+	var updatedParent model.Task
+	db.First(&updatedParent, "id = ?", parentID)
+	if updatedParent.Status != model.StatusTestingReady {
+		t.Errorf("expected parent status testing_ready, got %s", updatedParent.Status)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Suppress unused import warning
 // ---------------------------------------------------------------------------
 
