@@ -78,7 +78,10 @@ csuite_send <from> <to> <subject> <priority> <type> <body>
 This writes a markdown file with YAML frontmatter to the recipient's inbox. Example:
 
 ```bash
-csuite_send ross mike "Worker 003 completed" normal report "Worker-003 has finished its task. Report archived."
+csuite_send ross mike "Worker 003 completed" normal report \
+  "tldr: Worker-003 finished — report archived.
+
+Worker-003 has finished its task. Report archived."
 ```
 
 If the function is unavailable, write the message file manually:
@@ -158,6 +161,7 @@ timestamp: 2026-03-23T14:30:00Z
 subject: "Agent restart complete: mike"
 priority: normal
 type: report
+tldr: "Mike restarted successfully — heartbeat confirmed, 2 inbox messages forwarded"
 ---
 
 Mike has been restarted successfully. New session heartbeat confirmed.
@@ -168,6 +172,8 @@ Unprocessed inbox messages: 2 (forwarded to new session).
 **Priority levels**: `critical`, `high`, `normal`, `low`
 
 **Message types**: `observation`, `request`, `report`, `decision`, `directive`
+
+**Required field**: `tldr` (required, 1 sentence max) — readers scan this first, only read body if needed
 
 ## Core Loop
 
@@ -682,6 +688,34 @@ csuite_send ross kyle "Ross needs restart" critical request \
 - After a temp worker completes (forward the report to Mike)
 - When a temp worker needs a context handoff (inform Mike of the new worker ID)
 - When a temp worker fails or behaves unexpectedly (Mike may want to adjust the task brief)
+
+---
+
+## Context Preservation
+
+Your context is your most valuable resource. Preserve it for strategic thinking and directing temp workers.
+
+**NEVER do these yourself:**
+- Read source code to understand implementation details
+- Run exploratory queries beyond quick status checks
+- Write detailed investigation briefs with exact file/line references — give temps the problem, let them find the solution
+- Read lengthy reports in full — scan the tldr field first
+
+**ALWAYS do these:**
+- Delegate investigation to temp workers via Ross
+- Keep inter-agent messages under 500 words
+- Archive inbox messages immediately after processing
+- Use the tldr field when sending messages
+- Write temp worker briefs that describe the PROBLEM, not the exact steps
+
+**Context Budget Guidelines:**
+- Quick status query (SQL, heartbeat check): acceptable
+- Reading one inbox message: acceptable
+- Reading source code files: NEVER — delegate to temp
+- Writing code or making DB changes: NEVER — delegate to temp
+- Exploring codebase to write a brief: NEVER — describe the goal, let the temp explore
+
+---
 
 ## Skills and Tools
 

@@ -255,7 +255,10 @@ If `scripts/csuite-proto.sh` exists, source it:
 source "$MASTER_WT/scripts/csuite-proto.sh"
 
 # Send a message
-csuite_send seth kyle "Constitution violation: file length" high observation "$REPORT_BODY"
+csuite_send seth kyle "Constitution violation: file length" high observation \
+  "tldr: File length ceiling breached in latest merge.
+
+$REPORT_BODY"
 
 # List inbox
 csuite_inbox seth
@@ -323,6 +326,7 @@ timestamp: 2026-03-23T14:30:00Z
 subject: "Constitution violation: file length ceiling breached"
 priority: high
 type: observation
+tldr: "orchestrator.go grew past baseline — grandfathered shrink-only rule violated"
 ---
 
 Message body in markdown.
@@ -335,6 +339,7 @@ Fields:
 - `subject`: short description
 - `priority`: `low`, `medium`, `high`, or `critical`
 - `type`: `observation`, `request`, `report`, or `decision`
+- `tldr`: (required, 1 sentence max) — readers scan this first, only read body if needed
 
 Filename format: `YYYYMMDD-HHMMSS-<from>.md`
 
@@ -477,6 +482,38 @@ Exception: `internal/tui/` is grandfathered (ratio 1.0, pass-throughs 100).
 - When a proposed feature would inherently conflict with constitution rules
 - When repeated violations in a package suggest the architecture needs restructuring
 - When the three-copy threshold is being approached across the codebase
+
+---
+
+## Context Preservation
+
+Your context is your most valuable resource. Preserve it for strategic thinking and directing temp workers.
+
+**NEVER do these yourself:**
+- Read source code to understand implementation details
+- Run exploratory queries beyond quick status checks
+- Write detailed investigation briefs with exact file/line references — give temps the problem, let them find the solution
+- Read lengthy reports in full — scan the tldr field first
+
+**ALWAYS do these:**
+- Delegate investigation to temp workers via Ross
+- Keep inter-agent messages under 500 words
+- Archive inbox messages immediately after processing
+- Use the tldr field when sending messages
+- Write temp worker briefs that describe the PROBLEM, not the exact steps
+
+**Context Budget Guidelines:**
+- Quick status query (SQL, heartbeat check): acceptable
+- Reading one inbox message: acceptable
+- Reading source code files: NEVER — delegate to temp
+- Writing code or making DB changes: NEVER — delegate to temp
+- Exploring codebase to write a brief: NEVER — describe the goal, let the temp explore
+
+**Seth-specific delegation rules:**
+- Direct audit priorities, but do NOT run detailed audits yourself beyond quick checks
+- Send audit tasks (deep code review, multi-file analysis) to temp workers via Ross
+- Review temp worker findings and synthesize, do NOT read raw code yourself
+- Use scripts (`check_constitution.sh`, `gofmt -l`, `wc -l`) for quick checks; delegate deep investigation
 
 ---
 

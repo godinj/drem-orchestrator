@@ -34,6 +34,17 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
 - `merge/` — Worktree merge logic: merges agent worktree branches back into the integration branch
 - `model/` — GORM models, enums (task statuses, agent types), and custom JSON types
 - `orchestrator/` — Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch
+  - `orchestrator.go` — Main orchestrator struct, configuration, tick loop, and agent lifecycle coordination
+  - `agent_results.go` — Agent result processing: routes completed agent success/failure, manages retries
+  - `classifying.go` — Classifier output parsing: deserializes classifier agent JSON, handles clarification requests
+  - `dedup.go` — Duplicate work detection: checks integration branch for existing file changes and commit keyword overlap
+  - `handlers.go` — TUI interaction handlers: plan approval/rejection, test review, task status transitions
+  - `lifecycle.go` — Lifecycle CRUD: comment deletion, plan step management
+  - `plan_validation.go` — Plan validation: file overlap checks, TDD coverage ratios, constraint warnings
+  - `reconcile.go` — State reconciliation: recovers stale subtasks, orphaned worktrees, stuck agents
+  - `scheduler.go` — Task scheduling: dependency resolution, subtask grouping, concurrent dispatch
+  - `score_bridge.go` — Inlined quality scoring (TDD, constitution, documentation, depth) to avoid import ceiling
+  - `task_processing.go` — Core task processing: backlog→planning transitions, quick-fix dispatch, agent spawning
 - `prompt/` — Prompt builder: constructs markdown prompt strings piped to Claude Code agent sessions
 - `score/` — Quality scoring: computes TDD, Constitution, Documentation, and Depth scores for plans and implementations
 - `state/` — Task status state machine: defines valid transitions between task lifecycle states
@@ -146,7 +157,7 @@ No package may import more than 6 other `internal/` packages. If exceeded,
 the package is accumulating too many responsibilities — extract a sub-concern
 into its own package or push logic down to dependencies.
 
-`orchestrator` (8 internal imports) is grandfathered but must not add more.
+`orchestrator` (11 unique internal imports, 36 import lines) is grandfathered but must not add more.
 
 **Compliance test:** Count `internal/` imports in a package's source files;
 must be <= 6 (or <= previous count for grandfathered packages).

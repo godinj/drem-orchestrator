@@ -29,6 +29,24 @@ _csuite_check_agent() {
     fi
 }
 
+# Notify an agent's tmux session that a message arrived.
+# Usage: _csuite_notify <to> <from> <subject> <priority>
+# Sends a brief input line to the agent's Claude Code session.
+# Silently no-ops if the session doesn't exist.
+_csuite_notify() {
+    local to="$1"
+    local from="$2"
+    local subject="$3"
+    local priority="$4"
+    local session="csuite-${to}"
+
+    # Only notify if the recipient has a running tmux session
+    if tmux -L drem has-session -t "$session" 2>/dev/null; then
+        local note="[inbox] ${priority} from ${from}: ${subject}"
+        tmux -L drem send-keys -t "$session" "$note" Enter
+    fi
+}
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -73,6 +91,9 @@ type: ${type}
 
 ${body}
 MSGEOF
+
+    # Push-notify the recipient if their session is running
+    _csuite_notify "$to" "$from" "$subject" "$priority"
 
     echo "$filepath"
 }
