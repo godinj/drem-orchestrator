@@ -38,13 +38,15 @@ _csuite_notify() {
     local from="$2"
     local subject="$3"
     local priority="$4"
-    local session="csuite-${to}"
+    local note="[inbox] ${priority} from ${from}: ${subject}"
 
-    # Only notify if the recipient has a running tmux session
-    if tmux -L drem has-session -t "$session" 2>/dev/null; then
-        local note="[inbox] ${priority} from ${from}: ${subject}"
-        tmux -L drem send-keys -t "$session" "$note" Enter
-    fi
+    # Try csuite-<agent> first (C-Suite agents), then bare name (temp workers)
+    for session in "csuite-${to}" "${to}"; do
+        if tmux -L drem has-session -t "$session" 2>/dev/null; then
+            tmux -L drem send-keys -t "$session" "$note" Enter
+            return 0
+        fi
+    done
 }
 
 # ---------------------------------------------------------------------------

@@ -490,8 +490,11 @@ cp <mike-task-brief-file> "${WORKER_DIR}/inbox/"
 4. **Launch the worker session**:
 
 ```bash
-tmux -L csuite new-session -d -s "$WORKER_ID" \
-  "cd <orchestrator-dir> && claude --task-brief ${WORKER_DIR}/inbox/<brief-filename>"
+tmux -L drem new-session -d -s "csuite-${WORKER_ID}" \
+  "cd /home/godinj/git/drem-orchestrator.git/master && claude \
+    --dangerously-skip-permissions \
+    --system-prompt ${WORKER_DIR}/inbox/<brief-filename> \
+    'You are ${WORKER_ID}. Read your task brief and begin.'"
 ```
 
 The exact launch command depends on how temp workers are configured. The worker must have access to the headless CLI (`drem cli`) and its own inbox/outbox.
