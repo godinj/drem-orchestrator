@@ -151,26 +151,39 @@ fi
 
 Recommended start order: **Ross** (monitors others), **Seth** and **Alex** (independent), **Mike** (may spawn workers Ross manages).
 
-### Stop an Agent
+### Restart an Agent (Graceful)
+
+**Always use `/csuite-save-and-restart` for graceful restarts.** This lets the agent save its context before shutdown.
 
 ```bash
 AGENT="mike"; SESSION="csuite-${AGENT}"
 
-# Graceful exit
-tmux -L drem send-keys -t "$SESSION" "/exit" Enter
-sleep 2
-tmux -L drem send-keys -t "$SESSION" Enter
+# Step 1: Tell the agent to save state via the slash command
+tmux -L drem send-keys -t "$SESSION" "/csuite-save-and-restart" Enter
 
-# Wait up to 15 seconds
-for i in $(seq 1 15); do
-  tmux -L drem has-session -t "$SESSION" 2>/dev/null || break
-  sleep 1
-done
+# Step 2: Wait for the agent to finish saving (watch for the relaunch command in output)
+sleep 15
 
-# Force kill if needed
-if tmux -L drem has-session -t "$SESSION" 2>/dev/null; then
-  tmux -L drem kill-session -t "$SESSION"
-fi
+# Step 3: Kill the session
+tmux -L drem kill-session -t "$SESSION" 2>/dev/null
+
+# Step 4: Relaunch (restart-context.md will exist from the save)
+```
+
+Then use the standard launch pattern from "Launch Commands" above to restart.
+
+**NEVER kill an agent session without sending `/csuite-save-and-restart` first** — cold kills lose all unsaved context.
+
+### Stop an Agent (No Restart)
+
+```bash
+AGENT="mike"; SESSION="csuite-${AGENT}"
+
+# Still save state first in case we restart later
+tmux -L drem send-keys -t "$SESSION" "/csuite-save-and-restart" Enter
+sleep 15
+
+tmux -L drem kill-session -t "$SESSION" 2>/dev/null
 
 # Notify Ross so he doesn't treat it as an unexpected death
 csuite_send kyle ross "Agent stopped: ${AGENT}" normal report \
@@ -505,5 +518,6 @@ Use this skill to check worktree state when briefing the operator about the dev 
 - **Launching agents whose prompts do not exist.** Check the file before starting.
 - **Exploring code to write precise briefs.** You are not a researcher. Describe the goal and constraints. Let temps and specialists find the implementation details.
 - **Reading source code.** If you need to understand code to delegate, your brief is too detailed. Simplify.
+- **Cold-killing agent sessions.** Always send `/csuite-save-and-restart` before killing a session. Cold kills lose all unsaved context.
 - **Burying priority-1 in a stats table.** The operator's standing execution order defines what matters most. Lead with it, always.
 - **Moving on to lower-priority work while priority-1 is failed/blocked.** If priority-1 needs attention, that IS your job until it's unblocked or the operator redirects.
