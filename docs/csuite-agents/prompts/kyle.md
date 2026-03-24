@@ -131,8 +131,8 @@ else
     tmux -L drem new-session -d -s "$SESSION" \
       "cd /home/godinj/git/drem-orchestrator.git/master && claude \
         --system-prompt $PROMPT \
-        --allowedTools 'Bash(command),Read(file_path),Glob(pattern),Grep(pattern)' \
-        -p 'You are ${AGENT}, the ${ROLE}. Begin your loop. Read your state file first.${RESTART_FLAG}'"
+        --dangerously-skip-permissions \
+        'You are ${AGENT}, the ${ROLE}. Begin your loop. Read your state file first.${RESTART_FLAG}'"
     echo "${AGENT}: started"
   fi
 fi

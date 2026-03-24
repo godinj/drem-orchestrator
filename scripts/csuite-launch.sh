@@ -161,8 +161,8 @@ fi
 tmux -L "$TMUX_SOCKET" new-session -d -s "$KYLE_SESSION" \
     "cd '$WORK_DIR' && claude \
         --system-prompt '$KYLE_PROMPT' \
-        --allowedTools 'Bash(command),Read(file_path),Glob(pattern),Grep(pattern)' \
-        -p '$INITIAL_PROMPT'"
+        --dangerously-skip-permissions \
+        '$INITIAL_PROMPT'"
 
 echo "Kyle started in tmux session '$KYLE_SESSION' on socket '$TMUX_SOCKET'."
 echo "Attaching..."
