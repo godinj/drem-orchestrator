@@ -456,10 +456,8 @@ func (o *Orchestrator) onFixerCompleted(ag *model.Agent, task *model.Task) error
 	return nil
 }
 
-// onAgentFailed handles a failed agent. When a supervisor is configured, it
-// performs LLM-powered failure diagnosis to decide whether to retry (and with
-// what prompt adjustments). Without a supervisor, planners retry up to
-// MaxPlannerRetries and coders/researchers hard-fail.
+// onAgentFailed handles a failed agent. Uses supervisor diagnosis for smart
+// retry decisions when available; otherwise planners retry and coders hard-fail.
 func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	// Classifier agents have their own failure handling — they stay in
 	// CLASSIFYING and get parked for human triage instead of transitioning
@@ -734,10 +732,8 @@ func (o *Orchestrator) synthesizeCompletion(agentID uuid.UUID) error {
 	return o.processAgentResult(agent.Completion{AgentID: agentID, ReturnCode: 0})
 }
 
-// checkDepthConstraintFailures inspects constraint evaluation results for
-// depth-specific failures and requests a supervisor diagnosis if any are found.
-// The diagnosis is stored as a system comment and in the task context. This is
-// advisory only — normal constraint failure handling continues regardless.
+// checkDepthConstraintFailures checks for depth-type constraint failures and
+// requests advisory supervisor diagnosis, stored as a system comment.
 func (o *Orchestrator) checkDepthConstraintFailures(task *model.Task, report *constraints.Report, featureDir string) {
 	if report == nil || o.supervisor == nil {
 		return
