@@ -491,7 +491,7 @@ cp <mike-task-brief-file> "${WORKER_DIR}/inbox/"
 
 ```bash
 tmux -L drem new-session -d -s "csuite-${WORKER_ID}" \
-  "cd /home/godinj/git/drem-orchestrator.git/master && claude \
+  "cd /home/godinj/git/drem-orchestrator.git/master && CSUITE_AGENT=${WORKER_ID} claude \
     --dangerously-skip-permissions \
     --system-prompt ${WORKER_DIR}/inbox/<brief-filename> \
     'You are ${WORKER_ID}. Read your task brief and begin.'"

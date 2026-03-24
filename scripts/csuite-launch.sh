@@ -159,7 +159,7 @@ if [ -f "$CSUITE_DIR/kyle/restart-context.md" ]; then
 fi
 
 tmux -L "$TMUX_SOCKET" new-session -d -s "$KYLE_SESSION" \
-    "cd '$WORK_DIR' && claude \
+    "cd '$WORK_DIR' && CSUITE_AGENT=kyle claude \
         --system-prompt '$KYLE_PROMPT' \
         --dangerously-skip-permissions \
         '$INITIAL_PROMPT'"

@@ -34,29 +34,19 @@ if [ ! -d "${CSUITE_DIR}/temp-workers" ]; then
     created_dirs=$((created_dirs + 1))
 fi
 
-# Build inbox watcher if not already built
-REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-WATCHER_BIN="${REPO_DIR}/csuite-inbox-watch"
-if [ ! -f "$WATCHER_BIN" ]; then
-    echo "  Building csuite-inbox-watch..."
-    (cd "$REPO_DIR" && go build -o csuite-inbox-watch ./cmd/csuite-inbox-watch/) 2>/dev/null || true
-fi
-
-# Start inbox watchers for each agent (idempotent — skips if already running)
-if [ -f "$WATCHER_BIN" ]; then
-    for agent in "${AGENTS[@]}"; do
-        pidfile="${CSUITE_DIR}/${agent}/inbox-watch.pid"
-        # Check if watcher is already running
-        if [ -f "$pidfile" ] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
-            continue
-        fi
-        "$WATCHER_BIN" -agent "$agent" &
-        echo $! > "$pidfile"
-    done
-    echo "  Inbox watchers: started for ${AGENTS[*]}"
-else
-    echo "  Inbox watchers: skipped (build failed)"
-fi
+# NOTE: csuite-inbox-watch (fsnotify-based inbox watcher) has been disabled.
+# It used tmux send-keys to inject notifications into agent TUI sessions,
+# which interrupts any operator interaction in those sessions.
+# Agents now discover new messages by polling their inbox directories.
+#
+# Kill any stale inbox watchers that may still be running.
+for agent in "${AGENTS[@]}"; do
+    pidfile="${CSUITE_DIR}/${agent}/inbox-watch.pid"
+    if [ -f "$pidfile" ]; then
+        kill "$(cat "$pidfile")" 2>/dev/null || true
+        rm -f "$pidfile"
+    fi
+done
 
 echo "C-Suite bootstrap complete: ${CSUITE_DIR}"
 echo "  Agents: ${AGENTS[*]}"

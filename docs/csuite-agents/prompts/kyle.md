@@ -129,7 +129,7 @@ else
       RESTART_FLAG=" Read restart context at ~/.drem-csuite/${AGENT}/restart-context.md first."
     fi
     tmux -L drem new-session -d -s "$SESSION" \
-      "cd /home/godinj/git/drem-orchestrator.git/master && claude \
+      "cd /home/godinj/git/drem-orchestrator.git/master && CSUITE_AGENT=${AGENT} claude \
         --system-prompt $PROMPT \
         --dangerously-skip-permissions \
         'You are ${AGENT}, the ${ROLE}. Begin your loop. Read your state file first.${RESTART_FLAG}'"

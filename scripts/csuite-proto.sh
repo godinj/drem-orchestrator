@@ -29,24 +29,18 @@ _csuite_check_agent() {
     fi
 }
 
-# Notify an agent's tmux session that a message arrived.
+# Notify an agent that a message arrived.
 # Usage: _csuite_notify <to> <from> <subject> <priority>
-# Sends a brief input line to the agent's Claude Code session.
-# Silently no-ops if the session doesn't exist.
+#
+# Previously this used tmux send-keys to inject a one-liner into the
+# recipient's Claude Code session.  That approach interrupts any operator
+# interaction happening in the TUI, so it has been removed.
+#
+# Agents discover new messages by polling their inbox directory on their
+# own loop cadence.  No push notification is needed.
 _csuite_notify() {
-    local to="$1"
-    local from="$2"
-    local subject="$3"
-    local priority="$4"
-    local note="[inbox] ${priority} from ${from}: ${subject}"
-
-    # Try csuite-<agent> first (C-Suite agents), then bare name (temp workers)
-    for session in "csuite-${to}" "${to}"; do
-        if tmux -L drem has-session -t "$session" 2>/dev/null; then
-            tmux -L drem send-keys -t "$session" "$note" Enter
-            return 0
-        fi
-    done
+    # No-op.  Agents poll their inboxes; no tmux send-keys notification.
+    return 0
 }
 
 # ---------------------------------------------------------------------------
