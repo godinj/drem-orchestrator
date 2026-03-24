@@ -400,11 +400,11 @@ func TestReconcileOrphanedSubtasks_DeadAgent(t *testing.T) {
 		t.Errorf("expected 1 fix for dead agent, got %d", fixes)
 	}
 
-	// Subtask should be fast-tracked to DONE (merged=true since no branches).
+	// Subtask should stop at TESTING_READY (quality gate), not fast-track to DONE.
 	var updated model.Task
 	db.First(&updated, "id = ?", subID)
-	if updated.Status != model.StatusDone {
-		t.Errorf("expected subtask to be fast-tracked to done, got %s", updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected subtask to stop at testing_ready, got %s", updated.Status)
 	}
 }
 
@@ -460,11 +460,75 @@ func TestReconcileOrphanedSubtasks_WorkAlreadyMerged(t *testing.T) {
 		t.Errorf("expected 1 fix, got %d", fixes)
 	}
 
-	// Subtask should transition to DONE since work is already merged.
+	// Subtask should stop at TESTING_READY (quality gate), not fast-track to DONE.
 	var updated model.Task
 	db.First(&updated, "id = ?", subID)
-	if updated.Status != model.StatusDone {
-		t.Errorf("expected subtask status done, got %s", updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected subtask status testing_ready, got %s", updated.Status)
+	}
+}
+
+func TestReconcileOrphanedSubtasks_FastTrackStopsAtQualityGate(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "orphan-gate"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	// Create agent branch with a commit and merge it into the feature branch.
+	agentBranch := createAgentBranch(t, bareRepo, featureName, "worktree-agent-gate", true)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      orch.projectID,
+		Title:          "orphan-gate-parent",
+		Description:    "test parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&parent)
+
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "gate-agent",
+		Status:         model.AgentIdle,
+		WorktreeBranch: agentBranch,
+	}
+	db.Create(&ag)
+
+	subID := uuid.New()
+	sub := model.Task{
+		ID:              subID,
+		ProjectID:       orch.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "orphan-gate-sub",
+		Description:     "subtask that must not bypass quality gate",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&sub)
+
+	_, err := orch.reconcileOrphanedSubtasks()
+	if err != nil {
+		t.Fatalf("reconcileOrphanedSubtasks() error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", subID)
+
+	// The subtask must NOT reach merging or done — the quality gate must not be bypassed.
+	if updated.Status == model.StatusMerging {
+		t.Errorf("subtask bypassed quality gate: reached merging status")
+	}
+	if updated.Status == model.StatusDone {
+		t.Errorf("subtask bypassed quality gate: reached done status")
+	}
+	// It should stop at testing_ready.
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected subtask to stop at testing_ready, got %s", updated.Status)
 	}
 }
 
