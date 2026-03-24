@@ -162,7 +162,7 @@ No package may import more than 6 other `internal/` packages. If exceeded,
 the package is accumulating too many responsibilities — extract a sub-concern
 into its own package or push logic down to dependencies.
 
-`orchestrator` (11 unique internal imports, 36 import lines) is grandfathered but must not add more.
+`orchestrator` (11 unique internal imports, 55 import lines) is grandfathered but must not add more.
 
 **Compliance test:** Count `internal/` imports in a package's source files;
 must be <= 6 (or <= previous count for grandfathered packages).
