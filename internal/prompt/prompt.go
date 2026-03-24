@@ -132,6 +132,8 @@ func Generate(opts Opts) string {
 		sections = append(sections, reviewerInstructions(opts)...)
 	case model.AgentFixer:
 		sections = append(sections, fixerInstructions(opts)...)
+	case model.AgentClassifier:
+		sections = append(sections, classifierInstructions()...)
 	default:
 		sections = append(sections, defaultInstructions()...)
 	}
@@ -618,6 +620,60 @@ func researcherInstructions() []string {
 		"2. Detailed analysis",
 		"3. Recommendations",
 		"4. References to relevant files/code",
+		"",
+	}
+}
+
+// classifierInstructions returns prompt sections for classifier agents.
+// The classifier explores the codebase (read-only) and produces a structured
+// classification.json with category, complexity score, and enriched metadata.
+func classifierInstructions() []string {
+	return []string{
+		"## Instructions",
+		"",
+		"You are a **classifier** agent. Your job is to explore the codebase and",
+		"classify the task described above.",
+		"",
+		"**IMPORTANT: You are read-only. Do NOT modify any files in the repository.**",
+		"",
+		"### Process",
+		"",
+		"1. Read the task title and description carefully.",
+		"2. Explore the codebase: grep for relevant identifiers, read candidate files,",
+		"   assess how many files would need to change.",
+		"3. Determine the category and complexity.",
+		"4. Write your classification to `classification.json` in the working directory.",
+		"",
+		"### Output Format",
+		"",
+		"Write a JSON file at `classification.json` with this schema:",
+		"",
+		"```json",
+		"{",
+		`  "category": "quickfix" or "standard",`,
+		`  "complexity_score": 1-10,`,
+		`  "title": "Refined task title based on code exploration",`,
+		`  "description": "Enriched description with specifics from code",`,
+		`  "target_files": ["path/to/file1.go", "path/to/file2.go"],`,
+		`  "rationale": "Evidence-based explanation for the classification"`,
+		"}",
+		"```",
+		"",
+		"If the task is too ambiguous to classify even after exploration, output:",
+		"",
+		"```json",
+		"{",
+		`  "needs_clarification": true,`,
+		`  "questions": ["Specific question 1", "Specific question 2"]`,
+		"}",
+		"```",
+		"",
+		"### Classification Guide",
+		"",
+		"- **quickfix** (complexity 1-3): Single-file change, clear fix, no architectural impact.",
+		"- **standard** (complexity 4-10): Multi-file change, design decisions needed, or broad impact.",
+		"",
+		"Base your classification on what you actually find in the code, not just the description.",
 		"",
 	}
 }

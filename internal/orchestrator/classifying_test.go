@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/agent"
 	dbpkg "github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
@@ -17,6 +18,7 @@ import (
 
 // setupClassifyingTest creates an Orchestrator with a real DB for testing
 // classifier agent orchestration. Returns the orchestrator and project ID.
+// The orchestrator has no runner (nil), suitable for testing completion handlers.
 func setupClassifyingTest(t *testing.T) (*Orchestrator, uuid.UUID) {
 	t.Helper()
 
@@ -51,8 +53,76 @@ func setupClassifyingTest(t *testing.T) (*Orchestrator, uuid.UUID) {
 	return orch, projectID
 }
 
-func TestProcessClassifyingTasks_SpawnsAgentForUnassignedTask(t *testing.T) {
+// setupClassifyingTestWithRunner creates an Orchestrator backed by a real bare
+// repo and agent runner, suitable for testing processClassifyingTasks which
+// needs to spawn agents via the runner.
+func setupClassifyingTestWithRunner(t *testing.T) (*Orchestrator, uuid.UUID) {
+	t.Helper()
+
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
+	db := testutil.NewTestDB(t)
+	projectID := uuid.New()
+	events := make(chan Event, 100)
+
+	wt := worktree.NewManager(bareRepo, defaultBranch)
+
+	project := model.Project{
+		ID:            projectID,
+		Name:          "classifying-runner-test",
+		BareRepoPath:  bareRepo,
+		DefaultBranch: defaultBranch,
+	}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	// Create a fake Claude binary that reads stdin and exits 0.
+	binDir := t.TempDir()
+	fakeBin := filepath.Join(binDir, "fake-claude")
+	script := "#!/bin/sh\ncat > /dev/null\nexit 0\n"
+	if err := os.WriteFile(fakeBin, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude binary: %v", err)
+	}
+
+	runner := agent.NewRunner(db, nil, wt, fakeBin, 4)
+
+	orch := &Orchestrator{
+		db:              db,
+		projectID:       projectID,
+		worktree:        wt,
+		runner:          runner,
+		events:          events,
+		contextWarnPct:  75,
+		contextStopPct:  90,
+		contextFixerPct: 85,
+		logger:          slog.Default().With("component", "classifying-runner-test"),
+	}
+
+	return orch, projectID
+}
+
+func TestProcessClassifyingTasks_NilRunner_Skips(t *testing.T) {
 	orch, projectID := setupClassifyingTest(t)
+
+	// Create a task in CLASSIFYING with no assigned agent.
+	testutil.CreateTask(t, orch.db, projectID, "Classify this task", model.StatusClassifying)
+
+	// With nil runner, processClassifyingTasks should return early.
+	orch.processClassifyingTasks()
+
+	// No agents should have been created.
+	var agents []model.Agent
+	if err := orch.db.Find(&agents).Error; err != nil {
+		t.Fatalf("query agents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents with nil runner, got %d", len(agents))
+	}
+}
+
+func TestProcessClassifyingTasks_SpawnsAgentForUnassignedTask(t *testing.T) {
+	orch, projectID := setupClassifyingTestWithRunner(t)
 
 	// Create a task in CLASSIFYING with no assigned agent.
 	task := testutil.CreateTask(t, orch.db, projectID, "Classify this task", model.StatusClassifying)
@@ -76,10 +146,18 @@ func TestProcessClassifyingTasks_SpawnsAgentForUnassignedTask(t *testing.T) {
 	if ag.AgentType != model.AgentClassifier {
 		t.Errorf("agent type = %q, want %q", ag.AgentType, model.AgentClassifier)
 	}
+	if ag.WorktreePath == "" {
+		t.Error("agent WorktreePath should be set (main worktree)")
+	}
+
+	// Clean up: stop the spawned agent to cancel monitoring goroutines.
+	if orch.runner != nil {
+		_ = orch.runner.StopAgent(ag.ID)
+	}
 }
 
 func TestProcessClassifyingTasks_SkipsAssignedTask(t *testing.T) {
-	orch, projectID := setupClassifyingTest(t)
+	orch, projectID := setupClassifyingTestWithRunner(t)
 
 	// Create a task in CLASSIFYING that already has an assigned agent.
 	task := testutil.CreateTask(t, orch.db, projectID, "Already assigned", model.StatusClassifying)
@@ -320,3 +398,4 @@ func writeClassificationJSON(t *testing.T, dir string, output ClassifierOutput) 
 		t.Fatalf("write classification.json: %v", err)
 	}
 }
+

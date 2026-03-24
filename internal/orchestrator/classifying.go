@@ -6,9 +6,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/google/uuid"
-
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
@@ -30,8 +29,25 @@ type ClassifierOutput struct {
 }
 
 // processClassifyingTasks finds tasks in CLASSIFYING with no assigned agent
-// and spawns a classifier agent for each.
+// and spawns a classifier agent for each via the runner.
 func (o *Orchestrator) processClassifyingTasks() {
+	if o.runner == nil {
+		return
+	}
+
+	// Resolve main worktree — classifiers run read-only against it.
+	mainWT, err := o.worktree.MainWorktreePath()
+	if err != nil {
+		o.logger.Error("classifier: resolve main worktree", "error", err)
+		return
+	}
+
+	var project model.Project
+	if err := o.db.First(&project, "id = ?", o.projectID).Error; err != nil {
+		o.logger.Error("classifier: load project", "error", err)
+		return
+	}
+
 	var tasks []model.Task
 	if err := o.db.Where("project_id = ? AND status = ? AND assigned_agent_id IS NULL",
 		o.projectID, model.StatusClassifying).Find(&tasks).Error; err != nil {
@@ -41,27 +57,27 @@ func (o *Orchestrator) processClassifyingTasks() {
 
 	for i := range tasks {
 		task := &tasks[i]
-		agentID := uuid.New()
-		ag := model.Agent{
-			ID:            agentID,
-			ProjectID:     o.projectID,
-			AgentType:     model.AgentClassifier,
-			Name:          fmt.Sprintf("classifier-%s", agentID.String()[:8]),
-			Status:        model.AgentWorking,
-			CurrentTaskID: &task.ID,
-		}
-		if err := o.db.Create(&ag).Error; err != nil {
-			o.logger.Error("create classifier agent", "task_id", task.ID, "error", err)
+
+		classifierPrompt := prompt.Generate(prompt.Opts{
+			Task:         task,
+			Project:      &project,
+			AgentType:    model.AgentClassifier,
+			WorktreePath: mainWT,
+		})
+
+		ag, err := o.runner.SpawnAgentInWorktree(task, mainWT, model.AgentClassifier, classifierPrompt)
+		if err != nil {
+			o.logger.Error("spawn classifier agent", "task_id", task.ID, "error", err)
 			continue
 		}
 
-		task.AssignedAgentID = &agentID
+		task.AssignedAgentID = &ag.ID
 		if err := o.db.Save(task).Error; err != nil {
 			o.logger.Error("assign classifier agent to task", "task_id", task.ID, "error", err)
 			continue
 		}
 
-		o.logger.Info("spawned classifier agent", "task_id", task.ID, "agent_id", agentID)
+		o.logger.Info("spawned classifier agent", "task_id", task.ID, "agent_id", ag.ID)
 	}
 }
 
