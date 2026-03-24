@@ -6,6 +6,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/google/uuid"
+
+	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/state"
@@ -192,4 +195,90 @@ func (o *Orchestrator) applyClassification(task *model.Task, output *ClassifierO
 	o.logger.Info("classifier completed, task moved to backlog",
 		"task_id", task.ID, "category", task.Category, "complexity", task.ComplexityScore)
 	return nil
+}
+
+// ingestBugReports scans the bug report directory for new reports and ingests
+// them into the database. If any new reports are found, it triggers
+// classification.
+func (o *Orchestrator) ingestBugReports() {
+	if o.bugreport == nil {
+		return
+	}
+	n, err := o.bugreport.Ingest(o.bugreportDir, o.projectID)
+	if err != nil {
+		o.logger.Warn("bug report ingestion error", "error", err)
+	}
+	if n > 0 {
+		o.logger.Info("ingested bug reports", "count", n)
+		o.classifyNewBugReports()
+	}
+}
+
+// classifyNewBugReports queries for unclassified (open, no PromotedTaskID) bug
+// reports and creates a task in CLASSIFYING for each. The classifier agent will
+// pick up these tasks and determine category, complexity, and target files.
+func (o *Orchestrator) classifyNewBugReports() {
+	openStatus := model.BugStatusOpen
+	reports, err := o.bugreport.List(bugreport.ListFilters{
+		Status:    &openStatus,
+		ProjectID: &o.projectID,
+	})
+	if err != nil {
+		o.logger.Warn("classify new bug reports: list open reports", "error", err)
+		return
+	}
+
+	for i := range reports {
+		report := &reports[i]
+
+		// Skip already-promoted reports.
+		if report.PromotedTaskID != nil {
+			continue
+		}
+
+		// Store bug report context for the classifier agent.
+		ctx := model.JSONField{
+			"title":                report.Title,
+			"category":             string(report.Category),
+			"severity":             string(report.Severity),
+			"description":          report.Description,
+			"reproduction_context": report.ReproductionContext,
+		}
+
+		// Create the task in CLASSIFYING for the classifier agent.
+		task := &model.Task{
+			ID:          uuid.New(),
+			ProjectID:   o.projectID,
+			Title:       report.Title,
+			Description: report.Description,
+			Status:      model.StatusClassifying,
+			Category:    model.CategoryStandard,
+			Context:     ctx,
+		}
+
+		if err := o.db.Create(task).Error; err != nil {
+			o.logger.Warn("classify new bug reports: create task",
+				"report_id", report.ID, "error", err)
+			continue
+		}
+
+		// Update the bug report: mark as promoted and link to the new task.
+		report.PromotedTaskID = &task.ID
+		report.Status = model.BugStatusPromoted
+		if err := o.db.Save(report).Error; err != nil {
+			o.logger.Warn("classify new bug reports: update bug report",
+				"report_id", report.ID, "error", err)
+			continue
+		}
+
+		o.emit("bugreport_classified", map[string]any{
+			"task_id":   task.ID,
+			"report_id": report.ID,
+		})
+
+		o.logger.Info("bug report promoted to classifying",
+			"report_id", report.ID,
+			"task_id", task.ID,
+		)
+	}
 }

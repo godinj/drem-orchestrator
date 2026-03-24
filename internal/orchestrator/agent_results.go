@@ -793,17 +793,3 @@ func (o *Orchestrator) checkDepthConstraintFailures(task *model.Task, report *co
 	o.logger.Info("depth constraint diagnosis completed",
 		"task_id", task.ID, "rejection_reason", diagnosis.RejectionReason)
 }
-
-// getChangedFilesDiff returns the diff of changed files between the worktree
-// HEAD and the given base branch. Returns empty string on error.
-func getChangedFilesDiff(worktreeDir, baseBranch string) (string, error) {
-	output, err := worktree.RunGit([]string{"diff", baseBranch + "...HEAD"}, worktreeDir)
-	if err != nil {
-		return "", fmt.Errorf("get changed files diff: %w", err)
-	}
-	// Truncate to avoid overly large diffs in prompts.
-	if len(output) > maxGitDiffLen {
-		output = output[:maxGitDiffLen] + "\n... (truncated)"
-	}
-	return output, nil
-}

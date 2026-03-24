@@ -398,4 +398,3 @@ func writeClassificationJSON(t *testing.T, dir string, output ClassifierOutput) 
 		t.Fatalf("write classification.json: %v", err)
 	}
 }
-

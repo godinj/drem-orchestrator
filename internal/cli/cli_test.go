@@ -370,4 +370,3 @@ func TestTaskDetailJSON(t *testing.T) {
 		t.Errorf("expected ID %s, got %s", task.ID, detail.ID)
 	}
 }
-

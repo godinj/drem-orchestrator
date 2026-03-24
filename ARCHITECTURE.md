@@ -36,15 +36,20 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
 - `orchestrator/` — Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch
   - `orchestrator.go` — Main orchestrator struct, configuration, tick loop, and agent lifecycle coordination
   - `agent_results.go` — Agent result processing: routes completed agent success/failure, manages retries
-  - `classifying.go` — Classifier output parsing: deserializes classifier agent JSON, handles clarification requests
+  - `classifying.go` — Classifier output parsing, bug report ingestion, and classification of new bug reports
+  - `context_monitor.go` — Context usage monitoring, fixer spawning, and failure recovery for agents
   - `dedup.go` — Duplicate work detection: checks integration branch for existing file changes and commit keyword overlap
   - `handlers.go` — TUI interaction handlers: plan approval/rejection, test review, task status transitions
   - `lifecycle.go` — Lifecycle CRUD: comment deletion, plan step management
+  - `merge_execution.go` — Merge execution and quick-fix-to-merging transition logic
   - `plan_validation.go` — Plan validation: file overlap checks, TDD coverage ratios, constraint warnings
   - `reconcile.go` — State reconciliation: recovers stale subtasks, orphaned worktrees, stuck agents
   - `scheduler.go` — Task scheduling: dependency resolution, subtask grouping, concurrent dispatch
   - `score_bridge.go` — Inlined quality scoring (TDD, constitution, documentation, depth) to avoid import ceiling
+  - `session_spawning.go` — Spawning reviewer, fixer, and supervisor Claude Code sessions
+  - `task_api.go` — Task management API: pause, resume, retry, create, comment, and override operations
   - `task_processing.go` — Core task processing: backlog→planning transitions, quick-fix dispatch, agent spawning
+  - `test_execution.go` — Test suite execution, compilation verification, and test scoping logic
 - `prompt/` — Prompt builder: constructs markdown prompt strings piped to Claude Code agent sessions
 - `score/` — Quality scoring: computes TDD, Constitution, Documentation, and Depth scores for plans and implementations
 - `state/` — Task status state machine: defines valid transitions between task lifecycle states
