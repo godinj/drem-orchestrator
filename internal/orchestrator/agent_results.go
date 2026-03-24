@@ -250,6 +250,14 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			if checkErr := o.checkFeatureCompletion(&parent); checkErr != nil {
 				o.logger.Error("check parent completion after subtask done", "parent_id", parent.ID, "error", checkErr)
 			}
+			// Also advance test_writing parents — checkFeatureCompletion
+			// only handles in_progress parents.
+			if parent.Status == model.StatusTestWriting {
+				if checkErr := o.processTestWriting(&parent); checkErr != nil {
+					o.logger.Error("process test writing after subtask done",
+						"parent_id", parent.ID, "error", checkErr)
+				}
+			}
 		}
 	}
 
