@@ -15,8 +15,8 @@ func TestDefaultConfigTmuxSocket(t *testing.T) {
 
 func TestDefaultConfigTmuxConfigFile(t *testing.T) {
 	cfg := DefaultConfig()
-	if cfg.TmuxConfigFile != "tmux.conf" {
-		t.Errorf("TmuxConfigFile: got %q, want %q", cfg.TmuxConfigFile, "tmux.conf")
+	if cfg.TmuxConfigFile != "master/.tmux.conf" {
+		t.Errorf("TmuxConfigFile: got %q, want %q", cfg.TmuxConfigFile, "master/.tmux.conf")
 	}
 }
 
@@ -63,8 +63,8 @@ func TestLoadConfigTmuxDefaults(t *testing.T) {
 	if cfg.TmuxSocket != "drem" {
 		t.Errorf("TmuxSocket: got %q, want %q", cfg.TmuxSocket, "drem")
 	}
-	if cfg.TmuxConfigFile != "tmux.conf" {
-		t.Errorf("TmuxConfigFile: got %q, want %q", cfg.TmuxConfigFile, "tmux.conf")
+	if cfg.TmuxConfigFile != "master/.tmux.conf" {
+		t.Errorf("TmuxConfigFile: got %q, want %q", cfg.TmuxConfigFile, "master/.tmux.conf")
 	}
 	// Verify the explicit override still applied.
 	if cfg.DatabasePath != "./other.db" {

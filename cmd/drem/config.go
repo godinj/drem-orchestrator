@@ -53,7 +53,7 @@ func DefaultConfig() Config {
 		ScopedTests:         &scopedDefault,
 		ContextFixerPercent: 85,
 		TmuxSocket:          "drem",
-		TmuxConfigFile:      "tmux.conf",
+		TmuxConfigFile:      "master/.tmux.conf",
 	}
 }
 
