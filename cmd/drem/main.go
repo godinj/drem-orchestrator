@@ -34,6 +34,12 @@ import (
 )
 
 func main() {
+	// Handle subcommands that bypass the flag-based TUI entry point.
+	if len(os.Args) > 1 && os.Args[1] == "cli" {
+		runCLI()
+		return
+	}
+
 	// Parse flags.
 	configPath := flag.String("config", "drem.toml", "config file path")
 	repoPath := flag.String("repo", "", "bare repo path (required)")
