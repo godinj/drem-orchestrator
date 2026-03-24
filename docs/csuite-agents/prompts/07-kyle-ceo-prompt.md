@@ -83,19 +83,19 @@ Kyle starts agents when needed. The launch command for each agent:
 bash scripts/csuite-bootstrap.sh
 
 # Start Mike (COO) — operations monitor
-tmux -L drem new-session -d -s "csuite-mike" \
+tmux -L drem new-session -d -s "csuite-mike" -f tmux.conf \
   "cd /home/godinj/git/drem-orchestrator.git/master && CSUITE_AGENT=mike claude --system-prompt docs/csuite-agents/prompts/mike.md --allowedTools 'Bash(command),Read(file_path),Glob(pattern),Grep(pattern)' -p 'You are Mike, the COO. Begin your monitoring loop. Read your state file first.'"
 
 # Start Alex (CPO) — product direction
-tmux -L drem new-session -d -s "csuite-alex" \
+tmux -L drem new-session -d -s "csuite-alex" -f tmux.conf \
   "cd /home/godinj/git/drem-orchestrator.git/master && CSUITE_AGENT=alex claude --system-prompt docs/csuite-agents/prompts/alex.md --allowedTools 'Bash(command),Read(file_path),Glob(pattern),Grep(pattern)' -p 'You are Alex, the CPO. Begin your product loop. Read your state file first.'"
 
 # Start Ross (HR) — workforce manager
-tmux -L drem new-session -d -s "csuite-ross" \
+tmux -L drem new-session -d -s "csuite-ross" -f tmux.conf \
   "cd /home/godinj/git/drem-orchestrator.git/master && CSUITE_AGENT=ross claude --system-prompt docs/csuite-agents/prompts/ross.md --allowedTools 'Bash(command),Read(file_path),Glob(pattern),Grep(pattern)' -p 'You are Ross, Chief HR. Begin your monitoring loop. Read your state file first.'"
 
 # Start Seth (CTO) — quality guardian
-tmux -L drem new-session -d -s "csuite-seth" \
+tmux -L drem new-session -d -s "csuite-seth" -f tmux.conf \
   "cd /home/godinj/git/drem-orchestrator.git/master && CSUITE_AGENT=seth claude --system-prompt docs/csuite-agents/prompts/seth.md --allowedTools 'Bash(command),Read(file_path),Glob(pattern),Grep(pattern)' -p 'You are Seth, the CTO. Begin your audit loop. Read your state file first.'"
 ```
 
