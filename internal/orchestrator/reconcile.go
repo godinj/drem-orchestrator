@@ -442,15 +442,17 @@ func (o *Orchestrator) reconcileOrphanWorktrees() (int, error) {
 	return cleaned, nil
 }
 
-// reconcileStuckAgents finds IN_PROGRESS subtasks whose agent tmux
-// sessions are dead but no completion was ever received. This catches
-// agents that exited without triggering the monitor goroutine.
+// reconcileStuckAgents finds tasks in actionable statuses (classifying,
+// planning, test_writing, in_progress) whose assigned agent's tmux session
+// is dead but no completion was ever received. This catches agents that
+// exited without triggering the monitor goroutine. Covers both top-level
+// tasks and subtasks.
 func (o *Orchestrator) reconcileStuckAgents() (int, error) {
-	var subtasks []model.Task
+	var tasks []model.Task
 	if err := o.db.Where(
-		"project_id = ? AND status = ? AND parent_task_id IS NOT NULL AND assigned_agent_id IS NOT NULL",
-		o.projectID, model.StatusInProgress,
-	).Find(&subtasks).Error; err != nil {
+		"project_id = ? AND status IN ? AND assigned_agent_id IS NOT NULL",
+		o.projectID, []model.TaskStatus{model.StatusClassifying, model.StatusPlanning, model.StatusTestWriting, model.StatusInProgress},
+	).Find(&tasks).Error; err != nil {
 		return 0, err
 	}
 
@@ -462,11 +464,11 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 	}
 
 	fixed := 0
-	for i := range subtasks {
-		sub := &subtasks[i]
+	for i := range tasks {
+		task := &tasks[i]
 
 		var ag model.Agent
-		if err := o.db.First(&ag, "id = ?", sub.AssignedAgentID).Error; err != nil {
+		if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err != nil {
 			continue
 		}
 
@@ -482,10 +484,10 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 
 		// Agent is NOT in the runner's running map AND DB status is working.
 		o.logger.Warn("detected dead agent session without completion",
-			"agent_id", ag.ID, "task", sub.Title, "session", ag.TmuxSession)
+			"agent_id", ag.ID, "task", task.Title, "session", ag.TmuxSession)
 
 		// Check if the agent branch has commits.
-		featureDir := o.resolveFeatureWorktree(sub)
+		featureDir := o.resolveFeatureWorktree(task)
 		hasCommits := false
 		if featureDir != "" && ag.WorktreeBranch != "" {
 			var err error
@@ -499,7 +501,7 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 		if hasCommits {
 			// Route through the normal completion path.
 			o.logger.Info("reconcile stuck: agent has commits, sending completion",
-				"agent_id", ag.ID, "task", sub.Title)
+				"agent_id", ag.ID, "task", task.Title)
 			if err := o.synthesizeCompletion(ag.ID); err != nil {
 				o.logger.Error("reconcile stuck: process completion",
 					"agent_id", ag.ID, "error", err)
@@ -515,27 +517,32 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 
 			// Auto-retry if under the limit.
 			retryCount := 0
-			if sub.Context != nil {
-				if v, ok := sub.Context["retry_count"].(float64); ok {
+			if task.Context != nil {
+				if v, ok := task.Context["retry_count"].(float64); ok {
 					retryCount = int(v)
 				}
 			}
 			if retryCount < MaxEmptyWorkRetries {
-				o.logger.Info("reconcile stuck: auto-retrying dead agent subtask",
-					"subtask_id", sub.ID, "retry_count", retryCount)
-				sub.AssignedAgentID = nil
-				if sub.Context == nil {
-					sub.Context = make(model.JSONField)
+				o.logger.Info("reconcile stuck: auto-retrying dead agent task",
+					"task_id", task.ID, "retry_count", retryCount)
+				task.AssignedAgentID = nil
+				if task.Context == nil {
+					task.Context = make(model.JSONField)
 				}
-				sub.Context["retry_count"] = float64(retryCount + 1)
-				sub.Status = model.StatusBacklog
-				sub.UpdatedAt = time.Now()
-				if err := o.db.Save(sub).Error; err != nil {
-					o.logger.Error("reconcile stuck: save subtask for retry", "subtask_id", sub.ID, "error", err)
+				task.Context["retry_count"] = float64(retryCount + 1)
+				// For pre-dispatch statuses, keep current status so the
+				// dispatch loop (e.g. processClassifyingTasks) re-picks
+				// the task. Only in_progress subtasks reset to backlog.
+				if task.Status == model.StatusInProgress {
+					task.Status = model.StatusBacklog
+				}
+				task.UpdatedAt = time.Now()
+				if err := o.db.Save(task).Error; err != nil {
+					o.logger.Error("reconcile stuck: save task for retry", "task_id", task.ID, "error", err)
 				}
 			} else {
-				if err := o.failTask(sub, "agent session died without producing commits"); err != nil {
-					o.logger.Error("reconcile stuck: fail subtask", "subtask_id", sub.ID, "error", err)
+				if err := o.failTask(task, "agent session died without producing commits"); err != nil {
+					o.logger.Error("reconcile stuck: fail task", "task_id", task.ID, "error", err)
 				}
 			}
 		}

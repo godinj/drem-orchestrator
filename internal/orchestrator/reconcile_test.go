@@ -1474,3 +1474,341 @@ func TestReconcile_ProtectsMainWorktreeFromOrphanCleanup(t *testing.T) {
 		t.Errorf("expected HEAD to point to main, got %q", headRef)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// reconcileStuckAgents — top-level task recovery (classifying, planning, test_writing)
+// ---------------------------------------------------------------------------
+// These tests verify that reconcileStuckAgents detects dead agents on
+// top-level tasks (parent_task_id IS NULL) across all actionable statuses.
+// They should FAIL against the current implementation which only queries
+// StatusInProgress subtasks with parent_task_id IS NOT NULL.
+
+func TestReconcileStuckAgents_TopLevel_Classifying(t *testing.T) {
+	orch, db, _ := setupReconcileTest(t)
+
+	// Top-level task in classifying status with a dead classifier agent.
+	// Classifier agents work in the bare repo — no worktree branch.
+	agentID := uuid.New()
+	taskID := uuid.New()
+	ag := model.Agent{
+		ID:            agentID,
+		ProjectID:     orch.projectID,
+		AgentType:     model.AgentClassifier,
+		Name:          "dead-classifier",
+		Status:        model.AgentWorking,
+		CurrentTaskID: &taskID,
+	}
+	db.Create(&ag)
+
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "top-level-classifying",
+		Description:     "task stuck in classifying with dead agent",
+		Status:          model.StatusClassifying,
+		AssignedAgentID: &agentID,
+		// No ParentTaskID — this is a top-level task.
+		// No WorktreeBranch — classifier operates in bare repo.
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileStuckAgents()
+	if err != nil {
+		t.Fatalf("reconcileStuckAgents() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix for dead classifier on top-level task, got %d", fixes)
+	}
+
+	// Task should keep classifying status (not reset to backlog) so that
+	// processClassifyingTasks re-dispatches a new classifier agent.
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.Status != model.StatusClassifying {
+		t.Errorf("expected task to remain in classifying status, got %s", updated.Status)
+	}
+	if updated.AssignedAgentID != nil {
+		t.Error("expected assigned_agent_id to be cleared")
+	}
+	// retry_count should be incremented.
+	if updated.Context == nil {
+		t.Fatal("expected Context to be set with retry_count")
+	}
+	if v, ok := updated.Context["retry_count"].(float64); !ok || int(v) != 1 {
+		t.Errorf("expected retry_count=1, got %v", updated.Context["retry_count"])
+	}
+
+	// Agent should be marked dead.
+	var updatedAgent model.Agent
+	db.First(&updatedAgent, "id = ?", agentID)
+	if updatedAgent.Status != model.AgentDead {
+		t.Errorf("expected agent status dead, got %s", updatedAgent.Status)
+	}
+}
+
+func TestReconcileStuckAgents_TopLevel_Planning(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	// Top-level task in planning status with a dead planner agent.
+	// Planner agents do use worktrees.
+	featureName := "stuck-planning"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	agentID := uuid.New()
+	taskID := uuid.New()
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentPlanner,
+		Name:           "dead-planner",
+		Status:         model.AgentWorking,
+		WorktreeBranch: "",
+		CurrentTaskID:  &taskID,
+	}
+	db.Create(&ag)
+
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "top-level-planning",
+		Description:     "task stuck in planning with dead agent",
+		Status:          model.StatusPlanning,
+		AssignedAgentID: &agentID,
+		WorktreeBranch:  "feature/" + featureName,
+		// No ParentTaskID — top-level task.
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileStuckAgents()
+	if err != nil {
+		t.Fatalf("reconcileStuckAgents() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix for dead planner on top-level task, got %d", fixes)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.Status != model.StatusPlanning {
+		t.Errorf("expected task to remain in planning status, got %s", updated.Status)
+	}
+	if updated.AssignedAgentID != nil {
+		t.Error("expected assigned_agent_id to be cleared")
+	}
+	if updated.Context == nil {
+		t.Fatal("expected Context to be set with retry_count")
+	}
+	if v, ok := updated.Context["retry_count"].(float64); !ok || int(v) != 1 {
+		t.Errorf("expected retry_count=1, got %v", updated.Context["retry_count"])
+	}
+
+	var updatedAgent model.Agent
+	db.First(&updatedAgent, "id = ?", agentID)
+	if updatedAgent.Status != model.AgentDead {
+		t.Errorf("expected agent status dead, got %s", updatedAgent.Status)
+	}
+}
+
+func TestReconcileStuckAgents_Subtask_TestWriting(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "stuck-testwrite"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      orch.projectID,
+		Title:          "stuck-testwrite-parent",
+		Description:    "test parent",
+		Status:         model.StatusTestWriting,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&parent)
+
+	agentID := uuid.New()
+	taskID := uuid.New()
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "dead-testwriter",
+		Status:         model.AgentWorking,
+		WorktreeBranch: "",
+		CurrentTaskID:  &taskID,
+	}
+	db.Create(&ag)
+
+	sub := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "stuck-testwrite-sub",
+		Description:     "subtask stuck in test_writing with dead agent",
+		Status:          model.StatusTestWriting,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&sub)
+
+	fixes, err := orch.reconcileStuckAgents()
+	if err != nil {
+		t.Fatalf("reconcileStuckAgents() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix for dead agent on test_writing subtask, got %d", fixes)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.Status != model.StatusTestWriting {
+		t.Errorf("expected subtask to remain in test_writing status, got %s", updated.Status)
+	}
+	if updated.AssignedAgentID != nil {
+		t.Error("expected assigned_agent_id to be cleared")
+	}
+	if updated.Context == nil {
+		t.Fatal("expected Context to be set with retry_count")
+	}
+	if v, ok := updated.Context["retry_count"].(float64); !ok || int(v) != 1 {
+		t.Errorf("expected retry_count=1, got %v", updated.Context["retry_count"])
+	}
+
+	var updatedAgent model.Agent
+	db.First(&updatedAgent, "id = ?", agentID)
+	if updatedAgent.Status != model.AgentDead {
+		t.Errorf("expected agent status dead, got %s", updatedAgent.Status)
+	}
+}
+
+func TestReconcileStuckAgents_TopLevel_Classifying_PreservesStatus(t *testing.T) {
+	// Verify that recovery does NOT reset a classifying task to backlog.
+	// The task must stay classifying so processClassifyingTasks picks it up.
+	orch, db, _ := setupReconcileTest(t)
+
+	agentID := uuid.New()
+	taskID := uuid.New()
+	ag := model.Agent{
+		ID:            agentID,
+		ProjectID:     orch.projectID,
+		AgentType:     model.AgentClassifier,
+		Name:          "dead-cls-preserve",
+		Status:        model.AgentWorking,
+		CurrentTaskID: &taskID,
+	}
+	db.Create(&ag)
+
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "preserve-classifying",
+		Description:     "must not become backlog",
+		Status:          model.StatusClassifying,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&task)
+
+	_, err := orch.reconcileStuckAgents()
+	if err != nil {
+		t.Fatalf("reconcileStuckAgents() error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+
+	// Critical: status must be classifying, NOT backlog.
+	if updated.Status == model.StatusBacklog {
+		t.Fatal("top-level classifying task was incorrectly reset to backlog — should remain classifying")
+	}
+	if updated.Status != model.StatusClassifying {
+		t.Errorf("expected classifying, got %s", updated.Status)
+	}
+}
+
+func TestReconcileStuckAgents_MultipleStatuses(t *testing.T) {
+	// Verify that a single reconcile pass catches dead agents across
+	// classifying, planning, and in_progress statuses simultaneously.
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "stuck-multi"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	// 1. Top-level classifying task with dead classifier.
+	clsAgentID := uuid.New()
+	clsTaskID := uuid.New()
+	db.Create(&model.Agent{
+		ID:            clsAgentID,
+		ProjectID:     orch.projectID,
+		AgentType:     model.AgentClassifier,
+		Name:          "dead-cls-multi",
+		Status:        model.AgentWorking,
+		CurrentTaskID: &clsTaskID,
+	})
+	db.Create(&model.Task{
+		ID:              clsTaskID,
+		ProjectID:       orch.projectID,
+		Title:           "multi-classifying",
+		Description:     "classifying stuck",
+		Status:          model.StatusClassifying,
+		AssignedAgentID: &clsAgentID,
+	})
+
+	// 2. In-progress subtask with dead coder (existing behavior).
+	parentID := uuid.New()
+	db.Create(&model.Task{
+		ID:             parentID,
+		ProjectID:      orch.projectID,
+		Title:          "multi-parent",
+		Description:    "parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/" + featureName,
+	})
+	ipAgentID := uuid.New()
+	ipTaskID := uuid.New()
+	db.Create(&model.Agent{
+		ID:             ipAgentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "dead-coder-multi",
+		Status:         model.AgentWorking,
+		WorktreeBranch: "",
+		CurrentTaskID:  &ipTaskID,
+	})
+	db.Create(&model.Task{
+		ID:              ipTaskID,
+		ProjectID:       orch.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "multi-inprogress-sub",
+		Description:     "in_progress stuck",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &ipAgentID,
+	})
+
+	// 3. Planning task with dead planner.
+	planAgentID := uuid.New()
+	planTaskID := uuid.New()
+	db.Create(&model.Agent{
+		ID:            planAgentID,
+		ProjectID:     orch.projectID,
+		AgentType:     model.AgentPlanner,
+		Name:          "dead-planner-multi",
+		Status:        model.AgentWorking,
+		CurrentTaskID: &planTaskID,
+	})
+	db.Create(&model.Task{
+		ID:              planTaskID,
+		ProjectID:       orch.projectID,
+		Title:           "multi-planning",
+		Description:     "planning stuck",
+		Status:          model.StatusPlanning,
+		AssignedAgentID: &planAgentID,
+		WorktreeBranch:  "feature/" + featureName,
+	})
+
+	fixes, err := orch.reconcileStuckAgents()
+	if err != nil {
+		t.Fatalf("reconcileStuckAgents() error: %v", err)
+	}
+	if fixes != 3 {
+		t.Errorf("expected 3 fixes (classifying + in_progress + planning), got %d", fixes)
+	}
+}

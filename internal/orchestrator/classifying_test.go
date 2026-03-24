@@ -223,6 +223,38 @@ func TestProcessClassifyingTasks_SkipsAssignedTask(t *testing.T) {
 	}
 }
 
+func TestProcessClassifyingTasks_SetsHeartbeatAtOnAgent(t *testing.T) {
+	orch, projectID := setupClassifyingTestWithRunner(t)
+
+	// Create a task in CLASSIFYING with no assigned agent.
+	task := testutil.CreateTask(t, orch.db, projectID, "Classify with heartbeat", model.StatusClassifying)
+
+	orch.processClassifyingTasks()
+
+	// Reload task to get the assigned agent ID.
+	var reloaded model.Task
+	if err := orch.db.First(&reloaded, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.AssignedAgentID == nil {
+		t.Fatal("expected task.AssignedAgentID to be set")
+	}
+
+	// Load the created agent and verify HeartbeatAt is set.
+	var ag model.Agent
+	if err := orch.db.First(&ag, "id = ?", *reloaded.AssignedAgentID).Error; err != nil {
+		t.Fatalf("load assigned agent: %v", err)
+	}
+	if ag.HeartbeatAt == nil {
+		t.Fatal("expected agent.HeartbeatAt to be non-nil on startup; classifier agents must set heartbeat_at so the reconciler can detect dead agents")
+	}
+
+	// Clean up: stop the spawned agent to cancel monitoring goroutines.
+	if orch.runner != nil {
+		_ = orch.runner.StopAgent(ag.ID)
+	}
+}
+
 func TestOnClassifierCompleted_Success(t *testing.T) {
 	orch, projectID := setupClassifyingTest(t)
 
