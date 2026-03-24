@@ -287,7 +287,7 @@ func plannerInstructions() []string {
 		"",
 		"If a subtask genuinely cannot be test-first, declare it in `tdd_exceptions` with the subtask index " +
 			`and a specific justification (not "too hard to test"). Valid: integration wiring, research, ` +
-			"infrastructure where the build IS the test. Invalid: UI code, refactors, \"tests will be added later\".",
+			"infrastructure where the build IS the test. Invalid: UI code, behavioral refactors (API changes, interface restructuring), \"tests will be added later\". Valid: structural refactoring (moving code between files in the same package with no behavior or API change — existing tests verify correctness).",
 		"",
 		"### Ordering",
 		"",

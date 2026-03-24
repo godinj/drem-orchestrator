@@ -85,6 +85,28 @@ func TestPlannerInstructionsIntegrationSubtaskContent(t *testing.T) {
 	}
 }
 
+func TestPlannerInstructionsTDDExceptionsDistinguishRefactoringTypes(t *testing.T) {
+	sections := plannerInstructions()
+	output := strings.Join(sections, "\n")
+
+	// Structural refactoring should be listed as a valid TDD exception reason.
+	if !strings.Contains(output, "structural refactoring") {
+		t.Error("plannerInstructions() should list 'structural refactoring' as a valid TDD exception reason")
+	}
+
+	// Behavioral refactors should be listed as an invalid TDD exception reason.
+	if !strings.Contains(output, "behavioral refactors") {
+		t.Error("plannerInstructions() should list 'behavioral refactors' as an invalid TDD exception reason")
+	}
+
+	// The old blanket "refactors" text (without qualifier) should no longer appear.
+	// Match the exact old phrasing: "UI code, refactors," which lumped all refactoring together.
+	if strings.Contains(output, "UI code, refactors,") {
+		t.Error("plannerInstructions() should not contain the old blanket 'UI code, refactors,' text; " +
+			"refactoring types must be distinguished as structural vs behavioral")
+	}
+}
+
 func TestPlannerInstructionsTestSubtasksContent(t *testing.T) {
 	sections := plannerInstructions()
 	output := strings.Join(sections, "\n")
