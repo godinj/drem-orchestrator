@@ -202,7 +202,11 @@ sed -i "s/^last_commit: .*/last_commit: $NEW_HEAD/" "$CSUITE_DIR/seth/state.md"
 sed -i "s/^last_heartbeat: .*/last_heartbeat: $(date -u +%Y-%m-%dT%H:%M:%SZ)/" "$CSUITE_DIR/seth/state.md"
 ```
 
-Sleep 60 seconds, then repeat from Step 1.
+Wait for inbox signal (wakes instantly on message, or after 60s timeout), then repeat from Step 1.
+
+```bash
+csuite_wait_for_inbox seth 60
+```
 
 ---
 

@@ -347,6 +347,7 @@ source scripts/csuite-proto.sh 2>/dev/null
 | `csuite_read` | `csuite_read kyle <filename>` |
 | `csuite_archive` | `csuite_archive kyle <filename>` |
 | `csuite_heartbeat` | `csuite_heartbeat kyle` |
+| `csuite_wait_for_inbox` | `csuite_wait_for_inbox kyle [timeout]` |
 | `csuite_is_alive` | `csuite_is_alive <agent> 300` |
 
 **Fallback** (if protocol library unavailable): write messages manually as markdown files with YAML frontmatter to `$CSUITE_DIR/<recipient>/inbox/YYYYMMDD-HHMMSS-kyle.md`.

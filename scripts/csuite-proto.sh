@@ -32,14 +32,14 @@ _csuite_check_agent() {
 # Notify an agent that a message arrived.
 # Usage: _csuite_notify <to> <from> <subject> <priority>
 #
-# Previously this used tmux send-keys to inject a one-liner into the
-# recipient's Claude Code session.  That approach interrupts any operator
-# interaction happening in the TUI, so it has been removed.
-#
-# Agents discover new messages by polling their inbox directory on their
-# own loop cadence.  No push notification is needed.
+# Touches a .signal file in the recipient's inbox directory.  If the
+# recipient is blocking on csuite_wait_for_inbox(), inotifywait will
+# wake it immediately.  The signal file carries no content — agents
+# check all unarchived .md files in their inbox after waking.
 _csuite_notify() {
-    # No-op.  Agents poll their inboxes; no tmux send-keys notification.
+    local to="$1"
+    local inbox="${CSUITE_DIR}/${to}/inbox"
+    [ -d "$inbox" ] && touch "${inbox}/.signal"
     return 0
 }
 
@@ -235,6 +235,42 @@ csuite_create_worker() {
         touch "${base}/state.md"
     fi
     echo "$base"
+}
+
+# Block until a message signal arrives or timeout expires.
+# Usage: csuite_wait_for_inbox <agent> [timeout_seconds]
+#   agent   — agent name (e.g. "ross")
+#   timeout — max seconds to wait (default 30)
+#
+# Uses inotifywait to watch for a .signal file in the agent's inbox.
+# Returns 0 if a signal was received, 1 on timeout.
+# The .signal file is removed after detection.  Callers should then
+# check all unarchived .md files in the inbox — the signal carries
+# no message content.
+csuite_wait_for_inbox() {
+    local agent="$1"
+    local timeout="${2:-30}"
+    _csuite_check_agent "$agent" || return 1
+
+    local inbox="${CSUITE_DIR}/${agent}/inbox"
+    local signal="${inbox}/.signal"
+
+    # If a signal is already pending, consume it immediately.
+    if [ -f "$signal" ]; then
+        rm -f "$signal"
+        return 0
+    fi
+
+    # Block until .signal appears or timeout expires.
+    inotifywait -qq -t "$timeout" -e create -e modify "$inbox" \
+        --include '\.signal$' 2>/dev/null
+
+    if [ -f "$signal" ]; then
+        rm -f "$signal"
+        return 0
+    fi
+
+    return 1
 }
 
 # List all temp worker directories.

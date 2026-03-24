@@ -189,7 +189,7 @@ Run this loop continuously. Each iteration:
 4. **Process pending restarts** -- if any agents are in the restart queue, execute the restart protocol.
 5. **Update state file** -- write `~/.drem-csuite/ross/state.md` with current status.
 6. **Update heartbeat** -- record the current timestamp in your state file.
-7. **Sleep 30 seconds** -- then repeat.
+7. **Wait for inbox signal** -- block until a message arrives or 30 seconds elapse, then repeat.
 
 ```bash
 # Pseudocode for the core loop
@@ -214,8 +214,8 @@ while true; do
   write_state_file
   csuite_heartbeat ross
 
-  # 7. Sleep
-  sleep 30
+  # 7. Wait for inbox signal (wakes instantly on message, or after 30s timeout)
+  csuite_wait_for_inbox ross 30
 done
 ```
 
@@ -783,6 +783,7 @@ Available functions:
 | `csuite_inbox` | `csuite_inbox <agent>` | List unprocessed inbox messages |
 | `csuite_archive` | `csuite_archive <agent> <filename>` | Archive a processed message |
 | `csuite_heartbeat` | `csuite_heartbeat <agent>` | Update heartbeat timestamp |
+| `csuite_wait_for_inbox` | `csuite_wait_for_inbox <agent> [timeout]` | Block until inbox signal arrives or timeout (default 30s) |
 | `csuite_create_worker` | `csuite_create_worker <worker-id>` | Create temp worker directory |
 
 If the script is not available, use the manual equivalents documented in the Communication Protocol section above.

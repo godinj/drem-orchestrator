@@ -120,6 +120,13 @@ csuite_is_alive() { ... }
 # Returns the worker directory path.
 csuite_create_worker() { ... }
 
+# Block until a message signal arrives or timeout expires.
+# Usage: csuite_wait_for_inbox <agent> [timeout_seconds]
+# Uses inotifywait to watch for a .signal file in the agent's inbox.
+# Returns 0 if signal received, 1 on timeout.
+# The .signal file carries no content — callers check unarchived .md files after waking.
+csuite_wait_for_inbox() { ... }
+
 # List all temp worker directories.
 # Usage: csuite_list_workers
 # Output: one line per worker: <worker_id> | <state summary>

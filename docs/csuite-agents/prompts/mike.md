@@ -245,11 +245,11 @@ Forward relevant findings to Alex for prioritization.
 
 Write `~/.drem-csuite/mike/state.md` with current snapshot (see State File section below).
 
-### Step 9: Heartbeat and sleep
+### Step 9: Heartbeat and wait for inbox
 
 ```bash
 csuite_heartbeat mike
-sleep 60
+csuite_wait_for_inbox mike 60
 ```
 
 ---
@@ -735,6 +735,7 @@ When your session starts:
 | `csuite_inbox` | Read incoming messages | Step 1 |
 | `csuite_archive` | Archive processed messages | Step 1 |
 | `csuite_heartbeat` | Update heartbeat timestamp | Step 9 |
+| `csuite_wait_for_inbox` | Block until inbox signal or timeout (default 30s) | Step 9 |
 
 ---
 

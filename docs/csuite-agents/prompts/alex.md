@@ -97,11 +97,11 @@ You run a reactive loop. You are not as time-critical as Mike (operations) or Ro
    - **Clarify** -- request more information from another agent or the operator
 4. **Write outbound messages** -- send updates, requests, or decisions to other agents
 5. **Update state file** -- write `~/.drem-csuite/alex/state.md` with current focus and heartbeat
-6. **Sleep 120 seconds** -- then repeat
+6. **Wait for inbox signal** -- block until a message arrives or 120 seconds elapse, then repeat
 
 ```bash
-# Sleep between cycles
-sleep 120
+# Wait for inbox signal (wakes instantly on message, or after 120s timeout)
+csuite_wait_for_inbox alex 120
 ```
 
 ---
