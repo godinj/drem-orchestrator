@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -148,6 +149,46 @@ func TestProcessClassifyingTasks_SpawnsAgentForUnassignedTask(t *testing.T) {
 	}
 	if ag.WorktreePath == "" {
 		t.Error("agent WorktreePath should be set (main worktree)")
+	}
+
+	// Clean up: stop the spawned agent to cancel monitoring goroutines.
+	if orch.runner != nil {
+		_ = orch.runner.StopAgent(ag.ID)
+	}
+}
+
+func TestProcessClassifyingTasks_SetsHeartbeatAt(t *testing.T) {
+	orch, projectID := setupClassifyingTestWithRunner(t)
+
+	task := testutil.CreateTask(t, orch.db, projectID, "Classify with heartbeat", model.StatusClassifying)
+	before := time.Now()
+
+	orch.processClassifyingTasks()
+
+	// Reload task to get the assigned agent ID.
+	var reloaded model.Task
+	if err := orch.db.First(&reloaded, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.AssignedAgentID == nil {
+		t.Fatal("expected task.AssignedAgentID to be set")
+	}
+
+	// Load the created agent and verify HeartbeatAt is set.
+	var ag model.Agent
+	if err := orch.db.First(&ag, "id = ?", *reloaded.AssignedAgentID).Error; err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+	if ag.HeartbeatAt == nil {
+		t.Fatal("expected agent.HeartbeatAt to be non-nil, got nil")
+	}
+
+	// HeartbeatAt should be approximately now (within 5 seconds).
+	if ag.HeartbeatAt.Before(before) {
+		t.Errorf("HeartbeatAt %v is before test start %v", ag.HeartbeatAt, before)
+	}
+	if ag.HeartbeatAt.After(before.Add(5 * time.Second)) {
+		t.Errorf("HeartbeatAt %v is more than 5s after test start %v", ag.HeartbeatAt, before)
 	}
 
 	// Clean up: stop the spawned agent to cancel monitoring goroutines.

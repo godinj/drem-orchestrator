@@ -488,6 +488,45 @@ func TestCleanupStaleAgents_InRunningMap(t *testing.T) {
 	}
 }
 
+// TestCleanupStaleAgents_NullHeartbeat tests defense in depth: agents with
+// status=WORKING and heartbeat_at=NULL should be caught by cleanup as stale.
+// This covers the case where a bug causes an agent to be created without
+// setting HeartbeatAt (e.g., the classifier agent bug).
+func TestCleanupStaleAgents_NullHeartbeat(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	r := newMockRunner(t, db, "/bin/true")
+
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+
+	// Create an agent with status=WORKING but HeartbeatAt=nil (NULL).
+	nullHeartbeatAgent := &model.Agent{
+		ID:          uuid.New(),
+		ProjectID:   project.ID,
+		AgentType:   model.AgentClassifier,
+		Name:        "classifier-null-hb",
+		Status:      model.AgentWorking,
+		TmuxSession: "test-session/classifier-null-hb",
+		HeartbeatAt: nil,
+	}
+	if err := db.Create(nullHeartbeatAgent).Error; err != nil {
+		t.Fatalf("create agent with null heartbeat: %v", err)
+	}
+
+	// Run cleanup — the agent has no heartbeat at all, so it should be
+	// treated as stale regardless of the timeout value.
+	if err := r.CleanupStaleAgents(5 * time.Minute); err != nil {
+		t.Fatalf("CleanupStaleAgents: %v", err)
+	}
+
+	var updated model.Agent
+	if err := db.First(&updated, "id = ?", nullHeartbeatAgent.ID).Error; err != nil {
+		t.Fatalf("agent not found: %v", err)
+	}
+	if updated.Status != model.AgentDead {
+		t.Errorf("agent with null heartbeat status = %q, want %q", updated.Status, model.AgentDead)
+	}
+}
+
 // contains checks if s contains substr (helper to avoid importing strings in tests).
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && searchSubstring(s, substr)

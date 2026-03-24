@@ -589,7 +589,7 @@ func (r *Runner) CleanupStaleAgents(timeout time.Duration) error {
 	cutoff := time.Now().Add(-timeout)
 
 	var staleAgents []model.Agent
-	err := r.db.Where("status = ? AND heartbeat_at < ?", model.AgentWorking, cutoff).Find(&staleAgents).Error
+	err := r.db.Where("status = ? AND (heartbeat_at < ? OR heartbeat_at IS NULL)", model.AgentWorking, cutoff).Find(&staleAgents).Error
 	if err != nil {
 		return fmt.Errorf("cleanup stale agents: query: %w", err)
 	}
