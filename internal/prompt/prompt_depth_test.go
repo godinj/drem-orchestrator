@@ -2,11 +2,92 @@ package prompt
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
+
+// repoRoot returns the repository root by walking up from the test file location.
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("unable to determine test file location")
+	}
+	// thisFile is internal/prompt/prompt_depth_test.go — walk up three levels.
+	root := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
+	return root
+}
+
+func TestREADMEContainsDepthScoringDocumentation(t *testing.T) {
+	readme, err := os.ReadFile(filepath.Join(repoRoot(t), "README.md"))
+	if err != nil {
+		t.Fatalf("failed to read README.md: %v", err)
+	}
+	content := string(readme)
+
+	t.Run("documents the three depth scoring criteria", func(t *testing.T) {
+		criteria := []string{
+			"module_boundaries",
+			"interface_shapes",
+			"export",
+		}
+		for _, c := range criteria {
+			if !strings.Contains(content, c) {
+				t.Errorf("README missing depth scoring criterion: %q", c)
+			}
+		}
+	})
+
+	t.Run("documents the planner self-check step", func(t *testing.T) {
+		// The README should describe the self-check that planners run
+		// before submitting a plan to verify depth quality.
+		selfCheckTerms := []string{
+			"self-check",
+			"meaningful internal logic",
+		}
+		for _, term := range selfCheckTerms {
+			if !strings.Contains(strings.ToLower(content), strings.ToLower(term)) {
+				t.Errorf("README missing planner self-check documentation: %q", term)
+			}
+		}
+	})
+
+	t.Run("documents shallow vs deep plan examples", func(t *testing.T) {
+		// The README should reference the shallow vs deep plan examples
+		// that are included in the planner prompt.
+		exampleTerms := []string{
+			"shallow",
+			"deep",
+		}
+		for _, term := range exampleTerms {
+			if !strings.Contains(strings.ToLower(content), strings.ToLower(term)) {
+				t.Errorf("README missing shallow vs deep plan example reference: %q", term)
+			}
+		}
+
+		// Should describe what makes a plan shallow (thin wrappers, no logic)
+		// vs deep (real internal decision-making, policy objects, state machines).
+		depthIndicators := []string{
+			"thin wrapper",
+			"pass-through",
+		}
+		found := false
+		for _, indicator := range depthIndicators {
+			if strings.Contains(strings.ToLower(content), strings.ToLower(indicator)) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("README should describe shallow plan anti-patterns (e.g., %v)", depthIndicators)
+		}
+	})
+}
 
 func TestPlannerPromptContainsDepthSection(t *testing.T) {
 	opts := minimalOpts()
