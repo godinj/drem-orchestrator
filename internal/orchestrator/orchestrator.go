@@ -310,16 +310,7 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 	}
 
 	// 5. Process MERGING tasks -> execute merges.
-	var mergingTasks []model.Task
-	if err := o.db.Where("project_id = ? AND status = ?", o.projectID, model.StatusMerging).
-		Find(&mergingTasks).Error; err != nil {
-		o.logger.Error("query merging tasks", "error", err)
-	}
-	for i := range mergingTasks {
-		if err := o.executeMerge(&mergingTasks[i]); err != nil {
-			o.logger.Error("execute merge", "task_id", mergingTasks[i].ID, "error", err)
-		}
-	}
+	o.dispatchMerges()
 
 	// 5b. Handle NEEDS_CLARIFICATION tasks.
 	// Human gate — no automated processing. The TUI handles user input

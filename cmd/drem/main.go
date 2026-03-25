@@ -179,7 +179,7 @@ func main() {
 	wt.MigrateAgentPaths(database)
 
 	runner := agent.NewRunner(database, tmux, wt, cfg.ClaudeBin, cfg.MaxConcurrentAgents)
-	merger := merge.NewOrchestrator(wt, database)
+	merger := merge.NewMergeQueue(merge.NewOrchestrator(wt, database), wt)
 	mem := memory.NewManager(database)
 
 	var sup *supervisor.Supervisor

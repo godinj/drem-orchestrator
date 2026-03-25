@@ -13,6 +13,21 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
+// dispatchMerges queries all MERGING tasks and calls executeMerge for each.
+func (o *Orchestrator) dispatchMerges() {
+	var mergingTasks []model.Task
+	if err := o.db.Where("project_id = ? AND status = ?", o.projectID, model.StatusMerging).
+		Find(&mergingTasks).Error; err != nil {
+		o.logger.Error("query merging tasks", "error", err)
+		return
+	}
+	for i := range mergingTasks {
+		if err := o.executeMerge(&mergingTasks[i]); err != nil {
+			o.logger.Error("execute merge", "task_id", mergingTasks[i].ID, "error", err)
+		}
+	}
+}
+
 // executeMerge handles tasks in the MERGING state by merging the feature
 // branch into main.
 func (o *Orchestrator) executeMerge(task *model.Task) error {
@@ -140,12 +155,22 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 			}
 		}
 
-		details := map[string]any{"conflicts": result.Conflicts}
-		if err := o.failTask(task, "merge conflicts"); err != nil {
+		o.logger.Warn("merge conflict classification",
+			"task_id", task.ID,
+			"trivial", result.TrivialCount,
+			"non_trivial", result.NonTrivialCount)
+
+		reason := fmt.Sprintf("merge conflicts (%d trivial, %d non-trivial):\n%s",
+			result.TrivialCount, result.NonTrivialCount, result.ClassifiedDetails)
+
+		details := map[string]any{
+			"conflicts":          result.Conflicts,
+			"classified_details": result.ClassifiedDetails,
+		}
+		if err := o.failTask(task, reason); err != nil {
 			return err
 		}
 		o.emit("merge_conflict", map[string]any{"task_id": task.ID, "details": details})
-		o.logger.Warn("merge failed with conflicts", "task_id", task.ID, "conflicts", result.Conflicts)
 	}
 
 	return nil

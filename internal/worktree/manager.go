@@ -32,13 +32,16 @@ type AgentWorktreeInfo struct {
 
 // MergeResult describes the outcome of a git merge.
 type MergeResult struct {
-	Success      bool
-	SourceBranch string
-	TargetBranch string
-	MergeCommit  string
-	Conflicts    []string
-	GitStderr    string // raw git stderr on failure
-	GitCommand   string // the exact git command that failed
+	Success           bool
+	SourceBranch      string
+	TargetBranch      string
+	MergeCommit       string
+	Conflicts         []string
+	GitStderr         string // raw git stderr on failure
+	GitCommand        string // the exact git command that failed
+	ClassifiedDetails string // formatted conflict classification (populated by MergeQueue)
+	TrivialCount      int    // count of trivial conflicts (populated by MergeQueue)
+	NonTrivialCount   int    // count of non-trivial conflicts (populated by MergeQueue)
 }
 
 // SyncResult describes the outcome of syncing a feature branch.
@@ -489,6 +492,12 @@ func (m *Manager) FindWorktreeByBranch(branch string) (string, error) {
 	}
 
 	return "", fmt.Errorf("find worktree by branch: no worktree found for branch %q", branch)
+}
+
+// RebaseBranchOnto rebases the branch in featureWorktree onto the HEAD of
+// mainWorktree. Delegates to the package-level RebaseBranch function.
+func (m *Manager) RebaseBranchOnto(featureWorktree, mainWorktree string) (*RebaseResult, error) {
+	return RebaseBranch(featureWorktree, mainWorktree)
 }
 
 // SyncAll rebases all feature branches onto the default branch.
