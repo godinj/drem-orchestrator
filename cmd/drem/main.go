@@ -196,11 +196,20 @@ func main() {
 	}
 	bugReportSvc := bugreport.New(database)
 
-	events := make(chan orchestrator.Event, 100)
-	orch := orchestrator.New(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, events, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.ContextFixerPercent)
+	orchEvents := make(chan orchestrator.Event, 100)
+	orch := orchestrator.New(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.ContextFixerPercent)
 
 	// Init bug report service.
 	bugreportSvc := bugreport.New(database)
+
+	// Bridge orchestrator events to TUI-local Event type.
+	tuiEvents := make(chan tui.Event, 100)
+	go func() {
+		for e := range orchEvents {
+			tuiEvents <- tui.Event{Type: e.Type, Payload: e.Payload}
+		}
+		close(tuiEvents)
+	}()
 
 	// Start orchestrator in background.
 	ctx, cancel := context.WithCancel(context.Background())
@@ -208,7 +217,7 @@ func main() {
 
 	// Start TUI (blocks until quit).
 	p := tea.NewProgram(
-		tui.NewModel(database, orch, tmux, project.ID, events, cfg.LogPath, bugreportSvc),
+		tui.NewModel(database, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc),
 		tea.WithAltScreen(),
 	)
 	if _, err := p.Run(); err != nil {

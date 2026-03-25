@@ -236,8 +236,10 @@ depend on concrete types from other packages when an interface would suffice.
 dependency (runner, manager, supervisor) should have a corresponding interface
 at the consumption site.
 
-**Current state:** 1 interface exists (`mergeWorktreeClient` in merge.go).
-Orchestrator depends on concrete internal types.
+**Current state:** 2 interfaces exist:
+- `mergeWorktreeClient` in `merge.go`
+- `TUIOrchestrator` in `tui/orchestrator.go` — 21-method interface
+  decoupling the TUI dashboard from `*orchestrator.Orchestrator`
 
 ---
 

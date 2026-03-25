@@ -12,7 +12,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
 )
 
@@ -34,8 +33,8 @@ const (
 	FocusBugReports
 )
 
-// EventMsg wraps an orchestrator Event as a tea.Msg.
-type EventMsg orchestrator.Event
+// EventMsg wraps an Event as a tea.Msg.
+type EventMsg Event
 
 // tasksLoadedMsg is sent when the initial task load completes.
 type tasksLoadedMsg struct {
@@ -112,10 +111,10 @@ const (
 // Model is the root Bubble Tea model that composes all TUI sub-models.
 type Model struct {
 	db        *gorm.DB
-	orch      *orchestrator.Orchestrator
+	orch      TUIOrchestrator
 	tmux      *tmuxpkg.Manager
 	projectID uuid.UUID
-	events    <-chan orchestrator.Event
+	events    <-chan Event
 
 	board      BoardModel
 	agents     AgentsModel
@@ -138,10 +137,10 @@ type Model struct {
 // NewModel creates the root TUI model.
 func NewModel(
 	db *gorm.DB,
-	orch *orchestrator.Orchestrator,
+	orch TUIOrchestrator,
 	tmux *tmuxpkg.Manager,
 	projectID uuid.UUID,
-	events <-chan orchestrator.Event,
+	events <-chan Event,
 	logPath string,
 	bugreportSvc *bugReportSvc,
 ) Model {
@@ -578,8 +577,8 @@ func (m Model) renderBugReportsScreen() string {
 }
 
 // listenForEvents returns a Cmd that blocks on the events channel and wraps
-// the received orchestrator Event as a tea.Msg.
-func listenForEvents(events <-chan orchestrator.Event) tea.Cmd {
+// the received Event as a tea.Msg.
+func listenForEvents(events <-chan Event) tea.Cmd {
 	return func() tea.Msg {
 		e, ok := <-events
 		if !ok {
