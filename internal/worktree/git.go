@@ -171,12 +171,17 @@ func CommitUnstagedChanges(worktreePath, message string) (bool, error) {
 		return false, nil
 	}
 
-	// Stage all changes. .claude/ is excluded via .gitignore in every worktree,
-	// so no :(exclude) pathspec is needed (and would actually conflict with
-	// .gitignore, causing "paths are ignored" errors in some git versions).
+	// Stage all changes. .claude/ is excluded via .gitignore in every worktree
+	// for untracked files, but already-tracked .claude/ files (e.g. settings.json
+	// committed by an agent) will still be staged by add --all.
 	if _, err := RunGit([]string{"add", "--all", "--", "."}, worktreePath); err != nil {
 		return false, fmt.Errorf("commit unstaged: add: %w", err)
 	}
+
+	// Unstage any .claude/ files that were tracked and staged above.
+	// This prevents worktree-specific .claude/settings.json from being committed.
+	// Errors are ignored — reset fails if no .claude/ files are staged, which is fine.
+	_, _ = RunGit([]string{"reset", "HEAD", "--", ".claude/"}, worktreePath)
 
 	// Check if anything was actually staged (add --all may have nothing after exclude).
 	if _, err := RunGit([]string{"diff", "--cached", "--quiet"}, worktreePath); err == nil {
@@ -203,11 +208,11 @@ func CleanClaudeArtifacts(worktreePath string) (bool, error) {
 }
 
 // UntrackEphemeralFiles removes orchestrator-generated ephemeral files
-// (plan.json) from git tracking if they are currently tracked. The files
-// remain on disk so agents can still read them. Returns true if a commit
-// was created to untrack the files.
+// (plan.json, .claude/settings.json) from git tracking if they are currently
+// tracked. The files remain on disk so agents can still read them. Returns
+// true if a commit was created to untrack the files.
 func UntrackEphemeralFiles(worktreePath string) (bool, error) {
-	ephemeralFiles := []string{"plan.json"}
+	ephemeralFiles := []string{"plan.json", ".claude/settings.json"}
 	var untracked bool
 	for _, f := range ephemeralFiles {
 		out, err := RunGit([]string{"ls-files", f}, worktreePath)

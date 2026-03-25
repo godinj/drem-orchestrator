@@ -807,6 +807,10 @@ The orchestrator automatically handles five recurring failure patterns that woul
 
 **How it works:** Before any merge or rebase, `MergeAgentIntoFeature()` checks whether the feature worktree is clean; if not, it auto-commits all unstaged changes with a `chore:` message. See `internal/merge/merge.go` lines 142-167.
 
+`.claude/` files (including `settings.json`) are explicitly excluded from auto-commits even when tracked. After `git add --all`, any staged `.claude/` files are unstaged via `git reset HEAD -- .claude/`. This prevents worktree-specific paths in `.claude/settings.json` from being committed and causing merge conflicts.
+
+As defense-in-depth, `UntrackEphemeralFiles` untracks `.claude/settings.json` (alongside `plan.json`) before merges. This ensures that even if `.claude/settings.json` was previously committed by an agent, it is removed from git tracking before any merge operation, preventing conflicts caused by divergent worktree-specific paths.
+
 **Where you see it:** Log entries reading `auto-committed orchestrator artifacts before merge` with the feature worktree path.
 
 ### 2. Stale Agent Unlinking
