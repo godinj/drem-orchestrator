@@ -346,7 +346,7 @@ New tasks start in `classifying` where a classifier agent explores the codebase 
 - **testing_ready** -- Human gate: verify the work meets acceptance criteria
 - **merging** -- Agent branches are being merged into the feature integration branch
 - **done** -- All work merged successfully
-- **failed** -- Something went wrong (can be retried back to classifying or backlog)
+- **failed** -- Something went wrong (can be retried back to classifying or backlog). If the parent failed but all subtasks eventually complete, the reconciler automatically recovers the parent (see [State Reconciliation](#state-reconciliation) #7)
 - **paused** -- Manually paused by user
 - **rejected** -- Task rejected at a review gate (terminal)
 
@@ -833,7 +833,7 @@ The orchestrator automatically handles five recurring failure patterns that woul
 
 ## State Reconciliation
 
-The `Reconcile()` method runs automatically every tick (default 5s) and audits the project for six categories of state inconsistency. All fixes are logged and emitted as a `reconcile` event. Source: `internal/orchestrator/reconcile.go`.
+The `Reconcile()` method runs automatically every tick (default 5s) and audits the project for seven categories of state inconsistency. All fixes are logged and emitted as a `reconcile` event. Source: `internal/orchestrator/reconcile.go`.
 
 | # | Category | Detected State | Fix Applied |
 |---|----------|---------------|-------------|
@@ -843,6 +843,7 @@ The `Reconcile()` method runs automatically every tick (default 5s) and audits t
 | 4 | **Orphan worktrees** | Agent worktrees with no commits ahead of the feature branch and no corresponding WORKING agent in the database | Worktree removed via `git worktree remove` |
 | 5 | **Stuck agents** | IN_PROGRESS subtasks whose agent tmux session is dead but still marked WORKING in the database | If agent branch has commits, route through normal completion; otherwise auto-retry (up to `MaxEmptyWorkRetries = 2`), then fail |
 | 6 | **Already-merged features** | FAILED parent tasks whose feature branch is already an ancestor of the default branch HEAD | Transition directly to DONE (bypasses state machine since failed-to-done is not a normal transition); feature worktree cleaned up |
+| 7 | **Failed parents with completed subtasks** | FAILED parent tasks where all subtasks have reached DONE status (e.g., parent failed due to a merge conflict but subtasks succeeded via retry) | Transition from FAILED → IN_PROGRESS via the state machine, then evaluate quality gates via `checkFeatureCompletion()` to advance to the appropriate next status |
 
 Reconciliation results can be observed in the log file. When any fixes are applied, a `reconcile` event is emitted containing a `ReconcileResult` struct with counts for each category.
 
