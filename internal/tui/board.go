@@ -26,16 +26,20 @@ type displayEntry struct {
 // statusSortOrder controls the display order of tasks: actionable first,
 // then human gates, then terminal states.
 var statusSortOrder = map[model.TaskStatus]int{
-	model.StatusInProgress:   0,
-	model.StatusPlanning:     1,
-	model.StatusMerging:      2,
-	model.StatusClassifying:  3,
-	model.StatusBacklog:      4,
-	model.StatusPlanReview:   5,
-	model.StatusTestingReady: 6,
-	model.StatusPaused:       7,
-	model.StatusDone:         8,
-	model.StatusFailed:       9,
+	model.StatusInProgress:         0,
+	model.StatusPlanning:           1,
+	model.StatusTestWriting:        2,
+	model.StatusMerging:            3,
+	model.StatusClassifying:        4,
+	model.StatusBacklog:            5,
+	model.StatusPlanReview:         6,
+	model.StatusTestReview:         7,
+	model.StatusTestingReady:       8,
+	model.StatusNeedsClarification: 9,
+	model.StatusPaused:             10,
+	model.StatusDone:               11,
+	model.StatusFailed:             12,
+	model.StatusRejected:           13,
 }
 
 // BoardModel renders the task list panel.
@@ -285,7 +289,11 @@ func (b BoardModel) View() string {
 		// Annotate tasks that have empty work or are being retried.
 		annotation := taskAnnotation(task)
 		if annotation != "" {
-			tw -= len(annotation) + 1
+			// Use visible width, not byte length — annotation contains ANSI escapes.
+			tw -= lipgloss.Width(annotation) + 1
+		}
+		if tw < 2 {
+			tw = 2
 		}
 		if len(title) > tw {
 			title = title[:tw-1] + "\u2026"
@@ -382,16 +390,20 @@ var (
 
 // statusColors maps each TaskStatus to a display color.
 var statusColors = map[model.TaskStatus]lipgloss.Color{
+	model.StatusClassifying:        lipgloss.Color("39"),
 	model.StatusBacklog:            lipgloss.Color("241"),
 	model.StatusPlanning:           lipgloss.Color("39"),
 	model.StatusNeedsClarification: lipgloss.Color("214"),
 	model.StatusPlanReview:         lipgloss.Color("214"),
+	model.StatusTestWriting:        lipgloss.Color("14"),
+	model.StatusTestReview:         lipgloss.Color("214"),
 	model.StatusInProgress:         lipgloss.Color("62"),
 	model.StatusTestingReady:       lipgloss.Color("214"),
 	model.StatusMerging:            lipgloss.Color("62"),
 	model.StatusPaused:             lipgloss.Color("241"),
 	model.StatusDone:               lipgloss.Color("42"),
 	model.StatusFailed:             lipgloss.Color("196"),
+	model.StatusRejected:           lipgloss.Color("196"),
 }
 
 // agentStatusColors maps each AgentStatus to a display color.
@@ -404,16 +416,20 @@ var agentStatusColors = map[model.AgentStatus]lipgloss.Color{
 
 // statusIcons maps each TaskStatus to a Unicode icon.
 var statusIcons = map[model.TaskStatus]string{
+	model.StatusClassifying:        "\u2699", // ⚙
 	model.StatusBacklog:            "\u25cb", // ○
 	model.StatusPlanning:           "\u25cc", // ◌
 	model.StatusNeedsClarification: "\u2753", // ❓
 	model.StatusPlanReview:         "\u25c9", // ◉
+	model.StatusTestWriting:        "\u270e", // ✎
+	model.StatusTestReview:         "\u2690", // ⚐
 	model.StatusInProgress:         "\u25cf", // ●
 	model.StatusTestingReady:       "\u25c8", // ◈
 	model.StatusMerging:            "\u27f3", // ⟳
 	model.StatusPaused:             "\u23f8", // ⏸
 	model.StatusDone:               "\u2713", // ✓
 	model.StatusFailed:             "\u2717", // ✗
+	model.StatusRejected:           "\u2718", // ✘
 }
 
 // Component styles used across the TUI.
