@@ -465,7 +465,7 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 		}
 
 		// Check capacity.
-		if !o.runner.CanSpawn() {
+		if o.runner == nil || !o.runner.CanSpawn() {
 			break
 		}
 
@@ -717,4 +717,47 @@ func (o *Orchestrator) handlePaused(task *model.Task) error {
 	}
 
 	return nil
+}
+
+// dispatchPendingSubtasks is a catch-all that finds backlog subtasks whose
+// parents were not processed by the status-specific handlers in doTick
+// (e.g. parent in BACKLOG after replan, or parent in PLANNING with
+// leftover subtasks from a previous plan cycle). It dispatches subtasks
+// for any parent in a non-terminal status, skipping parents that were
+// already handled (IN_PROGRESS, TEST_WRITING).
+func (o *Orchestrator) dispatchPendingSubtasks() {
+	// Find distinct parent IDs that have backlog subtasks in this project.
+	type parentIDRow struct {
+		ParentTaskID uuid.UUID
+	}
+	var rows []parentIDRow
+	if err := o.db.Model(&model.Task{}).
+		Select("DISTINCT parent_task_id").
+		Where("project_id = ? AND status = ? AND parent_task_id IS NOT NULL",
+			o.projectID, model.StatusBacklog,
+		).Scan(&rows).Error; err != nil {
+		o.logger.Error("dispatch pending subtasks: query parent IDs", "error", err)
+		return
+	}
+
+	for _, row := range rows {
+		var parent model.Task
+		if err := o.db.First(&parent, "id = ?", row.ParentTaskID).Error; err != nil {
+			continue
+		}
+
+		// Skip terminal parents — their subtasks should not be dispatched.
+		if isTerminal(parent.Status) {
+			continue
+		}
+
+		// Skip parents already handled by the main doTick handlers.
+		if parent.Status == model.StatusInProgress || parent.Status == model.StatusTestWriting {
+			continue
+		}
+
+		if err := o.scheduleSubtasks(&parent); err != nil {
+			o.logger.Error("dispatch pending subtasks", "parent_id", parent.ID, "error", err)
+		}
+	}
 }

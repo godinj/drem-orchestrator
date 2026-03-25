@@ -20,6 +20,7 @@ func TestAllow_UnderLimit(t *testing.T) {
 		if delay != 0 {
 			t.Fatalf("dispatch %d: expected zero delay, got %v", i+1, delay)
 		}
+		lim.Record() // simulate actual dispatch
 	}
 }
 
@@ -32,6 +33,7 @@ func TestAllow_BlocksAtLimit(t *testing.T) {
 	// Exhaust the limit.
 	for i := 0; i < 3; i++ {
 		lim.Allow()
+		lim.Record()
 	}
 
 	ok, _ := lim.Allow()
@@ -48,6 +50,7 @@ func TestAllow_BlockedDispatchReturnsDelay(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		lim.Allow()
+		lim.Record()
 	}
 
 	// Advance 20s so oldest entry is 20s old; window is 60s, so 40s remain.
@@ -71,6 +74,7 @@ func TestAllow_AllowsAfterWindowSlides(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		lim.Allow()
+		lim.Record()
 	}
 
 	// Advance past the window so all entries expire.
@@ -93,10 +97,12 @@ func TestAllow_PartialWindowSlide(t *testing.T) {
 
 	// Dispatch at t=0.
 	lim.Allow()
+	lim.Record()
 
 	// Dispatch at t=30s.
 	now = now.Add(30 * time.Second)
 	lim.Allow()
+	lim.Record()
 
 	// At t=30s both entries are in the window; limit reached.
 	ok, _ := lim.Allow()
@@ -127,6 +133,7 @@ func TestAllow_JitterAddsDelay(t *testing.T) {
 	lim := New(1, time.Minute, WithClock(clock), WithJitter(jitterFn))
 
 	lim.Allow()
+	lim.Record()
 
 	ok, delay := lim.Allow()
 	if ok {
@@ -162,6 +169,9 @@ func TestAllow_ConcurrentAccess(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			ok, _ := lim.Allow()
+			if ok {
+				lim.Record()
+			}
 			allowed <- ok
 		}()
 	}
@@ -178,6 +188,40 @@ func TestAllow_ConcurrentAccess(t *testing.T) {
 
 	if count != limit {
 		t.Fatalf("expected exactly %d allowed dispatches, got %d", limit, count)
+	}
+}
+
+func TestAllow_IsIdempotentWithoutRecord(t *testing.T) {
+	// Verify that calling Allow() multiple times without Record() does not
+	// consume rate limit budget. This was the root cause of the dispatch
+	// stall bug: CanSpawn() called Allow() as a check, recording a phantom
+	// dispatch that starved actual subtask scheduling.
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+
+	lim := New(3, time.Minute, WithClock(clock))
+
+	// Call Allow() 10 times without Record().
+	for i := 0; i < 10; i++ {
+		ok, _ := lim.Allow()
+		if !ok {
+			t.Fatalf("Allow() call %d should return true (no Record calls made)", i+1)
+		}
+	}
+
+	// Now actually dispatch (Record). Should still have full capacity.
+	for i := 0; i < 3; i++ {
+		ok, _ := lim.Allow()
+		if !ok {
+			t.Fatalf("dispatch %d should be allowed", i+1)
+		}
+		lim.Record()
+	}
+
+	// 4th dispatch should be blocked.
+	ok, _ := lim.Allow()
+	if ok {
+		t.Fatal("expected blocked after 3 actual dispatches")
 	}
 }
 

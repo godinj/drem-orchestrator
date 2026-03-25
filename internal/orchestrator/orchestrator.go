@@ -27,11 +27,10 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
-// MaxPlannerRetries is the number of times the orchestrator will retry a
-// planner agent before failing the task.
-const MaxPlannerRetries = 3
-
 const (
+	// MaxPlannerRetries is the number of times the orchestrator will retry a
+	// planner agent before failing the task.
+	MaxPlannerRetries      = 3
 	defaultContextFixerPct = 85
 	fixerEscalatePct       = 80 // fixer agents at this % → stop and escalate to human
 	maxTestOutputLen       = 5000
@@ -41,6 +40,9 @@ const (
 	maxErrorSnippetLen     = 500
 	maxSlugLen             = 40
 	maxBuildRetries        = 3
+	reconcileInterval      = 10 // consistency audit frequency (every N ticks; 0 = disable)
+	shortIDLen             = 4  // UUID characters for short display IDs
+	maxDisplayNameLen      = 30 // max task title length in supervisor session names
 )
 
 // slugRegexp matches non-alphanumeric characters for feature name derivation.
@@ -51,16 +53,6 @@ type Event struct {
 	Type    string
 	Payload any
 }
-
-// reconcileInterval controls how often the consistency audit runs inside
-// doTick (every N ticks). Set to 0 to disable periodic reconciliation.
-const reconcileInterval = 10
-
-// shortIDLen is the number of characters used from a UUID for short display identifiers.
-const shortIDLen = 4
-
-// maxDisplayNameLen is the maximum length of task titles in supervisor session names.
-const maxDisplayNameLen = 30
 
 // TestGateConfig holds configuration for the pre-merge test gate.
 // These values are typically loaded from drem.toml or CLAUDE.md.
@@ -296,7 +288,13 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 		}
 	}
 
-	// 4b. Process TESTING_READY parent tasks (automated gate).
+	// 4b. Catch-all: dispatch backlog subtasks for non-terminal parents
+	// that were not processed above. This handles edge cases where the
+	// parent is in an unexpected status (e.g. backlog after replan) but
+	// already has subtasks waiting for dispatch.
+	o.dispatchPendingSubtasks()
+
+	// 4c. Process TESTING_READY parent tasks (automated gate).
 	var testingReadyTasks []model.Task
 	if err := o.db.Where("project_id = ? AND status = ? AND parent_task_id IS NULL",
 		o.projectID, model.StatusTestingReady).Find(&testingReadyTasks).Error; err != nil {

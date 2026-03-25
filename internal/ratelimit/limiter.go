@@ -73,10 +73,11 @@ func New(maxDispatches int, window time.Duration, opts ...Option) *Limiter {
 	return l
 }
 
-// Allow checks whether a dispatch is permitted. If allowed, it records the
-// dispatch timestamp and returns (true, 0). If blocked, it returns
-// (false, retryAfter) where retryAfter is the time until the oldest entry
-// expires from the window, plus any configured jitter.
+// Allow checks whether a dispatch is permitted right now without recording
+// a dispatch. Returns (true, 0) if the rate limit has capacity, or
+// (false, retryAfter) with a suggested wait duration when the caller
+// should back off. Callers must call Record() after a successful dispatch
+// to advance the sliding window.
 func (l *Limiter) Allow() (ok bool, retryAfter time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -90,7 +91,6 @@ func (l *Limiter) Allow() (ok bool, retryAfter time.Duration) {
 	l.prune(now)
 
 	if len(l.recent) < l.maxDispatches {
-		l.recent = append(l.recent, now)
 		return true, 0
 	}
 
