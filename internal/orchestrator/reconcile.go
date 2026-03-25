@@ -23,6 +23,7 @@ type ReconcileResult struct {
 	StuckAgentsRecovered       int
 	AlreadyMergedFeaturesFixed int
 	CompletedParentsAdvanced   int
+	FailedParentsRecovered     int
 }
 
 // ReapOrphanedSessions kills tmux agent sessions that have no active agent
@@ -80,7 +81,13 @@ func (o *Orchestrator) Reconcile() (int, error) {
 		r.CompletedParentsAdvanced = n
 	}
 
-	total := r.StaleSubtasksReset + r.OrphanedSubtasksFixed + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned + r.StuckAgentsRecovered + r.AlreadyMergedFeaturesFixed + r.CompletedParentsAdvanced
+	if n, err := o.reconcileFailedParents(); err != nil {
+		return 0, fmt.Errorf("reconcile failed parents: %w", err)
+	} else {
+		r.FailedParentsRecovered = n
+	}
+
+	total := r.StaleSubtasksReset + r.OrphanedSubtasksFixed + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned + r.StuckAgentsRecovered + r.AlreadyMergedFeaturesFixed + r.CompletedParentsAdvanced + r.FailedParentsRecovered
 	if total > 0 {
 		o.emit("reconcile", r)
 	}
