@@ -120,6 +120,7 @@ type Orchestrator struct {
 	contextWarnPct  int
 	contextStopPct  int
 	contextFixerPct int // percentage: spawn fixer instead of failing
+	subtaskRecovery SubtaskRecoveryPolicy
 	logger          *slog.Logger
 }
 
@@ -429,13 +430,11 @@ func (o *Orchestrator) recoverStuckAgents() {
 }
 
 func (o *Orchestrator) processTestWriting(parent *model.Task) error {
-	// Check baseline test health (once per task).
 	if parent.Context == nil {
 		parent.Context = make(model.JSONField)
 	}
 	if _, checked := parent.Context["baseline_tests_checked"]; !checked {
-		testCmd := o.getTestCommand(parent)
-		if testCmd != "" {
+		if testCmd := o.getTestCommand(parent); testCmd != "" {
 			featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
 			featureDir := o.worktree.FeatureWorktreePath(featureName)
 			result, runErr := runCommand(featureDir, testCmd)
@@ -443,50 +442,49 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 			if runErr != nil || result.ExitCode != 0 {
 				parent.Context["baseline_tests_failed"] = true
 				parent.Context["baseline_test_output"] = truncate(result.Output, maxTestOutputLen)
-				o.logger.Warn("baseline tests fail on integration branch",
-					"task_id", parent.ID, "exit_code", result.ExitCode)
-				if err := o.db.Save(parent).Error; err != nil {
-					return fmt.Errorf("process test writing: save baseline check: %w", err)
-				}
-				return nil
+				o.logger.Warn("baseline tests fail on integration branch", "task_id", parent.ID, "exit_code", result.ExitCode)
 			}
 			if err := o.db.Save(parent).Error; err != nil {
 				return fmt.Errorf("process test writing: save baseline check: %w", err)
 			}
+			if runErr != nil || result.ExitCode != 0 {
+				return nil
+			}
 		}
 	}
 
-	// Block scheduling (but NOT completion checks) if baseline tests failed.
-	if failed, ok := parent.Context["baseline_tests_failed"].(bool); ok && failed {
-		// Still run the completion check below — a supervisor may have
-		// manually fixed the subtask and set it to done.
-	} else {
-		// Schedule only test-phase subtasks during the test-writing state.
+	if failed, ok := parent.Context["baseline_tests_failed"].(bool); !ok || !failed {
 		if err := o.scheduleSubtasks(parent, "test"); err != nil {
 			return fmt.Errorf("process test writing: schedule: %w", err)
 		}
 	}
 
-	// Completion check runs unconditionally every tick. This ensures that
-	// when a supervisor manually fixes a failed subtask (merges work, sets
-	// subtask to done), processTestWriting detects the change on the next
-	// tick and transitions the parent.
-
-	// Check if all test-phase subtasks are in a terminal state.
 	var testSubtasks []model.Task
 	if err := o.db.Where("parent_task_id = ? AND phase = ?", parent.ID, "test").
 		Find(&testSubtasks).Error; err != nil {
 		return fmt.Errorf("process test writing: query test subtasks: %w", err)
 	}
 
-	if len(testSubtasks) == 0 {
+	switch o.subtaskRecovery.Evaluate(parent, len(testSubtasks)) {
+	case RecoveryReplan:
+		parent.Context["replan_directive"] = "Previous plan produced no test-phase subtasks. Re-plan with explicit test subtasks for each implementation subtask."
+		if evt, err := state.TransitionTask(parent, model.StatusPlanning, "orchestrator", map[string]any{"reason": "empty test subtasks, replanning"}); err != nil {
+			return fmt.Errorf("process test writing: replan transition: %w", err)
+		} else if saveErr := o.db.Save(parent).Error; saveErr != nil {
+			return fmt.Errorf("process test writing: save replan: %w", saveErr)
+		} else {
+			_ = o.db.Create(evt).Error
+		}
+		o.emit("task_replan", map[string]any{"task_id": parent.ID})
 		return nil
+	case RecoveryFail:
+		return o.failTask(parent, fmt.Sprintf("no test subtasks after %d recovery attempts", defaultMaxEmptyChecks))
+	default:
+		if err := o.db.Save(parent).Error; err != nil {
+			return fmt.Errorf("process test writing: save recovery state: %w", err)
+		}
 	}
-
-	allTerminal := true
-	anyFailed := false
-	allDone := true
-
+	allTerminal, anyFailed, allDone := true, false, true
 	for _, sub := range testSubtasks {
 		switch sub.Status {
 		case model.StatusDone:

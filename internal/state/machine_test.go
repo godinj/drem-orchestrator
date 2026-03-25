@@ -128,6 +128,17 @@ func TestTransitionTask_TestWritingToTestReview(t *testing.T) {
 	}
 }
 
+func TestValidateTransition_TestWritingToPlanning(t *testing.T) {
+	// The recovery path for empty test subtasks requires test_writing → planning
+	// to be a valid transition so the orchestrator can send the task back
+	// for replanning with a directive to generate test subtasks.
+	err := ValidateTransition(model.StatusTestWriting, model.StatusPlanning)
+	if err != nil {
+		t.Errorf("ValidateTransition(test_writing, planning) = %v, want nil — "+
+			"test_writing → planning must be valid for empty-subtask recovery", err)
+	}
+}
+
 func TestNeedsClarification_IsHumanGate(t *testing.T) {
 	if !model.StatusNeedsClarification.IsHumanGate() {
 		t.Error("StatusNeedsClarification.IsHumanGate() = false, want true")

@@ -2038,11 +2038,11 @@ func TestProcessTestWriting_NoTestSubtasks(t *testing.T) {
 		t.Fatalf("processTestWriting error: %v", err)
 	}
 
-	// No test subtasks -> stays in test_writing.
+	// No test subtasks -> recovery policy sends task back to planning.
 	var updated model.Task
 	db.First(&updated, "id = ?", parent.ID)
-	if updated.Status != model.StatusTestWriting {
-		t.Errorf("expected test_writing (no test subtasks), got %s", updated.Status)
+	if updated.Status != model.StatusPlanning {
+		t.Errorf("expected planning (recovery replan on empty subtasks), got %s", updated.Status)
 	}
 }
 

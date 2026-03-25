@@ -1,0 +1,9 @@
+{
+  "title": "Pre-existing import ceiling violation in orchestrator package (58 vs baseline 57)",
+  "description": "The empty_subtask_guard.go stub file was committed with an import of internal/model, pushing the orchestrator package import count to 58, which exceeds the shrink-only baseline of 57 in constraints.toml. This violation existed before the recovery policy implementation and is not caused by the current changes.",
+  "category": "constraint_violation",
+  "severity": "informational",
+  "reproduction_context": "Run: go test ./internal/constraints/ — the 'Internal import ceiling' check reports 58 matches vs baseline 57. The stub file internal/orchestrator/empty_subtask_guard.go was committed in the TDD test-writing phase with `import \"github.com/godinj/drem-orchestrator/internal/model\"`. The baseline in .drem/constraints.toml is 57.",
+  "agent_id": "d830966d-3815-4cde-964a-46799918c19e",
+  "task_id": "4778f798-8edd-4e0c-aa6d-c876998f4bfa"
+}

@@ -289,6 +289,207 @@ func TestProcessTestWriting_TestSubtasksStillRunning(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Empty subtask recovery tests (TDD — implementation pending)
+// ---------------------------------------------------------------------------
+
+// maxEmptySubtaskChecks is the expected constant that the implementation will
+// define. Tests reference it so failures are assertion-based, not compile errors.
+// The implementation must define this constant with the same value.
+const expectedMaxEmptySubtaskChecks = 3
+
+func TestProcessTestWriting_EmptySubtasks_FirstCheck_TransitionsToPlanning(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-empty-subtasks",
+		Description: "parent with no test subtasks",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	// No test subtasks created — the empty condition.
+
+	err := o.processTestWriting(&parent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Reload parent from DB.
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+
+	// Expected: parent transitions to planning for replan.
+	if updated.Status != model.StatusPlanning {
+		t.Errorf("expected parent status planning (replan), got %s", updated.Status)
+	}
+
+	// Verify an event was recorded for the transition.
+	var events []model.TaskEvent
+	db.Where("task_id = ?", parentID).Find(&events)
+	found := false
+	for _, evt := range events {
+		if evt.OldValue == string(model.StatusTestWriting) && evt.NewValue == string(model.StatusPlanning) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("expected status_change event from test_writing to planning, not found")
+	}
+}
+
+func TestProcessTestWriting_EmptySubtasks_MaxRetries_TransitionsToFailed(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-max-retries",
+		Description: "parent at max empty subtask checks",
+		Status:      model.StatusTestWriting,
+		Context: model.JSONField{
+			// Set counter to max-1 so this call is the final attempt.
+			"empty_subtask_checks": float64(expectedMaxEmptySubtaskChecks - 1),
+		},
+	}
+	db.Create(&parent)
+
+	// No test subtasks — empty condition triggers at max retries.
+
+	err := o.processTestWriting(&parent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected parent status failed after max retries, got %s", updated.Status)
+	}
+
+	// Verify failure reason is descriptive.
+	ctx := updated.Context
+	if ctx == nil {
+		t.Fatal("expected task context to be non-nil after failure")
+	}
+	reason, ok := ctx["failure_reason"].(string)
+	if !ok || reason == "" {
+		t.Error("expected non-empty failure_reason in context")
+	}
+}
+
+func TestProcessTestWriting_EmptySubtasks_CounterResets_WhenSubtasksAppear(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-counter-reset",
+		Description: "parent with counter that should reset",
+		Status:      model.StatusTestWriting,
+		Context: model.JSONField{
+			"empty_subtask_checks": float64(2),
+		},
+	}
+	db.Create(&parent)
+
+	// Now subtasks exist — counter should reset to 0 and process normally.
+	sub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-sub",
+		Description:  "test subtask",
+		Status:       model.StatusInProgress,
+		Phase:        "test",
+	}
+	db.Create(&sub)
+
+	err := o.processTestWriting(&parent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Parent should stay in test_writing (subtask still running).
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusTestWriting {
+		t.Errorf("expected parent to stay in test_writing, got %s", updated.Status)
+	}
+
+	// Counter should be reset to 0.
+	ctx := updated.Context
+	if ctx == nil {
+		t.Fatal("expected task context to be non-nil")
+	}
+	counter, _ := ctx["empty_subtask_checks"].(float64)
+	if counter != 0 {
+		t.Errorf("expected empty_subtask_checks to be reset to 0, got %v", counter)
+	}
+}
+
+func TestProcessTestWriting_EmptySubtasks_ReplanDirective_InContext(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-replan-directive",
+		Description: "parent should get replan directive",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	// No test subtasks — triggers replan.
+
+	err := o.processTestWriting(&parent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+
+	// After replan transition, context must contain the replan directive.
+	ctx := updated.Context
+	if ctx == nil {
+		t.Fatal("expected task context to be non-nil after replan")
+	}
+
+	directive, ok := ctx["replan_directive"].(string)
+	if !ok || directive == "" {
+		t.Error("expected non-empty replan_directive in context instructing planner to generate test subtasks")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // HandlePlanApproved TDD tests
 // ---------------------------------------------------------------------------
 
