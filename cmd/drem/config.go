@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/godinj/drem-orchestrator/internal/ratelimit"
 )
 
 // Config holds all runtime configuration for the Drem Orchestrator.
@@ -30,6 +32,8 @@ type Config struct {
 	ContextFixerPercent int           `toml:"context_fixer_percent"`
 	TmuxSocket          string        `toml:"tmux_socket"`
 	TmuxConfigFile      string        `toml:"tmux_config_file"`
+	MaxDispatchRate     int           `toml:"max_dispatch_rate"`
+	DispatchWindow      time.Duration `toml:"dispatch_window"`
 }
 
 // DefaultConfig returns a Config populated with sensible default values.
@@ -54,6 +58,8 @@ func DefaultConfig() Config {
 		ContextFixerPercent: 85,
 		TmuxSocket:          "drem",
 		TmuxConfigFile:      "master/.tmux.conf",
+		MaxDispatchRate:     ratelimit.DefaultMaxDispatches,
+		DispatchWindow:      ratelimit.DefaultDispatchWindow,
 	}
 }
 

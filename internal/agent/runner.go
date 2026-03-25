@@ -90,10 +90,11 @@ type Runner struct {
 	claudeBin       string
 	maxConcurrent   int
 
-	mu          sync.Mutex
-	running     map[uuid.UUID]*RunningAgent
-	completions chan Completion
-	semaphore   chan struct{} // buffered channel of size maxConcurrent
+	mu              sync.Mutex
+	running         map[uuid.UUID]*RunningAgent
+	completions     chan Completion
+	semaphore       chan struct{}   // buffered channel of size maxConcurrent
+	dispatchLimiter dispatchLimiter // optional rate limiter; nil means no limit
 }
 
 // NewRunner creates an agent Runner. Headless agents are started via
@@ -205,10 +206,18 @@ func (r *Runner) ClaudeBin() string {
 }
 
 // CanSpawn returns whether there is capacity for another agent.
+// When a dispatchLimiter is set, it must also permit the dispatch.
 func (r *Runner) CanSpawn() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return len(r.running) < r.maxConcurrent
+	if len(r.running) >= r.maxConcurrent {
+		return false
+	}
+	if r.dispatchLimiter != nil {
+		ok, _ := r.dispatchLimiter.Allow()
+		return ok
+	}
+	return true
 }
 
 // SpawnAgent creates a new worktree, DB record, prompt file, tmux session, and
@@ -321,6 +330,15 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 	)
 
 	success = true
+
+	// Record the dispatch in the rate limiter's sliding window.
+	r.mu.Lock()
+	dl := r.dispatchLimiter
+	r.mu.Unlock()
+	if dl != nil {
+		dl.Record()
+	}
+
 	return agent, nil
 }
 

@@ -90,6 +90,8 @@ scoped_tests          = true
 test_timeout          = "5m"
 tmux_socket           = "drem"
 tmux_config_file      = "master/.tmux.conf"
+max_dispatch_rate     = 3
+dispatch_window       = "60s"
 ```
 
 | Setting | Description |
@@ -114,6 +116,28 @@ tmux_config_file      = "master/.tmux.conf"
 | `test_timeout` | Timeout for test command execution (default 5m) |
 | `tmux_socket` | Dedicated tmux server socket name (default `drem`) |
 | `tmux_config_file` | Repo-local tmux config path, relative to bare repo (default `master/.tmux.conf`) |
+| `max_dispatch_rate` | Maximum agent dispatches allowed within the dispatch window (default 3) |
+| `dispatch_window` | Sliding window duration for dispatch rate limiting (default `60s`) |
+
+## Dispatch Throttling
+
+To prevent API quota exhaustion when many tasks advance simultaneously, the orchestrator rate-limits agent dispatch using a sliding window algorithm.
+
+**How it works:**
+
+- The orchestrator tracks the timestamp of each agent dispatch in a sliding window of configurable duration (`dispatch_window`, default 60s).
+- Before spawning a new agent, it checks whether the number of dispatches within the current window has reached `max_dispatch_rate` (default 3). If so, the dispatch is deferred.
+- Tasks that cannot be dispatched immediately are **not dropped** — they remain in their current state and are retried on the next orchestrator tick (every `tick_interval`).
+- Random jitter (up to 5s) is added to retry timing to prevent thundering-herd effects when the window resets.
+
+**Configuration:**
+
+```toml
+max_dispatch_rate = 3    # max agents dispatched per window
+dispatch_window   = "60s" # sliding window duration
+```
+
+With the defaults, no more than 3 agents will be dispatched in any rolling 60-second period. Increase `max_dispatch_rate` if your API quota allows higher concurrency, or widen `dispatch_window` to spread dispatches further apart.
 
 ## Tmux Isolation
 

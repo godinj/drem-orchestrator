@@ -26,6 +26,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
+	"github.com/godinj/drem-orchestrator/internal/ratelimit"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/taskimport"
 	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
@@ -179,6 +180,7 @@ func main() {
 	wt.MigrateAgentPaths(database)
 
 	runner := agent.NewRunner(database, tmux, wt, cfg.ClaudeBin, cfg.MaxConcurrentAgents)
+	runner.SetDispatchLimiter(ratelimit.New(cfg.MaxDispatchRate, cfg.DispatchWindow))
 	merger := merge.NewMergeQueue(merge.NewOrchestrator(wt, database), wt)
 	mem := memory.NewManager(database)
 
