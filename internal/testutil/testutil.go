@@ -51,6 +51,36 @@ func NewTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
+// NewTestDBWithModels creates an in-memory SQLite database and runs
+// auto-migration for both the core orchestrator models and the supplied
+// extra models. Use this when testing packages that define their own GORM
+// models (e.g., internal/csuite) so that all tables exist without resorting
+// to local gorm.Open calls (which violate the constitution).
+func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
+	t.Helper()
+	name := uuid.New().String()
+	dsn := "file:" + name + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	coreModels := []any{
+		&model.Project{},
+		&model.Task{},
+		&model.Agent{},
+		&model.TaskEvent{},
+		&model.Memory{},
+		&model.TaskComment{},
+	}
+	allModels := append(coreModels, extraModels...)
+	if err := db.AutoMigrate(allModels...); err != nil {
+		t.Fatalf("auto migrate: %v", err)
+	}
+	return db
+}
+
 // NewSharedTestDB creates an in-memory SQLite database with cache=shared.
 // Use this for tests that need a single shared in-memory DB.
 func NewSharedTestDB(t *testing.T) *gorm.DB {

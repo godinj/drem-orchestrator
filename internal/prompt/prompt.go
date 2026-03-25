@@ -450,6 +450,24 @@ func testPhaseCoderInstructions(opts Opts) []string {
 	}
 
 	sections = append(sections,
+		"## Test Infrastructure Rules (Constitution-Enforced)",
+		"",
+		"These rules are enforced by the post-merge constitution check. Violations will cause",
+		"your merge to be rejected.",
+		"",
+		"1. **DB init**: NEVER call `gorm.Open(sqlite.Open(...))` in test files. Always use",
+		"   `testutil.NewTestDB(t)` for core models or `testutil.NewTestDBWithModels(t, &YourModel{})`",
+		"   for packages with custom GORM models (e.g., csuite). Import `internal/testutil`.",
+		"",
+		"2. **Test factories**: NEVER define helper functions matching `func createTest*`,",
+		"   `func newTest*`, or `func mockTestDB*` in your test files. All shared test helpers",
+		"   MUST live in `internal/testutil/testutil.go`. If you need a new factory, add it there.",
+		"",
+		"3. **Git test helpers**: NEVER define `func setupBareRepo`, `func initBareRepo`,",
+		"   `func addWorktree`, or `func commitFile` in test files. Use the equivalents from",
+		"   `testutil` (e.g., `testutil.SetupBareRepo(t)`, `testutil.CommitFile(t, ...)`).",
+		"",
+
 		"## Stub Requirements",
 		"",
 		"Your tests must compile and link. To achieve this, create minimal stub implementations",
@@ -577,6 +595,16 @@ func defaultCoderInstructions(opts Opts) []string {
 			sections = append(sections, fmt.Sprintf("Files to create/modify: %v", files), "")
 		}
 	}
+
+	sections = append(sections,
+		"## Test Infrastructure Rules (Constitution-Enforced)",
+		"",
+		"When writing or modifying tests, these rules are strictly enforced:",
+		"- DB init: Use `testutil.NewTestDB(t)` or `testutil.NewTestDBWithModels(t, &Model{})` — never `gorm.Open()` in test files",
+		"- Test factories: Must live in `internal/testutil/testutil.go`, not local test files",
+		"- Git helpers: Use `testutil.SetupBareRepo(t)`, `testutil.CommitFile(t, ...)`, etc.",
+		"",
+	)
 
 	sections = append(sections,
 		"After implementation:",

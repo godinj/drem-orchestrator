@@ -108,3 +108,9 @@ path               = "internal/tui/"
 rule               = "grandfathered"
 baseline_ratio     = 1.0
 baseline_pass_thrus = 100
+
+[[depth.exception]]
+path               = "internal/csuite/"
+rule               = "grandfathered"
+baseline_ratio     = 0.25
+baseline_pass_thrus = 5
