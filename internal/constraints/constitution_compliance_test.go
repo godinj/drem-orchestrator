@@ -54,8 +54,8 @@ func TestOrchestratorImportBaseline(t *testing.T) {
 	}
 
 	// After file splitting + merge with 836efc1d classifier fix, actual count was 55.
-	// merger_interface.go adds 2 imports, bringing total to 57.
-	const expectedBaseline = 57
+	// merger_interface.go adds 2 imports (57), constraint_gate_policy.go adds 1 (58).
+	const expectedBaseline = 58
 	if orchException.BaselineCount != expectedBaseline {
 		t.Errorf("internal/orchestrator/ import baseline_count = %d, want %d",
 			orchException.BaselineCount, expectedBaseline)
