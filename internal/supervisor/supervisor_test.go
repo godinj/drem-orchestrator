@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
 func TestExtractJSON(t *testing.T) {
@@ -142,7 +144,7 @@ func writeFakeClaudeBin(t *testing.T, dir string, stdout string, exitCode int) s
 // ---------------------------------------------------------------------------
 
 func TestNew(t *testing.T) {
-	s := New("claude", 30*time.Second)
+	s := New("claude", 30*time.Second, model.AgentCLIConfig{Effort: "low"})
 	if s == nil {
 		t.Fatal("New returned nil")
 	}
@@ -151,6 +153,9 @@ func TestNew(t *testing.T) {
 	}
 	if s.timeout != 30*time.Second {
 		t.Errorf("timeout = %v, want %v", s.timeout, 30*time.Second)
+	}
+	if s.cliConfig.Effort != "low" {
+		t.Errorf("cliConfig.Effort = %q, want %q", s.cliConfig.Effort, "low")
 	}
 }
 
@@ -162,7 +167,7 @@ func TestEvaluate_Success(t *testing.T) {
 	dir := t.TempDir()
 	bin := writeFakeClaudeBin(t, dir, "hello", 0)
 
-	s := New(bin, 5*time.Second)
+	s := New(bin, 5*time.Second, model.AgentCLIConfig{Effort: "low"})
 	got, err := s.evaluate(context.Background(), "test prompt")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -176,7 +181,7 @@ func TestEvaluate_NonZeroExit(t *testing.T) {
 	dir := t.TempDir()
 	bin := writeFakeClaudeBin(t, dir, "oops", 1)
 
-	s := New(bin, 5*time.Second)
+	s := New(bin, 5*time.Second, model.AgentCLIConfig{Effort: "low"})
 	_, err := s.evaluate(context.Background(), "test prompt")
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -194,7 +199,7 @@ func TestEvaluate_Timeout(t *testing.T) {
 		t.Fatalf("write fake claude bin: %v", err)
 	}
 
-	s := New(bin, 100*time.Millisecond)
+	s := New(bin, 100*time.Millisecond, model.AgentCLIConfig{Effort: "low"})
 	_, err := s.evaluate(context.Background(), "test prompt")
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -212,7 +217,7 @@ func TestEvaluateJSON_Success(t *testing.T) {
 	dir := t.TempDir()
 	bin := writeFakeClaudeBin(t, dir, `{"key":"val"}`, 0)
 
-	s := New(bin, 5*time.Second)
+	s := New(bin, 5*time.Second, model.AgentCLIConfig{Effort: "low"})
 	var result map[string]string
 	err := s.EvaluateJSON(context.Background(), "test", &result)
 	if err != nil {
@@ -227,7 +232,7 @@ func TestEvaluateJSON_NoJSON(t *testing.T) {
 	dir := t.TempDir()
 	bin := writeFakeClaudeBin(t, dir, "no json here", 0)
 
-	s := New(bin, 5*time.Second)
+	s := New(bin, 5*time.Second, model.AgentCLIConfig{Effort: "low"})
 	var result map[string]string
 	err := s.EvaluateJSON(context.Background(), "test", &result)
 	if err == nil {
@@ -242,7 +247,7 @@ func TestEvaluateJSON_InvalidJSON(t *testing.T) {
 	dir := t.TempDir()
 	bin := writeFakeClaudeBin(t, dir, `{"broken":}`, 0)
 
-	s := New(bin, 5*time.Second)
+	s := New(bin, 5*time.Second, model.AgentCLIConfig{Effort: "low"})
 	var result map[string]string
 	err := s.EvaluateJSON(context.Background(), "test", &result)
 	if err == nil {
@@ -257,7 +262,7 @@ func TestEvaluateJSON_WrappedJSON(t *testing.T) {
 	dir := t.TempDir()
 	bin := writeFakeClaudeBin(t, dir, `Here is the result: {"key":"val"} done`, 0)
 
-	s := New(bin, 5*time.Second)
+	s := New(bin, 5*time.Second, model.AgentCLIConfig{Effort: "low"})
 	var result map[string]string
 	err := s.EvaluateJSON(context.Background(), "test", &result)
 	if err != nil {

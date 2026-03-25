@@ -89,6 +89,7 @@ type Runner struct {
 	worktree        *worktree.Manager
 	claudeBin       string
 	maxConcurrent   int
+	agentConfigs    func(model.AgentType) model.AgentCLIConfig // per-type CLI flags
 
 	mu              sync.Mutex
 	running         map[uuid.UUID]*RunningAgent
@@ -99,7 +100,14 @@ type Runner struct {
 
 // NewRunner creates an agent Runner. Headless agents are started via
 // StartAgentProcess; supervisors and shells use the tmux Manager.
-func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin string, maxConcurrent int) *Runner {
+// agentConfigs maps agent types to CLI flags; pass nil for default behavior
+// (effort=medium, no model override).
+func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin string, maxConcurrent int, agentConfigs func(model.AgentType) model.AgentCLIConfig) *Runner {
+	if agentConfigs == nil {
+		agentConfigs = func(model.AgentType) model.AgentCLIConfig {
+			return model.AgentCLIConfig{Effort: "medium"}
+		}
+	}
 	var sessionName string
 	if tm != nil {
 		sessionName = tm.SessionName
@@ -112,6 +120,7 @@ func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin st
 		worktree:        wt,
 		claudeBin:       claudeBin,
 		maxConcurrent:   maxConcurrent,
+		agentConfigs:    agentConfigs,
 		running:         make(map[uuid.UUID]*RunningAgent),
 		completions:     make(chan Completion, maxConcurrent),
 		semaphore:       make(chan struct{}, maxConcurrent),
@@ -284,7 +293,7 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 	}
 
 	// Write prompt, start subprocess, begin monitoring.
-	if err := r.startAgent(agent.ID, task.ID, worktreePath, branch, sessionName, prompt); err != nil {
+	if err := r.startAgent(agent.ID, task.ID, worktreePath, branch, sessionName, prompt, agentType); err != nil {
 		r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("status", model.AgentDead)
 		return nil, fmt.Errorf("spawn agent: start: %w", err)
 	}
@@ -344,7 +353,7 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 
 // startAgent writes the prompt file and settings, starts the agent as a
 // subprocess, stores the RunningAgent, and launches monitoring goroutines.
-func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, sessionName, prompt string) error {
+func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, sessionName, prompt string, agentType model.AgentType) error {
 	// Ensure .claude directory exists.
 	claudeDir := filepath.Join(worktreePath, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
@@ -420,8 +429,9 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		return fmt.Errorf("write claude settings: %w", err)
 	}
 
-	// Start agent as a subprocess.
-	proc, err := r.startProcess(context.Background(), r.claudeBin, promptPath, worktreePath)
+	// Start agent as a subprocess with per-type CLI flags.
+	cliConfig := r.agentConfigs(agentType)
+	proc, err := r.startProcess(context.Background(), r.claudeBin, promptPath, worktreePath, cliConfig.CLIArgs())
 	if err != nil {
 		return fmt.Errorf("start subprocess: %w", err)
 	}

@@ -18,20 +18,20 @@ import (
 // mockProcessStarter returns a ProcessStarter that creates a real subprocess
 // using a short-lived shell script as the "claude binary".
 func mockProcessStarter(exitCode int, startErr error) ProcessStarter {
-	return func(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error) {
+	return func(ctx context.Context, claudeBin, promptPath, cwd string, extraArgs []string) (*AgentProcess, error) {
 		if startErr != nil {
 			return nil, startErr
 		}
 		// Use StartAgentProcess with a simple script that reads stdin and exits.
-		return StartAgentProcess(ctx, claudeBin, promptPath, cwd)
+		return StartAgentProcess(ctx, claudeBin, promptPath, cwd, extraArgs)
 	}
 }
 
 // mockProcessStarterBlocking returns a ProcessStarter whose processes block
 // until their idle signal file is created, simulating a real agent.
 func mockProcessStarterBlocking() ProcessStarter {
-	return func(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error) {
-		return StartAgentProcess(ctx, claudeBin, promptPath, cwd)
+	return func(ctx context.Context, claudeBin, promptPath, cwd string, extraArgs []string) (*AgentProcess, error) {
+		return StartAgentProcess(ctx, claudeBin, promptPath, cwd, extraArgs)
 	}
 }
 
@@ -56,6 +56,7 @@ func newMockRunner(t *testing.T, db *gorm.DB, claudeBin string) *Runner {
 		tmuxSessionName: "test-session",
 		claudeBin:       claudeBin,
 		maxConcurrent:   4,
+		agentConfigs:    func(model.AgentType) model.AgentCLIConfig { return model.AgentCLIConfig{Effort: "medium"} },
 		running:         make(map[uuid.UUID]*RunningAgent),
 		completions:     make(chan Completion, 4),
 		semaphore:       make(chan struct{}, 4),
@@ -71,6 +72,7 @@ func newMockRunnerWithStarter(t *testing.T, db *gorm.DB, starter ProcessStarter)
 		tmuxSessionName: "test-session",
 		claudeBin:       "/bin/false",
 		maxConcurrent:   4,
+		agentConfigs:    func(model.AgentType) model.AgentCLIConfig { return model.AgentCLIConfig{Effort: "medium"} },
 		running:         make(map[uuid.UUID]*RunningAgent),
 		completions:     make(chan Completion, 4),
 		semaphore:       make(chan struct{}, 4),
@@ -147,7 +149,7 @@ func TestSpawnAgentInWorktree_Subprocess(t *testing.T) {
 func TestSpawnAgentInWorktree_ProcessFailure(t *testing.T) {
 	db := testutil.NewTestDB(t)
 
-	starter := func(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error) {
+	starter := func(ctx context.Context, claudeBin, promptPath, cwd string, extraArgs []string) (*AgentProcess, error) {
 		return nil, fmt.Errorf("process start failed")
 	}
 	r := newMockRunnerWithStarter(t, db, starter)

@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
 // Supervisor calls Claude in pipe mode for focused evaluations at
@@ -19,13 +21,16 @@ import (
 type Supervisor struct {
 	claudeBin string
 	timeout   time.Duration
+	cliConfig model.AgentCLIConfig
 }
 
-// New creates a Supervisor.
-func New(claudeBin string, timeout time.Duration) *Supervisor {
+// New creates a Supervisor. The cliConfig provides model/effort flags for
+// the Claude CLI invocation.
+func New(claudeBin string, timeout time.Duration, cliConfig model.AgentCLIConfig) *Supervisor {
 	return &Supervisor{
 		claudeBin: claudeBin,
 		timeout:   timeout,
+		cliConfig: cliConfig,
 	}
 }
 
@@ -35,7 +40,9 @@ func (s *Supervisor) evaluate(ctx context.Context, prompt string) (string, error
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, s.claudeBin, "-p", "--dangerously-skip-permissions", "--effort", "low")
+	args := []string{"-p", "--dangerously-skip-permissions"}
+	args = append(args, s.cliConfig.CLIArgs()...)
+	cmd := exec.CommandContext(ctx, s.claudeBin, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 
 	var stdout, stderr bytes.Buffer

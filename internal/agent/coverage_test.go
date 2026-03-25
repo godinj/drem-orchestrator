@@ -26,7 +26,7 @@ func TestNewRunner(t *testing.T) {
 	db := testutil.NewTestDB(t)
 
 	t.Run("with nil tmux manager", func(t *testing.T) {
-		r := NewRunner(db, nil, nil, "/usr/bin/claude", 4)
+		r := NewRunner(db, nil, nil, "/usr/bin/claude", 4, nil)
 		if r == nil {
 			t.Fatal("NewRunner returned nil")
 		}
@@ -881,6 +881,7 @@ func TestSpawnNewAgent_MaxConcurrentReached(t *testing.T) {
 		tmuxSessionName: "test-session",
 		claudeBin:       "/bin/false",
 		maxConcurrent:   1,
+		agentConfigs:    func(model.AgentType) model.AgentCLIConfig { return model.AgentCLIConfig{Effort: "medium"} },
 		running:         make(map[uuid.UUID]*RunningAgent),
 		completions:     make(chan Completion, 1),
 		semaphore:       make(chan struct{}, 1),
@@ -1102,7 +1103,7 @@ func TestStartAgentProcess_Arguments(t *testing.T) {
 	os.WriteFile(promptPath, []byte("test prompt"), 0o644)
 
 	ctx := context.Background()
-	proc, err := StartAgentProcess(ctx, scriptPath, promptPath, cwd)
+	proc, err := StartAgentProcess(ctx, scriptPath, promptPath, cwd, []string{"--effort", "medium"})
 	if err != nil {
 		t.Fatalf("StartAgentProcess: %v", err)
 	}
@@ -1120,7 +1121,7 @@ func TestStartAgentProcess_Arguments(t *testing.T) {
 		t.Errorf("args should contain --dangerously-skip-permissions, got: %q", args)
 	}
 
-	// Verify --effort medium flag is present.
+	// Verify --effort medium flag is present (passed via extraArgs).
 	if !strings.Contains(args, "--effort medium") {
 		t.Errorf("args should contain '--effort medium', got: %q", args)
 	}
@@ -1140,7 +1141,7 @@ func TestStartAgentProcess_NonexistentBinary(t *testing.T) {
 	promptPath := filepath.Join(cwd, "prompt.md")
 	os.WriteFile(promptPath, []byte("test"), 0o644)
 
-	_, err := StartAgentProcess(context.Background(), "/nonexistent/binary", promptPath, cwd)
+	_, err := StartAgentProcess(context.Background(), "/nonexistent/binary", promptPath, cwd, nil)
 	if err == nil {
 		t.Fatal("expected error for nonexistent binary")
 	}
@@ -1162,7 +1163,7 @@ func TestStartAgentProcess_NonZeroExit(t *testing.T) {
 	promptPath := filepath.Join(cwd, "prompt.md")
 	os.WriteFile(promptPath, []byte("test prompt"), 0o644)
 
-	proc, err := StartAgentProcess(context.Background(), scriptPath, promptPath, cwd)
+	proc, err := StartAgentProcess(context.Background(), scriptPath, promptPath, cwd, nil)
 	if err != nil {
 		t.Fatalf("StartAgentProcess: %v", err)
 	}

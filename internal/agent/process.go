@@ -22,15 +22,17 @@ type AgentProcess struct {
 }
 
 // ProcessStarter is a function type for creating agent processes, allowing test injection.
-type ProcessStarter func(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error)
+// extraArgs carries per-agent model/effort flags (e.g. ["--model", "x", "--effort", "high"]).
+type ProcessStarter func(ctx context.Context, claudeBin, promptPath, cwd string, extraArgs []string) (*AgentProcess, error)
 
 // StartAgentProcess starts a Claude Code subprocess.
-// It creates the command: claudeBin --dangerously-skip-permissions -p -
+// extraArgs carries per-agent CLI flags (model, effort) inserted between
+// --dangerously-skip-permissions and -p -.
 // The prompt file content is written to stdin, then the pipe is closed so that
 // Claude receives EOF and begins processing. In -p mode, graceful shutdown is
 // handled via SIGTERM rather than stdin commands.
 // stdout+stderr are redirected to <cwd>/.claude/agent-output.log.
-func StartAgentProcess(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error) {
+func StartAgentProcess(ctx context.Context, claudeBin, promptPath, cwd string, extraArgs []string) (*AgentProcess, error) {
 	// 1. Ensure .claude directory exists.
 	claudeDir := filepath.Join(cwd, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
@@ -44,8 +46,11 @@ func StartAgentProcess(ctx context.Context, claudeBin, promptPath, cwd string) (
 		return nil, fmt.Errorf("start agent process: create log: %w", err)
 	}
 
-	// 3. Build command: <claudeBin> --dangerously-skip-permissions -p -
-	cmd := exec.CommandContext(ctx, claudeBin, "--dangerously-skip-permissions", "--effort", "medium", "-p", "-")
+	// 3. Build command with per-agent CLI flags.
+	args := []string{"--dangerously-skip-permissions"}
+	args = append(args, extraArgs...)
+	args = append(args, "-p", "-")
+	cmd := exec.CommandContext(ctx, claudeBin, args...)
 	cmd.Dir = cwd
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile

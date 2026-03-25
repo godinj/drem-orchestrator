@@ -39,7 +39,7 @@ func setupReconcileTest(t *testing.T) (*Orchestrator, *gorm.DB, string) {
 	orch.merger = merger
 	// Always provide a runner so reconcileStuckAgents doesn't panic.
 	// The runner's running map is empty, simulating no active agents.
-	orch.runner = agent.NewRunner(db, nil, wt, "/nonexistent/claude", 0)
+	orch.runner = agent.NewRunner(db, nil, wt, "/nonexistent/claude", 0, nil)
 
 	return orch, db, bareRepo
 }

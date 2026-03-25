@@ -22,7 +22,7 @@ import (
 func testOrchestratorWithRunner(t *testing.T, db *gorm.DB, wtManager *worktree.Manager) *Orchestrator {
 	t.Helper()
 	o := testOrchestrator(t, db, wtManager)
-	o.runner = agent.NewRunner(db, nil, wtManager, "claude", 0)
+	o.runner = agent.NewRunner(db, nil, wtManager, "claude", 0, nil)
 	return o
 }
 

@@ -7,8 +7,59 @@ import (
 
 	"github.com/BurntSushi/toml"
 
+	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/ratelimit"
 )
+
+// AgentConfig holds per-agent-type CLI flags for Claude Code invocations.
+type AgentConfig struct {
+	Model  string `toml:"model"`
+	Effort string `toml:"effort"`
+}
+
+// AgentsConfig holds per-agent-type configuration keyed by role.
+type AgentsConfig struct {
+	Classifier            AgentConfig `toml:"classifier"`
+	Planner               AgentConfig `toml:"planner"`
+	Coder                 AgentConfig `toml:"coder"`
+	Reviewer              AgentConfig `toml:"reviewer"`
+	Fixer                 AgentConfig `toml:"fixer"`
+	Researcher            AgentConfig `toml:"researcher"`
+	Supervisor            AgentConfig `toml:"supervisor"`
+	InteractiveSupervisor AgentConfig `toml:"interactive_supervisor"`
+}
+
+// ForAgentType returns the AgentCLIConfig for the given headless agent type.
+func (a AgentsConfig) ForAgentType(at model.AgentType) model.AgentCLIConfig {
+	var ac AgentConfig
+	switch at {
+	case model.AgentClassifier:
+		ac = a.Classifier
+	case model.AgentPlanner:
+		ac = a.Planner
+	case model.AgentCoder:
+		ac = a.Coder
+	case model.AgentReviewer:
+		ac = a.Reviewer
+	case model.AgentFixer:
+		ac = a.Fixer
+	case model.AgentResearcher:
+		ac = a.Researcher
+	default:
+		ac = AgentConfig{Effort: "medium"}
+	}
+	return model.AgentCLIConfig{Model: ac.Model, Effort: ac.Effort}
+}
+
+// SupervisorCLIConfig returns the AgentCLIConfig for synchronous supervisor calls.
+func (a AgentsConfig) SupervisorCLIConfig() model.AgentCLIConfig {
+	return model.AgentCLIConfig{Model: a.Supervisor.Model, Effort: a.Supervisor.Effort}
+}
+
+// InteractiveSupervisorCLIConfig returns the AgentCLIConfig for interactive supervisor sessions.
+func (a AgentsConfig) InteractiveSupervisorCLIConfig() model.AgentCLIConfig {
+	return model.AgentCLIConfig{Model: a.InteractiveSupervisor.Model, Effort: a.InteractiveSupervisor.Effort}
+}
 
 // Config holds all runtime configuration for the Drem Orchestrator.
 type Config struct {
@@ -34,6 +85,7 @@ type Config struct {
 	TmuxConfigFile      string        `toml:"tmux_config_file"`
 	MaxDispatchRate     int           `toml:"max_dispatch_rate"`
 	DispatchWindow      time.Duration `toml:"dispatch_window"`
+	Agents              AgentsConfig  `toml:"agents"`
 }
 
 // DefaultConfig returns a Config populated with sensible default values.
@@ -60,6 +112,16 @@ func DefaultConfig() Config {
 		TmuxConfigFile:      "master/.tmux.conf",
 		MaxDispatchRate:     ratelimit.DefaultMaxDispatches,
 		DispatchWindow:      ratelimit.DefaultDispatchWindow,
+		Agents: AgentsConfig{
+			Classifier:            AgentConfig{Effort: "medium"},
+			Planner:               AgentConfig{Effort: "medium"},
+			Coder:                 AgentConfig{Effort: "medium"},
+			Reviewer:              AgentConfig{Effort: "medium"},
+			Fixer:                 AgentConfig{Effort: "medium"},
+			Researcher:            AgentConfig{Effort: "medium"},
+			Supervisor:            AgentConfig{Effort: "low"},
+			InteractiveSupervisor: AgentConfig{Effort: "medium"},
+		},
 	}
 }
 

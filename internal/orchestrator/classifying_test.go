@@ -86,7 +86,7 @@ func setupClassifyingTestWithRunner(t *testing.T) (*Orchestrator, uuid.UUID) {
 		t.Fatalf("write fake claude binary: %v", err)
 	}
 
-	runner := agent.NewRunner(db, nil, wt, fakeBin, 4)
+	runner := agent.NewRunner(db, nil, wt, fakeBin, 4, nil)
 
 	orch := &Orchestrator{
 		db:              db,

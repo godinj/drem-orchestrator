@@ -400,5 +400,5 @@ func NewMockSupervisor(t *testing.T, response string) *supervisor.Supervisor {
 	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake claude bin: %v", err)
 	}
-	return supervisor.New(bin, 5*time.Second)
+	return supervisor.New(bin, 5*time.Second, model.AgentCLIConfig{Effort: "low"})
 }

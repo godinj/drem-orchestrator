@@ -293,9 +293,13 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 	tmuxMgr := o.runner.TmuxManager()
 	_ = tmuxMgr.KillAgentSession(sessionName)
 
-	// Build the claude command.
+	// Build the claude command with per-type model/effort flags.
 	claudeBin := o.runner.ClaudeBin()
-	cmd := fmt.Sprintf("%s --dangerously-skip-permissions \"$(cat %s)\"", claudeBin, promptPath)
+	cliArgs := o.interactiveSupervisorConfig.CLIArgs()
+	cmdParts := []string{claudeBin, "--dangerously-skip-permissions"}
+	cmdParts = append(cmdParts, cliArgs...)
+	cmdParts = append(cmdParts, fmt.Sprintf("\"$(cat %s)\"", promptPath))
+	cmd := strings.Join(cmdParts, " ")
 
 	// Create the tmux session.
 	if err := tmuxMgr.CreateAgentSession(sessionName, cmd, cwd); err != nil {

@@ -35,7 +35,7 @@ func setupQuickFixTest(t *testing.T) (*Orchestrator, *gorm.DB, uuid.UUID) {
 
 	wt := &worktree.Manager{BareRepoPath: "/tmp/fake-bare-repo", DefaultBranch: "main"}
 	// Runner with maxConcurrent=0 so CanSpawn returns false.
-	runner := agent.NewRunner(db, nil, wt, "/bin/false", 0)
+	runner := agent.NewRunner(db, nil, wt, "/bin/false", 0, nil)
 
 	o := &Orchestrator{
 		db:        db,
@@ -191,7 +191,7 @@ func TestQuickFix_MergeFailure_FlagsForHumanReview(t *testing.T) {
 
 	events := make(chan Event, 100)
 	wt := &worktree.Manager{BareRepoPath: bareRepo, DefaultBranch: defaultBranch}
-	runner := agent.NewRunner(db, nil, wt, "/bin/false", 0)
+	runner := agent.NewRunner(db, nil, wt, "/bin/false", 0, nil)
 
 	o := &Orchestrator{
 		db:        db,

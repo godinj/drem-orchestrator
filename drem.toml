@@ -1,0 +1,25 @@
+bare_repo_path    = "/home/godinj/git/drem-orchestrator.git"
+default_branch    = "master"
+test_command      = "go test ./..."
+compile_command   = "go vet ./..."
+
+[agents.classifier]
+  model  = "claude-haiku-4-5-20251001"
+
+[agents.planner]
+  model  = "claude-haiku-4-5-20251001"
+
+[agents.coder]
+  model  = "claude-haiku-4-5-20251001"
+
+[agents.reviewer]
+  model  = "claude-haiku-4-5-20251001"
+
+[agents.fixer]
+  model  = "claude-haiku-4-5-20251001"
+
+[agents.supervisor]
+  model  = "claude-haiku-4-5-20251001"
+
+[agents.interactive_supervisor]
+  model  = "claude-haiku-4-5-20251001"

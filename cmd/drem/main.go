@@ -179,14 +179,14 @@ func main() {
 	}
 	wt.MigrateAgentPaths(database)
 
-	runner := agent.NewRunner(database, tmux, wt, cfg.ClaudeBin, cfg.MaxConcurrentAgents)
+	runner := agent.NewRunner(database, tmux, wt, cfg.ClaudeBin, cfg.MaxConcurrentAgents, cfg.Agents.ForAgentType)
 	runner.SetDispatchLimiter(ratelimit.New(cfg.MaxDispatchRate, cfg.DispatchWindow))
 	merger := merge.NewMergeQueue(merge.NewOrchestrator(wt, database), wt)
 	mem := memory.NewManager(database)
 
 	var sup *supervisor.Supervisor
 	if cfg.SupervisorEnabled {
-		sup = supervisor.New(cfg.ClaudeBin, cfg.SupervisorTimeout)
+		sup = supervisor.New(cfg.ClaudeBin, cfg.SupervisorTimeout, cfg.Agents.SupervisorCLIConfig())
 	}
 
 	// Create bug report drop directory and service.
@@ -198,6 +198,7 @@ func main() {
 
 	orchEvents := make(chan orchestrator.Event, 100)
 	orch := orchestrator.New(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.ContextFixerPercent)
+	orch.SetInteractiveSupervisorConfig(cfg.Agents.InteractiveSupervisorCLIConfig())
 
 	// Init bug report service.
 	bugreportSvc := bugreport.New(database)

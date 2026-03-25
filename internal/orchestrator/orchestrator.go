@@ -93,26 +93,27 @@ type commandResult struct {
 // Orchestrator is the main scheduling loop. It queries the database each tick,
 // processes tasks through the state machine, spawns agents, and drives merges.
 type Orchestrator struct {
-	db              *gorm.DB
-	dbPath          string
-	runner          *agent.Runner
-	worktree        *worktree.Manager
-	merger          mergerClient
-	memory          *memory.Manager
-	supervisor      *supervisor.Supervisor // nil disables LLM-powered decisions
-	bugreport       *bugreport.Service     // nil disables bug report ingestion
-	bugreportDir    string                 // path to .drem/bug-reports/ drop directory
-	testGate        TestGateConfig
-	projectID       uuid.UUID
-	events          chan<- Event
-	tick            time.Duration
-	stale           time.Duration
-	tickCount       int
-	contextWarnPct  int
-	contextStopPct  int
-	contextFixerPct int // percentage: spawn fixer instead of failing
-	subtaskRecovery SubtaskRecoveryPolicy
-	logger          *slog.Logger
+	db                          *gorm.DB
+	dbPath                      string
+	runner                      *agent.Runner
+	worktree                    *worktree.Manager
+	merger                      mergerClient
+	memory                      *memory.Manager
+	supervisor                  *supervisor.Supervisor // nil disables LLM-powered decisions
+	bugreport                   *bugreport.Service     // nil disables bug report ingestion
+	bugreportDir                string                 // path to .drem/bug-reports/ drop directory
+	testGate                    TestGateConfig
+	projectID                   uuid.UUID
+	events                      chan<- Event
+	tick                        time.Duration
+	stale                       time.Duration
+	tickCount                   int
+	contextWarnPct              int
+	contextStopPct              int
+	contextFixerPct             int // percentage: spawn fixer instead of failing
+	subtaskRecovery             SubtaskRecoveryPolicy
+	interactiveSupervisorConfig model.AgentCLIConfig // model/effort for interactive supervisor sessions
+	logger                      *slog.Logger
 }
 
 // New creates an Orchestrator. The supervisor parameter is optional — pass nil
@@ -169,6 +170,12 @@ func (o *Orchestrator) SetTestGateConfig(cfg TestGateConfig) {
 		cfg.TestTimeout = 5 * time.Minute
 	}
 	o.testGate = cfg
+}
+
+// SetInteractiveSupervisorConfig sets the model/effort flags used when
+// spawning interactive supervisor sessions via tmux.
+func (o *Orchestrator) SetInteractiveSupervisorConfig(cfg model.AgentCLIConfig) {
+	o.interactiveSupervisorConfig = cfg
 }
 
 // Run starts the main loop. It blocks until ctx is cancelled.

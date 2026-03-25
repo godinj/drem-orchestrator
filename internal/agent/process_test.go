@@ -41,7 +41,7 @@ func TestStartAgentProcess(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	p, err := StartAgentProcess(ctx, claudeBin, promptPath, cwd)
+	p, err := StartAgentProcess(ctx, claudeBin, promptPath, cwd, nil)
 	if err != nil {
 		t.Fatalf("StartAgentProcess: %v", err)
 	}
@@ -96,7 +96,7 @@ while true; do sleep 1 & wait; done
 	}
 
 	ctx := context.Background()
-	p, err := StartAgentProcess(ctx, scriptPath, promptPath, cwd)
+	p, err := StartAgentProcess(ctx, scriptPath, promptPath, cwd, nil)
 	if err != nil {
 		t.Fatalf("StartAgentProcess: %v", err)
 	}
@@ -148,7 +148,7 @@ func TestAgentProcess_Kill(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	p, err := StartAgentProcess(ctx, scriptPath, promptPath, cwd)
+	p, err := StartAgentProcess(ctx, scriptPath, promptPath, cwd, nil)
 	if err != nil {
 		t.Fatalf("StartAgentProcess: %v", err)
 	}
@@ -204,7 +204,7 @@ echo "stderr line" >&2
 	}
 
 	ctx := context.Background()
-	p, err := StartAgentProcess(ctx, scriptPath, promptPath, cwd)
+	p, err := StartAgentProcess(ctx, scriptPath, promptPath, cwd, nil)
 	if err != nil {
 		t.Fatalf("StartAgentProcess: %v", err)
 	}
@@ -229,7 +229,7 @@ echo "stderr line" >&2
 
 func TestProcessStarter_Type(t *testing.T) {
 	// Verify that ProcessStarter func type works and can be assigned a mock.
-	var starter ProcessStarter = func(ctx context.Context, claudeBin, promptPath, cwd string) (*AgentProcess, error) {
+	var starter ProcessStarter = func(ctx context.Context, claudeBin, promptPath, cwd string, extraArgs []string) (*AgentProcess, error) {
 		return &AgentProcess{
 			logPath: "/mock/path/agent-output.log",
 			pid:     12345,
@@ -238,7 +238,7 @@ func TestProcessStarter_Type(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	p, err := starter(ctx, "/usr/bin/claude", "/tmp/prompt.md", "/tmp/cwd")
+	p, err := starter(ctx, "/usr/bin/claude", "/tmp/prompt.md", "/tmp/cwd", nil)
 	if err != nil {
 		t.Fatalf("mock ProcessStarter returned error: %v", err)
 	}
