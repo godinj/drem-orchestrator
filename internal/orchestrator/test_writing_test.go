@@ -295,7 +295,7 @@ func TestProcessTestWriting_TestSubtasksStillRunning(t *testing.T) {
 // maxEmptySubtaskChecks is the expected constant that the implementation will
 // define. Tests reference it so failures are assertion-based, not compile errors.
 // The implementation must define this constant with the same value.
-const expectedMaxEmptySubtaskChecks = 3
+const expectedMaxEmptySubtaskChecks = 5
 
 func TestProcessTestWriting_EmptySubtasks_FirstCheck_TransitionsToPlanning(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
@@ -486,6 +486,144 @@ func TestProcessTestWriting_EmptySubtasks_ReplanDirective_InContext(t *testing.T
 	directive, ok := ctx["replan_directive"].(string)
 	if !ok || directive == "" {
 		t.Error("expected non-empty replan_directive in context instructing planner to generate test subtasks")
+	}
+}
+
+func TestProcessTestWriting_EmptySubtasks_ReplanClearsPlan(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-replan-clears-plan",
+		Description: "parent that replans should clear stale plan",
+		Status:      model.StatusTestWriting,
+		Plan:        model.JSONField{"subtasks": []any{}},
+	}
+	db.Create(&parent)
+
+	// No test subtasks — triggers replan.
+
+	err := o.processTestWriting(&parent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+
+	if updated.Status != model.StatusPlanning {
+		t.Errorf("expected status planning after replan, got %s", updated.Status)
+	}
+
+	// Plan must be cleared so processPlanning spawns a new planner.
+	if updated.Plan != nil {
+		t.Error("expected Plan to be nil after replan, but it was still set")
+	}
+
+	// PlanFeedback must be set so the new planner sees the directive.
+	if updated.PlanFeedback == "" {
+		t.Error("expected PlanFeedback to be set with replan directive")
+	}
+
+	// retry_count must be reset for fresh planner retries.
+	if updated.Context != nil {
+		if rc, ok := updated.Context["retry_count"].(float64); ok && rc != 0 {
+			t.Errorf("expected retry_count reset to 0, got %v", rc)
+		}
+	}
+}
+
+func TestProcessTestWriting_EmptySubtasks_ReplanDetachesOldSubtasks(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-detach",
+		Description: "replan should detach old subtasks",
+		Status:      model.StatusTestWriting,
+		Plan:        model.JSONField{"subtasks": []any{}},
+	}
+	db.Create(&parent)
+
+	// Create implementation subtasks (not test phase, so they won't be found
+	// by the test subtask query but should still be detached).
+	implSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "impl-sub",
+		Description:  "implementation subtask",
+		Status:       model.StatusBacklog,
+		Phase:        "implementation",
+	}
+	db.Create(&implSub)
+
+	err := o.processTestWriting(&parent)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Reload the implementation subtask — it should be detached.
+	var updatedSub model.Task
+	db.First(&updatedSub, "id = ?", implSub.ID)
+	if updatedSub.ParentTaskID != nil {
+		t.Errorf("expected old subtask to be detached (ParentTaskID nil), got %v", updatedSub.ParentTaskID)
+	}
+}
+
+func TestProcessPlanning_PlanFeedbackClearsStaleFromReplan(t *testing.T) {
+	// When a task is in PLANNING with both Plan and PlanFeedback set
+	// (e.g., after RecoveryReplan), processPlanning should clear the plan
+	// and fall through to spawn a new planner (not auto-advance).
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	task := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		Title:        "replan-stale-plan",
+		Description:  "task with stale plan and feedback",
+		Status:       model.StatusPlanning,
+		Plan:         model.JSONField{"subtasks": []any{map[string]any{"title": "old", "description": "stale"}}},
+		PlanFeedback: "Need test subtasks",
+	}
+	db.Create(&task)
+
+	err := o.processPlanning(&task)
+	if err != nil {
+		t.Fatalf("processPlanning: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", task.ID)
+
+	// Task should NOT have auto-advanced to PLAN_REVIEW — it should stay
+	// in PLANNING waiting for a new planner (or fail to spawn due to capacity).
+	if updated.Status == model.StatusPlanReview {
+		t.Error("processPlanning should not auto-advance to plan_review when PlanFeedback is set")
+	}
+
+	// Plan should have been cleared.
+	if updated.Plan != nil {
+		t.Error("expected Plan to be nil after PlanFeedback clearing")
 	}
 }
 

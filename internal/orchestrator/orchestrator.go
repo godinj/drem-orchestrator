@@ -452,7 +452,28 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 
 	switch o.subtaskRecovery.Evaluate(parent, len(testSubtasks)) {
 	case RecoveryReplan:
-		parent.Context["replan_directive"] = "Previous plan produced no test-phase subtasks. Re-plan with explicit test subtasks for each implementation subtask."
+		// Clear the plan so processPlanning spawns a new planner instead of
+		// auto-advancing the same stale plan to PLAN_REVIEW.
+		replanMsg := "Previous plan produced no test-phase subtasks. Re-plan with explicit test subtasks for each implementation subtask."
+		parent.Plan = nil
+		parent.PlanFeedback = replanMsg
+		parent.AssignedAgentID = nil
+		parent.Context["replan_directive"] = replanMsg
+		// Reset planner retry counter — new planning cycle gets fresh retries.
+		parent.Context["retry_count"] = float64(0)
+
+		// Detach old subtasks to prevent duplicates and stale data.
+		var oldSubtasks []model.Task
+		o.db.Where("parent_task_id = ?", parent.ID).Find(&oldSubtasks)
+		for i := range oldSubtasks {
+			oldSubtasks[i].ParentTaskID = nil
+			o.db.Save(&oldSubtasks[i])
+		}
+		if len(oldSubtasks) > 0 {
+			o.logger.Info("detached old subtasks for replan",
+				"task_id", parent.ID, "count", len(oldSubtasks))
+		}
+
 		if evt, err := state.TransitionTask(parent, model.StatusPlanning, "orchestrator", map[string]any{"reason": "empty test subtasks, replanning"}); err != nil {
 			return fmt.Errorf("process test writing: replan transition: %w", err)
 		} else if saveErr := o.db.Save(parent).Error; saveErr != nil {

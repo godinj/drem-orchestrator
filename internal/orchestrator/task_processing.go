@@ -160,6 +160,19 @@ func (o *Orchestrator) processQuickFix(task *model.Task) error {
 // them to PLAN_REVIEW (if a plan exists), monitoring an assigned planner agent,
 // or spawning a new planner.
 func (o *Orchestrator) processPlanning(task *model.Task) error {
+	// 0. If plan exists but PlanFeedback requests a re-plan, clear the stale
+	// plan so a new planner is spawned below. Without this, the same plan
+	// would be auto-advanced to PLAN_REVIEW without addressing the feedback.
+	if task.Plan != nil && task.PlanFeedback != "" {
+		o.logger.Info("clearing stale plan for replan with feedback",
+			"task_id", task.ID, "feedback", task.PlanFeedback)
+		task.Plan = nil
+		task.AssignedAgentID = nil
+		if err := o.db.Save(task).Error; err != nil {
+			return fmt.Errorf("process planning: save cleared plan: %w", err)
+		}
+	}
+
 	// 1. If plan already exists, evaluate for clarification needs.
 	if task.Plan != nil {
 		// Parse plan to extract assumptions.
