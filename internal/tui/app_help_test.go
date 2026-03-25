@@ -213,13 +213,17 @@ func TestQKeyDoesNotQuit(t *testing.T) {
 }
 
 func TestEscDoesNotQuit(t *testing.T) {
+	// Esc should never quit the application (like ctrl+c). In the board
+	// panel it is a no-op (clears error); in agents/detail it navigates
+	// back to the board.
 	tests := []struct {
-		name  string
-		focus Focus
+		name      string
+		focus     Focus
+		wantFocus Focus
 	}{
-		{"FocusBoard", FocusBoard},
-		{"FocusAgents", FocusAgents},
-		{"FocusDetail", FocusDetail},
+		{"FocusBoard", FocusBoard, FocusBoard},
+		{"FocusAgents", FocusAgents, FocusBoard},
+		{"FocusDetail", FocusDetail, FocusBoard},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -231,8 +235,8 @@ func TestEscDoesNotQuit(t *testing.T) {
 			if cmd != nil {
 				t.Errorf("esc should not produce a command (got non-nil cmd) in %s", tt.name)
 			}
-			if got.focus != tt.focus {
-				t.Errorf("esc should not change focus in %s, but focus changed", tt.name)
+			if got.focus != tt.wantFocus {
+				t.Errorf("esc in %s: focus = %d, want %d", tt.name, got.focus, tt.wantFocus)
 			}
 		})
 	}

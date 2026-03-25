@@ -70,6 +70,16 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.focus = FocusDetail
 		return m, nil
 
+	case "enter":
+		// Drill into the detail panel for the currently selected task.
+		m.focus = FocusDetail
+		return m, nil
+
+	case "esc":
+		// No-op on board — board is the home panel. Clear any error.
+		m.err = nil
+		return m, nil
+
 	case " ":
 		m.toggleBoardCollapse()
 		m.board.adjustScroll()
@@ -139,6 +149,27 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.agents, cmd = m.agents.Update(msg)
 		return m, cmd
 
+	case "enter":
+		// Drill into the selected agent: jump to its tmux session if alive,
+		// otherwise fall through to the detail panel.
+		if ag := m.agents.Selected(); ag != nil {
+			if ag.TmuxSession != "" {
+				alive, _ := m.tmux.IsAgentSessionAlive(ag.TmuxSession)
+				if alive {
+					_ = m.tmux.FocusAgentSession(ag.TmuxSession)
+					return m, nil
+				}
+			}
+		}
+		// No live session — drill into detail panel.
+		m.focus = FocusDetail
+		return m, nil
+
+	case "esc":
+		// Go back to the board (overview).
+		m.focus = FocusBoard
+		return m, nil
+
 	case "tab":
 		m.focus = FocusDetail
 		return m, nil
@@ -185,6 +216,11 @@ func (m Model) handleDetailKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	switch msg.String() {
+	case "esc":
+		// Go back to the board (overview).
+		m.focus = FocusBoard
+		m.detail.scrollOffset = 0
+		return m, nil
 	case "tab":
 		m.focus = FocusBoard
 		return m, nil

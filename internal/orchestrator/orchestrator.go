@@ -288,10 +288,7 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 		}
 	}
 
-	// 4b. Catch-all: dispatch backlog subtasks for non-terminal parents
-	// that were not processed above. This handles edge cases where the
-	// parent is in an unexpected status (e.g. backlog after replan) but
-	// already has subtasks waiting for dispatch.
+	// 4b. Catch-all: dispatch backlog subtasks for non-terminal parents with pending subtasks.
 	o.dispatchPendingSubtasks()
 
 	// 4c. Process TESTING_READY parent tasks (automated gate).

@@ -190,6 +190,30 @@ func TestHandleKey_DispatchByFocus(t *testing.T) {
 			key:       "ctrl+h",
 			wantFocus: FocusBoard,
 		},
+		{
+			name:      "board enter to detail",
+			focus:     FocusBoard,
+			key:       "enter",
+			wantFocus: FocusDetail,
+		},
+		{
+			name:      "detail esc to board",
+			focus:     FocusDetail,
+			key:       "esc",
+			wantFocus: FocusBoard,
+		},
+		{
+			name:      "agents esc to board",
+			focus:     FocusAgents,
+			key:       "esc",
+			wantFocus: FocusBoard,
+		},
+		{
+			name:      "agents enter to detail (no agents)",
+			focus:     FocusAgents,
+			key:       "enter",
+			wantFocus: FocusDetail,
+		},
 	}
 
 	for _, tt := range tests {

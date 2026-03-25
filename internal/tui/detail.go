@@ -566,6 +566,7 @@ func (m Model) detailContextBindings() []helpBinding {
 	// Detail-specific navigation.
 	bindings = append(bindings,
 		helpBinding{"j/k", "scroll detail"},
+		helpBinding{"esc", "back to board"},
 		helpBinding{"ctrl+k", "jump to board"},
 		helpBinding{"ctrl+h", "jump to board"},
 		helpBinding{"ctrl+l", "jump to agents"},
