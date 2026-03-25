@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -10,7 +9,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
-	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -654,15 +652,23 @@ func (o *Orchestrator) reconcileAlreadyMergedFeatures() (int, error) {
 	return fixed, nil
 }
 
-// reconcileCompletedParents finds in_progress parent tasks whose subtasks are
-// all done and advances them via checkFeatureCompletion. This covers the case
-// where the completion signal was lost or the parent wasn't checked after the
-// last subtask finished.
-func (o *Orchestrator) reconcileCompletedParents() (int, error) {
+// parentReconcilePolicy defines how to reconcile parent tasks in a specific
+// status whose subtasks are all done. This avoids duplicating the
+// query-filter-advance loop across reconcileCompletedParents and
+// reconcileFailedParents.
+type parentReconcilePolicy struct {
+	status  model.TaskStatus
+	logVerb string
+	// recover transitions the parent into a state where checkFeatureCompletion
+	// can act on it. Nil means the parent is already in the right state.
+	recover func(o *Orchestrator, parent *model.Task) error
+}
+
+func (o *Orchestrator) reconcileParentsByPolicy(p parentReconcilePolicy) (int, error) {
 	var parents []model.Task
 	if err := o.db.Where(
 		"project_id = ? AND status = ? AND parent_task_id IS NULL",
-		o.projectID, model.StatusInProgress,
+		o.projectID, p.status,
 	).Find(&parents).Error; err != nil {
 		return 0, err
 	}
@@ -690,7 +696,15 @@ func (o *Orchestrator) reconcileCompletedParents() (int, error) {
 			continue
 		}
 
-		o.logger.Info("reconcile: all subtasks done, advancing parent",
+		if p.recover != nil {
+			if err := p.recover(o, parent); err != nil {
+				o.logger.Error("reconcile: recovery transition failed",
+					"task_id", parent.ID, "error", err)
+				continue
+			}
+		}
+
+		o.logger.Info("reconcile: all subtasks done, "+p.logVerb+" parent",
 			"task_id", parent.ID, "subtask_count", len(subtasks))
 
 		if err := o.checkFeatureCompletion(parent); err != nil {
@@ -703,74 +717,27 @@ func (o *Orchestrator) reconcileCompletedParents() (int, error) {
 	return advanced, nil
 }
 
-// handleAgentMergeFailure handles the case where merging an agent's work into
-// the feature branch fails. When a supervisor is available, it diagnoses the
-// conflict and may spawn a fixer agent. Without a supervisor, it falls back to
-// the current behavior: fail the task and preserve the agent branch.
-func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task, result *worktree.MergeResult, featureDir string) error {
-	// Supervisor-powered merge conflict diagnosis.
-	if o.supervisor != nil && result != nil && len(result.Conflicts) > 0 {
-		var analysis supervisor.MergeConflictAnalysis
-		diffOutput, _ := worktree.RunGit([]string{
-			"diff", result.TargetBranch + "..." + ag.WorktreeBranch,
-		}, featureDir)
+// reconcileCompletedParents finds in_progress parent tasks whose subtasks are
+// all done and advances them via checkFeatureCompletion.
+func (o *Orchestrator) reconcileCompletedParents() (int, error) {
+	return o.reconcileParentsByPolicy(parentReconcilePolicy{
+		status:  model.StatusInProgress,
+		logVerb: "advancing",
+	})
+}
 
-		mcPrompt := supervisor.MergeConflictPrompt(
-			ag.WorktreeBranch, result.TargetBranch,
-			result.Conflicts, diffOutput,
-		)
-		if mcErr := o.supervisor.EvaluateJSON(context.Background(), mcPrompt, &analysis); mcErr != nil {
-			o.logger.Warn("supervisor agent merge conflict analysis failed", "task_id", task.ID, "error", mcErr)
-		} else {
-			if task.Context == nil {
-				task.Context = make(model.JSONField)
-			}
-			task.Context["merge_conflict_severity"] = analysis.Severity
-			task.Context["merge_conflict_strategy"] = analysis.ResolutionStrategy
-			task.Context["merge_conflict_hints"] = analysis.ResolutionHints
-
-			if analysis.ResolutionStrategy == "spawn_agent" {
-				task.Context["merge_conflict_files"] = result.Conflicts
-				task.Context["merge_resolution_hints"] = analysis.ResolutionHints
-
-				// Set agent to idle and fail the task.
-				ag.Status = model.AgentIdle
-				ag.CurrentTaskID = nil
-				if err := o.db.Save(ag).Error; err != nil {
-					return fmt.Errorf("handle agent merge failure: save agent: %w", err)
-				}
-				if err := o.failTask(task, "merge conflicts — spawning resolver agent"); err != nil {
-					return err
-				}
-				if _, fixerErr := o.SpawnFixerSession(task.ID); fixerErr != nil {
-					o.logger.Warn("failed to spawn fixer for agent merge conflict",
-						"task_id", task.ID, "error", fixerErr)
-				}
-
-				return nil
-			}
-		}
-	}
-
-	// Default fallback: set agent to idle, fail the task, preserve agent branch.
-	ag.Status = model.AgentIdle
-	ag.CurrentTaskID = nil
-	if err := o.db.Save(ag).Error; err != nil {
-		return fmt.Errorf("on agent completed: save agent: %w", err)
-	}
-	evt, err := state.TransitionTask(task, model.StatusFailed, "orchestrator",
-		map[string]any{"reason": "merge into feature branch failed, agent branch preserved"})
+// recoverFailedParent transitions a failed parent to in_progress via the state
+// machine so checkFeatureCompletion can evaluate quality gates.
+func recoverFailedParent(o *Orchestrator, parent *model.Task) error {
+	evt, err := state.TransitionTask(parent, model.StatusInProgress, "orchestrator",
+		map[string]any{"reason": "reconcile-failed-parent-all-subtasks-done"})
 	if err != nil {
-		o.logger.Warn("failed to transition task to failed after merge failure", "task_id", task.ID, "error", err)
-	} else {
-		if err := o.db.Save(task).Error; err != nil {
-			return fmt.Errorf("on agent completed: save task after merge failure: %w", err)
-		}
-		if err := o.db.Create(evt).Error; err != nil {
-			return fmt.Errorf("on agent completed: save merge-failure event: %w", err)
-		}
+		return err
 	}
-	return nil
+	if err := o.db.Save(parent).Error; err != nil {
+		return err
+	}
+	return o.db.Create(evt).Error
 }
 
 // getChangedFilesDiff returns the diff of changed files between the worktree
