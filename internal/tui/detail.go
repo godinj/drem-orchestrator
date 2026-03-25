@@ -468,6 +468,16 @@ func (m Model) contextActions() []helpBinding {
 		{"shift+tab", "prev panel"},
 	}
 
+	// Gate action confirmation mode.
+	if m.confirm != confirmNone {
+		label := confirmActionLabel(m.confirm)
+		return append([]helpBinding{
+			{"y", "confirm " + label},
+			{"n", "cancel"},
+			{"esc", "cancel"},
+		}, global...)
+	}
+
 	switch m.focus {
 	case FocusBoard:
 		if m.detail.deleteMode {

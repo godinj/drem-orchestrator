@@ -40,7 +40,10 @@ func TestModelWiring_ApprovePlanReview(t *testing.T) {
 	}
 	m.board.cursor = 0
 
-	m.Update(keyMsg("a"))
+	// Press 'a' to initiate confirmation, then 'y' to confirm.
+	result, _ := m.Update(keyMsg("a"))
+	got := result.(Model)
+	got.Update(keyMsg("y"))
 
 	if mock.callCount("HandlePlanApproved") != 1 {
 		t.Fatalf("expected 1 call to HandlePlanApproved, got %d", mock.callCount("HandlePlanApproved"))
@@ -64,7 +67,10 @@ func TestModelWiring_RejectPlanReview(t *testing.T) {
 	}
 	m.board.cursor = 0
 
-	m.Update(keyMsg("r"))
+	// Press 'r' to initiate confirmation, then 'y' to confirm.
+	result, _ := m.Update(keyMsg("r"))
+	got := result.(Model)
+	got.Update(keyMsg("y"))
 
 	if mock.callCount("HandlePlanRejected") != 1 {
 		t.Fatalf("expected 1 call to HandlePlanRejected, got %d", mock.callCount("HandlePlanRejected"))
@@ -85,7 +91,10 @@ func TestModelWiring_ApproveTestReview(t *testing.T) {
 	}
 	m.board.cursor = 0
 
-	m.Update(keyMsg("a"))
+	// Press 'a' to initiate confirmation, then 'y' to confirm.
+	result, _ := m.Update(keyMsg("a"))
+	got := result.(Model)
+	got.Update(keyMsg("y"))
 
 	if mock.callCount("HandleTestReviewApproved") != 1 {
 		t.Fatalf("expected 1 call to HandleTestReviewApproved, got %d", mock.callCount("HandleTestReviewApproved"))
@@ -106,7 +115,10 @@ func TestModelWiring_TestPassOnTestingReady(t *testing.T) {
 	}
 	m.board.cursor = 0
 
-	m.Update(keyMsg("t"))
+	// Press 't' to initiate confirmation, then 'y' to confirm.
+	result, _ := m.Update(keyMsg("t"))
+	got := result.(Model)
+	got.Update(keyMsg("y"))
 
 	if mock.callCount("HandleTestPassed") != 1 {
 		t.Fatalf("expected 1 call to HandleTestPassed, got %d", mock.callCount("HandleTestPassed"))
@@ -127,7 +139,10 @@ func TestModelWiring_TestFailOnTestingReady(t *testing.T) {
 	}
 	m.board.cursor = 0
 
-	m.Update(keyMsg("f"))
+	// Press 'f' to initiate confirmation, then 'y' to confirm.
+	result, _ := m.Update(keyMsg("f"))
+	got := result.(Model)
+	got.Update(keyMsg("y"))
 
 	if mock.callCount("HandleTestFailed") != 1 {
 		t.Fatalf("expected 1 call to HandleTestFailed, got %d", mock.callCount("HandleTestFailed"))
@@ -207,8 +222,11 @@ func TestModelWiring_ErrorPropagation(t *testing.T) {
 	}
 	m.board.cursor = 0
 
+	// Press 'a' to initiate confirmation, then 'y' to confirm and trigger error.
 	result, _ := m.Update(keyMsg("a"))
 	got := result.(Model)
+	result, _ = got.Update(keyMsg("y"))
+	got = result.(Model)
 
 	if got.err == nil {
 		t.Fatal("expected error to be set on model")
@@ -336,7 +354,10 @@ func TestModelWiring_ApproveFromDetailPanel(t *testing.T) {
 	m.board.cursor = 0
 	m.detail.task = &m.board.tasks[0]
 
-	m.Update(keyMsg("a"))
+	// Press 'a' to initiate confirmation, then 'y' to confirm.
+	result, _ := m.Update(keyMsg("a"))
+	got := result.(Model)
+	got.Update(keyMsg("y"))
 
 	if mock.callCount("HandlePlanApproved") != 1 {
 		t.Fatalf("expected HandlePlanApproved from detail panel, got %d calls", mock.callCount("HandlePlanApproved"))

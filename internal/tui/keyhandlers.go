@@ -13,6 +13,11 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Gate action confirmation intercepts all keys until resolved.
+	if m.confirm != confirmNone {
+		return m.handleConfirmKeys(msg)
+	}
+
 	// Help overlay toggle.
 	if msg.String() == "?" {
 		m.showHelp = !m.showHelp

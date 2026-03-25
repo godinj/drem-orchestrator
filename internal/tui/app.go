@@ -108,6 +108,18 @@ const (
 	feedbackBugReportComment                   // add comment to bug report
 )
 
+// confirmAction tracks a pending gate action awaiting user confirmation.
+type confirmAction int
+
+const (
+	confirmNone              confirmAction = iota
+	confirmPlanApprove                     // approve plan (plan_review → test_writing)
+	confirmPlanReject                      // reject plan (plan_review → planning)
+	confirmTestReviewApprove               // approve test review (test_review → in_progress)
+	confirmTestPass                        // pass testing (testing_ready → merging)
+	confirmTestFail                        // fail testing (testing_ready → in_progress)
+)
+
 // Model is the root Bubble Tea model that composes all TUI sub-models.
 type Model struct {
 	db        *gorm.DB
@@ -127,6 +139,8 @@ type Model struct {
 	logPath        string
 	focus          Focus
 	feedbackAction feedbackAction
+	confirm        confirmAction // pending gate action awaiting y/n
+	confirmTaskID  uuid.UUID     // task ID for pending confirmation
 	keys           keyMap
 	showHelp       bool
 	width          int
@@ -424,6 +438,12 @@ func (m Model) View() string {
 		BorderForeground(m.panelBorderColor(FocusDetail)).
 		Render(lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(" Detail ") + "\n" + m.detail.View())
 
+	// Gate action confirmation prompt.
+	confirmLine := ""
+	if m.confirm != confirmNone {
+		confirmLine = m.renderConfirmPrompt()
+	}
+
 	// Error line.
 	errLine := ""
 	if m.err != nil {
@@ -437,7 +457,9 @@ func (m Model) View() string {
 		upperRow,
 		detailPanel,
 	}
-	if errLine != "" {
+	if confirmLine != "" {
+		parts = append(parts, confirmLine)
+	} else if errLine != "" {
 		parts = append(parts, errLine)
 	}
 	parts = append(parts, helpBar)
@@ -550,6 +572,43 @@ func (m *Model) toggleBoardCollapse() {
 		}
 	}
 	m.board.trackSelected()
+}
+
+// confirmActionLabel returns a human-readable label for the pending confirmation.
+func confirmActionLabel(action confirmAction) string {
+	switch action {
+	case confirmPlanApprove:
+		return "Approve plan"
+	case confirmPlanReject:
+		return "Reject plan"
+	case confirmTestReviewApprove:
+		return "Approve test review"
+	case confirmTestPass:
+		return "Pass testing"
+	case confirmTestFail:
+		return "Fail testing"
+	default:
+		return ""
+	}
+}
+
+// renderConfirmPrompt renders the gate action confirmation prompt.
+func (m Model) renderConfirmPrompt() string {
+	label := confirmActionLabel(m.confirm)
+	if label == "" {
+		return ""
+	}
+
+	taskTitle := ""
+	if selected := m.board.Selected(); selected != nil {
+		taskTitle = selected.Title
+		if len(taskTitle) > 40 {
+			taskTitle = taskTitle[:39] + "\u2026"
+		}
+	}
+
+	style := lipgloss.NewStyle().Foreground(colorWarning).Bold(true)
+	return style.Render(fmt.Sprintf("  Confirm: %s for \"%s\"? [y]es / [n]o", label, taskTitle))
 }
 
 // renderBugReportsScreen renders the full-screen bug report view.

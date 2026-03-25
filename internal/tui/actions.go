@@ -13,7 +13,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
-// handleApprove approves a plan (PLAN_REVIEW) or passes testing (TESTING_READY).
+// handleApprove initiates the confirmation dialog for approving a gate task.
 func (m Model) handleApprove() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil {
@@ -21,25 +21,20 @@ func (m Model) handleApprove() (tea.Model, tea.Cmd) {
 	}
 	switch selected.Status {
 	case model.StatusPlanReview:
-		if err := m.orch.HandlePlanApproved(selected.ID); err != nil {
-			m.err = err
-		}
+		m.confirm = confirmPlanApprove
 	case model.StatusTestReview:
-		if err := m.orch.HandleTestReviewApproved(selected.ID); err != nil {
-			m.err = err
-		}
+		m.confirm = confirmTestReviewApprove
 	case model.StatusTestingReady:
-		if err := m.orch.HandleTestPassed(selected.ID); err != nil {
-			m.err = err
-		}
+		m.confirm = confirmTestPass
 	default:
 		return m, nil
 	}
-	return m, m.refreshData()
+	m.confirmTaskID = selected.ID
+	return m, nil
 }
 
-// handleReject rejects the plan (PLAN_REVIEW), fails testing (TESTING_READY),
-// or rejects test review (TEST_REVIEW) with feedback.
+// handleReject initiates the confirmation dialog for rejecting a gate task.
+// Test review rejection opens the feedback dialog instead (feedback is required).
 func (m Model) handleReject() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil {
@@ -47,11 +42,11 @@ func (m Model) handleReject() (tea.Model, tea.Cmd) {
 	}
 	switch selected.Status {
 	case model.StatusPlanReview:
-		if err := m.orch.HandlePlanRejected(selected.ID); err != nil {
-			m.err = err
-		}
+		m.confirm = confirmPlanReject
+		m.confirmTaskID = selected.ID
 	case model.StatusTestReview:
 		// Open feedback dialog for test review rejection (feedback required).
+		// The feedback dialog serves as the confirmation step.
 		m.feedback = NewFeedbackModel("Test Review Rejection Feedback")
 		m.feedback.SetWidth(m.width*2/3 - 4)
 		m.feedback.Show()
@@ -59,37 +54,81 @@ func (m Model) handleReject() (tea.Model, tea.Cmd) {
 		m.focus = FocusFeedback
 		return m, nil
 	case model.StatusTestingReady:
-		if err := m.orch.HandleTestFailed(selected.ID); err != nil {
-			m.err = err
-		}
+		m.confirm = confirmTestFail
+		m.confirmTaskID = selected.ID
 	default:
 		return m, nil
+	}
+	return m, nil
+}
+
+// handleConfirmKeys handles key presses while a gate action confirmation is
+// pending. Only y (confirm), n, and esc (cancel) are accepted.
+func (m Model) handleConfirmKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y":
+		return m.executeConfirmedAction()
+	case "n", "esc":
+		m.confirm = confirmNone
+		return m, nil
+	}
+	return m, nil // ignore other keys during confirmation
+}
+
+// executeConfirmedAction executes the pending gate action and clears the
+// confirmation state.
+func (m Model) executeConfirmedAction() (tea.Model, tea.Cmd) {
+	action := m.confirm
+	taskID := m.confirmTaskID
+	m.confirm = confirmNone
+
+	switch action {
+	case confirmPlanApprove:
+		if err := m.orch.HandlePlanApproved(taskID); err != nil {
+			m.err = err
+		}
+	case confirmPlanReject:
+		if err := m.orch.HandlePlanRejected(taskID); err != nil {
+			m.err = err
+		}
+	case confirmTestReviewApprove:
+		if err := m.orch.HandleTestReviewApproved(taskID); err != nil {
+			m.err = err
+		}
+	case confirmTestPass:
+		if err := m.orch.HandleTestPassed(taskID); err != nil {
+			m.err = err
+		}
+	case confirmTestFail:
+		if err := m.orch.HandleTestFailed(taskID); err != nil {
+			m.err = err
+		}
 	}
 	return m, m.refreshData()
 }
 
-// handleTestPass passes a test if the selected task is in TESTING_READY.
+// handleTestPass initiates the confirmation dialog for passing a test
+// if the selected task is in TESTING_READY.
 func (m Model) handleTestPass() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil || selected.Status != model.StatusTestingReady {
 		return m, nil
 	}
-	if err := m.orch.HandleTestPassed(selected.ID); err != nil {
-		m.err = err
-	}
-	return m, m.refreshData()
+	m.confirm = confirmTestPass
+	m.confirmTaskID = selected.ID
+	return m, nil
 }
 
-// handleTestFail fails the test and transitions back to PLANNING.
+// handleTestFail initiates the confirmation dialog for failing a test
+// if the selected task is in TESTING_READY.
 func (m Model) handleTestFail() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
 	if selected == nil || selected.Status != model.StatusTestingReady {
 		return m, nil
 	}
-	if err := m.orch.HandleTestFailed(selected.ID); err != nil {
-		m.err = err
-	}
-	return m, m.refreshData()
+	m.confirm = confirmTestFail
+	m.confirmTaskID = selected.ID
+	return m, nil
 }
 
 // handlePauseResume pauses or resumes the selected task.
