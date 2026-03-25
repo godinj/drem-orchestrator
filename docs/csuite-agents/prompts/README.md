@@ -50,6 +50,30 @@ Tier 2 (parallel):
   07-kyle-ceo-launch (02-06) ──────┘
 ```
 
+## Operational Scripts
+
+| Script | Purpose | Tests |
+|--------|---------|-------|
+| `scripts/csuite-bootstrap.sh` | Create agent directory structure (idempotent) | `csuite-proto_test.sh` (test_bootstrap) |
+| `scripts/csuite-proto.sh` | Disk communication protocol library (send, inbox, archive, heartbeat, workers) | `csuite-proto_test.sh` |
+| `scripts/csuite-launch.sh` | Launch Kyle (CEO) in tmux, optionally start all agents | — |
+| `scripts/csuite-spawn-worker.sh` | Spawn a temp worker: assign ID, create dir, copy task brief, launch tmux session, notify Mike | `csuite-spawn-worker_test.sh` |
+| `scripts/csuite-status.sh` | Dashboard and situation report (agent health, pipeline, temp workers) | `csuite-status_test.sh` |
+| `scripts/csuite-inbox-hook.sh` | Claude Code notification hook for unread inbox messages | — |
+
+### Spawn Worker Usage
+
+```bash
+# Auto-assign next worker ID:
+bash scripts/csuite-spawn-worker.sh /path/to/task-brief.md
+
+# Specify a worker ID:
+bash scripts/csuite-spawn-worker.sh /path/to/task-brief.md --worker-id worker-042
+
+# Preview without side effects:
+bash scripts/csuite-spawn-worker.sh /path/to/task-brief.md --dry-run
+```
+
 ## Notes
 
 - All Tier 1 agents include fallback instructions for when their dependencies don't exist yet (e.g., `drem cli` → sqlite3 fallback). This means Tier 2 is a soft dependency — the prompts will work even if executed before Tier 1 merges, but the output will be more accurate after.
