@@ -332,36 +332,6 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 // If phaseFilter is non-empty, only subtasks with a matching Phase are
 // considered (used by processTestWriting to limit scheduling to test-phase).
 func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...string) error {
-	// Check for wave schedule in parent context.
-	var allowedIDs map[uuid.UUID]bool
-	if parent.Context != nil {
-		if scheduleRaw, hasSchedule := parent.Context["schedule"]; hasSchedule {
-			scheduleJSON, marshalErr := json.Marshal(scheduleRaw)
-			if marshalErr == nil {
-				var schedule Schedule
-				if parseErr := json.Unmarshal(scheduleJSON, &schedule); parseErr == nil {
-					currentGroup := o.findCurrentGroup(parent, schedule)
-					if currentGroup != nil {
-						allowedIDs = make(map[uuid.UUID]bool, len(currentGroup.TaskIDs))
-						for _, id := range currentGroup.TaskIDs {
-							allowedIDs[id] = true
-						}
-						o.logger.Debug("wave schedule active",
-							"task_id", parent.ID,
-							"group_order", currentGroup.Order,
-							"group_size", len(currentGroup.TaskIDs))
-					} else {
-						// All groups complete.
-						return nil
-					}
-				} else {
-					o.logger.Warn("schedule parse failed, falling back to legacy scheduling",
-						"task_id", parent.ID, "error", parseErr)
-				}
-			}
-		}
-	}
-
 	var subtasks []model.Task
 	if err := o.db.Where(
 		"parent_task_id = ? AND ((status = ?) OR (status = ? AND assigned_agent_id IS NULL))",
@@ -376,30 +346,37 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 		filterPhase = phaseFilter[0]
 	}
 
-	for i := range subtasks {
-		sub := &subtasks[i]
-
-		// If a phase filter is active, skip subtasks that don't match.
+	// Build filtered candidate list.
+	var candidates []model.Task
+	for _, sub := range subtasks {
 		if filterPhase != "" && sub.Phase != filterPhase {
 			continue
 		}
+		candidates = append(candidates, sub)
+	}
+	if len(candidates) == 0 {
+		return nil
+	}
 
-		// If wave scheduling is active, only schedule subtasks in the current group.
-		if allowedIDs != nil && !allowedIDs[sub.ID] {
-			continue
-		}
+	// Query in-progress sibling tasks for conflict detection.
+	var inProgress []model.Task
+	if err := o.db.Where(
+		"parent_task_id = ? AND status IN ?",
+		parent.ID, []model.TaskStatus{model.StatusInProgress, model.StatusMerging},
+	).Find(&inProgress).Error; err != nil {
+		return fmt.Errorf("schedule subtasks: query in-progress: %w", err)
+	}
 
-		// Check dependencies.
-		if len(sub.DependencyIDs) > 0 {
-			met, err := DependenciesMet(o.db, sub.DependencyIDs)
-			if err != nil {
-				o.logger.Warn("dependency check failed", "subtask_id", sub.ID, "error", err)
-				continue
-			}
-			if !met {
-				continue
-			}
-		}
+	// Evaluate dispatch decisions: dependencies, wave groups, file conflicts.
+	policy := NewSchedulingPolicy(o.db)
+	decisions := policy.EvaluateDispatch(candidates, inProgress)
+	dispatchDecisions := make(map[uuid.UUID]DispatchDecision, len(decisions))
+	for _, d := range decisions {
+		dispatchDecisions[d.TaskID] = d
+	}
+
+	for i := range candidates {
+		sub := &candidates[i]
 
 		// Content-aware dedup: if the subtask's estimated files already
 		// appear in the integration branch and commit messages match,
@@ -479,6 +456,13 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 				}
 				continue
 			}
+		}
+
+		// Check dispatch decision (dependencies, wave groups, file conflicts).
+		if d, ok := dispatchDecisions[sub.ID]; ok && !d.Dispatchable {
+			o.logger.Debug("subtask dispatch blocked",
+				"subtask_id", sub.ID, "reason", d.Reason)
+			continue
 		}
 
 		// Check capacity.

@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 )
@@ -78,6 +80,7 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 	if err := db.AutoMigrate(allModels...); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
+	registerUUIDCallback(db)
 	return db
 }
 
@@ -303,6 +306,71 @@ func CreateAgent(t *testing.T, db *gorm.DB, taskID uuid.UUID, agentType model.Ag
 		t.Fatalf("create test agent: %v", err)
 	}
 	return ag
+}
+
+// ---------------------------------------------------------------------------
+// C-Suite entity factory helpers
+// ---------------------------------------------------------------------------
+
+// CreateCsuiteAgent creates a test CsuiteAgent in the database and returns it.
+func CreateCsuiteAgent(t *testing.T, db *gorm.DB, name string, status csuite.AgentMonStatus) csuite.CsuiteAgent {
+	t.Helper()
+	ag := csuite.CsuiteAgent{
+		ID:     uuid.New(),
+		Name:   name,
+		Status: status,
+	}
+	if err := db.Create(&ag).Error; err != nil {
+		t.Fatalf("create test csuite agent: %v", err)
+	}
+	return ag
+}
+
+// CreateCsuiteInboxMessage creates a test CsuiteInboxMessage in the database
+// and returns it.
+func CreateCsuiteInboxMessage(t *testing.T, db *gorm.DB, from, to, subject string, priority csuite.InboxPriority, msgType csuite.InboxMessageType) csuite.CsuiteInboxMessage {
+	t.Helper()
+	msg := csuite.CsuiteInboxMessage{
+		ID:        uuid.New(),
+		FromAgent: from,
+		ToAgent:   to,
+		Subject:   subject,
+		Priority:  priority,
+		Type:      msgType,
+	}
+	if err := db.Create(&msg).Error; err != nil {
+		t.Fatalf("create test csuite inbox message: %v", err)
+	}
+	return msg
+}
+
+// ---------------------------------------------------------------------------
+// GORM callback helpers
+// ---------------------------------------------------------------------------
+
+// registerUUIDCallback registers a GORM callback that auto-generates UUIDs
+// for models with a uuid.UUID ID field set to uuid.Nil. This mirrors the
+// production callback in internal/db without importing that package.
+func registerUUIDCallback(db *gorm.DB) {
+	db.Callback().Create().Before("gorm:create").Register("generate_uuid", func(tx *gorm.DB) {
+		if tx.Statement == nil || tx.Statement.Dest == nil {
+			return
+		}
+		val := reflect.ValueOf(tx.Statement.Dest)
+		if val.Kind() == reflect.Ptr {
+			val = val.Elem()
+		}
+		if val.Kind() != reflect.Struct {
+			return
+		}
+		idField := val.FieldByName("ID")
+		if !idField.IsValid() || idField.Type() != reflect.TypeOf(uuid.UUID{}) {
+			return
+		}
+		if idField.Interface().(uuid.UUID) == uuid.Nil {
+			idField.Set(reflect.ValueOf(uuid.New()))
+		}
+	})
 }
 
 // ---------------------------------------------------------------------------

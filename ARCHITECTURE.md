@@ -29,6 +29,7 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
 - `agentmon/` — Agent transcript monitoring: tails Claude conversation JSONL, extracts test results, build errors, git operations, and context usage signals
 - `constraints/` — Constitution constraint engine: loads `.drem/constraints.toml`, evaluates `command`, `max_lines`, `max_matches`, `no_match`, and `depth` rules
 - `ctxmon/` — Context window monitoring: tracks agent token usage, triggers compaction and fixer escalation
+- `csuite/` — C-Suite agent monitoring models: CsuiteAgent (status, heartbeat, context usage), CsuiteInboxMessage (inter-agent messaging), and enums (AgentMonStatus, InboxPriority, InboxMessageType)
 - `db/` — Database initialization and migration helpers for the Drem Orchestrator
 - `memory/` — Agent memory persistence, retrieval, compaction, and extraction from agent output
 - `merge/` — Worktree merge logic: merges agent worktree branches back into the integration branch
@@ -47,7 +48,7 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
   - `plan_validation.go` — Plan validation: file overlap checks, TDD coverage ratios, constraint warnings
   - `retry_policy.go` — RetryPolicy: exponential backoff with jitter for merge retries (base=10s, cap=5min, max=5)
   - `reconcile.go` — State reconciliation: recovers stale subtasks, orphaned worktrees, stuck agents
-  - `scheduler.go` — Task scheduling: dependency resolution, subtask grouping, concurrent dispatch
+  - `scheduler.go` — SchedulingPolicy: dependency resolution, wave group ordering, file-conflict scoring, and dispatch gating; BuildSchedule for graph-coloring-based subtask grouping
   - `score_bridge.go` — Inlined quality scoring (TDD, constitution, documentation, depth) to avoid import ceiling
   - `session_spawning.go` — Spawning reviewer, fixer, and supervisor Claude Code sessions
   - `task_api.go` — Task management API: pause, resume, retry, create, comment, and override operations

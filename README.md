@@ -460,6 +460,7 @@ More details.
 cmd/drem/              Entry point, config parsing, tmux session bootstrap
 internal/
 ├── model/             GORM models (Task, Agent, Project, Memory, TaskEvent, TaskComment, BugReport)
+├── csuite/            C-Suite monitoring models (CsuiteAgent, CsuiteInboxMessage) and enums
 ├── db/                SQLite init, WAL mode, auto-migrations
 ├── state/             Task status state machine with validated transitions
 ├── orchestrator/      Main tick loop, task scheduling, dependency resolution
@@ -644,9 +645,23 @@ The planner prompt requires test subtasks to list **all** files they will create
 
 **Shared foundations pattern:** When multiple subtasks need the same new type or interface, the planner is guided to create a small foundational subtask that establishes those shared types first. Other subtasks depend on it, avoiding duplicate stubs and merge conflicts.
 
-### Layer 2: Merge-Time Recovery
+### Layer 2: Dispatch-Time File-Conflict Detection
 
-When an agent-to-feature merge fails despite plan-time prevention, the supervisor diagnoses the conflict and may spawn a fixer agent to auto-resolve trivial conflicts (see Self-Healing item #6 above). This mirrors the existing feature-to-main merge conflict fixer but operates at the subtask level.
+Before dispatching a subtask, the scheduler evaluates it against all in-progress sibling tasks using `SchedulingPolicy.EvaluateDispatch()`. A task is only dispatched when all three checks pass:
+
+1. **Dependency resolution** -- all tasks in `DependencyIDs` must be in `done` status
+2. **Wave group ordering** -- if a wave schedule exists in the parent's context, earlier groups must complete before later groups start
+3. **File-conflict scoring** -- the candidate's `estimated_files` are compared against every in-progress task's files. The conflict score is `|intersection| / min(|a|, |b|)`. If the score meets or exceeds the block threshold (0.3), the candidate is held back until the conflicting task finishes.
+
+This prevents two agents from concurrently modifying the same files, which is the root cause of merge conflict cascades in parallel task execution.
+
+**Wave scheduling** groups subtasks into concurrent batches using graph coloring on a file-overlap graph. `BuildSchedule()` assigns subtasks to groups such that no two tasks in the same group share files. Groups execute sequentially -- group N+1 starts only when all tasks in group N are terminal. The schedule is stored in `parent.Context["schedule"]` and computed once at plan approval.
+
+**How it surfaces:** Blocked dispatches are logged at `DEBUG` level with the blocking reason (e.g., "file conflict with 2 in-progress task(s)", "wave group 2 blocked: group 1 still has active tasks", "unmet dependencies"). No user action is needed -- blocked tasks are automatically dispatched once the conflict resolves.
+
+### Layer 3: Merge-Time Recovery
+
+When an agent-to-feature merge fails despite plan-time and dispatch-time prevention, the supervisor diagnoses the conflict and may spawn a fixer agent to auto-resolve trivial conflicts (see Self-Healing item #6 above). This mirrors the existing feature-to-main merge conflict fixer but operates at the subtask level.
 
 ## Memory & Context
 
@@ -729,7 +744,7 @@ The Stop hook is configured alongside the existing Notification (idle detection)
 Drem uses SQLite in WAL mode for zero-configuration persistence:
 
 - **Location** — configured via `database_path` (default `./drem.db`)
-- **Schema** — auto-migrated on startup via GORM for models: Project, Task, Agent, TaskEvent, Memory, TaskComment
+- **Schema** — auto-migrated on startup via GORM for models: Project, Task, Agent, TaskEvent, Memory, TaskComment, BugReport, BugReportComment, CsuiteAgent, CsuiteInboxMessage
 - **Inspection** — use `sqlite3 drem.db` to query directly; `.schema` shows tables, `.mode column` + `.headers on` for readable output
 - **WAL mode** — enables concurrent reads during agent writes; the `-wal` and `-shm` files are expected alongside the main DB file
 
@@ -747,6 +762,9 @@ The `internal/testutil/` package provides shared helpers to eliminate boilerplat
 | `testutil.CreateProject(t, db, name, path, branch)` | Insert a project record |
 | `testutil.CreateTask(t, db, projectID, title, status)` | Insert a task record |
 | `testutil.CreateAgent(t, db, taskID, agentType, status)` | Insert an agent record |
+| `testutil.CreateCsuiteAgent(t, db, name, status)` | Insert a C-Suite monitored agent record |
+| `testutil.CreateCsuiteInboxMessage(t, db, from, to, subject, priority, msgType)` | Insert a C-Suite inbox message |
+| `testutil.NewTestDBWithModels(t, extraModels...)` | In-memory SQLite with core + extra models (e.g., csuite) |
 
 **Patterns to follow:**
 
