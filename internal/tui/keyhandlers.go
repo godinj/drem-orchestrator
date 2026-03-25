@@ -35,6 +35,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleFeedbackKeys(msg)
 	case FocusBugReports:
 		return m.handleBugReportKeys(msg)
+	case FocusCsuite:
+		return m.handleCsuiteKeys(msg)
 	case FocusAgents:
 		return m.handleAgentKeys(msg)
 	case FocusDetail:
@@ -141,6 +143,9 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "b":
 		m.focus = FocusBugReports
 		return m, m.loadBugReports()
+	case "w":
+		m.focus = FocusCsuite
+		return m, nil
 	}
 
 	return m, nil
@@ -382,6 +387,28 @@ func (m Model) handleFeedbackKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.feedback, cmd = m.feedback.Update(msg)
 	return m, cmd
+}
+
+// handleCsuiteKeys handles keys when the C-Suite dashboard is focused.
+func (m Model) handleCsuiteKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "j", "down":
+		if m.csuite.snapshot != nil && m.csuite.cursor < len(m.csuite.snapshot.AgentSummaries)-1 {
+			m.csuite.cursor++
+			m.csuite.adjustScroll()
+		}
+		return m, nil
+	case "k", "up":
+		if m.csuite.cursor > 0 {
+			m.csuite.cursor--
+			m.csuite.adjustScroll()
+		}
+		return m, nil
+	case "w", "esc":
+		m.focus = FocusBoard
+		return m, nil
+	}
+	return m, nil
 }
 
 // handleDeleteModeKeys handles keys while in delete selection mode.

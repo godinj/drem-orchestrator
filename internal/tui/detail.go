@@ -537,6 +537,13 @@ func (m Model) contextActions() []helpBinding {
 			{"b/esc", "back to dashboard"},
 		}
 		return append(bindings, global...)
+
+	case FocusCsuite:
+		bindings := []helpBinding{
+			{"j/k", "navigate agents"},
+			{"w/esc", "back to dashboard"},
+		}
+		return append(bindings, global...)
 	}
 
 	return global
@@ -560,6 +567,7 @@ func (m Model) boardContextBindings() []helpBinding {
 	bindings = append(bindings,
 		helpBinding{"n", "new task"},
 		helpBinding{"b", "bug reports"},
+		helpBinding{"w", "C-Suite dashboard"},
 		helpBinding{"A", "toggle archived agents"},
 		helpBinding{"F", "toggle task filter"},
 		helpBinding{"C", "clean dead sessions"},
@@ -720,6 +728,8 @@ func (m Model) renderHelpOverlay() string {
 		title = "Help \u2014 Feedback"
 	case FocusBugReports:
 		title = "Help \u2014 Bug Reports"
+	case FocusCsuite:
+		title = "Help \u2014 C-Suite Dashboard"
 	}
 
 	titleRendered := titleStyle.Render(title)

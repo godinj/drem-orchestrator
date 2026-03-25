@@ -31,6 +31,8 @@ const (
 	FocusFeedback
 	// FocusBugReports means the bug report screen is focused.
 	FocusBugReports
+	// FocusCsuite means the C-Suite agent dashboard is focused.
+	FocusCsuite
 )
 
 // EventMsg wraps an Event as a tea.Msg.
@@ -134,6 +136,7 @@ type Model struct {
 	create     CreateModel
 	feedback   FeedbackModel
 	bugreports BugReportsModel
+	csuite     CsuiteModel
 
 	bugreportSvc   *bugReportSvc
 	logPath        string
@@ -172,6 +175,7 @@ func NewModel(
 		create:       NewCreateModel(),
 		feedback:     NewFeedbackModel("Feedback"),
 		bugreports:   NewBugReportsModel(db, bugreportSvc, projectID),
+		csuite:       NewCsuiteModel(),
 		focus:        FocusBoard,
 		keys:         defaultKeyMap(),
 	}
@@ -321,6 +325,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.bugreports.comments = msg.comments
 		return m, nil
 
+	case csuiteSnapshotMsg:
+		m.csuite.snapshot = &msg.snapshot
+		return m, nil
+
 	case editorFinishedMsg:
 		return m.handleEditorFinished(msg)
 
@@ -353,6 +361,11 @@ func (m Model) View() string {
 	// Bug reports screen replaces the main dashboard.
 	if m.focus == FocusBugReports {
 		return m.renderBugReportsScreen()
+	}
+
+	// C-Suite dashboard replaces the main dashboard.
+	if m.focus == FocusCsuite {
+		return m.renderCsuiteScreen()
 	}
 
 	// Title bar.
@@ -622,6 +635,30 @@ func (m Model) renderBugReportsScreen() string {
 	m.bugreports.height = m.height - 4 // account for border
 
 	content := m.bugreports.View()
+
+	// Error line.
+	if m.err != nil {
+		content += "\n" + lipglossRender(colorDanger, fmt.Sprintf("Error: %v", m.err))
+	}
+
+	return panelStyle.
+		Width(m.width - 2).
+		Height(m.height - 2).
+		BorderForeground(colorPrimary).
+		Render(content)
+}
+
+// renderCsuiteScreen renders the full-screen C-Suite dashboard view.
+func (m Model) renderCsuiteScreen() string {
+	// Update csuite panel sizes.
+	innerWidth := m.width - 4 // account for border + padding
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+	m.csuite.width = innerWidth
+	m.csuite.height = m.height - 4 // account for border
+
+	content := m.csuite.View()
 
 	// Error line.
 	if m.err != nil {

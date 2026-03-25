@@ -26,6 +26,7 @@ type keyMap struct {
 	Filter        key.Binding // F - toggle task filter
 	Reap          key.Binding // C - clean up dead tmux sessions
 	Shell         key.Binding // i - open shell at integration dir
+	Csuite        key.Binding // w - C-Suite agent dashboard
 	Help          key.Binding // ? - toggle help overlay
 	Esc           key.Binding
 }
@@ -120,6 +121,10 @@ func defaultKeyMap() keyMap {
 		Shell: key.NewBinding(
 			key.WithKeys("i"),
 			key.WithHelp("i", "shell"),
+		),
+		Csuite: key.NewBinding(
+			key.WithKeys("w"),
+			key.WithHelp("w", "C-Suite dashboard"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
