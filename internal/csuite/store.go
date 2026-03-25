@@ -26,9 +26,9 @@ type PurgeResult struct {
 // AgentDashboardRow is a projection returned by the query service — one row
 // per agent with their latest heartbeat and unread message count.
 type AgentDashboardRow struct {
-	Agent        CsuiteAgent
-	UnreadCount  int
-	LatestInbox  *time.Time // most recent inbound message CreatedAt, nil if none
+	Agent       CsuiteAgent
+	UnreadCount int
+	LatestInbox *time.Time // most recent inbound message CreatedAt, nil if none
 }
 
 // Store provides CRUD and query operations for csuite models.
@@ -51,6 +51,9 @@ func NewStore(db *gorm.DB) *Store {
 // CreateAgent persists a new CsuiteAgent. Returns an error if the name is
 // empty or already taken.
 func (s *Store) CreateAgent(agent *CsuiteAgent) error {
+	if agent.Name == "" {
+		return fmt.Errorf("agent name must not be empty")
+	}
 	return fmt.Errorf("not implemented")
 }
 
@@ -84,6 +87,9 @@ func (s *Store) DeleteAgent(id uuid.UUID) error {
 // CreateMessage persists a new inbox message. FromAgent, ToAgent, and Subject
 // must be non-empty.
 func (s *Store) CreateMessage(msg *CsuiteInboxMessage) error {
+	if msg.FromAgent == "" || msg.ToAgent == "" || msg.Subject == "" {
+		return fmt.Errorf("from_agent, to_agent, and subject must not be empty")
+	}
 	return fmt.Errorf("not implemented")
 }
 

@@ -326,6 +326,17 @@ func CreateCsuiteAgent(t *testing.T, db *gorm.DB, name string, status csuite.Age
 	return ag
 }
 
+// NewTestStore creates an isolated DB with csuite models migrated and returns
+// a ready-to-use csuite.Store. Use this instead of creating stores in test files.
+func NewTestStore(t *testing.T) *csuite.Store {
+	t.Helper()
+	db := NewTestDBWithModels(t,
+		&csuite.CsuiteAgent{},
+		&csuite.CsuiteInboxMessage{},
+	)
+	return csuite.NewStore(db)
+}
+
 // CreateCsuiteInboxMessage creates a test CsuiteInboxMessage in the database
 // and returns it.
 func CreateCsuiteInboxMessage(t *testing.T, db *gorm.DB, from, to, subject string, priority csuite.InboxPriority, msgType csuite.InboxMessageType) csuite.CsuiteInboxMessage {

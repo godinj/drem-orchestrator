@@ -11,23 +11,12 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
-// newTestStore is a test-local helper that creates an isolated DB with csuite
-// models migrated and returns a ready-to-use Store.
-func newTestStore(t *testing.T) *csuite.Store {
-	t.Helper()
-	db := testutil.NewTestDBWithModels(t,
-		&csuite.CsuiteAgent{},
-		&csuite.CsuiteInboxMessage{},
-	)
-	return csuite.NewStore(db)
-}
-
 // ---------------------------------------------------------------------------
 // Agent CRUD
 // ---------------------------------------------------------------------------
 
 func TestCreateAgent(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	agent := &csuite.CsuiteAgent{
 		Name:   "planner-01",
@@ -47,7 +36,7 @@ func TestCreateAgent(t *testing.T) {
 }
 
 func TestCreateAgent_DuplicateName(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	a1 := &csuite.CsuiteAgent{Name: "dup-agent", Status: csuite.AgentMonOffline}
 	if err := store.CreateAgent(a1); err != nil {
@@ -62,7 +51,7 @@ func TestCreateAgent_DuplicateName(t *testing.T) {
 }
 
 func TestCreateAgent_EmptyName(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	err := store.CreateAgent(&csuite.CsuiteAgent{Name: "", Status: csuite.AgentMonOffline})
 	if err == nil {
@@ -71,7 +60,7 @@ func TestCreateAgent_EmptyName(t *testing.T) {
 }
 
 func TestGetAgentByName(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	orig := &csuite.CsuiteAgent{Name: "coder-02", Status: csuite.AgentMonStale}
 	if err := store.CreateAgent(orig); err != nil {
@@ -91,7 +80,7 @@ func TestGetAgentByName(t *testing.T) {
 }
 
 func TestGetAgentByName_NotFound(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	_, err := store.GetAgentByName("nonexistent")
 	if err == nil {
@@ -103,7 +92,7 @@ func TestGetAgentByName_NotFound(t *testing.T) {
 }
 
 func TestListAgents(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	names := []string{"alpha", "beta", "gamma"}
 	for _, n := range names {
@@ -126,7 +115,7 @@ func TestListAgents(t *testing.T) {
 }
 
 func TestListAgents_Empty(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	agents, err := store.ListAgents()
 	if err != nil {
@@ -138,7 +127,7 @@ func TestListAgents_Empty(t *testing.T) {
 }
 
 func TestUpdateAgent(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	agent := &csuite.CsuiteAgent{Name: "updatable", Status: csuite.AgentMonOffline}
 	if err := store.CreateAgent(agent); err != nil {
@@ -171,7 +160,7 @@ func TestUpdateAgent(t *testing.T) {
 }
 
 func TestUpdateAgent_NotFound(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	agent := &csuite.CsuiteAgent{ID: uuid.New(), Name: "ghost"}
 	err := store.UpdateAgent(agent)
@@ -181,7 +170,7 @@ func TestUpdateAgent_NotFound(t *testing.T) {
 }
 
 func TestDeleteAgent(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	agent := &csuite.CsuiteAgent{Name: "doomed", Status: csuite.AgentMonOffline}
 	if err := store.CreateAgent(agent); err != nil {
@@ -199,7 +188,7 @@ func TestDeleteAgent(t *testing.T) {
 }
 
 func TestDeleteAgent_NotFound(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	err := store.DeleteAgent(uuid.New())
 	if err == nil {
@@ -212,7 +201,7 @@ func TestDeleteAgent_NotFound(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestCreateMessage(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	msg := &csuite.CsuiteInboxMessage{
 		FromAgent: "planner",
@@ -234,7 +223,7 @@ func TestCreateMessage(t *testing.T) {
 }
 
 func TestCreateMessage_MissingFields(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	cases := []struct {
 		name string
@@ -255,7 +244,7 @@ func TestCreateMessage_MissingFields(t *testing.T) {
 }
 
 func TestGetMessagesByAgent(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	// Create messages to different agents
 	for i, to := range []string{"coder", "coder", "reviewer"} {
@@ -286,7 +275,7 @@ func TestGetMessagesByAgent(t *testing.T) {
 }
 
 func TestGetMessagesByAgent_ExcludesArchived(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	msg := &csuite.CsuiteInboxMessage{
 		FromAgent: "a",
@@ -312,7 +301,7 @@ func TestGetMessagesByAgent_ExcludesArchived(t *testing.T) {
 }
 
 func TestListUnreadMessages(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	priorities := []csuite.InboxPriority{
 		csuite.PriorityLow,
@@ -353,7 +342,7 @@ func TestListUnreadMessages(t *testing.T) {
 }
 
 func TestListUnreadMessages_ExcludesArchived(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	msg := &csuite.CsuiteInboxMessage{
 		FromAgent: "a",
@@ -383,7 +372,7 @@ func TestListUnreadMessages_ExcludesArchived(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestArchiveMessage(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	msg := &csuite.CsuiteInboxMessage{
 		FromAgent: "a",
@@ -411,7 +400,7 @@ func TestArchiveMessage(t *testing.T) {
 }
 
 func TestArchiveMessage_AlreadyArchived(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	msg := &csuite.CsuiteInboxMessage{
 		FromAgent: "a",
@@ -435,7 +424,7 @@ func TestArchiveMessage_AlreadyArchived(t *testing.T) {
 }
 
 func TestArchiveMessage_NotFound(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	err := store.ArchiveMessage(uuid.New())
 	if err == nil {
@@ -444,7 +433,7 @@ func TestArchiveMessage_NotFound(t *testing.T) {
 }
 
 func TestDeleteMessage(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	msg := &csuite.CsuiteInboxMessage{
 		FromAgent: "a",
@@ -471,7 +460,7 @@ func TestDeleteMessage(t *testing.T) {
 }
 
 func TestDeleteMessage_NotFound(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	err := store.DeleteMessage(uuid.New())
 	if err == nil {
@@ -484,7 +473,7 @@ func TestDeleteMessage_NotFound(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPurgeArchivedMessages(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 	db := testutil.NewTestDBWithModels(t,
 		&csuite.CsuiteAgent{},
 		&csuite.CsuiteInboxMessage{},
@@ -531,7 +520,7 @@ func TestPurgeArchivedMessages(t *testing.T) {
 }
 
 func TestPurgeArchivedMessages_SkipsNonArchived(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 	db := testutil.NewTestDBWithModels(t,
 		&csuite.CsuiteAgent{},
 		&csuite.CsuiteInboxMessage{},
@@ -561,7 +550,7 @@ func TestPurgeArchivedMessages_SkipsNonArchived(t *testing.T) {
 }
 
 func TestPurgeArchivedMessages_CustomRetention(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 	db := testutil.NewTestDBWithModels(t,
 		&csuite.CsuiteAgent{},
 		&csuite.CsuiteInboxMessage{},
@@ -595,7 +584,7 @@ func TestPurgeArchivedMessages_CustomRetention(t *testing.T) {
 }
 
 func TestPurgeArchivedMessages_NothingToPurge(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	result, err := store.PurgeArchivedMessages(csuite.DefaultPurgeRetention)
 	if err != nil {
@@ -674,7 +663,7 @@ func TestAgentDashboard(t *testing.T) {
 }
 
 func TestAgentDashboard_Empty(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	rows, err := store.AgentDashboard()
 	if err != nil {
@@ -730,7 +719,7 @@ func TestUnreadCountByAgent(t *testing.T) {
 }
 
 func TestUnreadCountByAgent_Empty(t *testing.T) {
-	store := newTestStore(t)
+	store := testutil.NewTestStore(t)
 
 	counts, err := store.UnreadCountByAgent()
 	if err != nil {

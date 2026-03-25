@@ -95,8 +95,8 @@ func TestAgentsWithLatestHeartbeat_PreservesAllFields(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	ag := testutil.CreateCsuiteAgent(t, db, "field-check", csuite.AgentMonStale)
 	db.Model(&ag).Updates(map[string]any{
-		"heartbeat_at":    now,
-		"context_percent": 75,
+		"heartbeat_at":     now,
+		"context_percent":  75,
 		"current_activity": "testing fields",
 	})
 
