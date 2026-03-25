@@ -1,0 +1,104 @@
+{
+  "subtasks": [
+    {
+      "title": "Write tests for failed parent reconciliation",
+      "description": "Write tests for a new reconcileFailedParents() function that detects failed parent tasks whose subtasks have all completed successfully (status done) and advances them. Tests should cover:\n1. Failed parent with all subtasks done → parent transitions to in_progress then advances via checkFeatureCompletion\n2. Failed parent with mixed subtask statuses (some done, some still active) → no change\n3. Failed parent with some subtasks failed → no change (not all done)\n4. Failed parent with no subtasks → no change\n5. Top-level Reconcile() includes the new check and increments FailedParentsRecovered counter\n\nPlace tests in internal/orchestrator/reconcile_parent_test.go (append to existing file). Use setupReconcileTest() helper from reconcile_test.go. Do NOT create local test helpers — use testutil functions.",
+      "agent_type": "coder",
+      "phase": "test",
+      "tests_for": [1],
+      "files": [
+        "internal/orchestrator/reconcile_parent_test.go"
+      ],
+      "dependencies": [],
+      "priority": 1,
+      "module_boundaries": [
+        {"package": "internal/orchestrator", "description": "Core orchestrator loop including reconciliation", "exports": 2}
+      ],
+      "interface_shapes": [
+        {"package": "internal/orchestrator", "functions": ["reconcileFailedParents() (int, error)"], "types": ["ReconcileResult"]}
+      ]
+    },
+    {
+      "title": "Implement failed parent reconciliation",
+      "description": "Add reconcileFailedParents() to detect failed parent tasks whose subtasks are ALL done and recover them. Implementation:\n\n1. Create internal/orchestrator/reconcile_failed_parents.go (new file to avoid breaching 800-line ceiling on reconcile.go which is at 781 lines)\n2. Query parents with status=failed AND parent_task_id IS NULL\n3. For each, load subtasks and check if ALL are done\n4. If all done: transition parent from failed→in_progress (valid per state machine), then call checkFeatureCompletion() which will advance to testing_ready\n5. Add FailedParentsRecovered field to ReconcileResult in reconcile.go\n6. Wire reconcileFailedParents() into the Reconcile() method in reconcile.go\n7. Update the total count calculation in Reconcile()\n\nThis makes the pre-written tests pass. Do NOT modify test files.",
+      "agent_type": "coder",
+      "phase": "implementation",
+      "tests_for": [],
+      "files": [
+        "internal/orchestrator/reconcile_failed_parents.go",
+        "internal/orchestrator/reconcile.go"
+      ],
+      "dependencies": [],
+      "priority": 1,
+      "module_boundaries": [
+        {"package": "internal/orchestrator", "description": "Core orchestrator loop including reconciliation", "exports": 2}
+      ],
+      "interface_shapes": [
+        {"package": "internal/orchestrator", "functions": ["reconcileFailedParents() (int, error)"], "types": ["ReconcileResult"]}
+      ]
+    },
+    {
+      "title": "Update README and ARCHITECTURE documentation",
+      "description": "Update documentation to reflect the new failed parent reconciliation:\n\n1. In README.md, update the 'State Reconciliation' table to add row 7 for failed parent recovery: 'FAILED parent tasks with all subtasks in done status → Transition to in_progress then advance via checkFeatureCompletion to testing_ready'\n2. Update the reconciliation category count ('six categories' → 'seven categories' or similar)\n3. Update the reconcile event description to mention FailedParentsRecovered\n\nThis is a documentation-only subtask satisfying the acceptance criterion that documentation must be updated.",
+      "agent_type": "coder",
+      "phase": "integration",
+      "tests_for": [],
+      "files": [
+        "README.md"
+      ],
+      "dependencies": [1],
+      "priority": 2,
+      "module_boundaries": [],
+      "interface_shapes": []
+    }
+  ],
+  "tdd_exceptions": [
+    {
+      "subtask_index": 2,
+      "justification": "Documentation-only update (README.md) — no code behavior to test"
+    }
+  ],
+  "coverage": [
+    {
+      "criterion": "Failed parents with all subtasks done should be advanced to done",
+      "subtask_indices": [0, 1]
+    },
+    {
+      "criterion": "Reconciler should check failed parents periodically",
+      "subtask_indices": [1]
+    },
+    {
+      "criterion": "Failed parents with non-done subtasks should not be changed",
+      "subtask_indices": [0, 1]
+    },
+    {
+      "criterion": "Documentation must be updated to reflect the new reconciliation behavior",
+      "subtask_indices": [2]
+    }
+  ],
+  "assumptions": [
+    {
+      "decision": "Transition failed parent to in_progress first, then call checkFeatureCompletion, rather than bypassing the state machine directly to testing_ready",
+      "alternatives": [
+        "Bypass the state machine and directly set status to testing_ready (like reconcileAlreadyMergedFeatures does for failed→done)",
+        "Transition directly to backlog for replanning"
+      ],
+      "why_chosen": "The state machine already allows failed→in_progress. Using the existing checkFeatureCompletion() path means we get constraint evaluation, empty-feature detection, and all other quality gates for free. Bypassing would skip these safety checks."
+    },
+    {
+      "decision": "Place reconcileFailedParents in a new file (reconcile_failed_parents.go) rather than appending to reconcile.go",
+      "alternatives": [
+        "Append to reconcile.go directly",
+        "Extract existing functions from reconcile.go to make room"
+      ],
+      "why_chosen": "reconcile.go is at 781 lines with an 800-line ceiling. Adding ~40 lines would breach the limit. A new focused file follows the existing pattern (reconcile functions are logically separable) and avoids unnecessary refactoring of existing code."
+    },
+    {
+      "decision": "Only recover failed parents when ALL subtasks are done (not when all are terminal with some failed)",
+      "alternatives": [
+        "Also handle the case where failed parents have a mix of done and failed subtasks by re-evaluating"
+      ],
+      "why_chosen": "The bug report specifically describes parents that failed due to subtask failures but whose subtasks all eventually completed via retry. If some subtasks are still failed, the parent failure is correct. Recovering only when all are done is the minimal correct fix."
+    }
+  ]
+}
