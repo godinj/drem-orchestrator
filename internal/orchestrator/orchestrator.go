@@ -20,7 +20,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
-	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
@@ -505,57 +504,14 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		delete(parent.Context, "needs_human_review")
 
 		// Run full constraint evaluation on the integration worktree before
-		// allowing transition to test_review.
+		// allowing transition to test_review, with retry/backoff gating.
 		if parent.WorktreeBranch != "" {
-			fn := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
-			featureDir := o.worktree.FeatureWorktreePath(fn)
-
-			constraintCfg, cfgErr := constraints.LoadConfig(featureDir)
-			if cfgErr != nil {
-				o.logger.Warn("constraint config load failed at integration gate",
-					"task_id", parent.ID, "error", cfgErr)
-			} else if constraintCfg != nil {
-				report, evalErr := constraints.Evaluate(constraintCfg, featureDir)
-				if evalErr != nil {
-					o.logger.Warn("constraint evaluation failed at integration gate",
-						"task_id", parent.ID, "error", evalErr)
-				} else if report.Failed > 0 {
-					o.logger.Warn("constraint violations at integration gate, blocking test_review",
-						"task_id", parent.ID, "failed", report.Failed)
-					// Check for depth-specific constraint failures and
-					// request supervisor diagnosis (advisory only).
-					hasDepthFailure := false
-					for _, r := range report.Results {
-						if !r.Passed && r.Type == "depth" {
-							hasDepthFailure = true
-							break
-						}
-					}
-					if hasDepthFailure {
-						o.checkDepthConstraintFailures(parent, report, featureDir)
-					}
-					if parent.Context == nil {
-						parent.Context = make(model.JSONField)
-					}
-					parent.Context["constraint_violations"] = constraints.FormatReport(report)
-					if err := o.db.Save(parent).Error; err != nil {
-						return fmt.Errorf("check feature completion: save constraint violations: %w", err)
-					}
-
-					// Do NOT transition to test_review. The parent stays in current state.
-					// The violations are visible in the TUI for the user to address.
-					o.emit("constraint_violations", map[string]any{
-						"task_id":    parent.ID,
-						"failed":     report.Failed,
-						"violations": constraints.FormatReport(report),
-					})
-					return nil
-				}
-
-				// Constraints passed — clear any previous violation context.
-				if parent.Context != nil {
-					delete(parent.Context, "constraint_violations")
-				}
+			blocked, err := o.evaluateConstraintGate(parent)
+			if err != nil {
+				return err
+			}
+			if blocked {
+				return nil
 			}
 		}
 
