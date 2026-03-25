@@ -127,6 +127,79 @@ func depthGuidanceFromPlan(opts Opts) string {
 	return strings.Join(lines, "\n")
 }
 
+// depthScoringGuidance returns the depth scoring criteria, examples, and
+// self-check sections appended to planner instructions.
+func depthScoringGuidance() []string {
+	return []string{
+		"## Depth Scoring Criteria",
+		"",
+		"Your plan is scored on three equally-weighted depth criteria:",
+		"",
+		"1. **Module boundaries**: At least one subtask defines valid module boundaries with a `package` path and `description`.",
+		"2. **Interface shapes**: At least one subtask specifies interface shapes with `functions` or `types`.",
+		"3. **Deep decomposition**: All boundary-defining subtasks keep `exports` in the range (0, 20].",
+		"",
+		"Plans without `depth_meta` (module_boundaries and interface_shapes) fall back to a file-coverage " +
+			"ratio, which scores lower. Plans that score 0% on all three criteria are automatically flagged " +
+			"for rejection.",
+		"",
+		"## Shallow vs Deep Plan Examples",
+		"",
+		"### SHALLOW (anti-pattern) — scores 0%",
+		"",
+		"A subtask that wraps 5 lines of retry logic in a thin wrapper function:",
+		"",
+		"```",
+		`Subtask: "Add retry helper"`,
+		"  - No module_boundaries defined",
+		"  - No interface_shapes defined",
+		"  - Implementation is a pass-through that calls time.Sleep in a loop",
+		"  - No internal decision-making, no policy, no state",
+		"```",
+		"",
+		"This scores 0% because it defines no boundaries, no interface shapes, and the " +
+			"implementation is just glue code with no real internal logic.",
+		"",
+		"### DEEP (good pattern) — scores 100%",
+		"",
+		"A subtask that creates a RetryPolicy with configurable backoff strategy, jitter, " +
+			"circuit breaker state machine, and exports only the Policy interface:",
+		"",
+		"```",
+		`Subtask: "Implement RetryPolicy engine"`,
+		`  module_boundaries: [{package: "pkg/retry", description: "Retry engine with backoff, jitter, and circuit breaker", exports: 4}]`,
+		`  interface_shapes: [{package: "pkg/retry", functions: ["New(opts ...Option) *Policy", "Policy.Execute(ctx, func) error"], types: ["Policy", "Option"]}]`,
+		"```",
+		"",
+		"This scores 100% because it defines clear module boundaries, specifies interface " +
+			"shapes with functions and types, keeps exports low (4), and the module does real " +
+			"internal work: backoff calculation, jitter randomization, circuit breaker state " +
+			"transitions.",
+		"",
+		"**Module unification**: When the codebase has multiple implementations of the same " +
+			"concern (retry, logging, config loading), unify them into shared infrastructure " +
+			"rather than adding another thin wrapper. Check the codebase for existing patterns " +
+			"before creating a new module.",
+		"",
+		"## Pre-Submission Depth Self-Check",
+		"",
+		"Before writing plan.json, evaluate each subtask against this checklist:",
+		"",
+		"1. Does every implementation subtask have `module_boundaries` with `package`, " +
+			"`description`, and `exports` ≤ 20?",
+		"2. Does every implementation subtask have `interface_shapes` with at least one " +
+			"`function` or `type`?",
+		"3. Is each module doing real internal work (policy logic, state machines, validation) " +
+			"rather than just delegating to another package?",
+		"4. Are there opportunities to unify duplicated concerns into shared infrastructure?",
+		"",
+		"If any subtask is shallow (no boundaries, no interface shapes, or just a pass-through " +
+			"wrapper), restructure the plan before submitting. Shallow subtasks will cause the " +
+			"plan to score 0% and be flagged for rejection.",
+		"",
+	}
+}
+
 // genericDepthGuidance returns a generic depth guidance section when no
 // plan-level depth metadata is available.
 func genericDepthGuidance() string {

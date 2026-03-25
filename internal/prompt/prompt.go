@@ -195,7 +195,7 @@ func Generate(opts Opts) string {
 
 // plannerInstructions returns prompt sections for planner agents.
 func plannerInstructions() []string {
-	return []string{
+	sections := []string{
 		"## Instructions",
 		"",
 		"You are a planner agent. Decompose this task into implementable subtasks.",
@@ -408,6 +408,9 @@ func plannerInstructions() []string {
 		"Do NOT create shallow modules that redistribute complexity through pass-through interfaces.",
 		"",
 	}
+
+	sections = append(sections, depthScoringGuidance()...)
+	return sections
 }
 
 // coderInstructions returns prompt sections for coder agents, dispatching

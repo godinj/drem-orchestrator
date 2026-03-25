@@ -42,6 +42,9 @@ func planReviewerInstructions(opts Opts) []string {
 		`8. **TDD exceptions**: Are exceptions justified? (integration wiring and research are valid; "too hard to test" is not)`,
 		"9. **Documentation**: If the feature changes user-facing behavior (CLI, config, TUI, new capabilities), "+
 			"does at least one subtask update the README or add a walkthrough? Flag if missing.",
+		"10. **Depth**: Does each implementation subtask include `module_boundaries` and `interface_shapes`? "+
+			"Are modules deep (rich internal logic, few exports) rather than shallow wrappers? "+
+			"Flag subtasks that lack depth metadata or define pass-through modules with no real internal logic.",
 		"",
 		"## Output",
 		"",

@@ -404,6 +404,12 @@ Scores appear in the TUI board as compact badges (T:85 C:100 D:0 Dp:67) and in t
 - **Low Documentation (D)**: Ensure at least one subtask touches documentation files (README, doc comments, guides). At testing_ready, check whether changed files include any `.md` updates.
 - **Low Depth (Dp)**: At plan review — check that subtasks include `depth_meta` with module boundaries and interface shapes. Plans without `depth_meta` fall back to a file-coverage ratio which tends to score lower.
 
+**Depth scoring criteria**: The depth score evaluates three equally-weighted criteria: (1) at least one subtask defines valid `module_boundaries` with package and description, (2) at least one subtask specifies `interface_shapes` with functions or types, (3) all boundary-defining subtasks keep `exports` in (0, 20]. Plans that define no depth metadata score 0% and are flagged for rejection.
+
+**Shallow vs deep plans**: A shallow plan wraps a few lines of logic in a thin wrapper or pass-through function with no module boundaries, no interface shapes, and no meaningful internal logic — this scores 0%. A deep plan creates modules with real internal decision-making (policy logic, state machines, validation), clear boundaries, and narrow export surfaces — this scores 100%.
+
+**Planner self-check**: Before submitting a plan, the planner evaluates whether each subtask has `module_boundaries` and `interface_shapes`, whether modules contain meaningful internal logic rather than just delegating, and whether there are opportunities to unify duplicated concerns into shared infrastructure. Subtasks that fail this self-check are restructured before submission.
+
 **Scores at different gates**:
 - **Plan review**: Scores are predictive (based on plan structure, not actual code). TDD measures test subtask coverage. Depth evaluates module decomposition quality.
 - **Testing ready**: Scores are measured (based on actual code). TDD uses real `go test -cover` output. Constitution runs actual constraint checks.
