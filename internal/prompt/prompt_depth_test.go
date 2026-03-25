@@ -475,3 +475,229 @@ func TestDepthGuidanceFromPlan_NoMatchingSubtask(t *testing.T) {
 		t.Error("non-matching title should include depth metadata from all subtasks")
 	}
 }
+
+// ── Depth Scoring Criteria in planner prompt ──────────────────────────────
+
+func TestPlannerPromptContainsDepthScoringCriteria(t *testing.T) {
+	sections := plannerInstructions()
+	output := strings.Join(sections, "\n")
+
+	required := []string{
+		"## Depth Scoring Criteria",
+		"module_boundaries",
+		"interface_shapes",
+		"exports",
+	}
+
+	for _, r := range required {
+		if !strings.Contains(output, r) {
+			t.Errorf("planner prompt missing depth scoring criteria text: %q", r)
+		}
+	}
+
+	// Must explain all three scoring dimensions.
+	scoringDimensions := []string{
+		"module boundaries",
+		"interface shapes",
+		"deep decomposition",
+	}
+	for _, dim := range scoringDimensions {
+		if !strings.Contains(strings.ToLower(output), dim) {
+			t.Errorf("planner prompt missing scoring dimension: %q", dim)
+		}
+	}
+
+	// Must mention the exports ≤ 20 threshold for deep decomposition.
+	if !strings.Contains(output, "20") {
+		t.Errorf("planner prompt missing exports threshold (≤ 20) in depth scoring criteria")
+	}
+}
+
+// ── Shallow anti-pattern and deep pattern examples ────────────────────────
+
+func TestPlannerPromptContainsDepthExamples(t *testing.T) {
+	sections := plannerInstructions()
+	output := strings.Join(sections, "\n")
+
+	// Must have at least one shallow anti-pattern example.
+	shallowIndicators := []string{
+		"Shallow",
+		"anti-pattern",
+	}
+	foundShallow := false
+	for _, s := range shallowIndicators {
+		if strings.Contains(output, s) {
+			foundShallow = true
+			break
+		}
+	}
+	if !foundShallow {
+		t.Error("planner prompt missing shallow anti-pattern example; " +
+			"expected at least one of: 'Shallow', 'anti-pattern'")
+	}
+
+	// Must have at least one deep pattern example.
+	deepIndicators := []string{
+		"Deep",
+		"good pattern",
+		"deep pattern",
+	}
+	foundDeep := false
+	lower := strings.ToLower(output)
+	for _, d := range deepIndicators {
+		if strings.Contains(lower, strings.ToLower(d)) {
+			foundDeep = true
+			break
+		}
+	}
+	if !foundDeep {
+		t.Error("planner prompt missing deep pattern example; " +
+			"expected at least one of: 'Deep', 'good pattern', 'deep pattern'")
+	}
+
+	// The examples section must contain concrete code-like indicators
+	// (package paths, function signatures, or export counts) to be useful.
+	concreteIndicators := []string{
+		"pass-through",
+		"thin wrapper",
+	}
+	foundConcrete := false
+	for _, c := range concreteIndicators {
+		if strings.Contains(lower, c) {
+			foundConcrete = true
+			break
+		}
+	}
+	if !foundConcrete {
+		t.Error("planner prompt depth examples missing concrete anti-pattern indicators; " +
+			"expected at least one of: 'pass-through', 'thin wrapper'")
+	}
+}
+
+// ── Pre-Submission Depth Self-Check ───────────────────────────────────────
+
+func TestPlannerPromptContainsDepthSelfCheck(t *testing.T) {
+	sections := plannerInstructions()
+	output := strings.Join(sections, "\n")
+
+	required := []string{
+		"Pre-Submission Depth Self-Check",
+	}
+
+	for _, r := range required {
+		if !strings.Contains(output, r) {
+			t.Errorf("planner prompt missing self-check section: %q", r)
+		}
+	}
+
+	// The self-check must require evaluating each subtask.
+	selfCheckIndicators := []string{
+		"each subtask",
+		"evaluate",
+	}
+	lower := strings.ToLower(output)
+	for _, s := range selfCheckIndicators {
+		if !strings.Contains(lower, s) {
+			t.Errorf("planner prompt self-check missing required concept: %q", s)
+		}
+	}
+
+	// Must mention that shallow subtasks should be reworked or justified.
+	if !strings.Contains(lower, "shallow") {
+		t.Error("planner prompt self-check should mention 'shallow' subtasks needing rework")
+	}
+}
+
+// ── Module unification guidance ───────────────────────────────────────────
+
+func TestPlannerPromptContainsModuleUnificationGuidance(t *testing.T) {
+	sections := plannerInstructions()
+	output := strings.Join(sections, "\n")
+	lower := strings.ToLower(output)
+
+	// Must mention unification of related implementations.
+	if !strings.Contains(lower, "unif") {
+		t.Error("planner prompt missing module unification guidance; " +
+			"expected text containing 'unif' (unify/unification)")
+	}
+
+	// Must give a concrete example like RetryPolicy.
+	if !strings.Contains(output, "RetryPolicy") && !strings.Contains(lower, "retry") {
+		t.Error("planner prompt missing concrete unification example (e.g., RetryPolicy)")
+	}
+
+	// Must mention shared infrastructure or shared module.
+	sharedIndicators := []string{
+		"shared",
+		"consolidat",
+	}
+	foundShared := false
+	for _, s := range sharedIndicators {
+		if strings.Contains(lower, s) {
+			foundShared = true
+			break
+		}
+	}
+	if !foundShared {
+		t.Error("planner prompt unification guidance missing 'shared' or 'consolidat' concept")
+	}
+}
+
+// ── Generate() includes depth scoring for planner ─────────────────────────
+
+func TestPlannerGenerateIncludesDepthScoringCriteria(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentPlanner
+	output := Generate(opts)
+
+	required := []string{
+		"Depth Scoring Criteria",
+		"Pre-Submission Depth Self-Check",
+	}
+
+	for _, r := range required {
+		if !strings.Contains(output, r) {
+			t.Errorf("Generate() for planner missing depth scoring text: %q", r)
+		}
+	}
+}
+
+// ── Plan reviewer includes depth as review criterion ──────────────────────
+
+func TestPlanReviewerIncludesDepthCriterion(t *testing.T) {
+	opts := minimalOpts()
+	opts.AgentType = model.AgentReviewer
+	opts.ReviewMode = "plan"
+	opts.PlanJSON = `{"subtasks": []}`
+
+	output := Generate(opts)
+
+	// The plan reviewer must evaluate depth as one of its review criteria.
+	if !strings.Contains(output, "depth") && !strings.Contains(output, "Depth") {
+		t.Error("plan reviewer prompt missing 'depth' as a review criterion")
+	}
+
+	// Should specifically mention module boundaries or depth scoring.
+	depthReviewIndicators := []string{
+		"module_boundaries",
+		"module boundaries",
+		"depth scor",
+		"Depth Scor",
+	}
+	found := false
+	for _, d := range depthReviewIndicators {
+		if strings.Contains(output, d) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("plan reviewer prompt should reference module boundaries or depth scoring in review criteria")
+	}
+
+	// Should mention that shallow plans should be flagged.
+	lower := strings.ToLower(output)
+	if !strings.Contains(lower, "shallow") {
+		t.Error("plan reviewer prompt should mention 'shallow' plans as something to flag")
+	}
+}
