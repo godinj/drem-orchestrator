@@ -68,6 +68,72 @@ func TestJSONFieldScan(t *testing.T) {
 	})
 }
 
+func TestJSONFieldScanArray(t *testing.T) {
+	t.Run("bare array wraps in items key", func(t *testing.T) {
+		var j JSONField
+		err := j.Scan(`[{"subtask_index":2,"reason":"Integration wiring only"}]`)
+		if err != nil {
+			t.Fatalf("Scan(array) returned error: %v", err)
+		}
+		items, ok := j["items"]
+		if !ok {
+			t.Fatal("expected 'items' key in wrapped map")
+		}
+		arr, ok := items.([]any)
+		if !ok {
+			t.Fatalf("items is %T, want []any", items)
+		}
+		if len(arr) != 1 {
+			t.Fatalf("items length = %d, want 1", len(arr))
+		}
+		elem, ok := arr[0].(map[string]any)
+		if !ok {
+			t.Fatalf("arr[0] is %T, want map[string]any", arr[0])
+		}
+		if elem["reason"] != "Integration wiring only" {
+			t.Errorf("reason = %v, want %q", elem["reason"], "Integration wiring only")
+		}
+	})
+
+	t.Run("empty array wraps in items key", func(t *testing.T) {
+		var j JSONField
+		err := j.Scan(`[]`)
+		if err != nil {
+			t.Fatalf("Scan(empty array) returned error: %v", err)
+		}
+		items, ok := j["items"]
+		if !ok {
+			t.Fatal("expected 'items' key")
+		}
+		arr, ok := items.([]any)
+		if !ok {
+			t.Fatalf("items is %T, want []any", items)
+		}
+		if len(arr) != 0 {
+			t.Errorf("items length = %d, want 0", len(arr))
+		}
+	})
+
+	t.Run("byte slice array wraps in items key", func(t *testing.T) {
+		var j JSONField
+		err := j.Scan([]byte(`[1, 2, 3]`))
+		if err != nil {
+			t.Fatalf("Scan([]byte array) returned error: %v", err)
+		}
+		if _, ok := j["items"]; !ok {
+			t.Fatal("expected 'items' key")
+		}
+	})
+
+	t.Run("truly malformed JSON still errors", func(t *testing.T) {
+		var j JSONField
+		err := j.Scan(`not json at all`)
+		if err == nil {
+			t.Fatal("expected error for non-JSON input")
+		}
+	})
+}
+
 func TestJSONFieldValue(t *testing.T) {
 	t.Run("nil map", func(t *testing.T) {
 		var j JSONField
@@ -158,6 +224,61 @@ func TestJSONArrayScan(t *testing.T) {
 		}
 		if j[0] != "x" || j[1] != "y" || j[2] != "z" {
 			t.Errorf("j = %v, want [x y z]", j)
+		}
+	})
+}
+
+func TestJSONArrayScanNumbers(t *testing.T) {
+	t.Run("numeric array converts to strings", func(t *testing.T) {
+		var j JSONArray
+		err := j.Scan(`[0, 1, 2]`)
+		if err != nil {
+			t.Fatalf("Scan(numbers) returned error: %v", err)
+		}
+		if len(j) != 3 {
+			t.Fatalf("len = %d, want 3", len(j))
+		}
+		if j[0] != "0" || j[1] != "1" || j[2] != "2" {
+			t.Errorf("j = %v, want [0 1 2]", j)
+		}
+	})
+
+	t.Run("mixed string and number array", func(t *testing.T) {
+		var j JSONArray
+		err := j.Scan(`["a", 1, "b", 2]`)
+		if err != nil {
+			t.Fatalf("Scan(mixed) returned error: %v", err)
+		}
+		if len(j) != 4 {
+			t.Fatalf("len = %d, want 4", len(j))
+		}
+		if j[0] != "a" || j[1] != "1" || j[2] != "b" || j[3] != "2" {
+			t.Errorf("j = %v, want [a 1 b 2]", j)
+		}
+	})
+
+	t.Run("float number converts correctly", func(t *testing.T) {
+		var j JSONArray
+		err := j.Scan(`[1.5, 3]`)
+		if err != nil {
+			t.Fatalf("Scan(floats) returned error: %v", err)
+		}
+		if len(j) != 2 {
+			t.Fatalf("len = %d, want 2", len(j))
+		}
+		if j[0] != "1.5" {
+			t.Errorf("j[0] = %q, want %q", j[0], "1.5")
+		}
+		if j[1] != "3" {
+			t.Errorf("j[1] = %q, want %q", j[1], "3")
+		}
+	})
+
+	t.Run("truly malformed JSON still errors", func(t *testing.T) {
+		var j JSONArray
+		err := j.Scan(`not json at all`)
+		if err == nil {
+			t.Fatal("expected error for non-JSON input")
 		}
 	})
 }
