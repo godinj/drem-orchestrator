@@ -458,6 +458,402 @@ func TestOnClassifierFailed_ParksForTriage(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Agent lifecycle cleanup tests
+//
+// These tests verify that classifier completion/failure handlers update agent
+// status and clear task.AssignedAgentID — the missing behavior that causes
+// the hot-loop bug where recoverStuckAgents() re-parks the same agents every
+// 5 seconds.
+// ---------------------------------------------------------------------------
+
+func TestOnClassifierCompleted_Success_MarksAgentIdle(t *testing.T) {
+	orch, projectID := setupClassifyingTest(t)
+
+	task := testutil.CreateTask(t, orch.db, projectID, "Classify me", model.StatusClassifying)
+	ag := testutil.CreateAgent(t, orch.db, task.ID, model.AgentClassifier, model.AgentWorking)
+	task.AssignedAgentID = &ag.ID
+	if err := orch.db.Save(&task).Error; err != nil {
+		t.Fatalf("assign agent: %v", err)
+	}
+
+	wtDir := t.TempDir()
+	ag.WorktreePath = wtDir
+	if err := orch.db.Save(&ag).Error; err != nil {
+		t.Fatalf("save agent worktree: %v", err)
+	}
+
+	writeClassificationJSON(t, wtDir, ClassifierOutput{
+		Category:        "standard",
+		ComplexityScore: 5,
+		Title:           "Refined",
+		Description:     "Enriched",
+		TargetFiles:     []string{"a.go"},
+		Rationale:       "reason",
+	})
+
+	if err := orch.onClassifierCompleted(&ag, &task); err != nil {
+		t.Fatalf("onClassifierCompleted: %v", err)
+	}
+
+	// Reload agent from DB and verify status.
+	var reloadedAgent model.Agent
+	if err := orch.db.First(&reloadedAgent, "id = ?", ag.ID).Error; err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	if reloadedAgent.Status != model.AgentIdle {
+		t.Errorf("agent status = %q, want %q", reloadedAgent.Status, model.AgentIdle)
+	}
+	if reloadedAgent.CurrentTaskID != nil {
+		t.Errorf("agent CurrentTaskID = %v, want nil", reloadedAgent.CurrentTaskID)
+	}
+
+	// Verify task.AssignedAgentID is cleared.
+	var reloadedTask model.Task
+	if err := orch.db.First(&reloadedTask, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloadedTask.AssignedAgentID != nil {
+		t.Errorf("task AssignedAgentID = %v, want nil", reloadedTask.AssignedAgentID)
+	}
+}
+
+func TestOnClassifierCompleted_NeedsClarification_MarksAgentIdle(t *testing.T) {
+	orch, projectID := setupClassifyingTest(t)
+
+	task := testutil.CreateTask(t, orch.db, projectID, "Unclear task", model.StatusClassifying)
+	ag := testutil.CreateAgent(t, orch.db, task.ID, model.AgentClassifier, model.AgentWorking)
+	task.AssignedAgentID = &ag.ID
+	if err := orch.db.Save(&task).Error; err != nil {
+		t.Fatalf("assign agent: %v", err)
+	}
+
+	wtDir := t.TempDir()
+	ag.WorktreePath = wtDir
+	if err := orch.db.Save(&ag).Error; err != nil {
+		t.Fatalf("save agent worktree: %v", err)
+	}
+
+	writeClassificationJSON(t, wtDir, ClassifierOutput{
+		NeedsClarification: true,
+		Questions:          []string{"What file?"},
+	})
+
+	if err := orch.onClassifierCompleted(&ag, &task); err != nil {
+		t.Fatalf("onClassifierCompleted: %v", err)
+	}
+
+	var reloadedAgent model.Agent
+	if err := orch.db.First(&reloadedAgent, "id = ?", ag.ID).Error; err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	if reloadedAgent.Status != model.AgentIdle {
+		t.Errorf("agent status = %q, want %q", reloadedAgent.Status, model.AgentIdle)
+	}
+	if reloadedAgent.CurrentTaskID != nil {
+		t.Errorf("agent CurrentTaskID = %v, want nil", reloadedAgent.CurrentTaskID)
+	}
+
+	var reloadedTask model.Task
+	if err := orch.db.First(&reloadedTask, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloadedTask.AssignedAgentID != nil {
+		t.Errorf("task AssignedAgentID = %v, want nil", reloadedTask.AssignedAgentID)
+	}
+}
+
+func TestOnClassifierCompleted_MalformedOutput_MarksAgentIdle(t *testing.T) {
+	orch, projectID := setupClassifyingTest(t)
+
+	task := testutil.CreateTask(t, orch.db, projectID, "Bad output", model.StatusClassifying)
+	ag := testutil.CreateAgent(t, orch.db, task.ID, model.AgentClassifier, model.AgentWorking)
+	task.AssignedAgentID = &ag.ID
+	if err := orch.db.Save(&task).Error; err != nil {
+		t.Fatalf("assign agent: %v", err)
+	}
+
+	// No classification.json written — triggers malformed output path.
+	wtDir := t.TempDir()
+	ag.WorktreePath = wtDir
+	if err := orch.db.Save(&ag).Error; err != nil {
+		t.Fatalf("save agent worktree: %v", err)
+	}
+
+	if err := orch.onClassifierCompleted(&ag, &task); err != nil {
+		t.Fatalf("onClassifierCompleted: %v", err)
+	}
+
+	var reloadedAgent model.Agent
+	if err := orch.db.First(&reloadedAgent, "id = ?", ag.ID).Error; err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	if reloadedAgent.Status != model.AgentIdle {
+		t.Errorf("agent status = %q, want %q", reloadedAgent.Status, model.AgentIdle)
+	}
+	if reloadedAgent.CurrentTaskID != nil {
+		t.Errorf("agent CurrentTaskID = %v, want nil", reloadedAgent.CurrentTaskID)
+	}
+
+	var reloadedTask model.Task
+	if err := orch.db.First(&reloadedTask, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloadedTask.AssignedAgentID != nil {
+		t.Errorf("task AssignedAgentID = %v, want nil", reloadedTask.AssignedAgentID)
+	}
+}
+
+func TestOnClassifierFailed_MarksAgentDead(t *testing.T) {
+	orch, projectID := setupClassifyingTest(t)
+
+	task := testutil.CreateTask(t, orch.db, projectID, "Failing classifier", model.StatusClassifying)
+	ag := testutil.CreateAgent(t, orch.db, task.ID, model.AgentClassifier, model.AgentWorking)
+	task.AssignedAgentID = &ag.ID
+	if err := orch.db.Save(&task).Error; err != nil {
+		t.Fatalf("assign agent: %v", err)
+	}
+
+	if err := orch.onClassifierFailed(&ag, &task); err != nil {
+		t.Fatalf("onClassifierFailed: %v", err)
+	}
+
+	var reloadedAgent model.Agent
+	if err := orch.db.First(&reloadedAgent, "id = ?", ag.ID).Error; err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	if reloadedAgent.Status != model.AgentDead {
+		t.Errorf("agent status = %q, want %q", reloadedAgent.Status, model.AgentDead)
+	}
+	if reloadedAgent.CurrentTaskID != nil {
+		t.Errorf("agent CurrentTaskID = %v, want nil", reloadedAgent.CurrentTaskID)
+	}
+
+	var reloadedTask model.Task
+	if err := orch.db.First(&reloadedTask, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloadedTask.AssignedAgentID != nil {
+		t.Errorf("task AssignedAgentID = %v, want nil", reloadedTask.AssignedAgentID)
+	}
+}
+
+func TestProcessClassifyingTasks_SkipsHumanTriageTasks(t *testing.T) {
+	orch, projectID := setupClassifyingTestWithRunner(t)
+
+	// Create a task in CLASSIFYING with human_triage=true and no assigned agent.
+	task := testutil.CreateTask(t, orch.db, projectID, "Triaged task", model.StatusClassifying)
+	task.Context = model.JSONField{"human_triage": true}
+	task.AssignedAgentID = nil
+	if err := orch.db.Save(&task).Error; err != nil {
+		t.Fatalf("save task with human_triage: %v", err)
+	}
+
+	orch.processClassifyingTasks()
+
+	// No agents should have been spawned.
+	var agents []model.Agent
+	if err := orch.db.Find(&agents).Error; err != nil {
+		t.Fatalf("query agents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents for human_triage task, got %d", len(agents))
+	}
+
+	// Task should remain unassigned.
+	var reloaded model.Task
+	if err := orch.db.First(&reloaded, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.AssignedAgentID != nil {
+		t.Errorf("task AssignedAgentID = %v, want nil (human_triage should skip)", reloaded.AssignedAgentID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Integration: verify hot loop is broken end-to-end
+// ---------------------------------------------------------------------------
+
+// TestClassifierRecovery_NoHotLoop verifies the full recovery → classifier
+// completion → skip path. Before the fix, recoverStuckAgents would re-detect
+// the same classifier on every tick because the agent stayed WORKING after
+// completion, generating ~4800 log lines/hour.
+func TestClassifierRecovery_NoHotLoop(t *testing.T) {
+	orch, projectID := setupClassifyingTest(t)
+
+	task := testutil.CreateTask(t, orch.db, projectID, "Hot loop task", model.StatusClassifying)
+	ag := testutil.CreateAgent(t, orch.db, task.ID, model.AgentClassifier, model.AgentWorking)
+
+	// Give the agent a worktree with an idle signal file and classification.json.
+	wtDir := t.TempDir()
+	ag.WorktreePath = wtDir
+	ag.ProjectID = projectID
+	if err := orch.db.Save(&ag).Error; err != nil {
+		t.Fatalf("save agent worktree path: %v", err)
+	}
+	task.AssignedAgentID = &ag.ID
+	if err := orch.db.Save(&task).Error; err != nil {
+		t.Fatalf("assign agent to task: %v", err)
+	}
+
+	// Place the idle signal file.
+	claudeDir := filepath.Join(wtDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, "agent-idle"), []byte("idle"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Write classification.json so onClassifierCompleted succeeds.
+	writeClassificationJSON(t, wtDir, ClassifierOutput{
+		Category:        "standard",
+		ComplexityScore: 5,
+		Title:           "Classified title",
+		Description:     "Classified desc",
+		Rationale:       "Reason",
+	})
+
+	// --- First call: should recover the stuck classifier ---
+	orch.recoverStuckAgents()
+
+	var agAfter model.Agent
+	if err := orch.db.First(&agAfter, "id = ?", ag.ID).Error; err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	if agAfter.Status != model.AgentIdle {
+		t.Fatalf("after first recovery: agent status = %q, want %q", agAfter.Status, model.AgentIdle)
+	}
+	if agAfter.CurrentTaskID != nil {
+		t.Errorf("after first recovery: agent CurrentTaskID = %v, want nil", agAfter.CurrentTaskID)
+	}
+
+	var taskAfter model.Task
+	if err := orch.db.First(&taskAfter, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if taskAfter.Status != model.StatusBacklog {
+		t.Errorf("after first recovery: task status = %q, want %q", taskAfter.Status, model.StatusBacklog)
+	}
+
+	// --- Second call: should NOT re-process the agent (status is now Idle) ---
+	// Reset task to classifying to simulate what would happen if the guard were missing.
+	taskAfter.Status = model.StatusClassifying
+	taskAfter.AssignedAgentID = &ag.ID
+	if err := orch.db.Save(&taskAfter).Error; err != nil {
+		t.Fatalf("reset task for second pass: %v", err)
+	}
+
+	orch.recoverStuckAgents()
+
+	// Agent should still be Idle — not re-processed.
+	var agSecond model.Agent
+	if err := orch.db.First(&agSecond, "id = ?", ag.ID).Error; err != nil {
+		t.Fatalf("reload agent after second call: %v", err)
+	}
+	if agSecond.Status != model.AgentIdle {
+		t.Errorf("after second recovery: agent status = %q, want %q (should not have been re-processed)", agSecond.Status, model.AgentIdle)
+	}
+
+	// Task should remain classifying (not transitioned again).
+	var taskSecond model.Task
+	if err := orch.db.First(&taskSecond, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task after second call: %v", err)
+	}
+	if taskSecond.Status != model.StatusClassifying {
+		t.Errorf("after second recovery: task status = %q, want %q (should not be re-processed)", taskSecond.Status, model.StatusClassifying)
+	}
+}
+
+// TestClassifierRecovery_FailedAgent_NoHotLoop verifies that a failed
+// classifier agent is also not re-processed on subsequent ticks.
+func TestClassifierRecovery_FailedAgent_NoHotLoop(t *testing.T) {
+	orch, projectID := setupClassifyingTest(t)
+
+	task := testutil.CreateTask(t, orch.db, projectID, "Failed classifier task", model.StatusClassifying)
+	ag := testutil.CreateAgent(t, orch.db, task.ID, model.AgentClassifier, model.AgentWorking)
+
+	// Agent worktree with idle signal but NO classification.json → triggers onClassifierCompleted
+	// which calls parkClassifierForTriage because classification.json is missing.
+	wtDir := t.TempDir()
+	ag.WorktreePath = wtDir
+	ag.ProjectID = projectID
+	if err := orch.db.Save(&ag).Error; err != nil {
+		t.Fatalf("save agent: %v", err)
+	}
+	task.AssignedAgentID = &ag.ID
+	if err := orch.db.Save(&task).Error; err != nil {
+		t.Fatalf("save task: %v", err)
+	}
+
+	claudeDir := filepath.Join(wtDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, "agent-idle"), []byte("idle"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// First call: triggers completion → parkClassifierForTriage (no classification.json).
+	orch.recoverStuckAgents()
+
+	var agAfter model.Agent
+	if err := orch.db.First(&agAfter, "id = ?", ag.ID).Error; err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	// onClassifierCompleted marks Idle even when parking for triage.
+	if agAfter.Status != model.AgentIdle {
+		t.Fatalf("after first recovery: agent status = %q, want %q", agAfter.Status, model.AgentIdle)
+	}
+
+	// Second call: agent is Idle, should be skipped entirely.
+	orch.recoverStuckAgents()
+
+	var agSecond model.Agent
+	if err := orch.db.First(&agSecond, "id = ?", ag.ID).Error; err != nil {
+		t.Fatalf("reload agent: %v", err)
+	}
+	if agSecond.Status != model.AgentIdle {
+		t.Errorf("after second recovery: agent status = %q, want %q", agSecond.Status, model.AgentIdle)
+	}
+}
+
+// TestProcessClassifyingTasks_SkipsParkedHumanTriage_NilAgent verifies that
+// a task parked with human_triage=true and AssignedAgentID=nil does NOT get
+// a new classifier spawned — this was the second half of the hot loop bug.
+// (Already covered by TestProcessClassifyingTasks_SkipsHumanTriageTasks above,
+// but this test makes the nil-agent invariant explicit.)
+func TestProcessClassifyingTasks_SkipsParkedHumanTriage_NilAgent(t *testing.T) {
+	orch, projectID := setupClassifyingTestWithRunner(t)
+
+	task := testutil.CreateTask(t, orch.db, projectID, "Parked triage task", model.StatusClassifying)
+	task.Context = model.JSONField{"human_triage": true}
+	task.AssignedAgentID = nil
+	if err := orch.db.Save(&task).Error; err != nil {
+		t.Fatalf("save task: %v", err)
+	}
+
+	// Call processClassifyingTasks multiple times to ensure no spawning.
+	orch.processClassifyingTasks()
+	orch.processClassifyingTasks()
+
+	var agents []model.Agent
+	if err := orch.db.Find(&agents).Error; err != nil {
+		t.Fatalf("query agents: %v", err)
+	}
+	if len(agents) != 0 {
+		t.Errorf("expected 0 agents for parked human_triage task, got %d", len(agents))
+	}
+
+	var reloaded model.Task
+	if err := orch.db.First(&reloaded, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.AssignedAgentID != nil {
+		t.Errorf("task AssignedAgentID = %v, want nil", reloaded.AssignedAgentID)
+	}
+}
+
 // writeClassificationJSON writes a ClassifierOutput as classification.json
 // in the given directory.
 func writeClassificationJSON(t *testing.T, dir string, output ClassifierOutput) {

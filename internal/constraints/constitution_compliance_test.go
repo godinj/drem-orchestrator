@@ -53,9 +53,9 @@ func TestOrchestratorImportBaseline(t *testing.T) {
 		t.Fatal("no exception for internal/orchestrator/ in Internal import ceiling constraint")
 	}
 
-	// After file splitting + merge with 836efc1d classifier fix, actual count is 55.
-	// The baseline must be updated to match.
-	const expectedBaseline = 55
+	// After file splitting + merge with 836efc1d classifier fix, actual count was 55.
+	// merger_interface.go adds 2 imports, bringing total to 57.
+	const expectedBaseline = 57
 	if orchException.BaselineCount != expectedBaseline {
 		t.Errorf("internal/orchestrator/ import baseline_count = %d, want %d",
 			orchException.BaselineCount, expectedBaseline)

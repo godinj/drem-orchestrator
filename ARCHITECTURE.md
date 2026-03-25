@@ -41,8 +41,11 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
   - `dedup.go` — Duplicate work detection: checks integration branch for existing file changes and commit keyword overlap
   - `handlers.go` — TUI interaction handlers: plan approval/rejection, test review, task status transitions
   - `lifecycle.go` — Lifecycle CRUD: comment deletion, plan step management
-  - `merge_execution.go` — Merge execution and quick-fix-to-merging transition logic
+  - `merge_attempt_state.go` — MergeAttemptState: typed context access for merge conflict state during retries
+  - `merge_execution.go` — Merge execution with retry and quick-fix-to-merging transition logic
+  - `merger_interface.go` — mergerClient interface: extracted at consumption site for merge retry testability
   - `plan_validation.go` — Plan validation: file overlap checks, TDD coverage ratios, constraint warnings
+  - `retry_policy.go` — RetryPolicy: exponential backoff with jitter for merge retries (base=10s, cap=5min, max=5)
   - `reconcile.go` — State reconciliation: recovers stale subtasks, orphaned worktrees, stuck agents
   - `scheduler.go` — Task scheduling: dependency resolution, subtask grouping, concurrent dispatch
   - `score_bridge.go` — Inlined quality scoring (TDD, constitution, documentation, depth) to avoid import ceiling

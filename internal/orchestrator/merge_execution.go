@@ -45,6 +45,33 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 			return nil
 		}
 
+		// Transient failure (no real conflicts): retry with exponential backoff.
+		if len(result.Conflicts) == 0 {
+			attemptState := LoadMergeAttemptState(task)
+			attemptState.Increment()
+			attemptState.Save(task)
+
+			policy := DefaultMergeRetryPolicy()
+			if policy.Exhausted(attemptState.AttemptCount()) {
+				reason := fmt.Sprintf("merge failed after %d attempts", attemptState.AttemptCount())
+				if err := o.failTask(task, reason); err != nil {
+					return err
+				}
+				o.emit("merge_retries_exhausted", map[string]any{"task_id": task.ID, "attempts": attemptState.AttemptCount()})
+				return nil
+			}
+
+			// Stay in MERGING for next tick to retry.
+			if err := o.db.Save(task).Error; err != nil {
+				return fmt.Errorf("execute merge: save retry state: %w", err)
+			}
+			o.logger.Info("merge transient failure, will retry",
+				"task_id", task.ID,
+				"attempt", attemptState.AttemptCount(),
+				"next_delay", policy.Delay(attemptState.AttemptCount()))
+			return nil
+		}
+
 		// Supervisor-powered analysis of the failure.
 		if o.supervisor != nil && len(result.Conflicts) > 0 {
 			if task.Context == nil {

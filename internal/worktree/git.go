@@ -171,14 +171,10 @@ func CommitUnstagedChanges(worktreePath, message string) (bool, error) {
 		return false, nil
 	}
 
-	// Stage all changes except .claude/ directory.
-	// Only add the exclude pathspec if .claude is NOT already gitignored,
-	// because git errors when an exclude pathspec references an ignored path.
-	addArgs := []string{"add", "--all", "--", "."}
-	if !isGitIgnored(worktreePath, ".claude") {
-		addArgs = append(addArgs, ":(exclude).claude")
-	}
-	if _, err := RunGit(addArgs, worktreePath); err != nil {
+	// Stage all changes. .claude/ is excluded via .gitignore in every worktree,
+	// so no :(exclude) pathspec is needed (and would actually conflict with
+	// .gitignore, causing "paths are ignored" errors in some git versions).
+	if _, err := RunGit([]string{"add", "--all", "--", "."}, worktreePath); err != nil {
 		return false, fmt.Errorf("commit unstaged: add: %w", err)
 	}
 
@@ -193,14 +189,6 @@ func CommitUnstagedChanges(worktreePath, message string) (bool, error) {
 	}
 
 	return true, nil
-}
-
-// isGitIgnored returns true if the given path is ignored by .gitignore rules
-// in the worktree. Uses `git check-ignore` which exits 0 when the path is
-// ignored and non-zero otherwise.
-func isGitIgnored(worktreePath, path string) bool {
-	_, err := RunGit([]string{"check-ignore", "-q", path}, worktreePath)
-	return err == nil
 }
 
 // CleanClaudeArtifacts removes .claude/ directory artifacts from a worktree.

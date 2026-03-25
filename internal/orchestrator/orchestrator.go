@@ -22,7 +22,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/memory"
-	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
@@ -107,7 +106,7 @@ type Orchestrator struct {
 	dbPath          string
 	runner          *agent.Runner
 	worktree        *worktree.Manager
-	merger          *merge.Orchestrator
+	merger          mergerClient
 	memory          *memory.Manager
 	supervisor      *supervisor.Supervisor // nil disables LLM-powered decisions
 	bugreport       *bugreport.Service     // nil disables bug report ingestion
@@ -132,7 +131,7 @@ func New(
 	dbPath string,
 	runner *agent.Runner,
 	wt *worktree.Manager,
-	merger *merge.Orchestrator,
+	merger mergerClient,
 	mem *memory.Manager,
 	sup *supervisor.Supervisor,
 	projectID uuid.UUID,

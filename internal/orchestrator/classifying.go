@@ -61,6 +61,14 @@ func (o *Orchestrator) processClassifyingTasks() {
 	for i := range tasks {
 		task := &tasks[i]
 
+		// Skip tasks parked for human triage — they should not get a new
+		// classifier agent spawned.
+		if task.Context != nil {
+			if ht, ok := task.Context["human_triage"]; ok && ht == true {
+				continue
+			}
+		}
+
 		classifierPrompt := prompt.Generate(prompt.Opts{
 			Task:         task,
 			Project:      &project,
@@ -88,6 +96,15 @@ func (o *Orchestrator) processClassifyingTasks() {
 // It reads the classification.json from the agent's worktree and transitions
 // the task based on the output.
 func (o *Orchestrator) onClassifierCompleted(ag *model.Agent, task *model.Task) error {
+	// Mark the agent idle and detach from the task so recoverStuckAgents
+	// does not re-detect it on subsequent ticks.
+	ag.Status = model.AgentIdle
+	ag.CurrentTaskID = nil
+	if err := o.db.Save(ag).Error; err != nil {
+		return fmt.Errorf("on classifier completed: save agent: %w", err)
+	}
+	task.AssignedAgentID = nil
+
 	path := filepath.Join(ag.WorktreePath, "classification.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -110,6 +127,15 @@ func (o *Orchestrator) onClassifierCompleted(ag *model.Agent, task *model.Task) 
 // onClassifierFailed handles a classifier agent that encountered an error.
 // The task stays in CLASSIFYING and is parked for human triage.
 func (o *Orchestrator) onClassifierFailed(ag *model.Agent, task *model.Task) error {
+	// Mark the agent dead and detach from the task so recoverStuckAgents
+	// does not re-detect it on subsequent ticks.
+	ag.Status = model.AgentDead
+	ag.CurrentTaskID = nil
+	if err := o.db.Save(ag).Error; err != nil {
+		return fmt.Errorf("on classifier failed: save agent: %w", err)
+	}
+	task.AssignedAgentID = nil
+
 	if task.Context == nil {
 		task.Context = make(model.JSONField)
 	}

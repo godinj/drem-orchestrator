@@ -22,6 +22,7 @@ type ReconcileResult struct {
 	OrphanWorktreesCleaned     int
 	StuckAgentsRecovered       int
 	AlreadyMergedFeaturesFixed int
+	CompletedParentsAdvanced   int
 }
 
 // ReapOrphanedSessions kills tmux agent sessions that have no active agent
@@ -73,7 +74,13 @@ func (o *Orchestrator) Reconcile() (int, error) {
 		r.AlreadyMergedFeaturesFixed = n
 	}
 
-	total := r.StaleSubtasksReset + r.OrphanedSubtasksFixed + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned + r.StuckAgentsRecovered + r.AlreadyMergedFeaturesFixed
+	if n, err := o.reconcileCompletedParents(); err != nil {
+		return 0, fmt.Errorf("reconcile completed parents: %w", err)
+	} else {
+		r.CompletedParentsAdvanced = n
+	}
+
+	total := r.StaleSubtasksReset + r.OrphanedSubtasksFixed + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned + r.StuckAgentsRecovered + r.AlreadyMergedFeaturesFixed + r.CompletedParentsAdvanced
 	if total > 0 {
 		o.emit("reconcile", r)
 	}
@@ -638,6 +645,55 @@ func (o *Orchestrator) reconcileAlreadyMergedFeatures() (int, error) {
 		fixed++
 	}
 	return fixed, nil
+}
+
+// reconcileCompletedParents finds in_progress parent tasks whose subtasks are
+// all done and advances them via checkFeatureCompletion. This covers the case
+// where the completion signal was lost or the parent wasn't checked after the
+// last subtask finished.
+func (o *Orchestrator) reconcileCompletedParents() (int, error) {
+	var parents []model.Task
+	if err := o.db.Where(
+		"project_id = ? AND status = ? AND parent_task_id IS NULL",
+		o.projectID, model.StatusInProgress,
+	).Find(&parents).Error; err != nil {
+		return 0, err
+	}
+
+	advanced := 0
+	for i := range parents {
+		parent := &parents[i]
+
+		var subtasks []model.Task
+		if err := o.db.Where("parent_task_id = ?", parent.ID).Find(&subtasks).Error; err != nil {
+			continue
+		}
+		if len(subtasks) == 0 {
+			continue
+		}
+
+		allDone := true
+		for _, sub := range subtasks {
+			if sub.Status != model.StatusDone {
+				allDone = false
+				break
+			}
+		}
+		if !allDone {
+			continue
+		}
+
+		o.logger.Info("reconcile: all subtasks done, advancing parent",
+			"task_id", parent.ID, "subtask_count", len(subtasks))
+
+		if err := o.checkFeatureCompletion(parent); err != nil {
+			o.logger.Error("reconcile: checkFeatureCompletion failed",
+				"task_id", parent.ID, "error", err)
+			continue
+		}
+		advanced++
+	}
+	return advanced, nil
 }
 
 // handleAgentMergeFailure handles the case where merging an agent's work into
