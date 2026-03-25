@@ -221,3 +221,126 @@ func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
 	o.logger.Info("quickfix transitioning to merging", "task_id", task.ID)
 	return nil
 }
+
+// mergerClient abstracts the merge operations used by the orchestrator.
+// Defined at the consumption site (per architecture rule) so tests can
+// provide stubs without importing the merge package.
+type mergerClient interface {
+	MergeFeatureIntoMain(task *model.Task) (*worktree.MergeResult, error)
+	MergeAgentIntoFeature(agentBranch, featureWorktree string) (*worktree.MergeResult, error)
+}
+
+// contextKeyMergeAttemptCount is the task.Context key for merge retry tracking.
+const contextKeyMergeAttemptCount = "merge_attempt_count"
+
+// MergeAttemptState provides typed access to merge retry tracking fields
+// stored in task.Context. It reads and writes the merge_attempt_count field,
+// replacing stringly-typed map access with a structured API.
+type MergeAttemptState struct {
+	attemptCount int
+}
+
+// LoadMergeAttemptState reads the current merge attempt state from a task's
+// Context map. Returns a zero-valued state if no prior attempts exist.
+func LoadMergeAttemptState(task *model.Task) MergeAttemptState {
+	if task.Context == nil {
+		return MergeAttemptState{}
+	}
+	raw, ok := task.Context[contextKeyMergeAttemptCount]
+	if !ok {
+		return MergeAttemptState{}
+	}
+	switch v := raw.(type) {
+	case float64:
+		return MergeAttemptState{attemptCount: int(v)}
+	case int:
+		return MergeAttemptState{attemptCount: v}
+	default:
+		return MergeAttemptState{}
+	}
+}
+
+// AttemptCount returns the number of merge attempts made so far.
+func (s MergeAttemptState) AttemptCount() int {
+	return s.attemptCount
+}
+
+// Increment bumps the attempt count by one.
+func (s *MergeAttemptState) Increment() {
+	s.attemptCount++
+}
+
+// Save writes the attempt state back into the task's Context map,
+// initializing the map if nil.
+func (s MergeAttemptState) Save(task *model.Task) {
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context[contextKeyMergeAttemptCount] = s.attemptCount
+}
+
+// checkDepthConstraintFailures checks for depth-type constraint failures and
+// requests advisory supervisor diagnosis, stored as a system comment.
+func (o *Orchestrator) checkDepthConstraintFailures(task *model.Task, report *constraints.Report, featureDir string) {
+	if report == nil || o.supervisor == nil {
+		return
+	}
+
+	// Check for depth-type constraint failures.
+	hasDepthFailure := false
+	for _, r := range report.Results {
+		if !r.Passed && r.Type == "depth" {
+			hasDepthFailure = true
+			break
+		}
+	}
+
+	if !hasDepthFailure {
+		return
+	}
+
+	constraintReport := constraints.FormatReport(report)
+	// Get the diff for context.
+	diff := ""
+	if o.worktree != nil {
+		diffOutput, err := getChangedFilesDiff(featureDir, o.worktree.DefaultBranch)
+		if err == nil {
+			diff = diffOutput
+		}
+	}
+
+	var diagnosis supervisor.DepthConstraintDiagnosis
+	prompt := supervisor.DepthConstraintDiagnosisPrompt(task.Title, constraintReport, diff)
+
+	if err := o.supervisor.EvaluateJSON(context.Background(), prompt, &diagnosis); err != nil {
+		o.logger.Warn("supervisor depth constraint diagnosis failed, continuing",
+			"task_id", task.ID, "error", err)
+		return
+	}
+
+	// Store the diagnosis in task context.
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context["depth_diagnosis"] = map[string]any{
+		"violations":       diagnosis.Violations,
+		"root_cause":       diagnosis.RootCause,
+		"recommendation":   diagnosis.Recommendation,
+		"rejection_reason": diagnosis.RejectionReason,
+	}
+
+	// Add supervisor diagnosis as a system comment on the task.
+	if diagnosis.RejectionReason != "" {
+		comment := model.TaskComment{
+			TaskID: task.ID,
+			Author: "system",
+			Body:   fmt.Sprintf("[Depth Constraint Failure] %s", diagnosis.RejectionReason),
+		}
+		if err := o.db.Create(&comment).Error; err != nil {
+			o.logger.Warn("failed to create depth diagnosis comment", "task_id", task.ID, "error", err)
+		}
+	}
+
+	o.logger.Info("depth constraint diagnosis completed",
+		"task_id", task.ID, "rejection_reason", diagnosis.RejectionReason)
+}
