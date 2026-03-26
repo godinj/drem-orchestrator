@@ -13,7 +13,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // mockProcessStarter returns a ProcessStarter that creates a real subprocess
@@ -860,65 +859,6 @@ func TestSpawnAgentInWorktree_ConfigVariesByAgentType(t *testing.T) {
 	}
 
 	_ = r.StopAgent(reviewerAgent.ID)
-}
-
-// TestSpawnAgent_PopulatesModelIDAndEffort verifies that ModelID and Effort
-// are populated when using SpawnAgent (which creates a new worktree).
-func TestSpawnAgent_PopulatesModelIDAndEffort(t *testing.T) {
-	db := testutil.NewTestDB(t)
-
-	binDir := t.TempDir()
-	claudeBin := writeFakeClaudeBin(t, binDir, 0)
-
-	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
-	wtMgr := worktree.NewManager(bareRepo, "master")
-
-	r := &Runner{
-		db:              db,
-		startProcess:    StartAgentProcess,
-		tmuxSessionName: "test-session",
-		claudeBin:       claudeBin,
-		maxConcurrent:   4,
-		worktree:        wtMgr,
-		agentConfigs: func(model.AgentType) model.AgentCLIConfig {
-			return model.AgentCLIConfig{Model: "claude-opus", Effort: "high"}
-		},
-		running:     make(map[uuid.UUID]*RunningAgent),
-		completions: make(chan Completion, 4),
-		semaphore:   make(chan struct{}, 4),
-	}
-
-	project := testutil.CreateProject(t, db, "test-project", bareRepo, "master")
-	task := testutil.CreateTask(t, db, project.ID, "Implementation task", model.StatusInProgress)
-
-	prompt := "Implement the feature"
-
-	agent, err := r.SpawnAgent(&task, "test-feature", model.AgentCoder, prompt)
-	if err != nil {
-		t.Fatalf("SpawnAgent: %v", err)
-	}
-
-	// Verify ModelID and Effort were set
-	if agent.ModelID != "claude-opus" {
-		t.Errorf("agent.ModelID = %q, want %q", agent.ModelID, "claude-opus")
-	}
-	if agent.Effort != "high" {
-		t.Errorf("agent.Effort = %q, want %q", agent.Effort, "high")
-	}
-
-	// Verify in DB
-	var dbAgent model.Agent
-	if err := db.First(&dbAgent, "id = ?", agent.ID).Error; err != nil {
-		t.Fatalf("agent not found in DB: %v", err)
-	}
-	if dbAgent.ModelID != "claude-opus" {
-		t.Errorf("dbAgent.ModelID = %q, want %q", dbAgent.ModelID, "claude-opus")
-	}
-	if dbAgent.Effort != "high" {
-		t.Errorf("dbAgent.Effort = %q, want %q", dbAgent.Effort, "high")
-	}
-
-	_ = r.StopAgent(agent.ID)
 }
 
 // TestSpawnAgentInWorktree_FieldsSetBeforeDBCreate verifies that ModelID and
