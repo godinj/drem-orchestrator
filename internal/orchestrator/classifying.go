@@ -69,6 +69,11 @@ func (o *Orchestrator) processClassifyingTasks() {
 			}
 		}
 
+		// Check capacity before spawning the next classifier agent.
+		if !o.runner.CanSpawn() {
+			break
+		}
+
 		classifierPrompt := prompt.Generate(prompt.Opts{
 			Task:         task,
 			Project:      &project,

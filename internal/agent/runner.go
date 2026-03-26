@@ -219,9 +219,23 @@ func (r *Runner) ClaudeBin() string {
 func (r *Runner) CanSpawn() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	// Check in-memory running agents first
 	if len(r.running) >= r.maxConcurrent {
 		return false
 	}
+
+	// Also check database for WORKING agents to account for agents not yet
+	// tracked in memory (e.g., those created outside the runner)
+	if r.db != nil {
+		var count int64
+		if err := r.db.Model(&model.Agent{}).Where("status = ?", model.AgentWorking).Count(&count).Error; err == nil {
+			if count >= int64(r.maxConcurrent) {
+				return false
+			}
+		}
+	}
+
 	if r.dispatchLimiter != nil {
 		ok, _ := r.dispatchLimiter.Allow()
 		return ok
