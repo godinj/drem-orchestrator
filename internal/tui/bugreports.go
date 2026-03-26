@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -507,4 +509,38 @@ func (m Model) loadBugReports() tea.Cmd {
 		}
 		return bugReportsLoadedMsg{reports: reports}
 	}
+}
+
+// handleBugReportPromote starts the promotion workflow: create temp file, spawn editor.
+func (m Model) handleBugReportPromote(report *model.BugReport) (tea.Model, tea.Cmd) {
+	// Create temp file with title and description.
+	tmpFile, err := os.CreateTemp("", "bugreport-promote-*.md")
+	if err != nil {
+		m.err = fmt.Errorf("create temp file: %w", err)
+		return m, nil
+	}
+
+	content := report.Title + "\n\n" + report.Description
+	if _, err := tmpFile.WriteString(content); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpFile.Name())
+		m.err = fmt.Errorf("write temp file: %w", err)
+		return m, nil
+	}
+	tmpFile.Close()
+
+	// Determine editor.
+	editor := os.Getenv("EDITOR")
+	if editor == "" {
+		editor = "vi"
+	}
+
+	tmpPath := tmpFile.Name()
+	bugReportID := report.ID
+
+	// Use tea.ExecProcess to spawn the editor.
+	editorCmd := exec.Command(editor, tmpPath)
+	return m, tea.ExecProcess(editorCmd, func(err error) tea.Msg {
+		return editorFinishedMsg{tempFile: tmpPath, bugReportID: bugReportID, err: err}
+	})
 }

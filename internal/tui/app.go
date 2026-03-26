@@ -10,8 +10,6 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/godinj/drem-orchestrator/internal/ctxmon"
-	"github.com/godinj/drem-orchestrator/internal/model"
 	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
 )
 
@@ -33,93 +31,6 @@ const (
 	FocusBugReports
 	// FocusCsuite means the C-Suite agent dashboard is focused.
 	FocusCsuite
-)
-
-// EventMsg wraps an Event as a tea.Msg.
-type EventMsg Event
-
-// tasksLoadedMsg is sent when the initial task load completes.
-type tasksLoadedMsg struct {
-	tasks []model.Task
-}
-
-// agentsLoadedMsg is sent when the initial agent load completes.
-type agentsLoadedMsg struct {
-	agents []model.Agent
-}
-
-// dataRefreshedMsg is sent after a data refresh from DB completes.
-type dataRefreshedMsg struct {
-	tasks     []model.Task
-	agents    []model.Agent
-	forTaskID *uuid.UUID // which task the detail data was loaded for
-	subtasks  []model.Task
-	agent     *model.Agent
-	comments  []model.TaskComment
-	deps      []depInfo
-}
-
-// periodicRefreshMsg triggers a periodic data refresh from the DB.
-type periodicRefreshMsg struct{}
-
-// periodicRefreshInterval is how often the TUI re-reads agent data from the
-// DB, so that continuously-updated fields like context_used_pct are visible
-// without waiting for an orchestrator event.
-const periodicRefreshInterval = 2 * time.Second
-
-// logCapturedMsg carries captured tmux pane output.
-type logCapturedMsg struct {
-	forTaskID uuid.UUID
-	text      string
-	err       error
-}
-
-// orchLogCapturedMsg carries orchestrator log file content.
-type orchLogCapturedMsg struct {
-	forTaskID uuid.UUID
-	text      string
-	err       error
-}
-
-// supervisorSpawnedMsg carries the result of spawning a supervisor session.
-type supervisorSpawnedMsg struct {
-	sessionName string
-	err         error
-}
-
-// reviewerSpawnedMsg carries the result of spawning a reviewer session.
-type reviewerSpawnedMsg struct {
-	sessionName string
-	err         error
-}
-
-// fixerSpawnedMsg carries the result of spawning a fixer session.
-type fixerSpawnedMsg struct {
-	sessionName string
-	err         error
-}
-
-// feedbackAction tracks what action triggered the feedback dialog.
-type feedbackAction int
-
-const (
-	feedbackNone                feedbackAction = iota
-	feedbackAddComment                         // add comment to task
-	feedbackTestReviewReject                   // reject test review with feedback
-	feedbackClarificationAnswer                // answer a clarification question
-	feedbackBugReportComment                   // add comment to bug report
-)
-
-// confirmAction tracks a pending gate action awaiting user confirmation.
-type confirmAction int
-
-const (
-	confirmNone              confirmAction = iota
-	confirmPlanApprove                     // approve plan (plan_review → test_writing)
-	confirmPlanReject                      // reject plan (plan_review → planning)
-	confirmTestReviewApprove               // approve test review (test_review → in_progress)
-	confirmTestPass                        // pass testing (testing_ready → merging)
-	confirmTestFail                        // fail testing (testing_ready → in_progress)
 )
 
 // Model is the root Bubble Tea model that composes all TUI sub-models.
@@ -384,39 +295,16 @@ func (m Model) View() string {
 	// Help bar at the bottom.
 	helpBar := m.renderHelpBar()
 
-	// Calculate panel heights.
-	// Title (1) + status bar (1) + blank (1) + help bar (1) + panel borders (4) = 8 overhead.
-	overhead := 8
-	availableHeight := m.height - overhead
-	if availableHeight < 4 {
-		availableHeight = 4
-	}
-
-	// Split: upper panels (60%), detail panel (40%).
-	upperHeight := availableHeight * 6 / 10
-	detailHeight := availableHeight - upperHeight
-	if upperHeight < 3 {
-		upperHeight = 3
-	}
-	if detailHeight < 3 {
-		detailHeight = 3
-	}
-
-	// Split width: tasks (60%) | agents (40%).
-	innerWidth := m.width - 2 // Account for outer margin.
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
-	tasksWidth := innerWidth * 6 / 10
-	agentsWidth := innerWidth - tasksWidth
+	// Compute layout dimensions (shared with updatePanelSizes).
+	d := m.computePanelDimensions()
 
 	// Update panel sizes.
-	m.board.width = tasksWidth - 4 // Account for panel border + padding.
-	m.board.height = upperHeight - 2
-	m.agents.width = agentsWidth - 4
-	m.agents.height = upperHeight - 2
-	m.detail.width = innerWidth - 4
-	m.detail.height = detailHeight - 2
+	m.board.width = d.tasksWidth - 4 // Account for panel border + padding.
+	m.board.height = d.upperHeight - 2
+	m.agents.width = d.agentsWidth - 4
+	m.agents.height = d.upperHeight - 2
+	m.detail.width = d.innerWidth - 4
+	m.detail.height = d.detailHeight - 2
 
 	// Render panels.
 	boardLabel := " Tasks "
@@ -424,8 +312,8 @@ func (m Model) View() string {
 		boardLabel = " Tasks (active) "
 	}
 	tasksPanel := panelStyle.
-		Width(tasksWidth).
-		Height(upperHeight).
+		Width(d.tasksWidth).
+		Height(d.upperHeight).
 		BorderForeground(m.panelBorderColor(FocusBoard)).
 		Render(lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(boardLabel) + "\n" + m.board.View())
 
@@ -444,8 +332,8 @@ func (m Model) View() string {
 		agentsLabel = strings.TrimSuffix(agentsLabel, " ") + " (active) "
 	}
 	agentsPanel := panelStyle.
-		Width(agentsWidth).
-		Height(upperHeight).
+		Width(d.agentsWidth).
+		Height(d.upperHeight).
 		BorderForeground(m.panelBorderColor(FocusAgents)).
 		Render(lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(agentsLabel) + "\n" + m.agents.View())
 
@@ -453,8 +341,8 @@ func (m Model) View() string {
 
 	m.detail.focused = m.focus == FocusDetail
 	detailPanel := panelStyle.
-		Width(innerWidth).
-		Height(detailHeight).
+		Width(d.innerWidth).
+		Height(d.detailHeight).
 		BorderForeground(m.panelBorderColor(FocusDetail)).
 		Render(lipgloss.NewStyle().Bold(true).Foreground(colorPrimary).Render(" Detail ") + "\n" + m.detail.View())
 
@@ -485,53 +373,6 @@ func (m Model) View() string {
 	parts = append(parts, helpBar)
 
 	return lipgloss.JoinVertical(lipgloss.Left, parts...)
-}
-
-// panelBorderColor returns the border color for a panel based on focus.
-func (m Model) panelBorderColor(panel Focus) lipgloss.Color {
-	if m.focus == panel {
-		return colorPrimary
-	}
-	return lipgloss.Color("238")
-}
-
-// updatePanelSizes recalculates panel dimensions after a window resize.
-// These are persisted on the sub-models so that scroll offsets can be
-// maintained correctly between Update and View calls.
-func (m *Model) updatePanelSizes() {
-	overhead := 8
-	availableHeight := m.height - overhead
-	if availableHeight < 4 {
-		availableHeight = 4
-	}
-	upperHeight := availableHeight * 6 / 10
-	detailHeight := availableHeight - upperHeight
-	if upperHeight < 3 {
-		upperHeight = 3
-	}
-	if detailHeight < 3 {
-		detailHeight = 3
-	}
-
-	innerWidth := m.width - 2
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
-	tasksWidth := innerWidth * 6 / 10
-	agentsWidth := innerWidth - tasksWidth
-
-	m.board.width = tasksWidth - 4
-	m.board.height = upperHeight - 2
-	m.agents.width = agentsWidth - 4
-	m.agents.height = upperHeight - 2
-	m.detail.width = innerWidth - 4
-	m.detail.height = detailHeight - 2
-
-	// Size overlay text inputs to fit the dialog container.
-	// The overlay is 2/3 of screen width; subtract 4 for border (2) + padding (2).
-	overlayInnerWidth := m.width*2/3 - 4
-	m.create.SetWidth(overlayInnerWidth)
-	m.feedback.SetWidth(overlayInnerWidth)
 }
 
 // updateDetail refreshes the detail panel based on the currently selected task.
@@ -592,199 +433,4 @@ func (m *Model) toggleBoardCollapse() {
 		}
 	}
 	m.board.trackSelected()
-}
-
-// confirmActionLabel returns a human-readable label for the pending confirmation.
-func confirmActionLabel(action confirmAction) string {
-	switch action {
-	case confirmPlanApprove:
-		return "Approve plan"
-	case confirmPlanReject:
-		return "Reject plan"
-	case confirmTestReviewApprove:
-		return "Approve test review"
-	case confirmTestPass:
-		return "Pass testing"
-	case confirmTestFail:
-		return "Fail testing"
-	default:
-		return ""
-	}
-}
-
-// renderConfirmPrompt renders the gate action confirmation prompt.
-func (m Model) renderConfirmPrompt() string {
-	label := confirmActionLabel(m.confirm)
-	if label == "" {
-		return ""
-	}
-
-	taskTitle := ""
-	if selected := m.board.Selected(); selected != nil {
-		taskTitle = selected.Title
-		if len(taskTitle) > 40 {
-			taskTitle = taskTitle[:39] + "\u2026"
-		}
-	}
-
-	style := lipgloss.NewStyle().Foreground(colorWarning).Bold(true)
-	return style.Render(fmt.Sprintf("  Confirm: %s for \"%s\"? [y]es / [n]o", label, taskTitle))
-}
-
-// renderBugReportsScreen renders the full-screen bug report view.
-func (m Model) renderBugReportsScreen() string {
-	// Update bug report panel sizes.
-	innerWidth := m.width - 4 // account for border + padding
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
-	m.bugreports.width = innerWidth
-	m.bugreports.height = m.height - 4 // account for border
-
-	content := m.bugreports.View()
-
-	// Error line.
-	if m.err != nil {
-		content += "\n" + lipglossRender(colorDanger, fmt.Sprintf("Error: %v", m.err))
-	}
-
-	return panelStyle.
-		Width(m.width - 2).
-		Height(m.height - 2).
-		BorderForeground(colorPrimary).
-		Render(content)
-}
-
-// listenForEvents returns a Cmd that blocks on the events channel and wraps
-// the received Event as a tea.Msg.
-func listenForEvents(events <-chan Event) tea.Cmd {
-	return func() tea.Msg {
-		e, ok := <-events
-		if !ok {
-			return nil
-		}
-		return EventMsg(e)
-	}
-}
-
-// loadTasks returns a Cmd that queries all tasks for the project from DB.
-func (m Model) loadTasks() tea.Cmd {
-	db := m.db
-	projectID := m.projectID
-	return func() tea.Msg {
-		var tasks []model.Task
-		db.Where("project_id = ?", projectID).
-			Order("priority desc, created_at").
-			Find(&tasks)
-		return tasksLoadedMsg{tasks: tasks}
-	}
-}
-
-// loadAgents returns a Cmd that queries all agents for the project from DB.
-func (m Model) loadAgents() tea.Cmd {
-	db := m.db
-	projectID := m.projectID
-	return func() tea.Msg {
-		var agents []model.Agent
-		db.Where("project_id = ?", projectID).Find(&agents)
-		return agentsLoadedMsg{agents: agents}
-	}
-}
-
-// refreshData returns a Cmd that reloads tasks, agents, and detail context from DB.
-func (m Model) refreshData() tea.Cmd {
-	db := m.db
-	projectID := m.projectID
-	selectedTask := m.board.Selected()
-
-	// Capture the task ID so the receiver can detect stale results.
-	var forTaskID *uuid.UUID
-	if selectedTask != nil {
-		id := selectedTask.ID
-		forTaskID = &id
-	}
-
-	return func() tea.Msg {
-		var tasks []model.Task
-		db.Where("project_id = ?", projectID).
-			Order("priority desc, created_at").
-			Find(&tasks)
-
-		var agents []model.Agent
-		db.Where("project_id = ?", projectID).Find(&agents)
-
-		// Enrich working agents with context usage from transcript if
-		// the runner's contextMonitorLoop hasn't populated it (e.g.
-		// after a drem restart when pre-existing agents aren't in the
-		// runner's in-memory map).
-		for i := range agents {
-			ag := &agents[i]
-			if ag.Status != model.AgentWorking || ag.WorktreePath == "" {
-				continue
-			}
-			if ag.Config != nil {
-				if _, ok := ag.Config["context_used_pct"]; ok {
-					continue
-				}
-			}
-			usage, err := ctxmon.ReadTranscriptUsage(ag.WorktreePath)
-			if err != nil || usage == nil {
-				continue
-			}
-			if ag.Config == nil {
-				ag.Config = make(model.JSONField)
-			}
-			ag.Config["context_used_pct"] = float64(usage.UsedPercent)
-			ag.Config["context_window_size"] = float64(usage.ContextWindowSize)
-		}
-
-		var subtasks []model.Task
-		var detailAgent *model.Agent
-		var comments []model.TaskComment
-		var deps []depInfo
-
-		if selectedTask != nil {
-			db.Where("parent_task_id = ?", selectedTask.ID).Find(&subtasks)
-			db.Where("task_id = ?", selectedTask.ID).Order("created_at asc").Find(&comments)
-			if selectedTask.AssignedAgentID != nil {
-				var ag model.Agent
-				if err := db.First(&ag, "id = ?", selectedTask.AssignedAgentID).Error; err == nil {
-					detailAgent = &ag
-				}
-			}
-			// Fallback for plan_review tasks whose assignment was cleared:
-			// find the project's planner agent so the user can still jump
-			// to its window (if it exists).
-			if detailAgent == nil && selectedTask.Status == model.StatusPlanReview {
-				var ag model.Agent
-				if err := db.Where("project_id = ? AND agent_type = ? AND tmux_session != ''",
-					projectID, model.AgentPlanner).
-					Order("updated_at desc").First(&ag).Error; err == nil {
-					detailAgent = &ag
-				}
-			}
-
-			// Load dependency tasks for display.
-			// Cast to []string to avoid JSONArray's driver.Valuer
-			// serialising the slice as a JSON string in the IN clause.
-			if len(selectedTask.DependencyIDs) > 0 {
-				var depTasks []model.Task
-				depIDs := []string(selectedTask.DependencyIDs)
-				db.Where("id IN ?", depIDs).Select("id, title, status").Find(&depTasks)
-				for _, dt := range depTasks {
-					deps = append(deps, depInfo{Title: dt.Title, Status: dt.Status})
-				}
-			}
-		}
-
-		return dataRefreshedMsg{
-			tasks:     tasks,
-			agents:    agents,
-			forTaskID: forTaskID,
-			subtasks:  subtasks,
-			agent:     detailAgent,
-			comments:  comments,
-			deps:      deps,
-		}
-	}
 }
