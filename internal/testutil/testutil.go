@@ -308,6 +308,26 @@ func CreateAgent(t *testing.T, db *gorm.DB, taskID uuid.UUID, agentType model.Ag
 	return ag
 }
 
+// CreateAgentWithOptions creates a test agent in the database with specified
+// ModelID and Effort fields and returns it.
+func CreateAgentWithOptions(t *testing.T, db *gorm.DB, taskID uuid.UUID, agentType model.AgentType, status model.AgentStatus, modelID, effort string) model.Agent {
+	t.Helper()
+	ag := model.Agent{
+		ID:        uuid.New(),
+		AgentType: agentType,
+		Status:    status,
+		ModelID:   modelID,
+		Effort:    effort,
+	}
+	if taskID != uuid.Nil {
+		ag.CurrentTaskID = &taskID
+	}
+	if err := db.Create(&ag).Error; err != nil {
+		t.Fatalf("create test agent with options: %v", err)
+	}
+	return ag
+}
+
 // ---------------------------------------------------------------------------
 // C-Suite entity factory helpers
 // ---------------------------------------------------------------------------

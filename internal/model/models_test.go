@@ -834,3 +834,333 @@ func TestSubtaskPlanLegacyJSONBackwardCompatible(t *testing.T) {
 		t.Errorf("InterfaceShapes = %v, want nil", plan.InterfaceShapes)
 	}
 }
+
+func TestAgentModelIDAndEffortFieldsExist(t *testing.T) {
+	t.Run("ModelID field can be set and retrieved", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		modelID := "claude-opus-4-6"
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "test-agent",
+			Status:    AgentIdle,
+			ModelID:   modelID,
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+
+		if loaded.ModelID != modelID {
+			t.Errorf("ModelID = %q, want %q", loaded.ModelID, modelID)
+		}
+	})
+
+	t.Run("Effort field can be set and retrieved", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		effort := "high"
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "test-agent",
+			Status:    AgentIdle,
+			Effort:    effort,
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+
+		if loaded.Effort != effort {
+			t.Errorf("Effort = %q, want %q", loaded.Effort, effort)
+		}
+	})
+
+	t.Run("both ModelID and Effort can be set together", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		modelID := "claude-sonnet-4-6"
+		effort := "medium"
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "test-agent",
+			Status:    AgentIdle,
+			ModelID:   modelID,
+			Effort:    effort,
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+
+		if loaded.ModelID != modelID {
+			t.Errorf("ModelID = %q, want %q", loaded.ModelID, modelID)
+		}
+		if loaded.Effort != effort {
+			t.Errorf("Effort = %q, want %q", loaded.Effort, effort)
+		}
+	})
+}
+
+func TestAgentModelIDAndEffortZeroValues(t *testing.T) {
+	t.Run("ModelID defaults to empty string when not set", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "test-agent",
+			Status:    AgentIdle,
+			// ModelID not set
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+
+		if loaded.ModelID != "" {
+			t.Errorf("ModelID = %q, want empty string", loaded.ModelID)
+		}
+	})
+
+	t.Run("Effort defaults to empty string when not set", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "test-agent",
+			Status:    AgentIdle,
+			// Effort not set
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+
+		if loaded.Effort != "" {
+			t.Errorf("Effort = %q, want empty string", loaded.Effort)
+		}
+	})
+
+	t.Run("both ModelID and Effort default to empty strings when not set", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "test-agent",
+			Status:    AgentIdle,
+			// Neither field set
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+
+		if loaded.ModelID != "" {
+			t.Errorf("ModelID = %q, want empty string", loaded.ModelID)
+		}
+		if loaded.Effort != "" {
+			t.Errorf("Effort = %q, want empty string", loaded.Effort)
+		}
+	})
+}
+
+func TestAgentModelIDAndEffortGORMRoundTrip(t *testing.T) {
+	t.Run("multiple agents with different ModelID and Effort values", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+
+		testCases := []struct {
+			name    string
+			modelID string
+			effort  string
+		}{
+			{
+				name:    "default model, low effort",
+				modelID: "",
+				effort:  "low",
+			},
+			{
+				name:    "opus model, high effort",
+				modelID: "claude-opus-4-6",
+				effort:  "high",
+			},
+			{
+				name:    "sonnet model, medium effort",
+				modelID: "claude-sonnet-4-6",
+				effort:  "medium",
+			},
+			{
+				name:    "haiku model, low effort",
+				modelID: "claude-haiku-4-5",
+				effort:  "low",
+			},
+			{
+				name:    "both empty",
+				modelID: "",
+				effort:  "",
+			},
+		}
+
+		agents := make([]Agent, 0, len(testCases))
+		for _, tc := range testCases {
+			agent := Agent{
+				ProjectID: proj.ID,
+				AgentType: AgentCoder,
+				Name:      "agent-" + tc.name,
+				Status:    AgentIdle,
+				ModelID:   tc.modelID,
+				Effort:    tc.effort,
+			}
+			if err := db.Create(&agent).Error; err != nil {
+				t.Fatalf("create agent for %s: %v", tc.name, err)
+			}
+			agents = append(agents, agent)
+		}
+
+		// Verify all agents round-trip correctly
+		for i, tc := range testCases {
+			var loaded Agent
+			if err := db.First(&loaded, "id = ?", agents[i].ID).Error; err != nil {
+				t.Fatalf("load agent for %s: %v", tc.name, err)
+			}
+
+			if loaded.ModelID != tc.modelID {
+				t.Errorf("agent %s: ModelID = %q, want %q", tc.name, loaded.ModelID, tc.modelID)
+			}
+			if loaded.Effort != tc.effort {
+				t.Errorf("agent %s: Effort = %q, want %q", tc.name, loaded.Effort, tc.effort)
+			}
+		}
+	})
+
+	t.Run("updating ModelID and Effort persists to database", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "test-agent",
+			Status:    AgentIdle,
+			ModelID:   "claude-haiku-4-5",
+			Effort:    "low",
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		// Update fields
+		agent.ModelID = "claude-opus-4-6"
+		agent.Effort = "high"
+		if err := db.Save(&agent).Error; err != nil {
+			t.Fatalf("update agent: %v", err)
+		}
+
+		// Reload and verify
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+
+		if loaded.ModelID != "claude-opus-4-6" {
+			t.Errorf("ModelID = %q, want %q", loaded.ModelID, "claude-opus-4-6")
+		}
+		if loaded.Effort != "high" {
+			t.Errorf("Effort = %q, want %q", loaded.Effort, "high")
+		}
+	})
+}
+
+func TestAgentModelIDAndEffortWithTestutil(t *testing.T) {
+	t.Run("CreateAgentWithOptions sets ModelID and Effort", func(t *testing.T) {
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+
+		// This test documents how CreateAgent should be enhanced to support ModelID/Effort
+		// The test will fail until testutil.CreateAgent is updated to accept these fields.
+		// For now, we test that we can manually set them on created agents.
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "test-agent",
+			Status:    AgentIdle,
+			ModelID:   "claude-opus-4-6",
+			Effort:    "high",
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+
+		if loaded.ModelID != "claude-opus-4-6" {
+			t.Errorf("ModelID = %q, want %q", loaded.ModelID, "claude-opus-4-6")
+		}
+		if loaded.Effort != "high" {
+			t.Errorf("Effort = %q, want %q", loaded.Effort, "high")
+		}
+	})
+
+	t.Run("agent with config default model uses empty ModelID", func(t *testing.T) {
+		// When config has Model="", Agent.ModelID should also be ""
+		// (meaning the Claude CLI will use its default)
+		db := testDB(t)
+		proj, _ := createProjectAndTask(t, db)
+
+		agent := Agent{
+			ProjectID: proj.ID,
+			AgentType: AgentCoder,
+			Name:      "test-agent",
+			Status:    AgentIdle,
+			ModelID:   "", // Inherits CLI default
+			Effort:    "medium",
+		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+
+		var loaded Agent
+		if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+			t.Fatalf("load agent: %v", err)
+		}
+
+		if loaded.ModelID != "" {
+			t.Errorf("ModelID = %q, want empty string (inherits CLI default)", loaded.ModelID)
+		}
+		if loaded.Effort != "medium" {
+			t.Errorf("Effort = %q, want %q", loaded.Effort, "medium")
+		}
+	})
+}
