@@ -10,13 +10,13 @@ Finally, there is no centralized tracking of agent activity. Turn duration, even
 
 ## Solution
 
-Replace the long-running daemon pattern with a **turn-based lifecycle** managed by a standalone **watcher binary**. C-Suite agents process one turn of work, exit, and get resumed by the watcher via `claude -p --resume` when there is new work to process. The watcher decides when to wake each agent, manages the resume-vs-fresh-start decision based on context usage, and records turn metrics for dashboard display.
+Replace the long-running daemon pattern with a **turn-based lifecycle** managed by a standalone **watcher binary**. C-Suite agents start fresh every turn -- the watcher launches `claude -p` with the agent's system prompt and a "process your turn" message, the agent does its work, exits, and the watcher records the outcome. There is no accumulated context between turns: `state.md` is the sole persistence mechanism, and the event bus provides full visibility into what happened between turns. This eliminates context management entirely for non-Kyle agents -- no save thresholds, no restart protocols, no session tracking.
 
 The watcher is built around three core systems:
 
-1. **Event bus** -- a SQLite-backed event log with delivery tracking and per-agent acknowledgment. The orchestrator emits events to the watcher via a configurable hook (`csuite-watcher event '<json>'`). The watcher evaluates routing rules, creates deliveries for target agents, and resumes those agents. Agents query unacked events on the bus to understand what happened, process them, and ack. The event bus serves dual purposes: it is both a wake-up trigger mechanism and a readable log that gives agents full visibility into system activity.
+1. **Event bus** -- a SQLite-backed event log with delivery tracking and per-agent acknowledgment. The orchestrator emits events to the watcher via a configurable hook (`csuite-watcher event '<json>'`). The watcher evaluates routing rules, creates deliveries for target agents, and wakes those agents. Agents query unacked events on the bus to understand what happened, process them, and ack. The event bus serves dual purposes: it is both a wake-up trigger mechanism and a readable log that gives agents full visibility into system activity.
 
-2. **Agent lifecycle manager** -- manages the subprocess lifecycle for each agent. On wake-up, it checks whether to resume an existing session or start fresh (based on context usage), launches `claude -p --resume "csuite-<agent>"` as a blocking subprocess, waits for exit, parses the JSON output for metrics (tokens, context %), and records the turn outcome. When context is too high, it publishes a `context_save_requested` event, resumes the agent one final time (the agent runs `/csuite-save-and-restart` and exits), then starts a fresh session on the next wake-up.
+2. **Agent lifecycle manager** -- manages the subprocess lifecycle for each agent. On wake-up, it launches `claude -p --system-prompt <prompt> "Process your turn" --output-format json` as a blocking subprocess, waits for exit, parses the JSON output for metrics (tokens, duration), and records the turn outcome. Each turn is a fresh session -- the agent reads `state.md` and the event bus for context, does its work, updates `state.md`, and exits.
 
 3. **Trigger system** -- watches for conditions that should wake an agent: new `.signal` files in agent inboxes (message-driven), new unacked event deliveries (event-driven), and a 5-minute safety timer for Mike to verify event bridge accuracy. Triggers are deduplicated -- if an agent is already running its current turn, new triggers are queued until the turn completes.
 
@@ -27,33 +27,30 @@ Kyle is a special case: he remains interactive (operator talks directly in a tmu
 ## User Stories
 
 1. As an orchestrator operator, I want C-Suite agents to exit cleanly after each turn of work, so that no resources are consumed when agents are idle.
-2. As an orchestrator operator, I want the watcher to resume agents automatically when new messages arrive in their inbox, so that agents respond to inter-agent communication without manual intervention.
+2. As an orchestrator operator, I want the watcher to start agents automatically when new messages arrive in their inbox, so that agents respond to inter-agent communication without manual intervention.
 3. As an orchestrator operator, I want the orchestrator to emit events to the watcher via a configurable hook, so that the watcher can react to task state transitions, agent deaths, and other orchestrator events in real time.
 4. As an orchestrator operator, I want the watcher to route orchestrator events to the appropriate C-Suite agents based on configurable routing rules, so that each agent only wakes up for events relevant to their role.
 5. As an orchestrator operator, I want agents to query unacked events on the event bus when they wake up, so that they have full context about what happened since their last turn without needing a wake-up summary.
 6. As an orchestrator operator, I want agents to acknowledge events after processing them, so that the watcher knows which events have been handled and does not re-deliver them.
 7. As an orchestrator operator, I want all task state transitions to be recorded on the event bus (not just failures), so that agents can read the full stream to understand system state even when no action is required.
-8. As an orchestrator operator, I want the watcher to run `claude -p --resume` as a blocking subprocess, so that the watcher knows exactly when a turn completes and can capture the output for metrics.
-9. As an orchestrator operator, I want the watcher to record turn metrics (duration, tokens in/out, events processed, messages sent, context %, exit status) after each turn, so that I can track agent efficiency and debug performance issues.
-10. As an orchestrator operator, I want the watcher to check an agent's context usage after each turn and decide whether to resume the existing session or start a fresh one, so that context exhaustion is handled automatically without Ross monitoring every agent manually.
-11. As an orchestrator operator, I want the watcher to publish a `context_save_requested` event when an agent's context is too high, so that the agent can run `/csuite-save-and-restart` to save state before the session is retired.
-12. As an orchestrator operator, I want a 5-minute safety timer for Mike, so that Mike periodically verifies the orchestrator pipeline state matches what the event bridge has reported, catching any missed or stale events.
-13. As an orchestrator operator, I want the watcher to deduplicate wake-up triggers, so that an agent is not resumed while it is already processing a turn -- new triggers queue until the current turn completes.
-14. As an orchestrator operator, I want Kyle to remain interactive in a tmux session for now, so that I can talk to Kyle directly while the other agents use the turn-based model.
-15. As an orchestrator operator, I want the watcher to deliver events to Kyle and track his status even though it does not manage his lifecycle, so that Kyle can query the event bus and the dashboard reflects Kyle's state.
-16. As an orchestrator operator, I want the watcher to be a standalone Go binary separate from the orchestrator, so that agents can rebuild and restart the watcher without affecting the running orchestrator.
-17. As an orchestrator operator, I want the watcher to write its own heartbeat, so that Kyle can detect a dead watcher as a fallback alerting mechanism (not the default route).
-18. As an orchestrator operator, I want the watcher to run as a systemd service with automatic restart, so that it recovers from crashes without manual intervention.
-19. As an orchestrator operator, I want the TUI csuite dashboard to display agent status, current/last turn metrics, context %, and token counts (per-turn and cumulative) from the watcher's database, so that I can monitor the C-Suite team at a glance.
-20. As an orchestrator operator, I want the TUI to show a recent events stream from the event bus, so that I can see what's happening in the system in real time.
-21. As an orchestrator operator, I want agent prompts rewritten to use a turn-based processing model instead of a continuous loop, so that agents work naturally with Claude's request-response pattern.
-22. As an orchestrator operator, I want agents to always update their `state.md` at the end of every turn, so that a lightweight state snapshot is always fresh and available for context recovery.
-23. As an orchestrator operator, I want the orchestrator hook to be configurable (enable/disable, command path), so that the orchestrator behaves exactly as it does today when the hook is disabled.
-24. As an orchestrator operator, I want the orchestrator hook to accept a JSON payload as a single argument, so that the interface is extensible without changing the CLI contract when new event fields are added.
-25. As an orchestrator operator, I want the event bus to support retention cleanup (prune events older than a configurable age), so that the database does not grow unbounded.
-26. As an orchestrator operator, I want named Claude Code sessions (e.g., `csuite-mike`) that persist across turns, so that the watcher can resume the correct session and context accumulates naturally until a fresh start is needed.
-27. As an orchestrator operator, I want the watcher and orchestrator packaged in the same codebase, so that this setup can be migrated to new projects as a single unit.
-28. As an orchestrator operator, I want the future option to transition Kyle to turn-based mode once the TUI supports sending messages, so that all five agents eventually use a uniform lifecycle model.
+8. As an orchestrator operator, I want the watcher to run `claude -p` as a blocking subprocess with a fresh session each turn, so that the watcher knows exactly when a turn completes, can capture the output for metrics, and agents never accumulate stale context.
+9. As an orchestrator operator, I want the watcher to record turn metrics (duration, tokens in/out, events processed, messages sent, exit status) after each turn, so that I can track agent efficiency and debug performance issues.
+10. As an orchestrator operator, I want agents to persist all relevant state to `state.md` at the end of every turn, so that fresh sessions can fully reconstruct context from disk without needing accumulated conversation history.
+11. As an orchestrator operator, I want a 5-minute safety timer for Mike, so that Mike periodically verifies the orchestrator pipeline state matches what the event bridge has reported, catching any missed or stale events.
+12. As an orchestrator operator, I want the watcher to deduplicate wake-up triggers, so that an agent is not started while it is already processing a turn -- new triggers queue until the current turn completes.
+13. As an orchestrator operator, I want Kyle to remain interactive in a tmux session for now, so that I can talk to Kyle directly while the other agents use the turn-based model.
+14. As an orchestrator operator, I want the watcher to deliver events to Kyle and track his status even though it does not manage his lifecycle, so that Kyle can query the event bus and the dashboard reflects Kyle's state.
+15. As an orchestrator operator, I want the watcher to be a standalone Go binary separate from the orchestrator, so that agents can rebuild and restart the watcher without affecting the running orchestrator.
+16. As an orchestrator operator, I want the watcher to write its own heartbeat, so that Kyle can detect a dead watcher as a fallback alerting mechanism (not the default route).
+17. As an orchestrator operator, I want the watcher to run as a systemd service with automatic restart, so that it recovers from crashes without manual intervention.
+18. As an orchestrator operator, I want the TUI csuite dashboard to display agent status, current/last turn metrics, and token counts (per-turn and cumulative) from the watcher's database, so that I can monitor the C-Suite team at a glance.
+19. As an orchestrator operator, I want the TUI to show a recent events stream from the event bus, so that I can see what's happening in the system in real time.
+20. As an orchestrator operator, I want agent prompts rewritten to use a turn-based processing model instead of a continuous loop, so that agents work naturally with Claude's request-response pattern.
+21. As an orchestrator operator, I want the orchestrator hook to be configurable (enable/disable, command path), so that the orchestrator behaves exactly as it does today when the hook is disabled.
+22. As an orchestrator operator, I want the orchestrator hook to accept a JSON payload as a single argument, so that the interface is extensible without changing the CLI contract when new event fields are added.
+23. As an orchestrator operator, I want the event bus to support retention cleanup (prune events older than a configurable age), so that the database does not grow unbounded.
+24. As an orchestrator operator, I want the watcher and orchestrator packaged in the same codebase, so that this setup can be migrated to new projects as a single unit.
+25. As an orchestrator operator, I want the future option to transition Kyle to turn-based mode once the TUI supports sending messages, so that all five agents eventually use a uniform lifecycle model.
 
 ## Implementation Decisions
 
@@ -65,7 +62,7 @@ The watcher is a standalone Go binary (`csuite-watcher`) compiled from `cmd/csui
 
 The event bus uses a SQLite database (WAL mode for concurrent read/write) stored at a configurable path (default: `~/.drem-csuite/csuite.db`). Two core tables:
 
-**`events`**: All orchestrator events and internal watcher events. Columns: `id`, `event_type`, `source`, `task_id`, `from_status`, `to_status`, `details` (JSON), `created_at`. All task state transitions are recorded, not just failures. Internal events like `context_save_requested` use `source = 'watcher'`.
+**`events`**: All orchestrator events. Columns: `id`, `event_type`, `source`, `task_id`, `from_status`, `to_status`, `details` (JSON), `created_at`. All task state transitions are recorded, not just failures.
 
 **`event_deliveries`**: Per-agent delivery and acknowledgment tracking. Columns: `event_id` (FK to events), `agent`, `delivered_at`, `acked_at` (NULL until processed). Primary key: `(event_id, agent)`. The watcher creates delivery rows when an event is published. Agents query unacked deliveries, process them, and update `acked_at`.
 
@@ -117,22 +114,20 @@ Events emitted by the hook include all task state transitions (not just failures
 
 ### Agent Lifecycle Manager
 
-The lifecycle manager runs each agent turn as a blocking subprocess:
+The lifecycle manager runs each agent turn as a fresh session in a blocking subprocess:
 
 ```bash
-claude -p "Process your turn" --resume "csuite-mike" --output-format json --dangerously-skip-permissions
+claude -p "Process your turn" \
+  --system-prompt docs/csuite-agents/prompts/mike.md \
+  --output-format json \
+  --dangerously-skip-permissions
 ```
 
-The `--output-format json` flag provides structured output including token counts and session metadata. The lifecycle manager parses this output after the process exits to record metrics.
+Every turn is a new session. There is no accumulated context between turns -- agents read `state.md` and the event bus at the start of each turn to reconstruct context, do their work, update `state.md`, and exit. This eliminates context management entirely: no save thresholds, no `context_save_requested` events, no `restart-context.md`, no session tracking.
 
-**Resume vs. fresh start decision**: After each turn, the lifecycle manager checks the agent's context usage (from the JSON output). If context exceeds the save threshold (default: 85% for C-Suite agents):
+The `--output-format json` flag provides structured output including token counts and session metadata. The lifecycle manager parses this output after the process exits to record turn metrics.
 
-1. Publish a `context_save_requested` event targeting that agent
-2. Resume the agent one more time -- the resume message instructs the agent to run `/csuite-save-and-restart`
-3. After the save turn completes, mark the agent for fresh start
-4. On next wake-up, start a new named session with the agent's system prompt and `restart-context.md` as initial context
-
-**Kyle exception**: Kyle is not managed by the lifecycle manager. He runs in a tmux session interactively. The watcher still creates `event_deliveries` for Kyle and records his status (by reading his heartbeat from `state.md`), but does not resume or terminate him.
+**Kyle exception**: Kyle is not managed by the lifecycle manager. He runs in a tmux session interactively. The watcher still creates `event_deliveries` for Kyle and records his status (by reading his heartbeat from `state.md`), but does not start or terminate him.
 
 ### Trigger System
 
@@ -150,7 +145,7 @@ Three trigger sources, all feeding into the lifecycle manager:
 
 Stored in the same SQLite database as the event bus. Table: `turn_metrics`.
 
-Columns: `id`, `agent`, `session_id`, `started_at`, `ended_at`, `duration_ms`, `tokens_in`, `tokens_out`, `events_processed`, `messages_sent`, `context_pct`, `exit_status`, `error_details`.
+Columns: `id`, `agent`, `started_at`, `ended_at`, `duration_ms`, `tokens_in`, `tokens_out`, `events_processed`, `messages_sent`, `exit_status`, `error_details`.
 
 Per-turn token counts come from the `claude -p --output-format json` response. Cumulative totals are derived by summing over `turn_metrics`.
 
@@ -158,10 +153,9 @@ Per-turn token counts come from the `claude -p --output-format json` response. C
 
 The existing TUI csuite dashboard screen (behind `q` key) is updated to read from the watcher's SQLite database instead of (or in addition to) polling disk state files. The dashboard displays:
 
-- Agent status (running / idle / context-warning / restarting)
+- Agent status (running / idle)
 - Current turn: duration so far, events being processed
 - Last turn: duration, events processed, outcome
-- Context %
 - Tokens in/out: per last turn and cumulative total
 - Turns completed today
 - Recent events stream from the event bus
@@ -173,28 +167,23 @@ All five agent prompts are rewritten to replace the continuous loop model with a
 ```markdown
 ## Turn Structure
 
-When you are resumed, execute these steps in order:
+You start fresh every turn. Your `state.md` and the event bus are your memory.
 
-1. Source protocol library and event bus access
-2. Query unacked events: `sqlite3 ~/.drem-csuite/csuite.db "SELECT e.* FROM events e JOIN event_deliveries d ON e.id = d.event_id WHERE d.agent = '<you>' AND d.acked_at IS NULL ORDER BY e.created_at"`
-3. Process inbox messages (read, respond, archive)
-4. Do your domain-specific work based on events and messages
-5. Ack processed events: `sqlite3 ~/.drem-csuite/csuite.db "UPDATE event_deliveries SET acked_at = datetime('now') WHERE agent = '<you>' AND event_id IN (...)"`
-6. Update state.md
-7. Exit cleanly -- you will be resumed when there is new work
-
-If you receive a `context_save_requested` event, run `/csuite-save-and-restart` instead of normal processing.
+1. Read `~/.drem-csuite/<you>/state.md` for prior context
+2. Source protocol library
+3. Query unacked events: `sqlite3 ~/.drem-csuite/csuite.db "SELECT e.* FROM events e JOIN event_deliveries d ON e.id = d.event_id WHERE d.agent = '<you>' AND d.acked_at IS NULL ORDER BY e.created_at"`
+4. Process inbox messages (read, respond, archive)
+5. Do your domain-specific work based on events and messages
+6. Ack processed events: `sqlite3 ~/.drem-csuite/csuite.db "UPDATE event_deliveries SET acked_at = datetime('now') WHERE agent = '<you>' AND event_id IN (...)"`
+7. Update state.md with current context summary, active patterns, recent decisions
+8. Exit cleanly -- you will be started again when there is new work
 ```
 
-Instructions like "NEVER halt at an idle prompt" and the `csuite_wait_for_inbox` mechanism are removed entirely. Agents are expected to exit after every turn.
+Instructions like "NEVER halt at an idle prompt", the `csuite_wait_for_inbox` mechanism, and all context management protocols (save thresholds, `restart-context.md`, `/csuite-save-and-restart`) are removed entirely. Agents start fresh and exit after every turn. `state.md` is the sole persistence mechanism.
 
 ### Watcher Resilience
 
 The watcher runs as a systemd service with automatic restart (`Restart=always`). As a fallback, it writes its own heartbeat to the SQLite database. Kyle can detect a stale watcher heartbeat when queried by the operator, but this is a fallback alerting mechanism -- Kyle does not actively poll the watcher's health.
-
-### Named Sessions
-
-Each agent uses a stable named session: `csuite-kyle`, `csuite-mike`, `csuite-alex`, `csuite-ross`, `csuite-seth`. Sessions are created with `claude -n "csuite-<agent>"` and resumed with `claude --resume "csuite-<agent>"`. When context is exhausted and a fresh start is needed, the old session is abandoned and a new one is created with the same name.
 
 ## Testing Decisions
 
@@ -206,7 +195,7 @@ A good test for this feature verifies observable behavior through the module's p
 
 **Routing Engine**: Test rule matching (event type + status filters produce correct agent lists), wildcard/catch-all rules, and rules that match no agents. Test that all events produce delivery rows for routed agents and no delivery rows for non-routed agents. These are pure functions operating on routing config and event data. Prior art: existing orchestrator tests that use configuration-driven behavior.
 
-**Agent Lifecycle Manager**: Test the resume-vs-fresh-start decision (given a context percentage and save threshold, determine correct action), the save-state flow (context_save_requested event is published, agent is marked for fresh start), and metric recording (turn outcome is correctly written to turn_metrics table). The subprocess launch itself can be tested with a mock command that simulates claude's JSON output. Prior art: existing agent runner tests in `internal/agent/` that manage subprocess lifecycles.
+**Agent Lifecycle Manager**: Test metric recording (turn outcome is correctly written to turn_metrics table with tokens in/out, duration, exit status), trigger deduplication (agent is not started while already running, triggers queue correctly), and the full turn cycle (subprocess launches, output is parsed, metrics recorded). The subprocess launch itself can be tested with a mock command that simulates claude's JSON output. Prior art: existing agent runner tests in `internal/agent/` that manage subprocess lifecycles.
 
 ## Out of Scope
 
@@ -219,8 +208,8 @@ A good test for this feature verifies observable behavior through the module's p
 
 ## Further Notes
 
-- The event bus and the disk-based inbox serve complementary purposes. The event bus carries orchestrator-originated events (task transitions, agent status changes) and watcher-originated events (context save requests). The disk-based inbox carries inter-agent messages (observations, requests, reports, decisions). Agents check both when they wake up. Over time, the inbox protocol may migrate to the event bus, but that is not in scope here.
-- The watcher's turn-based model aligns Claude Code's natural behavior with the system's needs. Instead of agents fighting to stay alive, they do their work and exit. The watcher handles scheduling, metrics, and context management externally. This should result in more reliable agent behavior and lower resource consumption.
+- The event bus and the disk-based inbox serve complementary purposes. The event bus carries orchestrator-originated events (task transitions, agent status changes). The disk-based inbox carries inter-agent messages (observations, requests, reports, decisions). Agents check both when they start a turn. Over time, the inbox protocol may migrate to the event bus, but that is not in scope here.
+- The watcher's turn-based model aligns Claude Code's natural behavior with the system's needs. Instead of agents fighting to stay alive, they do their work and exit. The watcher handles scheduling and metrics externally. This should result in more reliable agent behavior and lower resource consumption.
+- Fresh starts every turn eliminate context management entirely for non-Kyle agents. There are no save thresholds, no `restart-context.md`, no `/csuite-save-and-restart`, no session tracking. `state.md` is the sole persistence mechanism -- agents curate it at the end of every turn, and it serves as compact, high-signal memory that is strictly better than raw accumulated conversation history (which is mostly stale tool output and query results). This dramatically simplifies Ross's role: Ross no longer monitors context windows or orchestrates save/restart cycles for non-Kyle agents. Ross's remaining responsibilities are temp worker lifecycle management, Kyle's context monitoring (since Kyle still accumulates context as an interactive session), and workforce gap identification.
 - The `claude -p --output-format json` response provides structured data including token counts, which the lifecycle manager parses for metrics. If the JSON schema changes in future Claude Code versions, the parser will need updating, but the interface is stable enough for this use case.
 - The 5-minute safety timer for Mike is a pragmatic concession. In an ideal system, the event bridge captures everything and no polling is needed. The timer exists to catch edge cases where the hook fails silently or an event is missed. If the event bridge proves reliable, the timer interval can be extended or removed.
-- Context thresholds (85% save, 90% hard stop for C-Suite; 80%/85% for temp workers) are carried forward from the existing Ross protocol. The key difference is that the watcher enforces these externally after each turn, rather than Ross monitoring continuously. This is more reliable because the check happens at a natural boundary (turn end) rather than racing against context growth mid-turn.
