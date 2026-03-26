@@ -867,3 +867,217 @@ func writeClassificationJSON(t *testing.T, dir string, output ClassifierOutput) 
 		t.Fatalf("write classification.json: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Capacity checking tests
+//
+// These tests verify that processClassifyingTasks respects the agent pool
+// capacity limit and only dispatches classifier agents when capacity is
+// available. This prevents the classifier agent dispatch from being blocked
+// when max_concurrent_agents slots are exhausted by other agent types.
+// ---------------------------------------------------------------------------
+
+// TestProcessClassifyingTasksWithCapacity verifies successful dispatch when
+// capacity is available in the agent pool.
+func TestProcessClassifyingTasksWithCapacity(t *testing.T) {
+	orch, projectID := setupClassifyingTestWithRunner(t)
+
+	// Create a task in CLASSIFYING with no assigned agent.
+	task := testutil.CreateTask(t, orch.db, projectID, "Task with available capacity", model.StatusClassifying)
+
+	// Dispatch should succeed with available capacity.
+	orch.processClassifyingTasks()
+
+	// Verify the task now has an assigned classifier agent.
+	var reloaded model.Task
+	if err := orch.db.First(&reloaded, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if reloaded.AssignedAgentID == nil {
+		t.Fatal("expected task.AssignedAgentID to be set when capacity is available")
+	}
+
+	// Verify a classifier agent was created.
+	var ag model.Agent
+	if err := orch.db.First(&ag, "id = ?", *reloaded.AssignedAgentID).Error; err != nil {
+		t.Fatalf("load assigned agent: %v", err)
+	}
+	if ag.AgentType != model.AgentClassifier {
+		t.Errorf("agent type = %q, want %q", ag.AgentType, model.AgentClassifier)
+	}
+	if ag.Status != model.AgentWorking {
+		t.Errorf("agent status = %q, want %q", ag.Status, model.AgentWorking)
+	}
+
+	// Clean up: stop the spawned agent to cancel monitoring goroutines.
+	if orch.runner != nil {
+		_ = orch.runner.StopAgent(ag.ID)
+	}
+}
+
+// TestProcessClassifyingTasksNoCapacity verifies that no classifier agent
+// is dispatched when the agent pool is at max capacity.
+func TestProcessClassifyingTasksNoCapacity(t *testing.T) {
+	orch, projectID := setupClassifyingTestWithRunner(t)
+
+	// Create tasks in CLASSIFYING that need classification.
+	task1 := testutil.CreateTask(t, orch.db, projectID, "Task 1", model.StatusClassifying)
+	task2 := testutil.CreateTask(t, orch.db, projectID, "Task 2", model.StatusClassifying)
+
+	// Fill the agent pool to max capacity.
+	// The runner was created with maxConcurrent=4.
+	for i := 0; i < 4; i++ {
+		ag := testutil.CreateAgent(t, orch.db, uuid.New(), model.AgentPlanner, model.AgentWorking)
+		ag.ProjectID = projectID
+		if err := orch.db.Save(&ag).Error; err != nil {
+			t.Fatalf("create agent %d: %v", i, err)
+		}
+	}
+
+	// Attempt to process classifying tasks when pool is full.
+	// The first task should fail to dispatch due to no capacity.
+	orch.processClassifyingTasks()
+
+	// Verify neither task was assigned an agent (no capacity).
+	var reloaded1 model.Task
+	if err := orch.db.First(&reloaded1, "id = ?", task1.ID).Error; err != nil {
+		t.Fatalf("reload task1: %v", err)
+	}
+	if reloaded1.AssignedAgentID != nil {
+		t.Errorf("task1.AssignedAgentID = %v, want nil when pool is full", reloaded1.AssignedAgentID)
+	}
+
+	var reloaded2 model.Task
+	if err := orch.db.First(&reloaded2, "id = ?", task2.ID).Error; err != nil {
+		t.Fatalf("reload task2: %v", err)
+	}
+	if reloaded2.AssignedAgentID != nil {
+		t.Errorf("task2.AssignedAgentID = %v, want nil when pool is full", reloaded2.AssignedAgentID)
+	}
+
+	// Verify both tasks remain in CLASSIFYING status.
+	if reloaded1.Status != model.StatusClassifying {
+		t.Errorf("task1 status = %q, want %q", reloaded1.Status, model.StatusClassifying)
+	}
+	if reloaded2.Status != model.StatusClassifying {
+		t.Errorf("task2 status = %q, want %q", reloaded2.Status, model.StatusClassifying)
+	}
+}
+
+// TestProcessClassifyingTasksMultipleTasks verifies that multiple tasks are
+// processed up to the capacity limit.
+func TestProcessClassifyingTasksMultipleTasks(t *testing.T) {
+	orch, projectID := setupClassifyingTestWithRunner(t)
+
+	// Create 3 tasks in CLASSIFYING (runner has maxConcurrent=4, so we can
+	// dispatch all 3 in one call).
+	task1 := testutil.CreateTask(t, orch.db, projectID, "Task 1", model.StatusClassifying)
+	task2 := testutil.CreateTask(t, orch.db, projectID, "Task 2", model.StatusClassifying)
+	task3 := testutil.CreateTask(t, orch.db, projectID, "Task 3", model.StatusClassifying)
+
+	// Process classifying tasks — all 3 should get dispatched.
+	orch.processClassifyingTasks()
+
+	// Verify all 3 tasks were assigned classifier agents.
+	var tasks []model.Task
+	if err := orch.db.Where("id IN ?", []uuid.UUID{task1.ID, task2.ID, task3.ID}).
+		Find(&tasks).Error; err != nil {
+		t.Fatalf("reload tasks: %v", err)
+	}
+
+	assignedCount := 0
+	for i := range tasks {
+		if tasks[i].AssignedAgentID != nil {
+			assignedCount++
+		}
+	}
+	if assignedCount != 3 {
+		t.Errorf("expected 3 tasks to be assigned agents, got %d", assignedCount)
+	}
+
+	// Verify 3 classifier agents were created.
+	var agents []model.Agent
+	if err := orch.db.Where("agent_type = ?", model.AgentClassifier).
+		Find(&agents).Error; err != nil {
+		t.Fatalf("query classifier agents: %v", err)
+	}
+	if len(agents) != 3 {
+		t.Errorf("expected 3 classifier agents, got %d", len(agents))
+	}
+
+	// Clean up: stop the spawned agents.
+	for _, ag := range agents {
+		if orch.runner != nil {
+			_ = orch.runner.StopAgent(ag.ID)
+		}
+	}
+}
+
+// TestProcessClassifyingTasksCapacityFull verifies that when the agent pool
+// reaches capacity after dispatching some tasks, remaining tasks stay in
+// CLASSIFYING and are not assigned agents.
+func TestProcessClassifyingTasksCapacityFull(t *testing.T) {
+	orch, projectID := setupClassifyingTestWithRunner(t)
+
+	// Create 5 tasks in CLASSIFYING (runner has maxConcurrent=4, so the 5th
+	// should not be dispatched when the first 4 slots are full).
+	task1 := testutil.CreateTask(t, orch.db, projectID, "Task 1", model.StatusClassifying)
+	task2 := testutil.CreateTask(t, orch.db, projectID, "Task 2", model.StatusClassifying)
+	task3 := testutil.CreateTask(t, orch.db, projectID, "Task 3", model.StatusClassifying)
+	task4 := testutil.CreateTask(t, orch.db, projectID, "Task 4", model.StatusClassifying)
+	task5 := testutil.CreateTask(t, orch.db, projectID, "Task 5 - should not dispatch", model.StatusClassifying)
+
+	// Process classifying tasks.
+	// First 4 should dispatch successfully, but the 5th should fail due to capacity.
+	orch.processClassifyingTasks()
+
+	// Reload all tasks.
+	var tasks []model.Task
+	if err := orch.db.Where("id IN ?", []uuid.UUID{task1.ID, task2.ID, task3.ID, task4.ID, task5.ID}).
+		Find(&tasks).Error; err != nil {
+		t.Fatalf("reload tasks: %v", err)
+	}
+
+	// Count how many tasks were assigned agents.
+	assignedCount := 0
+	var assignedIDs map[uuid.UUID]bool = make(map[uuid.UUID]bool)
+	for i := range tasks {
+		if tasks[i].AssignedAgentID != nil {
+			assignedCount++
+			assignedIDs[tasks[i].ID] = true
+		}
+	}
+
+	// At most 4 tasks should be assigned (first 4 succeed, 5th fails due to capacity).
+	if assignedCount > 4 {
+		t.Errorf("expected at most 4 tasks to be assigned, got %d", assignedCount)
+	}
+
+	// Verify task5 was NOT assigned (hit capacity limit).
+	if assignedIDs[task5.ID] {
+		t.Error("task5 should not be assigned when pool reaches capacity")
+	}
+
+	// Verify task5 is still in CLASSIFYING.
+	var reloadedTask5 model.Task
+	if err := orch.db.First(&reloadedTask5, "id = ?", task5.ID).Error; err != nil {
+		t.Fatalf("reload task5: %v", err)
+	}
+	if reloadedTask5.Status != model.StatusClassifying {
+		t.Errorf("task5 status = %q, want %q when capacity is reached", reloadedTask5.Status, model.StatusClassifying)
+	}
+	if reloadedTask5.AssignedAgentID != nil {
+		t.Errorf("task5.AssignedAgentID = %v, want nil when capacity is reached", reloadedTask5.AssignedAgentID)
+	}
+
+	// Clean up: stop the spawned agents.
+	var agents []model.Agent
+	if err := orch.db.Where("agent_type = ?", model.AgentClassifier).
+		Find(&agents).Error; err == nil {
+		for _, ag := range agents {
+			if orch.runner != nil {
+				_ = orch.runner.StopAgent(ag.ID)
+			}
+		}
+	}
+}
