@@ -5,14 +5,20 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
 )
 
+// csuiteStateSnapshot is a package-local alias so that app.go can reference
+// the type without importing the csuite package directly (reducing the tui
+// import count).
+type csuiteStateSnapshot = csuite.StateSnapshot
+
 // csuiteSnapshotMsg carries a new state snapshot from the csuite poller.
 type csuiteSnapshotMsg struct {
-	snapshot csuite.StateSnapshot
+	snapshot csuiteStateSnapshot
 }
 
 // CsuiteModel renders the C-Suite agent dashboard screen.
@@ -260,6 +266,45 @@ func agentMonStatusBadge(status csuite.AgentMonStatus) string {
 		color = colorSecondary
 	}
 	return lipgloss.NewStyle().Foreground(color).Render(string(status))
+}
+
+// renderCsuiteScreen renders the full-screen C-Suite dashboard view.
+func (m Model) renderCsuiteScreen() string {
+	// Update csuite panel sizes.
+	innerWidth := m.width - 4 // account for border + padding
+	if innerWidth < 10 {
+		innerWidth = 10
+	}
+	m.csuite.width = innerWidth
+	m.csuite.height = m.height - 4 // account for border
+
+	content := m.csuite.View()
+
+	// Error line.
+	if m.err != nil {
+		content += "\n" + lipglossRender(colorDanger, fmt.Sprintf("Error: %v", m.err))
+	}
+
+	return panelStyle.
+		Width(m.width - 2).
+		Height(m.height - 2).
+		BorderForeground(colorPrimary).
+		Render(content)
+}
+
+// listenForCsuiteSnapshot returns a Cmd that blocks on the C-Suite snapshot
+// channel and wraps each StateSnapshot as a csuiteSnapshotMsg.
+func listenForCsuiteSnapshot(snaps <-chan csuite.StateSnapshot) tea.Cmd {
+	if snaps == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		snap, ok := <-snaps
+		if !ok {
+			return nil
+		}
+		return csuiteSnapshotMsg{snapshot: snap}
+	}
 }
 
 // heartbeatAge returns a human-readable string for how long ago the heartbeat was.

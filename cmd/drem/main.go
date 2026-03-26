@@ -217,9 +217,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go orch.Run(ctx)
 
-	// Start C-Suite dashboard poller.
-	csuiteQuery := csuite.NewDashboardQuery(database)
-	csuitePoller := csuite.NewPoller(csuiteQuery, csuite.DefaultPollInterval, log.Default())
+	// Start C-Suite dashboard poller backed by disk state files.
+	csuiteSource := csuite.NewDiskSnapshotSource("")
+	csuitePoller := csuite.NewPoller(csuiteSource, csuite.DefaultPollInterval, log.Default())
 	go csuitePoller.Start(ctx)
 
 	// Start TUI (blocks until quit).

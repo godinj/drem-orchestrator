@@ -10,7 +10,6 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
-	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
@@ -125,12 +124,12 @@ const (
 
 // Model is the root Bubble Tea model that composes all TUI sub-models.
 type Model struct {
-	db           *gorm.DB
-	orch         TUIOrchestrator
-	tmux         *tmuxpkg.Manager
-	projectID    uuid.UUID
-	events       <-chan Event
-	csuiteSnaps  <-chan csuite.StateSnapshot
+	db          *gorm.DB
+	orch        TUIOrchestrator
+	tmux        *tmuxpkg.Manager
+	projectID   uuid.UUID
+	events      <-chan Event
+	csuiteSnaps <-chan csuiteStateSnapshot
 
 	board      BoardModel
 	agents     AgentsModel
@@ -162,7 +161,7 @@ func NewModel(
 	events <-chan Event,
 	logPath string,
 	bugreportSvc *bugReportSvc,
-	csuiteSnaps <-chan csuite.StateSnapshot,
+	csuiteSnaps <-chan csuiteStateSnapshot,
 ) Model {
 	return Model{
 		db:           db,
@@ -656,30 +655,6 @@ func (m Model) renderBugReportsScreen() string {
 		Render(content)
 }
 
-// renderCsuiteScreen renders the full-screen C-Suite dashboard view.
-func (m Model) renderCsuiteScreen() string {
-	// Update csuite panel sizes.
-	innerWidth := m.width - 4 // account for border + padding
-	if innerWidth < 10 {
-		innerWidth = 10
-	}
-	m.csuite.width = innerWidth
-	m.csuite.height = m.height - 4 // account for border
-
-	content := m.csuite.View()
-
-	// Error line.
-	if m.err != nil {
-		content += "\n" + lipglossRender(colorDanger, fmt.Sprintf("Error: %v", m.err))
-	}
-
-	return panelStyle.
-		Width(m.width - 2).
-		Height(m.height - 2).
-		BorderForeground(colorPrimary).
-		Render(content)
-}
-
 // listenForEvents returns a Cmd that blocks on the events channel and wraps
 // the received Event as a tea.Msg.
 func listenForEvents(events <-chan Event) tea.Cmd {
@@ -689,21 +664,6 @@ func listenForEvents(events <-chan Event) tea.Cmd {
 			return nil
 		}
 		return EventMsg(e)
-	}
-}
-
-// listenForCsuiteSnapshot returns a Cmd that blocks on the C-Suite snapshot
-// channel and wraps each StateSnapshot as a csuiteSnapshotMsg.
-func listenForCsuiteSnapshot(snaps <-chan csuite.StateSnapshot) tea.Cmd {
-	if snaps == nil {
-		return nil
-	}
-	return func() tea.Msg {
-		snap, ok := <-snaps
-		if !ok {
-			return nil
-		}
-		return csuiteSnapshotMsg{snapshot: snap}
 	}
 }
 

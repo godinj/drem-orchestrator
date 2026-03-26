@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -488,4 +489,22 @@ var allBugStatuses = []model.BugReportStatus{
 	model.BugStatusAcknowledged,
 	model.BugStatusPromoted,
 	model.BugStatusDismissed,
+}
+
+// loadBugReports returns a Cmd that loads bug reports from the service.
+func (m Model) loadBugReports() tea.Cmd {
+	svc := m.bugreportSvc
+	projectID := m.projectID
+	return func() tea.Msg {
+		if svc == nil {
+			return bugReportsLoadedMsg{reports: nil}
+		}
+		reports, err := svc.List(bugreport.ListFilters{
+			ProjectID: &projectID,
+		})
+		if err != nil {
+			return bugReportsLoadedMsg{reports: nil}
+		}
+		return bugReportsLoadedMsg{reports: reports}
+	}
 }

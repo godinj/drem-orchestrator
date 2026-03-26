@@ -9,7 +9,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
 
-	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
@@ -726,24 +725,6 @@ func (m Model) handleEditorFinished(msg editorFinishedMsg) (tea.Model, tea.Cmd) 
 		}
 		_, err := svc.Promote(bugID, title, desc, projectID)
 		return bugReportActionMsg{err: err}
-	}
-}
-
-// loadBugReports returns a Cmd that loads bug reports from the service.
-func (m Model) loadBugReports() tea.Cmd {
-	svc := m.bugreportSvc
-	projectID := m.projectID
-	return func() tea.Msg {
-		if svc == nil {
-			return bugReportsLoadedMsg{reports: nil}
-		}
-		reports, err := svc.List(bugreport.ListFilters{
-			ProjectID: &projectID,
-		})
-		if err != nil {
-			return bugReportsLoadedMsg{reports: nil}
-		}
-		return bugReportsLoadedMsg{reports: reports}
 	}
 }
 
