@@ -7,7 +7,19 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/cli"
 	"github.com/godinj/drem-orchestrator/internal/db"
+	"github.com/godinj/drem-orchestrator/internal/orchestrator"
+	"github.com/godinj/drem-orchestrator/internal/tui"
+	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
+
+// gateCommands is the set of CLI subcommands that require a live orchestrator.
+var gateCommands = map[string]bool{
+	"approve": true,
+	"reject":  true,
+	"answer":  true,
+	"pass":    true,
+	"fail":    true,
+}
 
 // runCLI handles the "drem cli" subcommand. It loads config, opens the
 // database, and delegates to the cli package. This function calls
@@ -46,7 +58,19 @@ func runCLI() {
 		os.Exit(1)
 	}
 
-	if err := cli.Run(database, cliArgs, os.Stdout, jsonMode, nil); err != nil {
+	// If the subcommand is a gate command, create a minimal orchestrator
+	// so the handler methods (approve, reject, answer, pass, fail) can
+	// execute state transitions against the database.
+	var orch tui.TUIOrchestrator
+	if len(cliArgs) > 0 && gateCommands[cliArgs[0]] {
+		var wt *worktree.Manager
+		if cfg.BareRepoPath != "" {
+			wt = worktree.NewManager(cfg.BareRepoPath, cfg.DefaultBranch)
+		}
+		orch = orchestrator.NewForCLI(database, wt)
+	}
+
+	if err := cli.Run(database, cliArgs, os.Stdout, jsonMode, orch); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
