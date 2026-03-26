@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
@@ -124,11 +125,12 @@ const (
 
 // Model is the root Bubble Tea model that composes all TUI sub-models.
 type Model struct {
-	db        *gorm.DB
-	orch      TUIOrchestrator
-	tmux      *tmuxpkg.Manager
-	projectID uuid.UUID
-	events    <-chan Event
+	db           *gorm.DB
+	orch         TUIOrchestrator
+	tmux         *tmuxpkg.Manager
+	projectID    uuid.UUID
+	events       <-chan Event
+	csuiteSnaps  <-chan csuite.StateSnapshot
 
 	board      BoardModel
 	agents     AgentsModel
@@ -160,6 +162,7 @@ func NewModel(
 	events <-chan Event,
 	logPath string,
 	bugreportSvc *bugReportSvc,
+	csuiteSnaps <-chan csuite.StateSnapshot,
 ) Model {
 	return Model{
 		db:           db,
@@ -169,6 +172,7 @@ func NewModel(
 		events:       events,
 		logPath:      logPath,
 		bugreportSvc: bugreportSvc,
+		csuiteSnaps:  csuiteSnaps,
 		board:        NewBoardModel(),
 		agents:       NewAgentsModel(),
 		detail:       NewDetailModel(),
@@ -182,16 +186,20 @@ func NewModel(
 }
 
 // Init returns the initial commands: load tasks, load agents, listen for events,
-// and start the periodic refresh tick.
+// start the periodic refresh tick, and listen for C-Suite snapshots.
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		m.loadTasks(),
 		m.loadAgents(),
 		listenForEvents(m.events),
 		tea.Tick(periodicRefreshInterval, func(time.Time) tea.Msg {
 			return periodicRefreshMsg{}
 		}),
-	)
+	}
+	if m.csuiteSnaps != nil {
+		cmds = append(cmds, listenForCsuiteSnapshot(m.csuiteSnaps))
+	}
+	return tea.Batch(cmds...)
 }
 
 // Update processes messages and returns the updated model and any commands.
@@ -327,7 +335,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case csuiteSnapshotMsg:
 		m.csuite.snapshot = &msg.snapshot
-		return m, nil
+		return m, listenForCsuiteSnapshot(m.csuiteSnaps)
 
 	case editorFinishedMsg:
 		return m.handleEditorFinished(msg)
@@ -681,6 +689,21 @@ func listenForEvents(events <-chan Event) tea.Cmd {
 			return nil
 		}
 		return EventMsg(e)
+	}
+}
+
+// listenForCsuiteSnapshot returns a Cmd that blocks on the C-Suite snapshot
+// channel and wraps each StateSnapshot as a csuiteSnapshotMsg.
+func listenForCsuiteSnapshot(snaps <-chan csuite.StateSnapshot) tea.Cmd {
+	if snaps == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		snap, ok := <-snaps
+		if !ok {
+			return nil
+		}
+		return csuiteSnapshotMsg{snapshot: snap}
 	}
 }
 

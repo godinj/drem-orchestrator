@@ -21,6 +21,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
+	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/merge"
@@ -216,9 +217,14 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go orch.Run(ctx)
 
+	// Start C-Suite dashboard poller.
+	csuiteQuery := csuite.NewDashboardQuery(database)
+	csuitePoller := csuite.NewPoller(csuiteQuery, csuite.DefaultPollInterval, log.Default())
+	go csuitePoller.Start(ctx)
+
 	// Start TUI (blocks until quit).
 	p := tea.NewProgram(
-		tui.NewModel(database, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc),
+		tui.NewModel(database, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots()),
 		tea.WithAltScreen(),
 	)
 	if _, err := p.Run(); err != nil {
