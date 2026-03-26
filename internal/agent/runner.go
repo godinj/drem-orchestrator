@@ -290,6 +290,11 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 	agentID := uuid.New()
 	agentName, sessionName := r.buildAgentNames(task, agentType, agentID)
 	now := time.Now()
+
+	// Resolve agent config for this agent type and populate ModelID and Effort
+	// BEFORE creating the DB record, so these fields are present from the start.
+	cliConfig := r.agentConfigs(agentType)
+
 	agent := &model.Agent{
 		ID:             agentID,
 		ProjectID:      task.ProjectID,
@@ -300,6 +305,8 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 		WorktreePath:   worktreePath,
 		WorktreeBranch: dbBranch,
 		TmuxSession:    sessionName,
+		ModelID:        cliConfig.Model,
+		Effort:         cliConfig.Effort,
 		HeartbeatAt:    &now,
 	}
 	if err := r.db.Create(agent).Error; err != nil {

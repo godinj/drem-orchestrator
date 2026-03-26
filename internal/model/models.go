@@ -72,6 +72,8 @@ type Agent struct {
 	WorktreeBranch  string
 	TmuxSession     string
 	MemorySummary   string
+	ModelID         string // Claude model identifier from config (e.g., "claude-opus")
+	Effort          string // Effort level from config ("low", "medium", "high")
 	HeartbeatAt     *time.Time
 	Config          JSONField  `gorm:"type:text"`
 	CompletedAt     *time.Time // time when agent completion was processed

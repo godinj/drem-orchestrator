@@ -13,6 +13,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
+	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // mockProcessStarter returns a ProcessStarter that creates a real subprocess
@@ -527,6 +528,465 @@ func TestCleanupStaleAgents_NullHeartbeat(t *testing.T) {
 	if updated.Status != model.AgentDead {
 		t.Errorf("agent with null heartbeat status = %q, want %q", updated.Status, model.AgentDead)
 	}
+}
+
+// TestSpawnAgentInWorktree_PopulatesModelID verifies that ModelID is set from
+// the resolved config's Model field when spawning an agent.
+func TestSpawnAgentInWorktree_PopulatesModelID(t *testing.T) {
+	db := testutil.NewTestDB(t)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+
+	// agentConfigs returns a config with Model='claude-opus'
+	r := &Runner{
+		db:              db,
+		startProcess:    StartAgentProcess,
+		tmuxSessionName: "test-session",
+		claudeBin:       claudeBin,
+		maxConcurrent:   4,
+		agentConfigs: func(model.AgentType) model.AgentCLIConfig {
+			return model.AgentCLIConfig{Model: "claude-opus", Effort: "medium"}
+		},
+		running:     make(map[uuid.UUID]*RunningAgent),
+		completions: make(chan Completion, 4),
+		semaphore:   make(chan struct{}, 4),
+	}
+
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+	task := testutil.CreateTask(t, db, project.ID, "Implement feature X", model.StatusInProgress)
+
+	worktreeDir := t.TempDir()
+	prompt := "Implement feature X"
+
+	agent, err := r.SpawnAgentInWorktree(&task, worktreeDir, model.AgentCoder, prompt)
+	if err != nil {
+		t.Fatalf("SpawnAgentInWorktree: %v", err)
+	}
+
+	// Verify ModelID was set in the returned agent
+	if agent.ModelID != "claude-opus" {
+		t.Errorf("agent.ModelID = %q, want %q", agent.ModelID, "claude-opus")
+	}
+
+	// Verify ModelID was set in the DB record
+	var dbAgent model.Agent
+	if err := db.First(&dbAgent, "id = ?", agent.ID).Error; err != nil {
+		t.Fatalf("agent not found in DB: %v", err)
+	}
+	if dbAgent.ModelID != "claude-opus" {
+		t.Errorf("dbAgent.ModelID = %q, want %q", dbAgent.ModelID, "claude-opus")
+	}
+
+	_ = r.StopAgent(agent.ID)
+}
+
+// TestSpawnAgentInWorktree_PopulatesEffort verifies that Effort is set from
+// the resolved config's Effort field when spawning an agent.
+func TestSpawnAgentInWorktree_PopulatesEffort(t *testing.T) {
+	db := testutil.NewTestDB(t)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+
+	// agentConfigs returns a config with Effort='high'
+	r := &Runner{
+		db:              db,
+		startProcess:    StartAgentProcess,
+		tmuxSessionName: "test-session",
+		claudeBin:       claudeBin,
+		maxConcurrent:   4,
+		agentConfigs: func(model.AgentType) model.AgentCLIConfig {
+			return model.AgentCLIConfig{Model: "", Effort: "high"}
+		},
+		running:     make(map[uuid.UUID]*RunningAgent),
+		completions: make(chan Completion, 4),
+		semaphore:   make(chan struct{}, 4),
+	}
+
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+	task := testutil.CreateTask(t, db, project.ID, "Complex refactoring", model.StatusInProgress)
+
+	worktreeDir := t.TempDir()
+	prompt := "Refactor the system"
+
+	agent, err := r.SpawnAgentInWorktree(&task, worktreeDir, model.AgentCoder, prompt)
+	if err != nil {
+		t.Fatalf("SpawnAgentInWorktree: %v", err)
+	}
+
+	// Verify Effort was set in the returned agent
+	if agent.Effort != "high" {
+		t.Errorf("agent.Effort = %q, want %q", agent.Effort, "high")
+	}
+
+	// Verify Effort was set in the DB record
+	var dbAgent model.Agent
+	if err := db.First(&dbAgent, "id = ?", agent.ID).Error; err != nil {
+		t.Fatalf("agent not found in DB: %v", err)
+	}
+	if dbAgent.Effort != "high" {
+		t.Errorf("dbAgent.Effort = %q, want %q", dbAgent.Effort, "high")
+	}
+
+	_ = r.StopAgent(agent.ID)
+}
+
+// TestSpawnAgentInWorktree_PopulatesModelIDAndEffort verifies that both
+// ModelID and Effort are populated together from the resolved config.
+func TestSpawnAgentInWorktree_PopulatesModelIDAndEffort(t *testing.T) {
+	db := testutil.NewTestDB(t)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+
+	// agentConfigs returns a complete config with both Model and Effort
+	r := &Runner{
+		db:              db,
+		startProcess:    StartAgentProcess,
+		tmuxSessionName: "test-session",
+		claudeBin:       claudeBin,
+		maxConcurrent:   4,
+		agentConfigs: func(model.AgentType) model.AgentCLIConfig {
+			return model.AgentCLIConfig{Model: "claude-opus", Effort: "high"}
+		},
+		running:     make(map[uuid.UUID]*RunningAgent),
+		completions: make(chan Completion, 4),
+		semaphore:   make(chan struct{}, 4),
+	}
+
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+	task := testutil.CreateTask(t, db, project.ID, "Complex task", model.StatusInProgress)
+
+	worktreeDir := t.TempDir()
+	prompt := "Complex work"
+
+	agent, err := r.SpawnAgentInWorktree(&task, worktreeDir, model.AgentCoder, prompt)
+	if err != nil {
+		t.Fatalf("SpawnAgentInWorktree: %v", err)
+	}
+
+	// Verify both fields are set
+	if agent.ModelID != "claude-opus" {
+		t.Errorf("agent.ModelID = %q, want %q", agent.ModelID, "claude-opus")
+	}
+	if agent.Effort != "high" {
+		t.Errorf("agent.Effort = %q, want %q", agent.Effort, "high")
+	}
+
+	// Verify both in DB record
+	var dbAgent model.Agent
+	if err := db.First(&dbAgent, "id = ?", agent.ID).Error; err != nil {
+		t.Fatalf("agent not found in DB: %v", err)
+	}
+	if dbAgent.ModelID != "claude-opus" {
+		t.Errorf("dbAgent.ModelID = %q, want %q", dbAgent.ModelID, "claude-opus")
+	}
+	if dbAgent.Effort != "high" {
+		t.Errorf("dbAgent.Effort = %q, want %q", dbAgent.Effort, "high")
+	}
+
+	_ = r.StopAgent(agent.ID)
+}
+
+// TestSpawnAgentInWorktree_EmptyModelID verifies that when Model is an empty
+// string in the config, Agent.ModelID remains empty (not set to default).
+func TestSpawnAgentInWorktree_EmptyModelID(t *testing.T) {
+	db := testutil.NewTestDB(t)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+
+	// agentConfigs explicitly returns empty Model
+	r := &Runner{
+		db:              db,
+		startProcess:    StartAgentProcess,
+		tmuxSessionName: "test-session",
+		claudeBin:       claudeBin,
+		maxConcurrent:   4,
+		agentConfigs: func(model.AgentType) model.AgentCLIConfig {
+			return model.AgentCLIConfig{Model: "", Effort: "medium"}
+		},
+		running:     make(map[uuid.UUID]*RunningAgent),
+		completions: make(chan Completion, 4),
+		semaphore:   make(chan struct{}, 4),
+	}
+
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+	task := testutil.CreateTask(t, db, project.ID, "Task", model.StatusInProgress)
+
+	worktreeDir := t.TempDir()
+	prompt := "Work"
+
+	agent, err := r.SpawnAgentInWorktree(&task, worktreeDir, model.AgentCoder, prompt)
+	if err != nil {
+		t.Fatalf("SpawnAgentInWorktree: %v", err)
+	}
+
+	// Verify ModelID is empty (should not be filled with a default)
+	if agent.ModelID != "" {
+		t.Errorf("agent.ModelID = %q, want %q (empty)", agent.ModelID, "")
+	}
+
+	// Verify in DB record
+	var dbAgent model.Agent
+	if err := db.First(&dbAgent, "id = ?", agent.ID).Error; err != nil {
+		t.Fatalf("agent not found in DB: %v", err)
+	}
+	if dbAgent.ModelID != "" {
+		t.Errorf("dbAgent.ModelID = %q, want %q (empty)", dbAgent.ModelID, "")
+	}
+
+	_ = r.StopAgent(agent.ID)
+}
+
+// TestSpawnAgentInWorktree_EmptyEffort verifies that when Effort is an empty
+// string in the config, Agent.Effort remains empty (edge case validation).
+func TestSpawnAgentInWorktree_EmptyEffort(t *testing.T) {
+	db := testutil.NewTestDB(t)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+
+	// agentConfigs explicitly returns empty Effort
+	r := &Runner{
+		db:              db,
+		startProcess:    StartAgentProcess,
+		tmuxSessionName: "test-session",
+		claudeBin:       claudeBin,
+		maxConcurrent:   4,
+		agentConfigs: func(model.AgentType) model.AgentCLIConfig {
+			return model.AgentCLIConfig{Model: "claude-sonnet", Effort: ""}
+		},
+		running:     make(map[uuid.UUID]*RunningAgent),
+		completions: make(chan Completion, 4),
+		semaphore:   make(chan struct{}, 4),
+	}
+
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+	task := testutil.CreateTask(t, db, project.ID, "Task", model.StatusInProgress)
+
+	worktreeDir := t.TempDir()
+	prompt := "Work"
+
+	agent, err := r.SpawnAgentInWorktree(&task, worktreeDir, model.AgentCoder, prompt)
+	if err != nil {
+		t.Fatalf("SpawnAgentInWorktree: %v", err)
+	}
+
+	// Verify Effort is empty
+	if agent.Effort != "" {
+		t.Errorf("agent.Effort = %q, want %q (empty)", agent.Effort, "")
+	}
+
+	// Verify in DB record
+	var dbAgent model.Agent
+	if err := db.First(&dbAgent, "id = ?", agent.ID).Error; err != nil {
+		t.Fatalf("agent not found in DB: %v", err)
+	}
+	if dbAgent.Effort != "" {
+		t.Errorf("dbAgent.Effort = %q, want %q (empty)", dbAgent.Effort, "")
+	}
+
+	_ = r.StopAgent(agent.ID)
+}
+
+// TestSpawnAgentInWorktree_ConfigVariesByAgentType verifies that different
+// agent types can have different ModelID and Effort values via the agentConfigs function.
+func TestSpawnAgentInWorktree_ConfigVariesByAgentType(t *testing.T) {
+	db := testutil.NewTestDB(t)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+
+	// agentConfigs returns different configs based on agent type
+	r := &Runner{
+		db:              db,
+		startProcess:    StartAgentProcess,
+		tmuxSessionName: "test-session",
+		claudeBin:       claudeBin,
+		maxConcurrent:   4,
+		agentConfigs: func(at model.AgentType) model.AgentCLIConfig {
+			switch at {
+			case model.AgentPlanner:
+				return model.AgentCLIConfig{Model: "claude-opus", Effort: "high"}
+			case model.AgentCoder:
+				return model.AgentCLIConfig{Model: "claude-sonnet", Effort: "medium"}
+			case model.AgentReviewer:
+				return model.AgentCLIConfig{Model: "claude-haiku", Effort: "low"}
+			default:
+				return model.AgentCLIConfig{Model: "", Effort: "medium"}
+			}
+		},
+		running:     make(map[uuid.UUID]*RunningAgent),
+		completions: make(chan Completion, 4),
+		semaphore:   make(chan struct{}, 4),
+	}
+
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+	task := testutil.CreateTask(t, db, project.ID, "Task", model.StatusInProgress)
+
+	worktreeDir := t.TempDir()
+	prompt := "Work"
+
+	// Spawn coder agent (should get claude-sonnet/medium)
+	coderAgent, err := r.SpawnAgentInWorktree(&task, worktreeDir, model.AgentCoder, prompt)
+	if err != nil {
+		t.Fatalf("SpawnAgentInWorktree (coder): %v", err)
+	}
+	if coderAgent.ModelID != "claude-sonnet" {
+		t.Errorf("coder agent ModelID = %q, want %q", coderAgent.ModelID, "claude-sonnet")
+	}
+	if coderAgent.Effort != "medium" {
+		t.Errorf("coder agent Effort = %q, want %q", coderAgent.Effort, "medium")
+	}
+
+	_ = r.StopAgent(coderAgent.ID)
+
+	// Create second task for reviewer agent
+	task2 := testutil.CreateTask(t, db, project.ID, "Task 2", model.StatusInProgress)
+	worktreeDir2 := t.TempDir()
+
+	// Spawn reviewer agent (should get claude-haiku/low)
+	reviewerAgent, err := r.SpawnAgentInWorktree(&task2, worktreeDir2, model.AgentReviewer, prompt)
+	if err != nil {
+		t.Fatalf("SpawnAgentInWorktree (reviewer): %v", err)
+	}
+	if reviewerAgent.ModelID != "claude-haiku" {
+		t.Errorf("reviewer agent ModelID = %q, want %q", reviewerAgent.ModelID, "claude-haiku")
+	}
+	if reviewerAgent.Effort != "low" {
+		t.Errorf("reviewer agent Effort = %q, want %q", reviewerAgent.Effort, "low")
+	}
+
+	_ = r.StopAgent(reviewerAgent.ID)
+}
+
+// TestSpawnAgent_PopulatesModelIDAndEffort verifies that ModelID and Effort
+// are populated when using SpawnAgent (which creates a new worktree).
+func TestSpawnAgent_PopulatesModelIDAndEffort(t *testing.T) {
+	db := testutil.NewTestDB(t)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	wtMgr := worktree.NewManager(bareRepo, "master")
+
+	r := &Runner{
+		db:              db,
+		startProcess:    StartAgentProcess,
+		tmuxSessionName: "test-session",
+		claudeBin:       claudeBin,
+		maxConcurrent:   4,
+		worktree:        wtMgr,
+		agentConfigs: func(model.AgentType) model.AgentCLIConfig {
+			return model.AgentCLIConfig{Model: "claude-opus", Effort: "high"}
+		},
+		running:     make(map[uuid.UUID]*RunningAgent),
+		completions: make(chan Completion, 4),
+		semaphore:   make(chan struct{}, 4),
+	}
+
+	project := testutil.CreateProject(t, db, "test-project", bareRepo, "master")
+	task := testutil.CreateTask(t, db, project.ID, "Implementation task", model.StatusInProgress)
+
+	prompt := "Implement the feature"
+
+	agent, err := r.SpawnAgent(&task, "test-feature", model.AgentCoder, prompt)
+	if err != nil {
+		t.Fatalf("SpawnAgent: %v", err)
+	}
+
+	// Verify ModelID and Effort were set
+	if agent.ModelID != "claude-opus" {
+		t.Errorf("agent.ModelID = %q, want %q", agent.ModelID, "claude-opus")
+	}
+	if agent.Effort != "high" {
+		t.Errorf("agent.Effort = %q, want %q", agent.Effort, "high")
+	}
+
+	// Verify in DB
+	var dbAgent model.Agent
+	if err := db.First(&dbAgent, "id = ?", agent.ID).Error; err != nil {
+		t.Fatalf("agent not found in DB: %v", err)
+	}
+	if dbAgent.ModelID != "claude-opus" {
+		t.Errorf("dbAgent.ModelID = %q, want %q", dbAgent.ModelID, "claude-opus")
+	}
+	if dbAgent.Effort != "high" {
+		t.Errorf("dbAgent.Effort = %q, want %q", dbAgent.Effort, "high")
+	}
+
+	_ = r.StopAgent(agent.ID)
+}
+
+// TestSpawnAgentInWorktree_FieldsSetBeforeDBCreate verifies that ModelID and
+// Effort are set BEFORE the agent record is saved to the database (not in a
+// subsequent update). This is validated by checking that the DB read returns
+// the values with the initial query.
+func TestSpawnAgentInWorktree_FieldsSetBeforeDBCreate(t *testing.T) {
+	db := testutil.NewTestDB(t)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+
+	// Hook into the database to monitor the Create operation
+	createCallCount := 0
+	r := &Runner{
+		db:              db,
+		startProcess:    StartAgentProcess,
+		tmuxSessionName: "test-session",
+		claudeBin:       claudeBin,
+		maxConcurrent:   4,
+		agentConfigs: func(model.AgentType) model.AgentCLIConfig {
+			return model.AgentCLIConfig{Model: "claude-opus", Effort: "high"}
+		},
+		running:     make(map[uuid.UUID]*RunningAgent),
+		completions: make(chan Completion, 4),
+		semaphore:   make(chan struct{}, 4),
+	}
+
+	// Set up a callback on db to track Create operations
+	r.db.Callback().Create().Before("gorm:create").Register("test:track_create", func(db *gorm.DB) {
+		if _, ok := db.Statement.Dest.(*model.Agent); ok {
+			createCallCount++
+		}
+	})
+
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+	task := testutil.CreateTask(t, db, project.ID, "Task", model.StatusInProgress)
+
+	worktreeDir := t.TempDir()
+	prompt := "Work"
+
+	agent, err := r.SpawnAgentInWorktree(&task, worktreeDir, model.AgentCoder, prompt)
+	if err != nil {
+		t.Fatalf("SpawnAgentInWorktree: %v", err)
+	}
+
+	// If the agent record was created at least once
+	if createCallCount < 1 {
+		t.Error("agent record was not created")
+	}
+
+	// Query the DB immediately after spawn — fields should already be present
+	var dbAgent model.Agent
+	if err := db.First(&dbAgent, "id = ?", agent.ID).Error; err != nil {
+		t.Fatalf("failed to query agent from DB: %v", err)
+	}
+
+	// Fields must have been set before the Create call
+	if dbAgent.ModelID != "claude-opus" {
+		t.Errorf("dbAgent.ModelID was not set before Create; got %q, want %q",
+			dbAgent.ModelID, "claude-opus")
+	}
+	if dbAgent.Effort != "high" {
+		t.Errorf("dbAgent.Effort was not set before Create; got %q, want %q",
+			dbAgent.Effort, "high")
+	}
+
+	_ = r.StopAgent(agent.ID)
 }
 
 // contains checks if s contains substr (helper to avoid importing strings in tests).
