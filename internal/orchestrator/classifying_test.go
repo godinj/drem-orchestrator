@@ -1081,3 +1081,181 @@ func TestProcessClassifyingTasksCapacityFull(t *testing.T) {
 		}
 	}
 }
+
+// TestClassifyingTasksEndToEnd verifies the full pipeline for classifier dispatch
+// and task enrichment:
+// 1. Task filing creates task in CLASSIFYING status
+// 2. Orchestrator tick dispatches classifier agent
+// 3. Classifier completes and produces classification.json
+// 4. Task transitions from CLASSIFYING → BACKLOG
+// 5. Task has enriched data: complexity_score, category, title, description
+func TestClassifyingTasksEndToEnd(t *testing.T) {
+	orch, projectID := setupClassifyingTestWithRunner(t)
+	defer func() {
+		// Clean up: stop any running agents
+		var agents []model.Agent
+		if err := orch.db.Where("agent_type = ?", model.AgentClassifier).
+			Find(&agents).Error; err == nil {
+			for _, ag := range agents {
+				if orch.runner != nil {
+					_ = orch.runner.StopAgent(ag.ID)
+				}
+			}
+		}
+	}()
+
+	// Step 1: Create a task in CLASSIFYING status (simulating task filing)
+	task := testutil.CreateTask(t, orch.db, projectID, "Fix authentication bug", model.StatusClassifying)
+
+	// Verify initial state
+	var initial model.Task
+	if err := orch.db.First(&initial, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("load initial task: %v", err)
+	}
+	if initial.Status != model.StatusClassifying {
+		t.Fatalf("expected task in CLASSIFYING, got %q", initial.Status)
+	}
+	if initial.AssignedAgentID != nil {
+		t.Fatal("expected no assigned agent initially")
+	}
+
+	// Step 2: Process classifying tasks to trigger classifier agent dispatch
+	orch.processClassifyingTasks()
+
+	// Reload task to verify agent was assigned
+	var afterDispatch model.Task
+	if err := orch.db.First(&afterDispatch, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task after dispatch: %v", err)
+	}
+	if afterDispatch.AssignedAgentID == nil {
+		t.Fatal("expected task.AssignedAgentID to be set after processClassifyingTasks")
+	}
+
+	// Load the assigned agent
+	var ag model.Agent
+	if err := orch.db.First(&ag, "id = ?", *afterDispatch.AssignedAgentID).Error; err != nil {
+		t.Fatalf("load assigned agent: %v", err)
+	}
+
+	// Verify agent is classifier type
+	if ag.AgentType != model.AgentClassifier {
+		t.Errorf("agent type = %q, want %q", ag.AgentType, model.AgentClassifier)
+	}
+
+	// Verify agent has worktree path (should be main worktree for read-only classifier)
+	if ag.WorktreePath == "" {
+		t.Fatal("agent WorktreePath should be set")
+	}
+
+	// Step 3: Simulate classifier completion
+	// The classifier would have written classification.json to its worktree
+	classifierOutput := ClassifierOutput{
+		Category:        "quickfix",
+		ComplexityScore: 2,
+		Title:           "Fix OAuth authentication bypass",
+		Description:     "The session validation is broken for OAuth tokens due to incomplete token verification logic. Must add explicit token expiry checks.",
+		TargetFiles:     []string{"internal/auth/oauth.go", "internal/auth/session.go"},
+		Rationale:       "Analysis of code paths shows OAuth token validation is missing checks for token expiry and signature validation. This is a critical security issue.",
+	}
+
+	// Write classification.json to agent's worktree
+	writeClassificationJSON(t, ag.WorktreePath, classifierOutput)
+
+	// Update agent status to WORKING to simulate it being spawned
+	ag.Status = model.AgentWorking
+	if err := orch.db.Save(&ag).Error; err != nil {
+		t.Fatalf("update agent to WORKING: %v", err)
+	}
+
+	// Step 4: Call the completion handler
+	if err := orch.onClassifierCompleted(&ag, &afterDispatch); err != nil {
+		t.Fatalf("onClassifierCompleted: %v", err)
+	}
+
+	// Step 5: Verify task transitioned to BACKLOG with enriched data
+	var enriched model.Task
+	if err := orch.db.First(&enriched, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("load enriched task: %v", err)
+	}
+
+	// Verify status transition
+	if enriched.Status != model.StatusBacklog {
+		t.Errorf("status = %q, want %q", enriched.Status, model.StatusBacklog)
+	}
+
+	// Verify category
+	if enriched.Category != model.CategoryQuickFix {
+		t.Errorf("category = %q, want %q", enriched.Category, model.CategoryQuickFix)
+	}
+
+	// Verify complexity score
+	if enriched.ComplexityScore != 2 {
+		t.Errorf("complexity_score = %d, want 2", enriched.ComplexityScore)
+	}
+
+	// Verify title was enriched
+	expectedTitle := "Fix OAuth authentication bypass"
+	if enriched.Title != expectedTitle {
+		t.Errorf("title = %q, want %q", enriched.Title, expectedTitle)
+	}
+
+	// Verify description was enriched
+	expectedDesc := "The session validation is broken for OAuth tokens due to incomplete token verification logic. Must add explicit token expiry checks."
+	if enriched.Description != expectedDesc {
+		t.Errorf("description = %q, want %q", enriched.Description, expectedDesc)
+	}
+
+	// Verify target files are in context
+	if enriched.Context == nil {
+		t.Fatal("task context should not be nil")
+	}
+	targetFilesRaw, ok := enriched.Context["target_files"]
+	if !ok {
+		t.Fatal("context should contain target_files")
+	}
+	targetFiles, ok := targetFilesRaw.([]interface{})
+	if !ok {
+		t.Fatalf("target_files should be []interface{}, got %T", targetFilesRaw)
+	}
+	if len(targetFiles) != 2 {
+		t.Fatalf("expected 2 target files, got %d", len(targetFiles))
+	}
+	if targetFiles[0] != "internal/auth/oauth.go" || targetFiles[1] != "internal/auth/session.go" {
+		t.Errorf("target_files = %v, want [internal/auth/oauth.go internal/auth/session.go]", targetFiles)
+	}
+
+	// Verify rationale is in context
+	rationaleRaw, ok := enriched.Context["rationale"]
+	if !ok {
+		t.Fatal("context should contain rationale")
+	}
+	expectedRationale := "Analysis of code paths shows OAuth token validation is missing checks for token expiry and signature validation. This is a critical security issue."
+	if rationaleRaw != expectedRationale {
+		t.Errorf("rationale = %q, want %q", rationaleRaw, expectedRationale)
+	}
+
+	// Verify agent was marked idle
+	var agentAfterCompletion model.Agent
+	if err := orch.db.First(&agentAfterCompletion, "id = ?", ag.ID).Error; err != nil {
+		t.Fatalf("load agent after completion: %v", err)
+	}
+	if agentAfterCompletion.Status != model.AgentIdle {
+		t.Errorf("agent status = %q, want %q", agentAfterCompletion.Status, model.AgentIdle)
+	}
+	if agentAfterCompletion.CurrentTaskID != nil {
+		t.Fatal("agent should be detached from task after completion")
+	}
+
+	// Verify an event was recorded for the state transition
+	var event model.TaskEvent
+	if err := orch.db.Where("task_id = ?", task.ID).
+		First(&event).Error; err != nil {
+		t.Fatalf("load task event: %v", err)
+	}
+	if event.OldValue != string(model.StatusClassifying) {
+		t.Errorf("event old_value = %q, want %q", event.OldValue, model.StatusClassifying)
+	}
+	if event.NewValue != string(model.StatusBacklog) {
+		t.Errorf("event new_value = %q, want %q", event.NewValue, model.StatusBacklog)
+	}
+}
