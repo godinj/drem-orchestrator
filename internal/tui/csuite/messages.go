@@ -13,44 +13,44 @@ import (
 // MessageListModel displays a scrollable list of inbox messages for the current agent.
 // It supports j/k navigation, Enter to select, 'a' to toggle archive visibility, and 'c' to compose.
 type MessageListModel struct {
-	store             *csuite.Store
-	agentName         string
-	messages          []csuite.CsuiteInboxMessage
-	cursor            int
-	scrollOffset      int
-	width             int
-	height            int
-	showArchived      bool
-	selectedMessageID *uuid.UUID
-	composeTriggered  bool
+	Store             *csuite.Store
+	AgentName         string
+	Messages          []csuite.CsuiteInboxMessage
+	Cursor            int
+	ScrollOffset      int
+	Width             int
+	Height            int
+	ShowArchived      bool
+	SelectedMessageID *uuid.UUID
+	ComposeTriggered  bool
 }
 
 // NewMessageListModel creates a new MessageListModel for the given agent.
 func NewMessageListModel(store *csuite.Store, agentName string) MessageListModel {
 	m := MessageListModel{
-		store:        store,
-		agentName:    agentName,
-		showArchived: false,
+		Store:        store,
+		AgentName:    agentName,
+		ShowArchived: false,
 	}
-	m.loadMessages()
+	m.LoadMessages()
 	return m
 }
 
-// loadMessages fetches messages from the store for the current agent.
-func (m *MessageListModel) loadMessages() {
-	msgs, err := m.store.GetMessagesByAgent(m.agentName)
+// LoadMessages fetches messages from the store for the current agent.
+func (m *MessageListModel) LoadMessages() {
+	msgs, err := m.Store.GetMessagesByAgent(m.AgentName)
 	if err != nil {
 		return
 	}
 
-	// Filter archived messages based on showArchived flag
+	// Filter archived messages based on ShowArchived flag
 	var filtered []csuite.CsuiteInboxMessage
 	for _, msg := range msgs {
-		if !msg.Archived || m.showArchived {
+		if !msg.Archived || m.ShowArchived {
 			filtered = append(filtered, msg)
 		}
 	}
-	m.messages = filtered
+	m.Messages = filtered
 }
 
 // Init returns initial commands for the model.
@@ -67,25 +67,25 @@ func (m MessageListModel) Update(msg tea.Msg) (MessageListModel, tea.Cmd) {
 			switch msg.Runes[0] {
 			case 'j':
 				// Move cursor down
-				if m.cursor < len(m.messages)-1 {
-					m.cursor++
+				if m.Cursor < len(m.Messages)-1 {
+					m.Cursor++
 				}
-				m.adjustScroll()
+				m.AdjustScroll()
 			case 'k':
 				// Move cursor up
-				if m.cursor > 0 {
-					m.cursor--
+				if m.Cursor > 0 {
+					m.Cursor--
 				}
-				m.adjustScroll()
+				m.AdjustScroll()
 			case 'a':
 				// Toggle archive visibility
-				m.showArchived = !m.showArchived
-				m.loadMessages()
-				m.cursor = 0
-				m.scrollOffset = 0
+				m.ShowArchived = !m.ShowArchived
+				m.LoadMessages()
+				m.Cursor = 0
+				m.ScrollOffset = 0
 			case 'c':
 				// Trigger compose
-				m.composeTriggered = true
+				m.ComposeTriggered = true
 				return m, quitCmd()
 			case 'q':
 				// Quit
@@ -93,9 +93,9 @@ func (m MessageListModel) Update(msg tea.Msg) (MessageListModel, tea.Cmd) {
 			}
 		case msg.Type == tea.KeyEnter:
 			// Select current message
-			if m.cursor < len(m.messages) {
-				msgID := m.messages[m.cursor].ID
-				m.selectedMessageID = &msgID
+			if m.Cursor < len(m.Messages) {
+				msgID := m.Messages[m.Cursor].ID
+				m.SelectedMessageID = &msgID
 			}
 		case msg.Type == tea.KeyEsc:
 			// Return to parent view
@@ -113,7 +113,7 @@ func (m MessageListModel) View() string {
 	sections = append(sections, "Messages")
 
 	// Empty state
-	if len(m.messages) == 0 {
+	if len(m.Messages) == 0 {
 		sections = append(sections, "  No messages")
 		sections = append(sections, "")
 		sections = append(sections, "[c] compose  [a] toggle archive  [q] quit")
@@ -121,9 +121,9 @@ func (m MessageListModel) View() string {
 	}
 
 	// Message list
-	for i, msg := range m.messages {
+	for i, msg := range m.Messages {
 		prefix := "  "
-		if i == m.cursor {
+		if i == m.Cursor {
 			prefix = "> "
 		}
 		line := fmt.Sprintf("%s%-20s %s", prefix, msg.FromAgent, msg.Subject)
@@ -137,24 +137,24 @@ func (m MessageListModel) View() string {
 	return strings.Join(sections, "\n")
 }
 
-// adjustScroll keeps the cursor visible in the viewport.
-func (m *MessageListModel) adjustScroll() {
+// AdjustScroll keeps the cursor visible in the viewport.
+func (m *MessageListModel) AdjustScroll() {
 	listHeight := m.listHeight()
-	if len(m.messages) <= listHeight {
-		m.scrollOffset = 0
+	if len(m.Messages) <= listHeight {
+		m.ScrollOffset = 0
 		return
 	}
-	if m.cursor < m.scrollOffset {
-		m.scrollOffset = m.cursor
+	if m.Cursor < m.ScrollOffset {
+		m.ScrollOffset = m.Cursor
 	}
-	if m.cursor >= m.scrollOffset+listHeight {
-		m.scrollOffset = m.cursor - listHeight + 1
+	if m.Cursor >= m.ScrollOffset+listHeight {
+		m.ScrollOffset = m.Cursor - listHeight + 1
 	}
 }
 
 // listHeight returns the available height for the message list.
 func (m MessageListModel) listHeight() int {
-	h := m.height
+	h := m.Height
 	h -= 5 // header, help, spacers
 	if h < 3 {
 		h = 3
@@ -165,40 +165,40 @@ func (m MessageListModel) listHeight() int {
 // MessageDetailModel displays the full content of a single message.
 // It supports Esc to go back and 'r' for quick reply.
 type MessageDetailModel struct {
-	store               *csuite.Store
-	agentName           string
-	messageID           uuid.UUID
-	message             *csuite.CsuiteInboxMessage
-	width               int
-	height              int
-	backTriggered       bool
-	quickReplyTriggered bool
-	replyTo             string
-	replySubject        string
+	Store               *csuite.Store
+	AgentName           string
+	MessageID           uuid.UUID
+	Message             *csuite.CsuiteInboxMessage
+	Width               int
+	Height              int
+	BackTriggered       bool
+	QuickReplyTriggered bool
+	ReplyTo             string
+	ReplySubject        string
 }
 
 // NewMessageDetailModel creates a new MessageDetailModel for the given message.
 func NewMessageDetailModel(store *csuite.Store, messageID uuid.UUID, agentName string) MessageDetailModel {
 	m := MessageDetailModel{
-		store:     store,
-		messageID: messageID,
-		agentName: agentName,
+		Store:     store,
+		MessageID: messageID,
+		AgentName: agentName,
 	}
-	m.loadMessage()
+	m.LoadMessage()
 	return m
 }
 
-// loadMessage fetches the message from the store by querying all messages
+// LoadMessage fetches the message from the store by querying all messages
 // for the agent and filtering by ID.
-func (m *MessageDetailModel) loadMessage() {
-	msgs, err := m.store.GetMessagesByAgent(m.agentName)
+func (m *MessageDetailModel) LoadMessage() {
+	msgs, err := m.Store.GetMessagesByAgent(m.AgentName)
 	if err != nil {
 		return
 	}
 	// Find the message with matching ID
 	for i := range msgs {
-		if msgs[i].ID == m.messageID {
-			m.message = &msgs[i]
+		if msgs[i].ID == m.MessageID {
+			m.Message = &msgs[i]
 			return
 		}
 	}
@@ -216,17 +216,17 @@ func (m MessageDetailModel) Update(msg tea.Msg) (MessageDetailModel, tea.Cmd) {
 		switch msg.Type {
 		case tea.KeyEsc:
 			// Go back to list
-			m.backTriggered = true
+			m.BackTriggered = true
 			return m, quitCmd()
 		case tea.KeyRunes:
 			if len(msg.Runes) > 0 {
 				switch msg.Runes[0] {
 				case 'r':
 					// Quick reply
-					if m.message != nil {
-						m.quickReplyTriggered = true
-						m.replyTo = m.message.FromAgent
-						m.replySubject = "Re: " + m.message.Subject
+					if m.Message != nil {
+						m.QuickReplyTriggered = true
+						m.ReplyTo = m.Message.FromAgent
+						m.ReplySubject = "Re: " + m.Message.Subject
 					}
 					return m, quitCmd()
 				case 'q':
@@ -245,25 +245,25 @@ func (m MessageDetailModel) View() string {
 
 	sections = append(sections, "Message Detail")
 
-	if m.message == nil {
+	if m.Message == nil {
 		sections = append(sections, "  Loading message...")
 		return strings.Join(sections, "\n")
 	}
 
 	// Frontmatter
 	sections = append(sections, "")
-	sections = append(sections, fmt.Sprintf("From: %s", m.message.FromAgent))
-	sections = append(sections, fmt.Sprintf("To: %s", m.message.ToAgent))
-	sections = append(sections, fmt.Sprintf("Subject: %s", m.message.Subject))
-	sections = append(sections, fmt.Sprintf("Priority: %s", m.message.Priority))
-	sections = append(sections, fmt.Sprintf("Type: %s", m.message.Type))
-	sections = append(sections, fmt.Sprintf("Date: %s", m.message.CreatedAt.Format("2006-01-02 15:04:05")))
+	sections = append(sections, fmt.Sprintf("From: %s", m.Message.FromAgent))
+	sections = append(sections, fmt.Sprintf("To: %s", m.Message.ToAgent))
+	sections = append(sections, fmt.Sprintf("Subject: %s", m.Message.Subject))
+	sections = append(sections, fmt.Sprintf("Priority: %s", m.Message.Priority))
+	sections = append(sections, fmt.Sprintf("Type: %s", m.Message.Type))
+	sections = append(sections, fmt.Sprintf("Date: %s", m.Message.CreatedAt.Format("2006-01-02 15:04:05")))
 
 	// Body
 	sections = append(sections, "")
 	sections = append(sections, "---")
 	sections = append(sections, "")
-	sections = append(sections, m.message.Body)
+	sections = append(sections, m.Message.Body)
 
 	// Help bar
 	sections = append(sections, "")

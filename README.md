@@ -200,10 +200,79 @@ Lists all agents with their type, status, current task, and last heartbeat.
 | `A` | Toggle archived agents |
 | `F` | Toggle task filter |
 | `C` | Clean up dead tmux sessions |
+| `w` | Open C-Suite Dashboard (agent monitoring & messaging) |
 | `b` | Open bug report screen |
 | `?` | Toggle context-aware help overlay |
 
 > **Exiting:** The TUI does not have a quit key. To exit, kill the tmux session (e.g. `tmux kill-session`).
+
+### C-Suite Dashboard
+
+The C-Suite Dashboard provides real-time monitoring of orchestrator agents and inter-agent messaging.
+
+**Accessing the Dashboard:**
+Press `w` from the main task board to open the C-Suite Dashboard.
+
+**Dashboard Features:**
+
+- **Agent Health Table** — Lists all registered C-Suite agents with:
+  - Status (online, stale, offline)
+  - Last heartbeat time
+  - Context usage percentage (colors: gray ≤75%, yellow >75%, red >90%)
+  - Inbox count (messages waiting for agent)
+  - Current activity description
+
+- **Pipeline Summary** — Aggregate view of all agents:
+  - Total agent count (online, stale, offline)
+  - Total unread messages across all agents
+
+**Message Management:**
+
+When viewing an agent's messages, use these keybindings:
+
+| Key | Action |
+|-----|--------|
+| `j/k` | Navigate message list |
+| `enter` | Open message detail view |
+| `c` | Compose new message |
+| `a` | Toggle archive (show/hide archived messages) |
+| `esc` | Return to agent list or previous view |
+
+**Message Detail View:**
+
+View the full content of a single message including:
+- Sender and recipient
+- Subject, priority, and message type
+- Timestamp
+- Full message body
+
+| Key | Action |
+|-----|--------|
+| `r` | Quick reply (pre-fills recipient and "Re: " subject) |
+| `esc` | Return to message list |
+
+**Compose View:**
+
+Create a new message with the following fields:
+- **To** — Recipient agent name
+- **Subject** — Message subject line
+- **Priority** — Low, Normal, High, or Critical
+- **Type** — Status, Request, Alert, or Decision
+- **Body** — Message content
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Navigate between fields |
+| `Ctrl+S` or `Enter` | Submit and send message |
+| `esc` | Cancel and return to previous view |
+
+**Features:**
+
+- Messages are stored in the orchestrator database and persist across sessions
+- Archived messages are hidden by default; press `a` in the list view to toggle visibility
+- Quick reply automatically fills the recipient and adds "Re: " prefix to the subject
+- Priority color-coding: Critical (red), High (yellow), Normal (blue), Low (gray)
+- All messages include metadata (from, to, type, priority, timestamp)
 
 ## CLI Commands
 

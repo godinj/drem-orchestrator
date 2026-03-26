@@ -18,6 +18,8 @@ type ComposeModel struct {
 	focusedField   int // 0=to, 1=subject, 2=priority, 3=type, 4=body
 	toInitial      string
 	subjectInitial string
+	Width          int
+	Height         int
 }
 
 // ComposeOption represents an optional configuration for NewComposeModel.
@@ -67,22 +69,27 @@ func NewComposeModel(store *csuite.Store, opts ...ComposeOption) *ComposeModel {
 // Field accessors
 // ---------------------------------------------------------------------------
 
+// To returns the recipient field.
 func (m *ComposeModel) To() string {
 	return m.to
 }
 
+// Subject returns the subject field.
 func (m *ComposeModel) Subject() string {
 	return m.subject
 }
 
+// Body returns the body field.
 func (m *ComposeModel) Body() string {
 	return m.body
 }
 
+// Priority returns the priority field.
 func (m *ComposeModel) Priority() csuite.InboxPriority {
 	return m.priority
 }
 
+// MessageType returns the message type field.
 func (m *ComposeModel) MessageType() csuite.InboxMessageType {
 	return m.messageType
 }

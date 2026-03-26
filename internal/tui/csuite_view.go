@@ -7,8 +7,10 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
+	csuiteTUI "github.com/godinj/drem-orchestrator/internal/tui/csuite"
 )
 
 // csuiteStateSnapshot is a package-local alias so that app.go can reference
@@ -21,22 +23,242 @@ type csuiteSnapshotMsg struct {
 	snapshot csuiteStateSnapshot
 }
 
-// CsuiteModel renders the C-Suite agent dashboard screen.
+// viewMode represents the current view in CsuiteModel
+type viewMode int
+
+const (
+	viewDashboard viewMode = iota
+	viewList
+	viewDetail
+	viewCompose
+)
+
+// CsuiteModel renders the C-Suite agent dashboard screen and message views.
 type CsuiteModel struct {
-	snapshot     *csuite.StateSnapshot
-	cursor       int
-	scrollOffset int
-	width        int
-	height       int
+	snapshot          *csuite.StateSnapshot
+	store             *csuite.Store
+	cursor            int
+	scrollOffset      int
+	width             int
+	height            int
+	currentView       viewMode
+	selectedAgentName string
+	selectedMessageID *uuid.UUID
+
+	// Child models
+	messageList   csuiteTUI.MessageListModel
+	messageDetail csuiteTUI.MessageDetailModel
+	composeModel  *csuiteTUI.ComposeModel
 }
 
 // NewCsuiteModel creates an empty CsuiteModel.
 func NewCsuiteModel() CsuiteModel {
-	return CsuiteModel{}
+	return CsuiteModel{
+		currentView: viewDashboard,
+	}
 }
 
-// View renders the C-Suite dashboard screen.
-func (c CsuiteModel) View() string {
+// SetStore sets the store for the CsuiteModel to enable message operations.
+func (c *CsuiteModel) SetStore(store *csuite.Store) {
+	c.store = store
+}
+
+// Init returns initial commands for the CsuiteModel.
+func (c CsuiteModel) Init() tea.Cmd {
+	return nil
+}
+
+// Update handles keyboard input for navigation and view switching.
+func (c *CsuiteModel) Update(msg tea.Msg) tea.Cmd {
+	switch msg := msg.(type) {
+	case tea.KeyMsg:
+		switch c.currentView {
+		case viewDashboard:
+			return c.updateDashboard(msg)
+		case viewList:
+			return c.updateList(msg)
+		case viewDetail:
+			return c.updateDetail(msg)
+		case viewCompose:
+			return c.updateCompose(msg)
+		}
+	}
+	return nil
+}
+
+// updateDashboard handles keyboard input for the dashboard view.
+func (c *CsuiteModel) updateDashboard(msg tea.KeyMsg) tea.Cmd {
+	switch {
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0:
+		switch msg.Runes[0] {
+		case 'j':
+			// Move cursor down
+			if c.snapshot != nil && c.cursor < len(c.snapshot.AgentSummaries)-1 {
+				c.cursor++
+				c.adjustScroll()
+			}
+		case 'k':
+			// Move cursor up
+			if c.cursor > 0 {
+				c.cursor--
+				c.adjustScroll()
+			}
+		case 'm':
+			// Open message list for selected agent
+			if c.snapshot != nil && c.cursor < len(c.snapshot.AgentSummaries) {
+				c.selectedAgentName = c.snapshot.AgentSummaries[c.cursor].Name
+				if c.store != nil {
+					c.messageList = csuiteTUI.NewMessageListModel(c.store, c.selectedAgentName)
+					c.messageList.Width = c.width
+					c.messageList.Height = c.height
+					c.currentView = viewList
+				}
+			}
+		}
+	case msg.Type == tea.KeyEnter:
+		// Open message list for selected agent
+		if c.snapshot != nil && c.cursor < len(c.snapshot.AgentSummaries) {
+			c.selectedAgentName = c.snapshot.AgentSummaries[c.cursor].Name
+			if c.store != nil {
+				c.messageList = csuiteTUI.NewMessageListModel(c.store, c.selectedAgentName)
+				c.messageList.Width = c.width
+				c.messageList.Height = c.height
+				c.currentView = viewList
+			}
+		}
+	}
+	return nil
+}
+
+// updateList handles keyboard input for the message list view.
+func (c *CsuiteModel) updateList(msg tea.KeyMsg) tea.Cmd {
+	switch {
+	case msg.Type == tea.KeyRunes && len(msg.Runes) > 0:
+		switch msg.Runes[0] {
+		case 'j':
+			// Move cursor down
+			if c.messageList.Cursor < len(c.messageList.Messages)-1 {
+				c.messageList.Cursor++
+				c.messageList.AdjustScroll()
+			}
+		case 'k':
+			// Move cursor up
+			if c.messageList.Cursor > 0 {
+				c.messageList.Cursor--
+				c.messageList.AdjustScroll()
+			}
+		case 'a':
+			// Toggle archive visibility
+			c.messageList.ShowArchived = !c.messageList.ShowArchived
+			c.messageList.LoadMessages()
+			c.messageList.Cursor = 0
+			c.messageList.ScrollOffset = 0
+		case 'c':
+			// Open compose
+			c.composeModel = csuiteTUI.NewComposeModel(c.store)
+			c.composeModel.Width = c.width
+			c.composeModel.Height = c.height
+			c.currentView = viewCompose
+		}
+	case msg.Type == tea.KeyEnter:
+		// Open message detail
+		if c.messageList.Cursor < len(c.messageList.Messages) {
+			msgID := c.messageList.Messages[c.messageList.Cursor].ID
+			c.selectedMessageID = &msgID
+			c.messageDetail = csuiteTUI.NewMessageDetailModel(c.store, msgID, c.selectedAgentName)
+			c.messageDetail.Width = c.width
+			c.messageDetail.Height = c.height
+			c.currentView = viewDetail
+		}
+	case msg.Type == tea.KeyEsc:
+		// Go back to dashboard
+		c.currentView = viewDashboard
+		c.selectedAgentName = ""
+	}
+	return nil
+}
+
+// updateDetail handles keyboard input for the message detail view.
+func (c *CsuiteModel) updateDetail(msg tea.KeyMsg) tea.Cmd {
+	switch msg.Type {
+	case tea.KeyEsc:
+		// Go back to list
+		c.currentView = viewList
+		c.selectedMessageID = nil
+	case tea.KeyRunes:
+		if len(msg.Runes) > 0 {
+			switch msg.Runes[0] {
+			case 'r':
+				// Quick reply
+				if c.messageDetail.Message != nil {
+					c.composeModel = csuiteTUI.NewComposeModel(c.store,
+						csuiteTUI.WithQuickReply(c.messageDetail.Message.FromAgent, c.messageDetail.Message.Subject))
+					c.composeModel.Width = c.width
+					c.composeModel.Height = c.height
+					c.currentView = viewCompose
+				}
+			}
+		}
+	}
+	return nil
+}
+
+// updateCompose handles keyboard input for the compose view.
+func (c *CsuiteModel) updateCompose(msg tea.KeyMsg) tea.Cmd {
+	if c.composeModel == nil {
+		return nil
+	}
+
+	switch msg.Type {
+	case tea.KeyEsc:
+		// Cancel and go back to list
+		c.composeModel.Cancel()
+		c.currentView = viewList
+		c.composeModel = nil
+	case tea.KeyCtrlS, tea.KeyEnter:
+		// Submit the form
+		// Determine the "from" agent based on context
+		// For now, we'll use a placeholder - in a real app, this would come from the session
+		fromAgent := "operator"
+		if err := c.composeModel.Submit(fromAgent); err == nil {
+			// Reload messages and return to list
+			c.messageList.LoadMessages()
+			c.currentView = viewList
+			c.composeModel = nil
+		}
+	}
+	return nil
+}
+
+// View renders the appropriate view based on currentView.
+func (c *CsuiteModel) View() string {
+	// Update child model sizes
+	c.messageList.Width = c.width
+	c.messageList.Height = c.height
+	c.messageDetail.Width = c.width
+	c.messageDetail.Height = c.height
+	if c.composeModel != nil {
+		c.composeModel.Width = c.width
+		c.composeModel.Height = c.height
+	}
+
+	switch c.currentView {
+	case viewList:
+		return c.messageList.View()
+	case viewDetail:
+		return c.messageDetail.View()
+	case viewCompose:
+		if c.composeModel != nil {
+			return c.composeModel.View()
+		}
+	}
+
+	// Default: render dashboard
+	return c.renderDashboard()
+}
+
+// renderDashboard renders the C-Suite dashboard screen.
+func (c CsuiteModel) renderDashboard() string {
 	var sections []string
 
 	// Header.
@@ -63,7 +285,7 @@ func (c CsuiteModel) View() string {
 
 	// Help bar.
 	sections = append(sections, "")
-	sections = append(sections, helpStyle.Render("[j/k] navigate  [w/esc] back to dashboard  [?] help"))
+	sections = append(sections, helpStyle.Render("[j/k] navigate  [enter/m] messages  [?] help"))
 
 	return strings.Join(sections, "\n")
 }

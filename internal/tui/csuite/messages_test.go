@@ -19,8 +19,8 @@ import (
 func TestMessageListView_EmptyList(t *testing.T) {
 	store := csuite.NewStore(testutil.NewTestDBWithModels(t, &csuite.CsuiteInboxMessage{}))
 	m := NewMessageListModel(store, "test-agent")
-	m.width = 100
-	m.height = 40
+	m.Width = 100
+	m.Height = 40
 
 	view := m.View()
 
@@ -52,8 +52,8 @@ func TestMessageListView_RendersSingleMessage(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "test-agent")
-	m.width = 100
-	m.height = 40
+	m.Width = 100
+	m.Height = 40
 
 	view := m.View()
 
@@ -88,8 +88,8 @@ func TestMessageListView_RendersPriorityBadges(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "test-agent")
-	m.width = 100
-	m.height = 40
+	m.Width = 100
+	m.Height = 40
 
 	view := m.View()
 
@@ -124,8 +124,8 @@ func TestMessageListView_ShowsActiveMessages(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "test-agent")
-	m.width = 100
-	m.height = 40
+	m.Width = 100
+	m.Height = 40
 
 	view := m.View()
 
@@ -140,17 +140,17 @@ func TestMessageListView_ArchiveToggleFlag(t *testing.T) {
 	store := csuite.NewStore(db)
 
 	m := NewMessageListModel(store, "test-agent")
-	m.width = 100
-	m.height = 40
+	m.Width = 100
+	m.Height = 40
 
 	// Initially showArchived should be false
-	if m.showArchived {
+	if m.ShowArchived {
 		t.Error("showArchived should be false by default")
 	}
 
 	// After toggling, should be true
-	m.showArchived = true
-	if !m.showArchived {
+	m.ShowArchived = true
+	if !m.ShowArchived {
 		t.Error("showArchived should be true after toggle")
 	}
 }
@@ -175,9 +175,9 @@ func TestMessageListView_IndicatesCursorPosition(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "test-agent")
-	m.width = 100
-	m.height = 40
-	m.cursor = 1
+	m.Width = 100
+	m.Height = 40
+	m.Cursor = 1
 
 	view := m.View()
 
@@ -211,13 +211,13 @@ func TestMessageListUpdate_JMovesDown(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "test-agent")
-	m.height = 40
-	m.cursor = 0
+	m.Height = 40
+	m.Cursor = 0
 
 	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 
-	if got.cursor != 1 {
-		t.Errorf("cursor = %d, want 1 after j", got.cursor)
+	if got.Cursor != 1 {
+		t.Errorf("cursor = %d, want 1 after j", got.Cursor)
 	}
 }
 
@@ -241,13 +241,13 @@ func TestMessageListUpdate_KMovesUp(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "test-agent")
-	m.height = 40
-	m.cursor = 1
+	m.Height = 40
+	m.Cursor = 1
 
 	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 
-	if got.cursor != 0 {
-		t.Errorf("cursor = %d, want 0 after k", got.cursor)
+	if got.Cursor != 0 {
+		t.Errorf("cursor = %d, want 0 after k", got.Cursor)
 	}
 }
 
@@ -271,13 +271,13 @@ func TestMessageListUpdate_JClampedAtEnd(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "test-agent")
-	m.height = 40
-	m.cursor = 1
+	m.Height = 40
+	m.Cursor = 1
 
 	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'j'}})
 
-	if got.cursor != 1 {
-		t.Errorf("cursor = %d, want 1 (clamped)", got.cursor)
+	if got.Cursor != 1 {
+		t.Errorf("cursor = %d, want 1 (clamped)", got.Cursor)
 	}
 }
 
@@ -299,13 +299,13 @@ func TestMessageListUpdate_KClampedAtStart(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "test-agent")
-	m.height = 40
-	m.cursor = 0
+	m.Height = 40
+	m.Cursor = 0
 
 	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'k'}})
 
-	if got.cursor != 0 {
-		t.Errorf("cursor = %d, want 0 (clamped)", got.cursor)
+	if got.Cursor != 0 {
+		t.Errorf("cursor = %d, want 0 (clamped)", got.Cursor)
 	}
 }
 
@@ -328,16 +328,16 @@ func TestMessageListUpdate_EnterSelectsMessage(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "test-agent")
-	m.height = 40
-	m.cursor = 0
+	m.Height = 40
+	m.Cursor = 0
 
 	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 
-	if got.selectedMessageID == nil {
+	if got.SelectedMessageID == nil {
 		t.Fatal("selectedMessageID should be set after Enter")
 	}
-	if *got.selectedMessageID != msgID {
-		t.Errorf("selectedMessageID = %v, want %v", *got.selectedMessageID, msgID)
+	if *got.SelectedMessageID != msgID {
+		t.Errorf("selectedMessageID = %v, want %v", *got.SelectedMessageID, msgID)
 	}
 }
 
@@ -346,11 +346,11 @@ func TestMessageListUpdate_CTriggersCompose(t *testing.T) {
 	store := csuite.NewStore(db)
 
 	m := NewMessageListModel(store, "test-agent")
-	m.height = 40
+	m.Height = 40
 
 	got, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'c'}})
 
-	if !got.composeTriggered {
+	if !got.ComposeTriggered {
 		t.Error("composeTriggered should be true after c")
 	}
 	if cmd == nil {
@@ -363,19 +363,19 @@ func TestMessageListUpdate_AToggleArchiveVisibility(t *testing.T) {
 	store := csuite.NewStore(db)
 
 	m := NewMessageListModel(store, "test-agent")
-	m.height = 40
-	m.showArchived = false
+	m.Height = 40
+	m.ShowArchived = false
 
 	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 
-	if !got.showArchived {
+	if !got.ShowArchived {
 		t.Error("showArchived should be true after a")
 	}
 
 	// Toggle again
 	got, _ = got.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'a'}})
 
-	if got.showArchived {
+	if got.ShowArchived {
 		t.Error("showArchived should be false after second a")
 	}
 }
@@ -385,7 +385,7 @@ func TestMessageListUpdate_QuitKey(t *testing.T) {
 	store := csuite.NewStore(db)
 
 	m := NewMessageListModel(store, "test-agent")
-	m.height = 40
+	m.Height = 40
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 
@@ -418,8 +418,8 @@ func TestMessageDetailView_RendersFrontmatter(t *testing.T) {
 	}
 
 	m := NewMessageDetailModel(store, msg.ID, "test-agent")
-	m.width = 100
-	m.height = 40
+	m.Width = 100
+	m.Height = 40
 
 	view := m.View()
 
@@ -457,8 +457,8 @@ func TestMessageDetailView_RenderesBody(t *testing.T) {
 	}
 
 	m := NewMessageDetailModel(store, msg.ID, "test-agent")
-	m.width = 100
-	m.height = 40
+	m.Width = 100
+	m.Height = 40
 
 	view := m.View()
 
@@ -485,8 +485,8 @@ func TestMessageDetailView_ShowsHelpBar(t *testing.T) {
 	}
 
 	m := NewMessageDetailModel(store, msg.ID, "test-agent")
-	m.width = 100
-	m.height = 40
+	m.Width = 100
+	m.Height = 40
 
 	view := m.View()
 
@@ -518,11 +518,11 @@ func TestMessageDetailUpdate_EscGoesBack(t *testing.T) {
 	}
 
 	m := NewMessageDetailModel(store, msg.ID, "test-agent")
-	m.height = 40
+	m.Height = 40
 
 	got, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 
-	if !got.backTriggered {
+	if !got.BackTriggered {
 		t.Error("backTriggered should be true after Esc")
 	}
 	if cmd == nil {
@@ -549,19 +549,19 @@ func TestMessageDetailUpdate_RTriggersQuickReply(t *testing.T) {
 	}
 
 	m := NewMessageDetailModel(store, msg.ID, "test-agent")
-	m.height = 40
+	m.Height = 40
 
 	got, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 
 	// Should set reply fields
-	if !got.quickReplyTriggered {
+	if !got.QuickReplyTriggered {
 		t.Error("quickReplyTriggered should be true after r")
 	}
-	if got.replyTo != senderName {
-		t.Errorf("replyTo = %q, want %q", got.replyTo, senderName)
+	if got.ReplyTo != senderName {
+		t.Errorf("replyTo = %q, want %q", got.ReplyTo, senderName)
 	}
-	if !strings.HasPrefix(got.replySubject, "Re:") {
-		t.Errorf("replySubject should start with 'Re:', got %q", got.replySubject)
+	if !strings.HasPrefix(got.ReplySubject, "Re:") {
+		t.Errorf("replySubject should start with 'Re:', got %q", got.ReplySubject)
 	}
 	if cmd == nil {
 		t.Error("should return a command for quick reply trigger")
@@ -586,15 +586,15 @@ func TestMessageDetailUpdate_QuickReplyPrefillsCorrectly(t *testing.T) {
 	}
 
 	m := NewMessageDetailModel(store, msg.ID, "test-agent")
-	m.height = 40
+	m.Height = 40
 
 	got, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'r'}})
 
-	if got.replyTo != "kyle" {
-		t.Errorf("replyTo = %q, want 'kyle'", got.replyTo)
+	if got.ReplyTo != "kyle" {
+		t.Errorf("replyTo = %q, want 'kyle'", got.ReplyTo)
 	}
-	if got.replySubject != "Re: Test Subject Here" {
-		t.Errorf("replySubject = %q, want 'Re: Test Subject Here'", got.replySubject)
+	if got.ReplySubject != "Re: Test Subject Here" {
+		t.Errorf("replySubject = %q, want 'Re: Test Subject Here'", got.ReplySubject)
 	}
 }
 
@@ -616,7 +616,7 @@ func TestMessageDetailUpdate_QuitKey(t *testing.T) {
 	}
 
 	m := NewMessageDetailModel(store, msg.ID, "test-agent")
-	m.height = 40
+	m.Height = 40
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 
@@ -684,8 +684,8 @@ func TestMessageListScroll_HandlesLongList(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "test-agent")
-	m.width = 100
-	m.height = 10 // Small height to force scrolling
+	m.Width = 100
+	m.Height = 10 // Small height to force scrolling
 
 	view := m.View()
 
@@ -723,8 +723,8 @@ func TestMessageListFilter_FiltersByAgentCorrectly(t *testing.T) {
 	}
 
 	m := NewMessageListModel(store, "agent-a")
-	m.width = 100
-	m.height = 40
+	m.Width = 100
+	m.Height = 40
 
 	view := m.View()
 
