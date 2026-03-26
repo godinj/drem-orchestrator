@@ -5,26 +5,22 @@ test_command          = "go test ./..."
 compile_command       = "go vet ./..."
 
 [agents.classifier]
-  effort = "medium"
+  model  = "claude-haiku-4-5-20251001"
 
 [agents.planner]
-  model  = "claude-opus-4-6"
-  effort = "medium"
+  model  = "claude-haiku-4-5-20251001"
 
 [agents.coder]
-  model  = "claude-sonnet-4-6"
-  effort = "medium"
+  model  = "claude-haiku-4-5-20251001"
 
 [agents.reviewer]
-  model  = "claude-sonnet-4-6"
-  effort = "medium"
+  model  = "claude-haiku-4-5-20251001"
 
 [agents.fixer]
-  model  = "claude-sonnet-4-6"
-  effort = "medium"
+  model  = "claude-haiku-4-5-20251001"
 
 [agents.supervisor]
-  effort = "low"
+  model  = "claude-haiku-4-5-20251001"
 
 [agents.interactive_supervisor]
-  effort = "medium"
+  model  = "claude-haiku-4-5-20251001"
