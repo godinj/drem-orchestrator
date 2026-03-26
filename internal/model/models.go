@@ -62,20 +62,24 @@ type Task struct {
 
 // Agent represents a Claude Code agent working on tasks.
 type Agent struct {
-	ID             uuid.UUID   `gorm:"type:text;primaryKey"`
-	ProjectID      uuid.UUID   `gorm:"type:text;not null;index"`
-	AgentType      AgentType   `gorm:"not null"`
-	Name           string      `gorm:"not null"`
-	Status         AgentStatus `gorm:"not null;default:idle"`
-	CurrentTaskID  *uuid.UUID  `gorm:"type:text"`
-	WorktreePath   string
-	WorktreeBranch string
-	TmuxSession    string
-	MemorySummary  string
-	HeartbeatAt    *time.Time
-	Config         JSONField `gorm:"type:text"`
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	ID              uuid.UUID   `gorm:"type:text;primaryKey"`
+	ProjectID       uuid.UUID   `gorm:"type:text;not null;index"`
+	AgentType       AgentType   `gorm:"not null"`
+	Name            string      `gorm:"not null"`
+	Status          AgentStatus `gorm:"not null;default:idle"`
+	CurrentTaskID   *uuid.UUID  `gorm:"type:text"`
+	WorktreePath    string
+	WorktreeBranch  string
+	TmuxSession     string
+	MemorySummary   string
+	HeartbeatAt     *time.Time
+	Config          JSONField `gorm:"type:text"`
+	CompletedAt     *time.Time // time when agent completion was processed
+	ExitReason      string     // mapped exit reason (success, error, context_limit, killed, timeout)
+	TotalCostUSD    float64    // cumulative API cost from last context monitor reading
+	FinalContextPct int        // final context window usage percentage from last reading
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // TaskEvent records a status change or other significant event on a task.

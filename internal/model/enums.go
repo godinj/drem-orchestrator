@@ -166,3 +166,13 @@ const (
 func (s AgentStatus) String() string {
 	return string(s)
 }
+
+// ExitReason constants for agent completion outcomes.
+const (
+	ExitReasonSuccess      = "success"       // Agent completed successfully
+	ExitReasonContextLimit = "context_limit" // Context window limit reached
+	ExitReasonError        = "error"         // Agent encountered an error
+	ExitReasonKilled       = "killed"        // Agent was forcibly terminated
+	ExitReasonTimeout      = "timeout"       // Agent exceeded timeout
+	ExitReasonDefault      = "unknown"       // Default when exit info is nil
+)

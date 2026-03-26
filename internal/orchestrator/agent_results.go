@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/constraints"
@@ -34,6 +35,9 @@ func (o *Orchestrator) processAgentResult(comp agent.Completion) error {
 		ag.Config["exit_last_tool"] = comp.ExitInfo.LastTool
 		ag.Config["exit_summary"] = comp.ExitInfo.ExitSummary
 	}
+
+	// Populate completion fields (CompletedAt, ExitReason, TotalCostUSD, FinalContextPct)
+	populateAgentCompletionFields(&ag, comp)
 
 	if ag.CurrentTaskID == nil {
 		o.logger.Warn("completed agent has no current task", "agent_id", ag.ID)
@@ -457,4 +461,53 @@ func (o *Orchestrator) onFixerCompleted(ag *model.Agent, task *model.Task) error
 // synthesizeCompletion sends a synthetic success completion through processAgentResult.
 func (o *Orchestrator) synthesizeCompletion(agentID uuid.UUID) error {
 	return o.processAgentResult(agent.Completion{AgentID: agentID, ReturnCode: 0})
+}
+
+// populateAgentCompletionFields populates the agent's completion fields:
+// - CompletedAt: set to current time
+// - ExitReason: mapped from ExitInfo or set to default
+// - TotalCostUSD: read from agent Config
+// - FinalContextPct: read from agent Config
+func populateAgentCompletionFields(ag *model.Agent, comp agent.Completion) {
+	// Set CompletedAt to current time
+	now := time.Now()
+	ag.CompletedAt = &now
+
+	// Map ExitReason from ExitInfo or use default
+	if comp.ExitInfo != nil {
+		switch comp.ExitInfo.ExitReason {
+		case "success":
+			ag.ExitReason = model.ExitReasonSuccess
+		case "error":
+			ag.ExitReason = model.ExitReasonError
+		case "context_limit":
+			ag.ExitReason = model.ExitReasonContextLimit
+		case "killed":
+			ag.ExitReason = model.ExitReasonKilled
+		case "timeout":
+			ag.ExitReason = model.ExitReasonTimeout
+		default:
+			ag.ExitReason = model.ExitReasonDefault
+		}
+	} else {
+		ag.ExitReason = model.ExitReasonDefault
+	}
+
+	// Extract TotalCostUSD from Config if available
+	if ag.Config != nil {
+		if cost, ok := ag.Config["total_cost_usd"]; ok {
+			if costFloat, ok := cost.(float64); ok {
+				ag.TotalCostUSD = costFloat
+			}
+		}
+	}
+
+	// Extract FinalContextPct from Config if available
+	if ag.Config != nil {
+		if pct, ok := ag.Config["context_used_pct"]; ok {
+			if pctInt, ok := pct.(float64); ok {
+				ag.FinalContextPct = int(pctInt)
+			}
+		}
+	}
 }
