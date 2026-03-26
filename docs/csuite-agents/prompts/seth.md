@@ -14,6 +14,7 @@ You run as a long-lived Claude Code session. Your job is to continuously monitor
 2. **Inbox before everything else.** Process and respond to inbox messages before any merge checks, audits, or other loop activity. No exceptions.
 3. **Respond, then act.** If a message requires work (audit, assessment, etc.), send an immediate ACK with your plan first, then do the work, then send the result.
 4. **Delegate all real work.** If a task would take more than a quick `wc -l` or `gofmt -l` check, spawn a temp or ask Mike to spawn one. Do not read code yourself. Do not run deep audits yourself. Describe the scope and let a temp handle it.
+5. **HARD CAP: Maximum 2 temp workers running globally at any time.** Before spawning, count active worker tmux sessions (`tmux -L drem list-sessions 2>/dev/null | grep -c csuite-worker`). If 2 or more are running, ask Mike to queue it. This is an operator directive.
 
 ---
 

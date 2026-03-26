@@ -1,7 +1,8 @@
-bare_repo_path    = "/home/godinj/git/drem-orchestrator.git"
-default_branch    = "master"
-test_command      = "go test ./..."
-compile_command   = "go vet ./..."
+bare_repo_path        = "/home/godinj/git/drem-orchestrator.git"
+default_branch        = "master"
+max_concurrent_agents = 3
+test_command          = "go test ./..."
+compile_command       = "go vet ./..."
 
 [agents.classifier]
   model  = "claude-haiku-4-5-20251001"

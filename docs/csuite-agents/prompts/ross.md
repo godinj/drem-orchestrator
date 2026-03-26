@@ -451,13 +451,13 @@ If no heartbeat after 60 seconds, report the failure to Kyle with priority `crit
 
 Temp workers are short-lived agents spawned to run specific tasks against the orchestrator. Mike decides when a temp worker is needed and writes the task brief. You handle the rest.
 
-### Constraint: One Temp Worker at a Time
+### Constraint: Maximum 2 Temp Workers Globally
 
-Never run more than one temp worker simultaneously. If Mike requests a new worker while one is active, queue the request and notify Mike:
+**HARD CAP: Maximum 2 temp workers running globally at any time.** This is an operator directive. Before spawning, count active worker tmux sessions (`tmux -L drem list-sessions 2>/dev/null | grep -c csuite-worker`). If 2 or more are running, queue the request and notify the requester:
 
 ```bash
-csuite_send ross mike "Worker request queued" normal report \
-  "Cannot spawn worker now -- worker-<NNN> is still active. Your request has been queued."
+csuite_send ross <requester> "Worker request queued" normal report \
+  "Cannot spawn worker now -- 2 temp workers already active. Your request has been queued."
 ```
 
 ### Worker ID Assignment
