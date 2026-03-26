@@ -21,7 +21,7 @@ func TestTasksList(t *testing.T) {
 
 	// List all
 	var buf bytes.Buffer
-	if err := Run(db, []string{"tasks"}, &buf, false); err != nil {
+	if err := Run(db, []string{"tasks"}, &buf, false, nil); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	out := buf.String()
@@ -31,7 +31,7 @@ func TestTasksList(t *testing.T) {
 
 	// Filter by status
 	buf.Reset()
-	if err := Run(db, []string{"tasks", "--status=backlog"}, &buf, false); err != nil {
+	if err := Run(db, []string{"tasks", "--status=backlog"}, &buf, false, nil); err != nil {
 		t.Fatalf("tasks --status: %v", err)
 	}
 	out = buf.String()
@@ -78,7 +78,7 @@ func TestTaskDetail(t *testing.T) {
 	db.Model(&parent).Update("assigned_agent_id", ag.ID)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"task", parent.ID.String()}, &buf, false); err != nil {
+	if err := Run(db, []string{"task", parent.ID.String()}, &buf, false, nil); err != nil {
 		t.Fatalf("task detail: %v", err)
 	}
 	out := buf.String()
@@ -109,7 +109,7 @@ func TestAgentsList(t *testing.T) {
 
 	// List all
 	var buf bytes.Buffer
-	if err := Run(db, []string{"agents"}, &buf, false); err != nil {
+	if err := Run(db, []string{"agents"}, &buf, false, nil); err != nil {
 		t.Fatalf("agents: %v", err)
 	}
 	out := buf.String()
@@ -119,7 +119,7 @@ func TestAgentsList(t *testing.T) {
 
 	// Filter by status
 	buf.Reset()
-	if err := Run(db, []string{"agents", "--status=working"}, &buf, false); err != nil {
+	if err := Run(db, []string{"agents", "--status=working"}, &buf, false, nil); err != nil {
 		t.Fatalf("agents --status: %v", err)
 	}
 	out = buf.String()
@@ -139,7 +139,7 @@ func TestFailures(t *testing.T) {
 
 	// All failures (default 24h)
 	var buf bytes.Buffer
-	if err := Run(db, []string{"failures"}, &buf, false); err != nil {
+	if err := Run(db, []string{"failures"}, &buf, false, nil); err != nil {
 		t.Fatalf("failures: %v", err)
 	}
 	out := buf.String()
@@ -152,7 +152,7 @@ func TestFailures(t *testing.T) {
 
 	// Zero duration = nothing should match
 	buf.Reset()
-	if err := Run(db, []string{"failures", "--since=0s"}, &buf, false); err != nil {
+	if err := Run(db, []string{"failures", "--since=0s"}, &buf, false, nil); err != nil {
 		t.Fatalf("failures --since=0s: %v", err)
 	}
 	out = buf.String()
@@ -170,7 +170,7 @@ func TestStats(t *testing.T) {
 	testutil.CreateAgent(t, db, uuid.Nil, model.AgentCoder, model.AgentWorking)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"stats"}, &buf, false); err != nil {
+	if err := Run(db, []string{"stats"}, &buf, false, nil); err != nil {
 		t.Fatalf("stats: %v", err)
 	}
 	out := buf.String()
@@ -188,7 +188,7 @@ func TestFileTask(t *testing.T) {
 	_ = proj
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"file-task", "--title=New Feature", "--description=Build it"}, &buf, false); err != nil {
+	if err := Run(db, []string{"file-task", "--title=New Feature", "--description=Build it"}, &buf, false, nil); err != nil {
 		t.Fatalf("file-task: %v", err)
 	}
 
@@ -211,7 +211,7 @@ func TestComment(t *testing.T) {
 	task := testutil.CreateTask(t, db, proj.ID, "Commentable Task", model.StatusBacklog)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"comment", task.ID.String(), "--body=Nice work"}, &buf, false); err != nil {
+	if err := Run(db, []string{"comment", task.ID.String(), "--body=Nice work"}, &buf, false, nil); err != nil {
 		t.Fatalf("comment: %v", err)
 	}
 
@@ -234,7 +234,7 @@ func TestJSONOutput(t *testing.T) {
 	testutil.CreateTask(t, db, proj.ID, "JSON Task", model.StatusBacklog)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"tasks"}, &buf, true); err != nil {
+	if err := Run(db, []string{"tasks"}, &buf, true, nil); err != nil {
 		t.Fatalf("tasks --json: %v", err)
 	}
 
@@ -258,7 +258,7 @@ func TestTaskIDPrefix(t *testing.T) {
 	prefix := task.ID.String()[:8]
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"task", prefix}, &buf, false); err != nil {
+	if err := Run(db, []string{"task", prefix}, &buf, false, nil); err != nil {
 		t.Fatalf("task prefix: %v", err)
 	}
 	out := buf.String()
@@ -272,7 +272,7 @@ func TestTaskIDPrefix(t *testing.T) {
 
 func TestUnknownSubcommand(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	err := Run(db, []string{"bogus"}, &bytes.Buffer{}, false)
+	err := Run(db, []string{"bogus"}, &bytes.Buffer{}, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "unknown subcommand") {
 		t.Errorf("expected unknown subcommand error, got: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestUnknownSubcommand(t *testing.T) {
 
 func TestInvalidTaskStatus(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	err := Run(db, []string{"tasks", "--status=nonexistent"}, &bytes.Buffer{}, false)
+	err := Run(db, []string{"tasks", "--status=nonexistent"}, &bytes.Buffer{}, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "unknown task status") {
 		t.Errorf("expected unknown task status error, got: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestCommentRequiresBody(t *testing.T) {
 	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
 	task := testutil.CreateTask(t, db, proj.ID, "Task", model.StatusBacklog)
 
-	err := Run(db, []string{"comment", task.ID.String()}, &bytes.Buffer{}, false)
+	err := Run(db, []string{"comment", task.ID.String()}, &bytes.Buffer{}, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "--body is required") {
 		t.Errorf("expected --body required error, got: %v", err)
 	}
@@ -301,7 +301,7 @@ func TestFileTaskRequiresTitle(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	_ = testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
 
-	err := Run(db, []string{"file-task", "--description=Desc"}, &bytes.Buffer{}, false)
+	err := Run(db, []string{"file-task", "--description=Desc"}, &bytes.Buffer{}, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "--title is required") {
 		t.Errorf("expected --title required error, got: %v", err)
 	}
@@ -314,7 +314,7 @@ func TestStatsJSONOutput(t *testing.T) {
 	testutil.CreateTask(t, db, proj.ID, "Task B", model.StatusFailed)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"stats"}, &buf, true); err != nil {
+	if err := Run(db, []string{"stats"}, &buf, true, nil); err != nil {
 		t.Fatalf("stats --json: %v", err)
 	}
 
@@ -336,7 +336,7 @@ func TestFileTaskWithProjectID(t *testing.T) {
 
 	var buf bytes.Buffer
 	if err := Run(db, []string{"file-task", "--title=ProjTask", "--description=D",
-		"--project-id=" + proj.ID.String()}, &buf, false); err != nil {
+		"--project-id=" + proj.ID.String()}, &buf, false, nil); err != nil {
 		t.Fatalf("file-task with project-id: %v", err)
 	}
 
@@ -355,7 +355,7 @@ func TestTaskDetailJSON(t *testing.T) {
 	task := testutil.CreateTask(t, db, proj.ID, "JSON Detail Task", model.StatusBacklog)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"task", task.ID.String()}, &buf, true); err != nil {
+	if err := Run(db, []string{"task", task.ID.String()}, &buf, true, nil); err != nil {
 		t.Fatalf("task --json: %v", err)
 	}
 

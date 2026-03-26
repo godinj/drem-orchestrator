@@ -46,7 +46,7 @@ func runCLI() {
 		os.Exit(1)
 	}
 
-	if err := cli.Run(database, cliArgs, os.Stdout, jsonMode); err != nil {
+	if err := cli.Run(database, cliArgs, os.Stdout, jsonMode, nil); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

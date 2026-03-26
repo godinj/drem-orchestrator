@@ -15,18 +15,27 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/tui"
 )
 
 // Run parses args (after "cli" is consumed) and dispatches to the
 // appropriate handler. Returns an error for unknown subcommands or
-// handler failures.
-func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool) error {
+// handler failures. If orch is provided, gate commands (approve, reject,
+// answer, pass, fail) are also available.
+func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, orch tui.TUIOrchestrator) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, file-task, comment")
+		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, file-task, comment, approve, reject, answer, pass, fail")
 	}
 
 	sub := args[0]
 	rest := args[1:]
+
+	// Check for gate commands if orchestrator is provided
+	if orch != nil {
+		if handled, err := RegisterGateCommands(db, orch, sub, rest, w); handled {
+			return err
+		}
+	}
 
 	switch sub {
 	case "tasks":

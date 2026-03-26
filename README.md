@@ -205,6 +205,214 @@ Lists all agents with their type, status, current task, and last heartbeat.
 
 > **Exiting:** The TUI does not have a quit key. To exit, kill the tmux session (e.g. `tmux kill-session`).
 
+## CLI Commands
+
+The orchestrator provides a headless CLI for programmatic task and agent control. This is primarily used by C-Suite agents and temp workers that need to approve plans, provide feedback, or report test results without human operator intervention.
+
+### Subcommand Overview
+
+**Task queries** (read-only):
+- `drem cli tasks` — List all tasks with summary information
+- `drem cli task <id>` — Get detailed information about a single task
+- `drem cli agents` — List all Claude Code agents and their status
+- `drem cli failures` — List task failures and their root causes
+- `drem cli stats` — Display orchestrator statistics
+- `drem cli file-task <path>` — Create a task from a markdown file
+
+**Task mutations**:
+- `drem cli comment <task-id> --body '...'` — Add a comment to a task
+- `drem cli approve <task-id>` — Approve a plan or test review (gate command)
+- `drem cli reject <task-id> [--reason '...']` — Reject a plan or test review (gate command)
+- `drem cli answer <task-id> --body '...'` — Answer a clarification question (gate command)
+- `drem cli pass <task-id>` — Pass a final test review (gate command)
+- `drem cli fail <task-id>` — Fail a final test review (gate command)
+
+### Gate Commands
+
+Gate commands are actions taken at task review points. They require an orchestrator instance with proper task state; headless agents use these to drive task progression without human interaction.
+
+#### `drem cli approve <task-id>`
+
+Approves a task at a review gate (either plan_review or test_review).
+
+**Valid statuses:** `plan_review`, `test_review`
+- **plan_review** → approves plan and moves task to test_writing
+- **test_review** → approves tests and moves task to in_progress
+
+**Usage:**
+```bash
+# Approve a plan awaiting review
+drem cli approve 12345678
+
+# Using full UUID
+drem cli approve 12345678-1234-1234-1234-123456789012
+```
+
+**Error cases:**
+```bash
+# Task not found
+$ drem cli approve abcdefgh
+error: task not found
+
+# Wrong status (task not at a gate)
+$ drem cli approve 12345678
+error: task 12345678 is in wrong status "in_progress" for approval (expected plan_review or test_review)
+```
+
+#### `drem cli reject <task-id> [--reason '...']`
+
+Rejects a task at a review gate and transitions it back for revision.
+
+**Valid statuses:** `plan_review`, `test_review`
+- **plan_review** → rejects plan and moves task back to planning
+- **test_review** → rejects tests with feedback and moves task back to test_writing
+
+**Usage:**
+```bash
+# Reject a plan (no reason required)
+drem cli reject 12345678
+
+# Reject tests with feedback (recommended)
+drem cli reject 12345678 --reason "Incomplete test coverage; add tests for error cases"
+
+# Alternative syntax
+drem cli reject 12345678 --reason='Add validation for negative numbers'
+```
+
+**Error cases:**
+```bash
+# Task not found
+$ drem cli reject abcdefgh
+error: task not found
+
+# Wrong status
+$ drem cli reject 12345678
+error: task 12345678 is in wrong status "done" for rejection (expected plan_review or test_review)
+
+# Missing task ID
+$ drem cli reject
+error: usage: drem cli reject <task-id> [--reason=REASON]
+```
+
+#### `drem cli answer <task-id> --body '...'`
+
+Answers a clarification question when a task is blocked waiting for additional information.
+
+**Valid statuses:** `needs_clarification`
+
+**Usage:**
+```bash
+# Answer a clarification question
+drem cli answer 12345678 --body 'The API endpoint is /api/v2/users/{id}'
+
+# Multi-line answer (shell quoting)
+drem cli answer 12345678 --body 'Requirements:
+1. Must support batch operations
+2. Should be backward compatible
+3. Add performance benchmarks'
+```
+
+**Error cases:**
+```bash
+# Missing body
+$ drem cli answer 12345678
+error: usage: drem cli answer <task-id> --body=BODY
+
+# Empty body
+$ drem cli answer 12345678 --body ''
+error: --body is required
+
+# Wrong status
+$ drem cli answer 12345678 --body 'Answer'
+error: task 12345678 is in wrong status "plan_review" for answering clarification (expected needs_clarification)
+
+# Task not found
+$ drem cli answer abcdefgh --body 'Answer'
+error: task not found
+```
+
+#### `drem cli pass <task-id>`
+
+Passes the final test review, marking a task as ready for merge into main.
+
+**Valid statuses:** `testing_ready`
+
+Transitions task to merging and begins the merge process.
+
+**Usage:**
+```bash
+# Pass final testing
+drem cli pass 12345678
+
+# Full UUID
+drem cli pass 12345678-1234-1234-1234-123456789012
+```
+
+**Error cases:**
+```bash
+# Wrong status (not at testing_ready gate)
+$ drem cli pass 12345678
+error: task 12345678 is in wrong status "in_progress" for passing (expected testing_ready)
+
+# Task not found
+$ drem cli pass abcdefgh
+error: task not found
+
+# Missing task ID
+$ drem cli pass
+error: usage: drem cli pass <task-id>
+```
+
+#### `drem cli fail <task-id>`
+
+Fails the final test review, sending a task back for fixes.
+
+**Valid statuses:** `testing_ready`
+
+Transitions task back to in_progress so the coder agent can address the failures.
+
+**Usage:**
+```bash
+# Fail and send back to coder
+drem cli fail 12345678
+
+# Full UUID
+drem cli fail 12345678-1234-1234-1234-123456789012
+```
+
+**Error cases:**
+```bash
+# Wrong status
+$ drem cli fail 12345678
+error: task 12345678 is in wrong status "done" for failing (expected testing_ready)
+
+# Task not found
+$ drem cli fail abcdefgh
+error: task not found
+
+# Missing task ID
+$ drem cli fail
+error: usage: drem cli fail <task-id>
+```
+
+### Task ID Resolution
+
+All CLI commands that take a task ID accept either:
+- **Short form** (first 8 characters of UUID): `drem cli approve 12345678`
+- **Full UUID**: `drem cli approve 12345678-1234-1234-1234-123456789012`
+
+The CLI resolves the task by prefix matching against the database. If the prefix matches multiple tasks, an error is returned.
+
+### JSON Output
+
+Most read-only subcommands support `--json` for structured output. Example:
+
+```bash
+drem cli tasks --json | jq '.[] | select(.status == "plan_review")'
+drem cli task 12345678 --json
+drem cli agents --json
+```
+
 ## Bug Reports
 
 Bug reports are structured problem reports filed by agents during their work. When an agent encounters a broken build, flaky test, unclear requirement, constraint violation, or other issue, it writes a JSON file that the orchestrator ingests and surfaces in a dedicated TUI screen. Human operators triage these reports and optionally promote them into tasks.
