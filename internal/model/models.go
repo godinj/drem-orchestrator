@@ -73,7 +73,7 @@ type Agent struct {
 	TmuxSession     string
 	MemorySummary   string
 	HeartbeatAt     *time.Time
-	Config          JSONField `gorm:"type:text"`
+	Config          JSONField  `gorm:"type:text"`
 	CompletedAt     *time.Time // time when agent completion was processed
 	ExitReason      string     // mapped exit reason (success, error, context_limit, killed, timeout)
 	TotalCostUSD    float64    // cumulative API cost from last context monitor reading
