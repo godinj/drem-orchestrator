@@ -27,5 +27,20 @@ func NewEventDeliveryTrigger(notifications <-chan []string, triggerer AgentTrigg
 // notification is not consumed until all agents in the current one have
 // been triggered.
 func (t *EventDeliveryTrigger) Run(ctx context.Context) {
-	// stub — implementation pending
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case agents, ok := <-t.notifications:
+			if !ok {
+				return
+			}
+			for _, agent := range agents {
+				if agent == "kyle" {
+					continue
+				}
+				t.triggerer.TriggerAgent(agent)
+			}
+		}
+	}
 }

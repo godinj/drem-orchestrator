@@ -4,12 +4,6 @@ import "time"
 
 const defaultSafetyInterval = 5 * time.Minute
 
-// AgentTriggerer schedules an agent turn and reports the outcome.
-// Both Deduplicator and LifecycleManager satisfy this interface.
-type AgentTriggerer interface {
-	TriggerAgent(agent string) TriggerResult
-}
-
 // SafetyTimer periodically calls TriggerAgent("mike") at a fixed interval.
 // It is a safety net ensuring Mike processes operational state even if
 // signal/event triggers miss something. Kyle is never triggered.
