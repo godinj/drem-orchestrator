@@ -6,6 +6,8 @@
 // different agents are fully independent.
 package watcher
 
+import "sync"
+
 // TriggerResult describes the outcome of a TriggerAgent call.
 //
 // The values form a priority order reflecting the agent's state at call time:
@@ -37,17 +39,38 @@ type TurnRunner interface {
 	RunTurn(agent string)
 }
 
+type agentState int
+
+const (
+	stateRunning       agentState = iota // turn in progress, nothing queued
+	stateRunningQueued                   // turn in progress, one trigger queued
+)
+
+// kyle is the permanently ineligible agent name.
+const kyle = "kyle"
+
+type agentEntry struct {
+	state agentState
+}
+
 // LifecycleManager manages per-agent turn deduplication. Concurrent calls to
 // TriggerAgent for the same agent are serialized: at most one turn runs and
 // at most one additional trigger is queued. Triggers for different agents are
 // independent and may run concurrently.
 //
 // Use New to create a LifecycleManager.
-type LifecycleManager struct{}
+type LifecycleManager struct {
+	mu     sync.Mutex
+	agents map[string]*agentEntry
+	runner TurnRunner
+}
 
 // New creates a LifecycleManager backed by runner for turn execution.
 func New(runner TurnRunner) *LifecycleManager {
-	return &LifecycleManager{}
+	return &LifecycleManager{
+		agents: make(map[string]*agentEntry),
+		runner: runner,
+	}
 }
 
 // TriggerAgent requests a turn for agent and returns the outcome.
@@ -63,5 +86,43 @@ func New(runner TurnRunner) *LifecycleManager {
 //
 // TriggerAgent is safe for concurrent use by multiple goroutines.
 func (lm *LifecycleManager) TriggerAgent(agent string) TriggerResult {
-	return Dropped // stub — replaced by real implementation
+	if agent == kyle {
+		return Refused
+	}
+
+	lm.mu.Lock()
+	entry, ok := lm.agents[agent]
+	if !ok {
+		lm.agents[agent] = &agentEntry{state: stateRunning}
+		lm.mu.Unlock()
+		go lm.runLoop(agent)
+		return Started
+	}
+	if entry.state == stateRunning {
+		entry.state = stateRunningQueued
+		lm.mu.Unlock()
+		return Queued
+	}
+	lm.mu.Unlock()
+	return Dropped
+}
+
+// runLoop executes turns for agent, re-running if a queued trigger exists.
+func (lm *LifecycleManager) runLoop(agent string) {
+	for {
+		lm.runner.RunTurn(agent)
+
+		lm.mu.Lock()
+		entry := lm.agents[agent]
+		if entry.state == stateRunningQueued {
+			entry.state = stateRunning
+			lm.mu.Unlock()
+			// loop: run the queued turn
+			continue
+		}
+		// state == stateRunning, no queued trigger — clean up
+		delete(lm.agents, agent)
+		lm.mu.Unlock()
+		return
+	}
 }
