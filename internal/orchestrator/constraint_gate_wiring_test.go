@@ -338,12 +338,38 @@ func TestConstraintGateWiring_TestReview_MaxRetriesExhausted(t *testing.T) {
 	}
 }
 
-// TestConstraintGateWiring_TestReview_EarlyTermination verifies that if the
-// failed constraint count has not improved between attempts, the task fails
-// early with a descriptive message.
+// TestConstraintGateWiring_TestReview_EarlyTermination verifies that when the
+// per-constraint comparison (feature vs master) shows the same magnitude of
+// blocking constraints across retry attempts, the task fails early.
+//
+// Setup: master is clean (no violations). Feature introduces a NEW violation
+// (PASS→FAIL). The previous attempt already recorded magnitude=1. The gate
+// detects no improvement in magnitude and terminates early.
 func TestConstraintGateWiring_TestReview_EarlyTermination(t *testing.T) {
+	// Master worktree: constraints.toml with max_lines limit=5, no violating file.
 	bareRepoPath := setupTestRepoWithMainBranch(t)
 	featureName := "gate-retry-early-term"
+
+	// Add a main worktree for master comparison.
+	mainDir := filepath.Join(bareRepoPath, "main")
+	runGitCmd(t, bareRepoPath, "worktree", "add", mainDir, "main")
+	runGitCmd(t, mainDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, mainDir, "config", "user.name", "Test")
+
+	// Commit constraints.toml to master (no violating files, so master passes).
+	dremDir := filepath.Join(mainDir, ".drem")
+	if err := os.MkdirAll(dremDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	masterConstraints := "[[max_lines]]\nname = \"file size check\"\nglob = \"*.go\"\nlimit = 5\n"
+	if err := os.WriteFile(filepath.Join(dremDir, "constraints.toml"), []byte(masterConstraints), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, mainDir, "add", ".")
+	runGitCmd(t, mainDir, "commit", "-m", "add constraints to master")
+
+	// Feature worktree: inherits constraints.toml, adds a file that violates
+	// the max_lines limit (NEW violation — PASS→FAIL relative to master).
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
 	db := testutil.NewTestDB(t)
@@ -353,8 +379,9 @@ func TestConstraintGateWiring_TestReview_EarlyTermination(t *testing.T) {
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
 	db.Create(&project)
 
-	// Set previous_failed to 1 (same as what the evaluation will produce),
-	// so ShouldTerminateEarly triggers. next_check in the past.
+	// Set constraint_gate_previous_failed=1, reflecting that the prior evaluation
+	// found magnitude=1 (1 newly-blocked constraint). The current evaluation will
+	// also yield magnitude=1, so ShouldTerminateEarly fires.
 	pastCheck := time.Now().Add(-1 * time.Minute).Format(time.RFC3339)
 	parentID := uuid.New()
 	parent := model.Task{
@@ -391,12 +418,12 @@ func TestConstraintGateWiring_TestReview_EarlyTermination(t *testing.T) {
 	var updated model.Task
 	db.First(&updated, "id = ?", parentID)
 
-	// Task must transition to failed (early termination).
+	// Task must transition to failed (early termination — no improvement in
+	// per-constraint comparison magnitude across retry attempts).
 	if updated.Status != model.StatusFailed {
 		t.Errorf("expected status failed (early termination), got %s", updated.Status)
 	}
 
-	// Failure reason should indicate no improvement.
 	reason, ok := updated.Context["failure_reason"].(string)
 	if !ok {
 		t.Fatal("expected failure_reason in context")

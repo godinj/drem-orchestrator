@@ -67,14 +67,17 @@ func (p ConstraintGatePolicy) Exhausted(attempt int) bool {
 	return attempt >= p.MaxRetries
 }
 
-// ShouldTerminateEarly returns true if the constraint failure count has not
-// improved compared to the previous attempt, indicating retries are unlikely
-// to help. Returns false on the first attempt (previousFailed == 0).
-func (p ConstraintGatePolicy) ShouldTerminateEarly(currentFailed, previousFailed int) bool {
-	if previousFailed == 0 {
+// ShouldTerminateEarly returns true when the current per-constraint comparison
+// shows no improvement over the previous attempt, indicating retries are
+// unlikely to help. Returns false when previous.Dominated is false, meaning
+// this is the first blocked evaluation and there is no prior baseline.
+func (p ConstraintGatePolicy) ShouldTerminateEarly(current, previous constraints.ComparisonResult) bool {
+	// No prior dominated result — first blocked attempt, do not terminate.
+	if !previous.Dominated {
 		return false
 	}
-	return currentFailed >= previousFailed
+	// Terminate if the number of blocking constraints has not decreased.
+	return current.Magnitude() >= previous.Magnitude()
 }
 
 // FormatConstraintFailure produces a structured failure message listing each
@@ -177,7 +180,21 @@ func (o *Orchestrator) evaluateConstraintGate(task *model.Task) (bool, error) {
 	}
 
 	// Check early termination (no improvement).
-	if policy.ShouldTerminateEarly(report.Failed, previousFailed) {
+	// Build synthetic ComparisonResult objects from stored failure counts so the
+	// new ShouldTerminateEarly signature compiles while the delta implementation
+	// is being developed. The full implementation will populate these from
+	// CompareReports(masterReport, featureReport) instead.
+	currentResult := constraints.ComparisonResult{}
+	if report.Failed > 0 {
+		currentResult.Dominated = true
+		currentResult.NewViolations = make([]string, report.Failed)
+	}
+	previousResult := constraints.ComparisonResult{}
+	if previousFailed > 0 {
+		previousResult.Dominated = true
+		previousResult.NewViolations = make([]string, previousFailed)
+	}
+	if policy.ShouldTerminateEarly(currentResult, previousResult) {
 		reason := fmt.Sprintf("constraint gate: no improvement in constraint failures (current=%d, previous=%d): %s",
 			report.Failed, previousFailed, constraints.FormatReport(report))
 		return true, o.failTask(task, reason)

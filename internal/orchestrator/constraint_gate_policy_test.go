@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/godinj/drem-orchestrator/internal/constraints"
 )
 
 func TestDefaultConstraintGatePolicy(t *testing.T) {
@@ -102,31 +104,78 @@ func TestConstraintGatePolicy_Exhausted(t *testing.T) {
 func TestConstraintGatePolicy_ShouldTerminateEarly_Improvement(t *testing.T) {
 	p := DefaultConstraintGatePolicy()
 
-	// currentFailed < previousFailed means improvement -- should NOT terminate.
-	if p.ShouldTerminateEarly(2, 5) {
-		t.Error("ShouldTerminateEarly(2, 5) = true, want false (improvement detected)")
+	// current magnitude < previous magnitude — improvement detected, must NOT terminate.
+	current := constraints.ComparisonResult{
+		Dominated:     true,
+		NewViolations: []string{"a", "b"}, // magnitude=2
+	}
+	previous := constraints.ComparisonResult{
+		Dominated:     true,
+		NewViolations: []string{"a", "b", "c", "d", "e"}, // magnitude=5
+	}
+	if p.ShouldTerminateEarly(current, previous) {
+		t.Error("ShouldTerminateEarly = true, want false (magnitude improved 5→2)")
 	}
 }
 
 func TestConstraintGatePolicy_ShouldTerminateEarly_NoImprovement(t *testing.T) {
 	p := DefaultConstraintGatePolicy()
 
-	// currentFailed == previousFailed -- no improvement, should terminate.
-	if !p.ShouldTerminateEarly(5, 5) {
-		t.Error("ShouldTerminateEarly(5, 5) = false, want true (no improvement)")
+	same := constraints.ComparisonResult{
+		Dominated:     true,
+		NewViolations: []string{"a", "b", "c", "d", "e"}, // magnitude=5
 	}
-	// currentFailed > previousFailed -- regression, should terminate.
-	if !p.ShouldTerminateEarly(7, 5) {
-		t.Error("ShouldTerminateEarly(7, 5) = false, want true (regression)")
+	previous := constraints.ComparisonResult{
+		Dominated:     true,
+		NewViolations: []string{"x", "y", "z", "w", "v"}, // magnitude=5
+	}
+
+	// Same magnitude — no improvement, should terminate.
+	if !p.ShouldTerminateEarly(same, previous) {
+		t.Error("ShouldTerminateEarly = false, want true (magnitude unchanged 5→5)")
+	}
+
+	// Regression — magnitude grew, should also terminate.
+	worse := constraints.ComparisonResult{
+		Dominated:     true,
+		NewViolations: []string{"a", "b", "c", "d", "e", "f", "g"}, // magnitude=7
+	}
+	if !p.ShouldTerminateEarly(worse, previous) {
+		t.Error("ShouldTerminateEarly = false, want true (regression 5→7)")
 	}
 }
 
 func TestConstraintGatePolicy_ShouldTerminateEarly_FirstAttempt(t *testing.T) {
 	p := DefaultConstraintGatePolicy()
 
-	// previousFailed == 0 means first attempt (no baseline) -- should NOT terminate.
-	if p.ShouldTerminateEarly(3, 0) {
-		t.Error("ShouldTerminateEarly(3, 0) = true, want false (first attempt, no baseline)")
+	// previous.Dominated=false means no prior blocked baseline — must NOT terminate.
+	current := constraints.ComparisonResult{
+		Dominated:     true,
+		NewViolations: []string{"a", "b", "c"}, // magnitude=3
+	}
+	previous := constraints.ComparisonResult{} // Dominated=false, Magnitude()=0
+	if p.ShouldTerminateEarly(current, previous) {
+		t.Error("ShouldTerminateEarly = true, want false (first blocked attempt, no prior baseline)")
+	}
+}
+
+func TestConstraintGatePolicy_ShouldTerminateEarly_WorsensVsNewViolations(t *testing.T) {
+	p := DefaultConstraintGatePolicy()
+
+	// Worsened constraints also count toward magnitude; combined with new violations
+	// the total must be compared correctly.
+	current := constraints.ComparisonResult{
+		Dominated:     true,
+		NewViolations: []string{"gofmt"},   // magnitude 1
+		Worsened:      []string{"imports"}, // magnitude 1; total=2
+	}
+	previous := constraints.ComparisonResult{
+		Dominated: true,
+		Worsened:  []string{"imports", "line-limit", "depth"}, // magnitude=3
+	}
+	// current magnitude=2 < previous magnitude=3 → improvement → should NOT terminate.
+	if p.ShouldTerminateEarly(current, previous) {
+		t.Error("ShouldTerminateEarly = true, want false (combined magnitude improved 3→2)")
 	}
 }
 

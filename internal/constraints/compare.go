@@ -11,6 +11,14 @@ type ComparisonResult struct {
 	Worsened []string
 }
 
+// Magnitude returns the total number of blocking constraints
+// (new violations + worsened constraints). Used by ShouldTerminateEarly
+// to detect stagnation: if the magnitude does not decrease across retries,
+// retrying is unlikely to help.
+func (r ComparisonResult) Magnitude() int {
+	return len(r.NewViolations) + len(r.Worsened)
+}
+
 // Summary returns a human-readable description of the comparison outcome.
 // When not dominated, it reports no regressions. When dominated, it names
 // the new violations and worsened constraints.
