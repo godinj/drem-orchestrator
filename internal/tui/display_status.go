@@ -13,6 +13,8 @@ import (
 //   - StatusInProgress → "in_progress"
 //   - StatusDone → "done"
 func DisplayStatus(status model.TaskStatus) string {
-	// Stub implementation: returns default value
-	return ""
+	if status == model.StatusNeedsClarification {
+		return "needs_clar"
+	}
+	return string(status)
 }

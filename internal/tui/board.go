@@ -260,7 +260,7 @@ func (b BoardModel) View() string {
 		statusStr := lipgloss.NewStyle().
 			Foreground(color).
 			Width(16).
-			Render(fmt.Sprintf("%s %s", icon, strings.ToUpper(string(task.Status))))
+			Render(fmt.Sprintf("%s %s", icon, strings.ToUpper(DisplayStatus(task.Status))))
 
 		tw := maxTitleWidth
 		prefix := "  "

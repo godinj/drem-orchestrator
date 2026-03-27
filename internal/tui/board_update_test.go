@@ -411,3 +411,169 @@ func TestTaskAnnotation_NoSpecialFlags(t *testing.T) {
 		t.Errorf("expected empty annotation for no special flags, got %q", result)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// BoardModel.View() status rendering tests
+// ---------------------------------------------------------------------------
+
+func TestBoardView_RendersTruncatedNeedsClarification(t *testing.T) {
+	b := BoardModel{
+		tasks: []model.Task{
+			{ID: uuid.New(), Title: "Test Task", Status: model.StatusNeedsClarification},
+		},
+		cursor: 0,
+		width:  80,
+		height: 10,
+	}
+	output := b.View()
+	if output == "" {
+		t.Fatal("View() returned empty output")
+	}
+	// DisplayStatus returns "needs_clar", which is then uppercased to "NEEDS_CLAR"
+	if !contains(output, "NEEDS_CLAR") {
+		t.Errorf("View() output should contain 'NEEDS_CLAR' for needs_clarification status, got:\n%s", output)
+	}
+	// Verify it doesn't show the full "NEEDS_CLARIFICATION"
+	if contains(output, "NEEDS_CLARIFICAT") {
+		t.Errorf("View() output should NOT show truncated full 'NEEDS_CLARIFICATION', got:\n%s", output)
+	}
+}
+
+func TestBoardView_RendersStatusesCorrectly(t *testing.T) {
+	tests := []struct {
+		name       string
+		status     model.TaskStatus
+		wantString string
+	}{
+		{"classifying", model.StatusClassifying, "CLASSIFYING"},
+		{"backlog", model.StatusBacklog, "BACKLOG"},
+		{"planning", model.StatusPlanning, "PLANNING"},
+		{"plan_review", model.StatusPlanReview, "PLAN_REVIEW"},
+		{"test_writing", model.StatusTestWriting, "TEST_WRITING"},
+		{"test_review", model.StatusTestReview, "TEST_REVIEW"},
+		{"in_progress", model.StatusInProgress, "IN_PROGRESS"},
+		{"testing_ready", model.StatusTestingReady, "TESTING_READY"},
+		{"merging", model.StatusMerging, "MERGING"},
+		{"paused", model.StatusPaused, "PAUSED"},
+		{"done", model.StatusDone, "DONE"},
+		{"failed", model.StatusFailed, "FAILED"},
+		{"rejected", model.StatusRejected, "REJECTED"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b := BoardModel{
+				tasks: []model.Task{
+					{ID: uuid.New(), Title: "Task", Status: tc.status},
+				},
+				cursor: 0,
+				width:  80,
+				height: 10,
+			}
+			output := b.View()
+			if !contains(output, tc.wantString) {
+				t.Errorf("View() should contain %q for %s status, got:\n%s", tc.wantString, tc.name, output)
+			}
+		})
+	}
+}
+
+func TestBoardView_DisplaysSelectedTaskWithStatus(t *testing.T) {
+	taskID := uuid.New()
+	b := BoardModel{
+		tasks: []model.Task{
+			{ID: taskID, Title: "Selected Task", Status: model.StatusInProgress},
+		},
+		cursor:     0,
+		selectedID: &taskID,
+		width:      80,
+		height:     10,
+	}
+	output := b.View()
+	if !contains(output, "IN_PROGRESS") {
+		t.Errorf("View() should display selected task status 'IN_PROGRESS', got:\n%s", output)
+	}
+}
+
+func TestBoardView_MultipleTasks_DifferentStatuses(t *testing.T) {
+	b := BoardModel{
+		tasks: []model.Task{
+			{ID: uuid.New(), Title: "Task 1", Status: model.StatusNeedsClarification},
+			{ID: uuid.New(), Title: "Task 2", Status: model.StatusInProgress},
+			{ID: uuid.New(), Title: "Task 3", Status: model.StatusDone},
+		},
+		cursor: 0,
+		width:  80,
+		height: 10,
+	}
+	output := b.View()
+	if !contains(output, "NEEDS_CLAR") {
+		t.Errorf("View() should contain 'NEEDS_CLAR' for needs_clarification status")
+	}
+	if !contains(output, "IN_PROGRESS") {
+		t.Errorf("View() should contain 'IN_PROGRESS' status")
+	}
+	if !contains(output, "DONE") {
+		t.Errorf("View() should contain 'DONE' status")
+	}
+}
+
+func TestBoardView_NeedsClarificationNotFullString(t *testing.T) {
+	b := BoardModel{
+		tasks: []model.Task{
+			{ID: uuid.New(), Title: "Test", Status: model.StatusNeedsClarification},
+		},
+		cursor: 0,
+		width:  80,
+		height: 10,
+	}
+	output := b.View()
+	// Should contain NEEDS_CLAR (truncated, uppercased), not NEEDS_CLARIFICAT (full, then truncated by width)
+	if !contains(output, "NEEDS_CLAR") {
+		t.Errorf("View() should render 'NEEDS_CLAR', got:\n%s", output)
+	}
+	if contains(output, "NEEDS_CLARIFICAT") {
+		t.Errorf("View() should NOT render truncated full 'NEEDS_CLARIFICATION', got:\n%s", output)
+	}
+}
+
+func TestBoardView_StatusRenderingConsistency(t *testing.T) {
+	// Render the same task twice and verify consistent status output
+	taskID := uuid.New()
+	task := model.Task{ID: taskID, Title: "Task", Status: model.StatusNeedsClarification}
+
+	b1 := BoardModel{
+		tasks:  []model.Task{task},
+		cursor: 0,
+		width:  80,
+		height: 10,
+	}
+	output1 := b1.View()
+
+	b2 := BoardModel{
+		tasks:  []model.Task{task},
+		cursor: 0,
+		width:  80,
+		height: 10,
+	}
+	output2 := b2.View()
+
+	if output1 != output2 {
+		t.Errorf("Multiple renders of same task should be identical, got different outputs")
+	}
+}
+
+// contains is a helper to check if a string contains a substring
+func contains(s, substr string) bool {
+	return indexAny(s, substr) >= 0
+}
+
+// indexAny is a simple substring search helper
+func indexAny(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}
