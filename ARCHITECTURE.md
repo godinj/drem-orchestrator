@@ -135,6 +135,63 @@ use the defaults shown below.
 | Dispatch window         | `dispatch_window`       | duration   | `60s`          | Sliding window duration for dispatch rate limiting        |
 | Model profiles          | `[profiles.<name>.*]`   | map        | `{}`           | Named per-role model/effort overrides; see docs/prd-metrics-and-experiments.md#profiles |
 
+### Agent configuration
+
+Per-agent CLI flags are set under `[agents.<type>]` sections. Supported agent
+types: `classifier`, `planner`, `coder`, `reviewer`, `fixer`, `researcher`,
+`supervisor`, `interactive_supervisor`.
+
+| Field    | TOML key | Type   | Default    | Description                          |
+|----------|----------|--------|------------|--------------------------------------|
+| Model    | `model`  | string | `""`       | Claude model ID passed via `--model` |
+| Effort   | `effort` | string | `"medium"` | Effort level: `low`, `medium`, `high`|
+
+Example:
+
+```toml
+[agents.coder]
+  model  = "claude-sonnet-4-6"
+  effort = "medium"
+
+[agents.supervisor]
+  effort = "low"
+```
+
+### Profile configuration
+
+Named profiles allow task-specific overrides layered on top of the base agent
+configuration. Profiles are defined under `[profiles.<name>.agents.<type>]`.
+Only explicitly set (non-empty) fields override their base counterparts —
+omitted fields inherit from `[agents.<type>]`.
+
+The three-layer resolution order (highest to lowest priority):
+1. Profile override — fields set in `[profiles.<name>.agents.<type>]`
+2. Base agent config — fields set in `[agents.<type>]`
+3. Hardcoded default — `effort = "medium"`
+
+Supported profile agent types match the base agent types above (excludes
+`supervisor` and `interactive_supervisor`).
+
+Example:
+
+```toml
+[agents.coder]
+  model  = "claude-sonnet-4-6"
+  effort = "medium"
+
+# "fast" profile: keep the base model, run at low effort
+[profiles.fast.agents.coder]
+  effort = "low"
+
+# "quality" profile: override both model and effort
+[profiles.quality.agents.coder]
+  model  = "claude-opus-4-6"
+  effort = "high"
+```
+
+An empty profile name falls through to the base agent config. A non-empty name
+that does not match any `[profiles.*]` entry is a configuration error.
+
 ---
 
 ## Structural Limits

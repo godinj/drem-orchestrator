@@ -562,3 +562,128 @@ func TestLoadConfigIntegrationProfileRoundTrip(t *testing.T) {
 		t.Errorf("cheap/planner: got %+v, want { medium}", cheapPlanner)
 	}
 }
+
+// TestLoadConfigProfilesIntegration verifies end-to-end TOML deserialization
+// of [profiles.*] sections and that ForAgentTypeWithProfile returns correctly
+// layered results after loading from disk.
+func TestLoadConfigProfilesIntegration(t *testing.T) {
+	cases := []struct {
+		name        string
+		toml        string
+		agentType   model.AgentType
+		profileName string
+		want        model.AgentCLIConfig
+	}{
+		{
+			// Profile sets both model and effort; both must come from the profile.
+			name: "full override loaded from TOML",
+			toml: `
+[agents.coder]
+  model = "base-coder"
+  effort = "medium"
+
+[profiles.fast.coder]
+  model = "claude-haiku-4-5-20251001"
+  effort = "low"
+`,
+			agentType:   model.AgentCoder,
+			profileName: "fast",
+			want:        model.AgentCLIConfig{Model: "claude-haiku-4-5-20251001", Effort: "low"},
+		},
+		{
+			// Profile sets only model; effort must inherit from [agents.planner].
+			name: "partial override: model only, effort inherits from base",
+			toml: `
+[agents.planner]
+  model = "base-planner"
+  effort = "high"
+
+[profiles.quality.planner]
+  model = "claude-opus-4-6"
+`,
+			agentType:   model.AgentPlanner,
+			profileName: "quality",
+			want:        model.AgentCLIConfig{Model: "claude-opus-4-6", Effort: "high"},
+		},
+		{
+			// Profile overrides Coder but not Fixer; Fixer must resolve from base.
+			name: "profile does not override queried agent type: falls back to base",
+			toml: `
+[agents.fixer]
+  model = "base-fixer"
+  effort = "medium"
+
+[profiles.partial.coder]
+  model = "override-coder"
+`,
+			agentType:   model.AgentFixer,
+			profileName: "partial",
+			want:        model.AgentCLIConfig{Model: "base-fixer", Effort: "medium"},
+		},
+		{
+			// Empty profileName bypasses profile lookup entirely.
+			name: "empty profile name uses base config only",
+			toml: `
+[agents.reviewer]
+  model = "claude-sonnet-4-6"
+  effort = "high"
+`,
+			agentType:   model.AgentReviewer,
+			profileName: "",
+			want:        model.AgentCLIConfig{Model: "claude-sonnet-4-6", Effort: "high"},
+		},
+		{
+			// A non-empty profileName absent from the TOML file falls back to the
+			// base [agents.*] config without error.
+			name: "unknown profile falls back to base config",
+			toml: `
+[agents.coder]
+  model = "base-coder"
+  effort = "medium"
+`,
+			agentType:   model.AgentCoder,
+			profileName: "nonexistent",
+			want:        model.AgentCLIConfig{Model: "base-coder", Effort: "medium"},
+		},
+		{
+			// Two profiles in one file; only the queried profile contributes.
+			name: "multiple profiles: each resolves independently",
+			toml: `
+[agents.coder]
+  model = "base-coder"
+  effort = "medium"
+
+[profiles.fast.coder]
+  effort = "low"
+
+[profiles.quality.coder]
+  model = "claude-opus-4-6"
+  effort = "high"
+`,
+			agentType:   model.AgentCoder,
+			profileName: "quality",
+			want:        model.AgentCLIConfig{Model: "claude-opus-4-6", Effort: "high"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			cfgPath := filepath.Join(dir, "config.toml")
+			if err := os.WriteFile(cfgPath, []byte(tc.toml), 0o644); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			cfg, err := LoadConfig(cfgPath)
+			if err != nil {
+				t.Fatalf("LoadConfig: %v", err)
+			}
+
+			got := cfg.ForAgentTypeWithProfile(tc.agentType, tc.profileName)
+			if got != tc.want {
+				t.Errorf("ForAgentTypeWithProfile(%q, %q)\n  got  %+v\n  want %+v",
+					tc.agentType, tc.profileName, got, tc.want)
+			}
+		})
+	}
+}
