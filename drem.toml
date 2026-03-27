@@ -1,6 +1,6 @@
 bare_repo_path        = "/home/godinj/git/drem-orchestrator.git"
 default_branch        = "master"
-max_concurrent_agents = 3
+max_concurrent_agents = 6
 test_command          = "go test ./..."
 compile_command       = "go vet ./..."
 
