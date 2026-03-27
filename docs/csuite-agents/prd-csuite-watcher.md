@@ -197,6 +197,55 @@ A good test for this feature verifies observable behavior through the module's p
 
 **Agent Lifecycle Manager**: Test metric recording (turn outcome is correctly written to turn_metrics table with tokens in/out, duration, exit status), trigger deduplication (agent is not started while already running, triggers queue correctly), and the full turn cycle (subprocess launches, output is parsed, metrics recorded). The subprocess launch itself can be tested with a mock command that simulates claude's JSON output. Prior art: existing agent runner tests in `internal/agent/` that manage subprocess lifecycles.
 
+## Trigger System Implementation
+
+### EventDeliveryTrigger
+
+`EventDeliveryTrigger` is the event-driven wake-up source for C-Suite agents. It reads agent name lists from a `<-chan []string` channel and calls `TriggerAgent` on each agent in the list, processing each notification fully before consuming the next.
+
+**Behavior:**
+
+- Notifications are consumed sequentially. The next notification is not read from the channel until every agent in the current notification has been passed to `TriggerAgent`. This prevents notification bursts from interleaving agent triggers.
+- Each notification is a `[]string` containing the names of agents that have new unacked event deliveries. The routing layer (outside the watcher package) computes this list from the event deliveries and pushes it onto the channel.
+- `Run(ctx)` blocks until the context is cancelled or the channel is closed. It is safe to cancel the context at any time.
+
+**Kyle exception:** "kyle" is silently skipped. If a notification contains `["mike", "kyle", "ross"]`, only `TriggerAgent("mike")` and `TriggerAgent("ross")` are called. Kyle's delivery records are created and tracked in the event bus (so Kyle can read his event history), but the trigger system never attempts to manage his lifecycle.
+
+**Decoupling from eventbus:** The `watcher` package does not import `eventbus`. The channel is the integration seam. In production, the routing layer calls `Bus.Publish()`, creates delivery rows via `Bus.Deliver()`, computes the target agent list, and sends it to the channel. In tests, the test itself does this directly, demonstrating that the two subsystems are independently testable.
+
+### SafetyTimer
+
+`SafetyTimer` periodically calls `TriggerAgent("mike")` at a fixed interval, regardless of event delivery activity. It is a safety net ensuring Mike processes operational state even if the event bridge misses something.
+
+**Behavior:**
+
+- The first tick fires after one full interval has elapsed from `Start()` — not immediately. This prevents a spurious wake immediately on startup.
+- The interval is configurable. If zero is passed to `NewSafetyTimer`, the default of 5 minutes is used.
+- `Stop()` halts the ticker and blocks until the background goroutine exits. After `Stop()` returns, no further `TriggerAgent` calls will be made.
+- Only "mike" is ever triggered. The SafetyTimer never references any other agent name.
+
+**Kyle exception:** Kyle is never triggered by the SafetyTimer. The 5-minute safety interval applies only to Mike's operational verification role.
+
+**Independence:** SafetyTimer is fully decoupled from EventDeliveryTrigger and from the event bus. It runs a simple `time.Ticker` loop in a background goroutine and requires no external state.
+
+### Kyle Exception
+
+The Kyle exception is enforced at the trigger level, not the lifecycle manager level. This means:
+
+1. Events published to the bus are delivered to Kyle and persisted in the `event_deliveries` table. Kyle can query his unacked deliveries when he is active in his tmux session.
+2. The `event_deliveries` rows for Kyle are created just like for any other agent, so the dashboard and event history are complete.
+3. Neither `EventDeliveryTrigger` nor `SafetyTimer` will ever call `TriggerAgent("kyle")`. Filtering early prevents the lifecycle manager from even receiving a wake request for Kyle.
+
+### Watcher Package Decoupling
+
+The `watcher` package has zero imports of `internal/` packages. It receives agent names via `<-chan []string` (for event-driven triggers) and `AgentTriggerer` (for turn execution). The eventbus, routing engine, and any other orchestration logic live outside the watcher package boundary.
+
+This design keeps the `watcher` package's import count at zero internal packages, well within the 6-import constitution ceiling, and allows each subsystem to be tested independently:
+
+- `eventbus` tests verify publish, deliver, poll, ack, and unacked query behavior with a real SQLite database.
+- `watcher` unit tests verify trigger filtering, sequential processing, and timer behavior with mock channels and mock triggerers.
+- Integration tests (in `package watcher_test`) import both packages to wire the channel-based seam and verify end-to-end behavior: `Bus.Publish()` → `Bus.Deliver()` → channel notification → `EventDeliveryTrigger` → `TriggerAgent` called for the correct agents.
+
 ## Out of Scope
 
 - **Kyle's transition to turn-based mode** -- Kyle remains interactive for now. The uniform turn-based model for Kyle depends on TUI messaging support, which is a separate feature.
