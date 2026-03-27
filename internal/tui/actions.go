@@ -216,9 +216,10 @@ func (m Model) handleOrchLog() (tea.Model, tea.Cmd) {
 
 // handleAddComment opens the feedback dialog to add a comment.
 // For tasks in StatusNeedsClarification, it opens as a clarification answer dialog.
+// Comments are allowed on tasks in any status.
 func (m Model) handleAddComment() (tea.Model, tea.Cmd) {
 	selected := m.board.Selected()
-	if selected == nil || !selected.Status.IsHumanGate() {
+	if selected == nil {
 		return m, nil
 	}
 
