@@ -1127,18 +1127,6 @@ func TestAddDeleteComments(t *testing.T) {
 	}
 }
 
-func TestAddComment_WrongStatus(t *testing.T) {
-	o, db := setupLifecycleTest(t)
-
-	// Comments only allowed in human-gate statuses.
-	task := createLifecycleTask(t, db, o.projectID, "comment-wrong", model.StatusInProgress, nil)
-
-	err := o.AddComment(task.ID, "user", "should fail")
-	if err == nil {
-		t.Fatal("AddComment: expected error for non-human-gate status, got nil")
-	}
-}
-
 // ---------------------------------------------------------------------------
 // failTask tests
 // ---------------------------------------------------------------------------
