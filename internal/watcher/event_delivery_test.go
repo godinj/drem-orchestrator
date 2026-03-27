@@ -41,7 +41,8 @@ func (m *mockAgentTriggerer) prepareTrigger(agent string) (<-chan struct{}, func
 	m.mu.Lock()
 	m.queue[agent] = append(m.queue[agent], slot)
 	m.mu.Unlock()
-	return slot.started, func() { close(slot.done) }
+	var once sync.Once
+	return slot.started, func() { once.Do(func() { close(slot.done) }) }
 }
 
 // TriggerAgent implements watcher.AgentTriggerer. It pops the next queued
