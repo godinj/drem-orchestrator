@@ -171,15 +171,41 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 
 	// 1. If plan already exists, evaluate for clarification needs.
 	if task.Plan != nil {
-		handled, err := o.checkClarificationNeeds(task)
-		if err != nil {
-			return fmt.Errorf("process planning: %w", err)
-		}
-		if handled {
+		dec := o.decideClarification(task)
+		if dec.CapReached {
+			// Round cap hit — record it for observability then fall through to plan_review.
+			if task.Context == nil {
+				task.Context = make(model.JSONField)
+			}
+			task.Context["clarification_cap_reached"] = true
+			o.logger.Info("clarification round cap reached, skipping to plan_review",
+				"task_id", task.ID, "rounds", dec.Rounds)
+		} else if !dec.Proceed {
+			// Clarification needed — set context and transition.
+			if task.Context == nil {
+				task.Context = make(model.JSONField)
+			}
+			task.Context["clarification_session"] = dec.SessionData
+			task.Context["clarification_questions"] = dec.Questions
+			if len(dec.Questions) > 0 {
+				task.Context["clarification_current_question"] = dec.Questions[0]
+			}
+			task.Context["clarification_rounds"] = float64(dec.Rounds + 1)
+			event, transErr := state.TransitionTask(task, model.StatusNeedsClarification, "orchestrator", nil)
+			if transErr != nil {
+				return fmt.Errorf("process planning: transition to needs_clarification: %w", transErr)
+			}
+			if err := o.db.Save(task).Error; err != nil {
+				return fmt.Errorf("process planning: save task: %w", err)
+			}
+			if err := o.db.Create(event).Error; err != nil {
+				return fmt.Errorf("process planning: save event: %w", err)
+			}
+			o.emit("needs_clarification", map[string]any{"task_id": task.ID, "questions": dec.Questions})
 			return nil
 		}
 
-		// No clarification needed — proceed to plan_review.
+		// No clarification needed (or cap reached) — proceed to plan_review.
 		event, err := state.TransitionTask(task, model.StatusPlanReview, "orchestrator", nil)
 		if err != nil {
 			return fmt.Errorf("process planning: transition to plan_review: %w", err)
