@@ -2,13 +2,6 @@ package watcher
 
 import "context"
 
-// AgentTriggerer is satisfied by *Deduplicator and *LifecycleManager.
-// It is the interface through which EventDeliveryTrigger and SafetyTimer
-// request agent wake-ups without importing concrete lifecycle types.
-type AgentTriggerer interface {
-	TriggerAgent(agent string) TriggerResult
-}
-
 // EventDeliveryTrigger reads agent name lists from a channel and calls
 // TriggerAgent for each agent, skipping "kyle" (Kyle exception).
 // Each notification is processed fully before the next is consumed.
