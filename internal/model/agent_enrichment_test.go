@@ -74,7 +74,7 @@ func TestAgentEnrichmentFieldsPopulated(t *testing.T) {
 		CompletedAt:     &completedTime,
 		ExitReason:      "success",
 		TotalCostUSD:    2.5,
-		FinalContextPct: 85.5,
+		FinalContextPct: 85,
 	}
 	if err := db.Create(&agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -104,8 +104,8 @@ func TestAgentEnrichmentFieldsPopulated(t *testing.T) {
 	if loaded.TotalCostUSD != 2.5 {
 		t.Errorf("TotalCostUSD = %v, want %v", loaded.TotalCostUSD, 2.5)
 	}
-	if loaded.FinalContextPct != 85.5 {
-		t.Errorf("FinalContextPct = %v, want %v", loaded.FinalContextPct, 85.5)
+	if loaded.FinalContextPct != 85 {
+		t.Errorf("FinalContextPct = %v, want %v", loaded.FinalContextPct, 85)
 	}
 }
 
@@ -182,7 +182,7 @@ func TestAgentEnrichmentFieldsZeroValues(t *testing.T) {
 		CompletedAt:     nil,
 		ExitReason:      "",
 		TotalCostUSD:    0.0,
-		FinalContextPct: 0.0,
+		FinalContextPct: 0,
 	}
 	if err := db.Create(&agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -210,7 +210,7 @@ func TestAgentEnrichmentFieldsZeroValues(t *testing.T) {
 	if loaded.TotalCostUSD != 0.0 {
 		t.Errorf("TotalCostUSD = %v, want 0", loaded.TotalCostUSD)
 	}
-	if loaded.FinalContextPct != 0.0 {
+	if loaded.FinalContextPct != 0 {
 		t.Errorf("FinalContextPct = %v, want 0", loaded.FinalContextPct)
 	}
 }
@@ -265,13 +265,13 @@ func TestAgentEnrichmentCostValues(t *testing.T) {
 	tests := []struct {
 		name            string
 		totalCostUSD    float64
-		finalContextPct float64
+		finalContextPct int
 	}{
-		{"zero cost", 0.0, 0.0},
-		{"small cost", 0.01, 1.5},
-		{"large cost", 99.99, 99.99},
-		{"precise cost", 1.2345, 45.6789},
-		{"context near limit", 2.5, 95.0},
+		{"zero cost", 0.0, 0},
+		{"small cost", 0.01, 1},
+		{"large cost", 99.99, 99},
+		{"precise cost", 1.2345, 45},
+		{"context near limit", 2.5, 95},
 	}
 
 	for _, tt := range tests {
@@ -473,7 +473,7 @@ func TestAgentEnrichmentPartialUpdate(t *testing.T) {
 		CompletedAt:     nil,
 		ExitReason:      "",
 		TotalCostUSD:    0.0,
-		FinalContextPct: 0.0,
+		FinalContextPct: 0,
 	}
 	if err := db.Create(&agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
@@ -485,7 +485,7 @@ func TestAgentEnrichmentPartialUpdate(t *testing.T) {
 		CompletedAt:     &completedTime,
 		ExitReason:      "success",
 		TotalCostUSD:    1.5,
-		FinalContextPct: 75.0,
+		FinalContextPct: 75,
 	}).Error; err != nil {
 		t.Fatalf("update agent: %v", err)
 	}
@@ -514,8 +514,8 @@ func TestAgentEnrichmentPartialUpdate(t *testing.T) {
 	if loaded.TotalCostUSD != 1.5 {
 		t.Errorf("TotalCostUSD = %v, want 1.5", loaded.TotalCostUSD)
 	}
-	if loaded.FinalContextPct != 75.0 {
-		t.Errorf("FinalContextPct = %v, want 75.0", loaded.FinalContextPct)
+	if loaded.FinalContextPct != 75 {
+		t.Errorf("FinalContextPct = %v, want 75", loaded.FinalContextPct)
 	}
 }
 
@@ -539,11 +539,11 @@ func TestAgentEnrichmentMultipleAgents(t *testing.T) {
 		effort          string
 		exitReason      string
 		totalCostUSD    float64
-		finalContextPct float64
+		finalContextPct int
 	}{
-		{AgentCoder, "opus", "high", "success", 2.0, 80.0},
-		{AgentPlanner, "sonnet", "medium", "success", 1.0, 60.0},
-		{AgentOrchestrator, "haiku", "low", "context_limit", 0.5, 92.0},
+		{AgentCoder, "opus", "high", "success", 2.0, 80},
+		{AgentPlanner, "sonnet", "medium", "success", 1.0, 60},
+		{AgentOrchestrator, "haiku", "low", "context_limit", 0.5, 92},
 	}
 
 	var createdAgents []Agent

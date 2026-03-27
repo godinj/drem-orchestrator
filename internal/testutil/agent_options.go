@@ -36,6 +36,6 @@ func WithTotalCostUSD(cost float64) AgentOption {
 }
 
 // WithFinalContextPct returns an AgentOption that sets the FinalContextPct field.
-func WithFinalContextPct(pct float64) AgentOption {
+func WithFinalContextPct(pct int) AgentOption {
 	return func(a *model.Agent) { a.FinalContextPct = pct }
 }

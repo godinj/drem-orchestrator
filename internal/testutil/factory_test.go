@@ -151,7 +151,7 @@ func TestCreateAgent_WithTotalCostUSD(t *testing.T) {
 // FinalContextPct on the persisted agent.
 func TestCreateAgent_WithFinalContextPct(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	want := 87.5
+	want := 87
 	ag := testutil.CreateAgent(t, db, uuid.Nil, model.AgentCoder, model.AgentIdle,
 		testutil.WithFinalContextPct(want))
 
@@ -175,7 +175,7 @@ func TestCreateAgent_MultipleOptions(t *testing.T) {
 		testutil.WithCompletedAt(&ts),
 		testutil.WithExitReason("success"),
 		testutil.WithTotalCostUSD(4.56),
-		testutil.WithFinalContextPct(42.0),
+		testutil.WithFinalContextPct(42),
 	)
 
 	var got model.Agent
