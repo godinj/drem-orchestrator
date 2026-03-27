@@ -119,6 +119,39 @@ dispatch_window       = "60s"
 | `max_dispatch_rate` | Maximum agent dispatches allowed within the dispatch window (default 3) |
 | `dispatch_window` | Sliding window duration for dispatch rate limiting (default `60s`) |
 
+### Model Profiles
+
+Profiles let you override model and effort settings per agent role for a named experiment or run configuration. Define `[profiles.<name>]` sections in `drem.toml`:
+
+```toml
+[profiles.fast.planner]
+model  = "claude-opus-4-6"
+effort = "high"
+
+[profiles.fast.coder]
+model  = "claude-opus-4-6"
+effort = "high"
+
+[profiles.cheap.planner]
+model  = "claude-haiku-4-5-20251001"
+effort = "low"
+
+[profiles.cheap.coder]
+model  = "claude-haiku-4-5-20251001"
+effort = "low"
+```
+
+**Profile name constraints:** Names must be non-empty and contain only alphanumeric characters, hyphens (`-`), and underscores (`_`).
+
+**Partial overrides:** You only need to specify the roles you want to change. Any role not listed in a profile inherits from the corresponding `[agents.<role>]` section (or the hardcoded default if that is also absent).
+
+**Resolution order (highest priority wins):**
+1. Profile override for the specific agent role
+2. Default agent config from `[agents.<role>]`
+3. Hardcoded defaults (`claude-sonnet-4-6`, effort `normal`)
+
+Use `ForAgentTypeWithProfile(agentType, profileName)` in the config API to resolve the effective `AgentCLIConfig` for a given role and profile. If the profile name is unknown, an error is returned — referencing a non-existent profile is always an error, not a silent fallback.
+
 ## Dispatch Throttling
 
 To prevent API quota exhaustion when many tasks advance simultaneously, the orchestrator rate-limits agent dispatch using a sliding window algorithm.
