@@ -11,8 +11,9 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// enrichmentTestDB creates an in-memory SQLite database with auto-migration
-// for enrichment field tests. This mirrors the testDB function in models_test.go.
+// enrichmentTestDB creates an in-memory SQLite database with auto-migration for enrichment
+// field tests. This mirrors the testDB function in models_test.go and is used
+// locally because testutil imports model, creating a circular dependency.
 func enrichmentTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file::memory:"), &gorm.Config{
@@ -47,38 +48,26 @@ func enrichmentTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// createTestProject creates a test project in the database with unique name.
+// createTestProject is a helper that creates a test project with a unique name.
 func createTestProject(t *testing.T, db *gorm.DB) Project {
 	t.Helper()
-	proj := Project{Name: "enrichment-proj-" + uuid.New().String(), BareRepoPath: "/tmp/test"}
+	proj := Project{
+		ID:            uuid.New(),
+		Name:          "enrichment-proj-" + uuid.New().String(),
+		BareRepoPath:  "/tmp/test",
+		DefaultBranch: "master",
+	}
 	if err := db.Create(&proj).Error; err != nil {
 		t.Fatalf("create project: %v", err)
 	}
 	return proj
 }
 
-// createProjectAndAgentHelper creates a Project and Agent in the DB,
-// returning both for use as FK parents. Used by enrichment field tests.
-func createProjectAndAgentHelper(t *testing.T, db *gorm.DB) (Project, Agent) {
-	t.Helper()
-	proj := createTestProject(t, db)
-	agent := Agent{
-		ProjectID: proj.ID,
-		AgentType: AgentCoder,
-		Name:      "test-agent",
-		Status:    AgentIdle,
-	}
-	if err := db.Create(&agent).Error; err != nil {
-		t.Fatalf("create agent: %v", err)
-	}
-	return proj, agent
-}
-
 // TestAgentEnrichmentFieldsPopulated verifies that populated enrichment fields
 // persist correctly to the database and are retrievable via GORM.
 func TestAgentEnrichmentFieldsPopulated(t *testing.T) {
 	db := enrichmentTestDB(t)
-	proj, _ := createProjectAndAgentHelper(t, db)
+	proj := createTestProject(t, db)
 
 	// Create agent with all enrichment fields populated
 	completedTime := time.Date(2026, 3, 26, 12, 30, 45, 0, time.UTC)
@@ -133,7 +122,7 @@ func TestAgentEnrichmentFieldsPopulated(t *testing.T) {
 // (CompletedAt) can be nil without causing database errors.
 func TestAgentEnrichmentFieldsNullable(t *testing.T) {
 	db := enrichmentTestDB(t)
-	proj, _ := createProjectAndAgentHelper(t, db)
+	proj := createTestProject(t, db)
 
 	// Create agent with nullable field (CompletedAt) as nil
 	agent := Agent{
@@ -144,7 +133,7 @@ func TestAgentEnrichmentFieldsNullable(t *testing.T) {
 		Status:          AgentWorking,
 		ModelID:         "sonnet",
 		Effort:          "medium",
-		CompletedAt:     nil, // Explicitly null
+		CompletedAt:     nil,
 		ExitReason:      "",
 		TotalCostUSD:    0,
 		FinalContextPct: 0,
@@ -495,6 +484,7 @@ func TestAgentEnrichmentMultipleAgents(t *testing.T) {
 			ProjectID:       proj.ID,
 			AgentType:       AgentCoder,
 			Name:            "coder-agent",
+			Status:          AgentIdle,
 			ModelID:         "opus",
 			Effort:          "high",
 			ExitReason:      "success",
@@ -506,6 +496,7 @@ func TestAgentEnrichmentMultipleAgents(t *testing.T) {
 			ProjectID:       proj.ID,
 			AgentType:       AgentPlanner,
 			Name:            "planner-agent",
+			Status:          AgentIdle,
 			ModelID:         "sonnet",
 			Effort:          "medium",
 			ExitReason:      "success",
@@ -517,6 +508,7 @@ func TestAgentEnrichmentMultipleAgents(t *testing.T) {
 			ProjectID:       proj.ID,
 			AgentType:       AgentOrchestrator,
 			Name:            "orchestrator-agent",
+			Status:          AgentIdle,
 			ModelID:         "haiku",
 			Effort:          "low",
 			ExitReason:      "context_limit",
