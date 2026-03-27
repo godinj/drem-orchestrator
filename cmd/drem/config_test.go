@@ -374,6 +374,129 @@ func TestForAgentTypeWithProfile_MultipleProfilesCoexist(t *testing.T) {
 	}
 }
 
+// TestProfilesEndToEnd is a comprehensive integration test that exercises the
+// full profile resolution matrix across every agent type and every profile.
+// It verifies that:
+//   - [profiles.fast] overrides planner and coder to opus/high
+//   - [profiles.cheap] overrides ALL roles to haiku/low
+//   - Roles not specified in a profile inherit from [agents.*] defaults
+//   - CLIArgs() emits correct --model and --effort flags for each resolved config
+func TestProfilesEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "drem.toml")
+
+	// Realistic drem.toml: per-role defaults and two named profiles.
+	data := []byte(`
+[agents.classifier]
+  effort = "low"
+[agents.planner]
+  model = "claude-sonnet-4-6"
+  effort = "medium"
+[agents.coder]
+  model = "claude-sonnet-4-6"
+  effort = "medium"
+[agents.reviewer]
+  effort = "medium"
+[agents.fixer]
+  effort = "medium"
+[agents.researcher]
+  effort = "medium"
+
+[profiles.fast.planner]
+  model = "claude-opus-4-6"
+  effort = "high"
+[profiles.fast.coder]
+  model = "claude-opus-4-6"
+  effort = "high"
+
+[profiles.cheap.classifier]
+  model = "claude-haiku-4-5-20251001"
+  effort = "low"
+[profiles.cheap.planner]
+  model = "claude-haiku-4-5-20251001"
+  effort = "low"
+[profiles.cheap.coder]
+  model = "claude-haiku-4-5-20251001"
+  effort = "low"
+[profiles.cheap.reviewer]
+  model = "claude-haiku-4-5-20251001"
+  effort = "low"
+[profiles.cheap.fixer]
+  model = "claude-haiku-4-5-20251001"
+  effort = "low"
+[profiles.cheap.researcher]
+  model = "claude-haiku-4-5-20251001"
+  effort = "low"
+`)
+	if err := os.WriteFile(cfgPath, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+
+	type want struct {
+		model  string
+		effort string
+	}
+
+	// Matrix: agent type → profile → expected resolved values.
+	matrix := []struct {
+		at      model.AgentType
+		profile string
+		want    want
+	}{
+		// fast profile: planner and coder get opus/high; others fall back to agents defaults.
+		{model.AgentPlanner, "fast", want{"claude-opus-4-6", "high"}},
+		{model.AgentCoder, "fast", want{"claude-opus-4-6", "high"}},
+		{model.AgentClassifier, "fast", want{"", "low"}},
+		{model.AgentReviewer, "fast", want{"", "medium"}},
+		{model.AgentFixer, "fast", want{"", "medium"}},
+		{model.AgentResearcher, "fast", want{"", "medium"}},
+
+		// cheap profile: every role overridden to haiku/low.
+		{model.AgentClassifier, "cheap", want{"claude-haiku-4-5-20251001", "low"}},
+		{model.AgentPlanner, "cheap", want{"claude-haiku-4-5-20251001", "low"}},
+		{model.AgentCoder, "cheap", want{"claude-haiku-4-5-20251001", "low"}},
+		{model.AgentReviewer, "cheap", want{"claude-haiku-4-5-20251001", "low"}},
+		{model.AgentFixer, "cheap", want{"claude-haiku-4-5-20251001", "low"}},
+		{model.AgentResearcher, "cheap", want{"claude-haiku-4-5-20251001", "low"}},
+	}
+
+	for _, tc := range matrix {
+		resolved := cfg.ForAgentTypeWithProfile(tc.at, tc.profile)
+
+		if resolved.Model != tc.want.model {
+			t.Errorf("%s/%s Model: got %q, want %q", tc.profile, tc.at, resolved.Model, tc.want.model)
+		}
+		if resolved.Effort != tc.want.effort {
+			t.Errorf("%s/%s Effort: got %q, want %q", tc.profile, tc.at, resolved.Effort, tc.want.effort)
+		}
+
+		// Verify CLIArgs encodes the resolved config into correct flags.
+		args := resolved.CLIArgs()
+		if tc.want.model != "" {
+			if len(args) < 2 || args[0] != "--model" || args[1] != tc.want.model {
+				t.Errorf("%s/%s CLIArgs model flags: got %v", tc.profile, tc.at, args)
+			}
+		}
+		if tc.want.effort != "" {
+			var foundEffort bool
+			for i := 0; i+1 < len(args); i++ {
+				if args[i] == "--effort" && args[i+1] == tc.want.effort {
+					foundEffort = true
+					break
+				}
+			}
+			if !foundEffort {
+				t.Errorf("%s/%s CLIArgs missing --effort %s: got %v", tc.profile, tc.at, tc.want.effort, args)
+			}
+		}
+	}
+}
+
 // TestLoadConfigIntegrationProfileRoundTrip is a realistic end-to-end test
 // that creates a drem.toml with both [profiles.fast] and [profiles.cheap],
 // parses it via LoadConfig, then resolves ForAgentTypeWithProfile for each
