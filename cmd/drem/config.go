@@ -63,29 +63,30 @@ func (a AgentsConfig) InteractiveSupervisorCLIConfig() model.AgentCLIConfig {
 
 // Config holds all runtime configuration for the Drem Orchestrator.
 type Config struct {
-	DatabasePath        string        `toml:"database_path"`
-	BareRepoPath        string        `toml:"bare_repo_path"`
-	DefaultBranch       string        `toml:"default_branch"`
-	ClaudeBin           string        `toml:"claude_bin"`
-	MaxConcurrentAgents int           `toml:"max_concurrent_agents"`
-	TickInterval        time.Duration `toml:"tick_interval"`
-	HeartbeatInterval   time.Duration `toml:"heartbeat_interval"`
-	StaleTimeout        time.Duration `toml:"stale_timeout"`
-	SupervisorEnabled   bool          `toml:"supervisor_enabled"`
-	SupervisorTimeout   time.Duration `toml:"supervisor_timeout"`
-	ContextWarnPercent  int           `toml:"context_warn_percent"`
-	ContextStopPercent  int           `toml:"context_stop_percent"`
-	LogPath             string        `toml:"log_path"`
-	TestCommand         string        `toml:"test_command"`
-	CompileCommand      string        `toml:"compile_command"`
-	ScopedTests         *bool         `toml:"scoped_tests"` // pointer for default-true detection
-	TestTimeout         time.Duration `toml:"test_timeout"`
-	ContextFixerPercent int           `toml:"context_fixer_percent"`
-	TmuxSocket          string        `toml:"tmux_socket"`
-	TmuxConfigFile      string        `toml:"tmux_config_file"`
-	MaxDispatchRate     int           `toml:"max_dispatch_rate"`
-	DispatchWindow      time.Duration `toml:"dispatch_window"`
-	Agents              AgentsConfig  `toml:"agents"`
+	DatabasePath        string                   `toml:"database_path"`
+	BareRepoPath        string                   `toml:"bare_repo_path"`
+	DefaultBranch       string                   `toml:"default_branch"`
+	ClaudeBin           string                   `toml:"claude_bin"`
+	MaxConcurrentAgents int                      `toml:"max_concurrent_agents"`
+	TickInterval        time.Duration            `toml:"tick_interval"`
+	HeartbeatInterval   time.Duration            `toml:"heartbeat_interval"`
+	StaleTimeout        time.Duration            `toml:"stale_timeout"`
+	SupervisorEnabled   bool                     `toml:"supervisor_enabled"`
+	SupervisorTimeout   time.Duration            `toml:"supervisor_timeout"`
+	ContextWarnPercent  int                      `toml:"context_warn_percent"`
+	ContextStopPercent  int                      `toml:"context_stop_percent"`
+	LogPath             string                   `toml:"log_path"`
+	TestCommand         string                   `toml:"test_command"`
+	CompileCommand      string                   `toml:"compile_command"`
+	ScopedTests         *bool                    `toml:"scoped_tests"` // pointer for default-true detection
+	TestTimeout         time.Duration            `toml:"test_timeout"`
+	ContextFixerPercent int                      `toml:"context_fixer_percent"`
+	TmuxSocket          string                   `toml:"tmux_socket"`
+	TmuxConfigFile      string                   `toml:"tmux_config_file"`
+	MaxDispatchRate     int                      `toml:"max_dispatch_rate"`
+	DispatchWindow      time.Duration            `toml:"dispatch_window"`
+	Agents              AgentsConfig             `toml:"agents"`
+	Profiles            map[string]ProfileConfig `toml:"profiles"`
 }
 
 // DefaultConfig returns a Config populated with sensible default values.
