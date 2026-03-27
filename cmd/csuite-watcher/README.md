@@ -72,3 +72,113 @@ Use a custom database path:
 ```sh
 csuite-watcher event --db /tmp/test.db '{"type":"task_status_changed","task_id":"1","from_status":"backlog","to_status":"planning","details":"","timestamp":"2026-03-26T09:00:00Z"}'
 ```
+
+---
+
+## Trigger System (`internal/watcher`)
+
+The watcher package provides a generic trigger system for waking C-Suite agents
+based on external signals. This section documents the interfaces and the first
+trigger implementation.
+
+### Trigger interface
+
+```go
+type Trigger interface {
+    Start(ctx context.Context) error
+    Stop() error
+    Events() <-chan TriggerEvent
+}
+```
+
+**Lifecycle contract:**
+
+1. Call `Start(ctx)` to begin monitoring. Monitoring runs in a background goroutine; `Start` is non-blocking.
+2. Read from `Events()` to receive `TriggerEvent` values as agents are woken.
+3. Call `Stop()` to halt monitoring. `Stop` is idempotent. After `Stop` returns the `Events()` channel is closed, so a `range` loop over `Events()` terminates naturally.
+
+```go
+t := NewInboxSignalTrigger(baseDir, pollInterval)
+if err := t.Start(ctx); err != nil {
+    log.Fatal(err)
+}
+defer t.Stop()
+
+for event := range t.Events() {
+    // event.AgentName — agent that should be woken
+    // event.Source    — "inbox-signal"
+    // event.Timestamp — when the signal was detected
+    waker.Wake(event.AgentName)
+}
+```
+
+### AgentWaker interface
+
+```go
+type AgentWaker interface {
+    Wake(agentName string) error
+}
+```
+
+`AgentWaker` is the consumption-site interface used by trigger consumers to
+wake agents without importing the lifecycle package directly. It is satisfied
+by a thin adapter over `LifecycleManager.TriggerAgent` (Phase 4 task 4).
+This decoupling keeps the trigger package testable without a real lifecycle
+manager.
+
+### InboxSignalTrigger
+
+`InboxSignalTrigger` watches for `*.signal` files in `<baseDir>/<agent>/inbox/`
+directories. It is the primary wake mechanism for C-Suite agents.
+
+**Polling interval:** The trigger polls at a configurable `pollInterval`
+(default 2 seconds) for signal files. Agent directories created after `Start`
+are discovered automatically — no restart is required.
+
+**Signal detection:** On each poll tick, `InboxSignalTrigger` globs
+`<baseDir>/*/inbox/*.signal`. Any matching file causes a `TriggerEvent` to be
+emitted for the owning agent.
+
+**Cleanup semantics:** After a `.signal` file is detected and the wake event is
+emitted, the file is removed to prevent re-triggering. If removal fails (e.g.,
+a concurrent cleanup already deleted it), the error is logged and the event is
+still emitted.
+
+**Graceful handling of missing directories:** If `<baseDir>` does not exist or
+contains no agent directories, `InboxSignalTrigger` starts without error and
+delivers no events. New agent directories are discovered on subsequent polls.
+
+#### Waking an agent from the shell
+
+To wake a specific C-Suite agent, create a `.signal` file in its inbox:
+
+```sh
+# Wake the "planner" agent
+mkdir -p ~/.drem-csuite/planner/inbox
+touch ~/.drem-csuite/planner/inbox/wake.signal
+```
+
+This matches the `_csuite_notify` function used by `csuite-proto.sh`. Any
+filename ending in `.signal` is treated as a wake signal — `wake.signal`,
+`message.signal`, etc. all work equivalently.
+
+#### Wiring InboxSignalTrigger to a consumer
+
+```go
+baseDir := filepath.Join(os.Getenv("HOME"), ".drem-csuite")
+trigger := watcher.NewInboxSignalTrigger(baseDir, 2*time.Second)
+
+ctx, cancel := context.WithCancel(context.Background())
+defer cancel()
+
+if err := trigger.Start(ctx); err != nil {
+    log.Fatal(err)
+}
+defer trigger.Stop()
+
+for event := range trigger.Events() {
+    if err := lifecycleMgr.Wake(event.AgentName); err != nil {
+        log.Printf("wake %s: %v", event.AgentName, err)
+    }
+}
+```
