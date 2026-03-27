@@ -455,7 +455,7 @@ func StatusBadge(status model.TaskStatus) string {
 	if !ok {
 		icon = "?"
 	}
-	return statusBadge.Foreground(color).Render(icon + " " + string(status))
+	return statusBadge.Foreground(color).Render(icon + " " + DisplayStatus(string(status)))
 }
 
 // AgentStatusBadge renders a colored agent status indicator.
