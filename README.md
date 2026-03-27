@@ -185,6 +185,86 @@ Within each status group, tasks are sorted by priority (higher first), ensuring 
 
 Lists all agents with their type, status, current task, and last heartbeat.
 
+#### Phase 1: Agent Enrichment Fields
+
+The agent panel displays two enrichment fields for each agent:
+
+**Model ID** — The Claude model being used by the agent (e.g., `claude-opus-4`, `claude-haiku`).
+- Populated immediately after the agent spawns
+- Shows as "-" for agents created before this feature or if the model is not yet assigned
+- Useful for understanding which agents are using which models
+
+**Cost** — The cumulative cost (in USD) of API calls made by the agent during its execution.
+- Updated continuously as the agent runs
+- Shows as "$X.XX" (e.g., `$1.50`, `$0.05`)
+- Shows as "-" if no cost data is available yet
+- Shows as `$0.00` for agents that have started but made no API calls
+- Costs >$0.50 appear in yellow, >$1.00 appear in red (visual warning for expensive agents)
+
+**Example Agent Panel Display:**
+
+```
+> agent-1   spawned
+    session: tmux-4
+    branch: feature/xyz
+    model: claude-opus-4
+    cost: $2.15
+
+> agent-2   working
+    session: tmux-5
+    branch: feature/abc
+    model: claude-haiku
+    cost: $0.42
+    activity: ⊸ compile cmd/drem/main.go | implemented
+
+> agent-3   dead [timeout]
+    session: (no session)
+    branch: (no branch)
+    model: claude-sonnet
+    cost: $1.87
+    exit_reason: context limit exceeded
+```
+
+**When are these fields populated?**
+
+- **Model ID**: Set immediately when the agent is spawned, from the agent configuration
+- **Cost**: Updated every 30 seconds (or at heartbeat interval) by the context monitor, pulling cost data from the Claude API usage tracker
+
+**Querying agents by model via SQL:**
+
+You can query the orchestrator database directly to find agents by model:
+
+```sql
+-- Find all agents using a specific model
+SELECT id, type, status, created_at FROM agents
+WHERE json_extract(config, '$.model_id') = 'claude-opus-4';
+
+-- Sum costs by model
+SELECT
+  json_extract(config, '$.model_id') as model,
+  COUNT(*) as agent_count,
+  SUM(CAST(json_extract(config, '$.total_cost_usd') AS REAL)) as total_cost
+FROM agents
+GROUP BY json_extract(config, '$.model_id');
+```
+
+**Terminal Width:**
+
+All agent panel lines respect standard terminal widths:
+- Agent header: ~19 characters (e.g., `> agent-1   working`)
+- Model line: ~24-33 characters (e.g., `    model: claude-opus-4`)
+- Cost line: ~17 characters (e.g., `    cost: $123.45`)
+- Maximum observed: 84 characters (for long branch paths)
+- Safe on 120+ column terminals ✓
+
+**Phase 1 Context:**
+
+These fields are part of Phase 1 of the Metrics & Experiments plan. The agent enrichment enables:
+- Real-time cost tracking per agent
+- Model usage analytics across the fleet
+- Cost-aware scheduling and agent placement in future phases
+- Retrospective analysis of model performance and cost efficiency
+
 ### Keybindings
 
 | Key | Action |
