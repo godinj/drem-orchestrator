@@ -292,7 +292,8 @@ func CreateQuickFixTask(t *testing.T, db *gorm.DB, projectID uuid.UUID, title st
 }
 
 // CreateAgent creates a test agent in the database and returns it.
-func CreateAgent(t *testing.T, db *gorm.DB, taskID uuid.UUID, agentType model.AgentType, status model.AgentStatus) model.Agent {
+// Optional AgentOption values can be provided to set enrichment fields.
+func CreateAgent(t *testing.T, db *gorm.DB, taskID uuid.UUID, agentType model.AgentType, status model.AgentStatus, opts ...AgentOption) model.Agent {
 	t.Helper()
 	ag := model.Agent{
 		ID:        uuid.New(),
@@ -301,6 +302,9 @@ func CreateAgent(t *testing.T, db *gorm.DB, taskID uuid.UUID, agentType model.Ag
 	}
 	if taskID != uuid.Nil {
 		ag.CurrentTaskID = &taskID
+	}
+	for _, opt := range opts {
+		opt(&ag)
 	}
 	if err := db.Create(&ag).Error; err != nil {
 		t.Fatalf("create test agent: %v", err)
