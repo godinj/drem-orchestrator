@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 const defaultTimeout = 10 * time.Minute
@@ -17,6 +20,8 @@ const defaultTimeout = 10 * time.Minute
 //
 // Configure ClaudeBin, WorkDir, and Timeout before calling RunTurn.
 // ClaudeBin defaults to "claude"; Timeout defaults to 10 minutes.
+//
+// For the Phase 2 trigger-based API use NewLifecycleManager.
 type LifecycleManager struct {
 	// ClaudeBin is the path to the claude CLI binary. Defaults to "claude".
 	ClaudeBin string
@@ -27,6 +32,19 @@ type LifecycleManager struct {
 	Timeout time.Duration
 	// MetricsStore is used to persist LifecycleResult after each turn.
 	MetricsStore *MetricsStore
+
+	// Phase 2 trigger-based fields (set by NewLifecycleManager).
+	db     *gorm.DB
+	cfg    Config
+	runner CommandRunner
+
+	mu      sync.Mutex
+	running map[string]bool
+	queued  map[string]bool
+	wg      sync.WaitGroup
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // NewLifecycleManagerFromStore creates a LifecycleManager with default settings
