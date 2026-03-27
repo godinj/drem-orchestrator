@@ -236,7 +236,7 @@ func TestForAgentTypeWithProfile_ProfileOverrideWins(t *testing.T) {
 		},
 	}
 
-	got := cfg.ForAgentTypeWithProfile("fast", model.AgentCoder)
+	got := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
 
 	if got.Model != "claude-opus-4-6" {
 		t.Errorf("Model: got %q, want %q", got.Model, "claude-opus-4-6")
@@ -258,7 +258,7 @@ func TestForAgentTypeWithProfile_FallsBackToAgentsDefault(t *testing.T) {
 		},
 	}
 
-	got := cfg.ForAgentTypeWithProfile("fast", model.AgentPlanner)
+	got := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "fast")
 
 	if got.Model != "claude-sonnet-4-6" {
 		t.Errorf("Model: got %q, want %q", got.Model, "claude-sonnet-4-6")
@@ -279,7 +279,7 @@ func TestForAgentTypeWithProfile_FallsBackToHardcodedDefault(t *testing.T) {
 		"fast": {}, // Fixer not specified in profile either.
 	}
 
-	got := cfg.ForAgentTypeWithProfile("fast", model.AgentFixer)
+	got := cfg.ForAgentTypeWithProfile(model.AgentFixer, "fast")
 
 	if got.Model != "" {
 		t.Errorf("Model: got %q, want empty", got.Model)
@@ -299,7 +299,7 @@ func TestForAgentTypeWithProfile_UnknownProfileReturnsDefault(t *testing.T) {
 	}
 
 	// "unknown" does not exist — must not panic and must return agents default.
-	got := cfg.ForAgentTypeWithProfile("unknown", model.AgentCoder)
+	got := cfg.ForAgentTypeWithProfile(model.AgentCoder, "unknown")
 
 	if got.Model != "claude-sonnet-4-6" {
 		t.Errorf("Model: got %q, want %q", got.Model, "claude-sonnet-4-6")
@@ -334,7 +334,7 @@ func TestForAgentTypeWithProfile_PartialOverrideInheritance(t *testing.T) {
 		{model.AgentReviewer, "", "medium"},
 		{model.AgentFixer, "", "medium"},
 	} {
-		got := cfg.ForAgentTypeWithProfile("cheap", tc.at)
+		got := cfg.ForAgentTypeWithProfile(tc.at, "cheap")
 		if got.Model != tc.wantModel {
 			t.Errorf("cheap/%v Model: got %q, want %q", tc.at, got.Model, tc.wantModel)
 		}
@@ -357,8 +357,8 @@ func TestForAgentTypeWithProfile_MultipleProfilesCoexist(t *testing.T) {
 		},
 	}
 
-	fast := cfg.ForAgentTypeWithProfile("fast", model.AgentCoder)
-	cheap := cfg.ForAgentTypeWithProfile("cheap", model.AgentCoder)
+	fast := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
+	cheap := cfg.ForAgentTypeWithProfile(model.AgentCoder, "cheap")
 
 	if fast.Model != "claude-opus-4-6" {
 		t.Errorf("fast Model: got %q, want %q", fast.Model, "claude-opus-4-6")
@@ -413,28 +413,28 @@ func TestLoadConfigIntegrationProfileRoundTrip(t *testing.T) {
 	}
 
 	// fast: coder and planner overridden; reviewer and fixer inherit from [agents.*]
-	fastCoder := cfg.ForAgentTypeWithProfile("fast", model.AgentCoder)
+	fastCoder := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
 	if fastCoder.Model != "claude-opus-4-6" || fastCoder.Effort != "high" {
 		t.Errorf("fast/coder: got %+v, want {claude-opus-4-6 high}", fastCoder)
 	}
 
-	fastPlanner := cfg.ForAgentTypeWithProfile("fast", model.AgentPlanner)
+	fastPlanner := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "fast")
 	if fastPlanner.Model != "claude-opus-4-6" || fastPlanner.Effort != "high" {
 		t.Errorf("fast/planner: got %+v, want {claude-opus-4-6 high}", fastPlanner)
 	}
 
-	fastReviewer := cfg.ForAgentTypeWithProfile("fast", model.AgentReviewer)
+	fastReviewer := cfg.ForAgentTypeWithProfile(model.AgentReviewer, "fast")
 	if fastReviewer.Model != "" || fastReviewer.Effort != "medium" {
 		t.Errorf("fast/reviewer: got %+v, want { medium}", fastReviewer)
 	}
 
 	// cheap: only coder overridden; planner inherits from [agents.*]
-	cheapCoder := cfg.ForAgentTypeWithProfile("cheap", model.AgentCoder)
+	cheapCoder := cfg.ForAgentTypeWithProfile(model.AgentCoder, "cheap")
 	if cheapCoder.Model != "claude-haiku-4-5-20251001" || cheapCoder.Effort != "low" {
 		t.Errorf("cheap/coder: got %+v, want {claude-haiku-4-5-20251001 low}", cheapCoder)
 	}
 
-	cheapPlanner := cfg.ForAgentTypeWithProfile("cheap", model.AgentPlanner)
+	cheapPlanner := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "cheap")
 	if cheapPlanner.Model != "" || cheapPlanner.Effort != "medium" {
 		t.Errorf("cheap/planner: got %+v, want { medium}", cheapPlanner)
 	}

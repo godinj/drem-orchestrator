@@ -14,15 +14,15 @@ type ProfileConfig struct {
 	Researcher AgentConfig `toml:"researcher"`
 }
 
-// ForAgentTypeWithProfile resolves an AgentCLIConfig for the given profile and
-// agent type using three-layer fallback:
+// ForAgentTypeWithProfile resolves an AgentCLIConfig for the given agent type
+// and profile using three-layer fallback:
 //
 //  1. Profile override (profiles.<name>.<role>) — wins when non-empty
 //  2. [agents.<role>] defaults from Config.Agents
 //  3. Hardcoded default (effort="medium", model="")
 //
-// An unknown profile name silently falls back to layers 2 and 3.
-func (c Config) ForAgentTypeWithProfile(profile string, at model.AgentType) model.AgentCLIConfig {
-	// Stub: returns hardcoded default. Implementation pending.
-	return model.AgentCLIConfig{Effort: "medium"}
+// An unknown or empty profile name silently falls back to layers 2 and 3.
+func (c Config) ForAgentTypeWithProfile(at model.AgentType, profile string) model.AgentCLIConfig {
+	// Stub: profile layering not yet implemented; returns layer-2 default.
+	return c.Agents.ForAgentType(at)
 }
