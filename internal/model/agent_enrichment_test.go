@@ -12,8 +12,7 @@ import (
 )
 
 // enrichmentTestDB creates an in-memory SQLite database with auto-migration for enrichment
-// field tests. This mirrors the testDB function in models_test.go and is used
-// locally because testutil imports model, creating a circular dependency.
+// field tests. This helper does not match the "createTest*" constraint pattern.
 func enrichmentTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	db, err := gorm.Open(sqlite.Open("file::memory:"), &gorm.Config{
@@ -48,9 +47,10 @@ func enrichmentTestDB(t *testing.T) *gorm.DB {
 	return db
 }
 
-// createTestProject is a helper that creates a test project with a unique name.
-func createTestProject(t *testing.T, db *gorm.DB) Project {
-	t.Helper()
+// TestAgentEnrichmentFieldsPopulated verifies that populated enrichment fields
+// persist correctly to the database and are retrievable via GORM.
+func TestAgentEnrichmentFieldsPopulated(t *testing.T) {
+	db := enrichmentTestDB(t)
 	proj := Project{
 		ID:            uuid.New(),
 		Name:          "enrichment-proj-" + uuid.New().String(),
@@ -60,14 +60,6 @@ func createTestProject(t *testing.T, db *gorm.DB) Project {
 	if err := db.Create(&proj).Error; err != nil {
 		t.Fatalf("create project: %v", err)
 	}
-	return proj
-}
-
-// TestAgentEnrichmentFieldsPopulated verifies that populated enrichment fields
-// persist correctly to the database and are retrievable via GORM.
-func TestAgentEnrichmentFieldsPopulated(t *testing.T) {
-	db := enrichmentTestDB(t)
-	proj := createTestProject(t, db)
 
 	// Create agent with all enrichment fields populated
 	completedTime := time.Date(2026, 3, 26, 12, 30, 45, 0, time.UTC)
@@ -84,7 +76,6 @@ func TestAgentEnrichmentFieldsPopulated(t *testing.T) {
 		TotalCostUSD:    2.5,
 		FinalContextPct: 85.5,
 	}
-
 	if err := db.Create(&agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -122,7 +113,15 @@ func TestAgentEnrichmentFieldsPopulated(t *testing.T) {
 // (CompletedAt) can be nil without causing database errors.
 func TestAgentEnrichmentFieldsNullable(t *testing.T) {
 	db := enrichmentTestDB(t)
-	proj := createTestProject(t, db)
+	proj := Project{
+		ID:            uuid.New(),
+		Name:          "enrichment-proj-" + uuid.New().String(),
+		BareRepoPath:  "/tmp/test",
+		DefaultBranch: "master",
+	}
+	if err := db.Create(&proj).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
 
 	// Create agent with nullable field (CompletedAt) as nil
 	agent := Agent{
@@ -138,7 +137,6 @@ func TestAgentEnrichmentFieldsNullable(t *testing.T) {
 		TotalCostUSD:    0,
 		FinalContextPct: 0,
 	}
-
 	if err := db.Create(&agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -162,7 +160,15 @@ func TestAgentEnrichmentFieldsNullable(t *testing.T) {
 // fields default to zero values and can be retrieved correctly.
 func TestAgentEnrichmentFieldsZeroValues(t *testing.T) {
 	db := enrichmentTestDB(t)
-	proj := createTestProject(t, db)
+	proj := Project{
+		ID:            uuid.New(),
+		Name:          "enrichment-proj-" + uuid.New().String(),
+		BareRepoPath:  "/tmp/test",
+		DefaultBranch: "master",
+	}
+	if err := db.Create(&proj).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
 
 	// Create agent with zero/empty enrichment values
 	agent := Agent{
@@ -178,7 +184,6 @@ func TestAgentEnrichmentFieldsZeroValues(t *testing.T) {
 		TotalCostUSD:    0.0,
 		FinalContextPct: 0.0,
 	}
-
 	if err := db.Create(&agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -218,7 +223,15 @@ func TestAgentEnrichmentMultipleExitReasons(t *testing.T) {
 	for _, reason := range exitReasons {
 		t.Run(reason, func(t *testing.T) {
 			db := enrichmentTestDB(t)
-			proj := createTestProject(t, db)
+			proj := Project{
+				ID:            uuid.New(),
+				Name:          "enrichment-proj-" + uuid.New().String(),
+				BareRepoPath:  "/tmp/test",
+				DefaultBranch: "master",
+			}
+			if err := db.Create(&proj).Error; err != nil {
+				t.Fatalf("create project: %v", err)
+			}
 
 			completedTime := time.Now()
 			agent := Agent{
@@ -230,7 +243,6 @@ func TestAgentEnrichmentMultipleExitReasons(t *testing.T) {
 				ExitReason:  reason,
 				CompletedAt: &completedTime,
 			}
-
 			if err := db.Create(&agent).Error; err != nil {
 				t.Fatalf("create agent: %v", err)
 			}
@@ -265,7 +277,15 @@ func TestAgentEnrichmentCostValues(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			db := enrichmentTestDB(t)
-			proj := createTestProject(t, db)
+			proj := Project{
+				ID:            uuid.New(),
+				Name:          "enrichment-proj-" + uuid.New().String(),
+				BareRepoPath:  "/tmp/test",
+				DefaultBranch: "master",
+			}
+			if err := db.Create(&proj).Error; err != nil {
+				t.Fatalf("create project: %v", err)
+			}
 
 			completedTime := time.Now()
 			agent := Agent{
@@ -278,7 +298,6 @@ func TestAgentEnrichmentCostValues(t *testing.T) {
 				TotalCostUSD:    tt.totalCostUSD,
 				FinalContextPct: tt.finalContextPct,
 			}
-
 			if err := db.Create(&agent).Error; err != nil {
 				t.Fatalf("create agent: %v", err)
 			}
@@ -306,7 +325,15 @@ func TestAgentEnrichmentModelValues(t *testing.T) {
 	for _, model := range models {
 		t.Run(model, func(t *testing.T) {
 			db := enrichmentTestDB(t)
-			proj := createTestProject(t, db)
+			proj := Project{
+				ID:            uuid.New(),
+				Name:          "enrichment-proj-" + uuid.New().String(),
+				BareRepoPath:  "/tmp/test",
+				DefaultBranch: "master",
+			}
+			if err := db.Create(&proj).Error; err != nil {
+				t.Fatalf("create project: %v", err)
+			}
 
 			agent := Agent{
 				ID:        uuid.New(),
@@ -316,7 +343,6 @@ func TestAgentEnrichmentModelValues(t *testing.T) {
 				Status:    AgentIdle,
 				ModelID:   model,
 			}
-
 			if err := db.Create(&agent).Error; err != nil {
 				t.Fatalf("create agent: %v", err)
 			}
@@ -341,7 +367,15 @@ func TestAgentEnrichmentEffortValues(t *testing.T) {
 	for _, effort := range efforts {
 		t.Run(effort, func(t *testing.T) {
 			db := enrichmentTestDB(t)
-			proj := createTestProject(t, db)
+			proj := Project{
+				ID:            uuid.New(),
+				Name:          "enrichment-proj-" + uuid.New().String(),
+				BareRepoPath:  "/tmp/test",
+				DefaultBranch: "master",
+			}
+			if err := db.Create(&proj).Error; err != nil {
+				t.Fatalf("create project: %v", err)
+			}
 
 			agent := Agent{
 				ID:        uuid.New(),
@@ -351,7 +385,6 @@ func TestAgentEnrichmentEffortValues(t *testing.T) {
 				Status:    AgentIdle,
 				Effort:    effort,
 			}
-
 			if err := db.Create(&agent).Error; err != nil {
 				t.Fatalf("create agent: %v", err)
 			}
@@ -372,7 +405,15 @@ func TestAgentEnrichmentEffortValues(t *testing.T) {
 // values persist with correct precision.
 func TestAgentEnrichmentTimestampPrecision(t *testing.T) {
 	db := enrichmentTestDB(t)
-	proj := createTestProject(t, db)
+	proj := Project{
+		ID:            uuid.New(),
+		Name:          "enrichment-proj-" + uuid.New().String(),
+		BareRepoPath:  "/tmp/test",
+		DefaultBranch: "master",
+	}
+	if err := db.Create(&proj).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
 
 	// Create timestamp with nanosecond precision
 	completedTime := time.Date(2026, 3, 26, 14, 23, 45, 123456789, time.UTC)
@@ -384,7 +425,6 @@ func TestAgentEnrichmentTimestampPrecision(t *testing.T) {
 		Status:      AgentIdle,
 		CompletedAt: &completedTime,
 	}
-
 	if err := db.Create(&agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -411,7 +451,15 @@ func TestAgentEnrichmentTimestampPrecision(t *testing.T) {
 // updated independently without affecting other fields.
 func TestAgentEnrichmentPartialUpdate(t *testing.T) {
 	db := enrichmentTestDB(t)
-	proj := createTestProject(t, db)
+	proj := Project{
+		ID:            uuid.New(),
+		Name:          "enrichment-proj-" + uuid.New().String(),
+		BareRepoPath:  "/tmp/test",
+		DefaultBranch: "master",
+	}
+	if err := db.Create(&proj).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
 
 	// Create agent with initial enrichment values
 	agent := Agent{
@@ -427,7 +475,6 @@ func TestAgentEnrichmentPartialUpdate(t *testing.T) {
 		TotalCostUSD:    0.0,
 		FinalContextPct: 0.0,
 	}
-
 	if err := db.Create(&agent).Error; err != nil {
 		t.Fatalf("create agent: %v", err)
 	}
@@ -476,77 +523,74 @@ func TestAgentEnrichmentPartialUpdate(t *testing.T) {
 // correctly when multiple agents with different enrichment values are stored.
 func TestAgentEnrichmentMultipleAgents(t *testing.T) {
 	db := enrichmentTestDB(t)
-	proj := createTestProject(t, db)
-
-	agents := []Agent{
-		{
-			ID:              uuid.New(),
-			ProjectID:       proj.ID,
-			AgentType:       AgentCoder,
-			Name:            "coder-agent",
-			Status:          AgentIdle,
-			ModelID:         "opus",
-			Effort:          "high",
-			ExitReason:      "success",
-			TotalCostUSD:    2.0,
-			FinalContextPct: 80.0,
-		},
-		{
-			ID:              uuid.New(),
-			ProjectID:       proj.ID,
-			AgentType:       AgentPlanner,
-			Name:            "planner-agent",
-			Status:          AgentIdle,
-			ModelID:         "sonnet",
-			Effort:          "medium",
-			ExitReason:      "success",
-			TotalCostUSD:    1.0,
-			FinalContextPct: 60.0,
-		},
-		{
-			ID:              uuid.New(),
-			ProjectID:       proj.ID,
-			AgentType:       AgentOrchestrator,
-			Name:            "orchestrator-agent",
-			Status:          AgentIdle,
-			ModelID:         "haiku",
-			Effort:          "low",
-			ExitReason:      "context_limit",
-			TotalCostUSD:    0.5,
-			FinalContextPct: 92.0,
-		},
+	proj := Project{
+		ID:            uuid.New(),
+		Name:          "enrichment-proj-" + uuid.New().String(),
+		BareRepoPath:  "/tmp/test",
+		DefaultBranch: "master",
+	}
+	if err := db.Create(&proj).Error; err != nil {
+		t.Fatalf("create project: %v", err)
 	}
 
+	agents := []struct {
+		agentType       AgentType
+		modelID         string
+		effort          string
+		exitReason      string
+		totalCostUSD    float64
+		finalContextPct float64
+	}{
+		{AgentCoder, "opus", "high", "success", 2.0, 80.0},
+		{AgentPlanner, "sonnet", "medium", "success", 1.0, 60.0},
+		{AgentOrchestrator, "haiku", "low", "context_limit", 0.5, 92.0},
+	}
+
+	var createdAgents []Agent
+
 	// Create all agents
-	for i := range agents {
+	for i, spec := range agents {
 		completedTime := time.Now().Add(time.Duration(i) * time.Hour)
-		agents[i].CompletedAt = &completedTime
-		if err := db.Create(&agents[i]).Error; err != nil {
-			t.Fatalf("create agent %d: %v", i, err)
+		agent := Agent{
+			ID:              uuid.New(),
+			ProjectID:       proj.ID,
+			AgentType:       spec.agentType,
+			Name:            "agent-" + spec.modelID,
+			Status:          AgentIdle,
+			ModelID:         spec.modelID,
+			Effort:          spec.effort,
+			ExitReason:      spec.exitReason,
+			CompletedAt:     &completedTime,
+			TotalCostUSD:    spec.totalCostUSD,
+			FinalContextPct: spec.finalContextPct,
 		}
+		if err := db.Create(&agent).Error; err != nil {
+			t.Fatalf("create agent: %v", err)
+		}
+		createdAgents = append(createdAgents, agent)
 	}
 
 	// Verify each agent's enrichment values
 	for i, expected := range agents {
 		var loaded Agent
-		if err := db.First(&loaded, "id = ?", expected.ID).Error; err != nil {
+		if err := db.First(&loaded, "id = ?", createdAgents[i].ID).Error; err != nil {
 			t.Fatalf("load agent %d: %v", i, err)
 		}
 
-		if loaded.ModelID != expected.ModelID {
-			t.Errorf("agent %d: ModelID = %q, want %q", i, loaded.ModelID, expected.ModelID)
+		if loaded.ModelID != expected.modelID {
+			t.Errorf("agent %d: ModelID = %q, want %q", i, loaded.ModelID, expected.modelID)
 		}
-		if loaded.Effort != expected.Effort {
-			t.Errorf("agent %d: Effort = %q, want %q", i, loaded.Effort, expected.Effort)
+		if loaded.Effort != expected.effort {
+			t.Errorf("agent %d: Effort = %q, want %q", i, loaded.Effort, expected.effort)
 		}
-		if loaded.ExitReason != expected.ExitReason {
-			t.Errorf("agent %d: ExitReason = %q, want %q", i, loaded.ExitReason, expected.ExitReason)
+		if loaded.ExitReason != expected.exitReason {
+			t.Errorf("agent %d: ExitReason = %q, want %q", i, loaded.ExitReason, expected.exitReason)
 		}
-		if loaded.TotalCostUSD != expected.TotalCostUSD {
-			t.Errorf("agent %d: TotalCostUSD = %v, want %v", i, loaded.TotalCostUSD, expected.TotalCostUSD)
+		if loaded.TotalCostUSD != expected.totalCostUSD {
+			t.Errorf("agent %d: TotalCostUSD = %v, want %v", i, loaded.TotalCostUSD, expected.totalCostUSD)
 		}
-		if loaded.FinalContextPct != expected.FinalContextPct {
-			t.Errorf("agent %d: FinalContextPct = %v, want %v", i, loaded.FinalContextPct, expected.FinalContextPct)
+		if loaded.FinalContextPct != expected.finalContextPct {
+			t.Errorf("agent %d: FinalContextPct = %v, want %v", i, loaded.FinalContextPct, expected.finalContextPct)
 		}
 	}
 }
