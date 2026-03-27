@@ -21,11 +21,15 @@ type ProfileConfig struct {
 //  2. [agents.<role>] defaults from Config.Agents
 //  3. Hardcoded default (effort="medium", model="")
 //
-// An unknown or empty profile name silently falls back to layers 2 and 3.
-func (c Config) ForAgentTypeWithProfile(at model.AgentType, profile string) model.AgentCLIConfig {
+// An empty profile name falls through to layers 2 and 3 with no error.
+// A non-empty profile name that does not exist in Config.Profiles is a
+// configuration error and returns a non-nil error.
+func (c Config) ForAgentTypeWithProfile(at model.AgentType, profile string) (model.AgentCLIConfig, error) {
 	var override AgentConfig
-	if p, ok := c.Profiles[profile]; ok {
-		override = profileAgentConfig(p, at)
+	if profile != "" {
+		if p, ok := c.Profiles[profile]; ok {
+			override = profileAgentConfig(p, at)
+		}
 	}
 
 	base := c.Agents.ForAgentType(at)
@@ -43,7 +47,7 @@ func (c Config) ForAgentTypeWithProfile(at model.AgentType, profile string) mode
 		base.Effort = override.Effort
 	}
 
-	return base
+	return base, nil
 }
 
 // profileAgentConfig extracts the AgentConfig for the given agent type from a ProfileConfig.

@@ -236,7 +236,10 @@ func TestForAgentTypeWithProfile_ProfileOverrideWins(t *testing.T) {
 		},
 	}
 
-	got := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
+	got, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if got.Model != "claude-opus-4-6" {
 		t.Errorf("Model: got %q, want %q", got.Model, "claude-opus-4-6")
@@ -258,7 +261,10 @@ func TestForAgentTypeWithProfile_FallsBackToAgentsDefault(t *testing.T) {
 		},
 	}
 
-	got := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "fast")
+	got, err := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "fast")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if got.Model != "claude-sonnet-4-6" {
 		t.Errorf("Model: got %q, want %q", got.Model, "claude-sonnet-4-6")
@@ -279,7 +285,10 @@ func TestForAgentTypeWithProfile_FallsBackToHardcodedDefault(t *testing.T) {
 		"fast": {}, // Fixer not specified in profile either.
 	}
 
-	got := cfg.ForAgentTypeWithProfile(model.AgentFixer, "fast")
+	got, err := cfg.ForAgentTypeWithProfile(model.AgentFixer, "fast")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	if got.Model != "" {
 		t.Errorf("Model: got %q, want empty", got.Model)
@@ -289,18 +298,32 @@ func TestForAgentTypeWithProfile_FallsBackToHardcodedDefault(t *testing.T) {
 	}
 }
 
-// TestForAgentTypeWithProfile_UnknownProfileReturnsDefault verifies that an
-// unknown profile name does not panic and returns the [agents.*] default.
-func TestForAgentTypeWithProfile_UnknownProfileReturnsDefault(t *testing.T) {
+// TestForAgentTypeWithProfile_UnknownProfileReturnsError verifies that a
+// non-empty profile name absent from Config.Profiles returns a non-nil error.
+func TestForAgentTypeWithProfile_UnknownProfileReturnsError(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Agents.Coder = AgentConfig{Model: "claude-sonnet-4-6", Effort: "medium"}
 	cfg.Profiles = map[string]ProfileConfig{
 		"fast": {Coder: AgentConfig{Model: "claude-opus-4-6", Effort: "high"}},
 	}
 
-	// "unknown" does not exist — must not panic and must return agents default.
-	got := cfg.ForAgentTypeWithProfile(model.AgentCoder, "unknown")
+	// "unknown" does not exist — must return a non-nil error.
+	_, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "unknown")
+	if err == nil {
+		t.Error("expected error for unknown profile, got nil")
+	}
+}
 
+// TestForAgentTypeWithProfile_EmptyProfileNoError verifies that an empty
+// profile name is valid and returns nil error with the [agents.*] default.
+func TestForAgentTypeWithProfile_EmptyProfileNoError(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agents.Coder = AgentConfig{Model: "claude-sonnet-4-6", Effort: "medium"}
+
+	got, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "")
+	if err != nil {
+		t.Fatalf("empty profile must not return error, got: %v", err)
+	}
 	if got.Model != "claude-sonnet-4-6" {
 		t.Errorf("Model: got %q, want %q", got.Model, "claude-sonnet-4-6")
 	}
@@ -334,7 +357,10 @@ func TestForAgentTypeWithProfile_PartialOverrideInheritance(t *testing.T) {
 		{model.AgentReviewer, "", "medium"},
 		{model.AgentFixer, "", "medium"},
 	} {
-		got := cfg.ForAgentTypeWithProfile(tc.at, "cheap")
+		got, err := cfg.ForAgentTypeWithProfile(tc.at, "cheap")
+		if err != nil {
+			t.Fatalf("cheap/%v unexpected error: %v", tc.at, err)
+		}
 		if got.Model != tc.wantModel {
 			t.Errorf("cheap/%v Model: got %q, want %q", tc.at, got.Model, tc.wantModel)
 		}
@@ -357,8 +383,14 @@ func TestForAgentTypeWithProfile_MultipleProfilesCoexist(t *testing.T) {
 		},
 	}
 
-	fast := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
-	cheap := cfg.ForAgentTypeWithProfile(model.AgentCoder, "cheap")
+	fast, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
+	if err != nil {
+		t.Fatalf("fast profile unexpected error: %v", err)
+	}
+	cheap, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "cheap")
+	if err != nil {
+		t.Fatalf("cheap profile unexpected error: %v", err)
+	}
 
 	if fast.Model != "claude-opus-4-6" {
 		t.Errorf("fast Model: got %q, want %q", fast.Model, "claude-opus-4-6")
@@ -466,7 +498,10 @@ func TestProfilesEndToEnd(t *testing.T) {
 	}
 
 	for _, tc := range matrix {
-		resolved := cfg.ForAgentTypeWithProfile(tc.at, tc.profile)
+		resolved, err := cfg.ForAgentTypeWithProfile(tc.at, tc.profile)
+		if err != nil {
+			t.Fatalf("%s/%s unexpected error: %v", tc.profile, tc.at, err)
+		}
 
 		if resolved.Model != tc.want.model {
 			t.Errorf("%s/%s Model: got %q, want %q", tc.profile, tc.at, resolved.Model, tc.want.model)
@@ -536,28 +571,43 @@ func TestLoadConfigIntegrationProfileRoundTrip(t *testing.T) {
 	}
 
 	// fast: coder and planner overridden; reviewer and fixer inherit from [agents.*]
-	fastCoder := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
+	fastCoder, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
+	if err != nil {
+		t.Fatalf("fast/coder unexpected error: %v", err)
+	}
 	if fastCoder.Model != "claude-opus-4-6" || fastCoder.Effort != "high" {
 		t.Errorf("fast/coder: got %+v, want {claude-opus-4-6 high}", fastCoder)
 	}
 
-	fastPlanner := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "fast")
+	fastPlanner, err := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "fast")
+	if err != nil {
+		t.Fatalf("fast/planner unexpected error: %v", err)
+	}
 	if fastPlanner.Model != "claude-opus-4-6" || fastPlanner.Effort != "high" {
 		t.Errorf("fast/planner: got %+v, want {claude-opus-4-6 high}", fastPlanner)
 	}
 
-	fastReviewer := cfg.ForAgentTypeWithProfile(model.AgentReviewer, "fast")
+	fastReviewer, err := cfg.ForAgentTypeWithProfile(model.AgentReviewer, "fast")
+	if err != nil {
+		t.Fatalf("fast/reviewer unexpected error: %v", err)
+	}
 	if fastReviewer.Model != "" || fastReviewer.Effort != "medium" {
 		t.Errorf("fast/reviewer: got %+v, want { medium}", fastReviewer)
 	}
 
 	// cheap: only coder overridden; planner inherits from [agents.*]
-	cheapCoder := cfg.ForAgentTypeWithProfile(model.AgentCoder, "cheap")
+	cheapCoder, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "cheap")
+	if err != nil {
+		t.Fatalf("cheap/coder unexpected error: %v", err)
+	}
 	if cheapCoder.Model != "claude-haiku-4-5-20251001" || cheapCoder.Effort != "low" {
 		t.Errorf("cheap/coder: got %+v, want {claude-haiku-4-5-20251001 low}", cheapCoder)
 	}
 
-	cheapPlanner := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "cheap")
+	cheapPlanner, err := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "cheap")
+	if err != nil {
+		t.Fatalf("cheap/planner unexpected error: %v", err)
+	}
 	if cheapPlanner.Model != "" || cheapPlanner.Effort != "medium" {
 		t.Errorf("cheap/planner: got %+v, want { medium}", cheapPlanner)
 	}
@@ -573,6 +623,7 @@ func TestLoadConfigProfilesIntegration(t *testing.T) {
 		agentType   model.AgentType
 		profileName string
 		want        model.AgentCLIConfig
+		wantErr     bool
 	}{
 		{
 			// Profile sets both model and effort; both must come from the profile.
@@ -633,9 +684,8 @@ func TestLoadConfigProfilesIntegration(t *testing.T) {
 			want:        model.AgentCLIConfig{Model: "claude-sonnet-4-6", Effort: "high"},
 		},
 		{
-			// A non-empty profileName absent from the TOML file falls back to the
-			// base [agents.*] config without error.
-			name: "unknown profile falls back to base config",
+			// A non-empty profileName absent from the TOML file is a config error.
+			name: "unknown profile returns error",
 			toml: `
 [agents.coder]
   model = "base-coder"
@@ -643,7 +693,7 @@ func TestLoadConfigProfilesIntegration(t *testing.T) {
 `,
 			agentType:   model.AgentCoder,
 			profileName: "nonexistent",
-			want:        model.AgentCLIConfig{Model: "base-coder", Effort: "medium"},
+			wantErr:     true,
 		},
 		{
 			// Two profiles in one file; only the queried profile contributes.
@@ -679,7 +729,18 @@ func TestLoadConfigProfilesIntegration(t *testing.T) {
 				t.Fatalf("LoadConfig: %v", err)
 			}
 
-			got := cfg.ForAgentTypeWithProfile(tc.agentType, tc.profileName)
+			got, err := cfg.ForAgentTypeWithProfile(tc.agentType, tc.profileName)
+			if tc.wantErr {
+				if err == nil {
+					t.Errorf("ForAgentTypeWithProfile(%q, %q): want error, got nil",
+						tc.agentType, tc.profileName)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ForAgentTypeWithProfile(%q, %q): unexpected error: %v",
+					tc.agentType, tc.profileName, err)
+			}
 			if got != tc.want {
 				t.Errorf("ForAgentTypeWithProfile(%q, %q)\n  got  %+v\n  want %+v",
 					tc.agentType, tc.profileName, got, tc.want)

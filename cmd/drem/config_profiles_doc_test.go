@@ -74,7 +74,10 @@ func loadProfilesDocConfig(t *testing.T) Config {
 func TestProfilesDocExample_FastProfileOverridesCoderAndPlanner(t *testing.T) {
 	cfg := loadProfilesDocConfig(t)
 
-	planner := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "fast")
+	planner, err := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "fast")
+	if err != nil {
+		t.Fatalf("fast/planner unexpected error: %v", err)
+	}
 	if planner.Model != "claude-haiku-4-5-20251001" {
 		t.Errorf("fast/planner model: got %q, want claude-haiku-4-5-20251001", planner.Model)
 	}
@@ -82,7 +85,10 @@ func TestProfilesDocExample_FastProfileOverridesCoderAndPlanner(t *testing.T) {
 		t.Errorf("fast/planner effort: got %q, want low", planner.Effort)
 	}
 
-	coder := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
+	coder, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "fast")
+	if err != nil {
+		t.Fatalf("fast/coder unexpected error: %v", err)
+	}
 	if coder.Model != "claude-haiku-4-5-20251001" {
 		t.Errorf("fast/coder model: got %q, want claude-haiku-4-5-20251001", coder.Model)
 	}
@@ -96,7 +102,10 @@ func TestProfilesDocExample_FastProfileOverridesCoderAndPlanner(t *testing.T) {
 func TestProfilesDocExample_FastProfileInheritsUnspecifiedRoles(t *testing.T) {
 	cfg := loadProfilesDocConfig(t)
 
-	reviewer := cfg.ForAgentTypeWithProfile(model.AgentReviewer, "fast")
+	reviewer, err := cfg.ForAgentTypeWithProfile(model.AgentReviewer, "fast")
+	if err != nil {
+		t.Fatalf("fast/reviewer unexpected error: %v", err)
+	}
 	if reviewer.Model != "claude-sonnet-4-6" {
 		t.Errorf("fast/reviewer model: got %q, want claude-sonnet-4-6 (default)", reviewer.Model)
 	}
@@ -104,7 +113,10 @@ func TestProfilesDocExample_FastProfileInheritsUnspecifiedRoles(t *testing.T) {
 		t.Errorf("fast/reviewer effort: got %q, want medium (default)", reviewer.Effort)
 	}
 
-	fixer := cfg.ForAgentTypeWithProfile(model.AgentFixer, "fast")
+	fixer, err := cfg.ForAgentTypeWithProfile(model.AgentFixer, "fast")
+	if err != nil {
+		t.Fatalf("fast/fixer unexpected error: %v", err)
+	}
 	if fixer.Model != "claude-sonnet-4-6" {
 		t.Errorf("fast/fixer model: got %q, want claude-sonnet-4-6 (default)", fixer.Model)
 	}
@@ -115,13 +127,19 @@ func TestProfilesDocExample_FastProfileInheritsUnspecifiedRoles(t *testing.T) {
 func TestProfilesDocExample_CheapProfileOverridesOnlyCoder(t *testing.T) {
 	cfg := loadProfilesDocConfig(t)
 
-	coder := cfg.ForAgentTypeWithProfile(model.AgentCoder, "cheap")
+	coder, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "cheap")
+	if err != nil {
+		t.Fatalf("cheap/coder unexpected error: %v", err)
+	}
 	if coder.Model != "claude-haiku-4-5-20251001" {
 		t.Errorf("cheap/coder model: got %q, want claude-haiku-4-5-20251001", coder.Model)
 	}
 
 	// Planner not in "cheap" profile — must use default.
-	planner := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "cheap")
+	planner, err := cfg.ForAgentTypeWithProfile(model.AgentPlanner, "cheap")
+	if err != nil {
+		t.Fatalf("cheap/planner unexpected error: %v", err)
+	}
 	if planner.Model != "claude-sonnet-4-6" {
 		t.Errorf("cheap/planner model: got %q, want claude-sonnet-4-6 (default)", planner.Model)
 	}
@@ -130,27 +148,27 @@ func TestProfilesDocExample_CheapProfileOverridesOnlyCoder(t *testing.T) {
 	}
 }
 
-// TestProfilesDocExample_UnknownProfileFallsBackToDefaults verifies that
-// requesting a profile name that does not exist in the config is safe and
-// returns the default agent configuration.
-func TestProfilesDocExample_UnknownProfileFallsBackToDefaults(t *testing.T) {
+// TestProfilesDocExample_UnknownProfileReturnsError verifies that requesting a
+// profile name that does not exist in the config returns a non-nil error.
+func TestProfilesDocExample_UnknownProfileReturnsError(t *testing.T) {
 	cfg := loadProfilesDocConfig(t)
 
-	coder := cfg.ForAgentTypeWithProfile(model.AgentCoder, "nonexistent")
-	if coder.Model != "claude-sonnet-4-6" {
-		t.Errorf("nonexistent/coder model: got %q, want claude-sonnet-4-6 (default)", coder.Model)
-	}
-	if coder.Effort != "medium" {
-		t.Errorf("nonexistent/coder effort: got %q, want medium (default)", coder.Effort)
+	_, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "nonexistent")
+	if err == nil {
+		t.Error("expected error for unknown profile name, got nil")
 	}
 }
 
 // TestProfilesDocExample_EmptyProfileNameFallsBackToDefaults verifies that
-// an empty profile name is equivalent to running with no profile active.
+// an empty profile name is equivalent to running with no profile active and
+// returns nil error.
 func TestProfilesDocExample_EmptyProfileNameFallsBackToDefaults(t *testing.T) {
 	cfg := loadProfilesDocConfig(t)
 
-	coder := cfg.ForAgentTypeWithProfile(model.AgentCoder, "")
+	coder, err := cfg.ForAgentTypeWithProfile(model.AgentCoder, "")
+	if err != nil {
+		t.Fatalf("empty profile must not return error, got: %v", err)
+	}
 	if coder.Model != "claude-sonnet-4-6" {
 		t.Errorf("empty profile/coder model: got %q, want claude-sonnet-4-6 (default)", coder.Model)
 	}
@@ -171,7 +189,10 @@ func TestProfilesDocExample_AllAgentTypesResolveUnderFastProfile(t *testing.T) {
 	}
 
 	for _, at := range agentTypes {
-		got := cfg.ForAgentTypeWithProfile(at, "fast")
+		got, err := cfg.ForAgentTypeWithProfile(at, "fast")
+		if err != nil {
+			t.Fatalf("fast/%v unexpected error: %v", at, err)
+		}
 		if got.Effort == "" {
 			t.Errorf("fast/%v: effort must not be empty (missing default fallback)", at)
 		}
