@@ -21,6 +21,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
+	"github.com/godinj/drem-orchestrator/internal/watcher"
 )
 
 // ---------------------------------------------------------------------------
@@ -377,6 +378,42 @@ func CreateCsuiteInboxMessage(t *testing.T, db *gorm.DB, from, to, subject strin
 		t.Fatalf("create test csuite inbox message: %v", err)
 	}
 	return msg
+}
+
+// ---------------------------------------------------------------------------
+// Watcher entity factory helpers
+// ---------------------------------------------------------------------------
+
+// NewTestWatcherStore creates an isolated DB with the TurnMetric model
+// migrated and returns a ready-to-use watcher.Store.
+func NewTestWatcherStore(t *testing.T) *watcher.Store {
+	t.Helper()
+	db := NewTestDBWithModels(t, &watcher.TurnMetric{})
+	return watcher.NewStore(db)
+}
+
+// CreateTurnMetric inserts a TurnMetric row directly into the database and
+// returns it. Use this to set up test data for QueryTurns tests without
+// depending on RecordTurn's implementation.
+func CreateTurnMetric(t *testing.T, db *gorm.DB, agent string, exitStatus int) watcher.TurnMetric {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	m := watcher.TurnMetric{
+		ID:              uuid.New(),
+		Agent:           agent,
+		StartedAt:       now.Add(-2 * time.Second),
+		EndedAt:         now,
+		DurationMs:      2000,
+		TokensIn:        100,
+		TokensOut:       50,
+		EventsProcessed: 2,
+		MessagesSent:    1,
+		ExitStatus:      exitStatus,
+	}
+	if err := db.Create(&m).Error; err != nil {
+		t.Fatalf("create test turn metric: %v", err)
+	}
+	return m
 }
 
 // ---------------------------------------------------------------------------
