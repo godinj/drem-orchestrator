@@ -29,9 +29,10 @@ type LifecycleManager struct {
 	MetricsStore *MetricsStore
 }
 
-// NewLifecycleManager creates a LifecycleManager with default settings and
-// the provided MetricsStore.
-func NewLifecycleManager(store *MetricsStore) *LifecycleManager {
+// NewLifecycleManagerFromStore creates a LifecycleManager with default settings
+// and the provided MetricsStore. For the Phase 2 trigger-based API, use
+// NewLifecycleManager instead.
+func NewLifecycleManagerFromStore(store *MetricsStore) *LifecycleManager {
 	return &LifecycleManager{
 		ClaudeBin:    "claude",
 		Timeout:      defaultTimeout,
@@ -109,11 +110,13 @@ func (m *LifecycleManager) RunTurn(agent string, systemPrompt string) (*Lifecycl
 		}
 	}
 
-	// Parse JSON output for token counts; silently degrade on parse failure.
+	// Parse JSON output for token counts and event metrics; silently degrade on parse failure.
 	var resp claudeResponse
 	if jsonErr := json.Unmarshal(stdout.Bytes(), &resp); jsonErr == nil {
 		result.InputTokens = resp.Usage.InputTokens
 		result.OutputTokens = resp.Usage.OutputTokens
+		result.EventsProcessed = resp.EventsProcessed
+		result.MessagesSent = resp.MessagesSent
 	}
 
 	_ = m.MetricsStore.RecordTurn(result)

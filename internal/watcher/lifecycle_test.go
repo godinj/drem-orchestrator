@@ -47,7 +47,7 @@ func claudeJSON(inputTokens, outputTokens int) string {
 func TestRunTurn_Success(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
 	store := watcher.NewMetricsStore(db)
-	lm := watcher.NewLifecycleManager(store)
+	lm := watcher.NewLifecycleManagerFromStore(store)
 
 	script := writeMockScript(t, fmt.Sprintf("echo '%s'\n", claudeJSON(100, 50)))
 	lm.ClaudeBin = script
@@ -84,7 +84,7 @@ func TestRunTurn_Success(t *testing.T) {
 func TestRunTurn_FailingCommand(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
 	store := watcher.NewMetricsStore(db)
-	lm := watcher.NewLifecycleManager(store)
+	lm := watcher.NewLifecycleManagerFromStore(store)
 
 	script := writeMockScript(t, "echo 'something went wrong' >&2\nexit 2\n")
 	lm.ClaudeBin = script
@@ -106,7 +106,7 @@ func TestRunTurn_FailingCommand(t *testing.T) {
 func TestRunTurn_KyleException(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
 	store := watcher.NewMetricsStore(db)
-	lm := watcher.NewLifecycleManager(store)
+	lm := watcher.NewLifecycleManagerFromStore(store)
 
 	// The script would create a marker file if the subprocess is launched.
 	dir := t.TempDir()
@@ -131,7 +131,7 @@ func TestRunTurn_KyleException(t *testing.T) {
 func TestRunTurn_Timeout(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
 	store := watcher.NewMetricsStore(db)
-	lm := watcher.NewLifecycleManager(store)
+	lm := watcher.NewLifecycleManagerFromStore(store)
 	lm.Timeout = 500 * time.Millisecond
 
 	script := writeMockScript(t, "sleep 30\n")
@@ -154,7 +154,7 @@ func TestRunTurn_Timeout(t *testing.T) {
 func TestRunTurn_RecordsMetrics(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
 	store := watcher.NewMetricsStore(db)
-	lm := watcher.NewLifecycleManager(store)
+	lm := watcher.NewLifecycleManagerFromStore(store)
 
 	script := writeMockScript(t, fmt.Sprintf("echo '%s'\n", claudeJSON(200, 80)))
 	lm.ClaudeBin = script
@@ -198,7 +198,7 @@ func TestRunTurn_RecordsMetrics(t *testing.T) {
 func TestRunTurn_InvalidJSON(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
 	store := watcher.NewMetricsStore(db)
-	lm := watcher.NewLifecycleManager(store)
+	lm := watcher.NewLifecycleManagerFromStore(store)
 
 	script := writeMockScript(t, "echo 'this is not valid json'\n")
 	lm.ClaudeBin = script

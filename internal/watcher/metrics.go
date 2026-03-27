@@ -18,14 +18,16 @@ func NewMetricsStore(db *gorm.DB) *MetricsStore {
 // RecordTurn persists a LifecycleResult to the turn_metrics table.
 func (s *MetricsStore) RecordTurn(result *LifecycleResult) error {
 	metric := TurnMetric{
-		ID:           uuid.New(),
-		Agent:        result.Agent,
-		InputTokens:  result.InputTokens,
-		OutputTokens: result.OutputTokens,
-		ExitStatus:   result.ExitStatus,
-		Duration:     result.Duration,
-		StartedAt:    result.StartedAt,
-		EndedAt:      result.EndedAt,
+		ID:              uuid.New(),
+		Agent:           result.Agent,
+		InputTokens:     result.InputTokens,
+		OutputTokens:    result.OutputTokens,
+		ExitStatus:      result.ExitStatus,
+		Duration:        result.Duration,
+		StartedAt:       result.StartedAt,
+		EndedAt:         result.EndedAt,
+		EventsProcessed: result.EventsProcessed,
+		MessagesSent:    result.MessagesSent,
 	}
 	if result.ErrorDetails != "" {
 		msg := result.ErrorDetails
