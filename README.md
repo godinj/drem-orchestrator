@@ -1068,6 +1068,30 @@ The orchestrator evaluates constraints at three gates during the agent workflow:
 
 The supervisor also powers **depth enforcement gates**: plan depth scores are evaluated against a threshold, and depth-specific constraint violations receive supervisor diagnosis at the integration gate. Both are advisory only.
 
+### Per-Constraint Delta Gate
+
+The integration gate uses **per-constraint delta comparison** rather than total failure count. This prevents pre-existing violations (grandfathered baselines) from permanently blocking all tasks.
+
+When the integration gate runs, it evaluates the feature worktree against master on a constraint-by-constraint basis. Each constraint is classified by its state transition:
+
+| Transition | Outcome | Action |
+|------------|---------|--------|
+| PASS → PASS | No regression | Allow |
+| PASS → FAIL | New violation introduced | Block |
+| FAIL → PASS | Violation fixed | Allow |
+| FAIL → FAIL (not worse) | Pre-existing, unchanged | Allow |
+| FAIL → FAIL (worse) | Worsened violation | Block |
+
+For FAIL→FAIL transitions, "worse" is measured by violation message count: more messages means the violation grew (e.g., a file that was 10 lines over the ceiling is now 50 lines over).
+
+**What this means in practice:**
+
+- A task that fixes one violation without touching others will be allowed even if other violations remain.
+- A task that adds a new import to an already-over-ceiling package is blocked because the violation worsened.
+- Pre-existing violations (grandfathered baselines like `orchestrator.go` line count) do not block unrelated tasks.
+
+**Retry and backoff:** When the gate blocks, the orchestrator retries with exponential backoff (base 30s, up to 10 minutes, max 5 retries). Early termination triggers if the magnitude (number of blocked constraints) does not decrease between attempts.
+
 ### Adding Exceptions
 
 Use `[[<type>.exception]]` sub-tables to modify how a constraint applies to a specific file or directory. Two exception rules are supported:
