@@ -3,7 +3,6 @@
 package watcher
 
 import (
-	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -59,11 +58,28 @@ func NewStore(db *gorm.DB) *Store {
 // RecordTurn inserts a new TurnMetric row from the given TurnResult.
 // The store assigns a UUID to the new row via the GORM BeforeCreate callback.
 func (s *Store) RecordTurn(result TurnResult) error {
-	return fmt.Errorf("not implemented")
+	m := TurnMetric{
+		Agent:           result.Agent,
+		StartedAt:       result.StartedAt,
+		EndedAt:         result.EndedAt,
+		DurationMs:      result.DurationMs,
+		TokensIn:        result.TokensIn,
+		TokensOut:       result.TokensOut,
+		EventsProcessed: result.EventsProcessed,
+		MessagesSent:    result.MessagesSent,
+		ExitStatus:      result.ExitStatus,
+		ErrorDetails:    result.ErrorDetails,
+	}
+	return s.db.Create(&m).Error
 }
 
 // QueryTurns returns the most recent turns for the named agent, ordered by
 // started_at descending. At most limit rows are returned.
 func (s *Store) QueryTurns(agent string, limit int) ([]TurnMetric, error) {
-	return nil, fmt.Errorf("not implemented")
+	turns := []TurnMetric{}
+	err := s.db.Where("agent = ?", agent).
+		Order("started_at desc").
+		Limit(limit).
+		Find(&turns).Error
+	return turns, err
 }
