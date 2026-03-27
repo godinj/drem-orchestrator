@@ -122,13 +122,38 @@ func (b *Bus) Deliver(eventID string, agent string) error {
 	return b.db.Create(&delivery).Error
 }
 
-// Ack records that agent has acknowledged the event identified by eventID,
-// stamping acked_at with the current time.
-func (b *Bus) Ack(eventID string, agent string) error {
-	now := time.Now()
+// UnackedDeliveries returns all events that have been delivered to the given
+// agent but not yet acknowledged (acked_at IS NULL), ordered by created_at
+// ascending. Returns an empty slice (not an error) when no unacked deliveries
+// exist.
+func (b *Bus) UnackedDeliveries(agent string) ([]Event, error) {
+	var events []Event
+	err := b.db.Raw(`
+		SELECT e.* FROM events e
+		JOIN event_deliveries d ON d.event_id = e.id
+		WHERE d.agent = ? AND d.acked_at IS NULL
+		ORDER BY e.created_at ASC
+	`, agent).Scan(&events).Error
+	if err != nil {
+		return nil, err
+	}
+	if events == nil {
+		events = []Event{}
+	}
+	return events, nil
+}
+
+// Ack sets acked_at = now on every event_deliveries row that matches the
+// given agent and any of the provided eventIDs. It is idempotent: calling
+// Ack on an already-acknowledged event is a no-op, not an error.
+// Passing an empty eventIDs slice is a no-op.
+func (b *Bus) Ack(agent string, eventIDs []string) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
 	return b.db.Model(&EventDelivery{}).
-		Where("event_id = ? AND agent = ?", eventID, agent).
-		Update("acked_at", now).Error
+		Where("agent = ? AND event_id IN ?", agent, eventIDs).
+		Update("acked_at", time.Now()).Error
 }
 
 // Close releases the underlying database connection.

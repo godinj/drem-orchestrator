@@ -388,7 +388,7 @@ func TestAck_SetsAckedAt(t *testing.T) {
 	if err := bus.Deliver(e.ID, "watcher-agent"); err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
-	if err := bus.Ack(e.ID, "watcher-agent"); err != nil {
+	if err := bus.Ack("watcher-agent", []string{e.ID}); err != nil {
 		t.Fatalf("Ack: %v", err)
 	}
 
@@ -404,5 +404,275 @@ func TestAck_SetsAckedAt(t *testing.T) {
 	}
 	if !ackedAt.Valid || ackedAt.String == "" {
 		t.Error("acked_at is not set after Ack")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// UnackedDeliveries
+// ---------------------------------------------------------------------------
+
+// TestUnackedDeliveries_ReturnsDeliveredButNotAcked verifies that
+// UnackedDeliveries returns events that have been delivered to the agent
+// but not yet acknowledged.
+func TestUnackedDeliveries_ReturnsDeliveredButNotAcked(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	e := &eventbus.Event{Type: "task.status_changed", Source: "orchestrator", Details: "{}"}
+	if err := bus.Publish(e); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if err := bus.Deliver(e.ID, "watcher-agent"); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	events, err := bus.UnackedDeliveries("watcher-agent")
+	if err != nil {
+		t.Fatalf("UnackedDeliveries: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].ID != e.ID {
+		t.Errorf("event ID = %q, want %q", events[0].ID, e.ID)
+	}
+}
+
+// TestUnackedDeliveries_ExcludesAckedEvents verifies that acked events
+// no longer appear in UnackedDeliveries results.
+func TestUnackedDeliveries_ExcludesAckedEvents(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Publish and deliver 3 events.
+	ids := make([]string, 3)
+	for i := 0; i < 3; i++ {
+		e := &eventbus.Event{Type: "task.status_changed", Source: "orchestrator", Details: "{}"}
+		if err := bus.Publish(e); err != nil {
+			t.Fatalf("Publish[%d]: %v", i, err)
+		}
+		if err := bus.Deliver(e.ID, "watcher-agent"); err != nil {
+			t.Fatalf("Deliver[%d]: %v", i, err)
+		}
+		ids[i] = e.ID
+	}
+
+	// Ack the first two.
+	if err := bus.Ack("watcher-agent", ids[:2]); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+
+	remaining, err := bus.UnackedDeliveries("watcher-agent")
+	if err != nil {
+		t.Fatalf("UnackedDeliveries after ack: %v", err)
+	}
+	if len(remaining) != 1 {
+		t.Fatalf("got %d unacked events, want 1", len(remaining))
+	}
+	if remaining[0].ID != ids[2] {
+		t.Errorf("remaining event ID = %q, want %q", remaining[0].ID, ids[2])
+	}
+}
+
+// TestUnackedDeliveries_EmptyWhenNoneDelivered verifies that
+// UnackedDeliveries returns an empty slice (not nil/error) when no
+// deliveries exist for the agent.
+func TestUnackedDeliveries_EmptyWhenNoneDelivered(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	events, err := bus.UnackedDeliveries("watcher-agent")
+	if err != nil {
+		t.Fatalf("UnackedDeliveries on empty bus: %v", err)
+	}
+	if events == nil {
+		t.Error("UnackedDeliveries returned nil slice, want empty slice")
+	}
+	if len(events) != 0 {
+		t.Errorf("got %d events, want 0", len(events))
+	}
+}
+
+// TestUnackedDeliveries_EmptyAfterAllAcked verifies that after acking all
+// deliveries, UnackedDeliveries returns an empty slice.
+func TestUnackedDeliveries_EmptyAfterAllAcked(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	e := &eventbus.Event{Type: "task.created", Source: "orchestrator", Details: "{}"}
+	if err := bus.Publish(e); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if err := bus.Deliver(e.ID, "watcher-agent"); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if err := bus.Ack("watcher-agent", []string{e.ID}); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+
+	remaining, err := bus.UnackedDeliveries("watcher-agent")
+	if err != nil {
+		t.Fatalf("UnackedDeliveries after full ack: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("got %d events after acking all, want 0", len(remaining))
+	}
+}
+
+// TestUnackedDeliveries_AgentIsolation verifies that UnackedDeliveries
+// for one agent does not return another agent's deliveries.
+func TestUnackedDeliveries_AgentIsolation(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	e := &eventbus.Event{Type: "task.status_changed", Source: "orchestrator", Details: "{}"}
+	if err := bus.Publish(e); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	// Deliver only to watcher-agent.
+	if err := bus.Deliver(e.ID, "watcher-agent"); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	// other-agent has no deliveries.
+	events, err := bus.UnackedDeliveries("other-agent")
+	if err != nil {
+		t.Fatalf("UnackedDeliveries for other-agent: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("other-agent got %d events, want 0", len(events))
+	}
+}
+
+// TestUnackedDeliveries_OrderedByCreatedAt verifies that events are
+// returned in ascending created_at order.
+func TestUnackedDeliveries_OrderedByCreatedAt(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	for i := 0; i < 3; i++ {
+		e := &eventbus.Event{Type: "task.status_changed", Source: "orchestrator", Details: "{}"}
+		if err := bus.Publish(e); err != nil {
+			t.Fatalf("Publish[%d]: %v", i, err)
+		}
+		if err := bus.Deliver(e.ID, "watcher-agent"); err != nil {
+			t.Fatalf("Deliver[%d]: %v", i, err)
+		}
+	}
+
+	events, err := bus.UnackedDeliveries("watcher-agent")
+	if err != nil {
+		t.Fatalf("UnackedDeliveries: %v", err)
+	}
+	for i := 1; i < len(events); i++ {
+		if events[i].CreatedAt.Before(events[i-1].CreatedAt) {
+			t.Errorf("events[%d].CreatedAt (%v) before events[%d].CreatedAt (%v)",
+				i, events[i].CreatedAt, i-1, events[i-1].CreatedAt)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Ack: batch and idempotent behavior
+// ---------------------------------------------------------------------------
+
+// TestAck_Idempotent verifies that double-acking the same event does not
+// return an error.
+func TestAck_Idempotent(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	e := &eventbus.Event{Type: "task.created", Source: "orchestrator", Details: "{}"}
+	if err := bus.Publish(e); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if err := bus.Deliver(e.ID, "watcher-agent"); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	if err := bus.Ack("watcher-agent", []string{e.ID}); err != nil {
+		t.Fatalf("first Ack: %v", err)
+	}
+	if err := bus.Ack("watcher-agent", []string{e.ID}); err != nil {
+		t.Errorf("second Ack (idempotent) returned error: %v", err)
+	}
+}
+
+// TestAck_EmptySliceIsNoop verifies that calling Ack with an empty eventIDs
+// slice is a no-op and does not return an error.
+func TestAck_EmptySliceIsNoop(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := bus.Ack("watcher-agent", []string{}); err != nil {
+		t.Errorf("Ack with empty slice returned error: %v", err)
+	}
+}
+
+// TestAck_BatchMultipleEvents verifies that Ack can acknowledge multiple
+// events in a single call.
+func TestAck_BatchMultipleEvents(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ids := make([]string, 3)
+	for i := 0; i < 3; i++ {
+		e := &eventbus.Event{Type: "task.status_changed", Source: "orchestrator", Details: "{}"}
+		if err := bus.Publish(e); err != nil {
+			t.Fatalf("Publish[%d]: %v", i, err)
+		}
+		if err := bus.Deliver(e.ID, "watcher-agent"); err != nil {
+			t.Fatalf("Deliver[%d]: %v", i, err)
+		}
+		ids[i] = e.ID
+	}
+
+	// Ack all three at once.
+	if err := bus.Ack("watcher-agent", ids); err != nil {
+		t.Fatalf("Ack batch: %v", err)
+	}
+
+	remaining, err := bus.UnackedDeliveries("watcher-agent")
+	if err != nil {
+		t.Fatalf("UnackedDeliveries: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("got %d unacked events after batch ack, want 0", len(remaining))
 	}
 }
