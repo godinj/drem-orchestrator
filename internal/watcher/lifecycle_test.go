@@ -80,7 +80,7 @@ func TestRunTurn_Success(t *testing.T) {
 }
 
 // TestRunTurn_FailingCommand verifies that a subprocess that exits non-zero
-// causes TurnResult to carry the non-zero status and captured stderr content.
+// causes LifecycleResult to carry the non-zero status and captured stderr content.
 func TestRunTurn_FailingCommand(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
 	store := watcher.NewMetricsStore(db)
@@ -126,7 +126,7 @@ func TestRunTurn_KyleException(t *testing.T) {
 }
 
 // TestRunTurn_Timeout verifies that a subprocess running longer than the
-// configured timeout is killed and TurnResult reflects a non-zero exit status
+// configured timeout is killed and LifecycleResult reflects a non-zero exit status
 // with error details indicating termination.
 func TestRunTurn_Timeout(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
