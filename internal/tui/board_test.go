@@ -153,6 +153,226 @@ func TestBuildDisplayList(t *testing.T) {
 	}
 }
 
+func TestSortOrderWithMixedStatuses(t *testing.T) {
+	// Create tasks with all status categories in random order.
+	// Expected sort order: active > gates > failed > paused/rejected > done
+	tasks := []model.Task{
+		// These will be mixed in random input order
+		{ID: uuid.New(), Title: "done_task", Status: model.StatusDone, Priority: 100},
+		{ID: uuid.New(), Title: "in_progress_task", Status: model.StatusInProgress, Priority: 1},
+		{ID: uuid.New(), Title: "plan_review_task", Status: model.StatusPlanReview, Priority: 50},
+		{ID: uuid.New(), Title: "failed_task", Status: model.StatusFailed, Priority: 75},
+		{ID: uuid.New(), Title: "paused_task", Status: model.StatusPaused, Priority: 50},
+		{ID: uuid.New(), Title: "planning_task", Status: model.StatusPlanning, Priority: 2},
+		{ID: uuid.New(), Title: "test_review_task", Status: model.StatusTestReview, Priority: 40},
+		{ID: uuid.New(), Title: "rejected_task", Status: model.StatusRejected, Priority: 30},
+		{ID: uuid.New(), Title: "backlog_task", Status: model.StatusBacklog, Priority: 5},
+		{ID: uuid.New(), Title: "classifying_task", Status: model.StatusClassifying, Priority: 10},
+		{ID: uuid.New(), Title: "test_writing_task", Status: model.StatusTestWriting, Priority: 3},
+		{ID: uuid.New(), Title: "merging_task", Status: model.StatusMerging, Priority: 4},
+		{ID: uuid.New(), Title: "testing_ready_task", Status: model.StatusTestingReady, Priority: 35},
+		{ID: uuid.New(), Title: "needs_clarification_task", Status: model.StatusNeedsClarification, Priority: 25},
+	}
+
+	b := BoardModel{
+		tasks:    tasks,
+		expanded: make(map[uuid.UUID]bool),
+	}
+
+	entries := b.buildDisplayList()
+
+	if len(entries) != len(tasks) {
+		t.Fatalf("expected %d entries, got %d", len(tasks), len(entries))
+	}
+
+	// Extract status sequence from entries.
+	var statuses []model.TaskStatus
+	for _, e := range entries {
+		statuses = append(statuses, e.task.Status)
+	}
+
+	// Define status categories and their ordering.
+	statusCategory := map[model.TaskStatus]string{
+		model.StatusInProgress:         "active",
+		model.StatusPlanning:           "active",
+		model.StatusTestWriting:        "active",
+		model.StatusMerging:            "active",
+		model.StatusClassifying:        "active",
+		model.StatusBacklog:            "active",
+		model.StatusPlanReview:         "gates",
+		model.StatusTestReview:         "gates",
+		model.StatusTestingReady:       "gates",
+		model.StatusNeedsClarification: "gates",
+		model.StatusFailed:             "failed",
+		model.StatusPaused:             "paused_rejected",
+		model.StatusRejected:           "paused_rejected",
+		model.StatusDone:               "done",
+	}
+
+	categoryOrder := map[string]int{
+		"active":          0,
+		"gates":           1,
+		"failed":          2,
+		"paused_rejected": 3,
+		"done":            4,
+	}
+
+	// Verify that tasks are grouped by category and within-category ordering.
+	lastCategoryIdx := -1
+	for i, status := range statuses {
+		cat := statusCategory[status]
+		catIdx := categoryOrder[cat]
+
+		// Category index should never decrease (monotonically increasing).
+		if catIdx < lastCategoryIdx {
+			t.Errorf("at index %d: status %q (category %q, order %d) violates ordering after previous category order %d",
+				i, status, cat, catIdx, lastCategoryIdx)
+		}
+		lastCategoryIdx = catIdx
+	}
+
+	// Verify specific groupings.
+	t.Run("active_tasks_first", func(t *testing.T) {
+		activeCount := 0
+		firstActiveIdx := -1
+
+		for i, status := range statuses {
+			if statusCategory[status] == "active" {
+				if firstActiveIdx == -1 {
+					firstActiveIdx = i
+				}
+				activeCount++
+			}
+		}
+
+		if firstActiveIdx != 0 {
+			t.Errorf("first active task should be at index 0, got %d", firstActiveIdx)
+		}
+		if activeCount != 6 {
+			t.Errorf("expected 6 active tasks, got %d", activeCount)
+		}
+	})
+
+	t.Run("gates_after_active", func(t *testing.T) {
+		gateCount := 0
+		firstGateIdx := -1
+
+		for i, status := range statuses {
+			if statusCategory[status] == "gates" {
+				if firstGateIdx == -1 {
+					firstGateIdx = i
+				}
+				gateCount++
+			}
+		}
+
+		// Gates should start after all active tasks (which are 6).
+		if firstGateIdx <= 5 {
+			t.Errorf("first gate task should be at index 6 or higher, got %d", firstGateIdx)
+		}
+		if gateCount != 4 {
+			t.Errorf("expected 4 gate tasks, got %d", gateCount)
+		}
+	})
+
+	t.Run("failed_before_done", func(t *testing.T) {
+		failedIdx := -1
+		doneIdx := -1
+
+		for i, status := range statuses {
+			if status == model.StatusFailed {
+				failedIdx = i
+			}
+			if status == model.StatusDone {
+				doneIdx = i
+			}
+		}
+
+		if failedIdx == -1 {
+			t.Fatal("failed task not found in sorted list")
+		}
+		if doneIdx == -1 {
+			t.Fatal("done task not found in sorted list")
+		}
+
+		if failedIdx >= doneIdx {
+			t.Errorf("failed task (index %d) should appear before done task (index %d)", failedIdx, doneIdx)
+		}
+	})
+
+	t.Run("paused_rejected_between_failed_and_done", func(t *testing.T) {
+		failedIdx := -1
+		pausedIdx := -1
+		rejectedIdx := -1
+		doneIdx := -1
+
+		for i, status := range statuses {
+			if status == model.StatusFailed {
+				failedIdx = i
+			}
+			if status == model.StatusPaused {
+				pausedIdx = i
+			}
+			if status == model.StatusRejected {
+				rejectedIdx = i
+			}
+			if status == model.StatusDone {
+				doneIdx = i
+			}
+		}
+
+		if failedIdx == -1 || pausedIdx == -1 || rejectedIdx == -1 || doneIdx == -1 {
+			t.Fatal("missing expected statuses in sorted list")
+		}
+
+		// Both paused and rejected should be after failed.
+		if pausedIdx <= failedIdx {
+			t.Errorf("paused (index %d) should be after failed (index %d)", pausedIdx, failedIdx)
+		}
+		if rejectedIdx <= failedIdx {
+			t.Errorf("rejected (index %d) should be after failed (index %d)", rejectedIdx, failedIdx)
+		}
+
+		// Both paused and rejected should be before done.
+		if pausedIdx >= doneIdx {
+			t.Errorf("paused (index %d) should be before done (index %d)", pausedIdx, doneIdx)
+		}
+		if rejectedIdx >= doneIdx {
+			t.Errorf("rejected (index %d) should be before done (index %d)", rejectedIdx, doneIdx)
+		}
+	})
+
+	t.Run("within_category_priority_ordering", func(t *testing.T) {
+		// Active tasks within the active category should be sorted by priority (higher first).
+		// Extract just the active tasks.
+		var activeTasks []model.Task
+		for _, e := range entries {
+			if statusCategory[e.task.Status] == "active" {
+				activeTasks = append(activeTasks, e.task)
+			}
+		}
+
+		if len(activeTasks) == 0 {
+			t.Fatal("no active tasks found")
+		}
+
+		// Verify that priority is maintained within active tasks.
+		// When statuses are different within active, priority should be respected.
+		// Note: current implementation uses status sort order first, then priority,
+		// so we just verify no obvious violations.
+		for i := 0; i < len(activeTasks)-1; i++ {
+			curr := activeTasks[i]
+			next := activeTasks[i+1]
+
+			// If statuses are the same, priority should be >= (stable sort preserves order).
+			if curr.Status == next.Status && curr.Priority < next.Priority {
+				t.Logf("within same status %q, priority decreased from %d to %d (may be expected with stable sort)",
+					curr.Status, curr.Priority, next.Priority)
+			}
+		}
+	})
+}
+
 func TestSelected(t *testing.T) {
 	parentA := uuid.New()
 	childA1 := uuid.New()

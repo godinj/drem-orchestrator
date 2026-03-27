@@ -172,6 +172,15 @@ The dashboard has three main panels switched with `Tab`:
 
 Displays tasks in a tree view (parent tasks with expandable subtasks), color-coded by status.
 
+**Sort Order:** Tasks are organized by status priority to keep actionable items visible:
+1. **Active** — tasks currently being worked on (`in_progress`, `planning`, `test_writing`, `merging`, `classifying`, `backlog`)
+2. **Gates** — tasks awaiting human approval (`plan_review`, `test_review`, `testing_ready`, `needs_clarification`)
+3. **Failed** — tasks that encountered errors (visible without scrolling for quick action)
+4. **Paused/Rejected** — suspended or rejected tasks
+5. **Done** — completed tasks
+
+Within each status group, tasks are sorted by priority (higher first), ensuring failed tasks appear above the large done list for immediate visibility.
+
 ### Agent Panel
 
 Lists all agents with their type, status, current task, and last heartbeat.

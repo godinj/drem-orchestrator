@@ -23,8 +23,8 @@ type displayEntry struct {
 	childCount  int    // number of children (shown in collapsed indicator)
 }
 
-// statusSortOrder controls the display order of tasks: actionable first,
-// then human gates, then terminal states.
+// statusSortOrder controls the display order of tasks: active/actionable first,
+// then human gates, then failed, then paused/rejected, then done.
 var statusSortOrder = map[model.TaskStatus]int{
 	model.StatusInProgress:         0,
 	model.StatusPlanning:           1,
@@ -36,10 +36,10 @@ var statusSortOrder = map[model.TaskStatus]int{
 	model.StatusTestReview:         7,
 	model.StatusTestingReady:       8,
 	model.StatusNeedsClarification: 9,
-	model.StatusPaused:             10,
-	model.StatusDone:               11,
-	model.StatusFailed:             12,
-	model.StatusRejected:           13,
+	model.StatusFailed:             10,
+	model.StatusPaused:             11,
+	model.StatusRejected:           12,
+	model.StatusDone:               13,
 }
 
 // BoardModel renders the task list panel.
