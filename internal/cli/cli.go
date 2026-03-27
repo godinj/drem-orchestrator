@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/experiment"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/tui"
 )
@@ -24,7 +25,7 @@ import (
 // answer, pass, fail) are also available.
 func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, orch tui.TUIOrchestrator) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, file-task, comment, approve, reject, answer, pass, fail")
+		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, file-task, comment, experiment, approve, reject, answer, pass, fail")
 	}
 
 	sub := args[0]
@@ -52,6 +53,8 @@ func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, orch tui.TUIOrc
 		return handleFileTask(db, rest, w, jsonMode)
 	case "comment":
 		return handleComment(db, rest, w, jsonMode)
+	case "experiment":
+		return handleExperiment(db, rest, w, jsonMode)
 	default:
 		return fmt.Errorf("unknown subcommand: %q", sub)
 	}
@@ -593,4 +596,81 @@ func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// ── experiment ───────────────────────────────────────────────────────
+
+func handleExperiment(db *gorm.DB, args []string, w io.Writer, jsonMode bool) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: drem cli experiment create --profiles=X,Y --default=X --title=NAME --description=DESC [--project=ID]")
+	}
+
+	sub := args[0]
+	rest := args[1:]
+
+	switch sub {
+	case "create":
+		return handleExperimentCreate(db, rest, w, jsonMode)
+	default:
+		return fmt.Errorf("unknown experiment subcommand: %q", sub)
+	}
+}
+
+func handleExperimentCreate(db *gorm.DB, args []string, w io.Writer, jsonMode bool) error {
+	title, args := parseFlag(args, "title")
+	desc, args := parseFlag(args, "description")
+	profilesStr, args := parseFlag(args, "profiles")
+	defaultProfile, args := parseFlag(args, "default")
+	projectIDStr, _ := parseFlag(args, "project")
+
+	if title == "" {
+		return fmt.Errorf("--title is required")
+	}
+	if profilesStr == "" {
+		return fmt.Errorf("--profiles is required (comma-separated)")
+	}
+	if defaultProfile == "" {
+		return fmt.Errorf("--default is required")
+	}
+
+	profiles := strings.Split(profilesStr, ",")
+
+	var projectID uuid.UUID
+	if projectIDStr != "" {
+		var err error
+		projectID, err = uuid.Parse(projectIDStr)
+		if err != nil {
+			return fmt.Errorf("invalid --project: %w", err)
+		}
+	} else {
+		var project model.Project
+		if err := db.First(&project).Error; err != nil {
+			return fmt.Errorf("no project found in database; use --project to specify one")
+		}
+		projectID = project.ID
+	}
+
+	// Auto-migrate experiment tables so the command works without
+	// requiring the caller to have migrated them beforehand.
+	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
+		return fmt.Errorf("migrate experiment tables: %w", err)
+	}
+
+	exp, err := experiment.CreateExperiment(db, projectID, title, desc, profiles, defaultProfile)
+	if err != nil {
+		return fmt.Errorf("create experiment: %w", err)
+	}
+
+	if jsonMode {
+		return writeJSON(w, exp)
+	}
+	fmt.Fprintf(w, "Created experiment %s (%s) with %d variants\n", exp.ID, exp.Title, len(exp.Variants))
+	for _, v := range exp.Variants {
+		marker := " "
+		if v.IsDefault {
+			marker = "*"
+		}
+		fmt.Fprintf(w, "  %s %s (task %s)\n", marker, v.ProfileName, shortID(v.TaskID))
+	}
+	return nil
 }

@@ -1,0 +1,20 @@
+[Unit]
+Description=DREM C-Suite Watcher
+After=network.target local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/csuite-watcher run --config /etc/drem/drem.toml
+WorkingDirectory=/var/lib/drem
+User=drem
+Group=drem
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=310
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=csuite-watcher
+
+[Install]
+WantedBy=multi-user.target
