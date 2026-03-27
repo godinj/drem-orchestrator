@@ -1,6 +1,10 @@
 package main
 
-import "github.com/godinj/drem-orchestrator/internal/model"
+import (
+	"fmt"
+
+	"github.com/godinj/drem-orchestrator/internal/model"
+)
 
 // ProfileConfig holds per-role model/effort overrides for a named profile.
 // Only non-empty fields are applied; empty fields fall through to [agents.*]
@@ -27,9 +31,11 @@ type ProfileConfig struct {
 func (c Config) ForAgentTypeWithProfile(at model.AgentType, profile string) (model.AgentCLIConfig, error) {
 	var override AgentConfig
 	if profile != "" {
-		if p, ok := c.Profiles[profile]; ok {
-			override = profileAgentConfig(p, at)
+		p, ok := c.Profiles[profile]
+		if !ok {
+			return model.AgentCLIConfig{}, fmt.Errorf("unknown profile %q", profile)
 		}
+		override = profileAgentConfig(p, at)
 	}
 
 	base := c.Agents.ForAgentType(at)
