@@ -11,9 +11,12 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/eventbus"
@@ -43,11 +46,63 @@ func run(args []string, stderr io.Writer) int {
 	}
 }
 
-// runEvent handles the event subcommand (stub — always returns 0).
+// runEvent handles the event subcommand: parses flags and JSON argument,
+// opens the event bus, and publishes the event.
 func runEvent(args []string, stderr io.Writer) int {
-	_ = args
-	_ = stderr
+	fs := flag.NewFlagSet("event", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dbPath := fs.String("db", "~/.drem-csuite/csuite.db", "path to the event bus SQLite database")
+	_ = fs.String("routing", "", "path to the event routing config file")
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	remaining := fs.Args()
+	if len(remaining) == 0 {
+		fmt.Fprintln(stderr, "error: JSON argument required")
+		fmt.Fprintln(stderr, "usage: csuite-watcher event [--db <path>] [--routing <path>] '<json>'")
+		return 1
+	}
+
+	ev, err := parseEventJSON(remaining[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	ev.Source = "csuite-watcher"
+
+	actualPath := expandTilde(*dbPath)
+	if err := os.MkdirAll(filepath.Dir(actualPath), 0o700); err != nil {
+		fmt.Fprintf(stderr, "error: create DB directory: %v\n", err)
+		return 1
+	}
+
+	bus, err := eventbus.New(actualPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: open event bus: %v\n", err)
+		return 1
+	}
+	defer bus.Close()
+
+	if err := bus.Publish(ev); err != nil {
+		fmt.Fprintf(stderr, "error: publish event: %v\n", err)
+		return 1
+	}
+
 	return 0
+}
+
+// expandTilde replaces a leading "~" with the user's home directory.
+func expandTilde(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[1:])
 }
 
 // eventPayload is the wire format for the JSON argument to csuite-watcher event.

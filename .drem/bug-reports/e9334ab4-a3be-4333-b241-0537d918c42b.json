@@ -1,0 +1,9 @@
+{
+  "title": "bus_test.go uses incompatible eventbus API (EventType field, uuid.UUID ID, pointer Publish)",
+  "description": "Two agents wrote conflicting eventbus implementations that cannot both be satisfied:\n\n1. commit 2f871a4 added internal/eventbus/eventbus.go as a stub with: Event.ID as string, Event.Type (not EventType) field, Bus.Publish(Event) value receiver.\n2. commit 795a60e added internal/eventbus/bus.go + models.go with: Event.ID as uuid.UUID, Event.EventType field, Bus.Publish(*Event) pointer receiver.\n\nbus_test.go (from commit 480b27d) was written against the uuid.UUID/EventType/pointer API. main_test.go (from commit 2f871a4) was written against the string/Type/value API. These are genuinely incompatible — no single Event struct can satisfy both `ev.ID != \"\"` (string comparison in main_test.go:57) and `e.ID != (uuid.UUID{})` (uuid comparison in bus_test.go:278).\n\nResolution taken: kept eventbus.go API (string ID, Type field, value Publish) since it satisfies more tests (main_test.go + doc_test.go = 22 tests). Removed bus.go and models.go. bus_test.go now fails to compile due to:\n- unknown field EventType (should be Type)\n- mismatched types string and uuid.UUID for ID comparisons\n- cannot use *eventbus.Event as eventbus.Event in Publish calls\n- Deliver/Ack called with uuid.UUID args instead of string\n\nFix needed: rewrite bus_test.go to match the canonical eventbus.go API (string ID, Type field, value Publish, string Deliver/Ack args).",
+  "category": "test_failure",
+  "severity": "degraded",
+  "reproduction_context": "cd integration && go test ./internal/eventbus/... shows compile errors in bus_test.go. Affected lines: 273, 278, 282, 286, 303, 304, 309, 313, 332, 333, 356, 361, 386-394. Root cause: two conflicting agent implementations merged into the same package.",
+  "agent_id": "58d8889f-bdfd-46fc-b710-a5ecc8b67405",
+  "task_id": "984badb0-7405-4340-808c-dec0a0106db8"
+}
