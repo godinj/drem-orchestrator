@@ -1503,6 +1503,366 @@ func TestRetryTask_ClearsFailureContext(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// AddComment tests
+// ---------------------------------------------------------------------------
+
+// TestAddComment_BacklogStatus verifies AddComment works on tasks in backlog status.
+func TestAddComment_BacklogStatus(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "backlog-comment", model.StatusBacklog, nil)
+
+	err := o.AddComment(task.ID, "test-author", "This is a test comment on backlog")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error: %v", err)
+	}
+
+	// Verify comment was stored in DB.
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+	if comments[0].Author != "test-author" {
+		t.Errorf("expected author %q, got %q", "test-author", comments[0].Author)
+	}
+	if comments[0].Body != "This is a test comment on backlog" {
+		t.Errorf("expected body %q, got %q", "This is a test comment on backlog", comments[0].Body)
+	}
+}
+
+// TestAddComment_PlanningStatus verifies AddComment works on tasks in planning status.
+func TestAddComment_PlanningStatus(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "planning-comment", model.StatusPlanning, nil)
+
+	err := o.AddComment(task.ID, "agent-planner", "Planning in progress")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_InProgressStatus verifies AddComment works on tasks in in_progress status.
+func TestAddComment_InProgressStatus(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "in-progress-comment", model.StatusInProgress, nil)
+
+	err := o.AddComment(task.ID, "agent-coder", "Implementation underway")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_ClassifyingStatus verifies AddComment works on tasks in classifying status.
+func TestAddComment_ClassifyingStatus(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "classifying-comment", model.StatusClassifying, nil)
+
+	err := o.AddComment(task.ID, "agent-classifier", "Classification in progress")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_PausedStatus verifies AddComment works on tasks in paused status.
+func TestAddComment_PausedStatus(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "paused-comment", model.StatusPaused, nil)
+
+	err := o.AddComment(task.ID, "operator", "Task paused for review")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_DoneStatus verifies AddComment works on tasks in done status.
+func TestAddComment_DoneStatus(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "done-comment", model.StatusDone, nil)
+
+	err := o.AddComment(task.ID, "reviewer", "Excellent work!")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_TestWritingStatus verifies AddComment works on tasks in test_writing status.
+func TestAddComment_TestWritingStatus(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "test-writing-comment", model.StatusTestWriting, nil)
+
+	err := o.AddComment(task.ID, "agent-tester", "Writing comprehensive tests")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_MergingStatus verifies AddComment works on tasks in merging status.
+func TestAddComment_MergingStatus(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "merging-comment", model.StatusMerging, nil)
+
+	err := o.AddComment(task.ID, "orchestrator", "Merging to main branch")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_FailedStatus verifies AddComment works on tasks in failed status.
+func TestAddComment_FailedStatus(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "failed-comment", model.StatusFailed, nil)
+
+	err := o.AddComment(task.ID, "supervisor", "Task failed due to constraint violation")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_RejectedStatus verifies AddComment works on tasks in rejected status.
+func TestAddComment_RejectedStatus(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "rejected-comment", model.StatusRejected, nil)
+
+	err := o.AddComment(task.ID, "human-reviewer", "Plan was rejected due to unclear requirements")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_GateStatus_PlanReview verifies AddComment still works on gate status plan_review.
+func TestAddComment_GateStatus_PlanReview(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "gate-plan-review", model.StatusPlanReview, makePlan(1))
+
+	err := o.AddComment(task.ID, "human-approver", "Plan looks good")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error on gate status: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_GateStatus_TestReview verifies AddComment still works on gate status test_review.
+func TestAddComment_GateStatus_TestReview(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "gate-test-review", model.StatusTestReview, makePlan(1))
+
+	err := o.AddComment(task.ID, "test-reviewer", "Tests look comprehensive")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error on gate status: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_GateStatus_TestingReady verifies AddComment still works on gate status testing_ready.
+func TestAddComment_GateStatus_TestingReady(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "gate-testing-ready", model.StatusTestingReady, makePlan(1))
+
+	err := o.AddComment(task.ID, "final-reviewer", "Ready to merge")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error on gate status: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_GateStatus_NeedsClarification verifies AddComment still works on gate status needs_clarification.
+func TestAddComment_GateStatus_NeedsClarification(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "gate-needs-clarification", model.StatusNeedsClarification, nil)
+
+	err := o.AddComment(task.ID, "clarifier", "Need more details on requirements")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error on gate status: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+}
+
+// TestAddComment_TaskNotFound verifies AddComment returns error when task doesn't exist.
+func TestAddComment_TaskNotFound(t *testing.T) {
+	o, _ := setupLifecycleTest(t)
+	nonexistentID := uuid.New()
+
+	err := o.AddComment(nonexistentID, "author", "comment on non-existent task")
+	if err == nil {
+		t.Fatal("AddComment: expected error for non-existent task, got nil")
+	}
+}
+
+// TestAddComment_VerifyGetComments tests retrieving comments for a task.
+func TestAddComment_VerifyGetComments(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "get-comments-test", model.StatusBacklog, nil)
+
+	// Add multiple comments.
+	if err := o.AddComment(task.ID, "author1", "First comment"); err != nil {
+		t.Fatalf("AddComment 1: %v", err)
+	}
+	if err := o.AddComment(task.ID, "author2", "Second comment"); err != nil {
+		t.Fatalf("AddComment 2: %v", err)
+	}
+	if err := o.AddComment(task.ID, "author3", "Third comment"); err != nil {
+		t.Fatalf("AddComment 3: %v", err)
+	}
+
+	// Retrieve comments using GetComments.
+	comments, err := o.GetComments(task.ID)
+	if err != nil {
+		t.Fatalf("GetComments: %v", err)
+	}
+
+	if len(comments) != 3 {
+		t.Fatalf("expected 3 comments, got %d", len(comments))
+	}
+
+	// Verify order and content (should be ordered by created_at asc).
+	if comments[0].Author != "author1" || comments[0].Body != "First comment" {
+		t.Error("first comment mismatch")
+	}
+	if comments[1].Author != "author2" || comments[1].Body != "Second comment" {
+		t.Error("second comment mismatch")
+	}
+	if comments[2].Author != "author3" || comments[2].Body != "Third comment" {
+		t.Error("third comment mismatch")
+	}
+}
+
+// TestAddComment_EmptyAuthor verifies AddComment works even with empty author string.
+func TestAddComment_EmptyAuthor(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "empty-author", model.StatusBacklog, nil)
+
+	err := o.AddComment(task.ID, "", "Comment with empty author")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error with empty author: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+	if comments[0].Author != "" {
+		t.Errorf("expected empty author, got %q", comments[0].Author)
+	}
+}
+
+// TestAddComment_EmptyBody verifies AddComment works even with empty body string.
+func TestAddComment_EmptyBody(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "empty-body", model.StatusBacklog, nil)
+
+	err := o.AddComment(task.ID, "author", "")
+	if err != nil {
+		t.Fatalf("AddComment: unexpected error with empty body: %v", err)
+	}
+
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 1 {
+		t.Fatalf("expected 1 comment, got %d", len(comments))
+	}
+	if comments[0].Body != "" {
+		t.Errorf("expected empty body, got %q", comments[0].Body)
+	}
+}
+
+// TestAddComment_MultipleCommentsOnTask verifies multiple comments can be added to the same task.
+func TestAddComment_MultipleCommentsOnTask(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "multiple-comments", model.StatusBacklog, nil)
+
+	// Add 5 comments to the same task.
+	for i := 0; i < 5; i++ {
+		author := fmt.Sprintf("author-%d", i)
+		body := fmt.Sprintf("Comment %d", i)
+		if err := o.AddComment(task.ID, author, body); err != nil {
+			t.Fatalf("AddComment %d: %v", i, err)
+		}
+	}
+
+	// Verify all comments were stored.
+	var comments []model.TaskComment
+	db.Where("task_id = ?", task.ID).Find(&comments)
+	if len(comments) != 5 {
+		t.Fatalf("expected 5 comments, got %d", len(comments))
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
