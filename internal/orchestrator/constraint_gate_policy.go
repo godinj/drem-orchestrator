@@ -134,29 +134,40 @@ func (o *Orchestrator) evaluateConstraintGate(task *model.Task) (bool, error) {
 		return false, nil
 	}
 
-	report, evalErr := constraints.Evaluate(constraintCfg, featureDir)
+	featureReport, evalErr := constraints.Evaluate(constraintCfg, featureDir)
 	if evalErr != nil {
 		o.logger.Warn("constraint evaluation failed at integration gate",
 			"task_id", task.ID, "error", evalErr)
 		return false, nil
 	}
 
-	if report.Failed == 0 {
-		// Constraints passed — clear all gate context.
+	// Get baseline report from the master worktree for per-constraint delta comparison.
+	masterReport := &constraints.Report{}
+	if masterDir, err := o.worktree.MainWorktreePath(); err == nil {
+		if masterCfg, err := constraints.LoadConfig(masterDir); err == nil && masterCfg != nil {
+			if r, err := constraints.Evaluate(masterCfg, masterDir); err == nil {
+				masterReport = r
+			}
+		}
+	}
+
+	comparison := constraints.CompareReports(masterReport, featureReport)
+	if !comparison.Dominated {
+		// No regressions relative to master — clear all gate context.
 		for _, key := range constraintGateContextKeys {
 			delete(task.Context, key)
 		}
 		return false, nil
 	}
 
-	// Constraints failed — apply retry logic.
+	// Constraints regressed relative to master — apply retry logic.
 	o.logger.Warn("constraint violations at integration gate",
-		"task_id", task.ID, "failed", report.Failed)
+		"task_id", task.ID, "failed", featureReport.Failed)
 
 	// Depth-specific diagnosis (advisory).
-	for _, r := range report.Results {
+	for _, r := range featureReport.Results {
 		if !r.Passed && r.Type == "depth" {
-			o.checkDepthConstraintFailures(task, report, featureDir)
+			o.checkDepthConstraintFailures(task, featureReport, featureDir)
 			break
 		}
 	}
@@ -165,9 +176,9 @@ func (o *Orchestrator) evaluateConstraintGate(task *model.Task) (bool, error) {
 	if v, ok := task.Context["constraint_gate_retries"].(float64); ok {
 		retries = int(v)
 	}
-	previousFailed := 0
+	previousMagnitude := 0
 	if v, ok := task.Context["constraint_gate_previous_failed"].(float64); ok {
-		previousFailed = int(v)
+		previousMagnitude = int(v)
 	}
 
 	retries++
@@ -175,37 +186,28 @@ func (o *Orchestrator) evaluateConstraintGate(task *model.Task) (bool, error) {
 	// Check max retries exhaustion.
 	if policy.Exhausted(retries) {
 		reason := fmt.Sprintf("constraint gate exhausted after %d retries: %s",
-			retries, constraints.FormatReport(report))
+			retries, constraints.FormatReport(featureReport))
 		return true, o.failTask(task, reason)
 	}
 
-	// Check early termination (no improvement).
-	// Build synthetic ComparisonResult objects from stored failure counts so the
-	// new ShouldTerminateEarly signature compiles while the delta implementation
-	// is being developed. The full implementation will populate these from
-	// CompareReports(masterReport, featureReport) instead.
-	currentResult := constraints.ComparisonResult{}
-	if report.Failed > 0 {
-		currentResult.Dominated = true
-		currentResult.NewViolations = make([]string, report.Failed)
-	}
+	// Check early termination (no improvement in per-constraint magnitude).
 	previousResult := constraints.ComparisonResult{}
-	if previousFailed > 0 {
+	if previousMagnitude > 0 {
 		previousResult.Dominated = true
-		previousResult.NewViolations = make([]string, previousFailed)
+		previousResult.NewViolations = make([]string, previousMagnitude)
 	}
-	if policy.ShouldTerminateEarly(currentResult, previousResult) {
+	if policy.ShouldTerminateEarly(comparison, previousResult) {
 		reason := fmt.Sprintf("constraint gate: no improvement in constraint failures (current=%d, previous=%d): %s",
-			report.Failed, previousFailed, constraints.FormatReport(report))
+			comparison.Magnitude(), previousMagnitude, constraints.FormatReport(featureReport))
 		return true, o.failTask(task, reason)
 	}
 
 	// Schedule next check with backoff.
 	delay := policy.Delay(retries)
 	task.Context["constraint_gate_retries"] = float64(retries)
-	task.Context["constraint_gate_previous_failed"] = float64(report.Failed)
+	task.Context["constraint_gate_previous_failed"] = float64(comparison.Magnitude())
 	task.Context["constraint_gate_next_check"] = time.Now().Add(delay).Format(time.RFC3339)
-	task.Context["constraint_violations"] = constraints.FormatReport(report)
+	task.Context["constraint_violations"] = constraints.FormatReport(featureReport)
 
 	if err := o.db.Save(task).Error; err != nil {
 		return true, fmt.Errorf("save constraint gate state: %w", err)
@@ -213,8 +215,8 @@ func (o *Orchestrator) evaluateConstraintGate(task *model.Task) (bool, error) {
 
 	o.emit("constraint_violations", map[string]any{
 		"task_id":    task.ID,
-		"failed":     report.Failed,
-		"violations": constraints.FormatReport(report),
+		"failed":     featureReport.Failed,
+		"violations": constraints.FormatReport(featureReport),
 	})
 
 	return true, nil
