@@ -14,6 +14,15 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
+// Metric names recorded by contextMonitorLoop each tick.
+const (
+	metricContextPct  = "context_pct"
+	metricCostUSD     = "cost_usd"
+	metricTokenInput  = "token_input"
+	metricTokenOutput = "token_output"
+	metricToolCount   = "tool_count"
+)
+
 // contextMonitorLoop polls the context usage file and compaction signal for
 // a running agent, updating in-memory state and the DB Config field.
 func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, worktreePath string) {
@@ -116,7 +125,36 @@ func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, work
 			continue
 		}
 		r.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("config", configUpdate)
+
+		// Record time-series metrics (additive — does not affect Config write above).
+		if r.metricsRecorder != nil && usage != nil {
+			r.recordMetrics(agentID, usage, activity)
+		}
 	}
+}
+
+// recordMetrics appends five metric rows per tick: context_pct, cost_usd,
+// token_input, token_output, and tool_count. Errors are logged but do not
+// interrupt the monitoring loop.
+func (r *Runner) recordMetrics(agentID uuid.UUID, usage *ctxmon.Usage, activity *agentmon.Activity) {
+	record := func(name string, value float64) {
+		if err := r.metricsRecorder.Record(agentID, name, value, nil); err != nil {
+			slog.Warn("context monitor: record metric", "agent_id", agentID, "metric", name, "error", err)
+		}
+	}
+
+	record(metricContextPct, float64(usage.UsedPercent))
+	record(metricCostUSD, usage.TotalCostUSD)
+	record(metricTokenInput, float64(usage.TotalInputTokens))
+	record(metricTokenOutput, float64(usage.TotalOutputTokens))
+
+	var toolCount int
+	if activity != nil {
+		for _, count := range activity.ToolCounts {
+			toolCount += count
+		}
+	}
+	record(metricToolCount, float64(toolCount))
 }
 
 // GetContextUsage returns the latest context window usage for a running agent.

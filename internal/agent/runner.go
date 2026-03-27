@@ -79,6 +79,12 @@ type RunningAgent struct {
 	cancel       context.CancelFunc // cancels the monitor and heartbeat goroutines
 }
 
+// MetricsRecorder records time-series metric samples for running agents.
+// Implementations must be safe for concurrent use.
+type MetricsRecorder interface {
+	Record(agentID uuid.UUID, name string, value float64, labels map[string]string) error
+}
+
 // Runner manages Claude Code agent lifecycles. Headless agents run as
 // subprocesses; supervisors and shells still use tmux.
 type Runner struct {
@@ -90,12 +96,21 @@ type Runner struct {
 	claudeBin       string
 	maxConcurrent   int
 	agentConfigs    func(model.AgentType) model.AgentCLIConfig // per-type CLI flags
+	metricsRecorder MetricsRecorder                            // optional; nil means no time-series recording
 
 	mu              sync.Mutex
 	running         map[uuid.UUID]*RunningAgent
 	completions     chan Completion
 	semaphore       chan struct{}   // buffered channel of size maxConcurrent
 	dispatchLimiter dispatchLimiter // optional rate limiter; nil means no limit
+}
+
+// SetMetricsRecorder injects a MetricsRecorder for time-series metric
+// collection during agent runs. When set, contextMonitorLoop records five
+// metric samples per tick: context_pct, cost_usd, token_input, token_output,
+// and tool_count.
+func (r *Runner) SetMetricsRecorder(mr MetricsRecorder) {
+	r.metricsRecorder = mr
 }
 
 // NewRunner creates an agent Runner. Headless agents are started via

@@ -10,6 +10,53 @@ csuite-watcher <subcommand> [flags] [args]
 
 ### Subcommands
 
+#### run
+
+Start the watcher main loop. This starts all trigger sources (inbox signals,
+event delivery, safety timer), routes wake-ups to the lifecycle manager, and
+writes heartbeats to prove liveness:
+
+```
+csuite-watcher run [--config <path>]
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--config` | `drem.toml` | Path to the drem.toml config file |
+
+The `run` command reads the `[watcher]` section from drem.toml:
+
+```toml
+[watcher]
+  db_path             = "~/.drem-csuite/watcher.db"
+  inbox_base_dir      = "~/.drem-csuite"
+  allowed_agents      = ["mike", "alex", "ross", "seth"]
+  inbox_poll_interval = "2s"
+  safety_interval     = "5m"
+  heartbeat_interval  = "30s"
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `db_path` | `~/.drem-csuite/watcher.db` | SQLite database for metrics and heartbeats |
+| `inbox_base_dir` | `~/.drem-csuite` | Root directory for `<agent>/inbox/` signal files |
+| `allowed_agents` | `["mike", "alex", "ross", "seth"]` | Agents permitted to run turns |
+| `inbox_poll_interval` | `2s` | How often to scan for `.signal` files |
+| `safety_interval` | `5m` | How often the safety timer wakes "mike" |
+| `heartbeat_interval` | `30s` | How often heartbeats are written to DB |
+
+**Signal handling:** SIGTERM and SIGINT cause a clean shutdown. All triggers are
+stopped, in-flight turns complete, and the process exits with code 0.
+
+**Exit codes:**
+
+| Code | Meaning |
+|------|---------|
+| `0` | Clean shutdown (SIGTERM/SIGINT or context cancellation) |
+| non-zero | Error occurred during startup; error message written to stderr |
+
 #### event
 
 Publish a single event from a JSON argument:

@@ -19,6 +19,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
+	"github.com/godinj/drem-orchestrator/internal/metrics"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/watcher"
@@ -412,6 +413,36 @@ func CreateTurnMetric(t *testing.T, db *gorm.DB, agent string, exitStatus int) w
 	}
 	if err := db.Create(&m).Error; err != nil {
 		t.Fatalf("create test turn metric: %v", err)
+	}
+	return m
+}
+
+// ---------------------------------------------------------------------------
+// Metrics entity factory helpers
+// ---------------------------------------------------------------------------
+
+// NewTestMetricsStore creates an isolated DB with the Metric model migrated
+// and returns a ready-to-use metrics.Store.
+func NewTestMetricsStore(t *testing.T) *metrics.Store {
+	t.Helper()
+	db := NewTestDBWithModels(t, &metrics.Metric{})
+	return metrics.NewStore(db)
+}
+
+// CreateMetric inserts a Metric row directly into the database and returns it.
+// Use this to seed test data for Query tests without depending on Record's
+// implementation.
+func CreateMetric(t *testing.T, db *gorm.DB, agentID uuid.UUID, name string, value float64, ts time.Time) metrics.Metric {
+	t.Helper()
+	m := metrics.Metric{
+		ID:        uuid.New(),
+		AgentID:   agentID,
+		Name:      name,
+		Value:     value,
+		Timestamp: ts,
+	}
+	if err := db.Create(&m).Error; err != nil {
+		t.Fatalf("create test metric: %v", err)
 	}
 	return m
 }

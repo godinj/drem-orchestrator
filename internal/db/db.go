@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
+	"github.com/godinj/drem-orchestrator/internal/metrics"
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
@@ -68,6 +69,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.TaskComment{},
 		&model.BugReport{},
 		&model.BugReportComment{},
+		&metrics.Metric{},
 		&csuite.CsuiteAgent{},
 		&csuite.CsuiteInboxMessage{},
 	)

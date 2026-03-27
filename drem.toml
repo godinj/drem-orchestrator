@@ -28,3 +28,11 @@ compile_command       = "go vet ./..."
 
 [agents.interactive_supervisor]
   effort = "medium"
+
+[watcher]
+  db_path             = "~/.drem-csuite/watcher.db"
+  inbox_base_dir      = "~/.drem-csuite"
+  allowed_agents      = ["mike", "alex", "ross", "seth"]
+  inbox_poll_interval = "2s"
+  safety_interval     = "5m"
+  heartbeat_interval  = "30s"
