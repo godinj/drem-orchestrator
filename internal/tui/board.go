@@ -695,16 +695,10 @@ func (a AgentsModel) View() string {
 		cost := extractCost(&ag)
 		costStyle := subtitleStyle
 		switch {
-		case cost != "-":
-			// Parse the cost value for styling
-			if costVal, ok := ag.Config["total_cost_usd"].(float64); ok {
-				switch {
-				case costVal > 1.00:
-					costStyle = lipgloss.NewStyle().Foreground(colorDanger)
-				case costVal > 0.50:
-					costStyle = lipgloss.NewStyle().Foreground(colorWarning)
-				}
-			}
+		case ag.TotalCostUSD > 1.00:
+			costStyle = lipgloss.NewStyle().Foreground(colorDanger)
+		case ag.TotalCostUSD > 0.50:
+			costStyle = lipgloss.NewStyle().Foreground(colorWarning)
 		}
 		lines = append(lines, costStyle.Render(
 			fmt.Sprintf("    cost: %s", cost),

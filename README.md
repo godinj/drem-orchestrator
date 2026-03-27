@@ -232,20 +232,26 @@ The agent panel displays two enrichment fields for each agent:
 
 **Querying agents by model via SQL:**
 
-You can query the orchestrator database directly to find agents by model:
+You can query the orchestrator database directly to find agents by model. `model_id` and `total_cost_usd` are first-class columns on the `agents` table (not stored in the JSON config blob):
 
 ```sql
 -- Find all agents using a specific model
-SELECT id, type, status, created_at FROM agents
-WHERE json_extract(config, '$.model_id') = 'claude-opus-4';
+SELECT id, agent_type, status, created_at FROM agents
+WHERE model_id = 'claude-opus-4';
 
 -- Sum costs by model
 SELECT
-  json_extract(config, '$.model_id') as model,
+  model_id,
   COUNT(*) as agent_count,
-  SUM(CAST(json_extract(config, '$.total_cost_usd') AS REAL)) as total_cost
+  SUM(total_cost_usd) as total_cost
 FROM agents
-GROUP BY json_extract(config, '$.model_id');
+GROUP BY model_id;
+
+-- Find expensive completed agents
+SELECT name, model_id, total_cost_usd, exit_reason, completed_at
+FROM agents
+WHERE total_cost_usd > 1.0
+ORDER BY total_cost_usd DESC;
 ```
 
 **Terminal Width:**
