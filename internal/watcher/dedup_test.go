@@ -84,7 +84,7 @@ func mustStart(t *testing.T, started <-chan struct{}) {
 // when no turn is running and that the turn actually executes via RunTurn.
 func TestTriggerAgent_Idle_Started(t *testing.T) {
 	runner := newMockRunner()
-	lm := watcher.New(runner)
+	lm := watcher.NewDeduplicator(runner)
 
 	started, complete := runner.prepareRun("alice")
 	defer complete()
@@ -105,7 +105,7 @@ func TestTriggerAgent_Idle_Started(t *testing.T) {
 // when a turn is already running for the same agent.
 func TestTriggerAgent_Running_Queued(t *testing.T) {
 	runner := newMockRunner()
-	lm := watcher.New(runner)
+	lm := watcher.NewDeduplicator(runner)
 
 	started, complete := runner.prepareRun("alice")
 	defer complete()
@@ -126,7 +126,7 @@ func TestTriggerAgent_Running_Queued(t *testing.T) {
 // a trigger is already queued returns Dropped (at most one queued trigger).
 func TestTriggerAgent_AlreadyQueued_Dropped(t *testing.T) {
 	runner := newMockRunner()
-	lm := watcher.New(runner)
+	lm := watcher.NewDeduplicator(runner)
 
 	started, complete := runner.prepareRun("alice")
 	defer complete()
@@ -149,7 +149,7 @@ func TestTriggerAgent_AlreadyQueued_Dropped(t *testing.T) {
 // turn completes with a queued trigger, the next turn starts automatically.
 func TestTriggerAgent_QueuedExecutesAfterCompletion(t *testing.T) {
 	runner := newMockRunner()
-	lm := watcher.New(runner)
+	lm := watcher.NewDeduplicator(runner)
 
 	started1, complete1 := runner.prepareRun("alice")
 	started2, complete2 := runner.prepareRun("alice")
@@ -177,7 +177,7 @@ func TestTriggerAgent_QueuedExecutesAfterCompletion(t *testing.T) {
 // without blocking each other.
 func TestTriggerAgent_DifferentAgents_Concurrent(t *testing.T) {
 	runner := newMockRunner()
-	lm := watcher.New(runner)
+	lm := watcher.NewDeduplicator(runner)
 
 	startedA, completeA := runner.prepareRun("alice")
 	startedB, completeB := runner.prepareRun("bob")
@@ -203,7 +203,7 @@ func TestTriggerAgent_DifferentAgents_Concurrent(t *testing.T) {
 // returns Refused and never invokes RunTurn.
 func TestTriggerAgent_Kyle_Refused(t *testing.T) {
 	runner := newMockRunner()
-	lm := watcher.New(runner)
+	lm := watcher.NewDeduplicator(runner)
 
 	for i := range 3 {
 		result := lm.TriggerAgent("kyle")
@@ -222,7 +222,7 @@ func TestTriggerAgent_Kyle_Refused(t *testing.T) {
 // Run with -race to exercise the Go race detector.
 func TestTriggerAgent_ConcurrentSafety(t *testing.T) {
 	runner := newMockRunner()
-	lm := watcher.New(runner)
+	lm := watcher.NewDeduplicator(runner)
 
 	// Pre-queue non-blocking slots so RunTurn returns immediately.
 	const N = 50
@@ -248,7 +248,7 @@ func TestTriggerAgent_ConcurrentSafety(t *testing.T) {
 // than Queued or Dropped.
 func TestTriggerAgent_IdleAfterDrain(t *testing.T) {
 	runner := newMockRunner()
-	lm := watcher.New(runner)
+	lm := watcher.NewDeduplicator(runner)
 
 	// Run a full turn cycle to completion.
 	started1, complete1 := runner.prepareRun("alice")

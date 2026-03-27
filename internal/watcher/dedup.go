@@ -53,21 +53,21 @@ type agentEntry struct {
 	state agentState
 }
 
-// LifecycleManager manages per-agent turn deduplication. Concurrent calls to
+// Deduplicator manages per-agent turn deduplication. Concurrent calls to
 // TriggerAgent for the same agent are serialized: at most one turn runs and
 // at most one additional trigger is queued. Triggers for different agents are
 // independent and may run concurrently.
 //
-// Use New to create a LifecycleManager.
-type LifecycleManager struct {
+// Use NewDeduplicator to create a Deduplicator.
+type Deduplicator struct {
 	mu     sync.Mutex
 	agents map[string]*agentEntry
 	runner TurnRunner
 }
 
-// New creates a LifecycleManager backed by runner for turn execution.
-func New(runner TurnRunner) *LifecycleManager {
-	return &LifecycleManager{
+// NewDeduplicator creates a Deduplicator backed by runner for turn execution.
+func NewDeduplicator(runner TurnRunner) *Deduplicator {
+	return &Deduplicator{
 		agents: make(map[string]*agentEntry),
 		runner: runner,
 	}
@@ -85,44 +85,44 @@ func New(runner TurnRunner) *LifecycleManager {
 // After all turns drain, the agent's state is cleaned up.
 //
 // TriggerAgent is safe for concurrent use by multiple goroutines.
-func (lm *LifecycleManager) TriggerAgent(agent string) TriggerResult {
+func (d *Deduplicator) TriggerAgent(agent string) TriggerResult {
 	if agent == kyle {
 		return Refused
 	}
 
-	lm.mu.Lock()
-	entry, ok := lm.agents[agent]
+	d.mu.Lock()
+	entry, ok := d.agents[agent]
 	if !ok {
-		lm.agents[agent] = &agentEntry{state: stateRunning}
-		lm.mu.Unlock()
-		go lm.runLoop(agent)
+		d.agents[agent] = &agentEntry{state: stateRunning}
+		d.mu.Unlock()
+		go d.runLoop(agent)
 		return Started
 	}
 	if entry.state == stateRunning {
 		entry.state = stateRunningQueued
-		lm.mu.Unlock()
+		d.mu.Unlock()
 		return Queued
 	}
-	lm.mu.Unlock()
+	d.mu.Unlock()
 	return Dropped
 }
 
 // runLoop executes turns for agent, re-running if a queued trigger exists.
-func (lm *LifecycleManager) runLoop(agent string) {
+func (d *Deduplicator) runLoop(agent string) {
 	for {
-		lm.runner.RunTurn(agent)
+		d.runner.RunTurn(agent)
 
-		lm.mu.Lock()
-		entry := lm.agents[agent]
+		d.mu.Lock()
+		entry := d.agents[agent]
 		if entry.state == stateRunningQueued {
 			entry.state = stateRunning
-			lm.mu.Unlock()
+			d.mu.Unlock()
 			// loop: run the queued turn
 			continue
 		}
 		// state == stateRunning, no queued trigger — clean up
-		delete(lm.agents, agent)
-		lm.mu.Unlock()
+		delete(d.agents, agent)
+		d.mu.Unlock()
 		return
 	}
 }
