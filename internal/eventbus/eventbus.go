@@ -82,12 +82,12 @@ func New(dbPath string) (*Bus, error) {
 }
 
 // Publish stores the event in the database. It assigns a new UUID to e.ID
-// before inserting; any caller-supplied ID is overwritten.
-func (b *Bus) Publish(e Event) error {
+// if e.ID is empty; a caller-supplied ID is preserved.
+func (b *Bus) Publish(e *Event) error {
 	if e.ID == "" {
 		e.ID = uuid.New().String()
 	}
-	return b.db.Create(&e).Error
+	return b.db.Create(e).Error
 }
 
 // Events returns all events stored in the bus, ordered by creation time.

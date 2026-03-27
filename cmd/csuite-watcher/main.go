@@ -85,7 +85,7 @@ func runEvent(args []string, stderr io.Writer) int {
 	}
 	defer bus.Close()
 
-	if err := bus.Publish(ev); err != nil {
+	if err := bus.Publish(&ev); err != nil {
 		fmt.Fprintf(stderr, "error: publish event: %v\n", err)
 		return 1
 	}
