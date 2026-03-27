@@ -53,9 +53,9 @@ func TestOrchestratorImportBaseline(t *testing.T) {
 		t.Fatal("no exception for internal/orchestrator/ in Internal import ceiling constraint")
 	}
 
-	// After file splitting + merge with 836efc1d classifier fix, actual count was 55.
-	// merger_interface.go adds 2 imports (57), constraint_gate_policy.go adds 1 (58).
-	const expectedBaseline = 58
+	// With count_mode='unique', the orchestrator package has 10 distinct internal
+	// import paths. Baseline is set to 11 (10 unique paths + 1 margin for shrink-only).
+	const expectedBaseline = 11
 	if orchException.BaselineCount != expectedBaseline {
 		t.Errorf("internal/orchestrator/ import baseline_count = %d, want %d",
 			orchException.BaselineCount, expectedBaseline)

@@ -382,7 +382,57 @@ func evalMaxMatches(c MaxMatchesConstraint, worktreeRoot string, fileSet map[str
 }
 
 func evalMaxMatchesDirectory(c MaxMatchesConstraint, re *regexp.Regexp, files []string, worktreeRoot string, fileSet map[string]bool, result Result) (Result, error) {
-	// Aggregate match counts per directory.
+	if c.CountMode == "unique" {
+		// Collect unique matching lines per directory to count distinct import paths.
+		// Splitting a file within a package does not increase the count because shared
+		// lines (e.g. the same import appearing in two files) are deduplicated.
+		dirSets := make(map[string]map[string]bool)
+
+		for _, relPath := range files {
+			if fileSet != nil && !fileSet[relPath] {
+				continue
+			}
+
+			data, err := os.ReadFile(filepath.Join(worktreeRoot, relPath))
+			if err != nil {
+				return result, fmt.Errorf("reading %s: %w", relPath, err)
+			}
+
+			dir := filepath.Dir(relPath) + "/"
+			if dirSets[dir] == nil {
+				dirSets[dir] = make(map[string]bool)
+			}
+			for _, line := range strings.Split(string(data), "\n") {
+				if re.MatchString(line) {
+					dirSets[dir][strings.TrimSpace(line)] = true
+				}
+			}
+		}
+
+		for dir, set := range dirSets {
+			count := len(set)
+			if exc, ok := findMatchesException(c.Exceptions, dir); ok {
+				if count > exc.BaselineCount {
+					result.Passed = false
+					result.Messages = append(result.Messages,
+						fmt.Sprintf("%s has %d matches, exceeds shrink-only baseline of %d",
+							dir, count, exc.BaselineCount))
+				}
+				continue
+			}
+
+			if count > c.Limit {
+				result.Passed = false
+				result.Messages = append(result.Messages,
+					fmt.Sprintf("%s has %d matches, exceeds limit of %d",
+						dir, count, c.Limit))
+			}
+		}
+
+		return result, nil
+	}
+
+	// Aggregate match counts per directory (default: total occurrences).
 	dirCounts := make(map[string]int)
 
 	for _, relPath := range files {

@@ -249,6 +249,176 @@ func TestEvalMaxMatches(t *testing.T) {
 	}
 }
 
+// TestEvalMaxMatchesUniqueCountMode verifies that count_mode='unique' deduplicates
+// identical match strings across files in the same directory.
+//
+// Core bug scenario: splitting a file into multiple files should not increase the
+// import count when the same import path appears in more than one file.
+// With count_mode='total' (default), each occurrence is counted separately —
+// splitting one file with 2 imports into two files that share one import raises the
+// total from 2 to 3. With count_mode='unique', only distinct match strings are
+// counted, so the split has no effect.
+//
+// Verified: splitting a file within a package does not increase the import count.
+func TestEvalMaxMatchesUniqueCountMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		constraint MaxMatchesConstraint
+		files      map[string]string
+		wantPass   bool
+		wantMsg    string
+	}{
+		{
+			// Two files share one import line; unique count = 2, total = 3.
+			// With count_mode='unique' and limit=2, should pass.
+			name: "unique deduplicates shared imports across files",
+			constraint: MaxMatchesConstraint{
+				Name:      "internal imports",
+				Glob:      "**/*.go",
+				Pattern:   `"internal/`,
+				Limit:     2,
+				Scope:     "directory",
+				CountMode: "unique",
+			},
+			files: map[string]string{
+				// a.go imports two paths; b.go shares one of them
+				"pkg/a.go": "\t\"internal/model\"\n\t\"internal/state\"\n",
+				"pkg/b.go": "\t\"internal/model\"\n",
+			},
+			wantPass: true, // unique = {internal/model, internal/state} = 2 <= limit 2
+		},
+		{
+			// Same setup but count_mode='total' — total = 3 > limit 2, must fail.
+			// This confirms that the default behavior is unchanged.
+			name: "default count_mode total counts all occurrences",
+			constraint: MaxMatchesConstraint{
+				Name:    "internal imports",
+				Glob:    "**/*.go",
+				Pattern: `"internal/`,
+				Limit:   2,
+				Scope:   "directory",
+				// CountMode intentionally left empty — defaults to total
+			},
+			files: map[string]string{
+				"pkg/a.go": "\t\"internal/model\"\n\t\"internal/state\"\n",
+				"pkg/b.go": "\t\"internal/model\"\n",
+			},
+			wantPass: false,
+			wantMsg:  "pkg/ has 3 matches, exceeds limit of 2",
+		},
+		{
+			// Splitting one file into two does not change the unique import count.
+			// Before split: one file with both imports → unique = 2.
+			// After split: two files, one with both + one with the shared import → unique = 2.
+			// With count_mode='unique' and limit=2, both scenarios pass.
+			name: "splitting a file does not increase unique import count",
+			constraint: MaxMatchesConstraint{
+				Name:      "internal imports",
+				Glob:      "**/*.go",
+				Pattern:   `"internal/`,
+				Limit:     2,
+				Scope:     "directory",
+				CountMode: "unique",
+			},
+			files: map[string]string{
+				// After split: original logic extracted to two files, both import internal/model
+				"tui/board.go":        "\t\"internal/model\"\n\t\"internal/config\"\n",
+				"tui/status_badge.go": "\t\"internal/model\"\n",
+			},
+			wantPass: true, // unique = {internal/model, internal/config} = 2 <= limit 2
+		},
+		{
+			// Unique counting still detects violations when genuinely distinct paths exceed limit.
+			name: "unique count exceeds limit fails",
+			constraint: MaxMatchesConstraint{
+				Name:      "internal imports",
+				Glob:      "**/*.go",
+				Pattern:   `"internal/`,
+				Limit:     2,
+				Scope:     "directory",
+				CountMode: "unique",
+			},
+			files: map[string]string{
+				"pkg/a.go": "\t\"internal/model\"\n\t\"internal/state\"\n\t\"internal/config\"\n",
+				"pkg/b.go": "\t\"internal/model\"\n", // shared, does not add to unique count
+			},
+			wantPass: false, // unique = {internal/model, internal/state, internal/config} = 3 > 2
+		},
+		{
+			// Shrink-only exception with count_mode='unique': directory is grandfathered at
+			// baseline 3. As long as unique count <= 3, it passes even though limit = 1.
+			name: "shrink-only exception works with unique counting",
+			constraint: MaxMatchesConstraint{
+				Name:      "internal imports",
+				Glob:      "**/*.go",
+				Pattern:   `"internal/`,
+				Limit:     1,
+				Scope:     "directory",
+				CountMode: "unique",
+				Exceptions: []MatchesException{
+					{Path: "legacy/", Rule: "shrink-only", BaselineCount: 3},
+				},
+			},
+			files: map[string]string{
+				// 3 unique paths shared across two files
+				"legacy/a.go": "\t\"internal/model\"\n\t\"internal/state\"\n",
+				"legacy/b.go": "\t\"internal/model\"\n\t\"internal/config\"\n",
+			},
+			wantPass: true, // unique = 3 == baseline 3, not exceeding it
+		},
+		{
+			// Shrink-only exception: unique count exceeds baseline should fail.
+			name: "shrink-only exception over baseline fails with unique counting",
+			constraint: MaxMatchesConstraint{
+				Name:      "internal imports",
+				Glob:      "**/*.go",
+				Pattern:   `"internal/`,
+				Limit:     1,
+				Scope:     "directory",
+				CountMode: "unique",
+				Exceptions: []MatchesException{
+					{Path: "legacy/", Rule: "shrink-only", BaselineCount: 2},
+				},
+			},
+			files: map[string]string{
+				"legacy/a.go": "\t\"internal/model\"\n\t\"internal/state\"\n",
+				"legacy/b.go": "\t\"internal/model\"\n\t\"internal/config\"\n",
+			},
+			wantPass: false, // unique = 3 > baseline 2
+			wantMsg:  "shrink-only baseline of 2",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			for path, content := range tt.files {
+				writeFile(t, root, path, content)
+			}
+
+			result, err := evalMaxMatches(tt.constraint, root, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Passed != tt.wantPass {
+				t.Errorf("expected passed=%v, got %v; messages: %v", tt.wantPass, result.Passed, result.Messages)
+			}
+			if tt.wantMsg != "" {
+				found := false
+				for _, msg := range result.Messages {
+					if strings.Contains(msg, tt.wantMsg) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected message containing %q, got %v", tt.wantMsg, result.Messages)
+				}
+			}
+		})
+	}
+}
+
 func TestEvalNoMatch(t *testing.T) {
 	tests := []struct {
 		name       string

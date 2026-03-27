@@ -51,7 +51,8 @@ type MaxMatchesConstraint struct {
 	Exclude    []string           `toml:"exclude"`
 	Pattern    string             `toml:"pattern"`
 	Limit      int                `toml:"limit"`
-	Scope      string             `toml:"scope"` // "file" (default) or "directory"
+	Scope      string             `toml:"scope"`      // "file" (default) or "directory"
+	CountMode  string             `toml:"count_mode"` // "" or "total" (default): sum occurrences; "unique": count distinct match strings
 	Exceptions []MatchesException `toml:"exception"`
 }
 

@@ -46,27 +46,22 @@ rule           = "shrink-only"
 baseline_count = 2
 
 [[max_matches]]
-name    = "Internal import ceiling"
-glob    = "internal/**/*.go"
-exclude = ["*_test.go"]
-pattern = "\".*internal/"
-limit   = 6
-scope   = "directory"
+name       = "Internal import ceiling"
+glob       = "internal/**/*.go"
+exclude    = ["*_test.go"]
+pattern    = "\".*internal/"
+limit      = 6
+scope      = "directory"
+# count_mode='unique' counts distinct import paths per directory (equivalent to
+# sort -u), not total occurrences. This prevents decomposition from being
+# penalised: splitting a file into multiple focused files with shared imports
+# does not increase the unique import count.
+count_mode = "unique"
 
 [[max_matches.exception]]
 path           = "internal/orchestrator/"
 rule           = "shrink-only"
-baseline_count = 58
-
-[[max_matches.exception]]
-path           = "internal/tui/"
-rule           = "shrink-only"
-baseline_count = 12
-
-[[max_matches.exception]]
-path           = "internal/agent/"
-rule           = "shrink-only"
-baseline_count = 10
+baseline_count = 11
 
 [[max_matches]]
 name    = "GORM hook consolidation"

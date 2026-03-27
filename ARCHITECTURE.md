@@ -225,9 +225,23 @@ No package may import more than 6 other `internal/` packages. If exceeded,
 the package is accumulating too many responsibilities — extract a sub-concern
 into its own package or push logic down to dependencies.
 
-`orchestrator` (11 unique internal imports, 55 import lines) is grandfathered but must not add more.
+`orchestrator` (11 unique internal imports, grandfathered at baseline 11) must not add more.
 
-**Compliance test:** Count `internal/` imports in a package's source files;
+**Methodology:** The ceiling counts *unique import paths* per directory, not total
+occurrences across files. This is equivalent to `grep "internal/" *.go | sort -u | wc -l`.
+Splitting a file into multiple focused files within the same package does not increase the
+import count if the same import paths are reused — only genuinely new dependencies raise it.
+
+**Current baselines (unique paths, non-test files):**
+
+| Package            | Unique internal imports |
+|--------------------|------------------------|
+| `internal/agent/`  | 5                      |
+| `internal/tui/`    | 6 (at ceiling)         |
+| `internal/orchestrator/` | 10 (grandfathered, baseline 11) |
+
+**Compliance test:** Count distinct `internal/` import lines across a package's
+non-test source files (`grep "internal/" *.go | sort -u | wc -l`);
 must be <= 6 (or <= previous count for grandfathered packages).
 
 ---
