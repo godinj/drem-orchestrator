@@ -9,16 +9,14 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
-// AddComment creates a new comment on a task. Only allowed for human-gate statuses.
+// AddComment creates a new comment on a task. Allowed for tasks in any status.
 func (o *Orchestrator) AddComment(taskID uuid.UUID, author, body string) error {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
 		return fmt.Errorf("add comment: load task: %w", err)
 	}
-	if !task.Status.IsHumanGate() {
-		return fmt.Errorf("add comment: task %s is in %s, comments only allowed in human-gate statuses", taskID, task.Status)
-	}
 	comment := model.TaskComment{
+		ID:     uuid.New(),
 		TaskID: taskID,
 		Author: author,
 		Body:   body,
