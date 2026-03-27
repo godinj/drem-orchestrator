@@ -14,16 +14,16 @@ import (
 
 func TestExtractModelID(t *testing.T) {
 	tests := []struct {
-		name      string
-		agent     *model.Agent
-		wantValue string
+		name        string
+		agent       *model.Agent
+		wantValue   string
 		description string
 	}{
 		{
-			name:         "nil agent returns dash",
-			agent:        nil,
-			wantValue:    "-",
-			description:  "nil agent should return dash",
+			name:        "nil agent returns dash",
+			agent:       nil,
+			wantValue:   "-",
+			description: "nil agent should return dash",
 		},
 		{
 			name: "nil Config returns dash",
@@ -111,10 +111,10 @@ func TestExtractModelID(t *testing.T) {
 
 func TestExtractCost(t *testing.T) {
 	tests := []struct {
-		name         string
-		agent        *model.Agent
-		wantValue    string
-		description  string
+		name        string
+		agent       *model.Agent
+		wantValue   string
+		description string
 	}{
 		{
 			name:        "nil agent returns dash",

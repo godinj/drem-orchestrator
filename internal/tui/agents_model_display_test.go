@@ -15,12 +15,12 @@ import (
 
 func TestAgentsViewDisplay_ModelIDAndCostColumns(t *testing.T) {
 	tests := []struct {
-		name          string
-		agents        []model.Agent
-		width         int
-		wantModelID   string
-		wantCost      string
-		description   string
+		name        string
+		agents      []model.Agent
+		width       int
+		wantModelID string
+		wantCost    string
+		description string
 	}{
 		{
 			name: "agent with valid model_id and cost",

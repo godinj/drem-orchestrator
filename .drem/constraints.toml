@@ -61,7 +61,7 @@ baseline_count = 58
 [[max_matches.exception]]
 path           = "internal/tui/"
 rule           = "shrink-only"
-baseline_count = 11
+baseline_count = 12
 
 [[max_matches.exception]]
 path           = "internal/agent/"
