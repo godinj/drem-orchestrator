@@ -134,10 +134,10 @@ if ! command -v claude &>/dev/null; then
 fi
 
 # ---------------------------------------------------------------------------
-# Enforce global temp worker cap (operator directive: max 2)
+# Enforce global temp worker cap (operator directive: max 5)
 # ---------------------------------------------------------------------------
 
-MAX_TEMP_WORKERS=2
+MAX_TEMP_WORKERS=5
 ACTIVE_WORKERS=$(tmux -L "$TMUX_SOCKET" list-sessions 2>/dev/null | grep -c "csuite-worker" || true)
 if [ "$ACTIVE_WORKERS" -ge "$MAX_TEMP_WORKERS" ] && [ "$DRY_RUN" = false ]; then
     echo "error: $ACTIVE_WORKERS temp workers already running (cap: $MAX_TEMP_WORKERS). Queue this request." >&2

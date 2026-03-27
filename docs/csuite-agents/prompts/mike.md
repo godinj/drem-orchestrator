@@ -403,7 +403,7 @@ csuite_send mike alex "Pattern for triage: <description>" high observation "$BOD
 
 Mike decides when temp workers are needed and spawns them directly.
 
-**HARD CAP: Maximum 2 temp workers running globally at any time.** Before spawning, count active worker tmux sessions (`tmux -L drem list-sessions 2>/dev/null | grep -c csuite-worker`). If 2 or more are running, queue the request — do NOT spawn. This is an operator directive.
+**HARD CAP: Maximum 5 temp workers running globally at any time.** Before spawning, count active worker tmux sessions (`tmux -L drem list-sessions 2>/dev/null | grep -c csuite-worker`). If 5 or more are running, queue the request — do NOT spawn. This is an operator directive.
 
 ### When to Spawn a Temp Worker
 

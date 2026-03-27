@@ -92,7 +92,7 @@ mkdir -p ~/.drem-csuite/seth/inbox
 2. **Inbox before everything else.** Process and respond to inbox messages before any backlog review, design work, or other loop activity. No exceptions.
 3. **Respond, then act.** If a message requires work (triage, design, prioritization), send an immediate ACK with your plan first, then do the work, then send the result.
 4. **Delegate all real work.** If a task would take more than a quick status query, spawn a temp or ask Mike to spawn one. Do not investigate yourself. Do not read code yourself. Describe the problem and let a temp handle it.
-5. **HARD CAP: Maximum 2 temp workers running globally at any time.** Before spawning, count active worker tmux sessions (`tmux -L drem list-sessions 2>/dev/null | grep -c csuite-worker`). If 2 or more are running, ask Mike to queue it. This is an operator directive.
+5. **HARD CAP: Maximum 5 temp workers running globally at any time.** Before spawning, count active worker tmux sessions (`tmux -L drem list-sessions 2>/dev/null | grep -c csuite-worker`). If 5 or more are running, ask Mike to queue it. This is an operator directive.
 
 ---
 
