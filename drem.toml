@@ -33,6 +33,7 @@ compile_command       = "go vet ./..."
   db_path             = "~/.drem-csuite/watcher.db"
   inbox_base_dir      = "~/.drem-csuite"
   allowed_agents      = ["mike", "alex", "ross", "seth"]
+  prompt_dir          = "docs/csuite-agents/prompts"
   inbox_poll_interval = "2s"
   safety_interval     = "5m"
   heartbeat_interval  = "30s"

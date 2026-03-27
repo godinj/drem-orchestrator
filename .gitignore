@@ -30,6 +30,7 @@ uv.lock
 
 # Runtime / build
 drem
+csuite-watcher
 drem.db-*
 drem.log
 drem.toml

@@ -138,6 +138,7 @@ type watcherTomlConfig struct {
 	DBPath            string   `toml:"db_path"`
 	InboxBaseDir      string   `toml:"inbox_base_dir"`
 	AllowedAgents     []string `toml:"allowed_agents"`
+	PromptDir         string   `toml:"prompt_dir"`
 	InboxPollInterval string   `toml:"inbox_poll_interval"`
 	SafetyInterval    string   `toml:"safety_interval"`
 	HeartbeatInterval string   `toml:"heartbeat_interval"`
@@ -191,7 +192,10 @@ func runWatcher(args []string, stderr io.Writer) int {
 	runnerCfg := toRunnerConfig(cfg)
 
 	// Create a real CommandRunner that spawns claude subprocesses.
-	runner := &claudeCommandRunner{workDir: expandTilde(cfg.InboxBaseDir)}
+	runner := &claudeCommandRunner{
+		workDir:   expandTilde(cfg.InboxBaseDir),
+		promptDir: runnerCfg.PromptDir,
+	}
 
 	r := watcher.NewRunner(runnerCfg, db, runner)
 
@@ -231,12 +235,16 @@ func toRunnerConfig(cfg watcherTomlConfig) watcher.RunnerConfig {
 	rc := watcher.RunnerConfig{
 		AllowedAgents: cfg.AllowedAgents,
 		InboxBaseDir:  expandTilde(cfg.InboxBaseDir),
+		PromptDir:     expandTilde(cfg.PromptDir),
 	}
 	if rc.AllowedAgents == nil {
 		rc.AllowedAgents = []string{"mike", "alex", "ross", "seth"}
 	}
 	if rc.InboxBaseDir == "" {
 		rc.InboxBaseDir = expandTilde("~/.drem-csuite")
+	}
+	if rc.PromptDir == "" {
+		rc.PromptDir = "docs/csuite-agents/prompts"
 	}
 	if d, err := time.ParseDuration(cfg.InboxPollInterval); err == nil {
 		rc.InboxPollInterval = d
@@ -253,11 +261,18 @@ func toRunnerConfig(cfg watcherTomlConfig) watcher.RunnerConfig {
 // claudeCommandRunner is the production CommandRunner that spawns claude
 // subprocesses. It satisfies watcher.CommandRunner.
 type claudeCommandRunner struct {
-	workDir string
+	workDir   string
+	promptDir string
 }
 
 func (r *claudeCommandRunner) Run(ctx context.Context, agent string) ([]byte, int, error) {
-	return watcher.RunClaudeSubprocess(ctx, agent, r.workDir)
+	promptPath := filepath.Join(r.promptDir, agent+".md")
+	promptBytes, err := os.ReadFile(promptPath)
+	if err != nil {
+		log.Printf("watcher: skip turn for %s: prompt file not found: %s", agent, promptPath)
+		return nil, -1, fmt.Errorf("prompt file not found: %s: %w", promptPath, err)
+	}
+	return watcher.RunClaudeSubprocess(ctx, agent, r.workDir, string(promptBytes))
 }
 
 // ---------------------------------------------------------------------------

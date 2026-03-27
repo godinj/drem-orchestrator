@@ -202,29 +202,40 @@ func (m *LifecycleManager) isAllowed(name string) bool {
 
 // runTurnAsync executes one agent turn, persists metrics, then auto-starts a
 // queued trigger if one was registered during this turn.
+//
+// A turn_metrics row is created at turn start with zero EndedAt so the TUI
+// can detect running agents via "ended_at = zero-time" queries. The row is
+// updated with completion data when the subprocess exits.
 func (m *LifecycleManager) runTurnAsync(agent string) {
 	defer m.wg.Done()
 
 	startedAt := time.Now()
+
+	// Record turn start — EndedAt remains zero to signal "in progress".
+	metricID := uuid.New()
+	_ = m.db.Create(&TurnMetric{
+		ID:        metricID,
+		Agent:     agent,
+		StartedAt: startedAt,
+	}).Error
+
 	output, exitCode, _ := m.runner.Run(m.ctx, agent)
 	endedAt := time.Now()
 
 	var resp claudeResponse
 	_ = json.Unmarshal(output, &resp)
 
-	metric := TurnMetric{
-		ID:              uuid.New(),
-		Agent:           agent,
-		InputTokens:     resp.Usage.InputTokens,
-		OutputTokens:    resp.Usage.OutputTokens,
-		ExitStatus:      exitCode,
-		Duration:        endedAt.Sub(startedAt),
-		StartedAt:       startedAt,
-		EndedAt:         endedAt,
-		EventsProcessed: resp.EventsProcessed,
-		MessagesSent:    resp.MessagesSent,
-	}
-	_ = m.db.Create(&metric).Error
+	// Update the existing row with completion data.
+	_ = m.db.Model(&TurnMetric{}).Where("id = ?", metricID).Updates(map[string]interface{}{
+		"input_tokens":     resp.Usage.InputTokens,
+		"output_tokens":    resp.Usage.OutputTokens,
+		"exit_status":      exitCode,
+		"duration":         endedAt.Sub(startedAt),
+		"ended_at":         endedAt,
+		"started_at":       startedAt,
+		"events_processed": resp.EventsProcessed,
+		"messages_sent":    resp.MessagesSent,
+	}).Error
 
 	m.mu.Lock()
 	wasQueued := m.queued[agent]

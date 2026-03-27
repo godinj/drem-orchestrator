@@ -15,10 +15,11 @@ const maxBackoffMultiplier = 32
 
 // StateSnapshot contains a point-in-time view of pipeline health for
 // dashboard rendering. Each field is populated by the Poller from its
-// SnapshotSource.
+// SnapshotSource and optional WatcherSource.
 type StateSnapshot struct {
 	AgentSummaries []AgentSummary
 	InboxCounts    map[string]int
+	WatcherData    *WatcherSnapshot // nil when watcher DB is unavailable
 	Timestamp      time.Time
 }
 
@@ -34,12 +35,13 @@ type SnapshotSource interface {
 // StateSnapshots on a channel. It supports pause/resume and graceful
 // shutdown via context cancellation.
 type Poller struct {
-	source   SnapshotSource
-	interval time.Duration
-	snapC    chan StateSnapshot
-	logger   *log.Logger
-	pauseC   chan struct{}
-	resumeC  chan struct{}
+	source        SnapshotSource
+	watcherSource *WatcherSource // optional; nil means watcher data omitted
+	interval      time.Duration
+	snapC         chan StateSnapshot
+	logger        *log.Logger
+	pauseC        chan struct{}
+	resumeC       chan struct{}
 }
 
 // NewPoller creates a Poller that queries source every interval and sends
@@ -120,7 +122,15 @@ func (p *Poller) Resume() {
 	}
 }
 
-// BuildSnapshot assembles a StateSnapshot by querying the SnapshotSource.
+// SetWatcherSource attaches a WatcherSource to the Poller. When set, each
+// snapshot is enriched with turn metrics, token totals, and recent events
+// from the watcher database. A nil source disables watcher enrichment.
+func (p *Poller) SetWatcherSource(ws *WatcherSource) {
+	p.watcherSource = ws
+}
+
+// BuildSnapshot assembles a StateSnapshot by querying the SnapshotSource
+// and (if configured) the WatcherSource for turn metrics and events.
 func (p *Poller) BuildSnapshot() (StateSnapshot, error) {
 	agents, err := p.source.AgentSummaries()
 	if err != nil {
@@ -130,11 +140,23 @@ func (p *Poller) BuildSnapshot() (StateSnapshot, error) {
 	if err != nil {
 		return StateSnapshot{}, fmt.Errorf("unread counts: %w", err)
 	}
-	return StateSnapshot{
+
+	snap := StateSnapshot{
 		AgentSummaries: agents,
 		InboxCounts:    counts,
 		Timestamp:      time.Now(),
-	}, nil
+	}
+
+	if p.watcherSource != nil {
+		wSnap, wErr := p.watcherSource.Snapshot()
+		if wErr != nil {
+			p.logger.Printf("watcher snapshot error: %v", wErr)
+		} else {
+			snap.WatcherData = wSnap
+		}
+	}
+
+	return snap, nil
 }
 
 // backoff returns an exponential backoff duration capped at

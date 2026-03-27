@@ -17,6 +17,12 @@ type RunnerConfig struct {
 	// watched by InboxSignalTrigger for *.signal files.
 	InboxBaseDir string
 
+	// PromptDir is the directory containing agent prompt files named
+	// {agent}.md (e.g. mike.md, seth.md). When set, the watcher loads
+	// the prompt file before spawning the agent subprocess. If empty or
+	// if a prompt file does not exist, the turn is skipped with a log warning.
+	PromptDir string
+
 	// InboxPollInterval controls how often InboxSignalTrigger scans for new
 	// signal files. Zero uses the InboxSignalTrigger default (2s).
 	InboxPollInterval time.Duration

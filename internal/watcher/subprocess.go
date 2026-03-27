@@ -15,16 +15,20 @@ const defaultSubprocessTimeout = 10 * time.Minute
 // with a 10-minute timeout and is killed (via process-group SIGKILL) if the
 // timeout or context deadline is exceeded.
 //
+// systemPrompt is passed verbatim as the --system-prompt flag value. Callers
+// are responsible for loading prompt content from the appropriate source
+// (e.g. an agent prompt file).
+//
 // This function is used by the production CommandRunner in cmd/csuite-watcher
 // and is intentionally exported so the binary can use it without duplicating
 // subprocess logic.
-func RunClaudeSubprocess(ctx context.Context, agent string, workDir string) ([]byte, int, error) {
+func RunClaudeSubprocess(ctx context.Context, agent string, workDir string, systemPrompt string) ([]byte, int, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultSubprocessTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "claude",
 		"-p", "Process your turn",
-		"--system-prompt", "You are "+agent+". Process your inbox and take action.",
+		"--system-prompt", systemPrompt,
 		"--output-format", "json",
 	)
 	if workDir != "" {
