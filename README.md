@@ -384,7 +384,7 @@ The orchestrator provides a headless CLI for programmatic task and agent control
 - `drem cli file-task <path>` — Create a task from a markdown file
 
 **Task mutations**:
-- `drem cli comment <task-id> --body '...'` — Add a comment to a task
+- `drem cli comment <task-id> --body '...'` — Add a comment to a task (allowed in any status)
 - `drem cli approve <task-id>` — Approve a plan or test review (gate command)
 - `drem cli reject <task-id> [--reason '...']` — Reject a plan or test review (gate command)
 - `drem cli answer <task-id> --body '...'` — Answer a clarification question (gate command)
@@ -557,6 +557,37 @@ error: task not found
 # Missing task ID
 $ drem cli fail
 error: usage: drem cli fail <task-id>
+```
+
+#### `drem cli comment <task-id> --body '...'`
+
+Adds a comment to a task. Comments are allowed on tasks in **any status** — including `backlog`, `planning`, `in_progress`, and all other lifecycle states. This enables programmatic annotation by C-Suite agents and temp workers without requiring the task to be at a human-gate status.
+
+> **Note:** Prior to this change, `AddComment` restricted comments to human-gate statuses (`plan_review`, `test_review`, `needs_clarification`, `testing_ready`). That restriction has been removed.
+
+**Valid statuses:** any
+
+**Usage:**
+```bash
+# Add a comment to a task in any status
+drem cli comment 12345678 --body 'Blocked on upstream API change'
+
+# Works during active development
+drem cli comment 12345678 --body 'Reviewer noted: check edge case in line 42'
+
+# Full UUID also accepted
+drem cli comment 12345678-1234-1234-1234-123456789012 --body 'See related task 87654321'
+```
+
+**Error cases:**
+```bash
+# Task not found
+$ drem cli comment abcdefgh --body 'hello'
+error: task not found
+
+# Missing body
+$ drem cli comment 12345678
+error: usage: drem cli comment <task-id> --body=BODY
 ```
 
 ### Task ID Resolution
