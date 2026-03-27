@@ -23,12 +23,12 @@ import (
 // mockRunner is a controllable CommandRunner injected into LifecycleManager
 // during integration tests. It avoids real subprocess execution.
 //
-//   output   — stdout bytes returned to the caller (JSON)
-//   exitCode — process exit code returned to the caller
-//   block    — if non-nil, Run blocks until the channel is closed (simulates
-//              a long-running turn for concurrency tests)
-//   ready    — if non-nil, closed on the first Run call so tests can
-//              synchronise on "subprocess has started"
+//	output   — stdout bytes returned to the caller (JSON)
+//	exitCode — process exit code returned to the caller
+//	block    — if non-nil, Run blocks until the channel is closed (simulates
+//	           a long-running turn for concurrency tests)
+//	ready    — if non-nil, closed on the first Run call so tests can
+//	           synchronise on "subprocess has started"
 type mockRunner struct {
 	output   string
 	exitCode int
