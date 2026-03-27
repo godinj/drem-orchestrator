@@ -23,6 +23,45 @@ type ProfileConfig struct {
 //
 // An unknown or empty profile name silently falls back to layers 2 and 3.
 func (c Config) ForAgentTypeWithProfile(at model.AgentType, profile string) model.AgentCLIConfig {
-	// Stub: profile layering not yet implemented; returns layer-2 default.
-	return c.Agents.ForAgentType(at)
+	var override AgentConfig
+	if p, ok := c.Profiles[profile]; ok {
+		override = profileAgentConfig(p, at)
+	}
+
+	base := c.Agents.ForAgentType(at)
+
+	// Apply hardcoded default for effort if layer 2 left it empty.
+	if base.Effort == "" {
+		base.Effort = "medium"
+	}
+
+	// Layer 1 wins field-by-field when non-empty.
+	if override.Model != "" {
+		base.Model = override.Model
+	}
+	if override.Effort != "" {
+		base.Effort = override.Effort
+	}
+
+	return base
+}
+
+// profileAgentConfig extracts the AgentConfig for the given agent type from a ProfileConfig.
+func profileAgentConfig(p ProfileConfig, at model.AgentType) AgentConfig {
+	switch at {
+	case model.AgentClassifier:
+		return p.Classifier
+	case model.AgentPlanner:
+		return p.Planner
+	case model.AgentCoder:
+		return p.Coder
+	case model.AgentReviewer:
+		return p.Reviewer
+	case model.AgentFixer:
+		return p.Fixer
+	case model.AgentResearcher:
+		return p.Researcher
+	default:
+		return AgentConfig{}
+	}
 }
