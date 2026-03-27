@@ -12,6 +12,10 @@
 - [Merge Overhaul Prompts](merge-overhaul/prompts/) — Agent prompts implementing the reliability fixes (6 prompts, 2 tiers)
 - [Reconcile Overhaul](../feature/reconcile-overhaul.md) — Reconcile function redesign (currently disabled)
 
+## Model Profiles
+
+- [Model Profiles (PRD)](prd-metrics-and-experiments.md#profiles) — TOML syntax for per-agent model/effort overrides; profile resolution order and fallback chain
+
 ## Future Work
 
 - [Planner Decomposition Strategy](merge-overhaul/planner-decomposition-strategy.md) — 7 improvements to planner prompts and plan validation

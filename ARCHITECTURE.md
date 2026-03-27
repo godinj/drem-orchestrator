@@ -133,6 +133,7 @@ use the defaults shown below.
 | Tmux config file        | `tmux_config_file`      | string     | `master/.tmux.conf` | Repo-local tmux config file path (relative to bare repo) |
 | Max dispatch rate       | `max_dispatch_rate`     | int        | `3`            | Max agent dispatches allowed within the dispatch window   |
 | Dispatch window         | `dispatch_window`       | duration   | `60s`          | Sliding window duration for dispatch rate limiting        |
+| Model profiles          | `[profiles.<name>.*]`   | map        | `{}`           | Named per-role model/effort overrides; see docs/prd-metrics-and-experiments.md#profiles |
 
 ---
 
