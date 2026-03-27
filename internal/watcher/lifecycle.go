@@ -160,13 +160,13 @@ func NewLifecycleManager(db *gorm.DB, cfg Config, runner CommandRunner) *Lifecyc
 }
 
 // TriggerAgent schedules a turn for the named agent and returns immediately:
-//   - TriggerStarted: no turn is active; a new turn subprocess was launched.
-//   - TriggerQueued: a turn is already running; this trigger is queued and
+//   - Started: no turn is active; a new turn subprocess was launched.
+//   - Queued: a turn is already running; this trigger is queued and
 //     will auto-start as soon as the current turn completes.
-//   - TriggerRefused: name is not in Config.AllowedAgents; no action taken.
+//   - Refused: name is not in Config.AllowedAgents; no action taken.
 func (m *LifecycleManager) TriggerAgent(name string) TriggerResult {
 	if !m.isAllowed(name) {
-		return TriggerRefused
+		return Refused
 	}
 
 	m.mu.Lock()
@@ -174,13 +174,13 @@ func (m *LifecycleManager) TriggerAgent(name string) TriggerResult {
 
 	if m.running[name] {
 		m.queued[name] = true
-		return TriggerQueued
+		return Queued
 	}
 
 	m.running[name] = true
 	m.wg.Add(1)
 	go m.runTurnAsync(name)
-	return TriggerStarted
+	return Started
 }
 
 // Close shuts down the LifecycleManager, waiting for any active or queued

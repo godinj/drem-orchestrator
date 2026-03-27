@@ -2,13 +2,13 @@ package watcher_test
 
 // lifecycle_integration_test.go exercises the complete Phase 2 vertical slice:
 //
-//   TriggerAgent("mike") → subprocess launches, metrics recorded, TriggerStarted
-//   TriggerAgent("mike") while running → TriggerQueued, no second subprocess
+//   TriggerAgent("mike") → subprocess launches, metrics recorded, Started
+//   TriggerAgent("mike") while running → Queued, no second subprocess
 //   Queued trigger auto-starts after first turn → two turn_metrics rows
-//   TriggerAgent("kyle") → TriggerRefused, no subprocess, no metrics row
+//   TriggerAgent("kyle") → Refused, no subprocess, no metrics row
 //
 // Each test creates an isolated in-memory SQLite database via testutil and
-// injects a mockRunner that controls JSON output, exit codes, and blocking
+// injects a lifecycleMockRunner that controls JSON output, exit codes, and blocking
 // behaviour so concurrency scenarios are deterministic.
 
 import (
@@ -21,7 +21,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/watcher"
 )
 
-// mockRunner is a controllable CommandRunner injected into LifecycleManager
+// lifecycleMockRunner is a controllable CommandRunner injected into LifecycleManager
 // during integration tests. It avoids real subprocess execution.
 //
 //	output   — stdout bytes returned to the caller (JSON)
@@ -30,7 +30,7 @@ import (
 //	           a long-running turn for concurrency tests)
 //	ready    — if non-nil, closed on the first Run call so tests can
 //	           synchronise on "subprocess has started"
-type mockRunner struct {
+type lifecycleMockRunner struct {
 	output   string
 	exitCode int
 	block    chan struct{} // close to unblock all waiting Run calls
@@ -40,7 +40,7 @@ type mockRunner struct {
 	count int // number of times Run has been called
 }
 
-func (r *mockRunner) Run(_ context.Context, _ string) ([]byte, int, error) {
+func (r *lifecycleMockRunner) Run(_ context.Context, _ string) ([]byte, int, error) {
 	r.mu.Lock()
 	r.count++
 	isFirst := r.count == 1
@@ -59,7 +59,7 @@ func (r *mockRunner) Run(_ context.Context, _ string) ([]byte, int, error) {
 	return []byte(r.output), r.exitCode, nil
 }
 
-func (r *mockRunner) runCount() int {
+func (r *lifecycleMockRunner) runCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.count
@@ -100,7 +100,7 @@ func integrationJSON(inputTokens, outputTokens, eventsProcessed, messagesSent in
 // Lifecycle scenario: idle manager → trigger "mike" → Started.
 func TestLifecycleIntegration_TriggerStarted(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
-	runner := &mockRunner{output: claudeJSON(100, 50)}
+	runner := &lifecycleMockRunner{output: claudeJSON(100, 50)}
 	lm := watcher.NewLifecycleManager(db, allowedCfg(), runner)
 	defer lm.Close()
 
@@ -117,7 +117,7 @@ func TestLifecycleIntegration_TriggerStarted(t *testing.T) {
 // Lifecycle scenario: trigger "mike" → turn completes → DB row persisted.
 func TestLifecycleIntegration_MetricsRecorded(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
-	runner := &mockRunner{output: integrationJSON(100, 50, 12, 7)}
+	runner := &lifecycleMockRunner{output: integrationJSON(100, 50, 12, 7)}
 	lm := watcher.NewLifecycleManager(db, allowedCfg(), runner)
 
 	lm.TriggerAgent("mike")
@@ -166,7 +166,7 @@ func TestLifecycleIntegration_TriggerWhileRunning_Queued(t *testing.T) {
 
 	block := make(chan struct{})
 	ready := make(chan struct{})
-	runner := &mockRunner{
+	runner := &lifecycleMockRunner{
 		output: claudeJSON(100, 50),
 		block:  block,
 		ready:  ready,
@@ -215,7 +215,7 @@ func TestLifecycleIntegration_QueuedAutoStarts(t *testing.T) {
 	// return immediately because reading from a closed channel never blocks.
 	block := make(chan struct{})
 	ready := make(chan struct{})
-	runner := &mockRunner{
+	runner := &lifecycleMockRunner{
 		output: claudeJSON(100, 50),
 		block:  block,
 		ready:  ready,
@@ -264,7 +264,7 @@ func TestLifecycleIntegration_QueuedAutoStarts(t *testing.T) {
 // Lifecycle scenario: trigger "kyle" (not allowed) → Refused, no DB row.
 func TestLifecycleIntegration_RefusedAgent(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
-	runner := &mockRunner{output: claudeJSON(100, 50)}
+	runner := &lifecycleMockRunner{output: claudeJSON(100, 50)}
 	lm := watcher.NewLifecycleManager(db, allowedCfg(), runner)
 	defer lm.Close()
 
