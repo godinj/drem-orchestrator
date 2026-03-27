@@ -5,7 +5,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// MetricsStore persists and retrieves TurnMetric records.
+// MetricsStore persists and retrieves TurnMetric records for the lifecycle manager.
 type MetricsStore struct {
 	db *gorm.DB
 }
@@ -15,18 +15,21 @@ func NewMetricsStore(db *gorm.DB) *MetricsStore {
 	return &MetricsStore{db: db}
 }
 
-// RecordTurn persists a TurnResult to the turn_metrics table.
-func (s *MetricsStore) RecordTurn(result *TurnResult) error {
+// RecordTurn persists a LifecycleResult to the turn_metrics table.
+func (s *MetricsStore) RecordTurn(result *LifecycleResult) error {
 	metric := TurnMetric{
 		ID:           uuid.New(),
 		Agent:        result.Agent,
 		InputTokens:  result.InputTokens,
 		OutputTokens: result.OutputTokens,
 		ExitStatus:   result.ExitStatus,
-		ErrorDetails: result.ErrorDetails,
 		Duration:     result.Duration,
 		StartedAt:    result.StartedAt,
 		EndedAt:      result.EndedAt,
+	}
+	if result.ErrorDetails != "" {
+		msg := result.ErrorDetails
+		metric.ErrorDetails = &msg
 	}
 	return s.db.Create(&metric).Error
 }

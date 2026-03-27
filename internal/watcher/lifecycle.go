@@ -25,7 +25,7 @@ type LifecycleManager struct {
 	WorkDir string
 	// Timeout is the maximum duration a turn may run. Defaults to 10 minutes.
 	Timeout time.Duration
-	// MetricsStore is used to persist TurnResult after each turn.
+	// MetricsStore is used to persist LifecycleResult after each turn.
 	MetricsStore *MetricsStore
 }
 
@@ -41,11 +41,11 @@ func NewLifecycleManager(store *MetricsStore) *LifecycleManager {
 
 // RunTurn launches a claude subprocess for the given agent using systemPrompt,
 // waits for it to exit, parses the --output-format json response for token
-// counts, records a TurnMetric, and returns a TurnResult.
+// counts, records a TurnMetric, and returns a LifecycleResult.
 //
 // Returns ErrKyleException immediately — without launching any subprocess —
 // if agent is "kyle".
-func (m *LifecycleManager) RunTurn(agent string, systemPrompt string) (*TurnResult, error) {
+func (m *LifecycleManager) RunTurn(agent string, systemPrompt string) (*LifecycleResult, error) {
 	if agent == "kyle" {
 		return nil, ErrKyleException
 	}
@@ -89,7 +89,7 @@ func (m *LifecycleManager) RunTurn(agent string, systemPrompt string) (*TurnResu
 	runErr := cmd.Run()
 	endedAt := time.Now()
 
-	result := &TurnResult{
+	result := &LifecycleResult{
 		Agent:     agent,
 		StartedAt: startedAt,
 		EndedAt:   endedAt,
