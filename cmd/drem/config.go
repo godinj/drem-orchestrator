@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -10,6 +11,8 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/ratelimit"
 )
+
+var profileNameRE = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // AgentConfig holds per-agent-type CLI flags for Claude Code invocations.
 type AgentConfig struct {
@@ -144,5 +147,21 @@ func LoadConfig(path string) (Config, error) {
 		return cfg, fmt.Errorf("parse config %q: %w", path, err)
 	}
 
+	for name := range cfg.Profiles {
+		if err := ValidateProfileName(name); err != nil {
+			return cfg, fmt.Errorf("invalid profile name %q: %w", name, err)
+		}
+	}
+
 	return cfg, nil
+}
+
+// ValidateProfileName reports whether name is a valid profile identifier.
+// Valid names contain only ASCII letters, digits, hyphens, and underscores
+// and must be non-empty.
+func ValidateProfileName(name string) error {
+	if !profileNameRE.MatchString(name) {
+		return fmt.Errorf("profile name %q must match ^[a-zA-Z0-9_-]+$", name)
+	}
+	return nil
 }
