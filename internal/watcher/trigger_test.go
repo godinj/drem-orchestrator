@@ -96,9 +96,9 @@ func writeSignal(t *testing.T, inbox string) string {
 	return path
 }
 
-// startTrigger creates a new InboxSignalTrigger, starts it, and registers a
+// startInboxTrigger creates a new InboxSignalTrigger, starts it, and registers a
 // cleanup that calls Stop. Returns the started trigger.
-func startTrigger(t *testing.T, baseDir string) *watcher.InboxSignalTrigger {
+func startInboxTrigger(t *testing.T, baseDir string) *watcher.InboxSignalTrigger {
 	t.Helper()
 	tr := watcher.NewInboxSignalTrigger(baseDir, testPollInterval)
 	if err := tr.Start(context.Background()); err != nil {
@@ -116,7 +116,7 @@ func startTrigger(t *testing.T, baseDir string) *watcher.InboxSignalTrigger {
 func TestInboxSignalTrigger_SignalDetection(t *testing.T) {
 	base := t.TempDir()
 	inbox := mkInbox(t, base, "mike")
-	tr := startTrigger(t, base)
+	tr := startInboxTrigger(t, base)
 
 	writeSignal(t, inbox)
 
@@ -135,7 +135,7 @@ func TestInboxSignalTrigger_SignalDetection(t *testing.T) {
 func TestInboxSignalTrigger_SignalCleanup(t *testing.T) {
 	base := t.TempDir()
 	inbox := mkInbox(t, base, "alex")
-	tr := startTrigger(t, base)
+	tr := startInboxTrigger(t, base)
 
 	signalPath := writeSignal(t, inbox)
 
@@ -157,7 +157,7 @@ func TestInboxSignalTrigger_MultipleAgents(t *testing.T) {
 	base := t.TempDir()
 	inboxAlice := mkInbox(t, base, "alice")
 	inboxBob := mkInbox(t, base, "bob")
-	tr := startTrigger(t, base)
+	tr := startInboxTrigger(t, base)
 
 	writeSignal(t, inboxAlice)
 	writeSignal(t, inboxBob)
@@ -196,7 +196,7 @@ func TestInboxSignalTrigger_MultipleAgents(t *testing.T) {
 func TestInboxSignalTrigger_MissingDirectories(t *testing.T) {
 	base := t.TempDir()
 	// No agent subdirectories created — base exists but has no children.
-	tr := startTrigger(t, base)
+	tr := startInboxTrigger(t, base)
 
 	if !noEventReceived(tr.Events(), testQuietWindow) {
 		t.Error("unexpected TriggerEvent for empty base directory")
@@ -214,7 +214,7 @@ func TestInboxSignalTrigger_MissingDirectories(t *testing.T) {
 func TestInboxSignalTrigger_NewDirectoryDiscovery(t *testing.T) {
 	base := t.TempDir()
 	// Start with an empty base — no agent directories yet.
-	tr := startTrigger(t, base)
+	tr := startInboxTrigger(t, base)
 
 	// Allow at least one poll cycle to complete before creating the new dir.
 	time.Sleep(3 * testPollInterval)
@@ -278,7 +278,7 @@ func TestInboxSignalTrigger_StopBehaviour(t *testing.T) {
 func TestInboxSignalTrigger_NoSpuriousEvents(t *testing.T) {
 	base := t.TempDir()
 	inbox := mkInbox(t, base, "seth")
-	tr := startTrigger(t, base)
+	tr := startInboxTrigger(t, base)
 
 	// Write files that must NOT trigger events.
 	nonSignalFiles := []string{
