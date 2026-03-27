@@ -13,6 +13,7 @@ package watcher_test
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"testing"
 
@@ -75,7 +76,21 @@ func allowedCfg() watcher.Config {
 // integrationJSON returns a JSON payload that matches the claude
 // --output-format json schema with the provided token counts and event metrics.
 func integrationJSON(inputTokens, outputTokens, eventsProcessed, messagesSent int) string {
-	return claudeJSON(inputTokens, outputTokens)
+	type usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	}
+	type response struct {
+		Usage           usage `json:"usage"`
+		EventsProcessed int   `json:"events_processed"`
+		MessagesSent    int   `json:"messages_sent"`
+	}
+	data, _ := json.Marshal(response{
+		Usage:           usage{InputTokens: inputTokens, OutputTokens: outputTokens},
+		EventsProcessed: eventsProcessed,
+		MessagesSent:    messagesSent,
+	})
+	return string(data)
 }
 
 // TestLifecycleIntegration_TriggerStarted verifies the happy-path trigger:
@@ -102,7 +117,7 @@ func TestLifecycleIntegration_TriggerStarted(t *testing.T) {
 // Lifecycle scenario: trigger "mike" → turn completes → DB row persisted.
 func TestLifecycleIntegration_MetricsRecorded(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
-	runner := &mockRunner{output: claudeJSON(100, 50)}
+	runner := &mockRunner{output: integrationJSON(100, 50, 12, 7)}
 	lm := watcher.NewLifecycleManager(db, allowedCfg(), runner)
 
 	lm.TriggerAgent("mike")
@@ -128,6 +143,12 @@ func TestLifecycleIntegration_MetricsRecorded(t *testing.T) {
 	}
 	if m.OutputTokens != 50 {
 		t.Errorf("OutputTokens: got %d, want 50", m.OutputTokens)
+	}
+	if m.EventsProcessed != 12 {
+		t.Errorf("EventsProcessed: got %d, want 12", m.EventsProcessed)
+	}
+	if m.MessagesSent != 7 {
+		t.Errorf("MessagesSent: got %d, want 7", m.MessagesSent)
 	}
 	if m.ExitStatus != 0 {
 		t.Errorf("ExitStatus: got %d, want 0", m.ExitStatus)
