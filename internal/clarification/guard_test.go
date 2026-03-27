@@ -111,7 +111,7 @@ func TestFilterAnswered_PartialMatch_ReturnsOnlyUnmatched(t *testing.T) {
 	}
 
 	assumptions := []Assumption{
-		{Decision: "Use PostgreSQL", Alternatives: []string{"MySQL"}},          // answered — filtered
+		{Decision: "Use PostgreSQL", Alternatives: []string{"MySQL"}},            // answered — filtered
 		{Decision: "Use Redis for caching", Alternatives: []string{"Memcached"}}, // new — remains
 	}
 	result := FilterAnswered(assumptions, answered)
