@@ -390,25 +390,24 @@ func (m Model) handleFeedbackKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // handleCsuiteKeys handles keys when the C-Suite dashboard is focused.
+// It delegates to CsuiteModel.Update() for all messaging/navigation keys
+// (m, Enter, c, j, k, esc within subviews, etc.) and only intercepts
+// w/esc at the top-level dashboard to return focus to the board.
 func (m Model) handleCsuiteKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "j", "down":
-		if m.csuite.snapshot != nil && m.csuite.cursor < len(m.csuite.snapshot.AgentSummaries)-1 {
-			m.csuite.cursor++
-			m.csuite.adjustScroll()
-		}
-		return m, nil
-	case "k", "up":
-		if m.csuite.cursor > 0 {
-			m.csuite.cursor--
-			m.csuite.adjustScroll()
-		}
-		return m, nil
 	case "w", "esc":
-		m.focus = FocusBoard
-		return m, nil
+		// Only exit to board if we're at the top-level dashboard view.
+		// In subviews (list, detail, compose), let the csuite model handle
+		// its own back-navigation.
+		if m.csuite.currentView == viewDashboard {
+			m.focus = FocusBoard
+			return m, nil
+		}
 	}
-	return m, nil
+	// Delegate all keys to the csuite model (handles j/k, m, Enter, c,
+	// esc within subviews, etc.)
+	cmd := m.csuite.Update(msg)
+	return m, cmd
 }
 
 // handleDeleteModeKeys handles keys while in delete selection mode.

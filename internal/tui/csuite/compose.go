@@ -163,6 +163,32 @@ func (m *ComposeModel) HandleInput(input string) {
 		m.subject += input
 	case "body":
 		m.body += input
+	case "priority":
+		m.CycleNextPriority()
+	case "type":
+		m.CycleNextType()
+	}
+}
+
+// HandleBackspace removes the last character from the currently focused field.
+func (m *ComposeModel) HandleBackspace() {
+	switch m.FocusedField() {
+	case "to":
+		if len(m.to) > 0 {
+			m.to = m.to[:len(m.to)-1]
+		}
+	case "subject":
+		if len(m.subject) > 0 {
+			m.subject = m.subject[:len(m.subject)-1]
+		}
+	case "body":
+		if len(m.body) > 0 {
+			m.body = m.body[:len(m.body)-1]
+		}
+	case "priority":
+		m.CycleNextPriority()
+	case "type":
+		m.CycleNextType()
 	}
 }
 
@@ -261,8 +287,22 @@ func (m *ComposeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case tea.KeyEsc:
 			m.Cancel()
 			return m, tea.Quit
+		case tea.KeyBackspace, tea.KeyDelete:
+			m.HandleBackspace()
+			return m, nil
+		case tea.KeySpace:
+			m.HandleInput(" ")
+			return m, nil
 		case tea.KeyCtrlS:
 			// Submit will be handled by parent model
+			return m, nil
+		case tea.KeyEnter:
+			// In body field, add newline; otherwise move to next field
+			if m.FocusedField() == "body" {
+				m.HandleInput("\n")
+			} else {
+				m.FocusNext()
+			}
 			return m, nil
 		case tea.KeyRunes:
 			for _, r := range msg.Runes {

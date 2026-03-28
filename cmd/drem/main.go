@@ -222,9 +222,12 @@ func main() {
 	csuitePoller := csuite.NewPoller(csuiteSource, csuite.DefaultPollInterval, log.Default())
 	go csuitePoller.Start(ctx)
 
+	// Create C-Suite store for messaging operations (compose, list, detail).
+	csuiteStore := csuite.NewStore(database)
+
 	// Start TUI (blocks until quit).
 	p := tea.NewProgram(
-		tui.NewModel(database, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots()),
+		tui.NewModel(database, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
 		tea.WithAltScreen(),
 	)
 	if _, err := p.Run(); err != nil {

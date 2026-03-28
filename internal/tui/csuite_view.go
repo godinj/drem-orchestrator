@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -154,8 +156,8 @@ func (c *CsuiteModel) updateList(msg tea.KeyMsg) tea.Cmd {
 			c.messageList.Cursor = 0
 			c.messageList.ScrollOffset = 0
 		case 'c':
-			// Open compose
-			c.composeModel = csuiteTUI.NewComposeModel(c.store)
+			// Open compose with the currently selected agent pre-filled
+			c.composeModel = csuiteTUI.NewComposeModel(c.store, csuiteTUI.WithTo(c.selectedAgentName))
 			c.composeModel.Width = c.width
 			c.composeModel.Height = c.height
 			c.currentView = viewCompose
@@ -215,19 +217,25 @@ func (c *CsuiteModel) updateCompose(msg tea.KeyMsg) tea.Cmd {
 		c.composeModel.Cancel()
 		c.currentView = viewList
 		c.composeModel = nil
-	case tea.KeyCtrlS, tea.KeyEnter:
+		return nil
+	case tea.KeyCtrlS:
 		// Submit the form
-		// Determine the "from" agent based on context
-		// For now, we'll use a placeholder - in a real app, this would come from the session
 		fromAgent := "operator"
+		recipient := c.composeModel.To()
 		if err := c.composeModel.Submit(fromAgent); err == nil {
+			// Touch .signal file to wake the watcher for the recipient
+			touchSignalFile(recipient)
 			// Reload messages and return to list
 			c.messageList.LoadMessages()
 			c.currentView = viewList
 			c.composeModel = nil
 		}
+		return nil
+	default:
+		// Delegate all other keys (typing, Tab, Shift+Tab, Backspace) to compose model
+		c.composeModel.Update(msg)
+		return nil
 	}
-	return nil
 }
 
 // View renders the appropriate view based on currentView.
@@ -512,6 +520,21 @@ func (m Model) renderCsuiteScreen() string {
 		Height(m.height - 2).
 		BorderForeground(colorPrimary).
 		Render(content)
+}
+
+// touchSignalFile creates a .signal file in the recipient's inbox directory
+// to trigger the watcher to spawn a turn for that agent.
+func touchSignalFile(agent string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	signalPath := filepath.Join(home, ".drem-csuite", agent, "inbox", ".signal")
+	_ = os.MkdirAll(filepath.Dir(signalPath), 0o700)
+	f, err := os.Create(signalPath)
+	if err == nil {
+		f.Close()
+	}
 }
 
 // listenForCsuiteSnapshot returns a Cmd that blocks on the C-Suite snapshot

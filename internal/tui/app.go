@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/csuite"
 	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
 )
 
@@ -73,7 +74,12 @@ func NewModel(
 	logPath string,
 	bugreportSvc *bugReportSvc,
 	csuiteSnaps <-chan csuiteStateSnapshot,
+	csuiteStore *csuite.Store,
 ) Model {
+	cs := NewCsuiteModel()
+	if csuiteStore != nil {
+		cs.store = csuiteStore
+	}
 	return Model{
 		db:           db,
 		orch:         orch,
@@ -89,7 +95,7 @@ func NewModel(
 		create:       NewCreateModel(),
 		feedback:     NewFeedbackModel("Feedback"),
 		bugreports:   NewBugReportsModel(db, bugreportSvc, projectID),
-		csuite:       NewCsuiteModel(),
+		csuite:       cs,
 		focus:        FocusBoard,
 		keys:         defaultKeyMap(),
 	}
