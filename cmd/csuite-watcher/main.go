@@ -136,6 +136,7 @@ type eventPayload struct {
 // watcherTomlConfig is the TOML structure for the [watcher] section of drem.toml.
 type watcherTomlConfig struct {
 	DBPath            string   `toml:"db_path"`
+	EventBusDBPath    string   `toml:"event_bus_db_path"`
 	InboxBaseDir      string   `toml:"inbox_base_dir"`
 	AllowedAgents     []string `toml:"allowed_agents"`
 	PromptDir         string   `toml:"prompt_dir"`
@@ -199,9 +200,25 @@ func runWatcher(args []string, stderr io.Writer) int {
 
 	r := watcher.NewRunner(runnerCfg, db, runner)
 
+	// Open the event bus database (csuite.db) for delivery polling.
+	eventBusPath := expandTilde(cfg.EventBusDBPath)
+	if eventBusPath == "" {
+		eventBusPath = expandTilde("~/.drem-csuite/csuite.db")
+	}
+	bus, err := eventbus.New(eventBusPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: open event bus: %v\n", err)
+		return 1
+	}
+	defer bus.Close()
+
 	// Set up signal-driven context cancellation.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()
+
+	// Start delivery poller: periodically check the event bus for unacked
+	// deliveries and push agent names onto the Runner's notifications channel.
+	go pollDeliveries(ctx, bus, runnerCfg.AllowedAgents, r.Notifications())
 
 	if err := r.Run(ctx); err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
@@ -273,6 +290,65 @@ func (r *claudeCommandRunner) Run(ctx context.Context, agent string) ([]byte, in
 		return nil, -1, fmt.Errorf("prompt file not found: %s: %w", promptPath, err)
 	}
 	return watcher.RunClaudeSubprocess(ctx, agent, r.workDir, string(promptBytes))
+}
+
+// ---------------------------------------------------------------------------
+// delivery poller
+// ---------------------------------------------------------------------------
+
+// pollDeliveries polls the event bus for unacked deliveries and pushes
+// distinct agent names onto the notifications channel. It runs until ctx is
+// cancelled.
+//
+// For each allowed agent, it calls bus.UnackedDeliveries. If there are unacked
+// events, it collects the agent name and acks the events so they are not
+// re-delivered on the next poll cycle. After checking all agents, if any had
+// pending deliveries, the collected agent names are sent as a single
+// notification batch.
+func pollDeliveries(ctx context.Context, bus *eventbus.Bus, allowedAgents []string, notifications chan<- []string) {
+	const pollInterval = 2 * time.Second
+
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			var agents []string
+			for _, agent := range allowedAgents {
+				unacked, err := bus.UnackedDeliveries(agent)
+				if err != nil {
+					log.Printf("watcher: poll deliveries for %s: %v", agent, err)
+					continue
+				}
+				if len(unacked) == 0 {
+					continue
+				}
+
+				// Collect event IDs for acking.
+				ids := make([]string, len(unacked))
+				for i, ev := range unacked {
+					ids[i] = ev.ID
+				}
+				if err := bus.Ack(agent, ids); err != nil {
+					log.Printf("watcher: ack deliveries for %s: %v", agent, err)
+					continue
+				}
+
+				agents = append(agents, agent)
+			}
+
+			if len(agents) > 0 {
+				select {
+				case notifications <- agents:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}
 }
 
 // ---------------------------------------------------------------------------

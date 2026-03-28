@@ -160,9 +160,9 @@ func TestRunner_EventDeliveryRoutesToLifecycle(t *testing.T) {
 	<-done
 }
 
-// TestRunner_SafetyTimerWakesMike verifies that the safety timer periodically
-// wakes mike through the lifecycle manager, producing turn_metrics rows.
-func TestRunner_SafetyTimerWakesMike(t *testing.T) {
+// TestRunner_SafetyTimerDisabled verifies that the safety timer no longer
+// wakes mike — no turn_metrics rows are produced from the timer alone.
+func TestRunner_SafetyTimerDisabled(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{}, &watcher.Heartbeat{})
 	mock := &runnerMockRunner{output: claudeJSON(10, 5)}
 	cfg := runnerCfg(t)
@@ -176,12 +176,14 @@ func TestRunner_SafetyTimerWakesMike(t *testing.T) {
 		done <- r.Run(ctx)
 	}()
 
-	// Wait for at least one safety timer fire.
-	waitUntil(t, func() bool {
-		var count int64
-		db.Model(&watcher.TurnMetric{}).Where("agent = ?", "mike").Count(&count)
-		return count >= 1
-	}, 2*time.Second)
+	// Wait long enough that the old timer would have fired several times.
+	time.Sleep(200 * time.Millisecond)
+
+	var count int64
+	db.Model(&watcher.TurnMetric{}).Where("agent = ?", "mike").Count(&count)
+	if count != 0 {
+		t.Fatalf("safety timer should be disabled, but got %d turn_metrics for mike", count)
+	}
 
 	cancel()
 	<-done

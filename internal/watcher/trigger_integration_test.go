@@ -142,24 +142,21 @@ func TestTriggerIntegration_KyleDeliveredNoWake(t *testing.T) {
 	}
 }
 
-// TestTriggerIntegration_SafetyTimerIndependent verifies that SafetyTimer
-// wakes "mike" at its configured interval without any eventbus involvement.
-// This demonstrates that the two trigger sources (event delivery and safety
-// timer) are fully decoupled from each other.
-func TestTriggerIntegration_SafetyTimerIndependent(t *testing.T) {
-	// The triggerer used here is mockTriggerer (from safety_timer_test.go);
-	// it provides waitForCall which is convenient for timer-based assertions.
+// TestTriggerIntegration_SafetyTimerDisabled verifies that SafetyTimer is
+// now a no-op — it starts and stops cleanly but never fires TriggerAgent.
+// This demonstrates that the safety timer trigger source is fully decoupled
+// from the event delivery trigger source.
+func TestTriggerIntegration_SafetyTimerDisabled(t *testing.T) {
 	triggerer := newMockTriggerer()
 	timer := watcher.NewSafetyTimer(10*time.Millisecond, triggerer)
 	timer.Start()
 	defer timer.Stop()
 
-	if !triggerer.waitForCall(time.Second) {
-		t.Fatal("SafetyTimer did not fire TriggerAgent within 1s")
+	// The disabled timer should never fire.
+	if triggerer.waitForCall(200 * time.Millisecond) {
+		t.Fatal("SafetyTimer is disabled but TriggerAgent was called")
 	}
-	if triggerer.callCount("mike") == 0 {
-		t.Fatal("SafetyTimer fired but did not call TriggerAgent(\"mike\")")
+	if triggerer.callCount("mike") != 0 {
+		t.Fatal("SafetyTimer should not have called TriggerAgent(\"mike\")")
 	}
-
-	// No eventbus was created or consulted — the timer is entirely self-contained.
 }

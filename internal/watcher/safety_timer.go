@@ -44,18 +44,10 @@ func (s *SafetyTimer) Stop() {
 	<-s.done
 }
 
-// run is the background goroutine. It fires TriggerAgent("mike") on each tick
-// until Stop is called.
+// run is the background goroutine. Previously it fired TriggerAgent("mike")
+// on each tick; now disabled (no-op) so the safety timer never triggers.
+// The struct and Start/Stop contract are preserved to avoid breaking callers.
 func (s *SafetyTimer) run() {
 	defer close(s.done)
-	ticker := time.NewTicker(s.interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			s.triggerer.TriggerAgent("mike")
-		case <-s.stop:
-			return
-		}
-	}
+	<-s.stop
 }

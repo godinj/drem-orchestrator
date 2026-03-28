@@ -27,6 +27,7 @@ func RunClaudeSubprocess(ctx context.Context, agent string, workDir string, syst
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "claude",
+		"--dangerously-skip-permissions",
 		"-p", "Process your turn",
 		"--system-prompt", systemPrompt,
 		"--output-format", "json",
