@@ -30,16 +30,32 @@ _csuite_check_agent() {
 }
 
 # Notify an agent that a message arrived.
-# Usage: _csuite_notify <to> <from> <subject> <priority>
+# Usage: _csuite_notify <to> <type>
 #
-# Touches a .signal file in the recipient's inbox directory.  If the
-# recipient is blocking on csuite_wait_for_inbox(), inotifywait will
-# wake it immediately.  The signal file carries no content — agents
-# check all unarchived .md files in their inbox after waking.
+# Touches a .signal file in the recipient's inbox directory ONLY when
+# the message type requires action (request or decision).  Informational
+# types (observation, report) skip the signal — the recipient will pick
+# them up during their next natural turn.
+#
+# Kyle is never signalled — his session is operator-managed, not
+# turn-based via the watcher, so signals are always wasted.
 _csuite_notify() {
     local to="$1"
-    local inbox="${CSUITE_DIR}/${to}/inbox"
-    [ -d "$inbox" ] && touch "${inbox}/.signal"
+    local type="$2"
+
+    # Kyle is an interactive session; never signal him.
+    if [ "$to" = "kyle" ]; then
+        return 0
+    fi
+
+    # Only actionable message types trigger a wake-up.
+    case "$type" in
+        request|decision)
+            local inbox="${CSUITE_DIR}/${to}/inbox"
+            [ -d "$inbox" ] && touch "${inbox}/.signal"
+            ;;
+        # observation, report, and anything else — no signal
+    esac
     return 0
 }
 
@@ -88,8 +104,8 @@ type: ${type}
 ${body}
 MSGEOF
 
-    # Push-notify the recipient if their session is running
-    _csuite_notify "$to" "$from" "$subject" "$priority"
+    # Push-notify the recipient if the message type requires action
+    _csuite_notify "$to" "$type"
 
     echo "$filepath"
 }
