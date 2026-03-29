@@ -1,249 +1,183 @@
 {
   "subtasks": [
     {
-      "title": "Write tests for serve package (server, auth, handlers)",
-      "description": "Create test files for the internal/serve package covering: (1) auth_test.go — bearer token middleware rejects missing/invalid tokens, accepts valid token using constant-time compare, returns 401 with JSON error body; (2) handlers_test.go — GET /api/health returns 200 with JSON status, GET /api/agents returns agent dashboard rows with unread counts (wire testutil.NewTestStore + testutil factories); (3) serve_test.go — server starts and stops cleanly, ListenAddr defaults. Create stub files (serve.go, auth.go, handlers.go) with minimal types/function signatures so tests compile but fail. Tests use net/http/httptest for handler tests. Auth tests verify crypto/subtle constant-time comparison indirectly (correct token passes, wrong token fails, empty token fails). Agent handler tests create agents via store.CreateAgent and messages via store.CreateMessage, then verify JSON response shape.",
-      "agent_type": "coder",
-      "phase": "test",
-      "tests_for": [1],
-      "files": [
-        "internal/serve/serve.go",
-        "internal/serve/auth.go",
-        "internal/serve/handlers.go",
-        "internal/serve/serve_test.go",
-        "internal/serve/auth_test.go",
-        "internal/serve/handlers_test.go"
-      ],
-      "dependencies": [],
-      "priority": 1,
-      "module_boundaries": [
-        {
-          "package": "internal/serve",
-          "description": "HTTP bridge server with auth middleware and agent dashboard API — stubs only for test compilation",
-          "exports": 8
-        }
-      ],
-      "interface_shapes": [
-        {
-          "package": "internal/serve",
-          "functions": [
-            "New(cfg Config, store *csuite.Store) *Server",
-            "Server.ListenAndServe(ctx context.Context) error",
-            "BearerAuth(token string) func(http.Handler) http.Handler",
-            "HealthHandler() http.HandlerFunc",
-            "AgentsHandler(store *csuite.Store) http.HandlerFunc"
-          ],
-          "types": [
-            "Server",
-            "Config"
-          ]
-        }
-      ]
-    },
-    {
-      "title": "Implement serve package (server, auth, handlers)",
-      "description": "Implement internal/serve/ package to make all pre-written tests pass: (1) serve.go — Server struct holding Config and *csuite.Store, New() constructor, ListenAndServe(ctx) that wires mux with auth middleware and graceful shutdown via context; Config struct with ListenAddr and BearerToken fields. (2) auth.go — BearerAuth middleware using crypto/subtle.ConstantTimeCompare, returns 401 JSON on failure, skips auth for /api/health. (3) handlers.go — HealthHandler returns {\"status\":\"ok\"}, AgentsHandler calls store.AgentDashboard() and returns JSON array with agent name, status, unread_count, and latest_inbox fields. All handlers set Content-Type: application/json. Do NOT modify the pre-written tests.",
+      "title": "Define shared types for serve package",
+      "description": "Create internal/serve/serve.go with foundational types needed by all other subtasks. This is a types-only foundation — no behavioral logic.\n\nCreate:\n- Config struct with fields: Addr string, BearerToken string, Store StoreQuerier\n- StoreQuerier interface with single method: AgentDashboard() ([]csuite.AgentDashboardRow, error) — consumption-site interface per ARCHITECTURE.md 'Interfaces at consumption sites' rule\n- Server struct with fields: cfg Config, srv *http.Server\n- NewServer(cfg Config) *Server constructor (trivial field assignment)\n\nThe StoreQuerier interface decouples the serve package from *csuite.Store, enabling mock-based testing. csuite.Store already satisfies this interface via its AgentDashboard() method.\n\nImports: only net/http and internal/csuite (for AgentDashboardRow type).",
       "agent_type": "coder",
       "phase": "implementation",
       "tests_for": [],
-      "files": [
-        "internal/serve/serve.go",
-        "internal/serve/auth.go",
-        "internal/serve/handlers.go"
-      ],
+      "files": ["internal/serve/serve.go"],
       "dependencies": [],
       "priority": 1,
       "module_boundaries": [
-        {
-          "package": "internal/serve",
-          "description": "HTTP bridge server encapsulating routing, bearer auth, graceful shutdown, and agent dashboard API behind a simple New+ListenAndServe interface",
-          "exports": 8
-        }
+        {"package": "internal/serve", "description": "HTTP bridge server with auth middleware and agent dashboard API for C-Suite mobile client", "exports": 5}
       ],
       "interface_shapes": [
-        {
-          "package": "internal/serve",
-          "functions": [
-            "New(cfg Config, store *csuite.Store) *Server",
-            "Server.ListenAndServe(ctx context.Context) error",
-            "BearerAuth(token string) func(http.Handler) http.Handler",
-            "HealthHandler() http.HandlerFunc",
-            "AgentsHandler(store *csuite.Store) http.HandlerFunc"
-          ],
-          "types": [
-            "Server",
-            "Config"
-          ]
-        }
+        {"package": "internal/serve", "functions": ["NewServer(cfg Config) *Server"], "types": ["Config", "Server", "StoreQuerier"]}
       ]
     },
     {
-      "title": "Write tests for serve subcommand and config",
-      "description": "Create tests in cmd/csuite-watcher/main_test.go (or a new serve-specific test section) for: (1) serveTomlConfig parsing from [serve] TOML section — verify listen_addr, bearer_token, db_path fields parse correctly; missing file returns zero-value config; (2) serve subcommand dispatches correctly from the run() switch — unknown subcommand still errors, 'serve' is recognized. Tests should exercise the config loading function directly. Create a minimal stub for the serve subcommand (runServe function returning 1) so tests compile. The test for the subcommand switch can verify that run([\"serve\", ...]) does not return the 'unknown subcommand' exit path.",
+      "title": "Write tests for auth middleware",
+      "description": "Create internal/serve/auth_test.go with tests for bearer token authentication middleware. Create minimal stub in internal/serve/auth.go (function signature only, returns no-op middleware) so tests compile but fail.\n\nTest cases:\n1. Valid token: request with 'Authorization: Bearer <correct-token>' passes through, inner handler is called and writes 200\n2. Missing header: request with no Authorization header returns 401 with JSON {\"error\":\"unauthorized\"}\n3. Wrong token: request with incorrect bearer token returns 401 with JSON {\"error\":\"unauthorized\"}\n4. Malformed header: request with 'Authorization: Token xyz' (wrong prefix) returns 401\n5. Empty token in config: middleware rejects all requests with 401\n\nUse httptest.NewRecorder and httptest.NewRequest. Verify Content-Type is application/json on 401 responses.\n\nFunction signature to test: AuthMiddleware(token string) func(http.Handler) http.Handler",
       "agent_type": "coder",
       "phase": "test",
-      "tests_for": [3],
-      "files": [
-        "cmd/csuite-watcher/main.go",
-        "cmd/csuite-watcher/main_test.go"
-      ],
-      "dependencies": [],
+      "tests_for": [2],
+      "files": ["internal/serve/auth_test.go", "internal/serve/auth.go"],
+      "dependencies": [0],
       "priority": 1,
-      "module_boundaries": [
-        {
-          "package": "cmd/csuite-watcher",
-          "description": "CLI entry point for C-Suite watcher with subcommand dispatch — adding serve subcommand",
-          "exports": 0
-        }
-      ],
+      "module_boundaries": [],
       "interface_shapes": [
-        {
-          "package": "cmd/csuite-watcher",
-          "functions": [
-            "loadServeConfig(path string) (serveTomlConfig, error)",
-            "runServe(args []string, stderr io.Writer) int"
-          ],
-          "types": [
-            "serveTomlConfig"
-          ]
-        }
+        {"package": "internal/serve", "functions": ["AuthMiddleware(token string) func(http.Handler) http.Handler"], "types": []}
       ]
     },
     {
-      "title": "Implement serve subcommand and config wiring",
-      "description": "Wire the serve subcommand into cmd/csuite-watcher/main.go: (1) Add serveTomlConfig struct with ListenAddr, BearerToken, DBPath fields following watcherTomlConfig pattern. (2) Add Serve field to dremToml struct for [serve] TOML section. (3) Add loadServeConfig function following loadWatcherConfig pattern. (4) Add 'serve' case to the subcommand switch in run(). (5) Implement runServe: parse -config flag, load config, open csuite DB, create csuite.Store, create serve.Server, run with signal context. (6) Add [serve] section to drem.toml with listen_addr, bearer_token, db_path defaults. (7) Add nhooyr.io/websocket dependency to go.mod (go get). Update usage strings to include 'serve'. Do NOT modify pre-written tests.",
+      "title": "Implement auth middleware",
+      "description": "Implement AuthMiddleware in internal/serve/auth.go. Replace the stub from the test subtask with full implementation.\n\nBehavior:\n- Takes a bearer token string, returns standard http middleware func(http.Handler) http.Handler\n- Extracts Authorization header value\n- Verifies 'Bearer ' prefix (case-sensitive)\n- Uses crypto/subtle.ConstantTimeCompare for timing-safe token comparison\n- On auth failure: respond with 401 status, Content-Type application/json, body {\"error\":\"unauthorized\"}\n- On success: call next handler\n\nAll pre-written tests in auth_test.go must pass. Do NOT modify the test file.",
       "agent_type": "coder",
       "phase": "implementation",
-      "tests_for": [],
-      "files": [
-        "cmd/csuite-watcher/main.go",
-        "drem.toml",
-        "go.mod",
-        "go.sum"
-      ],
-      "dependencies": [1],
-      "priority": 2,
+      "files": ["internal/serve/auth.go"],
+      "dependencies": [0],
+      "priority": 1,
       "module_boundaries": [
-        {
-          "package": "cmd/csuite-watcher",
-          "description": "CLI entry point adding serve subcommand with TOML config parsing and server lifecycle",
-          "exports": 0
-        }
+        {"package": "internal/serve", "description": "HTTP bridge server with auth middleware and agent dashboard API for C-Suite mobile client", "exports": 5}
       ],
       "interface_shapes": [
-        {
-          "package": "cmd/csuite-watcher",
-          "functions": [
-            "loadServeConfig(path string) (serveTomlConfig, error)",
-            "runServe(args []string, stderr io.Writer) int"
-          ],
-          "types": [
-            "serveTomlConfig"
-          ]
-        }
+        {"package": "internal/serve", "functions": ["AuthMiddleware(token string) func(http.Handler) http.Handler"], "types": []}
       ]
     },
     {
-      "title": "Integration: end-to-end serve subcommand verification and docs",
-      "description": "Final integration subtask: (1) Verify all tests pass with `go test ./internal/serve/... ./cmd/csuite-watcher/...`. (2) Verify `go vet ./...` passes. (3) Verify `gofmt -l` shows no unformatted files. (4) Verify file length and function count ceilings (800 lines, 20 exported functions). (5) Verify internal import ceiling (serve package should import only csuite — 1 internal import, well under ceiling of 6). (6) Run constitution check if available. (7) Update README or docs with serve subcommand usage if user-facing documentation exists. This subtask ensures the serve skeleton works end-to-end: config loads, server starts, auth rejects bad tokens, health endpoint responds, agents endpoint returns dashboard data. No unit tests here — integration verification only.",
+      "title": "Write tests for handlers and server lifecycle",
+      "description": "Create internal/serve/handlers_test.go and internal/serve/serve_test.go. Create minimal stub in internal/serve/handlers.go (function signatures returning 501) so tests compile but fail.\n\nhandlers_test.go tests:\n1. GET /api/health returns 200 with JSON {\"status\":\"ok\"} and Content-Type application/json\n2. GET /api/agents with mock StoreQuerier returns 200 with JSON array of agents (verify name, status, unread_count fields)\n3. GET /api/agents when store returns error returns 500 with JSON {\"error\":\"internal server error\"}\n4. Integration test using testutil.NewTestStore: create agents via testutil.CreateCsuiteAgent, verify GET /api/agents returns them with correct unread counts\n\nDefine a mockStore struct in handlers_test.go implementing StoreQuerier for unit tests.\n\nserve_test.go tests:\n1. NewServer creates a server with correct config\n2. Server.ListenAndServe starts serving and responds to requests; Server.Shutdown stops it gracefully\n3. Routes are wired correctly: /api/health is accessible, /api/agents requires auth\n\nUse httptest for handler tests. For serve_test.go, use net.Listen on :0 for ephemeral port.",
+      "agent_type": "coder",
+      "phase": "test",
+      "tests_for": [4],
+      "files": ["internal/serve/handlers_test.go", "internal/serve/serve_test.go", "internal/serve/handlers.go"],
+      "dependencies": [0],
+      "priority": 1,
+      "module_boundaries": [],
+      "interface_shapes": [
+        {"package": "internal/serve", "functions": ["HandleHealth() http.HandlerFunc", "HandleAgents(store StoreQuerier) http.HandlerFunc"], "types": []}
+      ]
+    },
+    {
+      "title": "Implement handlers and server lifecycle",
+      "description": "Implement internal/serve/handlers.go and complete Server.ListenAndServe/Shutdown in internal/serve/serve.go.\n\nhandlers.go:\n- HandleHealth() http.HandlerFunc: returns JSON {\"status\":\"ok\"} with 200\n- HandleAgents(store StoreQuerier) http.HandlerFunc: calls store.AgentDashboard(), marshals result as JSON array. Each element has json tags for snake_case: name, status, unread_count, latest_inbox. On store error, returns 500 with {\"error\":\"internal server error\"}. Set Content-Type: application/json.\n\nserve.go additions:\n- Server.ListenAndServe() error: creates http.ServeMux, registers GET /api/health (no auth), registers GET /api/agents (behind AuthMiddleware), creates http.Server with Addr from config, calls ListenAndServe\n- Server.Shutdown(ctx context.Context) error: delegates to internal http.Server.Shutdown\n\nAll pre-written tests must pass. Do NOT modify test files.",
+      "agent_type": "coder",
+      "phase": "implementation",
+      "files": ["internal/serve/serve.go", "internal/serve/handlers.go"],
+      "dependencies": [0],
+      "priority": 1,
+      "module_boundaries": [
+        {"package": "internal/serve", "description": "HTTP bridge server with auth middleware and agent dashboard API for C-Suite mobile client", "exports": 5}
+      ],
+      "interface_shapes": [
+        {"package": "internal/serve", "functions": ["NewServer(cfg Config) *Server", "(*Server).ListenAndServe() error", "(*Server).Shutdown(ctx context.Context) error", "HandleHealth() http.HandlerFunc", "HandleAgents(store StoreQuerier) http.HandlerFunc"], "types": ["Config", "Server", "StoreQuerier"]}
+      ]
+    },
+    {
+      "title": "Integration: serve subcommand, config, dependency, and docs",
+      "description": "Wire the serve package into the csuite-watcher CLI and add configuration.\n\ncmd/csuite-watcher/main.go changes:\n1. Add serveTomlConfig struct: Addr string `toml:\"addr\"`, BearerToken string `toml:\"bearer_token\"`, DBPath string `toml:\"db_path\"` — following watcherTomlConfig pattern\n2. Add Serve field to dremToml struct: Serve serveTomlConfig `toml:\"serve\"`\n3. Add loadServeConfig function following loadWatcherConfig pattern\n4. Add 'serve' case to subcommand switch in run() function\n5. Implement runServe(args []string, stderr io.Writer) int: parse -config flag, load serve config, open csuite.db with gorm+sqlite, AutoMigrate CsuiteAgent and CsuiteInboxMessage, create csuite.NewStore(db), create serve.NewServer with serve.Config, run ListenAndServe in goroutine, wait for SIGTERM/SIGINT via signal.NotifyContext, call Shutdown\n6. Update usage strings to include 'serve' subcommand\n\ndrem.toml changes:\n- Add [serve] section with addr = ':8080', bearer_token = 'changeme', db_path = '~/.drem-csuite/csuite.db'\n\nDependency:\n- Run `go get nhooyr.io/websocket` to add to go.mod/go.sum\n\nDocumentation:\n- Add brief serve subcommand section to README.md (if it exists) or create docs/bridge-server.md with usage, config, and endpoint documentation\n\nVerification:\n- go build ./cmd/csuite-watcher\n- go vet ./...\n- go test ./internal/serve/... ./cmd/csuite-watcher/...\n- gofmt -l ./internal/serve/ ./cmd/csuite-watcher/\n- Verify file lengths under 800 lines\n- Verify internal/serve imports ≤ 6 internal packages",
       "agent_type": "coder",
       "phase": "integration",
-      "tests_for": [],
-      "files": [
-        "internal/serve/serve.go",
-        "internal/serve/auth.go",
-        "internal/serve/handlers.go",
-        "cmd/csuite-watcher/main.go",
-        "drem.toml"
-      ],
-      "dependencies": [1, 3],
-      "priority": 3,
+      "files": ["cmd/csuite-watcher/main.go", "drem.toml", "go.mod", "go.sum"],
+      "dependencies": [2, 4],
+      "priority": 2,
       "module_boundaries": [],
       "interface_shapes": []
     }
   ],
   "tdd_exceptions": [
     {
-      "subtask_index": 4,
-      "justification": "Integration wiring and verification connecting already-tested serve package and subcommand — no new behavior, only end-to-end validation of constitution constraints and formatting."
+      "subtask_index": 0,
+      "justification": "Shared foundation subtask defining types and interfaces only — no behavioral logic. Constructor is trivial field assignment. Types are validated by downstream test subtasks that depend on them."
+    },
+    {
+      "subtask_index": 5,
+      "justification": "Integration wiring connecting already-tested serve package to existing main.go subcommand switch. Behavioral correctness verified by go build + go vet + existing serve package tests. Config parsing follows established loadWatcherConfig pattern."
     }
   ],
   "coverage": [
     {
-      "criterion": "HTTP server with graceful shutdown in internal/serve/serve.go",
-      "subtask_indices": [0, 1]
+      "criterion": "HTTP server in internal/serve/serve.go",
+      "subtask_indices": [0, 3, 4]
     },
     {
       "criterion": "Bearer token auth middleware using crypto/subtle in internal/serve/auth.go",
-      "subtask_indices": [0, 1]
-    },
-    {
-      "criterion": "GET /api/agents handler returning agent dashboard with unread counts",
-      "subtask_indices": [0, 1]
+      "subtask_indices": [1, 2]
     },
     {
       "criterion": "GET /api/health handler",
-      "subtask_indices": [0, 1]
+      "subtask_indices": [3, 4]
+    },
+    {
+      "criterion": "GET /api/agents handler wired to Store.AgentDashboard() with unread counts",
+      "subtask_indices": [3, 4]
     },
     {
       "criterion": "serve subcommand case added to cmd/csuite-watcher/main.go switch",
-      "subtask_indices": [2, 3]
+      "subtask_indices": [5]
     },
     {
       "criterion": "serveTomlConfig struct following watcherTomlConfig pattern",
-      "subtask_indices": [2, 3]
+      "subtask_indices": [5]
     },
     {
       "criterion": "[serve] section added to drem.toml",
-      "subtask_indices": [3]
-    },
-    {
-      "criterion": "Store.AgentDashboard() wired for agent list with unread counts",
-      "subtask_indices": [0, 1]
+      "subtask_indices": [5]
     },
     {
       "criterion": "nhooyr.io/websocket dependency added",
+      "subtask_indices": [5]
+    },
+    {
+      "criterion": "Tests use testutil.NewTestStore and testutil.CreateCsuiteAgent factories",
       "subtask_indices": [3]
     },
     {
-      "criterion": "Tests use testutil.NewTestStore and testutil.CreateCsuiteAgent",
-      "subtask_indices": [0]
-    },
-    {
-      "criterion": "Constitution compliance (file length, imports, formatting)",
-      "subtask_indices": [4]
+      "criterion": "Documentation for serve subcommand",
+      "subtask_indices": [5]
     }
   ],
   "assumptions": [
     {
-      "decision": "Adding serve subcommand to existing csuite-watcher binary rather than creating a new cmd/bridge-server binary",
-      "alternatives": ["Create a separate cmd/bridge-server/main.go binary"],
-      "why_chosen": "Task description explicitly says 'Add serve case to cmd/csuite-watcher/main.go subcommand switch' — this is specified, not inferred."
+      "decision": "Health endpoint is unauthenticated, agents endpoint requires bearer token",
+      "alternatives": ["All endpoints behind auth", "All endpoints public"],
+      "why_chosen": "Health endpoints are conventionally unauthenticated for load balancer probes and monitoring. Agent data contains business state and should be protected."
     },
     {
-      "decision": "Health endpoint is unauthenticated (no bearer token required)",
-      "alternatives": ["Require bearer token for all endpoints including health"],
-      "why_chosen": "Health checks are typically unauthenticated for load balancer probes and monitoring. The middleware can skip /api/health. This is a standard HTTP server convention."
+      "decision": "StoreQuerier interface at consumption site (internal/serve) rather than using *csuite.Store directly",
+      "alternatives": ["Import and use *csuite.Store directly", "Define interface in csuite package"],
+      "why_chosen": "ARCHITECTURE.md constitution rule 'Interfaces at consumption sites' explicitly requires this pattern. Enables mock-based unit testing without real DB."
     },
     {
-      "decision": "JSON response shape for agents endpoint uses snake_case field names (name, status, unread_count, latest_inbox)",
-      "alternatives": ["camelCase field names", "Exact Go struct field names"],
-      "why_chosen": "snake_case is the conventional JSON naming for REST APIs and matches the TOML config field naming convention used throughout the project."
+      "decision": "Using stdlib http.ServeMux for routing (not a third-party router)",
+      "alternatives": ["chi router", "gorilla/mux"],
+      "why_chosen": "Only 2 routes needed. stdlib is sufficient, avoids unnecessary dependencies, and matches project's minimal dependency approach."
     },
     {
-      "decision": "Config fields: listen_addr (string), bearer_token (string), db_path (string)",
-      "alternatives": ["Additional fields like read_timeout, write_timeout, cors_origins"],
-      "why_chosen": "Minimal config for a skeleton server. Task description specifies following watcherTomlConfig pattern which has only essential fields. Additional config can be added when needed."
+      "decision": "Server.ListenAndServe() + Server.Shutdown(ctx) as the lifecycle API",
+      "alternatives": ["Single Run(ctx) method that blocks until context cancellation", "Start()/Stop() pair"],
+      "why_chosen": "Matches stdlib http.Server API shape. Allows the caller (main.go) to control shutdown timing with its own context, matching the runWatcher pattern."
     },
     {
-      "decision": "Server.ListenAndServe takes a context.Context for graceful shutdown rather than separate Start/Stop methods",
-      "alternatives": ["Separate Start() and Stop() methods", "ListenAndServe() + Shutdown(ctx)"],
-      "why_chosen": "Context-driven shutdown matches the runWatcher pattern which uses signal.NotifyContext and passes ctx to the runner. Single method is simpler and deeper."
+      "decision": "JSON response fields use snake_case (name, status, unread_count, latest_inbox)",
+      "alternatives": ["camelCase (JavaScript convention)", "Exact Go struct field names"],
+      "why_chosen": "snake_case matches the TOML config field naming convention used throughout the project and is conventional for REST APIs consumed by diverse clients."
     },
     {
-      "decision": "nhooyr.io/websocket added to go.mod but not used in code yet (skeleton only)",
-      "alternatives": ["Skip websocket dependency until actually needed"],
-      "why_chosen": "Task description explicitly requires adding nhooyr.io/websocket dependency. It prepares for future WebSocket upgrade of the bridge server."
+      "decision": "Default serve address is :8080",
+      "alternatives": [":3000", ":9090", "localhost:8080"],
+      "why_chosen": "8080 is the conventional HTTP alternative port. Binding all interfaces is standard for server processes (restrict via config if needed)."
+    },
+    {
+      "decision": "nhooyr.io/websocket added to go.mod but not used in handler code yet",
+      "alternatives": ["Skip dependency until websocket handlers are implemented"],
+      "why_chosen": "Task description explicitly requires adding this dependency. Prepares for future websocket endpoints."
+    },
+    {
+      "decision": "Serve subcommand opens its own DB connection rather than sharing with watcher",
+      "alternatives": ["Share DB connection if both run in same process"],
+      "why_chosen": "serve and run are separate subcommands that run independently. Each opens its own connection following the established runWatcher pattern."
     }
   ]
 }
