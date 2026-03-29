@@ -7,12 +7,12 @@ import (
 
 // agentResponse is the JSON shape returned by GET /api/agents.
 type agentResponse struct {
-	Name           string     `json:"name"`
-	Status         string     `json:"status"`
-	ContextPercent int        `json:"context_percent"`
-	CurrentActivity string   `json:"current_activity"`
-	UnreadCount    int        `json:"unread_count"`
-	LatestInbox    *time.Time `json:"latest_inbox,omitempty"`
+	Name            string     `json:"name"`
+	Status          string     `json:"status"`
+	ContextPercent  int        `json:"context_percent"`
+	CurrentActivity string     `json:"current_activity"`
+	UnreadCount     int        `json:"unread_count"`
+	LatestInbox     *time.Time `json:"latest_inbox,omitempty"`
 }
 
 // healthHandler serves GET /api/health.
