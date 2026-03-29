@@ -190,6 +190,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 						if err := o.db.Create(evt).Error; err != nil {
 							return fmt.Errorf("on agent completed: save constraint-fail event: %w", err)
 						}
+						o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "constraint violations after merge")
 						return nil
 					}
 				}
@@ -223,6 +224,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 	}
 
 	// The subtask might be in IN_PROGRESS; fast-track through the rest.
+	preStatus := string(task.Status)
 	for _, target := range transitions {
 		if task.Status == target {
 			continue // already at or past this state
@@ -243,6 +245,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 	}
 
 	o.emit("task_updated", task)
+	o.publishTaskTransition(task.ID.String(), preStatus, string(task.Status), "subtask completed, fast-tracked to done")
 	o.logger.Info("subtask completed", "task_id", task.ID, "agent_id", ag.ID)
 
 	// Check if parent's subtasks are all done.
@@ -398,6 +401,7 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	}
 
 	o.emit("plan_ready", map[string]any{"task_id": task.ID, "subtask_count": len(rawPlan.Subtasks)})
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "plan ready for review")
 	o.logger.Info("plan ready for review", "task_id", task.ID, "subtasks", len(rawPlan.Subtasks))
 	return nil
 }

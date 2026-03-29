@@ -24,6 +24,7 @@ type keyMap struct {
 	Fixer         key.Binding // x - fixer
 	Archive       key.Binding // A - toggle archived agents
 	Filter        key.Binding // F - toggle task filter
+	ShowAll       key.Binding // H - show/hide cancelled & rejected tasks
 	Reap          key.Binding // C - clean up dead tmux sessions
 	Shell         key.Binding // i - open shell at integration dir
 	Csuite        key.Binding // w - C-Suite agent dashboard
@@ -113,6 +114,10 @@ func defaultKeyMap() keyMap {
 		Filter: key.NewBinding(
 			key.WithKeys("F"),
 			key.WithHelp("F", "filter"),
+		),
+		ShowAll: key.NewBinding(
+			key.WithKeys("H", "h"),
+			key.WithHelp("h", "show cancelled/rejected"),
 		),
 		Reap: key.NewBinding(
 			key.WithKeys("C"),

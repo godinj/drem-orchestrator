@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -276,7 +277,7 @@ func TestOnClassifierCompleted_Success(t *testing.T) {
 		TargetFiles:     []string{"path/to/file.go"},
 		Rationale:       "Evidence-based reason",
 	}
-	writeClassificationJSON(t, wtDir, output)
+	writeClassificationJSON(t, wtDir, task.ID, output)
 
 	if err := orch.onClassifierCompleted(&ag, &task); err != nil {
 		t.Fatalf("onClassifierCompleted: %v", err)
@@ -343,7 +344,7 @@ func TestOnClassifierCompleted_NeedsClarification(t *testing.T) {
 		NeedsClarification: true,
 		Questions:          []string{"What file?", "Expected behavior?"},
 	}
-	writeClassificationJSON(t, wtDir, output)
+	writeClassificationJSON(t, wtDir, task.ID, output)
 
 	if err := orch.onClassifierCompleted(&ag, &task); err != nil {
 		t.Fatalf("onClassifierCompleted: %v", err)
@@ -483,7 +484,7 @@ func TestOnClassifierCompleted_Success_MarksAgentIdle(t *testing.T) {
 		t.Fatalf("save agent worktree: %v", err)
 	}
 
-	writeClassificationJSON(t, wtDir, ClassifierOutput{
+	writeClassificationJSON(t, wtDir, task.ID, ClassifierOutput{
 		Category:        "standard",
 		ComplexityScore: 5,
 		Title:           "Refined",
@@ -534,7 +535,7 @@ func TestOnClassifierCompleted_NeedsClarification_MarksAgentIdle(t *testing.T) {
 		t.Fatalf("save agent worktree: %v", err)
 	}
 
-	writeClassificationJSON(t, wtDir, ClassifierOutput{
+	writeClassificationJSON(t, wtDir, task.ID, ClassifierOutput{
 		NeedsClarification: true,
 		Questions:          []string{"What file?"},
 	})
@@ -691,6 +692,8 @@ func TestClassifierRecovery_NoHotLoop(t *testing.T) {
 	if err := orch.db.Save(&ag).Error; err != nil {
 		t.Fatalf("save agent worktree path: %v", err)
 	}
+	// Backdate past grace period so recovery can act on this agent.
+	orch.db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
 	task.AssignedAgentID = &ag.ID
 	if err := orch.db.Save(&task).Error; err != nil {
 		t.Fatalf("assign agent to task: %v", err)
@@ -705,8 +708,8 @@ func TestClassifierRecovery_NoHotLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Write classification.json so onClassifierCompleted succeeds.
-	writeClassificationJSON(t, wtDir, ClassifierOutput{
+	// Write classification-<taskID>.json so onClassifierCompleted succeeds.
+	writeClassificationJSON(t, wtDir, task.ID, ClassifierOutput{
 		Category:        "standard",
 		ComplexityScore: 5,
 		Title:           "Classified title",
@@ -781,6 +784,8 @@ func TestClassifierRecovery_FailedAgent_NoHotLoop(t *testing.T) {
 	if err := orch.db.Save(&ag).Error; err != nil {
 		t.Fatalf("save agent: %v", err)
 	}
+	// Backdate past grace period so recovery can act on this agent.
+	orch.db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
 	task.AssignedAgentID = &ag.ID
 	if err := orch.db.Save(&task).Error; err != nil {
 		t.Fatalf("save task: %v", err)
@@ -854,17 +859,17 @@ func TestProcessClassifyingTasks_SkipsParkedHumanTriage_NilAgent(t *testing.T) {
 	}
 }
 
-// writeClassificationJSON writes a ClassifierOutput as classification.json
+// writeClassificationJSON writes a ClassifierOutput as classification-<taskID>.json
 // in the given directory.
-func writeClassificationJSON(t *testing.T, dir string, output ClassifierOutput) {
+func writeClassificationJSON(t *testing.T, dir string, taskID uuid.UUID, output ClassifierOutput) {
 	t.Helper()
 	data, err := json.Marshal(output)
 	if err != nil {
 		t.Fatalf("marshal classification output: %v", err)
 	}
-	path := filepath.Join(dir, "classification.json")
+	path := filepath.Join(dir, fmt.Sprintf("classification-%s.json", taskID))
 	if err := os.WriteFile(path, data, 0o644); err != nil {
-		t.Fatalf("write classification.json: %v", err)
+		t.Fatalf("write classification json: %v", err)
 	}
 }
 
@@ -1158,8 +1163,8 @@ func TestClassifyingTasksEndToEnd(t *testing.T) {
 		Rationale:       "Analysis of code paths shows OAuth token validation is missing checks for token expiry and signature validation. This is a critical security issue.",
 	}
 
-	// Write classification.json to agent's worktree
-	writeClassificationJSON(t, ag.WorktreePath, classifierOutput)
+	// Write classification-<taskID>.json to agent's worktree
+	writeClassificationJSON(t, ag.WorktreePath, task.ID, classifierOutput)
 
 	// Update agent status to WORKING to simulate it being spawned
 	ag.Status = model.AgentWorking

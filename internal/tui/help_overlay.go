@@ -132,6 +132,7 @@ func (m Model) boardContextBindings() []helpBinding {
 		helpBinding{"w", "C-Suite dashboard"},
 		helpBinding{"A", "toggle archived agents"},
 		helpBinding{"F", "toggle task filter"},
+		helpBinding{"H", "show cancelled/rejected"},
 		helpBinding{"C", "clean dead sessions"},
 	)
 

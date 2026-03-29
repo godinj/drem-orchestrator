@@ -23,6 +23,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/db"
+	"github.com/godinj/drem-orchestrator/internal/eventbus"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -200,6 +201,14 @@ func main() {
 	orchEvents := make(chan orchestrator.Event, 100)
 	orch := orchestrator.New(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.ContextFixerPercent)
 	orch.SetInteractiveSupervisorConfig(cfg.Agents.InteractiveSupervisorCLIConfig())
+
+	// Wire event bus so task transitions produce events for C-Suite agents.
+	if bus, err := eventbus.New(filepath.Join(os.Getenv("HOME"), ".drem-csuite", "csuite.db")); err != nil {
+		log.Printf("warning: event bus unavailable: %v", err)
+	} else {
+		orch.SetEventBus(bus)
+		defer bus.Close()
+	}
 
 	// Init bug report service.
 	bugreportSvc := bugreport.New(database)

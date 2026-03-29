@@ -34,6 +34,11 @@ type RunnerConfig struct {
 	// HeartbeatInterval controls how often heartbeats are written to the DB.
 	// Zero uses the HeartbeatWriter default (30s).
 	HeartbeatInterval time.Duration
+
+	// Precheck, when non-nil, is checked before each turn subprocess is
+	// launched. If HasWork returns false, the turn is skipped. This is
+	// passed through to Config.Precheck on the LifecycleManager.
+	Precheck TurnPrecheck
 }
 
 // Runner is the watcher main loop. It starts all trigger sources, fans in
@@ -94,7 +99,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		return err
 	}
 
-	lcfg := Config{AllowedAgents: r.cfg.AllowedAgents}
+	lcfg := Config{AllowedAgents: r.cfg.AllowedAgents, Precheck: r.cfg.Precheck}
 	lm := NewLifecycleManager(r.db, lcfg, r.runner)
 
 	hb := NewHeartbeatWriter(r.db, r.cfg.HeartbeatInterval)

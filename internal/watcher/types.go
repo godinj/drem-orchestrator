@@ -14,6 +14,12 @@ type Config struct {
 	// AllowedAgents lists the agent names permitted to run turns.
 	// Any agent name not in this list will receive Refused.
 	AllowedAgents []string
+
+	// Precheck, when non-nil, is called before each turn subprocess is
+	// launched. If HasWork returns false the turn is skipped with a log
+	// message, saving the cost of an idle subprocess. When nil, every
+	// triggered turn launches a subprocess unconditionally.
+	Precheck TurnPrecheck
 }
 
 // CommandRunner abstracts agent turn subprocess execution so tests can inject

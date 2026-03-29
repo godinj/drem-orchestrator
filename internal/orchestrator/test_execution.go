@@ -71,6 +71,7 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 		}
 
 		o.emit("testing_ready_passed", map[string]any{"task_id": parent.ID})
+		o.publishTaskTransition(parent.ID.String(), evt.OldValue, evt.NewValue, "automated test gate passed")
 		o.logger.Info("automated test gate passed, transitioning to merging", "task_id", parent.ID)
 		return nil
 	}

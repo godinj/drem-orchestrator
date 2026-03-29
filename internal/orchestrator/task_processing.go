@@ -50,6 +50,7 @@ func (o *Orchestrator) processBacklog(task *model.Task) error {
 		return fmt.Errorf("process backlog: save event: %w", err)
 	}
 	o.emit("task_updated", task)
+	o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "")
 	o.logger.Info("task transitioned to planning", "task_id", task.ID, "title", task.Title)
 	return nil
 }
@@ -148,6 +149,8 @@ func (o *Orchestrator) processQuickFix(task *model.Task) error {
 	}
 
 	o.emit("quickfix_started", map[string]any{"task_id": task.ID, "agent_id": ag.ID})
+	o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "quickfix started")
+	o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(ag.AgentType), string(model.AgentWorking))
 	o.logger.Info("quickfix started", "task_id", task.ID, "agent_id", ag.ID)
 	return nil
 }
@@ -202,6 +205,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 				return fmt.Errorf("process planning: save event: %w", err)
 			}
 			o.emit("needs_clarification", map[string]any{"task_id": task.ID, "questions": dec.Questions})
+			o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "needs clarification")
 			return nil
 		}
 
@@ -217,6 +221,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 			return fmt.Errorf("process planning: save event: %w", err)
 		}
 		o.emit("plan_ready", map[string]any{"task_id": task.ID})
+		o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "plan ready for review")
 		return nil
 	}
 
@@ -303,6 +308,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 	}
 
 	o.emit("planner_spawned", map[string]any{"task_id": task.ID, "agent_id": ag.ID})
+	o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(model.AgentPlanner), string(model.AgentWorking))
 	o.logger.Info("planner spawned", "task_id", task.ID, "agent_id", ag.ID)
 	return nil
 }
@@ -536,6 +542,8 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 			"agent_id":   ag.ID,
 			"agent_type": agentType,
 		})
+		o.publishTaskTransition(sub.ID.String(), string(model.StatusBacklog), string(sub.Status), "subtask scheduled")
+		o.publishAgentStatus(sub.ID.String(), ag.ID.String(), string(agentType), string(model.AgentWorking))
 		o.logger.Info("subtask scheduled", "subtask_id", sub.ID, "agent_id", ag.ID, "type", agentType)
 	}
 
@@ -647,6 +655,7 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 			return fmt.Errorf("check feature completion: save event: %w", err)
 		}
 		o.emit("testing_ready", map[string]any{"task_id": parent.ID})
+		o.publishTaskTransition(parent.ID.String(), evt.OldValue, evt.NewValue, "all subtasks done, testing ready")
 		o.logger.Info("all subtasks done, testing ready", "task_id", parent.ID)
 	} else if allTerminal && anyFailed && parent.Status == model.StatusInProgress {
 		// All subtasks finished but some failed -> parent fails.

@@ -177,6 +177,7 @@ func TestSortOrderWithMixedStatuses(t *testing.T) {
 	b := BoardModel{
 		tasks:    tasks,
 		expanded: make(map[uuid.UUID]bool),
+		showAll:  true, // show all statuses including rejected
 	}
 
 	entries := b.buildDisplayList()

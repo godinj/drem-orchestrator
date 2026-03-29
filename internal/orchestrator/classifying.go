@@ -93,6 +93,7 @@ func (o *Orchestrator) processClassifyingTasks() {
 			continue
 		}
 
+		o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(model.AgentClassifier), string(model.AgentWorking))
 		o.logger.Info("spawned classifier agent", "task_id", task.ID, "agent_id", ag.ID)
 	}
 }
@@ -110,16 +111,19 @@ func (o *Orchestrator) onClassifierCompleted(ag *model.Agent, task *model.Task) 
 	}
 	task.AssignedAgentID = nil
 
-	path := filepath.Join(ag.WorktreePath, "classification.json")
+	path := filepath.Join(ag.WorktreePath, fmt.Sprintf("classification-%s.json", task.ID))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		// Missing or unreadable output — park for human triage.
-		return o.parkClassifierForTriage(task, fmt.Sprintf("read classification.json: %v", err))
+		return o.parkClassifierForTriage(task, fmt.Sprintf("read classification-%s.json: %v", task.ID, err))
 	}
+
+	// Clean up the classification file so they don't accumulate in the master worktree.
+	_ = os.Remove(path)
 
 	var output ClassifierOutput
 	if err := json.Unmarshal(data, &output); err != nil {
-		return o.parkClassifierForTriage(task, fmt.Sprintf("parse classification.json: %v", err))
+		return o.parkClassifierForTriage(task, fmt.Sprintf("parse classification-%s.json: %v", task.ID, err))
 	}
 
 	if output.NeedsClarification {
@@ -223,6 +227,7 @@ func (o *Orchestrator) applyClassification(task *model.Task, output *ClassifierO
 		return fmt.Errorf("apply classification: save event: %w", err)
 	}
 	o.emit("task_updated", task)
+	o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "classifier completed")
 	o.logger.Info("classifier completed, task moved to backlog",
 		"task_id", task.ID, "category", task.Category, "complexity", task.ComplexityScore)
 	return nil

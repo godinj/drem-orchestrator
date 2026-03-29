@@ -140,6 +140,11 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.agents.autoFilter = !m.agents.autoFilter
 		m.agents.clampAgentCursor()
 		return m, nil
+	case "H", "h":
+		m.board.showAll = !m.board.showAll
+		m.board.relocateCursor()
+		m.board.adjustScroll()
+		return m, nil
 	case "b":
 		m.focus = FocusBugReports
 		return m, m.loadBugReports()

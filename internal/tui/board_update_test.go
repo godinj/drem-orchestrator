@@ -466,9 +466,10 @@ func TestBoardView_RendersStatusesCorrectly(t *testing.T) {
 				tasks: []model.Task{
 					{ID: uuid.New(), Title: "Task", Status: tc.status},
 				},
-				cursor: 0,
-				width:  80,
-				height: 10,
+				cursor:  0,
+				width:   80,
+				height:  10,
+				showAll: true, // show all statuses including rejected
 			}
 			output := b.View()
 			if !contains(output, tc.wantString) {

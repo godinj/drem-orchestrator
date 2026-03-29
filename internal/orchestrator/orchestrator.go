@@ -20,6 +20,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
+	"github.com/godinj/drem-orchestrator/internal/eventbus"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
@@ -43,6 +44,7 @@ const (
 	reconcileInterval      = 10 // consistency audit frequency (every N ticks; 0 = disable)
 	shortIDLen             = 4  // UUID characters for short display IDs
 	maxDisplayNameLen      = 30 // max task title length in supervisor session names
+	agentSpawnGracePeriod  = 60 * time.Second // how long to wait after agent spawn before treating it as stuck
 )
 
 // slugRegexp matches non-alphanumeric characters for feature name derivation.
@@ -99,6 +101,7 @@ type Orchestrator struct {
 	worktree                    *worktree.Manager
 	merger                      mergerClient
 	memory                      *memory.Manager
+	bus                         *eventbus.Bus          // nil disables C-Suite event emission
 	supervisor                  *supervisor.Supervisor // nil disables LLM-powered decisions
 	bugreport                   *bugreport.Service     // nil disables bug report ingestion
 	bugreportDir                string                 // path to .drem/bug-reports/ drop directory
@@ -178,8 +181,18 @@ func (o *Orchestrator) SetInteractiveSupervisorConfig(cfg model.AgentCLIConfig) 
 	o.interactiveSupervisorConfig = cfg
 }
 
+// SetEventBus connects the orchestrator to the C-Suite event bus. When set,
+// every task status transition and agent status change is published as an event
+// with delivery records for all known C-Suite agents. Pass nil to disable.
+func (o *Orchestrator) SetEventBus(bus *eventbus.Bus) {
+	o.bus = bus
+}
+
 // Run starts the main loop. It blocks until ctx is cancelled.
 func (o *Orchestrator) Run(ctx context.Context) {
+	// Startup cleanup: clear stale agent assignments left from previous runs.
+	o.cleanupOrphanedAssignments()
+
 	ticker := time.NewTicker(o.tick)
 	defer ticker.Stop()
 	o.logger.Info("orchestrator started", "project_id", o.projectID)
@@ -397,7 +410,16 @@ func (o *Orchestrator) recoverStuckAgents() {
 		return
 	}
 
+	now := time.Now()
 	for _, ag := range agents {
+		// Grace period: skip agents that were recently spawned. This prevents
+		// a race where a stale idle signal file (from a previous agent in the
+		// same worktree) causes a freshly-spawned agent to be immediately
+		// treated as stuck before it has time to begin work.
+		if ag.CreatedAt.After(now.Add(-agentSpawnGracePeriod)) {
+			continue
+		}
+
 		idleSignal := filepath.Join(ag.WorktreePath, ".claude", "agent-idle")
 		if _, err := os.Stat(idleSignal); err != nil {
 			continue // signal file doesn't exist — agent is genuinely working
@@ -677,6 +699,7 @@ func (o *Orchestrator) failTask(task *model.Task, reason string) error {
 	}
 
 	o.emit("task_failed", map[string]any{"task_id": task.ID, "reason": reason})
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, reason)
 	o.logger.Warn("task failed", "task_id", task.ID, "reason", reason)
 	return nil
 }

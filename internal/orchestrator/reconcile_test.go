@@ -808,6 +808,8 @@ func TestReconcileStuckAgents_SessionDead_WithCommits(t *testing.T) {
 		CurrentTaskID:  &taskID,
 	}
 	db.Create(&ag)
+	// Backdate past grace period so reconciliation can act.
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
 
 	sub := model.Task{
 		ID:              taskID,
@@ -863,6 +865,8 @@ func TestReconcileStuckAgents_SessionDead_NoCommits(t *testing.T) {
 		CurrentTaskID:  &taskID,
 	}
 	db.Create(&ag)
+	// Backdate past grace period so reconciliation can act.
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
 
 	sub := model.Task{
 		ID:              taskID,
@@ -1088,6 +1092,9 @@ func TestRecoverStuckAgents_WithSignalFile(t *testing.T) {
 	}
 	db.Create(&ag)
 
+	// Backdate CreatedAt past the grace period so recovery can act on it.
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
+
 	task := model.Task{
 		ID:              taskID,
 		ProjectID:       orch.projectID,
@@ -1110,6 +1117,76 @@ func TestRecoverStuckAgents_WithSignalFile(t *testing.T) {
 	db.First(&updatedAgent, "id = ?", agentID)
 	if updatedAgent.Status == model.AgentWorking {
 		t.Error("expected agent to no longer be working after recovery")
+	}
+}
+
+// TestRecoverStuckAgents_GracePeriod_SkipsNewAgent verifies that a freshly-
+// spawned agent with a stale idle signal file is NOT recovered during the
+// grace period. This is the race condition fix: a new agent in a worktree
+// that has a leftover agent-idle file from a previous agent should not be
+// immediately treated as stuck.
+func TestRecoverStuckAgents_GracePeriod_SkipsNewAgent(t *testing.T) {
+	orch, db, _ := setupReconcileTest(t)
+
+	// Create the worktree directory structure with a stale idle signal file
+	// (simulating a leftover from a previous agent).
+	worktreeDir := t.TempDir()
+	claudeDir := filepath.Join(worktreeDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	idleSignal := filepath.Join(claudeDir, "agent-idle")
+	if err := os.WriteFile(idleSignal, []byte("idle"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	agentID := uuid.New()
+	taskID := uuid.New()
+	now := time.Now()
+	ag := model.Agent{
+		ID:            agentID,
+		ProjectID:     orch.projectID,
+		AgentType:     model.AgentClassifier,
+		Name:          "freshly-spawned-classifier",
+		Status:        model.AgentWorking,
+		WorktreePath:  worktreeDir,
+		CurrentTaskID: &taskID,
+		HeartbeatAt:   &now,
+		// CreatedAt is set by GORM to time.Now() — within the grace period.
+	}
+	db.Create(&ag)
+
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "fresh-task",
+		Description:     "task assigned to freshly spawned agent",
+		Status:          model.StatusClassifying,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&task)
+
+	// recoverStuckAgents should skip this agent because it was just created
+	// (within the grace period), even though the idle signal file exists.
+	orch.recoverStuckAgents()
+
+	// Agent should still be WORKING — not recovered.
+	var updatedAgent model.Agent
+	db.First(&updatedAgent, "id = ?", agentID)
+	if updatedAgent.Status != model.AgentWorking {
+		t.Errorf("expected freshly-spawned agent to stay WORKING during grace period, got %s", updatedAgent.Status)
+	}
+
+	// Task should still be CLASSIFYING — not parked.
+	var updatedTask model.Task
+	db.First(&updatedTask, "id = ?", taskID)
+	if updatedTask.Status != model.StatusClassifying {
+		t.Errorf("expected task to stay CLASSIFYING during grace period, got %s", updatedTask.Status)
+	}
+	if updatedTask.Context != nil {
+		if _, parked := updatedTask.Context["human_triage"]; parked {
+			t.Error("task should NOT be parked for triage during grace period")
+		}
 	}
 }
 
@@ -1142,6 +1219,8 @@ func TestReconcileStuckAgents_AutoRetriesFirst(t *testing.T) {
 		CurrentTaskID:  &taskID,
 	}
 	db.Create(&ag)
+	// Backdate past grace period so reconciliation can act.
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
 
 	sub := model.Task{
 		ID:              taskID,
@@ -1207,6 +1286,8 @@ func TestReconcileStuckAgents_FailsAtLimit(t *testing.T) {
 		CurrentTaskID:  &taskID,
 	}
 	db.Create(&ag)
+	// Backdate past grace period so reconciliation can act.
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
 
 	sub := model.Task{
 		ID:              taskID,
@@ -1499,6 +1580,8 @@ func TestReconcileStuckAgents_TopLevel_Classifying(t *testing.T) {
 		CurrentTaskID: &taskID,
 	}
 	db.Create(&ag)
+	// Backdate past grace period so reconciliation can act.
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
 
 	task := model.Task{
 		ID:              taskID,
@@ -1566,6 +1649,8 @@ func TestReconcileStuckAgents_TopLevel_Planning(t *testing.T) {
 		CurrentTaskID:  &taskID,
 	}
 	db.Create(&ag)
+	// Backdate past grace period so reconciliation can act.
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
 
 	task := model.Task{
 		ID:              taskID,
@@ -1638,6 +1723,8 @@ func TestReconcileStuckAgents_Subtask_TestWriting(t *testing.T) {
 		CurrentTaskID:  &taskID,
 	}
 	db.Create(&ag)
+	// Backdate past grace period so reconciliation can act.
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
 
 	sub := model.Task{
 		ID:              taskID,
@@ -1696,6 +1783,8 @@ func TestReconcileStuckAgents_TopLevel_Classifying_PreservesStatus(t *testing.T)
 		CurrentTaskID: &taskID,
 	}
 	db.Create(&ag)
+	// Backdate past grace period so reconciliation can act.
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
 
 	task := model.Task{
 		ID:              taskID,
@@ -1724,6 +1813,350 @@ func TestReconcileStuckAgents_TopLevel_Classifying_PreservesStatus(t *testing.T)
 	}
 }
 
+// ---------------------------------------------------------------------------
+// reconcileOrphanedTaskAssignments — idle/dead agent with stale task assignment
+// ---------------------------------------------------------------------------
+
+func TestReconcileOrphanedTaskAssignments_IdleAgent(t *testing.T) {
+	// An agent completed (IDLE) but the task's assigned_agent_id was not
+	// cleared — this is the exact bug that stranded task 5936f2aa.
+	orch, db, _ := setupReconcileTest(t)
+
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:        agentID,
+		ProjectID: orch.projectID,
+		AgentType: model.AgentClassifier,
+		Name:      "idle-orphan",
+		Status:    model.AgentIdle, // completed, now idle
+	}
+	db.Create(&ag)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "orphaned-classifying",
+		Description:     "task stuck with idle agent",
+		Status:          model.StatusClassifying,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileOrphanedTaskAssignments()
+	if err != nil {
+		t.Fatalf("reconcileOrphanedTaskAssignments() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix for idle agent, got %d", fixes)
+	}
+
+	// Task should have assigned_agent_id cleared.
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.AssignedAgentID != nil {
+		t.Error("expected assigned_agent_id to be cleared")
+	}
+	// Status should remain classifying so processClassifyingTasks re-dispatches.
+	if updated.Status != model.StatusClassifying {
+		t.Errorf("expected status classifying, got %s", updated.Status)
+	}
+}
+
+func TestReconcileOrphanedTaskAssignments_DeadAgent(t *testing.T) {
+	// Agent died but task still references it as assigned.
+	orch, db, _ := setupReconcileTest(t)
+
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:        agentID,
+		ProjectID: orch.projectID,
+		AgentType: model.AgentPlanner,
+		Name:      "dead-orphan",
+		Status:    model.AgentDead,
+	}
+	db.Create(&ag)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "orphaned-planning",
+		Description:     "task stuck with dead agent",
+		Status:          model.StatusPlanning,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileOrphanedTaskAssignments()
+	if err != nil {
+		t.Fatalf("reconcileOrphanedTaskAssignments() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix for dead agent, got %d", fixes)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.AssignedAgentID != nil {
+		t.Error("expected assigned_agent_id to be cleared")
+	}
+	if updated.Status != model.StatusPlanning {
+		t.Errorf("expected status planning, got %s", updated.Status)
+	}
+}
+
+func TestReconcileOrphanedTaskAssignments_MissingAgent(t *testing.T) {
+	// Agent record doesn't exist in DB at all.
+	orch, db, _ := setupReconcileTest(t)
+
+	missingAgentID := uuid.New() // no agent record created
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "orphaned-missing-agent",
+		Description:     "task stuck with nonexistent agent",
+		Status:          model.StatusClassifying,
+		AssignedAgentID: &missingAgentID,
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileOrphanedTaskAssignments()
+	if err != nil {
+		t.Fatalf("reconcileOrphanedTaskAssignments() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix for missing agent, got %d", fixes)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.AssignedAgentID != nil {
+		t.Error("expected assigned_agent_id to be cleared")
+	}
+}
+
+func TestReconcileOrphanedTaskAssignments_SkipsWorkingAgent(t *testing.T) {
+	// A WORKING agent should NOT have its assignment cleared — that's handled
+	// by reconcileStuckAgents.
+	orch, db, _ := setupReconcileTest(t)
+
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:        agentID,
+		ProjectID: orch.projectID,
+		AgentType: model.AgentClassifier,
+		Name:      "working-agent",
+		Status:    model.AgentWorking,
+	}
+	db.Create(&ag)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "task-with-working-agent",
+		Description:     "should not be touched",
+		Status:          model.StatusClassifying,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileOrphanedTaskAssignments()
+	if err != nil {
+		t.Fatalf("reconcileOrphanedTaskAssignments() error: %v", err)
+	}
+	if fixes != 0 {
+		t.Errorf("expected 0 fixes for working agent, got %d", fixes)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.AssignedAgentID == nil || *updated.AssignedAgentID != agentID {
+		t.Error("expected assigned_agent_id to remain set for working agent")
+	}
+}
+
+func TestReconcileOrphanedTaskAssignments_SkipsBlockedAgent(t *testing.T) {
+	// A BLOCKED agent is legitimately waiting — assignment should not be cleared.
+	orch, db, _ := setupReconcileTest(t)
+
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:        agentID,
+		ProjectID: orch.projectID,
+		AgentType: model.AgentCoder,
+		Name:      "blocked-agent",
+		Status:    model.AgentBlocked,
+	}
+	db.Create(&ag)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "task-with-blocked-agent",
+		Description:     "should not be touched",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileOrphanedTaskAssignments()
+	if err != nil {
+		t.Fatalf("reconcileOrphanedTaskAssignments() error: %v", err)
+	}
+	if fixes != 0 {
+		t.Errorf("expected 0 fixes for blocked agent, got %d", fixes)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.AssignedAgentID == nil || *updated.AssignedAgentID != agentID {
+		t.Error("expected assigned_agent_id to remain set for blocked agent")
+	}
+}
+
+func TestReconcileOrphanedTaskAssignments_MultipleStatuses(t *testing.T) {
+	// Verify orphaned assignments are cleared across classifying, planning,
+	// test_writing, and in_progress statuses in one pass.
+	orch, db, _ := setupReconcileTest(t)
+
+	createOrphaned := func(status model.TaskStatus, agentStatus model.AgentStatus, title string) {
+		agentID := uuid.New()
+		db.Create(&model.Agent{
+			ID:        agentID,
+			ProjectID: orch.projectID,
+			AgentType: model.AgentClassifier,
+			Name:      title + "-agent",
+			Status:    agentStatus,
+		})
+		db.Create(&model.Task{
+			ID:              uuid.New(),
+			ProjectID:       orch.projectID,
+			Title:           title,
+			Description:     "orphaned",
+			Status:          status,
+			AssignedAgentID: &agentID,
+		})
+	}
+
+	createOrphaned(model.StatusClassifying, model.AgentIdle, "cls-orphan")
+	createOrphaned(model.StatusPlanning, model.AgentDead, "plan-orphan")
+	createOrphaned(model.StatusTestWriting, model.AgentIdle, "tw-orphan")
+	createOrphaned(model.StatusInProgress, model.AgentDead, "ip-orphan")
+
+	fixes, err := orch.reconcileOrphanedTaskAssignments()
+	if err != nil {
+		t.Fatalf("reconcileOrphanedTaskAssignments() error: %v", err)
+	}
+	if fixes != 4 {
+		t.Errorf("expected 4 fixes across all statuses, got %d", fixes)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// cleanupOrphanedAssignments — startup cleanup
+// ---------------------------------------------------------------------------
+
+func TestCleanupOrphanedAssignments_ClearsIdleAgent(t *testing.T) {
+	orch, db, _ := setupReconcileTest(t)
+
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:        agentID,
+		ProjectID: orch.projectID,
+		AgentType: model.AgentClassifier,
+		Name:      "startup-idle",
+		Status:    model.AgentIdle,
+	}
+	db.Create(&ag)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "startup-cleanup-test",
+		Description:     "task with stale assignment at startup",
+		Status:          model.StatusClassifying,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&task)
+
+	orch.cleanupOrphanedAssignments()
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.AssignedAgentID != nil {
+		t.Error("expected startup cleanup to clear assigned_agent_id for idle agent")
+	}
+}
+
+func TestCleanupOrphanedAssignments_ClearsMissingAgent(t *testing.T) {
+	orch, db, _ := setupReconcileTest(t)
+
+	missingAgentID := uuid.New()
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "startup-missing-agent",
+		Description:     "task referencing deleted agent",
+		Status:          model.StatusPlanning,
+		AssignedAgentID: &missingAgentID,
+	}
+	db.Create(&task)
+
+	orch.cleanupOrphanedAssignments()
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.AssignedAgentID != nil {
+		t.Error("expected startup cleanup to clear assigned_agent_id for missing agent")
+	}
+}
+
+func TestCleanupOrphanedAssignments_SkipsTerminalStatuses(t *testing.T) {
+	// Tasks in terminal statuses (done, failed) should not be affected.
+	orch, db, _ := setupReconcileTest(t)
+
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:        agentID,
+		ProjectID: orch.projectID,
+		AgentType: model.AgentCoder,
+		Name:      "startup-terminal",
+		Status:    model.AgentIdle,
+	}
+	db.Create(&ag)
+
+	taskID := uuid.New()
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "done-task-with-agent",
+		Description:     "should not be touched",
+		Status:          model.StatusDone,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&task)
+
+	orch.cleanupOrphanedAssignments()
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.AssignedAgentID == nil {
+		t.Error("startup cleanup should not touch tasks in terminal statuses")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// reconcileStuckAgents — multiple statuses (moved below new tests)
+// ---------------------------------------------------------------------------
+
 func TestReconcileStuckAgents_MultipleStatuses(t *testing.T) {
 	// Verify that a single reconcile pass catches dead agents across
 	// classifying, planning, and in_progress statuses simultaneously.
@@ -1731,6 +2164,11 @@ func TestReconcileStuckAgents_MultipleStatuses(t *testing.T) {
 
 	featureName := "stuck-multi"
 	createFeatureWorktree(t, bareRepo, featureName)
+
+	// Backdate helper — shifts agent CreatedAt past the grace period.
+	backdateAgent := func(id uuid.UUID) {
+		db.Model(&model.Agent{}).Where("id = ?", id).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
+	}
 
 	// 1. Top-level classifying task with dead classifier.
 	clsAgentID := uuid.New()
@@ -1743,6 +2181,7 @@ func TestReconcileStuckAgents_MultipleStatuses(t *testing.T) {
 		Status:        model.AgentWorking,
 		CurrentTaskID: &clsTaskID,
 	})
+	backdateAgent(clsAgentID)
 	db.Create(&model.Task{
 		ID:              clsTaskID,
 		ProjectID:       orch.projectID,
@@ -1773,6 +2212,7 @@ func TestReconcileStuckAgents_MultipleStatuses(t *testing.T) {
 		WorktreeBranch: "",
 		CurrentTaskID:  &ipTaskID,
 	})
+	backdateAgent(ipAgentID)
 	db.Create(&model.Task{
 		ID:              ipTaskID,
 		ProjectID:       orch.projectID,
@@ -1794,6 +2234,7 @@ func TestReconcileStuckAgents_MultipleStatuses(t *testing.T) {
 		Status:        model.AgentWorking,
 		CurrentTaskID: &planTaskID,
 	})
+	backdateAgent(planAgentID)
 	db.Create(&model.Task{
 		ID:              planTaskID,
 		ProjectID:       orch.projectID,

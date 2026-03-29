@@ -48,6 +48,7 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 			return fmt.Errorf("execute merge: save event: %w", err)
 		}
 		o.emit("merge_complete", map[string]any{"task_id": task.ID})
+		o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "merge complete")
 		o.logger.Info("merge complete", "task_id", task.ID)
 	} else {
 		// Quick fix tasks: flag for human review on merge failure, no fixer agent.
@@ -243,6 +244,7 @@ func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
 	}
 
 	o.emit("quickfix_merging", map[string]any{"task_id": task.ID})
+	o.publishTaskTransition(task.ID.String(), evt1.OldValue, string(task.Status), "quickfix fast-tracked to merging")
 	o.logger.Info("quickfix transitioning to merging", "task_id", task.ID)
 	return nil
 }

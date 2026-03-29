@@ -287,3 +287,148 @@ func TestLifecycleIntegration_RefusedAgent(t *testing.T) {
 		t.Errorf("turn_metrics rows for kyle: got %d, want 0", count)
 	}
 }
+
+// mockPrecheck is a controllable TurnPrecheck for testing.
+type mockPrecheck struct {
+	hasWork bool
+}
+
+func (m *mockPrecheck) HasWork(_ string) bool {
+	return m.hasWork
+}
+
+// TestLifecycleIntegration_PrecheckSkips verifies that when a TurnPrecheck
+// reports no work, the turn is skipped: no subprocess is launched and no
+// turn_metrics row is created.
+//
+// Lifecycle scenario: trigger "mike" with precheck returning false → Started
+// (trigger accepted), but subprocess skipped, no DB row.
+func TestLifecycleIntegration_PrecheckSkips(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
+	runner := &lifecycleMockRunner{output: claudeJSON(100, 50)}
+	cfg := allowedCfg()
+	cfg.Precheck = &mockPrecheck{hasWork: false}
+	lm := watcher.NewLifecycleManager(db, cfg, runner)
+
+	lm.TriggerAgent("mike")
+	lm.Close() // waits for the turn goroutine to finish
+
+	// No subprocess must have been launched.
+	if runner.runCount() != 0 {
+		t.Errorf("subprocess launch count: got %d, want 0 (precheck returned false)", runner.runCount())
+	}
+
+	// No turn_metrics row must exist — skipped turns do not record metrics.
+	var count int64
+	if err := db.Model(&watcher.TurnMetric{}).Where("agent = ?", "mike").Count(&count).Error; err != nil {
+		t.Fatalf("query turn_metrics count: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("turn_metrics rows for mike: got %d, want 0 (turn was skipped)", count)
+	}
+}
+
+// TestLifecycleIntegration_PrecheckAllowsRun verifies that when a TurnPrecheck
+// reports work, the turn proceeds normally: subprocess is launched and
+// turn_metrics are recorded.
+//
+// Lifecycle scenario: trigger "mike" with precheck returning true → Started,
+// subprocess runs, DB row persisted.
+func TestLifecycleIntegration_PrecheckAllowsRun(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
+	runner := &lifecycleMockRunner{output: claudeJSON(100, 50)}
+	cfg := allowedCfg()
+	cfg.Precheck = &mockPrecheck{hasWork: true}
+	lm := watcher.NewLifecycleManager(db, cfg, runner)
+
+	lm.TriggerAgent("mike")
+	lm.Close()
+
+	if runner.runCount() != 1 {
+		t.Errorf("subprocess launch count: got %d, want 1", runner.runCount())
+	}
+
+	var count int64
+	if err := db.Model(&watcher.TurnMetric{}).Where("agent = ?", "mike").Count(&count).Error; err != nil {
+		t.Fatalf("query turn_metrics count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("turn_metrics rows for mike: got %d, want 1", count)
+	}
+}
+
+// TestLifecycleIntegration_PrecheckNilMeansRun verifies that a nil Precheck
+// (the default) does not interfere — turns run unconditionally.
+func TestLifecycleIntegration_PrecheckNilMeansRun(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
+	runner := &lifecycleMockRunner{output: claudeJSON(100, 50)}
+	cfg := allowedCfg()
+	// cfg.Precheck is nil (default)
+	lm := watcher.NewLifecycleManager(db, cfg, runner)
+
+	lm.TriggerAgent("mike")
+	lm.Close()
+
+	if runner.runCount() != 1 {
+		t.Errorf("subprocess launch count: got %d, want 1 (nil precheck should not block)", runner.runCount())
+	}
+}
+
+// TestLifecycleIntegration_PrecheckSkipHonoursQueuedTrigger verifies that
+// when a turn is skipped by precheck and a queued trigger exists, the queued
+// trigger still fires (which may also be skipped if still no work).
+func TestLifecycleIntegration_PrecheckSkipHonoursQueuedTrigger(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
+
+	// First turn blocks so we can queue a second trigger.
+	block := make(chan struct{})
+	ready := make(chan struct{})
+	runner := &lifecycleMockRunner{
+		output: claudeJSON(100, 50),
+		block:  block,
+		ready:  ready,
+	}
+
+	// Precheck starts as hasWork=true (first turn runs), then after the first
+	// turn starts, we set hasWork=false and queue a second trigger. The queued
+	// trigger should skip because precheck returns false.
+	precheck := &mockPrecheck{hasWork: true}
+	cfg := allowedCfg()
+	cfg.Precheck = precheck
+	lm := watcher.NewLifecycleManager(db, cfg, runner)
+
+	// Start first turn (blocks on block channel).
+	r1 := lm.TriggerAgent("mike")
+	if r1 != watcher.TriggerStarted {
+		t.Fatalf("first trigger: got %v, want TriggerStarted", r1)
+	}
+
+	// Wait for the subprocess to begin.
+	<-ready
+
+	// Now set precheck to false and queue a second trigger.
+	precheck.hasWork = false
+	r2 := lm.TriggerAgent("mike")
+	if r2 != watcher.TriggerQueued {
+		t.Errorf("second trigger: got %v, want TriggerQueued", r2)
+	}
+
+	// Unblock first turn. Queued trigger fires, precheck returns false → skip.
+	close(block)
+	lm.Close()
+
+	// Only one subprocess should have been launched (the first turn).
+	// The queued trigger was skipped by precheck.
+	if runner.runCount() != 1 {
+		t.Errorf("subprocess launch count: got %d, want 1 (queued trigger should be skipped)", runner.runCount())
+	}
+
+	// Only one turn_metrics row should exist (from the first turn).
+	var count int64
+	if err := db.Model(&watcher.TurnMetric{}).Where("agent = ?", "mike").Count(&count).Error; err != nil {
+		t.Fatalf("query turn_metrics count: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("turn_metrics rows for mike: got %d, want 1 (queued turn was skipped)", count)
+	}
+}

@@ -60,6 +60,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	if err := o.db.Save(ag).Error; err != nil {
 		return fmt.Errorf("on agent failed: save agent: %w", err)
 	}
+	o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(ag.AgentType), string(model.AgentDead))
 
 	// Supervisor-powered failure diagnosis.
 	if o.supervisor != nil {
@@ -134,6 +135,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 		o.logger.Info("agent failed but work already merged, fast-tracking to done",
 			"task_id", task.ID, "agent_id", ag.ID)
 		// Fast-track subtask through states to DONE.
+		preStatus := string(task.Status)
 		transitions := []model.TaskStatus{
 			model.StatusTestingReady,
 			model.StatusMerging,
@@ -156,6 +158,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 			return fmt.Errorf("on agent failed: save task: %w", err)
 		}
 		o.emit("task_updated", task)
+		o.publishTaskTransition(task.ID.String(), preStatus, string(task.Status), "already merged, fast-tracked to done")
 		return nil
 	}
 
@@ -347,6 +350,7 @@ func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task
 		if err := o.db.Create(evt).Error; err != nil {
 			return fmt.Errorf("on agent completed: save merge-failure event: %w", err)
 		}
+		o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "merge into feature branch failed")
 	}
 	return nil
 }

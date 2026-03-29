@@ -40,6 +40,14 @@ var statusSortOrder = map[model.TaskStatus]int{
 	model.StatusPaused:             11,
 	model.StatusRejected:           12,
 	model.StatusDone:               13,
+	model.TaskStatus("cancelled"):  14,
+}
+
+// hiddenStatuses are task statuses hidden from the board by default.
+// The user can reveal them with the H toggle.
+var hiddenStatuses = map[model.TaskStatus]bool{
+	"cancelled":          true,
+	model.StatusRejected: true,
 }
 
 // BoardModel renders the task list panel.
@@ -51,6 +59,7 @@ type BoardModel struct {
 	width        int
 	height       int
 	expanded     map[uuid.UUID]bool // parent task IDs whose children are shown (collapsed by default)
+	showAll      bool               // H toggle: when false (default) hide cancelled/rejected tasks
 }
 
 // NewBoardModel creates an empty BoardModel.
@@ -67,10 +76,13 @@ func (b BoardModel) buildDisplayList() []displayEntry {
 		return nil
 	}
 
-	// Separate roots from children.
+	// Separate roots from children, optionally filtering hidden statuses.
 	var roots []model.Task
 	children := make(map[uuid.UUID][]model.Task) // parentID -> children
 	for _, t := range b.tasks {
+		if !b.showAll && hiddenStatuses[t.Status] {
+			continue
+		}
 		if t.ParentTaskID == nil {
 			roots = append(roots, t)
 		} else {
@@ -404,6 +416,7 @@ var statusColors = map[model.TaskStatus]lipgloss.Color{
 	model.StatusDone:               lipgloss.Color("42"),
 	model.StatusFailed:             lipgloss.Color("196"),
 	model.StatusRejected:           lipgloss.Color("196"),
+	model.TaskStatus("cancelled"):  lipgloss.Color("241"),
 }
 
 // agentStatusColors maps each AgentStatus to a display color.
@@ -430,6 +443,7 @@ var statusIcons = map[model.TaskStatus]string{
 	model.StatusDone:               "\u2713", // ✓
 	model.StatusFailed:             "\u2717", // ✗
 	model.StatusRejected:           "\u2718", // ✘
+	model.TaskStatus("cancelled"):  "\u2205", // ∅
 }
 
 // Component styles used across the TUI.

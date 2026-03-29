@@ -202,6 +202,7 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "plan approved")
 	o.logger.Info("plan approved", "task_id", task.ID, "subtask_count", len(subtaskPlans))
 	return nil
 }
@@ -232,6 +233,7 @@ func (o *Orchestrator) HandlePlanRejected(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "plan rejected")
 	o.logger.Info("plan rejected", "task_id", task.ID)
 	return nil
 }
@@ -259,6 +261,7 @@ func (o *Orchestrator) HandleTestPassed(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "test passed")
 	o.logger.Info("test passed, task merging", "task_id", task.ID)
 	return nil
 }
@@ -288,6 +291,7 @@ func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "test failed")
 	o.logger.Info("test failed, task back to in_progress", "task_id", task.ID)
 	return nil
 }
@@ -315,6 +319,7 @@ func (o *Orchestrator) HandleTestReviewApproved(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "test review approved")
 	o.logger.Info("test review approved, scheduling implementation", "task_id", task.ID)
 	return nil
 }
@@ -376,6 +381,7 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 		}
 
 		o.emit("task_updated", &task)
+		o.publishTaskTransition(task.ID.String(), evt1.OldValue, string(model.StatusPaused), "test review rejected 3 times, paused for diagnostic")
 		o.logger.Warn("test review rejected 3 times, task paused for diagnostic",
 			"task_id", task.ID, "rejection_count", rejectionCount)
 
@@ -471,6 +477,7 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 	}
 
 	o.emit("task_updated", &task)
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "test review rejected")
 	o.logger.Info("test review rejected, back to test writing",
 		"task_id", task.ID,
 		"rejection_count", rejectionCount,
@@ -623,6 +630,7 @@ func (o *Orchestrator) HandleClarificationAnswer(taskID uuid.UUID, answer string
 			return fmt.Errorf("handle clarification answer: save event: %w", err)
 		}
 		o.emit("task_updated", &task)
+		o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "clarification complete, replanning")
 		o.logger.Info("clarification complete, replanning", "task_id", task.ID)
 		return nil
 	}

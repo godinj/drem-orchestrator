@@ -431,8 +431,13 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		return fmt.Errorf("write exit-log script: %w", err)
 	}
 
-	// Build hooks map with idle_prompt notification and PreCompact hooks.
+	// Remove any stale idle signal file left by a previous agent that used
+	// the same worktree. Without this cleanup, recoverStuckAgents can
+	// immediately treat the freshly-spawned agent as stuck.
 	idleSignal := filepath.Join(claudeDir, "agent-idle")
+	os.Remove(idleSignal) // ignore error — file may not exist
+
+	// Build hooks map with idle_prompt notification and PreCompact hooks.
 	compactionSignal := ctxmon.CompactionSignalPath(worktreePath)
 
 	hooks := map[string]any{

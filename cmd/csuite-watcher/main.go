@@ -192,15 +192,8 @@ func runWatcher(args []string, stderr io.Writer) int {
 
 	runnerCfg := toRunnerConfig(cfg)
 
-	// Create a real CommandRunner that spawns claude subprocesses.
-	runner := &claudeCommandRunner{
-		workDir:   expandTilde(cfg.InboxBaseDir),
-		promptDir: runnerCfg.PromptDir,
-	}
-
-	r := watcher.NewRunner(runnerCfg, db, runner)
-
-	// Open the event bus database (csuite.db) for delivery polling.
+	// Open the event bus database (csuite.db) for delivery polling and
+	// pre-trigger inbox checks.
 	eventBusPath := expandTilde(cfg.EventBusDBPath)
 	if eventBusPath == "" {
 		eventBusPath = expandTilde("~/.drem-csuite/csuite.db")
@@ -211,6 +204,21 @@ func runWatcher(args []string, stderr io.Writer) int {
 		return 1
 	}
 	defer bus.Close()
+
+	// Pre-trigger inbox check: skip turns when agent has no inbox messages
+	// and no unacked event bus deliveries.
+	runnerCfg.Precheck = &inboxEventPrecheck{
+		inboxBaseDir: runnerCfg.InboxBaseDir,
+		bus:          bus,
+	}
+
+	// Create a real CommandRunner that spawns claude subprocesses.
+	runner := &claudeCommandRunner{
+		workDir:   expandTilde(cfg.InboxBaseDir),
+		promptDir: runnerCfg.PromptDir,
+	}
+
+	r := watcher.NewRunner(runnerCfg, db, runner)
 
 	// Set up signal-driven context cancellation.
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -273,6 +281,29 @@ func toRunnerConfig(cfg watcherTomlConfig) watcher.RunnerConfig {
 		rc.HeartbeatInterval = d
 	}
 	return rc
+}
+
+// inboxEventPrecheck implements watcher.TurnPrecheck by checking both the
+// filesystem inbox and the event bus. A turn is skipped only when BOTH are
+// empty; either one having work is sufficient to run.
+type inboxEventPrecheck struct {
+	inboxBaseDir string
+	bus          *eventbus.Bus
+}
+
+// HasWork returns true if the agent has unarchived inbox messages or unacked
+// event bus deliveries.
+func (p *inboxEventPrecheck) HasWork(agent string) bool {
+	if watcher.HasInboxMessages(p.inboxBaseDir, agent) {
+		return true
+	}
+	unacked, err := p.bus.UnackedDeliveries(agent)
+	if err != nil {
+		// On error, err on the side of running the turn.
+		log.Printf("precheck: event bus query for %s: %v", agent, err)
+		return true
+	}
+	return len(unacked) > 0
 }
 
 // claudeCommandRunner is the production CommandRunner that spawns claude

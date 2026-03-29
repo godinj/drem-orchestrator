@@ -146,6 +146,51 @@ func TestSpawnAgentInWorktree_Subprocess(t *testing.T) {
 	_ = r.StopAgent(agent.ID)
 }
 
+// TestSpawnAgentInWorktree_CleansStaleIdleSignal verifies that spawning an
+// agent in a worktree with a leftover agent-idle file from a previous agent
+// cleans up the stale file before starting. This prevents the race condition
+// where recoverStuckAgents treats the freshly-spawned agent as stuck.
+func TestSpawnAgentInWorktree_CleansStaleIdleSignal(t *testing.T) {
+	db := testutil.NewTestDB(t)
+
+	binDir := t.TempDir()
+	claudeBin := writeFakeClaudeBin(t, binDir, 0)
+	r := newMockRunner(t, db, claudeBin)
+
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/test.git", "")
+	task := testutil.CreateTask(t, db, project.ID, "Test stale signal cleanup", model.StatusInProgress)
+
+	worktreeDir := t.TempDir()
+
+	// Pre-create a stale agent-idle signal file (simulating a previous agent).
+	claudeDir := filepath.Join(worktreeDir, ".claude")
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	staleSignal := filepath.Join(claudeDir, "agent-idle")
+	if err := os.WriteFile(staleSignal, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the file exists before spawn.
+	if _, err := os.Stat(staleSignal); os.IsNotExist(err) {
+		t.Fatal("precondition: stale signal file should exist before spawn")
+	}
+
+	agent, err := r.SpawnAgentInWorktree(&task, worktreeDir, model.AgentCoder, "test prompt")
+	if err != nil {
+		t.Fatalf("SpawnAgentInWorktree: %v", err)
+	}
+
+	// The stale idle signal file should have been removed during startAgent().
+	if _, err := os.Stat(staleSignal); !os.IsNotExist(err) {
+		t.Error("stale agent-idle file should have been removed by startAgent, but still exists")
+	}
+
+	// Clean up: stop the agent to cancel background goroutines.
+	_ = r.StopAgent(agent.ID)
+}
+
 func TestSpawnAgentInWorktree_ProcessFailure(t *testing.T) {
 	db := testutil.NewTestDB(t)
 

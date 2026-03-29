@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"os/exec"
 	"strings"
 	"sync"
@@ -14,13 +15,13 @@ import (
 	"gorm.io/gorm"
 )
 
-const defaultTimeout = 10 * time.Minute
+const defaultTimeout = 60 * time.Minute
 
 // LifecycleManager launches agent turns as claude subprocesses, waits for
 // completion, parses JSON output for token counts, and records metrics.
 //
 // Configure ClaudeBin, WorkDir, and Timeout before calling RunTurn.
-// ClaudeBin defaults to "claude"; Timeout defaults to 10 minutes.
+// ClaudeBin defaults to "claude"; Timeout defaults to 3 minutes.
 //
 // For the Phase 2 trigger-based API use NewLifecycleManager.
 type LifecycleManager struct {
@@ -29,7 +30,7 @@ type LifecycleManager struct {
 	// WorkDir is the working directory for the subprocess. Empty uses the
 	// current process working directory.
 	WorkDir string
-	// Timeout is the maximum duration a turn may run. Defaults to 10 minutes.
+	// Timeout is the maximum duration a turn may run. Defaults to 3 minutes.
 	Timeout time.Duration
 	// MetricsStore is used to persist LifecycleResult after each turn.
 	MetricsStore *MetricsStore
@@ -206,8 +207,20 @@ func (m *LifecycleManager) isAllowed(name string) bool {
 // A turn_metrics row is created at turn start with zero EndedAt so the TUI
 // can detect running agents via "ended_at = zero-time" queries. The row is
 // updated with completion data when the subprocess exits.
+//
+// If a TurnPrecheck is configured and reports no actionable work for the
+// agent, the turn is skipped without launching a subprocess. Queued triggers
+// are still honoured so a message arriving between the check and the skip
+// is picked up on the next trigger.
 func (m *LifecycleManager) runTurnAsync(agent string) {
 	defer m.wg.Done()
+
+	// Pre-check: skip if agent has no actionable work.
+	if m.cfg.Precheck != nil && !m.cfg.Precheck.HasWork(agent) {
+		log.Printf("watcher: skipping %s: no inbox messages and no unacked events", agent)
+		m.drainQueue(agent)
+		return
+	}
 
 	startedAt := time.Now()
 
@@ -237,6 +250,12 @@ func (m *LifecycleManager) runTurnAsync(agent string) {
 		"messages_sent":    resp.MessagesSent,
 	}).Error
 
+	m.drainQueue(agent)
+}
+
+// drainQueue checks for a queued trigger and either launches the next turn
+// or cleans up the running state for the agent.
+func (m *LifecycleManager) drainQueue(agent string) {
 	m.mu.Lock()
 	wasQueued := m.queued[agent]
 	delete(m.queued, agent)

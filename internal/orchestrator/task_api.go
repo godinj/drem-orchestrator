@@ -62,6 +62,7 @@ func (o *Orchestrator) PauseTask(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "user paused task")
 	o.logger.Info("task paused", "task_id", task.ID)
 	return nil
 }
@@ -106,6 +107,7 @@ func (o *Orchestrator) ResumeTask(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "user resumed task")
 	o.logger.Info("task resumed", "task_id", task.ID, "status", task.Status)
 	return nil
 }
@@ -161,6 +163,7 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 	}
 
 	o.emit("task_updated", &task)
+	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "user retried task")
 	o.logger.Info("task retried", "task_id", task.ID)
 	return nil
 }
@@ -183,6 +186,7 @@ func (o *Orchestrator) CreateTask(title, description string, priority int) (*mod
 	}
 
 	o.emit("task_created", task)
+	o.publishTaskTransition(task.ID.String(), "", string(model.StatusClassifying), "task created")
 	o.logger.Info("task created", "task_id", task.ID, "title", title)
 	return task, nil
 }
@@ -208,6 +212,7 @@ func (o *Orchestrator) OverrideClassification(taskID uuid.UUID, category model.T
 	}
 
 	o.emit("task_updated", &task)
+	o.publishTaskTransition(task.ID.String(), string(model.StatusClassifying), string(model.StatusBacklog), "classification overridden by user")
 	o.logger.Info("classification overridden", "task_id", taskID, "category", category, "complexity", complexityScore)
 	return nil
 }

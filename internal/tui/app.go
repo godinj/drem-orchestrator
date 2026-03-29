@@ -314,8 +314,15 @@ func (m Model) View() string {
 
 	// Render panels.
 	boardLabel := " Tasks "
+	if m.board.showAll {
+		boardLabel = " Tasks [+all] "
+	}
 	if m.focus == FocusBoard {
-		boardLabel = " Tasks (active) "
+		if m.board.showAll {
+			boardLabel = " Tasks [+all] (active) "
+		} else {
+			boardLabel = " Tasks (active) "
+		}
 	}
 	tasksPanel := panelStyle.
 		Width(d.tasksWidth).

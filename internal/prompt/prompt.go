@@ -133,7 +133,7 @@ func Generate(opts Opts) string {
 	case model.AgentFixer:
 		sections = append(sections, fixerInstructions(opts)...)
 	case model.AgentClassifier:
-		sections = append(sections, classifierInstructions()...)
+		sections = append(sections, classifierInstructions(opts.WorktreePath, opts.Task.ID.String())...)
 	default:
 		sections = append(sections, defaultInstructions()...)
 	}
@@ -657,8 +657,11 @@ func researcherInstructions() []string {
 
 // classifierInstructions returns prompt sections for classifier agents.
 // The classifier explores the codebase (read-only) and produces a structured
-// classification.json with category, complexity score, and enriched metadata.
-func classifierInstructions() []string {
+// classification JSON file with category, complexity score, and enriched metadata.
+// The output file uses an absolute path with the task ID to avoid path-resolution
+// issues and filename collisions between concurrent classifiers.
+func classifierInstructions(worktreePath, taskID string) []string {
+	outputFile := filepath.Join(worktreePath, fmt.Sprintf("classification-%s.json", taskID))
 	return []string{
 		"## Instructions",
 		"",
@@ -666,7 +669,7 @@ func classifierInstructions() []string {
 		"classify the task described above.",
 		"",
 		"**IMPORTANT: Do NOT modify any source code files in the repository.**",
-		"Your only permitted write is the `classification.json` output file described below.",
+		"Your only permitted write is the classification output file described below.",
 		"",
 		"### Process",
 		"",
@@ -674,11 +677,11 @@ func classifierInstructions() []string {
 		"2. Explore the codebase: grep for relevant identifiers, read candidate files,",
 		"   assess how many files would need to change.",
 		"3. Determine the category and complexity.",
-		"4. **You MUST write your classification to `classification.json` in the current working directory.** This is your only deliverable — if you do not write this file, the pipeline cannot proceed.",
+		fmt.Sprintf("4. **You MUST write your classification to the EXACT absolute path `%s`.** This is your only deliverable — if you do not write this file, the pipeline cannot proceed.", outputFile),
 		"",
 		"### Output Format",
 		"",
-		"Write a JSON file at `classification.json` with this schema:",
+		fmt.Sprintf("Write a JSON file at `%s` with this schema:", outputFile),
 		"",
 		"```json",
 		"{",
