@@ -1,7 +1,10 @@
 package serve
 
 import (
+	"crypto/subtle"
+	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // BearerAuth wraps next with HTTP Bearer Token authentication.
@@ -10,6 +13,23 @@ import (
 // to prevent timing side-channel attacks.
 func BearerAuth(token string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		const prefix = "Bearer "
+		if !strings.HasPrefix(authHeader, prefix) {
+			rejectAuth(w)
+			return
+		}
+		got := authHeader[len(prefix):]
+		if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+			rejectAuth(w)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func rejectAuth(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"}) //nolint:errcheck
 }
