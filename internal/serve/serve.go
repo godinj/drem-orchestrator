@@ -3,6 +3,7 @@
 package serve
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 
@@ -43,12 +44,22 @@ func New(cfg Config) *Server {
 // Start binds the listener and begins serving HTTP in the background.
 // ListenAddr returns the actual bound address after Start returns nil.
 func (s *Server) Start() error {
+	ln, err := net.Listen("tcp", s.cfg.Addr)
+	if err != nil {
+		return fmt.Errorf("listen %s: %w", s.cfg.Addr, err)
+	}
+	s.listener = ln
+	s.srv = &http.Server{Handler: s.buildMux()}
+	go s.srv.Serve(ln) //nolint:errcheck
 	return nil
 }
 
 // Stop gracefully shuts down the server.
 func (s *Server) Stop() error {
-	return nil
+	if s.srv == nil {
+		return nil
+	}
+	return s.srv.Close()
 }
 
 // ListenAddr returns the address the server is bound to after Start returns.
