@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"log/slog"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -293,6 +295,96 @@ func TestTransitionQuickFixToMerging_FastTracksThroughTestingReady(t *testing.T)
 	}
 	if !hasMerging {
 		t.Error("expected a merging transition event")
+	}
+}
+
+func TestTransitionQuickFixToMerging_ConstraintViolation_PausesTask(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
+
+	db := testutil.NewTestDB(t)
+	projectID := uuid.New()
+	project := model.Project{
+		ID:            projectID,
+		Name:          "quickfix-constraint-test",
+		BareRepoPath:  bareRepo,
+		DefaultBranch: defaultBranch,
+	}
+	db.Create(&project)
+
+	events := make(chan Event, 100)
+	wt := &worktree.Manager{BareRepoPath: bareRepo, DefaultBranch: defaultBranch}
+	runner := agent.NewRunner(db, nil, wt, "/bin/false", 0, nil)
+
+	o := &Orchestrator{
+		db:        db,
+		projectID: projectID,
+		worktree:  wt,
+		runner:    runner,
+		events:    events,
+		logger:    slog.Default().With("component", "quickfix-constraint-test"),
+	}
+
+	// Create a worktree branch name that points to a real worktree directory
+	// containing a .drem/constraints.toml with a failing constraint.
+	featureBranch := "feature/quickfix-constraint-violation"
+	featureDir := wt.FeatureWorktreePath(strings.TrimPrefix(featureBranch, "feature/"))
+
+	// Write a constraints.toml with a rule that always fails (max_lines=0).
+	constraintsDir := featureDir + "/.drem"
+	if err := os.MkdirAll(constraintsDir, 0o755); err != nil {
+		t.Fatalf("mkdir constraints dir: %v", err)
+	}
+	constraintsToml := constraintsDir + "/constraints.toml"
+	if err := os.WriteFile(constraintsToml, []byte("[[max_lines]]\nname = \"always-fail\"\nglob = \"*.go\"\nlimit = 0\n"), 0o644); err != nil {
+		t.Fatalf("write constraints.toml: %v", err)
+	}
+	// Write a Go file so the constraint has something to match (exceeds limit=0).
+	if err := os.WriteFile(featureDir+"/dummy.go", []byte("package dummy\n"), 0o644); err != nil {
+		t.Fatalf("write dummy.go: %v", err)
+	}
+
+	task := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      projectID,
+		Title:          "fix with constraint violation",
+		Description:    "quick fix: constraint violation",
+		Status:         model.StatusInProgress,
+		Category:       model.CategoryQuickFix,
+		WorktreeBranch: featureBranch,
+	}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	if err := o.transitionQuickFixToMerging(&task); err != nil {
+		t.Fatalf("transitionQuickFixToMerging: unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+
+	if updated.Status != model.StatusPaused {
+		t.Errorf("expected status %q after constraint violation, got %q", model.StatusPaused, updated.Status)
+	}
+	if !updated.NeedsHumanReview {
+		t.Error("expected NeedsHumanReview=true after constraint violation")
+	}
+
+	// Verify a pause event was recorded.
+	var taskEvents []model.TaskEvent
+	db.Where("task_id = ?", task.ID).Find(&taskEvents)
+
+	hasPaused := false
+	for _, e := range taskEvents {
+		if e.NewValue == string(model.StatusPaused) {
+			hasPaused = true
+		}
+	}
+	if !hasPaused {
+		t.Error("expected a paused transition event after constraint violation")
 	}
 }
 

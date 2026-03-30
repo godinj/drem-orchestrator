@@ -204,8 +204,17 @@ func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
 					task.Context = make(model.JSONField)
 				}
 				task.Context["constraint_violations"] = constraints.FormatReport(report)
+
+				pauseEvt, pauseErr := state.TransitionTask(task, model.StatusPaused, "orchestrator",
+					map[string]any{"reason": "constraint-violations"})
+				if pauseErr != nil {
+					return fmt.Errorf("transition quickfix to merging: pause on constraint violation: %w", pauseErr)
+				}
 				if err := o.db.Save(task).Error; err != nil {
 					return fmt.Errorf("transition quickfix to merging: save constraint violations: %w", err)
+				}
+				if err := o.db.Create(pauseEvt).Error; err != nil {
+					return fmt.Errorf("transition quickfix to merging: save pause event: %w", err)
 				}
 
 				o.emit("quickfix_constraint_failed", map[string]any{
