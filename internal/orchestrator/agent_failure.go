@@ -196,6 +196,40 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 	task.Context["empty_work"] = true
 	task.Context["last_error"] = "agent completed without committing any changes"
 
+	// Before retrying or failing, check if work was already merged into the
+	// feature branch (e.g. a prior merge succeeded but the retry agent found
+	// no new commits to produce). Mirror the pattern in onAgentFailed.
+	featureDir := o.resolveFeatureWorktree(task)
+	if featureDir != "" && o.isWorkAlreadyMerged(task, featureDir) {
+		o.logger.Info("agent produced no commits but work already merged, fast-tracking to done",
+			"task_id", task.ID, "agent_id", ag.ID)
+		preStatus := string(task.Status)
+		transitions := []model.TaskStatus{
+			model.StatusTestingReady,
+			model.StatusMerging,
+			model.StatusDone,
+		}
+		for _, target := range transitions {
+			if task.Status == target {
+				continue
+			}
+			evt, tErr := state.TransitionTask(task, target, "orchestrator",
+				map[string]any{"reason": "already-merged-on-empty-work"})
+			if tErr != nil {
+				continue
+			}
+			if err := o.db.Create(evt).Error; err != nil {
+				return fmt.Errorf("on agent empty work: save event: %w", err)
+			}
+		}
+		if err := o.db.Save(task).Error; err != nil {
+			return fmt.Errorf("on agent empty work: save task after fast-track: %w", err)
+		}
+		o.emit("task_updated", task)
+		o.publishTaskTransition(task.ID.String(), preStatus, string(task.Status), "already merged, fast-tracked to done")
+		return nil
+	}
+
 	retries := o.incrementRetryCount(task)
 
 	// Supervisor-powered diagnosis.
