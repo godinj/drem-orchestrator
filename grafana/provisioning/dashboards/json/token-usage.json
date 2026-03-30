@@ -1,0 +1,142 @@
+{
+  "uid": "drem-token-usage",
+  "title": "Token Usage by Agent Role",
+  "description": "Input and output token consumption broken down by agent type and model",
+  "tags": ["drem", "tokens"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total Tokens by Agent Type (metrics table)",
+      "description": "Cumulative token_input and token_output from the time-series metrics table, grouped by agent type",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.8
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT a.agent_type, SUM(CASE WHEN m.name = 'token_input' THEN m.value ELSE 0 END) AS input_tokens, SUM(CASE WHEN m.name = 'token_output' THEN m.value ELSE 0 END) AS output_tokens FROM metrics m JOIN agents a ON m.agent_id = a.id WHERE m.name IN ('token_input', 'token_output') GROUP BY a.agent_type ORDER BY input_tokens DESC",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Token Input Over Time by Agent Type",
+      "description": "Time series of token_input metric samples, grouped by agent type",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT m.timestamp AS time, a.agent_type, m.value AS input_tokens FROM metrics m JOIN agents a ON m.agent_id = a.id WHERE m.name = 'token_input' ORDER BY m.timestamp",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Token Output Over Time by Agent Type",
+      "description": "Time series of token_output metric samples, grouped by agent type",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "pointSize": 5,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT m.timestamp AS time, a.agent_type, m.value AS output_tokens FROM metrics m JOIN agents a ON m.agent_id = a.id WHERE m.name = 'token_output' ORDER BY m.timestamp",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Agent Count by Type (snapshot)",
+      "description": "Number of agents spawned, grouped by agent_type — always has data",
+      "type": "piechart",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 10 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "right" },
+        "tooltip": { "mode": "single" },
+        "pieType": "pie"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT agent_type, COUNT(*) AS count FROM agents GROUP BY agent_type ORDER BY count DESC",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    }
+  ]
+}

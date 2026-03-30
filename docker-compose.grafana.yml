@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  grafana:
+    image: grafana/grafana-oss:11.4.0
+    container_name: drem-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_INSTALL_PLUGINS=frser-sqlite-datasource
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/json/model-scorecard.json
+    volumes:
+      - ./drem.db:/var/lib/grafana/drem.db:ro
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    restart: unless-stopped

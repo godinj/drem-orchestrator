@@ -1,0 +1,279 @@
+{
+  "uid": "drem-model-scorecard",
+  "title": "Model Scorecard",
+  "description": "Performance comparison across models — cost, context usage, completion rates, and agent counts",
+  "tags": ["drem", "models", "scorecard"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Total Agents",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT COUNT(*) AS total_agents FROM agents",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Total Tasks",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT COUNT(*) AS total_tasks FROM tasks",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Total Events",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT COUNT(*) AS total_events FROM task_events",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Total Spend",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 200 }] }
+        },
+        "overrides": []
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "value", "graphMode": "none" },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT COALESCE(SUM(total_cost_usd), 0) AS total_spend FROM agents WHERE total_cost_usd > 0",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Model Scorecard",
+      "description": "Aggregate metrics per model — agent count, total cost, average cost, average context %, and exit reason breakdown",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "total_cost" },
+            "properties": [{ "id": "unit", "value": "currencyUSD" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "avg_cost" },
+            "properties": [{ "id": "unit", "value": "currencyUSD" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "max_cost" },
+            "properties": [{ "id": "unit", "value": "currencyUSD" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "avg_context_pct" },
+            "properties": [{ "id": "unit", "value": "percent" }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "agent_count", "desc": true }],
+        "footer": { "show": false }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT CASE WHEN model_id = '' THEN 'unknown' ELSE model_id END AS model, COUNT(*) AS agent_count, COALESCE(SUM(total_cost_usd), 0) AS total_cost, ROUND(COALESCE(AVG(CASE WHEN total_cost_usd > 0 THEN total_cost_usd END), 0), 4) AS avg_cost, ROUND(COALESCE(MAX(total_cost_usd), 0), 4) AS max_cost, ROUND(AVG(CASE WHEN final_context_pct > 0 THEN final_context_pct END), 1) AS avg_context_pct, SUM(CASE WHEN exit_reason = 'success' THEN 1 ELSE 0 END) AS successes, SUM(CASE WHEN exit_reason = 'error' THEN 1 ELSE 0 END) AS errors, SUM(CASE WHEN exit_reason NOT IN ('success', 'error', '') THEN 1 ELSE 0 END) AS other_exits FROM agents GROUP BY model ORDER BY agent_count DESC",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "title": "Agent Completions by Model Over Time",
+      "description": "Stacked bar chart showing agent completions per day, colored by model",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 14 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "vertical",
+        "showValue": "never",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.9
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT DATE(completed_at) AS day, CASE WHEN model_id = '' THEN 'unknown' ELSE model_id END AS model, COUNT(*) AS completions FROM agents WHERE completed_at IS NOT NULL GROUP BY day, model ORDER BY day",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Task Status Breakdown",
+      "description": "Current status distribution of all tasks",
+      "type": "piechart",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 24 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "right" },
+        "tooltip": { "mode": "single" },
+        "pieType": "donut"
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT status, COUNT(*) AS count FROM tasks GROUP BY status ORDER BY count DESC",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Task Events per Day",
+      "description": "Volume of task events over time — shows orchestrator activity",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 24 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "pointSize": 5,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT DATE(created_at) AS time, event_type, COUNT(*) AS count FROM task_events GROUP BY time, event_type ORDER BY time",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "title": "Exit Reasons by Model",
+      "description": "How each model exits — success, error, or other",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 34 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "vertical",
+        "showValue": "auto",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.8
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT CASE WHEN model_id = '' THEN 'unknown' ELSE model_id END AS model, CASE WHEN exit_reason = '' THEN 'unknown' ELSE exit_reason END AS exit_reason, COUNT(*) AS count FROM agents GROUP BY model, exit_reason ORDER BY count DESC",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    }
+  ]
+}

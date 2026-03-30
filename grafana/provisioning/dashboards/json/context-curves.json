@@ -1,0 +1,188 @@
+{
+  "uid": "drem-context-curves",
+  "title": "Context % Curves per Agent",
+  "description": "Context window utilization over time — tracks how agents consume their available context",
+  "tags": ["drem", "context"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Average Final Context % by Model",
+      "description": "Mean final_context_pct grouped by model_id — how much context each model uses on average",
+      "type": "gauge",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 60 },
+              { "color": "orange", "value": 80 },
+              { "color": "red", "value": 90 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT CASE WHEN model_id = '' THEN 'unknown' ELSE model_id END AS model, AVG(final_context_pct) AS avg_context_pct FROM agents WHERE final_context_pct > 0 GROUP BY model ORDER BY avg_context_pct DESC",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Final Context % Distribution",
+      "description": "Histogram of final_context_pct across all completed agents",
+      "type": "histogram",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "bucketSize": 10,
+        "combine": false,
+        "fillOpacity": 80,
+        "gradientMode": "none",
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "single" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT final_context_pct FROM agents WHERE final_context_pct > 0",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Context % Over Time (metrics table)",
+      "description": "Live context_pct metric samples from the time-series metrics table — shows context growth curves per agent",
+      "type": "timeseries",
+      "gridPos": { "h": 12, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "pointSize": 4,
+            "showPoints": "auto",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT m.timestamp AS time, a.name AS agent, m.value AS context_pct FROM metrics m JOIN agents a ON m.agent_id = a.id WHERE m.name = 'context_pct' ORDER BY m.timestamp",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Final Context % at Completion",
+      "description": "Each agent's final context % plotted at its completion time",
+      "type": "timeseries",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 20 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "points",
+            "pointSize": 8,
+            "showPoints": "always"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT completed_at AS time, final_context_pct AS context_pct, agent_type FROM agents WHERE final_context_pct > 0 AND completed_at IS NOT NULL ORDER BY completed_at",
+          "refId": "A",
+          "format": "time_series"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "title": "Context % by Exit Reason",
+      "description": "Average final context % grouped by exit_reason — reveals whether high context leads to specific outcomes",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 20 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.8
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "drem-sqlite" },
+          "rawSql": "SELECT CASE WHEN exit_reason = '' THEN 'unknown' ELSE exit_reason END AS exit_reason, AVG(final_context_pct) AS avg_context_pct, COUNT(*) AS agent_count FROM agents WHERE final_context_pct > 0 GROUP BY exit_reason ORDER BY avg_context_pct DESC",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    }
+  ]
+}
