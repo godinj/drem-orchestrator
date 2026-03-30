@@ -239,7 +239,26 @@ FROM task_events WHERE task_id = '%s' ORDER BY created_at;
 
 ### Changing Task State
 
-You can update task status directly. The orchestrator polls the database each tick and will react to changes.
+**For gate transitions** (plan_review, test_review, testing_ready), always use the CLI gate commands — they atomically update tasks.status and insert a task_events record:
+
+%s
+# Approve a task at plan_review or test_review
+drem cli approve <task-id>
+
+# Reject a task at plan_review or test_review (with optional feedback)
+drem cli reject <task-id> [--reason=REASON]
+
+# Pass a task at testing_ready (transitions to merging)
+drem cli pass <task-id>
+
+# Fail a task at testing_ready (transitions to failed)
+drem cli fail <task-id>
+
+# Answer a clarification question
+drem cli answer <task-id> --body=BODY
+%s
+
+**For non-gate state resets** (stuck or failed tasks), use raw SQL — always include an INSERT INTO task_events to preserve event history:
 
 **Valid transitions:**
 - backlog -> planning, paused
@@ -254,12 +273,18 @@ You can update task status directly. The orchestrator polls the database each ti
 %s
 -- Reset a failed task to backlog
 UPDATE tasks SET status = 'backlog', updated_at = datetime('now') WHERE id = '<task-id>';
+INSERT INTO task_events (id, task_id, event_type, old_value, new_value, actor, created_at)
+VALUES (lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-' || substr('89ab', abs(random()) %% 4 + 1, 1) || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))), '<task-id>', 'status_change', 'failed', 'backlog', 'supervisor', datetime('now'));
 
 -- Reset a stuck subtask
 UPDATE tasks SET status = 'backlog', assigned_agent_id = NULL, updated_at = datetime('now') WHERE id = '<subtask-id>';
+INSERT INTO task_events (id, task_id, event_type, old_value, new_value, actor, created_at)
+VALUES (lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-' || substr('89ab', abs(random()) %% 4 + 1, 1) || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))), '<subtask-id>', 'status_change', '<old-status>', 'backlog', 'supervisor', datetime('now'));
 
 -- Fail a broken task
 UPDATE tasks SET status = 'failed', updated_at = datetime('now') WHERE id = '<task-id>';
+INSERT INTO task_events (id, task_id, event_type, old_value, new_value, actor, created_at)
+VALUES (lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(hex(randomblob(2)),2) || '-' || substr('89ab', abs(random()) %% 4 + 1, 1) || substr(hex(randomblob(2)),2) || '-' || hex(randomblob(6))), '<task-id>', 'status_change', '<old-status>', 'failed', 'supervisor', datetime('now'));
 
 -- Add a comment (the orchestrator feeds comments to agents on next spawn)
 INSERT INTO task_comments (id, task_id, author, body, created_at)
@@ -270,6 +295,7 @@ VALUES (lower(hex(randomblob(4)) || '-' || hex(randomblob(2)) || '-4' || substr(
 `,
 		"```bash", opts.DBPath, "```",
 		"```sql", opts.TaskID, opts.TaskID, opts.TaskID, opts.TaskID, "```",
+		"```bash", "```",
 		"```sql", "```",
 	)
 
