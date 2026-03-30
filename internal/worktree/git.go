@@ -351,6 +351,14 @@ func RebaseBranch(sourceWorktree, targetWorktree string) (*RebaseResult, error) 
 	}, nil
 }
 
+// ResetWorktree resets a worktree to a clean state by discarding all local
+// modifications to tracked files (git checkout .) and removing all untracked
+// non-.claude/ files and directories (git clean -fd --exclude=.claude).
+// Returns nil if the worktree is already clean or was successfully reset.
+func ResetWorktree(worktreePath string) error {
+	return fmt.Errorf("not implemented")
+}
+
 // parseRebaseConflicts extracts conflicting file paths from git conflict output.
 // It tries multiple patterns to handle different conflict types.
 func parseRebaseConflicts(output string) []string {

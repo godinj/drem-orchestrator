@@ -327,6 +327,119 @@ func TestUntrackEphemeralFiles_BothPlanAndClaudeTracked(t *testing.T) {
 	}
 }
 
+func TestResetWorktree_DirtyTrackedFiles(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	dir := filepath.Dir(bareRepo)
+
+	wtDir := filepath.Join(dir, "wt")
+	testutil.AddWorktree(t, bareRepo, "test-reset-dirty-tracked", wtDir)
+
+	// Commit a file so it's tracked.
+	testutil.CommitFile(t, wtDir, "main.go", "package main\n", "add main.go")
+
+	// Modify the tracked file without committing.
+	if err := os.WriteFile(filepath.Join(wtDir, "main.go"), []byte("package main\n// dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ResetWorktree(wtDir); err != nil {
+		t.Fatalf("ResetWorktree returned error: %v", err)
+	}
+
+	// File should be restored to committed content.
+	content, err := os.ReadFile(filepath.Join(wtDir, "main.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "package main\n" {
+		t.Errorf("expected file to be restored, got %q", string(content))
+	}
+}
+
+func TestResetWorktree_UntrackedNonClaudeFiles(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	dir := filepath.Dir(bareRepo)
+
+	wtDir := filepath.Join(dir, "wt")
+	testutil.AddWorktree(t, bareRepo, "test-reset-untracked", wtDir)
+
+	// Write an untracked non-.claude file.
+	if err := os.WriteFile(filepath.Join(wtDir, "untracked.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ResetWorktree(wtDir); err != nil {
+		t.Fatalf("ResetWorktree returned error: %v", err)
+	}
+
+	// Untracked file should be removed.
+	if _, err := os.Stat(filepath.Join(wtDir, "untracked.txt")); !os.IsNotExist(err) {
+		t.Error("expected untracked.txt to be removed by ResetWorktree")
+	}
+}
+
+func TestResetWorktree_BothModifiedAndUntracked(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	dir := filepath.Dir(bareRepo)
+
+	wtDir := filepath.Join(dir, "wt")
+	testutil.AddWorktree(t, bareRepo, "test-reset-both", wtDir)
+
+	// Commit a tracked file.
+	testutil.CommitFile(t, wtDir, "tracked.go", "package main\n", "add tracked.go")
+
+	// Modify tracked file.
+	if err := os.WriteFile(filepath.Join(wtDir, "tracked.go"), []byte("package main\n// modified\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Add an untracked file.
+	if err := os.WriteFile(filepath.Join(wtDir, "untracked.txt"), []byte("noise"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ResetWorktree(wtDir); err != nil {
+		t.Fatalf("ResetWorktree returned error: %v", err)
+	}
+
+	// Tracked file should be restored.
+	content, err := os.ReadFile(filepath.Join(wtDir, "tracked.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "package main\n" {
+		t.Errorf("expected tracked.go to be restored, got %q", string(content))
+	}
+
+	// Untracked file should be removed.
+	if _, err := os.Stat(filepath.Join(wtDir, "untracked.txt")); !os.IsNotExist(err) {
+		t.Error("expected untracked.txt to be removed by ResetWorktree")
+	}
+}
+
+func TestResetWorktree_AlreadyClean(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	dir := filepath.Dir(bareRepo)
+
+	wtDir := filepath.Join(dir, "wt")
+	testutil.AddWorktree(t, bareRepo, "test-reset-clean", wtDir)
+
+	// Commit a file — worktree is clean.
+	testutil.CommitFile(t, wtDir, "clean.go", "package main\n", "initial")
+
+	if err := ResetWorktree(wtDir); err != nil {
+		t.Fatalf("ResetWorktree on clean worktree returned error: %v", err)
+	}
+
+	// File should still be present and unchanged.
+	content, err := os.ReadFile(filepath.Join(wtDir, "clean.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "package main\n" {
+		t.Errorf("unexpected file content after no-op reset: %q", string(content))
+	}
+}
+
 func TestRebaseBranch_WithClaudeArtifacts(t *testing.T) {
 	bareRepo := testutil.SetupBareRepo(t)
 	dir := filepath.Dir(bareRepo)
