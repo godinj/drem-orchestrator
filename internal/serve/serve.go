@@ -91,5 +91,9 @@ func (s *Server) buildMux() *http.ServeMux {
 	// WebSocket endpoint handles its own auth (token via query param or header)
 	// because browsers cannot set custom headers on WebSocket upgrade requests.
 	mux.Handle("/api/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token))
+	// PWA static assets are served without auth — the browser needs to fetch
+	// the manifest, service worker, and app shell before the user can log in.
+	// The "/" pattern is a catch-all that serves index.html for unmatched paths.
+	mux.Handle("/", pwaHandler())
 	return mux
 }
