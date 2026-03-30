@@ -193,6 +193,47 @@ func TestRunTurn_RecordsMetrics(t *testing.T) {
 	}
 }
 
+// TestRunTurn_RecordsBothTokenColumnPairs verifies that after a successful
+// turn the persisted TurnMetric has both tokens_in/tokens_out and
+// input_tokens/output_tokens populated with matching values.
+func TestRunTurn_RecordsBothTokenColumnPairs(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
+	store := watcher.NewMetricsStore(db)
+	lm := watcher.NewLifecycleManagerFromStore(store)
+
+	script := writeMockScript(t, fmt.Sprintf("echo '%s'\n", claudeJSON(9000, 3000)))
+	lm.ClaudeBin = script
+
+	_, err := lm.RunTurn("token-agent", "some prompt")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	turns, err := store.GetTurns()
+	if err != nil {
+		t.Fatalf("GetTurns error: %v", err)
+	}
+	if len(turns) != 1 {
+		t.Fatalf("expected 1 turn metric, got %d", len(turns))
+	}
+
+	m := turns[0]
+	// Phase 2 columns (input_tokens / output_tokens)
+	if m.InputTokens != 9000 {
+		t.Errorf("InputTokens: got %d, want 9000", m.InputTokens)
+	}
+	if m.OutputTokens != 3000 {
+		t.Errorf("OutputTokens: got %d, want 3000", m.OutputTokens)
+	}
+	// Legacy columns (tokens_in / tokens_out) must match
+	if m.TokensIn != 9000 {
+		t.Errorf("TokensIn: got %d, want 9000", m.TokensIn)
+	}
+	if m.TokensOut != 3000 {
+		t.Errorf("TokensOut: got %d, want 3000", m.TokensOut)
+	}
+}
+
 // TestRunTurn_InvalidJSON verifies that when the subprocess outputs invalid
 // JSON the call still succeeds (graceful degradation) with zero token counts.
 func TestRunTurn_InvalidJSON(t *testing.T) {

@@ -242,6 +242,8 @@ func (m *LifecycleManager) runTurnAsync(agent string) {
 	_ = m.db.Model(&TurnMetric{}).Where("id = ?", metricID).Updates(map[string]interface{}{
 		"input_tokens":     resp.Usage.InputTokens,
 		"output_tokens":    resp.Usage.OutputTokens,
+		"tokens_in":        resp.Usage.InputTokens,
+		"tokens_out":       resp.Usage.OutputTokens,
 		"exit_status":      exitCode,
 		"duration":         endedAt.Sub(startedAt),
 		"ended_at":         endedAt,

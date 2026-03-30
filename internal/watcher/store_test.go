@@ -251,6 +251,51 @@ func TestQueryTurns_FiltersByAgent(t *testing.T) {
 	}
 }
 
+// TestRecordTurn_PopulatesBothTokenColumnPairs verifies that Store.RecordTurn
+// writes TokensIn/TokensOut into BOTH the legacy columns (tokens_in/tokens_out)
+// and the Phase 2 columns (input_tokens/output_tokens).
+func TestRecordTurn_PopulatesBothTokenColumnPairs(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
+	store := watcher.NewStore(db)
+
+	result := watcher.TurnResult{
+		Agent:      "agent-tokens",
+		StartedAt:  time.Now().UTC().Add(-1 * time.Second),
+		EndedAt:    time.Now().UTC(),
+		DurationMs: 1000,
+		TokensIn:   12000,
+		TokensOut:  4500,
+	}
+
+	if err := store.RecordTurn(result); err != nil {
+		t.Fatalf("RecordTurn: %v", err)
+	}
+
+	var metrics []watcher.TurnMetric
+	if err := db.Find(&metrics).Error; err != nil {
+		t.Fatalf("direct DB query: %v", err)
+	}
+	if len(metrics) != 1 {
+		t.Fatalf("expected 1 row, got %d", len(metrics))
+	}
+
+	got := metrics[0]
+	// Legacy columns
+	if got.TokensIn != 12000 {
+		t.Errorf("TokensIn: got %d, want 12000", got.TokensIn)
+	}
+	if got.TokensOut != 4500 {
+		t.Errorf("TokensOut: got %d, want 4500", got.TokensOut)
+	}
+	// Phase 2 columns must also be populated
+	if got.InputTokens != 12000 {
+		t.Errorf("InputTokens: got %d, want 12000", got.InputTokens)
+	}
+	if got.OutputTokens != 4500 {
+		t.Errorf("OutputTokens: got %d, want 4500", got.OutputTokens)
+	}
+}
+
 // TestQueryTurns_EmptyResult verifies that querying for a nonexistent agent
 // returns an empty (non-nil) slice rather than nil.
 func TestQueryTurns_EmptyResult(t *testing.T) {

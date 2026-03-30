@@ -111,6 +111,8 @@ func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, work
 			configUpdate["context_used_pct"] = usage.UsedPercent
 			configUpdate["context_window_size"] = usage.ContextWindowSize
 			configUpdate["total_cost_usd"] = usage.TotalCostUSD
+			configUpdate["tokens_in"] = usage.TotalInputTokens
+			configUpdate["tokens_out"] = usage.TotalOutputTokens
 		}
 		if activity != nil {
 			configUpdate["activity_tool"] = activity.LastTool

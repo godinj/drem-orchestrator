@@ -22,6 +22,8 @@ func (s *MetricsStore) RecordTurn(result *LifecycleResult) error {
 		Agent:           result.Agent,
 		InputTokens:     result.InputTokens,
 		OutputTokens:    result.OutputTokens,
+		TokensIn:        result.InputTokens,
+		TokensOut:       result.OutputTokens,
 		ExitStatus:      result.ExitStatus,
 		Duration:        result.Duration,
 		StartedAt:       result.StartedAt,

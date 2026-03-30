@@ -514,4 +514,28 @@ func populateAgentCompletionFields(ag *model.Agent, comp agent.Completion) {
 			}
 		}
 	}
+
+	// Extract TokensIn from Config if available
+	if ag.Config != nil {
+		if tokIn, ok := ag.Config["tokens_in"]; ok {
+			switch v := tokIn.(type) {
+			case float64:
+				ag.TokensIn = int(v)
+			case int:
+				ag.TokensIn = v
+			}
+		}
+	}
+
+	// Extract TokensOut from Config if available
+	if ag.Config != nil {
+		if tokOut, ok := ag.Config["tokens_out"]; ok {
+			switch v := tokOut.(type) {
+			case float64:
+				ag.TokensOut = int(v)
+			case int:
+				ag.TokensOut = v
+			}
+		}
+	}
 }

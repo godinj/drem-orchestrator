@@ -292,10 +292,25 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 		if task.Category.IsQuickFix() {
 			// Quick fix tasks are top-level with no subtasks.
 			// Agent completion is handled by processAgentResult (step 2).
-			// If agent is done and task is still in_progress, transition to merging.
 			if task.AssignedAgentID == nil {
-				if err := o.transitionQuickFixToMerging(task); err != nil {
-					o.logger.Error("quickfix to merging", "task_id", task.ID, "error", err)
+				// Check if this is an empty-work retry (agent completed
+				// without commits and onAgentEmptyWork cleared the agent
+				// for respawn). In that case, respawn a new agent instead
+				// of transitioning to merging.
+				needsRetry := false
+				if task.Context != nil {
+					if _, ok := task.Context["empty_work"]; ok {
+						needsRetry = true
+					}
+				}
+				if needsRetry {
+					if err := o.respawnQuickFixAgent(task); err != nil {
+						o.logger.Error("quickfix respawn", "task_id", task.ID, "error", err)
+					}
+				} else {
+					if err := o.transitionQuickFixToMerging(task); err != nil {
+						o.logger.Error("quickfix to merging", "task_id", task.ID, "error", err)
+					}
 				}
 			}
 			continue

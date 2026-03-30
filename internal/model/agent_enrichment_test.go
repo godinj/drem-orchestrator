@@ -519,6 +519,126 @@ func TestAgentEnrichmentPartialUpdate(t *testing.T) {
 	}
 }
 
+// TestAgentEnrichmentTokenFields verifies that TokensIn and TokensOut
+// persist correctly to the database and round-trip through GORM.
+func TestAgentEnrichmentTokenFields(t *testing.T) {
+	db := enrichmentTestDB(t)
+	proj := Project{
+		ID:            uuid.New(),
+		Name:          "enrichment-proj-" + uuid.New().String(),
+		BareRepoPath:  "/tmp/test",
+		DefaultBranch: "master",
+	}
+	if err := db.Create(&proj).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		tokensIn  int
+		tokensOut int
+	}{
+		{"zero tokens", 0, 0},
+		{"small session", 1000, 200},
+		{"large session", 500000, 150000},
+		{"input heavy", 800000, 5000},
+		{"output heavy", 5000, 300000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			completedTime := time.Now()
+			agent := Agent{
+				ID:          uuid.New(),
+				ProjectID:   proj.ID,
+				AgentType:   AgentCoder,
+				Name:        "token-agent-" + uuid.New().String(),
+				Status:      AgentIdle,
+				CompletedAt: &completedTime,
+				TokensIn:    tt.tokensIn,
+				TokensOut:   tt.tokensOut,
+			}
+			if err := db.Create(&agent).Error; err != nil {
+				t.Fatalf("create agent: %v", err)
+			}
+
+			var loaded Agent
+			if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+				t.Fatalf("load agent: %v", err)
+			}
+
+			if loaded.TokensIn != tt.tokensIn {
+				t.Errorf("TokensIn = %d, want %d", loaded.TokensIn, tt.tokensIn)
+			}
+			if loaded.TokensOut != tt.tokensOut {
+				t.Errorf("TokensOut = %d, want %d", loaded.TokensOut, tt.tokensOut)
+			}
+		})
+	}
+}
+
+// TestAgentEnrichmentTokensPartialUpdate verifies that token fields can be
+// updated independently via GORM Updates without affecting other enrichment fields.
+func TestAgentEnrichmentTokensPartialUpdate(t *testing.T) {
+	db := enrichmentTestDB(t)
+	proj := Project{
+		ID:            uuid.New(),
+		Name:          "enrichment-proj-" + uuid.New().String(),
+		BareRepoPath:  "/tmp/test",
+		DefaultBranch: "master",
+	}
+	if err := db.Create(&proj).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	agent := Agent{
+		ID:           uuid.New(),
+		ProjectID:    proj.ID,
+		AgentType:    AgentCoder,
+		Name:         "partial-token-agent",
+		Status:       AgentWorking,
+		ModelID:      "opus",
+		Effort:       "high",
+		TotalCostUSD: 2.5,
+		TokensIn:     0,
+		TokensOut:    0,
+	}
+	if err := db.Create(&agent).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	// Simulate completion: update token fields
+	completedTime := time.Now()
+	if err := db.Model(&agent).Updates(Agent{
+		CompletedAt: &completedTime,
+		TokensIn:    250000,
+		TokensOut:   75000,
+	}).Error; err != nil {
+		t.Fatalf("update agent: %v", err)
+	}
+
+	var loaded Agent
+	if err := db.First(&loaded, "id = ?", agent.ID).Error; err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+
+	// Original fields preserved
+	if loaded.ModelID != "opus" {
+		t.Errorf("ModelID = %q, want %q", loaded.ModelID, "opus")
+	}
+	if loaded.TotalCostUSD != 2.5 {
+		t.Errorf("TotalCostUSD = %v, want 2.5", loaded.TotalCostUSD)
+	}
+
+	// Token fields updated
+	if loaded.TokensIn != 250000 {
+		t.Errorf("TokensIn = %d, want 250000", loaded.TokensIn)
+	}
+	if loaded.TokensOut != 75000 {
+		t.Errorf("TokensOut = %d, want 75000", loaded.TokensOut)
+	}
+}
+
 // TestAgentEnrichmentMultipleAgents verifies that enrichment fields persist
 // correctly when multiple agents with different enrichment values are stored.
 func TestAgentEnrichmentMultipleAgents(t *testing.T) {

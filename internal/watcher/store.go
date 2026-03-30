@@ -72,6 +72,8 @@ func (s *Store) RecordTurn(result TurnResult) error {
 		DurationMs:      result.DurationMs,
 		TokensIn:        result.TokensIn,
 		TokensOut:       result.TokensOut,
+		InputTokens:     result.TokensIn,
+		OutputTokens:    result.TokensOut,
 		EventsProcessed: result.EventsProcessed,
 		MessagesSent:    result.MessagesSent,
 		ExitStatus:      result.ExitStatus,
