@@ -1,0 +1,146 @@
+{
+  "uid": "drem-temp-worker-tokens",
+  "title": "Temp Worker Token Usage",
+  "description": "Token consumption and cost for C-Suite temp workers from csuite.db",
+  "tags": ["drem", "csuite", "temp-workers"],
+  "timezone": "browser",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": {
+    "from": "now-7d",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Temp Worker Cost (USD)",
+      "description": "Total cost per temp worker",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "csuite-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "groupWidth": 0.7,
+        "barWidth": 0.8
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "csuite-sqlite" },
+          "rawSql": "SELECT worker_id, total_cost_usd FROM temp_worker_tokens ORDER BY total_cost_usd DESC",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Temp Worker Token Breakdown",
+      "description": "Input, output, cache read, and cache creation tokens per worker",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "csuite-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.8
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "csuite-sqlite" },
+          "rawSql": "SELECT worker_id, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens FROM temp_worker_tokens ORDER BY worker_id",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Temp Worker Turns",
+      "description": "Direct turns and subagent turns per worker",
+      "type": "barchart",
+      "gridPos": { "h": 10, "w": 12, "x": 0, "y": 10 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "csuite-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": { "mode": "palette-classic" }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.8
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "csuite-sqlite" },
+          "rawSql": "SELECT worker_id, turns, subagent_turns FROM temp_worker_tokens ORDER BY worker_id",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Temp Worker Summary Table",
+      "description": "Full details for all temp workers",
+      "type": "table",
+      "gridPos": { "h": 10, "w": 12, "x": 12, "y": 10 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "csuite-sqlite" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 20 },
+              { "color": "red", "value": 50 }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "total_cost_usd" },
+            "properties": [{ "id": "unit", "value": "currencyUSD" }]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "total_cost_usd", "desc": true }]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "csuite-sqlite" },
+          "rawSql": "SELECT worker_id, model, input_tokens, output_tokens, cache_read_tokens, total_cost_usd, turns, subagent_turns, status, started_at, harvested_at FROM temp_worker_tokens ORDER BY total_cost_usd DESC",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    }
+  ]
+}

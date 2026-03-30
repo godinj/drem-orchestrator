@@ -9,3 +9,11 @@ datasources:
     editable: false
     jsonData:
       path: /var/lib/grafana/drem.db
+  - name: CsuiteDB
+    type: frser-sqlite-datasource
+    uid: csuite-sqlite
+    access: proxy
+    isDefault: false
+    editable: false
+    jsonData:
+      path: /var/lib/grafana/csuite.db

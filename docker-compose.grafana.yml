@@ -13,5 +13,6 @@ services:
       - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/provisioning/dashboards/json/model-scorecard.json
     volumes:
       - ./drem.db:/var/lib/grafana/drem.db:ro
+      - ${HOME}/.drem-csuite/csuite.db:/var/lib/grafana/csuite.db:ro
       - ./grafana/provisioning:/etc/grafana/provisioning
     restart: unless-stopped
