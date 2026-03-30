@@ -227,6 +227,53 @@ func (s *Store) PurgeArchivedMessages(retention time.Duration) (*PurgeResult, er
 }
 
 // ---------------------------------------------------------------------------
+// Query service — message queries
+// ---------------------------------------------------------------------------
+
+// GetMessagesBetween returns messages exchanged between agent1 and agent2,
+// ordered by created_at DESC (newest first). If beforeID is non-zero, only
+// messages created before the message with that ID are returned (cursor
+// pagination). limit caps the result set; pass 0 to use the default (50).
+func (s *Store) GetMessagesBetween(agent1, agent2 string, limit int, beforeID uuid.UUID) ([]CsuiteInboxMessage, error) {
+	const defaultLimit = 50
+	if limit <= 0 {
+		limit = defaultLimit
+	}
+
+	q := s.db.Where(
+		"(from_agent = ? AND to_agent = ?) OR (from_agent = ? AND to_agent = ?)",
+		agent1, agent2, agent2, agent1,
+	).Order("created_at DESC").Limit(limit)
+
+	if beforeID != uuid.Nil {
+		var cursor CsuiteInboxMessage
+		if err := s.db.First(&cursor, "id = ?", beforeID).Error; err != nil {
+			return nil, fmt.Errorf("get cursor message %s: %w", beforeID, err)
+		}
+		q = q.Where("created_at < ?", cursor.CreatedAt)
+	}
+
+	var msgs []CsuiteInboxMessage
+	if err := q.Find(&msgs).Error; err != nil {
+		return nil, fmt.Errorf("get messages between %q and %q: %w", agent1, agent2, err)
+	}
+	return msgs, nil
+}
+
+// GetMessageCountByAgent returns the total number of messages (sent or
+// received, including archived) for the named agent.
+func (s *Store) GetMessageCountByAgent(scopedTo string) (int, error) {
+	var count int64
+	err := s.db.Model(&CsuiteInboxMessage{}).
+		Where("from_agent = ? OR to_agent = ?", scopedTo, scopedTo).
+		Count(&count).Error
+	if err != nil {
+		return 0, fmt.Errorf("message count for agent %q: %w", scopedTo, err)
+	}
+	return int(count), nil
+}
+
+// ---------------------------------------------------------------------------
 // Query service — dashboard aggregation
 // ---------------------------------------------------------------------------
 

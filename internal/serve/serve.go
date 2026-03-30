@@ -1,5 +1,6 @@
 // Package serve implements the bridge HTTP server for the C-Suite mobile client.
-// It exposes a bearer-token-authenticated REST API over a single TCP listener.
+// It exposes a bearer-token-authenticated REST API and a WebSocket endpoint for
+// real-time message streaming over a single TCP listener.
 package serve
 
 import (
@@ -8,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
+	"github.com/google/uuid"
 )
 
 const defaultAddr = ":8080"
@@ -16,6 +18,9 @@ const defaultAddr = ":8080"
 // Defined at the consumption site per architecture guidelines.
 type dashboardStore interface {
 	AgentDashboard() ([]csuite.AgentDashboardRow, error)
+	CreateMessage(msg *csuite.CsuiteInboxMessage) error
+	GetMessagesBetween(agent1, agent2 string, limit int, beforeID uuid.UUID) ([]csuite.CsuiteInboxMessage, error)
+	GetMessageCountByAgent(scopedTo string) (int, error)
 }
 
 // Config holds the bridge HTTP server configuration.
@@ -30,6 +35,7 @@ type Server struct {
 	cfg      Config
 	listener net.Listener
 	srv      *http.Server
+	hub      *Hub
 }
 
 // New creates a Server from cfg. Call Start to begin accepting requests.
@@ -38,7 +44,7 @@ func New(cfg Config) *Server {
 	if cfg.Addr == "" {
 		cfg.Addr = defaultAddr
 	}
-	return &Server{cfg: cfg}
+	return &Server{cfg: cfg, hub: NewHub()}
 }
 
 // Start binds the listener and begins serving HTTP in the background.
@@ -71,9 +77,19 @@ func (s *Server) ListenAddr() string {
 	return s.listener.Addr().String()
 }
 
+// Hub returns the server's WebSocket hub, allowing callers to inspect
+// connection state (e.g. for testing).
+func (s *Server) Hub() *Hub {
+	return s.hub
+}
+
 func (s *Server) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/api/health", BearerAuth(s.cfg.Token, http.HandlerFunc(healthHandler)))
 	mux.Handle("/api/agents", BearerAuth(s.cfg.Token, agentsHandler(s.cfg.Store)))
+	mux.Handle("/api/messages", BearerAuth(s.cfg.Token, messagesHandler(s.cfg.Store, s.hub)))
+	// WebSocket endpoint handles its own auth (token via query param or header)
+	// because browsers cannot set custom headers on WebSocket upgrade requests.
+	mux.Handle("/api/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token))
 	return mux
 }
