@@ -302,6 +302,23 @@ do_dashboard() {
     [ "$found" -eq 0 ] && echo "  None."
     echo
 
+    # Token usage from harvest data (if available)
+    if sqlite3 "$CSUITE_DIR/csuite.db" "SELECT 1 FROM temp_worker_tokens LIMIT 1" &>/dev/null 2>&1; then
+        printf "${BOLD}Temp Worker Token Usage${RESET}\n"
+        printf "  ${BOLD}%-14s %10s %10s %12s %8s${RESET}\n" "Worker" "Input" "Output" "Cache Read" "Cost"
+        printf '  %s\n' "$(printf '%.0s-' {1..56})"
+        sqlite3 "$CSUITE_DIR/csuite.db" \
+            "SELECT worker_id, input_tokens, output_tokens, cache_read_tokens, printf('\$%.2f', total_cost_usd) FROM temp_worker_tokens ORDER BY worker_id;" \
+            2>/dev/null | while IFS='|' read -r wid inp outp cread cost; do
+            printf "  %-14s %10s %10s %12s %8s\n" "$wid" "$inp" "$outp" "$cread" "$cost"
+        done
+        local total_cost
+        total_cost=$(sqlite3 "$CSUITE_DIR/csuite.db" "SELECT printf('\$%.2f', COALESCE(SUM(total_cost_usd), 0)) FROM temp_worker_tokens;" 2>/dev/null || echo "\$0.00")
+        printf '  %s\n' "$(printf '%.0s-' {1..56})"
+        printf "  ${BOLD}%-14s %10s %10s %12s %8s${RESET}\n" "TOTAL" "" "" "" "$total_cost"
+        echo
+    fi
+
     printf "${BOLD}Recent Messages (last 10)${RESET}\n"
     local all_msgs=""
     for agent in "${AGENTS[@]}"; do

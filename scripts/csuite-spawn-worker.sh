@@ -255,6 +255,24 @@ fi
 echo "Worker ${WORKER_ID} started in tmux session '${SESSION_NAME}'."
 
 # ---------------------------------------------------------------------------
+# Record Claude Code session ID for token tracking
+# ---------------------------------------------------------------------------
+
+# Wait briefly for Claude to initialize and register its session file,
+# then capture the session UUID from ~/.claude/sessions/<pane_pid>.json.
+(
+    sleep 3
+    PANE_PID=$(tmux -L "$TMUX_SOCKET" list-panes -t "$SESSION_NAME" -F '#{pane_pid}' 2>/dev/null | head -1)
+    if [ -n "$PANE_PID" ] && [ -f "${HOME}/.claude/sessions/${PANE_PID}.json" ]; then
+        SESSION_UUID=$(jq -r '.sessionId' "${HOME}/.claude/sessions/${PANE_PID}.json" 2>/dev/null)
+        if [ -n "$SESSION_UUID" ] && [ "$SESSION_UUID" != "null" ]; then
+            echo "$SESSION_UUID" > "${WORKER_DIR}/session_id"
+            echo "Recorded Claude session ID: ${SESSION_UUID}"
+        fi
+    fi
+) &
+
+# ---------------------------------------------------------------------------
 # Notify Mike
 # ---------------------------------------------------------------------------
 

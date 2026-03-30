@@ -303,3 +303,40 @@ csuite_list_workers() {
         basename "$dir"
     done
 }
+
+# Query token usage for temp workers from csuite.db.
+# Usage: csuite_worker_tokens [worker_id]
+#   worker_id — optional; if omitted, returns all workers.
+# Outputs a formatted table to stdout.
+csuite_worker_tokens() {
+    local db="${CSUITE_DIR}/csuite.db"
+    if [ ! -f "$db" ]; then
+        echo "error: csuite.db not found" >&2
+        return 1
+    fi
+
+    if ! sqlite3 "$db" "SELECT 1 FROM temp_worker_tokens LIMIT 1" &>/dev/null; then
+        echo "No token data available. Run csuite-harvest-worker-tokens.sh first."
+        return 0
+    fi
+
+    local where=""
+    if [ -n "${1:-}" ]; then
+        where="WHERE worker_id = '$1'"
+    fi
+
+    sqlite3 -header -column "$db" \
+        "SELECT worker_id, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, printf('\$%.2f', total_cost_usd) as cost, turns, subagent_turns as sub_turns, status, harvested_at FROM temp_worker_tokens $where ORDER BY worker_id;"
+}
+
+# Get total cost across all temp workers.
+# Usage: csuite_worker_total_cost
+# Outputs the total USD cost as a formatted string.
+csuite_worker_total_cost() {
+    local db="${CSUITE_DIR}/csuite.db"
+    if [ ! -f "$db" ]; then
+        echo "\$0.00"
+        return
+    fi
+    sqlite3 "$db" "SELECT printf('\$%.2f', COALESCE(SUM(total_cost_usd), 0)) FROM temp_worker_tokens;" 2>/dev/null || echo "\$0.00"
+}
