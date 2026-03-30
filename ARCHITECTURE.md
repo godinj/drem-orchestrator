@@ -47,6 +47,7 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
   - `plan_validation.go` — Plan validation: file overlap checks, TDD coverage ratios, constraint warnings
   - `retry_policy.go` — RetryPolicy: exponential backoff with jitter for merge retries (base=10s, cap=5min, max=5)
   - `reconcile.go` — State reconciliation: recovers stale subtasks, orphaned worktrees, stuck agents
+  - `reconcile_parents.go` — Parent task reconciliation: already-merged feature detection, completed/failed parent recovery via policy pattern
   - `scheduler.go` — SchedulingPolicy: dependency resolution, wave group ordering, file-conflict scoring, and dispatch gating; BuildSchedule for graph-coloring-based subtask grouping
   - `score_bridge.go` — Inlined quality scoring (TDD, constitution, documentation, depth) to avoid import ceiling
   - `session_spawning.go` — Spawning reviewer, fixer, and supervisor Claude Code sessions

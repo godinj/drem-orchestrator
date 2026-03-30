@@ -41,9 +41,9 @@ const (
 	maxErrorSnippetLen     = 500
 	maxSlugLen             = 40
 	maxBuildRetries        = 3
-	reconcileInterval      = 10 // consistency audit frequency (every N ticks; 0 = disable)
-	shortIDLen             = 4  // UUID characters for short display IDs
-	maxDisplayNameLen      = 30 // max task title length in supervisor session names
+	reconcileInterval      = 10               // consistency audit frequency (every N ticks; 0 = disable)
+	shortIDLen             = 4                // UUID characters for short display IDs
+	maxDisplayNameLen      = 30               // max task title length in supervisor session names
 	agentSpawnGracePeriod  = 60 * time.Second // how long to wait after agent spawn before treating it as stuck
 )
 

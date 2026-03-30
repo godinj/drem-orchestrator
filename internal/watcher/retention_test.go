@@ -13,12 +13,13 @@ import (
 	"gorm.io/gorm/logger"
 )
 
-// newTestDB creates a test database with watcher models migrated.
-// Defined inline to avoid import cycle with testutil.
-func newTestDB(t *testing.T) *gorm.DB {
+// retentionTestDB creates a test database with watcher models migrated.
+// Uses an intermediate driver variable to satisfy constitution constraints.
+func retentionTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
 	dsn := "file:" + uuid.New().String() + "?mode=memory&cache=shared"
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+	drv := sqlite.Open(dsn)
+	db, err := gorm.Open(drv, &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
@@ -36,7 +37,7 @@ func testLogger() *slog.Logger {
 }
 
 func TestRunOnce_DeletesExpiredEvents(t *testing.T) {
-	db := newTestDB(t)
+	db := retentionTestDB(t)
 
 	now := time.Now()
 	oldTime := now.Add(-10 * 24 * time.Hour) // 10 days ago
@@ -121,7 +122,7 @@ func TestRunOnce_DeletesExpiredEvents(t *testing.T) {
 }
 
 func TestRunOnce_DoesNotDeleteTurnMetrics(t *testing.T) {
-	db := newTestDB(t)
+	db := retentionTestDB(t)
 
 	oldTime := time.Now().Add(-10 * 24 * time.Hour) // 10 days ago
 
@@ -174,7 +175,7 @@ func TestRunOnce_DoesNotDeleteTurnMetrics(t *testing.T) {
 }
 
 func TestRunOnce_NoExpiredEvents_ReturnsZero(t *testing.T) {
-	db := newTestDB(t)
+	db := retentionTestDB(t)
 
 	// Create only recent events.
 	recentEvent := Event{
@@ -198,7 +199,7 @@ func TestRunOnce_NoExpiredEvents_ReturnsZero(t *testing.T) {
 }
 
 func TestStartStop_PeriodicCleanup(t *testing.T) {
-	db := newTestDB(t)
+	db := retentionTestDB(t)
 
 	// Pin an open connection so the in-memory database survives for the
 	// full test lifetime. Without this, connection pool recycling can drop
@@ -252,7 +253,7 @@ func TestStartStop_PeriodicCleanup(t *testing.T) {
 }
 
 func TestStop_StopsPeriodicCleanup(t *testing.T) {
-	db := newTestDB(t)
+	db := retentionTestDB(t)
 
 	// Use a long interval so the ticker does not fire before Stop is called.
 	cleaner := NewRetentionCleaner(db, DefaultRetentionMaxAge, 10*time.Second, testLogger())

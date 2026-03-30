@@ -2,7 +2,6 @@ package orchestrator
 
 import (
 	"log/slog"
-	"path/filepath"
 	"testing"
 
 	"github.com/google/uuid"
@@ -12,19 +11,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
-
-// newTestBus creates a temporary eventbus.Bus for testing.
-func newTestBus(t *testing.T) *eventbus.Bus {
-	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "csuite_test.db")
-	bus, err := eventbus.New(dbPath)
-	if err != nil {
-		t.Fatalf("eventbus.New: %v", err)
-	}
-	t.Cleanup(func() { bus.Close() })
-	return bus
-}
 
 // testOrchestratorWithBus creates an Orchestrator with event bus wired up.
 func testOrchestratorWithBus(t *testing.T, bus *eventbus.Bus) (*Orchestrator, uuid.UUID) {
@@ -56,11 +42,11 @@ func TestSetEventBus_NilIsNoOp(t *testing.T) {
 	events := make(chan Event, 100)
 	wt := &worktree.Manager{BareRepoPath: t.TempDir(), DefaultBranch: "main"}
 	o := &Orchestrator{
-		db:         db,
-		projectID:  uuid.New(),
-		worktree:   wt,
-		events:     events,
-		logger:     slog.Default(),
+		db:        db,
+		projectID: uuid.New(),
+		worktree:  wt,
+		events:    events,
+		logger:    slog.Default(),
 	}
 
 	// Should not panic with nil bus.
@@ -69,16 +55,16 @@ func TestSetEventBus_NilIsNoOp(t *testing.T) {
 }
 
 func TestSetEventBus_SetsField(t *testing.T) {
-	bus := newTestBus(t)
+	bus := testutil.NewTestBus(t)
 	db := testutil.NewTestDB(t)
 	events := make(chan Event, 100)
 	wt := &worktree.Manager{BareRepoPath: t.TempDir(), DefaultBranch: "main"}
 	o := &Orchestrator{
-		db:         db,
-		projectID:  uuid.New(),
-		worktree:   wt,
-		events:     events,
-		logger:     slog.Default(),
+		db:        db,
+		projectID: uuid.New(),
+		worktree:  wt,
+		events:    events,
+		logger:    slog.Default(),
 	}
 
 	o.SetEventBus(bus)
@@ -92,7 +78,7 @@ func TestSetEventBus_SetsField(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPublishTaskTransition_CreatesEventAndDeliveries(t *testing.T) {
-	bus := newTestBus(t)
+	bus := testutil.NewTestBus(t)
 	o, _ := testOrchestratorWithBus(t, bus)
 
 	taskID := uuid.New().String()
@@ -143,7 +129,7 @@ func TestPublishTaskTransition_CreatesEventAndDeliveries(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPublishAgentStatus_CreatesEventAndDeliveries(t *testing.T) {
-	bus := newTestBus(t)
+	bus := testutil.NewTestBus(t)
 	o, _ := testOrchestratorWithBus(t, bus)
 
 	taskID := uuid.New().String()
@@ -182,7 +168,7 @@ func TestPublishAgentStatus_CreatesEventAndDeliveries(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestFailTask_EmitsEventBusEvent(t *testing.T) {
-	bus := newTestBus(t)
+	bus := testutil.NewTestBus(t)
 	o, projectID := testOrchestratorWithBus(t, bus)
 
 	// Create a task in IN_PROGRESS status.
@@ -224,7 +210,7 @@ func TestFailTask_EmitsEventBusEvent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestPauseTask_EmitsEventBusEvent(t *testing.T) {
-	bus := newTestBus(t)
+	bus := testutil.NewTestBus(t)
 	o, projectID := testOrchestratorWithBus(t, bus)
 
 	task := &model.Task{
@@ -258,7 +244,7 @@ func TestPauseTask_EmitsEventBusEvent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestProcessBacklog_EmitsEventBusEvent(t *testing.T) {
-	bus := newTestBus(t)
+	bus := testutil.NewTestBus(t)
 	o, projectID := testOrchestratorWithBus(t, bus)
 
 	task := &model.Task{
@@ -296,7 +282,7 @@ func TestProcessBacklog_EmitsEventBusEvent(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestApplyClassification_EmitsEventBusEvent(t *testing.T) {
-	bus := newTestBus(t)
+	bus := testutil.NewTestBus(t)
 	o, projectID := testOrchestratorWithBus(t, bus)
 
 	task := &model.Task{
@@ -376,7 +362,7 @@ func TestNilBus_FailTask_Succeeds(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestMultipleTransitions_ProduceMultipleEvents(t *testing.T) {
-	bus := newTestBus(t)
+	bus := testutil.NewTestBus(t)
 	o, _ := testOrchestratorWithBus(t, bus)
 
 	taskID := uuid.New().String()

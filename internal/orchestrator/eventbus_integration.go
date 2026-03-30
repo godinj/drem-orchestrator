@@ -53,12 +53,12 @@ func (o *Orchestrator) publishAgentStatus(taskID, agentID, agentType, status str
 	detailsJSON, _ := json.Marshal(detailsMap)
 
 	event := &eventbus.Event{
-		Type:       "agent_status_changed",
-		Source:     "orchestrator",
-		TaskID:     taskID,
-		ToStatus:   status,
-		Details:    string(detailsJSON),
-		CreatedAt:  time.Now(),
+		Type:      "agent_status_changed",
+		Source:    "orchestrator",
+		TaskID:    taskID,
+		ToStatus:  status,
+		Details:   string(detailsJSON),
+		CreatedAt: time.Now(),
 	}
 
 	if err := o.bus.Publish(event); err != nil {

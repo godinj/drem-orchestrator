@@ -1,6 +1,8 @@
 package orchestrator
 
-import "github.com/godinj/drem-orchestrator/internal/model"
+import (
+	"github.com/godinj/drem-orchestrator/internal/model"
+)
 
 // RecoveryAction represents the action a recovery policy recommends.
 type RecoveryAction int
