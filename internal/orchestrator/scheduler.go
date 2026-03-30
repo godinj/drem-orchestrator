@@ -80,6 +80,46 @@ func (sp *SchedulingPolicy) EvaluateDispatch(
 		decisions[i] = sp.evaluateCandidate(cand, inProgress, ipFiles, ipIDs)
 	}
 
+	// Mutual conflict pass: check approved candidates against each other.
+	// Earlier candidates take priority; later ones are blocked if their file
+	// sets overlap with already-approved candidates in this batch.
+	accumulated := make(map[string]uuid.UUID) // file -> first approved candidate's task ID
+	for i, cand := range candidates {
+		if !decisions[i].Dispatchable {
+			continue
+		}
+		candFiles := extractEstimatedFiles(cand)
+		if len(candFiles) == 0 {
+			continue
+		}
+		if len(accumulated) > 0 {
+			accFiles := make([]string, 0, len(accumulated))
+			for f := range accumulated {
+				accFiles = append(accFiles, f)
+			}
+			overlap, score := fileOverlapDetails(candFiles, accFiles)
+			if score >= conflictScoreBlockThreshold {
+				var blockingID uuid.UUID
+				if len(overlap) > 0 {
+					blockingID = accumulated[overlap[0]]
+				}
+				decisions[i].Dispatchable = false
+				decisions[i].Reason = fmt.Sprintf("file conflict with co-dispatched task %s", blockingID)
+				decisions[i].Conflicts = append(decisions[i].Conflicts, ConflictDetail{
+					BlockingTaskID: blockingID,
+					OverlapFiles:   overlap,
+					Score:          score,
+				})
+				continue
+			}
+		}
+		for _, f := range candFiles {
+			if _, exists := accumulated[f]; !exists {
+				accumulated[f] = cand.ID
+			}
+		}
+	}
+
 	return decisions
 }
 
