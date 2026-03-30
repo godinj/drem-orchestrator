@@ -37,3 +37,8 @@ compile_command       = "go vet ./..."
   inbox_poll_interval = "2s"
   safety_interval     = "5m"
   heartbeat_interval  = "30s"
+
+[serve]
+  listen_addr  = ":8080"
+  bearer_token = ""
+  db_path      = "~/.drem-csuite/csuite.db"

@@ -29,21 +29,25 @@ func agentsHandler(s dashboardStore) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rows, err := s.AgentDashboard()
 		if err != nil {
-			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]string{"error": "store unavailable"}) //nolint:errcheck
 			return
 		}
-		out := make([]agentResponse, len(rows))
+
+		resp := make([]agentResponse, len(rows))
 		for i, row := range rows {
-			out[i] = agentResponse{
+			resp[i] = agentResponse{
 				Name:            row.Agent.Name,
-				Status:          row.Agent.Status.String(),
+				Status:          string(row.Agent.Status),
 				ContextPercent:  row.Agent.ContextPercent,
 				CurrentActivity: row.Agent.CurrentActivity,
 				UnreadCount:     row.UnreadCount,
 				LatestInbox:     row.LatestInbox,
 			}
 		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(out) //nolint:errcheck
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
 	})
 }
