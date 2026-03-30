@@ -55,7 +55,7 @@ func TestPWA_IndexNoAuthRequired(t *testing.T) {
 	mux := s.buildMux()
 
 	// No Authorization header — should still get 200 for static assets.
-	paths := []string{"/", "/style.css", "/app.js", "/manifest.json", "/sw.js"}
+	paths := []string{"/", "/style.css", "/app.js", "/voice.js", "/manifest.json", "/sw.js"}
 	for _, path := range paths {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		w := httptest.NewRecorder()
@@ -192,6 +192,38 @@ func TestPWA_AppJS(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "serviceWorker") {
 		t.Error("GET /app.js does not reference serviceWorker registration")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Voice JS
+// ---------------------------------------------------------------------------
+
+// TestPWA_VoiceJS verifies /voice.js returns JavaScript with speech controls.
+func TestPWA_VoiceJS(t *testing.T) {
+	store := testutil.NewTestStore(t)
+	s := New(Config{Token: "tok", Addr: "127.0.0.1:0", Store: store})
+	mux := s.buildMux()
+
+	req := httptest.NewRequest(http.MethodGet, "/voice.js", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /voice.js status = %d, want 200", w.Code)
+	}
+
+	ct := w.Header().Get("Content-Type")
+	if !strings.Contains(ct, "javascript") {
+		t.Errorf("GET /voice.js Content-Type = %q, want application/javascript", ct)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "SpeechRecognition") {
+		t.Error("GET /voice.js does not contain SpeechRecognition")
+	}
+	if !strings.Contains(body, "SpeechSynthesis") {
+		t.Error("GET /voice.js does not contain SpeechSynthesis")
 	}
 }
 

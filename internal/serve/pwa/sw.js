@@ -2,11 +2,12 @@
 // Caches the app shell for fast startup and offline shell display.
 // Message data is never cached — it must always come from the server.
 
-const CACHE_NAME = 'csuite-v1';
+const CACHE_NAME = 'csuite-v2';
 const APP_SHELL = [
   '/',
   '/style.css',
   '/app.js',
+  '/voice.js',
   '/manifest.json',
   '/icons/icon-192.svg',
   '/icons/icon-512.svg',
