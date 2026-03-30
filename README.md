@@ -924,9 +924,11 @@ More details.
 
 ```
 cmd/drem/              Entry point, config parsing, tmux session bootstrap
+cmd/csuite-watcher/    C-Suite bridge: event publisher, watcher loop, HTTP serve subcommand
 internal/
 ├── model/             GORM models (Task, Agent, Project, Memory, TaskEvent, TaskComment, BugReport)
 ├── csuite/            C-Suite monitoring models (CsuiteAgent, CsuiteInboxMessage) and enums
+├── serve/             Bridge HTTP server: bearer auth middleware, /api/health and /api/agents handlers
 ├── db/                SQLite init, WAL mode, auto-migrations
 ├── state/             Task status state machine with validated transitions
 ├── orchestrator/      Main tick loop, task scheduling, dependency resolution
@@ -1186,6 +1188,61 @@ The `agentmon` package (`internal/agentmon/`) tails Claude's conversation transc
 - Context usage indicators
 
 These signals feed back into the orchestrator's decision loop for automated test gating and failure recovery.
+
+## C-Suite Bridge Server (csuite-watcher serve)
+
+The `csuite-watcher` binary (`cmd/csuite-watcher/`) provides a lightweight HTTP bridge server for the C-Suite mobile client. It exposes a REST API over bearer token authentication so the mobile app can query live agent status and inbox data.
+
+```bash
+# Build
+go build -o csuite-watcher ./cmd/csuite-watcher
+
+# Start the bridge server (reads [serve] section from drem.toml)
+csuite-watcher serve --config /path/to/drem.toml
+```
+
+### Configuration
+
+Add a `[serve]` section to your `drem.toml`:
+
+```toml
+[serve]
+listen_addr   = ":8080"       # Address and port to listen on (default: ":8080")
+bearer_token  = "secret"      # Required: token clients must supply in Authorization header
+db_path       = "./drem.db"   # Path to the SQLite database (default: "./drem.db")
+```
+
+If `bearer_token` is empty the server starts but rejects all requests with 401 Unauthorized.
+
+### Endpoints
+
+| Method | Path          | Description                                      |
+|--------|---------------|--------------------------------------------------|
+| GET    | `/api/health` | Returns `{"status":"ok"}`. Requires auth.        |
+| GET    | `/api/agents` | Returns JSON array of agent dashboard rows. Requires auth. |
+
+All endpoints require a valid `Authorization: Bearer <token>` header. Missing or incorrect tokens return HTTP 401.
+
+#### `GET /api/agents` response
+
+```json
+[
+  {
+    "name":             "agent-abc123",
+    "status":           "in_progress",
+    "context_percent":  42,
+    "current_activity": "implementing foo.go",
+    "unread_count":     2,
+    "latest_inbox":     "Reviewer left a comment"
+  }
+]
+```
+
+Fields map directly to `internal/csuite.AgentDashboardRow`. An empty agent list returns `[]`.
+
+### Graceful shutdown
+
+The server honours `SIGTERM` and `SIGINT` — send either signal to stop it cleanly.
 
 ## Context Monitor (ctxmon)
 
