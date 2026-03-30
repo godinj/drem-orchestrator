@@ -1,0 +1,9 @@
+{
+  "title": "TestEvaluateDispatch_MutualConflict tests failing — implementation not yet merged",
+  "description": "The master merge (95932b4) brought in scheduling_policy_test.go changes (+263 lines) containing TestEvaluateDispatch_MutualConflict_* tests, but the corresponding implementation (commit fda9d90 'feat: add mutual conflict pass in EvaluateDispatch') is on a separate branch feature/1f1f992b-evaluatedispatch-missing-mutual-conflict that has not yet been merged. This causes 4 test failures in internal/orchestrator: TestEvaluateDispatch_MutualConflict_TwoCandidates, TestEvaluateDispatch_MutualConflict_ThreeCandidates, TestEvaluateDispatch_MutualConflict_AllOverlap, TestEvaluateDispatch_MutualConflict_OrderingSemantics.",
+  "category": "merge_conflict",
+  "severity": "degraded",
+  "reproduction_context": "Run: go test ./internal/orchestrator/... -run TestEvaluateDispatch_MutualConflict. The implementation exists on branch feature/1f1f992b-evaluatedispatch-missing-mutual-conflict (commit fda9d90). The tests were included in the master merge commit 95932b4 but the implementation was not.",
+  "agent_id": "d845b56b-4122-449a-879a-6b4f5b216204",
+  "task_id": "9e1b60b4-4599-4475-ba46-0512aa6b4218"
+}
