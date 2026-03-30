@@ -171,10 +171,11 @@ func CommitUnstagedChanges(worktreePath, message string) (bool, error) {
 		return false, nil
 	}
 
-	// Stage all changes. .claude/ is excluded via .gitignore in every worktree
-	// for untracked files, but already-tracked .claude/ files (e.g. settings.json
-	// committed by an agent) will still be staged by add --all.
-	if _, err := RunGit([]string{"add", "--all", "--", "."}, worktreePath); err != nil {
+	// Stage only tracked (modified/deleted) files. Using -u instead of --all
+	// avoids staging untracked files such as build artifacts, editor configs,
+	// and other files not yet in the index, which would cause merge conflicts
+	// when multiple agents commit overlapping untracked files.
+	if _, err := RunGit([]string{"add", "-u", "--", "."}, worktreePath); err != nil {
 		return false, fmt.Errorf("commit unstaged: add: %w", err)
 	}
 
@@ -183,7 +184,7 @@ func CommitUnstagedChanges(worktreePath, message string) (bool, error) {
 	// Errors are ignored — reset fails if no .claude/ files are staged, which is fine.
 	_, _ = RunGit([]string{"reset", "HEAD", "--", ".claude/"}, worktreePath)
 
-	// Check if anything was actually staged (add --all may have nothing after exclude).
+	// Check if anything was actually staged (-u may have nothing if there are no tracked changes).
 	if _, err := RunGit([]string{"diff", "--cached", "--quiet"}, worktreePath); err == nil {
 		// Exit code 0 means no staged differences — nothing to commit.
 		return false, nil
