@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"encoding/json"
 	"net/http"
 	"time"
 )
@@ -18,11 +19,31 @@ type agentResponse struct {
 // healthHandler serves GET /api/health.
 // Returns 200 with {"status":"ok"}.
 func healthHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"}) //nolint:errcheck
 }
 
 // agentsHandler returns a handler for GET /api/agents.
 // It queries the store for the agent dashboard and returns the rows as JSON.
 func agentsHandler(s dashboardStore) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rows, err := s.AgentDashboard()
+		if err != nil {
+			http.Error(w, `{"error":"internal server error"}`, http.StatusInternalServerError)
+			return
+		}
+		out := make([]agentResponse, len(rows))
+		for i, row := range rows {
+			out[i] = agentResponse{
+				Name:            row.Agent.Name,
+				Status:          row.Agent.Status.String(),
+				ContextPercent:  row.Agent.ContextPercent,
+				CurrentActivity: row.Agent.CurrentActivity,
+				UnreadCount:     row.UnreadCount,
+				LatestInbox:     row.LatestInbox,
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(out) //nolint:errcheck
 	})
 }
