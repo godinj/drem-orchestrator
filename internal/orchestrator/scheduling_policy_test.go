@@ -688,6 +688,269 @@ func TestSchedulingPolicy_CoherentWithBuildSchedule(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// EvaluateDispatch: mutual conflict between same-batch candidates
+// ---------------------------------------------------------------------------
+
+// TestEvaluateDispatch_MutualConflict_TwoCandidates verifies that when two
+// candidates in the same batch share files, the first is approved and the
+// second is blocked with a reason containing "co-dispatched".
+func TestEvaluateDispatch_MutualConflict_TwoCandidates(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/fake", "master")
+
+	candA := testutil.CreateTask(t, db, proj.ID, "cand-a", model.StatusBacklog)
+	db.Model(&candA).Update("context", model.JSONField{
+		"estimated_files": []any{"shared.go", "a_only.go"},
+	})
+	db.First(&candA, "id = ?", candA.ID)
+
+	candB := testutil.CreateTask(t, db, proj.ID, "cand-b", model.StatusBacklog)
+	db.Model(&candB).Update("context", model.JSONField{
+		"estimated_files": []any{"shared.go", "b_only.go"},
+	})
+	db.First(&candB, "id = ?", candB.ID)
+
+	sp := NewSchedulingPolicy(db)
+	decisions := sp.EvaluateDispatch([]model.Task{candA, candB}, nil)
+
+	if len(decisions) != 2 {
+		t.Fatalf("expected 2 decisions, got %d", len(decisions))
+	}
+
+	decisionMap := make(map[uuid.UUID]DispatchDecision)
+	for _, d := range decisions {
+		decisionMap[d.TaskID] = d
+	}
+
+	if !decisionMap[candA.ID].Dispatchable {
+		t.Errorf("first candidate (candA) should be approved, reason: %s", decisionMap[candA.ID].Reason)
+	}
+	if decisionMap[candB.ID].Dispatchable {
+		t.Error("second candidate (candB) should be blocked due to file conflict with co-dispatched candA")
+	}
+	if reason := decisionMap[candB.ID].Reason; reason == "" {
+		t.Error("blocked candidate should have a non-empty reason")
+	} else {
+		found := false
+		for _, sub := range []string{"co-dispatched", "co-dispatch"} {
+			if len(reason) >= len(sub) {
+				for i := 0; i <= len(reason)-len(sub); i++ {
+					if reason[i:i+len(sub)] == sub {
+						found = true
+						break
+					}
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			t.Errorf("blocked reason %q should contain 'co-dispatched'", reason)
+		}
+	}
+}
+
+// TestEvaluateDispatch_MutualConflict_ThreeCandidates verifies partial overlap:
+// A and B share files, A and C do not. A and C should be approved; B blocked.
+func TestEvaluateDispatch_MutualConflict_ThreeCandidates(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/fake", "master")
+
+	candA := testutil.CreateTask(t, db, proj.ID, "cand-a", model.StatusBacklog)
+	db.Model(&candA).Update("context", model.JSONField{
+		"estimated_files": []any{"shared_ab.go", "a_only.go"},
+	})
+	db.First(&candA, "id = ?", candA.ID)
+
+	candB := testutil.CreateTask(t, db, proj.ID, "cand-b", model.StatusBacklog)
+	db.Model(&candB).Update("context", model.JSONField{
+		"estimated_files": []any{"shared_ab.go", "b_only.go"},
+	})
+	db.First(&candB, "id = ?", candB.ID)
+
+	candC := testutil.CreateTask(t, db, proj.ID, "cand-c", model.StatusBacklog)
+	db.Model(&candC).Update("context", model.JSONField{
+		"estimated_files": []any{"c_only.go"},
+	})
+	db.First(&candC, "id = ?", candC.ID)
+
+	sp := NewSchedulingPolicy(db)
+	decisions := sp.EvaluateDispatch([]model.Task{candA, candB, candC}, nil)
+
+	if len(decisions) != 3 {
+		t.Fatalf("expected 3 decisions, got %d", len(decisions))
+	}
+
+	decisionMap := make(map[uuid.UUID]DispatchDecision)
+	for _, d := range decisions {
+		decisionMap[d.TaskID] = d
+	}
+
+	if !decisionMap[candA.ID].Dispatchable {
+		t.Errorf("candA should be approved (first in slice), reason: %s", decisionMap[candA.ID].Reason)
+	}
+	if decisionMap[candB.ID].Dispatchable {
+		t.Error("candB should be blocked (shares shared_ab.go with candA)")
+	}
+	if !decisionMap[candC.ID].Dispatchable {
+		t.Errorf("candC should be approved (no file overlap with candA), reason: %s", decisionMap[candC.ID].Reason)
+	}
+}
+
+// TestEvaluateDispatch_MutualConflict_AllOverlap verifies that when all
+// candidates share files, only the first is approved and the rest are blocked.
+func TestEvaluateDispatch_MutualConflict_AllOverlap(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/fake", "master")
+
+	sharedFiles := []any{"shared.go"}
+
+	candA := testutil.CreateTask(t, db, proj.ID, "cand-a", model.StatusBacklog)
+	db.Model(&candA).Update("context", model.JSONField{"estimated_files": sharedFiles})
+	db.First(&candA, "id = ?", candA.ID)
+
+	candB := testutil.CreateTask(t, db, proj.ID, "cand-b", model.StatusBacklog)
+	db.Model(&candB).Update("context", model.JSONField{"estimated_files": sharedFiles})
+	db.First(&candB, "id = ?", candB.ID)
+
+	candC := testutil.CreateTask(t, db, proj.ID, "cand-c", model.StatusBacklog)
+	db.Model(&candC).Update("context", model.JSONField{"estimated_files": sharedFiles})
+	db.First(&candC, "id = ?", candC.ID)
+
+	sp := NewSchedulingPolicy(db)
+	decisions := sp.EvaluateDispatch([]model.Task{candA, candB, candC}, nil)
+
+	if len(decisions) != 3 {
+		t.Fatalf("expected 3 decisions, got %d", len(decisions))
+	}
+
+	approvedCount := 0
+	for _, d := range decisions {
+		if d.Dispatchable {
+			approvedCount++
+		}
+	}
+	if approvedCount != 1 {
+		t.Errorf("only 1 candidate should be approved when all overlap; got %d approved", approvedCount)
+	}
+	// The first in slice (candA) must be the approved one.
+	if !decisions[0].Dispatchable {
+		t.Errorf("candA (first in slice) should be the approved candidate")
+	}
+}
+
+// TestEvaluateDispatch_MutualConflict_NoFiles_AllApproved verifies backward
+// compatibility: candidates with no estimated_files are all approved even
+// when batched together (mirrors BuildSchedule's single-group fallback).
+func TestEvaluateDispatch_MutualConflict_NoFiles_AllApproved(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/fake", "master")
+
+	candA := testutil.CreateTask(t, db, proj.ID, "cand-a", model.StatusBacklog)
+	candB := testutil.CreateTask(t, db, proj.ID, "cand-b", model.StatusBacklog)
+	candC := testutil.CreateTask(t, db, proj.ID, "cand-c", model.StatusBacklog)
+
+	sp := NewSchedulingPolicy(db)
+	decisions := sp.EvaluateDispatch([]model.Task{candA, candB, candC}, nil)
+
+	if len(decisions) != 3 {
+		t.Fatalf("expected 3 decisions, got %d", len(decisions))
+	}
+	for _, d := range decisions {
+		if !d.Dispatchable {
+			t.Errorf("candidate %s with no file data should be approved (backward compat), reason: %s",
+				d.TaskID, d.Reason)
+		}
+	}
+}
+
+// TestEvaluateDispatch_MutualConflict_PartialOverlapBelowThreshold verifies that
+// two candidates whose file overlap is below the block threshold are both approved.
+func TestEvaluateDispatch_MutualConflict_PartialOverlapBelowThreshold(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/fake", "master")
+
+	// 5 files each, 1 shared -> score = 1/5 = 0.2, below threshold (0.3).
+	candA := testutil.CreateTask(t, db, proj.ID, "cand-a", model.StatusBacklog)
+	db.Model(&candA).Update("context", model.JSONField{
+		"estimated_files": []any{"shared.go", "a1.go", "a2.go", "a3.go", "a4.go"},
+	})
+	db.First(&candA, "id = ?", candA.ID)
+
+	candB := testutil.CreateTask(t, db, proj.ID, "cand-b", model.StatusBacklog)
+	db.Model(&candB).Update("context", model.JSONField{
+		"estimated_files": []any{"shared.go", "b1.go", "b2.go", "b3.go", "b4.go"},
+	})
+	db.First(&candB, "id = ?", candB.ID)
+
+	sp := NewSchedulingPolicy(db)
+	decisions := sp.EvaluateDispatch([]model.Task{candA, candB}, nil)
+
+	if len(decisions) != 2 {
+		t.Fatalf("expected 2 decisions, got %d", len(decisions))
+	}
+	for _, d := range decisions {
+		if !d.Dispatchable {
+			t.Errorf("candidate %s should be approved (overlap below threshold), reason: %s",
+				d.TaskID, d.Reason)
+		}
+	}
+}
+
+// TestEvaluateDispatch_MutualConflict_OrderingSemantics verifies that earlier
+// candidates in the slice take priority: given A, B, C where A-B and A-C both
+// overlap, A wins and both B and C are blocked.
+func TestEvaluateDispatch_MutualConflict_OrderingSemantics(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/fake", "master")
+
+	// A touches shared.go; B and C both touch shared.go.
+	candA := testutil.CreateTask(t, db, proj.ID, "cand-a", model.StatusBacklog)
+	db.Model(&candA).Update("context", model.JSONField{
+		"estimated_files": []any{"shared.go"},
+	})
+	db.First(&candA, "id = ?", candA.ID)
+
+	candB := testutil.CreateTask(t, db, proj.ID, "cand-b", model.StatusBacklog)
+	db.Model(&candB).Update("context", model.JSONField{
+		"estimated_files": []any{"shared.go"},
+	})
+	db.First(&candB, "id = ?", candB.ID)
+
+	candC := testutil.CreateTask(t, db, proj.ID, "cand-c", model.StatusBacklog)
+	db.Model(&candC).Update("context", model.JSONField{
+		"estimated_files": []any{"shared.go"},
+	})
+	db.First(&candC, "id = ?", candC.ID)
+
+	sp := NewSchedulingPolicy(db)
+	// Pass in order B, A, C — A is in position 1 (middle).
+	// Ordering semantics: earlier in slice wins, so B should be approved, A and C blocked.
+	decisions := sp.EvaluateDispatch([]model.Task{candB, candA, candC}, nil)
+
+	if len(decisions) != 3 {
+		t.Fatalf("expected 3 decisions, got %d", len(decisions))
+	}
+
+	decisionMap := make(map[uuid.UUID]DispatchDecision)
+	for _, d := range decisions {
+		decisionMap[d.TaskID] = d
+	}
+
+	// candB is first in slice — it should win.
+	if !decisionMap[candB.ID].Dispatchable {
+		t.Errorf("candB (first in slice) should be approved, reason: %s", decisionMap[candB.ID].Reason)
+	}
+	if decisionMap[candA.ID].Dispatchable {
+		t.Error("candA (second in slice, conflicts with candB) should be blocked")
+	}
+	if decisionMap[candC.ID].Dispatchable {
+		t.Error("candC (third in slice, conflicts with candB) should be blocked")
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Helper: marshalScheduleForContext
 // ---------------------------------------------------------------------------
 
