@@ -331,6 +331,224 @@ header {
   border-color: var(--accent);
 }
 
+/* ----- Quick Action Gear Button ----- */
+
+.qa-gear-btn {
+  background: transparent;
+  border-color: var(--text-muted);
+  color: var(--text-muted);
+  font-size: 18px;
+  padding: 8px 12px;
+}
+
+.qa-gear-btn:active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: transparent;
+}
+
+/* ----- Quick Actions Configuration Modal ----- */
+
+.qa-config-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.qa-config-overlay.hidden {
+  display: none;
+}
+
+.qa-config-modal {
+  width: 100%;
+  max-width: 440px;
+  max-height: 80vh;
+  background: var(--bg-secondary);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.qa-config-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.qa-config-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.qa-config-close {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qa-config-close:active {
+  background: var(--border);
+}
+
+.qa-config-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.qa-config-empty {
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 24px 0;
+}
+
+.qa-config-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-tertiary);
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+}
+
+.qa-config-reorder {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.qa-config-arrow {
+  width: 28px;
+  height: 22px;
+  border-radius: 4px;
+  border: none;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  font-size: 10px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.qa-config-arrow:active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.qa-config-arrow:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.qa-config-fields {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.qa-config-input {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+}
+
+.qa-config-input:focus {
+  border-color: var(--accent);
+}
+
+.qa-config-input::placeholder {
+  color: var(--text-muted);
+}
+
+.qa-config-delete {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--danger);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.qa-config-delete:active {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.qa-config-footer {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.qa-config-btn {
+  flex: 1;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: none;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 40px;
+}
+
+.qa-config-btn-add {
+  background: var(--accent);
+  color: #fff;
+}
+
+.qa-config-btn-add:active {
+  background: var(--accent-hover);
+}
+
+.qa-config-btn-reset {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.qa-config-btn-reset:active {
+  background: var(--border);
+}
+
 /* ----- Input Bar ----- */
 
 .input-bar {
@@ -386,6 +604,131 @@ header {
   background: var(--bg-tertiary);
   color: var(--text-muted);
   cursor: default;
+}
+
+/* ----- Mic Button (STT) ----- */
+
+.mic-btn {
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: none;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 20px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, color 0.2s;
+}
+
+.mic-btn:active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.mic-btn.recording {
+  background: var(--danger);
+  color: #fff;
+  animation: mic-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+}
+
+/* ----- Recording Indicator Overlay ----- */
+
+.recording-indicator {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 12px 20px;
+  background: rgba(239, 68, 68, 0.95);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.recording-pulse {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  animation: rec-pulse 1s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+.recording-stop {
+  padding: 4px 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.7);
+  background: transparent;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.recording-stop:active {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ----- Speaker Button (TTS) ----- */
+
+.speak-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-top: 6px;
+  transition: background 0.2s, color 0.2s;
+}
+
+.speak-btn:hover {
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--text-secondary);
+}
+
+.speak-btn:active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.speak-btn.speaking {
+  background: var(--accent);
+  color: #fff;
+  animation: speak-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes speak-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+.message.speaking {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 /* ----- Utility ----- */

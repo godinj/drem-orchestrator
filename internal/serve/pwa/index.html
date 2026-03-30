@@ -39,6 +39,21 @@
 
     <div id="quick-actions" class="quick-actions"></div>
 
+    <!-- Quick Actions Configuration Modal -->
+    <div id="qa-config-overlay" class="qa-config-overlay hidden">
+      <div class="qa-config-modal">
+        <div class="qa-config-header">
+          <h2>Quick Actions</h2>
+          <button id="qa-config-close" class="qa-config-close" aria-label="Close">&#10005;</button>
+        </div>
+        <div id="qa-config-list" class="qa-config-list"></div>
+        <div class="qa-config-footer">
+          <button id="qa-config-add" class="qa-config-btn qa-config-btn-add">+ Add Action</button>
+          <button id="qa-config-reset" class="qa-config-btn qa-config-btn-reset">Reset to Defaults</button>
+        </div>
+      </div>
+    </div>
+
     <div class="input-bar">
       <textarea id="msg-input" rows="1" placeholder="Message..." enterkeyhint="send"></textarea>
       <button id="send-btn" aria-label="Send">&#9654;</button>
@@ -46,5 +61,6 @@
   </div>
 
   <script src="/app.js"></script>
+  <script src="/voice.js"></script>
 </body>
 </html>

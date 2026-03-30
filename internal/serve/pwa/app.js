@@ -346,6 +346,10 @@
   // Quick Actions
   // -------------------------------------------------------------------------
 
+  function saveQuickActions(actions) {
+    localStorage.setItem('csuite_quick_actions', JSON.stringify(actions));
+  }
+
   function renderQuickActions() {
     const actions = getQuickActions();
     $quickActions.innerHTML = '';
@@ -356,7 +360,170 @@
       btn.addEventListener('click', () => sendMessage(a.payload));
       $quickActions.appendChild(btn);
     });
+
+    // Gear icon for configuration
+    const gear = document.createElement('button');
+    gear.className = 'quick-btn qa-gear-btn';
+    gear.innerHTML = '&#9881;';
+    gear.setAttribute('aria-label', 'Configure quick actions');
+    gear.addEventListener('click', openQaConfig);
+    $quickActions.appendChild(gear);
   }
+
+  // -------------------------------------------------------------------------
+  // Quick Actions Configuration
+  // -------------------------------------------------------------------------
+
+  const $qaOverlay = document.getElementById('qa-config-overlay');
+  const $qaConfigList = document.getElementById('qa-config-list');
+  const $qaCloseBtn = document.getElementById('qa-config-close');
+  const $qaAddBtn = document.getElementById('qa-config-add');
+  const $qaResetBtn = document.getElementById('qa-config-reset');
+
+  function openQaConfig() {
+    renderQaConfigList();
+    $qaOverlay.classList.remove('hidden');
+  }
+
+  function closeQaConfig() {
+    $qaOverlay.classList.add('hidden');
+    renderQuickActions();
+  }
+
+  function renderQaConfigList() {
+    const actions = getQuickActions();
+    $qaConfigList.innerHTML = '';
+
+    if (actions.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'qa-config-empty';
+      empty.textContent = 'No quick actions. Tap "+ Add Action" to create one.';
+      $qaConfigList.appendChild(empty);
+      return;
+    }
+
+    actions.forEach(function (action, index) {
+      var item = document.createElement('div');
+      item.className = 'qa-config-item';
+      item.setAttribute('data-index', index);
+
+      // Reorder buttons
+      var reorderGroup = document.createElement('div');
+      reorderGroup.className = 'qa-config-reorder';
+
+      var upBtn = document.createElement('button');
+      upBtn.className = 'qa-config-arrow';
+      upBtn.innerHTML = '&#9650;';
+      upBtn.setAttribute('aria-label', 'Move up');
+      upBtn.disabled = (index === 0);
+      upBtn.addEventListener('click', function () { moveQaAction(index, -1); });
+
+      var downBtn = document.createElement('button');
+      downBtn.className = 'qa-config-arrow';
+      downBtn.innerHTML = '&#9660;';
+      downBtn.setAttribute('aria-label', 'Move down');
+      downBtn.disabled = (index === actions.length - 1);
+      downBtn.addEventListener('click', function () { moveQaAction(index, 1); });
+
+      reorderGroup.appendChild(upBtn);
+      reorderGroup.appendChild(downBtn);
+      item.appendChild(reorderGroup);
+
+      // Fields
+      var fields = document.createElement('div');
+      fields.className = 'qa-config-fields';
+
+      var labelInput = document.createElement('input');
+      labelInput.type = 'text';
+      labelInput.className = 'qa-config-input';
+      labelInput.placeholder = 'Label';
+      labelInput.value = action.label;
+      labelInput.setAttribute('data-field', 'label');
+      labelInput.setAttribute('data-index', index);
+      labelInput.addEventListener('change', function () {
+        updateQaAction(index, 'label', this.value);
+      });
+
+      var payloadInput = document.createElement('input');
+      payloadInput.type = 'text';
+      payloadInput.className = 'qa-config-input';
+      payloadInput.placeholder = 'Payload';
+      payloadInput.value = action.payload;
+      payloadInput.setAttribute('data-field', 'payload');
+      payloadInput.setAttribute('data-index', index);
+      payloadInput.addEventListener('change', function () {
+        updateQaAction(index, 'payload', this.value);
+      });
+
+      fields.appendChild(labelInput);
+      fields.appendChild(payloadInput);
+      item.appendChild(fields);
+
+      // Delete button
+      var delBtn = document.createElement('button');
+      delBtn.className = 'qa-config-delete';
+      delBtn.innerHTML = '&#128465;';
+      delBtn.setAttribute('aria-label', 'Remove action');
+      delBtn.addEventListener('click', function () { removeQaAction(index); });
+      item.appendChild(delBtn);
+
+      $qaConfigList.appendChild(item);
+    });
+  }
+
+  function moveQaAction(index, direction) {
+    var actions = getQuickActions();
+    var target = index + direction;
+    if (target < 0 || target >= actions.length) return;
+
+    var temp = actions[index];
+    actions[index] = actions[target];
+    actions[target] = temp;
+
+    saveQuickActions(actions);
+    renderQaConfigList();
+  }
+
+  function updateQaAction(index, field, value) {
+    var actions = getQuickActions();
+    if (index >= 0 && index < actions.length) {
+      actions[index][field] = value;
+      saveQuickActions(actions);
+    }
+  }
+
+  function removeQaAction(index) {
+    var actions = getQuickActions();
+    actions.splice(index, 1);
+    saveQuickActions(actions);
+    renderQaConfigList();
+  }
+
+  function addQaAction() {
+    var actions = getQuickActions();
+    actions.push({ label: '', payload: '' });
+    saveQuickActions(actions);
+    renderQaConfigList();
+    // Focus the new label input
+    var inputs = $qaConfigList.querySelectorAll('.qa-config-input[data-field="label"]');
+    if (inputs.length > 0) {
+      inputs[inputs.length - 1].focus();
+    }
+  }
+
+  function resetQaActions() {
+    saveQuickActions(DEFAULT_QUICK_ACTIONS.slice());
+    renderQaConfigList();
+  }
+
+  $qaCloseBtn.addEventListener('click', closeQaConfig);
+  $qaAddBtn.addEventListener('click', addQaAction);
+  $qaResetBtn.addEventListener('click', resetQaActions);
+
+  // Close on overlay background click
+  $qaOverlay.addEventListener('click', function (e) {
+    if (e.target === $qaOverlay) closeQaConfig();
+  });
 
   // -------------------------------------------------------------------------
   // WebSocket
