@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
@@ -373,8 +374,25 @@ func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task
 	if err := o.db.Save(ag).Error; err != nil {
 		return fmt.Errorf("on agent completed: save agent: %w", err)
 	}
+
+	failureReason := "merge into feature branch failed, agent branch preserved"
+	publishReason := "merge into feature branch failed"
+	if result != nil {
+		var parts []string
+		if len(result.Conflicts) > 0 {
+			parts = append(parts, fmt.Sprintf("conflicts: %s", strings.Join(result.Conflicts, ", ")))
+		}
+		if result.GitStderr != "" {
+			parts = append(parts, fmt.Sprintf("git stderr: %s", result.GitStderr))
+		}
+		if len(parts) > 0 {
+			failureReason = fmt.Sprintf("merge into feature branch failed (%s), agent branch preserved", strings.Join(parts, "; "))
+			publishReason = fmt.Sprintf("merge into feature branch failed (%s)", strings.Join(parts, "; "))
+		}
+	}
+
 	evt, err := state.TransitionTask(task, model.StatusFailed, "orchestrator",
-		map[string]any{"reason": "merge into feature branch failed, agent branch preserved"})
+		map[string]any{"reason": failureReason})
 	if err != nil {
 		o.logger.Warn("failed to transition task to failed after merge failure", "task_id", task.ID, "error", err)
 	} else {
@@ -384,7 +402,7 @@ func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task
 		if err := o.db.Create(evt).Error; err != nil {
 			return fmt.Errorf("on agent completed: save merge-failure event: %w", err)
 		}
-		o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "merge into feature branch failed")
+		o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, publishReason)
 	}
 	return nil
 }
