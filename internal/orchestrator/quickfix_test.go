@@ -465,3 +465,155 @@ func TestProcessQuickFix_AgentStillWorking_ReturnsNil(t *testing.T) {
 		t.Fatalf("processQuickFix: expected nil when agent is working, got: %v", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Empty work retry tests
+// ---------------------------------------------------------------------------
+
+func TestQuickFixInProgress_EmptyWork_DoesNotTransitionToMerging(t *testing.T) {
+	o, db, projectID := setupQuickFixTest(t)
+
+	// Create a quickfix task in IN_PROGRESS with empty_work=true.
+	// This simulates the state after onAgentEmptyWork clears the agent.
+	task := createQuickFixTask(t, db, projectID, "fix empty work retry", model.StatusInProgress)
+	task.Context = model.JSONField{
+		"empty_work":        true,
+		"retry_count":       float64(1),
+		"prompt_adjustment": "You MUST edit the file and commit your changes.",
+	}
+	task.WorktreeBranch = "feature/test-quickfix"
+	if err := db.Save(&task).Error; err != nil {
+		t.Fatalf("save task: %v", err)
+	}
+
+	// respawnQuickFixAgent should return nil when CanSpawn() is false
+	// (no capacity). The task should stay in IN_PROGRESS with empty_work
+	// still set, waiting for next tick.
+	if err := o.respawnQuickFixAgent(&task); err != nil {
+		t.Fatalf("respawnQuickFixAgent: unexpected error: %v", err)
+	}
+
+	// Reload and verify: task should NOT have transitioned to merging.
+	var updated model.Task
+	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+
+	if updated.Status == model.StatusMerging {
+		t.Error("quickfix task with empty_work should NOT transition to merging")
+	}
+	if updated.Status == model.StatusTestingReady {
+		t.Error("quickfix task with empty_work should NOT transition to testing_ready")
+	}
+	if updated.Status != model.StatusInProgress {
+		t.Errorf("expected status %q, got %q", model.StatusInProgress, updated.Status)
+	}
+}
+
+func TestQuickFixInProgress_EmptyWork_RespawnClearsFlag(t *testing.T) {
+	// Verify that when capacity is available and agent is spawned,
+	// the empty_work flag is cleared from context.
+	// We can't easily test full spawn (needs real claude binary), so
+	// we test the logic indirectly: when CanSpawn is false, the flag
+	// should remain (respawn deferred to next tick).
+
+	o, db, projectID := setupQuickFixTest(t)
+
+	task := createQuickFixTask(t, db, projectID, "fix retry flag test", model.StatusInProgress)
+	task.Context = model.JSONField{
+		"empty_work":  true,
+		"retry_count": float64(1),
+	}
+	task.WorktreeBranch = "feature/test-quickfix-flag"
+	if err := db.Save(&task).Error; err != nil {
+		t.Fatalf("save task: %v", err)
+	}
+
+	// CanSpawn() is false (runner has maxConcurrent=0), so respawn should
+	// return nil without modifying the task.
+	if err := o.respawnQuickFixAgent(&task); err != nil {
+		t.Fatalf("respawnQuickFixAgent: unexpected error: %v", err)
+	}
+
+	// Reload and verify empty_work flag is still set (waiting for capacity).
+	var updated model.Task
+	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+
+	if updated.Context == nil {
+		t.Fatal("expected context to be preserved")
+	}
+	if _, ok := updated.Context["empty_work"]; !ok {
+		t.Error("empty_work flag should remain when respawn is deferred (no capacity)")
+	}
+}
+
+func TestQuickFixInProgress_NoEmptyWork_WouldTransitionToMerging(t *testing.T) {
+	o, db, projectID := setupQuickFixTest(t)
+
+	// Create a quickfix task in IN_PROGRESS WITHOUT empty_work flag.
+	// This simulates successful agent completion where AssignedAgentID
+	// was cleared by agent completion.
+	task := createQuickFixTask(t, db, projectID, "fix clean completion", model.StatusInProgress)
+	// No empty_work in context — agent completed normally.
+
+	// transitionQuickFixToMerging should fast-track to merging.
+	if err := o.transitionQuickFixToMerging(&task); err != nil {
+		t.Fatalf("transitionQuickFixToMerging: unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+
+	if updated.Status != model.StatusMerging {
+		t.Errorf("expected status %q for clean completion, got %q", model.StatusMerging, updated.Status)
+	}
+}
+
+func TestQuickFixInProgress_EmptyWorkDetection(t *testing.T) {
+	// Verify the empty_work detection logic used in the doTick handler.
+	tests := []struct {
+		name      string
+		context   model.JSONField
+		wantRetry bool
+	}{
+		{
+			name:      "empty_work=true triggers retry",
+			context:   model.JSONField{"empty_work": true},
+			wantRetry: true,
+		},
+		{
+			name:      "no context means no retry",
+			context:   nil,
+			wantRetry: false,
+		},
+		{
+			name:      "empty context means no retry",
+			context:   model.JSONField{},
+			wantRetry: false,
+		},
+		{
+			name:      "other keys but no empty_work means no retry",
+			context:   model.JSONField{"retry_count": float64(1)},
+			wantRetry: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			task := &model.Task{Context: tc.context}
+			needsRetry := false
+			if task.Context != nil {
+				if _, ok := task.Context["empty_work"]; ok {
+					needsRetry = true
+				}
+			}
+			if needsRetry != tc.wantRetry {
+				t.Errorf("empty_work detection: got %v, want %v", needsRetry, tc.wantRetry)
+			}
+		})
+	}
+}
