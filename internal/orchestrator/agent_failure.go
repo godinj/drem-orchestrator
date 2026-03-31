@@ -34,6 +34,17 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	}
 	task.Context["last_error"] = truncate(output, maxErrorSnippetLen)
 
+	// Before cleanup, check if the agent's work was already merged into the
+	// feature branch (e.g. merge succeeded on a prior attempt but DB update
+	// failed). Must check BEFORE worktree removal because RemoveAgentWorktree
+	// deletes the branch ref needed by merge-base --is-ancestor.
+	earlyAlreadyMerged := false
+	if ag.WorktreeBranch != "" {
+		if featureDir := o.resolveFeatureWorktree(task); featureDir != "" {
+			earlyAlreadyMerged = o.isWorkAlreadyMerged(task, featureDir)
+		}
+	}
+
 	// Only remove the agent worktree if it has no commits to preserve.
 	// If the agent produced work, keep the worktree so it can be retried
 	// or manually resolved (consistent with onAgentCompleted merge failure).
@@ -130,9 +141,9 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	}
 
 	// Before failing, check if work was already merged (e.g. merge succeeded
-	// but DB update failed on a prior attempt).
-	featureDir := o.resolveFeatureWorktree(task)
-	if featureDir != "" && o.isWorkAlreadyMerged(task, featureDir) {
+	// but DB update failed on a prior attempt). Uses the result cached before
+	// worktree cleanup because RemoveAgentWorktree deletes the branch ref.
+	if earlyAlreadyMerged {
 		o.logger.Info("agent failed but work already merged, fast-tracking to done",
 			"task_id", task.ID, "agent_id", ag.ID)
 		// Fast-track subtask through states to DONE.

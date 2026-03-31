@@ -116,6 +116,11 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			return o.onAgentEmptyWork(ag, task, output)
 		}
 
+		// Resolve diagnostic refs before merge for structured failure events.
+		mergeBase, _ := worktree.RunGit([]string{"merge-base", "HEAD", ag.WorktreeBranch}, featureDir)
+		featureHEAD, _ := worktree.RunGit([]string{"rev-parse", "HEAD"}, featureDir)
+		agentHEAD, _ := worktree.RunGit([]string{"rev-parse", ag.WorktreeBranch}, featureDir)
+
 		result, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir)
 		if mergeErr != nil {
 			o.logger.Error("merge agent into feature failed", "agent_id", ag.ID, "error", mergeErr)
@@ -125,7 +130,23 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 				"agent_id", ag.ID,
 				"source", result.SourceBranch,
 				"target", result.TargetBranch,
-				"conflicts", result.Conflicts)
+				"conflicts", result.Conflicts,
+				"git_stderr", result.GitStderr,
+				"git_command", result.GitCommand)
+
+			// Emit structured merge failure event with full diagnostics.
+			o.emit("merge_failed", map[string]any{
+				"task_id":        task.ID,
+				"agent_id":       ag.ID,
+				"agent_branch":   ag.WorktreeBranch,
+				"feature_branch": featureBranch,
+				"conflicts":      result.Conflicts,
+				"git_stderr":     result.GitStderr,
+				"git_command":    result.GitCommand,
+				"merge_base":     mergeBase,
+				"feature_head":   featureHEAD,
+				"agent_head":     agentHEAD,
+			})
 		} else {
 			merged = true
 		}
