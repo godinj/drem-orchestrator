@@ -157,6 +157,20 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 	}
 
 	// 3. No agent assigned — spawn a planner if capacity allows.
+
+	// Hard cap: prevent runaway planner spawns across all cycles.
+	totalSpawns := 0
+	if task.Context != nil {
+		if v, ok := task.Context["total_planner_spawns"].(float64); ok {
+			totalSpawns = int(v)
+		}
+	}
+	if totalSpawns >= MaxTotalPlannerSpawns {
+		return o.failTask(task, fmt.Sprintf(
+			"planner spawn cap reached (%d/%d) — task needs human review",
+			totalSpawns, MaxTotalPlannerSpawns))
+	}
+
 	if !o.runner.CanSpawn() {
 		return nil // wait for capacity
 	}
@@ -199,13 +213,27 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 	}
 
 	task.AssignedAgentID = &ag.ID
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context["total_planner_spawns"] = float64(totalSpawns + 1)
 	if err := o.db.Save(task).Error; err != nil {
 		return fmt.Errorf("process planning: save assigned agent: %w", err)
 	}
 
-	o.emit("planner_spawned", map[string]any{"task_id": task.ID, "agent_id": ag.ID})
+	retryCount := 0
+	if v, ok := task.Context["retry_count"].(float64); ok {
+		retryCount = int(v)
+	}
+	o.emit("planner_spawned", map[string]any{
+		"task_id":              task.ID,
+		"agent_id":             ag.ID,
+		"total_planner_spawns": totalSpawns + 1,
+		"retry_count":          retryCount,
+	})
 	o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(model.AgentPlanner), string(model.AgentWorking))
-	o.logger.Info("planner spawned", "task_id", task.ID, "agent_id", ag.ID)
+	o.logger.Info("planner spawned", "task_id", task.ID, "agent_id", ag.ID,
+		"total_planner_spawns", totalSpawns+1)
 	return nil
 }
 

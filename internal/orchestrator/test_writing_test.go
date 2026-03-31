@@ -532,12 +532,10 @@ func TestProcessTestWriting_EmptySubtasks_ReplanClearsPlan(t *testing.T) {
 		t.Error("expected PlanFeedback to be set with replan directive")
 	}
 
-	// retry_count must be reset for fresh planner retries.
-	if updated.Context != nil {
-		if rc, ok := updated.Context["retry_count"].(float64); ok && rc != 0 {
-			t.Errorf("expected retry_count reset to 0, got %v", rc)
-		}
-	}
+	// retry_count must NOT be reset on replan — the global
+	// total_planner_spawns cap prevents runaway spawning.
+	// (Previously this test asserted retry_count == 0; the reset was removed
+	// to fix the multiplicative planner blowup bug.)
 }
 
 func TestProcessTestWriting_EmptySubtasks_ReplanDetachesOldSubtasks(t *testing.T) {

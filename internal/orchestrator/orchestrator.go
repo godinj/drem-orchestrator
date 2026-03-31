@@ -31,7 +31,13 @@ import (
 const (
 	// MaxPlannerRetries is the number of times the orchestrator will retry a
 	// planner agent before failing the task.
-	MaxPlannerRetries      = 3
+	MaxPlannerRetries = 3
+	// MaxTotalPlannerSpawns is the hard cap on total planner agents spawned
+	// for a single task across ALL planning cycles (replans, retries, etc.).
+	// This prevents multiplicative blowup from retry_count resets and
+	// reconciliation bypasses. 6 allows 2 full planning cycles with room
+	// for 1-2 transient failures.
+	MaxTotalPlannerSpawns  = 6
 	defaultContextFixerPct = 85
 	fixerEscalatePct       = 80 // fixer agents at this % → stop and escalate to human
 	maxTestOutputLen       = 5000
@@ -503,8 +509,9 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		parent.PlanFeedback = replanMsg
 		parent.AssignedAgentID = nil
 		parent.Context["replan_directive"] = replanMsg
-		// Reset planner retry counter — new planning cycle gets fresh retries.
-		parent.Context["retry_count"] = float64(0)
+		// NOTE: Do NOT reset retry_count on replan. The global
+		// total_planner_spawns cap prevents runaway spawning, and
+		// per-cycle retries use the existing retry_count which accumulates.
 
 		// Detach old subtasks to prevent duplicates and stale data.
 		var oldSubtasks []model.Task
