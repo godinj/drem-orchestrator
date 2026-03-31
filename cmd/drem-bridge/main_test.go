@@ -3,8 +3,6 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"log"
 	"net/http"
 	"path/filepath"
 	"sync"
@@ -12,12 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
-
 	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/serve"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -130,20 +125,7 @@ func TestMissingToken(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWALMode(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "wal-test.db")
-	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000", dbPath)
-
-	gormLog := logger.New(log.New(io.Discard, "", 0), logger.Config{LogLevel: logger.Silent})
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormLog})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() {
-		if sqlDB, err := db.DB(); err == nil {
-			sqlDB.Close()
-		}
-	})
+	db := testutil.NewTestDBFileWAL(t)
 
 	var mode string
 	db.Raw("PRAGMA journal_mode").Scan(&mode)
@@ -157,24 +139,7 @@ func TestWALMode(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestIntegrationHealth(t *testing.T) {
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "bridge.db")
-	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000", dbPath)
-
-	gormLog := logger.New(log.New(io.Discard, "", 0), logger.Config{LogLevel: logger.Silent})
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormLog})
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() {
-		if sqlDB, err := db.DB(); err == nil {
-			sqlDB.Close()
-		}
-	})
-
-	if err := db.AutoMigrate(&csuite.CsuiteAgent{}, &csuite.CsuiteInboxMessage{}); err != nil {
-		t.Fatalf("migrate: %v", err)
-	}
+	db := testutil.NewTestDBWithModels(t, &csuite.CsuiteAgent{}, &csuite.CsuiteInboxMessage{})
 
 	store := csuite.NewStore(db)
 	token := "test-secret"

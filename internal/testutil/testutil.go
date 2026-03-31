@@ -84,6 +84,29 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 	return db
 }
 
+// NewTestDBFileWAL creates a file-based SQLite database in a temporary
+// directory with WAL journal mode enabled. Use this when a test must verify
+// file-based SQLite behaviour (e.g. WAL pragma) that in-memory databases do
+// not support.
+func NewTestDBFileWAL(t *testing.T) *gorm.DB {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000", dbPath)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			sqlDB.Close()
+		}
+	})
+	return db
+}
+
 // NewSharedTestDB creates an in-memory SQLite database with cache=shared.
 // Use this for tests that need a single shared in-memory DB.
 func NewSharedTestDB(t *testing.T) *gorm.DB {
