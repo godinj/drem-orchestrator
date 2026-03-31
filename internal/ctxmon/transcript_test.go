@@ -40,22 +40,104 @@ func TestParseTranscriptUsage(t *testing.T) {
 		t.Fatal("expected usage, got nil")
 	}
 
-	// Last entry: 50 + 1000 + 30000 = 31050 input tokens
-	wantInput := 31050
+	// Cumulative across both entries:
+	// input: 100 + 50 = 150
+	// cache_creation: 500 + 1000 = 1500
+	// cache_read: 10000 + 30000 = 40000
+	// total input = 150 + 1500 + 40000 = 41650
+	wantInput := 41650
 	if usage.TotalInputTokens != wantInput {
 		t.Errorf("TotalInputTokens = %d, want %d", usage.TotalInputTokens, wantInput)
 	}
-	if usage.TotalOutputTokens != 400 {
-		t.Errorf("TotalOutputTokens = %d, want 400", usage.TotalOutputTokens)
+
+	// output: 200 + 400 = 600
+	wantOutput := 600
+	if usage.TotalOutputTokens != wantOutput {
+		t.Errorf("TotalOutputTokens = %d, want %d", usage.TotalOutputTokens, wantOutput)
 	}
 
-	// 31050 / 200000 = 15%
-	wantPct := 15
+	// 41650 / 200000 = 20%
+	wantPct := 20
 	if usage.UsedPercent != wantPct {
 		t.Errorf("UsedPercent = %d, want %d", usage.UsedPercent, wantPct)
 	}
 	if usage.ContextWindowSize != defaultContextWindowSize {
 		t.Errorf("ContextWindowSize = %d, want %d", usage.ContextWindowSize, defaultContextWindowSize)
+	}
+
+	// Cost should be estimated from opus pricing:
+	// input: 150 × $15/M = $0.00225
+	// cache_creation: 1500 × $18.75/M = $0.028125
+	// cache_read: 40000 × $1.875/M = $0.075
+	// output: 600 × $75/M = $0.045
+	// total = $0.150375
+	wantCost := 0.150375
+	if diff := usage.TotalCostUSD - wantCost; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("TotalCostUSD = %f, want %f", usage.TotalCostUSD, wantCost)
+	}
+}
+
+func TestParseTranscriptUsageSonnetCost(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "session.jsonl")
+
+	lines := []string{
+		`{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":500}}}`,
+	}
+	var data []byte
+	for _, l := range lines {
+		data = append(data, []byte(l+"\n")...)
+	}
+	if err := os.WriteFile(transcript, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err := parseTranscriptUsage(transcript)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if usage == nil {
+		t.Fatal("expected usage, got nil")
+	}
+
+	// Sonnet pricing: input 1000 × $3/M + output 500 × $15/M
+	// = $0.003 + $0.0075 = $0.0105
+	wantCost := 0.0105
+	if diff := usage.TotalCostUSD - wantCost; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("TotalCostUSD = %f, want %f", usage.TotalCostUSD, wantCost)
+	}
+}
+
+func TestParseTranscriptUsageUnknownModel(t *testing.T) {
+	dir := t.TempDir()
+	transcript := filepath.Join(dir, "session.jsonl")
+
+	lines := []string{
+		`{"type":"assistant","message":{"model":"unknown-model-v1","usage":{"input_tokens":1000,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":500}}}`,
+	}
+	var data []byte
+	for _, l := range lines {
+		data = append(data, []byte(l+"\n")...)
+	}
+	if err := os.WriteFile(transcript, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	usage, err := parseTranscriptUsage(transcript)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if usage == nil {
+		t.Fatal("expected usage, got nil")
+	}
+
+	// Unknown model — cost should be 0
+	if usage.TotalCostUSD != 0 {
+		t.Errorf("TotalCostUSD = %f, want 0 for unknown model", usage.TotalCostUSD)
+	}
+	// But tokens should still be populated
+	if usage.TotalInputTokens != 1000 {
+		t.Errorf("TotalInputTokens = %d, want 1000", usage.TotalInputTokens)
 	}
 }
 
