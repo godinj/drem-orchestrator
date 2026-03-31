@@ -25,10 +25,10 @@ func TestSubtaskRecoveryPolicy_Evaluate(t *testing.T) {
 			wantCounter:  1,
 		},
 		{
-			name:         "empty subtasks second check increments counter and returns replan",
+			name:         "empty subtasks second check at default max returns fail",
 			subtaskCount: 0,
 			context:      model.JSONField{emptySubtaskCounterKey: float64(1)},
-			wantAction:   RecoveryReplan,
+			wantAction:   RecoveryFail,
 			wantCounter:  2,
 		},
 		{
@@ -51,6 +51,14 @@ func TestSubtaskRecoveryPolicy_Evaluate(t *testing.T) {
 			context:      nil,
 			wantAction:   RecoveryContinue,
 			wantCounter:  0,
+		},
+		{
+			name:           "custom max empty checks of 3 allows second replan",
+			maxEmptyChecks: 3,
+			subtaskCount:   0,
+			context:        model.JSONField{emptySubtaskCounterKey: float64(1)},
+			wantAction:     RecoveryReplan,
+			wantCounter:    2,
 		},
 		{
 			name:           "custom max empty checks of 1 fails immediately",

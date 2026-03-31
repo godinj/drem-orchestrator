@@ -23,9 +23,9 @@ const (
 const emptySubtaskCounterKey = "empty_subtask_checks"
 
 // defaultMaxEmptyChecks is the number of replan attempts before failing.
-// Set to 5 to give the system enough cycles to recover through a full
-// replan: TEST_WRITING → PLANNING → new planner → PLAN_REVIEW → TEST_WRITING.
-const defaultMaxEmptyChecks = 5
+// Set to 2 to limit replan aggression. Combined with the test_replan_count
+// cap (1 replan before human review), this keeps total planner spawns low.
+const defaultMaxEmptyChecks = 2
 
 // SubtaskRecoveryPolicy evaluates whether a task's subtask set is healthy
 // and selects a recovery action when subtasks are missing.

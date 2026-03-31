@@ -502,6 +502,19 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 
 	switch o.subtaskRecovery.Evaluate(parent, len(testSubtasks)) {
 	case RecoveryReplan:
+		// Cap test_writing replans at 1. After that, flag for human review
+		// instead of spinning through more planning cycles.
+		replanCount := 0
+		if v, ok := parent.Context["test_replan_count"].(float64); ok {
+			replanCount = int(v)
+		}
+		if replanCount >= 1 {
+			parent.Context["needs_human_review"] = true
+			parent.Context["review_reason"] = "repeated empty test subtasks after replan"
+			return o.failTask(parent, "repeated empty test subtasks — needs human review")
+		}
+		parent.Context["test_replan_count"] = float64(replanCount + 1)
+
 		// Clear the plan so processPlanning spawns a new planner instead of
 		// auto-advancing the same stale plan to PLAN_REVIEW.
 		replanMsg := "Previous plan produced no test-phase subtasks. Re-plan with explicit test subtasks for each implementation subtask."
