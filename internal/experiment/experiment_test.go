@@ -156,3 +156,140 @@ func TestVariantTaskIDNotNil(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// CreateFromTask tests
+// ---------------------------------------------------------------------------
+
+func TestCreateFromTaskHappyPathNoReusePlan(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "from-task-proj", "/tmp/from-task.git", "master")
+	src := testutil.CreateTask(t, db, proj.ID, "Source task", model.StatusDone)
+
+	exp, err := CreateFromTask(db, proj.ID, src.ID, "From-task experiment", "desc", []string{"fast", "thorough"}, "fast", false)
+	if err != nil {
+		t.Fatalf("CreateFromTask: %v", err)
+	}
+
+	// Experiment fields.
+	if exp.SourceTaskID == nil || *exp.SourceTaskID != src.ID {
+		t.Errorf("expected SourceTaskID=%s, got %v", src.ID, exp.SourceTaskID)
+	}
+	if exp.ProjectID != proj.ID {
+		t.Errorf("expected ProjectID=%s, got %s", proj.ID, exp.ProjectID)
+	}
+	if len(exp.Variants) != 2 {
+		t.Fatalf("expected 2 variants, got %d", len(exp.Variants))
+	}
+
+	// Variants and tasks.
+	for _, v := range exp.Variants {
+		if v.ReusesPlan {
+			t.Errorf("variant %s: expected ReusesPlan=false", v.ProfileName)
+		}
+		var task model.Task
+		if err := db.First(&task, "id = ?", v.TaskID).Error; err != nil {
+			t.Fatalf("find task for variant %s: %v", v.ProfileName, err)
+		}
+		if task.Status != model.StatusBacklog {
+			t.Errorf("variant %s: expected task status backlog, got %q", v.ProfileName, task.Status)
+		}
+	}
+}
+
+func TestCreateFromTaskHappyPathReusePlan(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "from-task-reuse-proj", "/tmp/from-task-reuse.git", "master")
+	src := testutil.CreateTask(t, db, proj.ID, "Source task with plan", model.StatusDone)
+
+	// Set a plan on the source task.
+	planData := model.JSONField{"steps": []any{"step1", "step2"}}
+	if err := db.Model(&src).Update("plan", planData).Error; err != nil {
+		t.Fatalf("update source task plan: %v", err)
+	}
+	src.Plan = planData
+
+	exp, err := CreateFromTask(db, proj.ID, src.ID, "Reuse-plan experiment", "desc", []string{"alpha", "beta"}, "alpha", true)
+	if err != nil {
+		t.Fatalf("CreateFromTask with reuse-plan: %v", err)
+	}
+
+	if exp.SourceTaskID == nil || *exp.SourceTaskID != src.ID {
+		t.Errorf("expected SourceTaskID=%s, got %v", src.ID, exp.SourceTaskID)
+	}
+	if len(exp.Variants) != 2 {
+		t.Fatalf("expected 2 variants, got %d", len(exp.Variants))
+	}
+
+	for _, v := range exp.Variants {
+		if !v.ReusesPlan {
+			t.Errorf("variant %s: expected ReusesPlan=true", v.ProfileName)
+		}
+		var task model.Task
+		if err := db.First(&task, "id = ?", v.TaskID).Error; err != nil {
+			t.Fatalf("find task for variant %s: %v", v.ProfileName, err)
+		}
+		if task.Status != model.StatusPlanReview {
+			t.Errorf("variant %s: expected task status plan_review, got %q", v.ProfileName, task.Status)
+		}
+		// Verify the plan was copied: both should have the same "steps" key.
+		if len(task.Plan) != len(src.Plan) {
+			t.Errorf("variant %s: expected plan copied from source (len=%d), got len=%d", v.ProfileName, len(src.Plan), len(task.Plan))
+		}
+	}
+}
+
+func TestCreateFromTaskSourceNotDone(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "from-task-nodone-proj", "/tmp/nodone.git", "master")
+	src := testutil.CreateTask(t, db, proj.ID, "In-progress task", model.StatusInProgress)
+
+	_, err := CreateFromTask(db, proj.ID, src.ID, "Should fail", "desc", []string{"a", "b"}, "a", false)
+	if err == nil {
+		t.Fatal("expected error for source task not in StatusDone, got nil")
+	}
+}
+
+func TestCreateFromTaskSourceNotFound(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "from-task-notfound-proj", "/tmp/notfound.git", "master")
+	nonexistent := uuid.New()
+
+	_, err := CreateFromTask(db, proj.ID, nonexistent, "Should fail", "desc", []string{"a", "b"}, "a", false)
+	if err == nil {
+		t.Fatal("expected error for nonexistent source task, got nil")
+	}
+}
+
+func TestCreateFromTaskTooFewProfiles(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "from-task-fewprof-proj", "/tmp/fewprof.git", "master")
+	src := testutil.CreateTask(t, db, proj.ID, "Done task", model.StatusDone)
+
+	_, err := CreateFromTask(db, proj.ID, src.ID, "One profile", "desc", []string{"solo"}, "solo", false)
+	if err == nil {
+		t.Fatal("expected error for <2 profiles, got nil")
+	}
+}
+
+func TestCreateFromTaskTooManyProfiles(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "from-task-manyprof-proj", "/tmp/manyprof.git", "master")
+	src := testutil.CreateTask(t, db, proj.ID, "Done task", model.StatusDone)
+
+	_, err := CreateFromTask(db, proj.ID, src.ID, "Four profiles", "desc", []string{"a", "b", "c", "d"}, "a", false)
+	if err == nil {
+		t.Fatal("expected error for >3 profiles, got nil")
+	}
+}
+
+func TestCreateFromTaskDefaultNotInProfiles(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "from-task-baddefault-proj", "/tmp/baddefault.git", "master")
+	src := testutil.CreateTask(t, db, proj.ID, "Done task", model.StatusDone)
+
+	_, err := CreateFromTask(db, proj.ID, src.ID, "Bad default", "desc", []string{"x", "y"}, "z", false)
+	if err == nil {
+		t.Fatal("expected error for default not in profiles, got nil")
+	}
+}

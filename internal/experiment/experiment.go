@@ -132,6 +132,17 @@ func CreateExperiment(db *gorm.DB, projectID uuid.UUID, title, description strin
 	return &exp, nil
 }
 
+// CreateFromTask creates an experiment derived from an existing done task.
+// The source task must be in StatusDone. Each variant gets a new task that
+// either copies the source plan (reusesPlan=true, tasks start at
+// StatusPlanReview) or starts fresh (reusesPlan=false, tasks start at
+// StatusBacklog). The experiment's SourceTaskID is set to sourceTaskID.
+//
+// NOTE: This is a stub. The real implementation is pending.
+func CreateFromTask(db *gorm.DB, projectID uuid.UUID, sourceTaskID uuid.UUID, title, description string, profiles []string, defaultProfile string, reusesPlan bool) (*Experiment, error) {
+	return nil, fmt.Errorf("CreateFromTask: not implemented")
+}
+
 // containsProfile returns true if needle is present in the profiles slice.
 func containsProfile(profiles []string, needle string) bool {
 	for _, p := range profiles {
