@@ -16,10 +16,10 @@ const defaultContextWindowSize = 200_000
 // Model pricing per token (USD). These are Anthropic API rates as of 2026-03.
 // Prices are per-token, not per-million-tokens.
 var modelPricing = map[string]struct {
-	inputPerToken              float64
-	cacheCreationPerToken      float64
-	cacheReadPerToken          float64
-	outputPerToken             float64
+	inputPerToken         float64
+	cacheCreationPerToken float64
+	cacheReadPerToken     float64
+	outputPerToken        float64
 }{
 	"opus": {
 		inputPerToken:         15.0 / 1_000_000,
