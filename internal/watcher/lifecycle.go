@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const defaultTimeout = 60 * time.Minute
+const defaultTimeout = 3 * time.Minute
 
 // LifecycleManager launches agent turns as claude subprocesses, waits for
 // completion, parses JSON output for token counts, and records metrics.

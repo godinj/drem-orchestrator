@@ -8,11 +8,11 @@ import (
 	"time"
 )
 
-const defaultSubprocessTimeout = 60 * time.Minute
+const defaultSubprocessTimeout = 3 * time.Minute
 
 // RunClaudeSubprocess executes a claude subprocess for the named agent and
 // returns the stdout bytes, exit code, and any error. The subprocess runs
-// with a 5-minute timeout and is killed (via process-group SIGKILL) if the
+// with a 3-minute timeout and is killed (via process-group SIGKILL) if the
 // timeout or context deadline is exceeded.
 //
 // systemPrompt is passed verbatim as the --system-prompt flag value. Callers
