@@ -184,8 +184,10 @@ func Generate(opts Opts) string {
 		)
 	} else {
 		sections = append(sections,
-			"When you have completed the task, commit all changes with a "+
-				"descriptive commit message. Ensure all tests pass before committing.",
+			"When you have completed the task, you MUST commit all changes before exiting. "+
+				"Run `git add` for any new or untracked files (do NOT rely solely on `git add -u`, "+
+				"which skips untracked files), then run `git commit` with a descriptive message. "+
+				"Ensure all tests pass before committing.",
 			"",
 		)
 	}
@@ -492,7 +494,8 @@ func testPhaseCoderInstructions(opts Opts) []string {
 		"2. Run the tests — they SHOULD fail (that's expected for TDD)",
 		"3. Verify failures are ASSERTION failures, not compilation or linker errors",
 		"4. If tests fail to compile, fix your stubs until the build succeeds",
-		`5. Commit both test files AND stub files together with message: "test: <what these tests verify>"`,
+		"5. Run `git add` for all new/untracked files, then commit both test files AND stub files " +
+			`together with message: "test: <what these tests verify>"`,
 		"6. Do NOT push to remote",
 		"",
 	)
@@ -566,7 +569,8 @@ func implPhaseCoderInstructions(opts Opts) []string {
 		"2. Run the FULL test suite — ALL tests must pass",
 		"3. If any test fails, fix your implementation (not the test)",
 		"4. NEVER modify pre-written TDD tests. Fix your code to match the tests.",
-		`5. Commit with message: "feat: <what was implemented>"`,
+		"5. Run `git add` for all new/untracked files, then commit with " +
+			`message: "feat: <what was implemented>"`,
 		"6. Do NOT push to remote",
 		"",
 	)
@@ -620,7 +624,7 @@ func defaultCoderInstructions(opts Opts) []string {
 		"5. If this is an integration subtask and the feature changes user-facing "+
 			"behavior (CLI, config, TUI, new capabilities), update the README "+
 			"or relevant documentation to reflect the changes",
-		"6. Commit your changes with a descriptive message",
+		"6. Run `git add` for all new/untracked files, then commit your changes with a descriptive message",
 		"7. Do NOT push to remote",
 		"",
 	)
