@@ -156,6 +156,8 @@ fi
 
 init_db() {
     sqlite3 "$CSUITE_DB" <<'SQL'
+PRAGMA journal_mode=WAL;
+PRAGMA busy_timeout=5000;
 CREATE TABLE IF NOT EXISTS temp_worker_tokens (
     worker_id          TEXT PRIMARY KEY,
     session_id         TEXT,

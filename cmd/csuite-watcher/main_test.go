@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/godinj/drem-orchestrator/internal/eventbus"
 )
@@ -335,5 +338,36 @@ func TestRun_EventRoutingFlagAccepted(t *testing.T) {
 	// must not cause an "unknown flag" failure. Check stderr for flag errors.
 	if strings.Contains(buf.String(), "flag provided but not defined") {
 		t.Errorf("--routing flag not defined; stderr: %q", buf.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WAL journal mode verification
+// ---------------------------------------------------------------------------
+
+// TestRun_EventDBUsesWALMode verifies that the csuite.db created by the event
+// subcommand is opened with WAL journal mode, preventing SQLITE_BUSY errors
+// when the bridge binary or other processes access the same database.
+func TestRun_EventDBUsesWALMode(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "csuite.db")
+	var buf bytes.Buffer
+	code := run([]string{"event", "--db", dbPath, validEventJSON}, &buf)
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d; stderr: %q", code, buf.String())
+	}
+
+	// Open the DB file with a raw database/sql connection to query PRAGMA.
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("open raw DB: %v", err)
+	}
+	defer db.Close()
+
+	var mode string
+	if err := db.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("query journal_mode: %v", err)
+	}
+	if mode != "wal" {
+		t.Errorf("journal_mode = %q, want %q", mode, "wal")
 	}
 }
