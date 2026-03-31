@@ -272,4 +272,3 @@ func (m MessageDetailModel) View() string {
 
 	return strings.Join(sections, "\n")
 }
-

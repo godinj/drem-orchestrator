@@ -242,7 +242,7 @@ func main() {
 	// Bubble Tea.  WithoutSignalHandler() prevents Bubble Tea from
 	// converting SIGTERM into a QuitMsg that silently exits the TUI.
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Start TUI (blocks until quit). If the TUI cannot start (no TTY),
 	// fall back to headless daemon mode. Either way the process MUST
