@@ -356,7 +356,18 @@ func RebaseBranch(sourceWorktree, targetWorktree string) (*RebaseResult, error) 
 // non-.claude/ files and directories (git clean -fd --exclude=.claude).
 // Returns nil if the worktree is already clean or was successfully reset.
 func ResetWorktree(worktreePath string) error {
-	return fmt.Errorf("not implemented")
+	// Discard all modifications to tracked files.
+	if _, err := RunGit([]string{"checkout", "--", "."}, worktreePath); err != nil {
+		return fmt.Errorf("reset worktree: checkout: %w", err)
+	}
+
+	// Remove untracked files and directories, excluding .claude/ so that
+	// agent configuration and settings survive the reset.
+	if _, err := RunGit([]string{"clean", "-fd", "--exclude=.claude"}, worktreePath); err != nil {
+		return fmt.Errorf("reset worktree: clean: %w", err)
+	}
+
+	return nil
 }
 
 // parseRebaseConflicts extracts conflicting file paths from git conflict output.
