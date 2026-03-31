@@ -611,6 +611,8 @@ func handleExperiment(db *gorm.DB, args []string, w io.Writer, jsonMode bool) er
 	switch sub {
 	case "create":
 		return handleExperimentCreate(db, rest, w, jsonMode)
+	case "from-task":
+		return handleExperimentFromTask(db, rest, w, jsonMode)
 	default:
 		return fmt.Errorf("unknown experiment subcommand: %q", sub)
 	}
@@ -673,4 +675,10 @@ func handleExperimentCreate(db *gorm.DB, args []string, w io.Writer, jsonMode bo
 		fmt.Fprintf(w, "  %s %s (task %s)\n", marker, v.ProfileName, shortID(v.TaskID))
 	}
 	return nil
+}
+
+// handleExperimentFromTask is a stub dispatcher for the 'experiment from-task' subcommand.
+// The full implementation is pending (see CreateFromTask in experiment package).
+func handleExperimentFromTask(db *gorm.DB, args []string, w io.Writer, jsonMode bool) error {
+	return fmt.Errorf("experiment from-task: not implemented")
 }

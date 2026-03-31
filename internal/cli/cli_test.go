@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/experiment"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
@@ -368,5 +369,244 @@ func TestTaskDetailJSON(t *testing.T) {
 	}
 	if detail.ID != task.ID.String() {
 		t.Errorf("expected ID %s, got %s", task.ID, detail.ID)
+	}
+}
+
+// TestExperimentFromTask_HappyPath verifies that 'experiment from-task' creates
+// an experiment with SourceTaskID set and one variant task per profile.
+func TestExperimentFromTask_HappyPath(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
+		t.Fatalf("migrate experiment tables: %v", err)
+	}
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
+	sourceTask := testutil.CreateTask(t, db, proj.ID, "Source Task", model.StatusDone)
+
+	var buf bytes.Buffer
+	err := Run(db, []string{
+		"experiment", "from-task",
+		"--task=" + sourceTask.ID.String(),
+		"--title=My Experiment",
+		"--profiles=fast,quality",
+		"--default=fast",
+	}, &buf, false, nil)
+	if err != nil {
+		t.Fatalf("experiment from-task: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "My Experiment") {
+		t.Errorf("expected experiment title in output:\n%s", out)
+	}
+
+	// Verify an experiment was created with SourceTaskID set.
+	var exp experiment.Experiment
+	if err := db.Preload("Variants").First(&exp, "source_task_id = ?", sourceTask.ID).Error; err != nil {
+		t.Fatalf("experiment not found by source_task_id: %v", err)
+	}
+	if exp.Title != "My Experiment" {
+		t.Errorf("expected title 'My Experiment', got %q", exp.Title)
+	}
+	if exp.SourceTaskID == nil || *exp.SourceTaskID != sourceTask.ID {
+		t.Errorf("expected SourceTaskID %s, got %v", sourceTask.ID, exp.SourceTaskID)
+	}
+	if exp.DefaultVariant != "fast" {
+		t.Errorf("expected DefaultVariant 'fast', got %q", exp.DefaultVariant)
+	}
+	if len(exp.Variants) != 2 {
+		t.Errorf("expected 2 variants, got %d", len(exp.Variants))
+	}
+}
+
+// TestExperimentFromTask_JSON verifies JSON output mode returns a parseable
+// experiment struct with SourceTaskID populated.
+func TestExperimentFromTask_JSON(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
+		t.Fatalf("migrate experiment tables: %v", err)
+	}
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
+	sourceTask := testutil.CreateTask(t, db, proj.ID, "Source Task", model.StatusDone)
+
+	var buf bytes.Buffer
+	err := Run(db, []string{
+		"experiment", "from-task",
+		"--task=" + sourceTask.ID.String(),
+		"--title=JSON Experiment",
+		"--profiles=fast,quality",
+		"--default=quality",
+	}, &buf, true, nil)
+	if err != nil {
+		t.Fatalf("experiment from-task --json: %v", err)
+	}
+
+	var exp experiment.Experiment
+	if err := json.Unmarshal(buf.Bytes(), &exp); err != nil {
+		t.Fatalf("invalid JSON output: %v\n%s", err, buf.String())
+	}
+	if exp.Title != "JSON Experiment" {
+		t.Errorf("expected title 'JSON Experiment', got %q", exp.Title)
+	}
+	if exp.SourceTaskID == nil || *exp.SourceTaskID != sourceTask.ID {
+		t.Errorf("expected SourceTaskID %s, got %v", sourceTask.ID, exp.SourceTaskID)
+	}
+}
+
+// TestExperimentFromTask_ReusePlan verifies that --reuse-plan causes variant
+// tasks to start at plan_review status and have ReusesPlan=true on variants.
+func TestExperimentFromTask_ReusePlan(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
+		t.Fatalf("migrate experiment tables: %v", err)
+	}
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
+	sourceTask := testutil.CreateTask(t, db, proj.ID, "Source Task", model.StatusDone)
+
+	var buf bytes.Buffer
+	err := Run(db, []string{
+		"experiment", "from-task",
+		"--task=" + sourceTask.ID.String(),
+		"--title=Reuse Experiment",
+		"--profiles=fast,quality",
+		"--default=fast",
+		"--reuse-plan",
+	}, &buf, false, nil)
+	if err != nil {
+		t.Fatalf("experiment from-task --reuse-plan: %v", err)
+	}
+
+	// Verify all variant tasks start at plan_review and have ReusesPlan=true.
+	var exp experiment.Experiment
+	if err := db.Preload("Variants").First(&exp, "source_task_id = ?", sourceTask.ID).Error; err != nil {
+		t.Fatalf("experiment not found: %v", err)
+	}
+	for _, v := range exp.Variants {
+		if !v.ReusesPlan {
+			t.Errorf("variant %s: expected ReusesPlan=true", v.ProfileName)
+		}
+		var task model.Task
+		if err := db.First(&task, "id = ?", v.TaskID).Error; err != nil {
+			t.Fatalf("variant task not found for profile %s: %v", v.ProfileName, err)
+		}
+		if task.Status != model.StatusPlanReview {
+			t.Errorf("variant %s: expected task status plan_review, got %s", v.ProfileName, task.Status)
+		}
+	}
+}
+
+// TestExperimentFromTask_SourceTaskNotFound verifies that an error is returned
+// when the --task ID does not match any existing task.
+func TestExperimentFromTask_SourceTaskNotFound(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
+		t.Fatalf("migrate experiment tables: %v", err)
+	}
+	_ = testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
+
+	missingID := uuid.New()
+	err := Run(db, []string{
+		"experiment", "from-task",
+		"--task=" + missingID.String(),
+		"--title=Ghost Experiment",
+		"--profiles=fast,quality",
+		"--default=fast",
+	}, &bytes.Buffer{}, false, nil)
+	if err == nil {
+		t.Fatal("expected error for non-existent source task, got nil")
+	}
+	if !strings.Contains(err.Error(), "not found") && !strings.Contains(err.Error(), "source task") {
+		t.Errorf("expected 'not found' or 'source task' in error, got: %v", err)
+	}
+}
+
+// TestExperimentFromTask_MissingProfiles verifies that --profiles is required.
+func TestExperimentFromTask_MissingProfiles(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
+		t.Fatalf("migrate experiment tables: %v", err)
+	}
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
+	sourceTask := testutil.CreateTask(t, db, proj.ID, "Source Task", model.StatusDone)
+
+	err := Run(db, []string{
+		"experiment", "from-task",
+		"--task=" + sourceTask.ID.String(),
+		"--title=No Profiles",
+		"--default=fast",
+	}, &bytes.Buffer{}, false, nil)
+	if err == nil {
+		t.Fatal("expected error for missing --profiles, got nil")
+	}
+	if !strings.Contains(err.Error(), "--profiles") {
+		t.Errorf("expected '--profiles' in error message, got: %v", err)
+	}
+}
+
+// TestExperimentFromTask_MissingDefault verifies that --default is required.
+func TestExperimentFromTask_MissingDefault(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
+		t.Fatalf("migrate experiment tables: %v", err)
+	}
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
+	sourceTask := testutil.CreateTask(t, db, proj.ID, "Source Task", model.StatusDone)
+
+	err := Run(db, []string{
+		"experiment", "from-task",
+		"--task=" + sourceTask.ID.String(),
+		"--title=No Default",
+		"--profiles=fast,quality",
+	}, &bytes.Buffer{}, false, nil)
+	if err == nil {
+		t.Fatal("expected error for missing --default, got nil")
+	}
+	if !strings.Contains(err.Error(), "--default") {
+		t.Errorf("expected '--default' in error message, got: %v", err)
+	}
+}
+
+// TestExperimentFromTask_MissingTask verifies that --task is required.
+func TestExperimentFromTask_MissingTask(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
+		t.Fatalf("migrate experiment tables: %v", err)
+	}
+
+	err := Run(db, []string{
+		"experiment", "from-task",
+		"--title=No Task Flag",
+		"--profiles=fast,quality",
+		"--default=fast",
+	}, &bytes.Buffer{}, false, nil)
+	if err == nil {
+		t.Fatal("expected error for missing --task, got nil")
+	}
+	if !strings.Contains(err.Error(), "--task") {
+		t.Errorf("expected '--task' in error message, got: %v", err)
+	}
+}
+
+// TestExperimentFromTask_SourceTaskNotDone verifies that a source task must be
+// in StatusDone; tasks in other states should be rejected.
+func TestExperimentFromTask_SourceTaskNotDone(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
+		t.Fatalf("migrate experiment tables: %v", err)
+	}
+	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
+	inProgressTask := testutil.CreateTask(t, db, proj.ID, "Still Running", model.StatusInProgress)
+
+	err := Run(db, []string{
+		"experiment", "from-task",
+		"--task=" + inProgressTask.ID.String(),
+		"--title=From Incomplete Task",
+		"--profiles=fast,quality",
+		"--default=fast",
+	}, &bytes.Buffer{}, false, nil)
+	if err == nil {
+		t.Fatal("expected error for source task not in StatusDone, got nil")
+	}
+	if !strings.Contains(err.Error(), "done") && !strings.Contains(err.Error(), "status") {
+		t.Errorf("expected 'done' or 'status' in error, got: %v", err)
 	}
 }
