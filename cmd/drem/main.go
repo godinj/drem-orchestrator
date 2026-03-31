@@ -17,7 +17,9 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -241,39 +243,87 @@ func main() {
 	// Register our own signal handler so we control shutdown — not
 	// Bubble Tea.  WithoutSignalHandler() prevents Bubble Tea from
 	// converting SIGTERM into a QuitMsg that silently exits the TUI.
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	//
+	// Only SIGINT and SIGTERM trigger graceful shutdown (quit TUI + exit).
+	// SIGHUP is caught separately and IGNORED — tmux sends SIGHUP when a
+	// session is destroyed, and we must not let it kill the TUI or process.
+	sigShutdown := make(chan os.Signal, 1)
+	signal.Notify(sigShutdown, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start TUI (blocks until quit). If the TUI cannot start (no TTY),
-	// fall back to headless daemon mode. Either way the process MUST
-	// stay alive so the orchestrator run loop keeps ticking.
-	p := tea.NewProgram(
-		tui.NewModel(database, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
-		tea.WithAltScreen(),
-		tea.WithoutSignalHandler(),
-	)
-
-	// Shutdown listener: when a signal arrives, quit the TUI
-	// gracefully (if running) so it restores the terminal, then
-	// signal done so the main goroutine can proceed to cleanup.
-	shutdownDone := make(chan struct{})
+	sigHup := make(chan os.Signal, 1)
+	signal.Notify(sigHup, syscall.SIGHUP)
 	go func() {
-		<-sig
-		slog.Info("received shutdown signal, stopping orchestrator")
-		p.Quit()
-		close(shutdownDone)
+		for range sigHup {
+			slog.Info("SIGHUP received and ignored (tmux session event)")
+		}
 	}()
 
-	if _, err := p.Run(); err != nil {
-		slog.Warn("TUI unavailable, running in headless daemon mode", "error", err)
-	}
+	// shutdownRequested is closed when a real shutdown signal (SIGINT/SIGTERM)
+	// arrives, signalling the TUI restart loop to stop.
+	shutdownRequested := make(chan struct{})
 
-	// Block until the shutdown signal arrives. In TUI mode, this
-	// returns immediately because the signal goroutine already fired
-	// and closed shutdownDone. In headless mode (or if the TUI exited
-	// unexpectedly), this blocks until a signal arrives — keeping the
-	// orchestrator run loop alive.
-	<-shutdownDone
+	// TUI restart loop: if p.Run() returns unexpectedly (no shutdown signal),
+	// create a fresh Program and restart. This makes the TUI resilient to
+	// transient Bubble Tea exits (PTY errors, races, etc.).
+	var (
+		pMu sync.Mutex
+		p   *tea.Program
+	)
+	go func() {
+		for {
+			prog := tea.NewProgram(
+				tui.NewModel(database, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
+				tea.WithAltScreen(),
+				tea.WithoutSignalHandler(),
+			)
+			pMu.Lock()
+			p = prog
+			pMu.Unlock()
+
+			slog.Info("TUI starting")
+
+			_, err := prog.Run()
+
+			// Check whether this was a requested shutdown.
+			select {
+			case <-shutdownRequested:
+				slog.Info("TUI exited after shutdown request")
+				return
+			default:
+			}
+
+			// Unexpected exit — log diagnostics and restart.
+			if err != nil {
+				slog.Warn("TUI exited unexpectedly, restarting in 1s", "error", err)
+			} else {
+				slog.Warn("TUI p.Run() returned nil error unexpectedly, restarting in 1s")
+			}
+
+			// Brief pause before restart to avoid tight loops if the TTY
+			// is permanently unavailable.
+			select {
+			case <-shutdownRequested:
+				return
+			case <-time.After(1 * time.Second):
+			}
+		}
+	}()
+
+	// Shutdown listener: when a real shutdown signal arrives, quit the TUI
+	// gracefully (if running) so it restores the terminal, then proceed
+	// to cleanup.
+	<-sigShutdown
+	slog.Info("received shutdown signal, stopping orchestrator")
+	close(shutdownRequested)
+	pMu.Lock()
+	if p != nil {
+		p.Quit()
+	}
+	pMu.Unlock()
+
+	// Give the TUI goroutine a moment to notice shutdownRequested and exit
+	// p.Run() cleanly. Then proceed to cleanup regardless.
+	time.Sleep(100 * time.Millisecond)
 
 	// Cleanup.
 	cancel()
