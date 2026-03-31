@@ -542,14 +542,20 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 			}
 			o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(ag.AgentType), string(model.AgentDead))
 
-			// Auto-retry if under the limit.
+			// Auto-retry if under the limit. Use MaxPlannerRetries for
+			// PLANNING tasks (planner agents) since they have a different
+			// retry budget than generic empty-work retries.
 			retryCount := 0
 			if task.Context != nil {
 				if v, ok := task.Context["retry_count"].(float64); ok {
 					retryCount = int(v)
 				}
 			}
-			if retryCount < MaxEmptyWorkRetries {
+			maxRetries := MaxEmptyWorkRetries
+			if task.Status == model.StatusPlanning {
+				maxRetries = MaxPlannerRetries
+			}
+			if retryCount < maxRetries {
 				o.logger.Info("reconcile stuck: auto-retrying dead agent task",
 					"task_id", task.ID, "retry_count", retryCount)
 				task.AssignedAgentID = nil
@@ -645,6 +651,14 @@ func (o *Orchestrator) reconcileOrphanedTaskAssignments() (int, error) {
 
 		task.AssignedAgentID = nil
 		task.UpdatedAt = time.Now()
+
+		// Increment retry_count for PLANNING tasks so this counts toward
+		// the retry budget. Without this, orphaned planner assignments get
+		// cleared silently, bypassing all retry limits.
+		if task.Status == model.StatusPlanning {
+			o.incrementRetryCount(task)
+		}
+
 		if err := o.db.Save(task).Error; err != nil {
 			o.logger.Error("reconcile: save task after clearing orphaned assignment",
 				"task_id", task.ID, "error", err)
@@ -701,6 +715,11 @@ func (o *Orchestrator) cleanupOrphanedAssignments() {
 				"task_id", task.ID, "agent_id", task.AssignedAgentID)
 			task.AssignedAgentID = nil
 			task.UpdatedAt = time.Now()
+			// Increment retry_count for PLANNING tasks so this startup
+			// cleanup counts toward the retry budget.
+			if task.Status == model.StatusPlanning {
+				o.incrementRetryCount(task)
+			}
 			if err := o.db.Save(task).Error; err != nil {
 				o.logger.Error("startup cleanup: save task", "task_id", task.ID, "error", err)
 			}
@@ -716,6 +735,11 @@ func (o *Orchestrator) cleanupOrphanedAssignments() {
 				"task_id", task.ID, "agent_id", ag.ID, "agent_status", ag.Status)
 			task.AssignedAgentID = nil
 			task.UpdatedAt = time.Now()
+			// Increment retry_count for PLANNING tasks so this startup
+			// cleanup counts toward the retry budget.
+			if task.Status == model.StatusPlanning {
+				o.incrementRetryCount(task)
+			}
 			if err := o.db.Save(task).Error; err != nil {
 				o.logger.Error("startup cleanup: save task", "task_id", task.ID, "error", err)
 			}
