@@ -14,8 +14,10 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -236,13 +238,20 @@ func main() {
 	// Create C-Suite store for messaging operations (compose, list, detail).
 	csuiteStore := csuite.NewStore(database)
 
-	// Start TUI (blocks until quit).
+	// Start TUI (blocks until quit). If the TUI cannot start (no TTY),
+	// fall back to headless daemon mode — block on OS signals so the
+	// orchestrator run loop stays alive.
 	p := tea.NewProgram(
 		tui.NewModel(database, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
 		tea.WithAltScreen(),
 	)
 	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "tui error: %v\n", err)
+		slog.Warn("TUI unavailable, running in headless daemon mode", "error", err)
+		// Block until SIGINT or SIGTERM so the orchestrator keeps ticking.
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+		<-sig
+		slog.Info("received shutdown signal, stopping orchestrator")
 	}
 
 	// Cleanup.
