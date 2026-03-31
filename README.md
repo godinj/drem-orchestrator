@@ -924,7 +924,7 @@ More details.
 
 ```
 cmd/drem/              Entry point, config parsing, tmux session bootstrap
-cmd/csuite-watcher/    C-Suite bridge: event publisher, watcher loop, HTTP serve subcommand
+cmd/csuite-watcher/    C-Suite watcher: event publisher, watcher loop
 internal/
 ├── model/             GORM models (Task, Agent, Project, Memory, TaskEvent, TaskComment, BugReport)
 ├── csuite/            C-Suite monitoring models (CsuiteAgent, CsuiteInboxMessage) and enums

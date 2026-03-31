@@ -9,7 +9,6 @@
 //
 //	event    Publish an event to the event bus from a JSON argument
 //	run      Start the watcher main loop
-//	serve    Start the bridge HTTP server
 package main
 
 import (
@@ -44,7 +43,7 @@ func main() {
 func run(args []string, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: csuite-watcher <subcommand> [flags] [args]")
-		fmt.Fprintln(stderr, "subcommands: event, run, serve")
+		fmt.Fprintln(stderr, "subcommands: event, run")
 		return 1
 	}
 
@@ -53,12 +52,10 @@ func run(args []string, stderr io.Writer) int {
 		return runEvent(args[1:], stderr)
 	case "run":
 		return runWatcher(args[1:], stderr)
-	case "serve":
-		return runServe(args[1:], stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown subcommand %q\n", args[0])
 		fmt.Fprintln(stderr, "usage: csuite-watcher <subcommand> [flags] [args]")
-		fmt.Fprintln(stderr, "subcommands: event, run, serve")
+		fmt.Fprintln(stderr, "subcommands: event, run")
 		return 1
 	}
 }
