@@ -238,21 +238,42 @@ func main() {
 	// Create C-Suite store for messaging operations (compose, list, detail).
 	csuiteStore := csuite.NewStore(database)
 
+	// Register our own signal handler so we control shutdown — not
+	// Bubble Tea.  WithoutSignalHandler() prevents Bubble Tea from
+	// converting SIGTERM into a QuitMsg that silently exits the TUI.
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
 	// Start TUI (blocks until quit). If the TUI cannot start (no TTY),
-	// fall back to headless daemon mode — block on OS signals so the
-	// orchestrator run loop stays alive.
+	// fall back to headless daemon mode. Either way the process MUST
+	// stay alive so the orchestrator run loop keeps ticking.
 	p := tea.NewProgram(
 		tui.NewModel(database, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
 		tea.WithAltScreen(),
+		tea.WithoutSignalHandler(),
 	)
-	if _, err := p.Run(); err != nil {
-		slog.Warn("TUI unavailable, running in headless daemon mode", "error", err)
-		// Block until SIGINT or SIGTERM so the orchestrator keeps ticking.
-		sig := make(chan os.Signal, 1)
-		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+	// Shutdown listener: when a signal arrives, quit the TUI
+	// gracefully (if running) so it restores the terminal, then
+	// signal done so the main goroutine can proceed to cleanup.
+	shutdownDone := make(chan struct{})
+	go func() {
 		<-sig
 		slog.Info("received shutdown signal, stopping orchestrator")
+		p.Quit()
+		close(shutdownDone)
+	}()
+
+	if _, err := p.Run(); err != nil {
+		slog.Warn("TUI unavailable, running in headless daemon mode", "error", err)
 	}
+
+	// Block until the shutdown signal arrives. In TUI mode, this
+	// returns immediately because the signal goroutine already fired
+	// and closed shutdownDone. In headless mode (or if the TUI exited
+	// unexpectedly), this blocks until a signal arrives — keeping the
+	// orchestrator run loop alive.
+	<-shutdownDone
 
 	// Cleanup.
 	cancel()
