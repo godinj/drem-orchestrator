@@ -1216,10 +1216,12 @@ If `bearer_token` is empty the server starts but rejects all requests with 401 U
 
 ### Endpoints
 
-| Method | Path          | Description                                      |
-|--------|---------------|--------------------------------------------------|
-| GET    | `/api/health` | Returns `{"status":"ok"}`. Requires auth.        |
-| GET    | `/api/agents` | Returns JSON array of agent dashboard rows. Requires auth. |
+| Method | Path             | Description                                                   |
+|--------|------------------|---------------------------------------------------------------|
+| GET    | `/api/health`    | Returns `{"status":"ok"}`. Requires auth.                     |
+| GET    | `/api/agents`    | Returns JSON array of agent dashboard rows. Requires auth.    |
+| GET    | `/api/messages`  | Returns paginated messages between two agents. Requires auth. |
+| POST   | `/api/messages`  | Creates a new inbox message. Requires auth.                   |
 
 All endpoints require a valid `Authorization: Bearer <token>` header. Missing or incorrect tokens return HTTP 401.
 
@@ -1233,12 +1235,54 @@ All endpoints require a valid `Authorization: Bearer <token>` header. Missing or
     "context_percent":  42,
     "current_activity": "implementing foo.go",
     "unread_count":     2,
-    "latest_inbox":     "Reviewer left a comment"
+    "latest_inbox":     "2026-03-29T18:00:00Z"
   }
 ]
 ```
 
 Fields map directly to `internal/csuite.AgentDashboardRow`. An empty agent list returns `[]`.
+
+#### `GET /api/messages` query parameters
+
+| Parameter   | Required | Description                                                                  |
+|-------------|----------|------------------------------------------------------------------------------|
+| `from`      | yes      | Agent name — one side of the conversation                                    |
+| `to`        | yes      | Agent name — other side of the conversation                                  |
+| `limit`     | no       | Max messages to return (default: 50)                                         |
+| `before_id` | no       | UUID of a message — return only messages older than this (cursor pagination) |
+
+Messages are returned newest-first. To page backwards, pass the `id` of the oldest message in the last response as `before_id`.
+
+```json
+[
+  {
+    "id":         "b3d2e1f0-...",
+    "from_agent": "operator",
+    "to_agent":   "ceo",
+    "subject":    "Status update",
+    "body":       "All systems nominal.",
+    "priority":   "normal",
+    "type":       "status",
+    "archived":   false,
+    "created_at": "2026-03-29T18:00:00Z"
+  }
+]
+```
+
+#### `POST /api/messages` request body
+
+```json
+{
+  "from_agent": "operator",
+  "to_agent":   "ceo",
+  "subject":    "Status update",
+  "body":       "All systems nominal.",
+  "priority":   "normal",
+  "type":       "status"
+}
+```
+
+`priority` must be one of `low`, `normal`, `high` (default: `normal`). `type` must be one of `status`, `request`, `alert` (default: `status`). `from_agent`, `to_agent`, and `subject` are required. Returns HTTP 201 with the created message on success.
 
 ### Graceful shutdown
 
