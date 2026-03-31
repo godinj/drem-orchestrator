@@ -353,8 +353,8 @@ func TestMessageListUpdate_CTriggersCompose(t *testing.T) {
 	if !got.ComposeTriggered {
 		t.Error("composeTriggered should be true after c")
 	}
-	if cmd == nil {
-		t.Error("should return a command for compose trigger")
+	if cmd != nil {
+		t.Error("compose trigger must not return a command (no tea.Quit)")
 	}
 }
 
@@ -389,8 +389,8 @@ func TestMessageListUpdate_QuitKey(t *testing.T) {
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 
-	if cmd == nil {
-		t.Error("should return a command for quit key")
+	if cmd != nil {
+		t.Error("q key must not return a command (no tea.Quit)")
 	}
 }
 
@@ -525,8 +525,8 @@ func TestMessageDetailUpdate_EscGoesBack(t *testing.T) {
 	if !got.BackTriggered {
 		t.Error("backTriggered should be true after Esc")
 	}
-	if cmd == nil {
-		t.Error("should return a command for back trigger")
+	if cmd != nil {
+		t.Error("back trigger must not return a command (no tea.Quit)")
 	}
 }
 
@@ -563,8 +563,8 @@ func TestMessageDetailUpdate_RTriggersQuickReply(t *testing.T) {
 	if !strings.HasPrefix(got.ReplySubject, "Re:") {
 		t.Errorf("replySubject should start with 'Re:', got %q", got.ReplySubject)
 	}
-	if cmd == nil {
-		t.Error("should return a command for quick reply trigger")
+	if cmd != nil {
+		t.Error("quick reply trigger must not return a command (no tea.Quit)")
 	}
 }
 
@@ -620,8 +620,8 @@ func TestMessageDetailUpdate_QuitKey(t *testing.T) {
 
 	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'q'}})
 
-	if cmd == nil {
-		t.Error("should return a command for quit key")
+	if cmd != nil {
+		t.Error("q key must not return a command (no tea.Quit)")
 	}
 }
 

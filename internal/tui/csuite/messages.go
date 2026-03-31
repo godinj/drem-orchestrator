@@ -86,10 +86,10 @@ func (m MessageListModel) Update(msg tea.Msg) (MessageListModel, tea.Cmd) {
 			case 'c':
 				// Trigger compose
 				m.ComposeTriggered = true
-				return m, quitCmd()
+				return m, nil
 			case 'q':
-				// Quit
-				return m, quitCmd()
+				// Back to parent
+				return m, nil
 			}
 		case msg.Type == tea.KeyEnter:
 			// Select current message
@@ -99,7 +99,7 @@ func (m MessageListModel) Update(msg tea.Msg) (MessageListModel, tea.Cmd) {
 			}
 		case msg.Type == tea.KeyEsc:
 			// Return to parent view
-			return m, quitCmd()
+			return m, nil
 		}
 	}
 	return m, nil
@@ -116,7 +116,7 @@ func (m MessageListModel) View() string {
 	if len(m.Messages) == 0 {
 		sections = append(sections, "  No messages")
 		sections = append(sections, "")
-		sections = append(sections, "[c] compose  [a] toggle archive  [q] quit")
+		sections = append(sections, "[c] compose  [a] toggle archive  [esc] back")
 		return strings.Join(sections, "\n")
 	}
 
@@ -132,7 +132,7 @@ func (m MessageListModel) View() string {
 
 	// Help bar
 	sections = append(sections, "")
-	sections = append(sections, "[j/k] navigate  [enter] select  [c] compose  [a] toggle archive  [q] quit")
+	sections = append(sections, "[j/k] navigate  [enter] select  [c] compose  [a] toggle archive  [esc] back")
 
 	return strings.Join(sections, "\n")
 }
@@ -217,7 +217,7 @@ func (m MessageDetailModel) Update(msg tea.Msg) (MessageDetailModel, tea.Cmd) {
 		case tea.KeyEsc:
 			// Go back to list
 			m.BackTriggered = true
-			return m, quitCmd()
+			return m, nil
 		case tea.KeyRunes:
 			if len(msg.Runes) > 0 {
 				switch msg.Runes[0] {
@@ -228,10 +228,10 @@ func (m MessageDetailModel) Update(msg tea.Msg) (MessageDetailModel, tea.Cmd) {
 						m.ReplyTo = m.Message.FromAgent
 						m.ReplySubject = "Re: " + m.Message.Subject
 					}
-					return m, quitCmd()
+					return m, nil
 				case 'q':
-					// Quit
-					return m, quitCmd()
+					// Back to parent
+					return m, nil
 				}
 			}
 		}
@@ -268,12 +268,8 @@ func (m MessageDetailModel) View() string {
 	// Help bar
 	sections = append(sections, "")
 	sections = append(sections, "---")
-	sections = append(sections, "[esc] back  [r] quick reply  [q] quit")
+	sections = append(sections, "[esc] back  [r] quick reply")
 
 	return strings.Join(sections, "\n")
 }
 
-// quitCmd returns a command that quits the current model.
-func quitCmd() tea.Cmd {
-	return tea.Quit
-}

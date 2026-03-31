@@ -286,7 +286,7 @@ func (m *ComposeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case tea.KeyEsc:
 			m.Cancel()
-			return m, tea.Quit
+			return m, nil
 		case tea.KeyBackspace, tea.KeyDelete:
 			m.HandleBackspace()
 			return m, nil

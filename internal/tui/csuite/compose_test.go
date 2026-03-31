@@ -453,13 +453,13 @@ func TestComposeModel_Update_HandlesShiftTabKey(t *testing.T) {
 	}
 }
 
-func TestComposeModel_Update_HandlesEscapeKey_ReturnsQuitMessage(t *testing.T) {
+func TestComposeModel_Update_HandlesEscapeKey_NoQuit(t *testing.T) {
 	store := testutil.NewTestStore(t)
 	model := NewComposeModel(store)
 
 	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if cmd == nil {
-		t.Error("expected Escape key to return a quit command")
+	if cmd != nil {
+		t.Error("Escape key must not return a command (no tea.Quit)")
 	}
 }
 
