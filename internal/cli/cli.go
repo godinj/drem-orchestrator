@@ -602,7 +602,7 @@ func writeJSON(w io.Writer, v any) error {
 
 func handleExperiment(db *gorm.DB, args []string, w io.Writer, jsonMode bool) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: drem cli experiment create --profiles=X,Y --default=X --title=NAME --description=DESC [--project=ID]")
+		return fmt.Errorf("usage: drem cli experiment <create|from-task> ...\n  create: --profiles=X,Y --default=X --title=NAME --description=DESC [--project=ID]\n  from-task: --task=ID --profiles=X,Y --default=X [--title=NAME] [--description=DESC] [--reuse-plan]")
 	}
 
 	sub := args[0]
@@ -677,8 +677,56 @@ func handleExperimentCreate(db *gorm.DB, args []string, w io.Writer, jsonMode bo
 	return nil
 }
 
-// handleExperimentFromTask is a stub dispatcher for the 'experiment from-task' subcommand.
-// The full implementation is pending (see CreateFromTask in experiment package).
 func handleExperimentFromTask(db *gorm.DB, args []string, w io.Writer, jsonMode bool) error {
-	return fmt.Errorf("experiment from-task: not implemented")
+	taskIDStr, args := parseFlag(args, "task")
+	profilesStr, args := parseFlag(args, "profiles")
+	defaultProfile, args := parseFlag(args, "default")
+	title, args := parseFlag(args, "title")
+	desc, args := parseFlag(args, "description")
+
+	reusesPlan := false
+	for _, arg := range args {
+		if arg == "--reuse-plan" {
+			reusesPlan = true
+		}
+	}
+
+	if taskIDStr == "" {
+		return fmt.Errorf("--task is required")
+	}
+	if profilesStr == "" {
+		return fmt.Errorf("--profiles is required (comma-separated)")
+	}
+	if defaultProfile == "" {
+		return fmt.Errorf("--default is required")
+	}
+
+	profiles := strings.Split(profilesStr, ",")
+
+	src, err := resolveTaskByPrefix(db, taskIDStr)
+	if err != nil {
+		return fmt.Errorf("source task: %w", err)
+	}
+
+	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
+		return fmt.Errorf("migrate experiment tables: %w", err)
+	}
+
+	exp, err := experiment.CreateFromTask(db, src.ProjectID, src.ID, title, desc, profiles, defaultProfile, reusesPlan)
+	if err != nil {
+		return fmt.Errorf("create from task: %w", err)
+	}
+
+	if jsonMode {
+		return writeJSON(w, exp)
+	}
+	fmt.Fprintf(w, "Created experiment %s (%s) from task %s with %d variants\n", exp.ID, exp.Title, shortID(src.ID), len(exp.Variants))
+	for _, v := range exp.Variants {
+		marker := " "
+		if v.IsDefault {
+			marker = "*"
+		}
+		fmt.Fprintf(w, "  %s %s (task %s)\n", marker, v.ProfileName, shortID(v.TaskID))
+	}
+	return nil
 }
