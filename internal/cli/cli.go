@@ -730,7 +730,14 @@ func handleExperimentFromTask(db *gorm.DB, args []string, w io.Writer, jsonMode 
 		return fmt.Errorf("migrate experiment tables: %w", err)
 	}
 
-	exp, err := experiment.CreateFromTask(db, src.ProjectID, src.ID, title, desc, profiles, defaultProfile, reusesPlan)
+	opts := experiment.FromTaskOpts{
+		Title:          title,
+		Description:    desc,
+		Profiles:       profiles,
+		DefaultProfile: defaultProfile,
+		ReusePlan:      reusesPlan,
+	}
+	exp, err := experiment.CreateFromTask(db, src.ProjectID, src.ID, opts)
 	if err != nil {
 		return fmt.Errorf("create from task: %w", err)
 	}
@@ -747,4 +754,3 @@ func handleExperimentFromTask(db *gorm.DB, args []string, w io.Writer, jsonMode 
 		fmt.Fprintf(w, "  %s %s (task %s)\n", marker, v.ProfileName, shortID(v.TaskID))
 	}
 	return nil
-}

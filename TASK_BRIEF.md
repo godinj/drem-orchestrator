@@ -1,5 +1,6 @@
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
 # Task: Auto-merge Default Variant & Challenger Promotion (5c)
 
 ## Goal
@@ -170,10 +171,46 @@ if o.metrics != nil && task.AssignedAgentID != nil {
 - `internal/orchestrator/agent_failure.go:335` — merge conflict path
 - `internal/orchestrator/constraint_gate_policy.go` — constraint evaluation
 >>>>>>> 91bf620 (feat: worker-022 qwen3-coder round 2 output)
+=======
+# Task: From-Task CLI & Plan Reuse (5d)
+
+## Goal
+Add a CLI command `drem from-task <task-id>` that creates a new experiment using an existing task's plan, avoiding re-planning.
+
+## What to build
+
+### 1. CLI command
+**File:** `cmd/drem/main.go` (or appropriate CLI file)
+Add a `from-task` subcommand that:
+- Takes a task ID argument
+- Looks up the task and its plan.json
+- Creates a new experiment with variants that reuse the existing plan
+- Prints the new experiment ID
+
+### 2. Plan reuse logic
+**New file or addition to:** `internal/experiment/from_task.go`
+```go
+func CreateFromTask(db *gorm.DB, sourceTaskID uuid.UUID, opts FromTaskOpts) (*Experiment, error)
+```
+- Load source task and its plan
+- Create new experiment
+- Create variant tasks with the same plan (skip planning phase)
+- Set variant tasks to start at implementation phase directly
+
+### 3. Key files to read (check repo-map.md FIRST)
+- `cmd/drem/main.go` — CLI structure
+- `internal/experiment/experiment.go` — experiment creation
+- `internal/model/models.go` — Task model, plan field
+- `internal/cli/cli.go` — if CLI helpers exist
+
+### 4. Write a test
+Test that CreateFromTask correctly copies the plan and sets the right phase.
+>>>>>>> 9bf38d3 (feat: worker-024 qwen3-coder round 2 output)
 
 ## BEFORE YOU EXIT
 **ALWAYS commit your work before the session ends.** Run:
 ```bash
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 git add -A && git commit -m "feat: auto-merge default variant and challenger promotion (5c)"
@@ -183,10 +220,14 @@ git add -A && git commit -m "feat: add TUI experiment summary view (7a)"
 =======
 git add -A && git commit -m "feat: add quality metrics model field and integration hooks (6a)"
 >>>>>>> 91bf620 (feat: worker-022 qwen3-coder round 2 output)
+=======
+git add -A && git commit -m "feat: add from-task CLI command for plan reuse (5d)"
+>>>>>>> 9bf38d3 (feat: worker-024 qwen3-coder round 2 output)
 ```
 Even if tests fail, commit what you have with a WIP note. Uncommitted work WILL BE LOST.
 
 ## Verification
+<<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
 Run `go vet ./... && go test ./internal/orchestrator/...` in ONE command. Max 2 fix cycles.
@@ -196,3 +237,6 @@ Run `go vet ./... && go test ./internal/tui/...` in ONE command. Max 2 fix cycle
 =======
 Run `go vet ./... && go test ./internal/orchestrator/...` in ONE command. Max 2 fix cycles.
 >>>>>>> 91bf620 (feat: worker-022 qwen3-coder round 2 output)
+=======
+Run `go vet ./... && go test ./internal/experiment/...` in ONE command. Max 2 fix cycles.
+>>>>>>> 9bf38d3 (feat: worker-024 qwen3-coder round 2 output)

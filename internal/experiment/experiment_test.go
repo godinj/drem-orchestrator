@@ -166,7 +166,14 @@ func TestCreateFromTaskHappyPathNoReusePlan(t *testing.T) {
 	proj := testutil.CreateProject(t, db, "from-task-proj", "/tmp/from-task.git", "master")
 	src := testutil.CreateTask(t, db, proj.ID, "Source task", model.StatusDone)
 
-	exp, err := CreateFromTask(db, proj.ID, src.ID, "From-task experiment", "desc", []string{"fast", "thorough"}, "fast", false)
+	opts := FromTaskOpts{
+		Title:          "From-task experiment",
+		Description:    "desc",
+		Profiles:       []string{"fast", "thorough"},
+		DefaultProfile: "fast",
+		ReusePlan:      false,
+	}
+	exp, err := CreateFromTask(db, proj.ID, src.ID, opts)
 	if err != nil {
 		t.Fatalf("CreateFromTask: %v", err)
 	}
@@ -209,7 +216,14 @@ func TestCreateFromTaskHappyPathReusePlan(t *testing.T) {
 	}
 	src.Plan = planData
 
-	exp, err := CreateFromTask(db, proj.ID, src.ID, "Reuse-plan experiment", "desc", []string{"alpha", "beta"}, "alpha", true)
+	opts := FromTaskOpts{
+		Title:          "Reuse-plan experiment",
+		Description:    "desc",
+		Profiles:       []string{"alpha", "beta"},
+		DefaultProfile: "alpha",
+		ReusePlan:      true,
+	}
+	exp, err := CreateFromTask(db, proj.ID, src.ID, opts)
 	if err != nil {
 		t.Fatalf("CreateFromTask with reuse-plan: %v", err)
 	}
@@ -244,7 +258,14 @@ func TestCreateFromTaskSourceNotDone(t *testing.T) {
 	proj := testutil.CreateProject(t, db, "from-task-nodone-proj", "/tmp/nodone.git", "master")
 	src := testutil.CreateTask(t, db, proj.ID, "In-progress task", model.StatusInProgress)
 
-	_, err := CreateFromTask(db, proj.ID, src.ID, "Should fail", "desc", []string{"a", "b"}, "a", false)
+	opts := FromTaskOpts{
+		Title:          "Should fail",
+		Description:    "desc",
+		Profiles:       []string{"a", "b"},
+		DefaultProfile: "a",
+		ReusePlan:      false,
+	}
+	_, err := CreateFromTask(db, proj.ID, src.ID, opts)
 	if err == nil {
 		t.Fatal("expected error for source task not in StatusDone, got nil")
 	}
@@ -255,7 +276,14 @@ func TestCreateFromTaskSourceNotFound(t *testing.T) {
 	proj := testutil.CreateProject(t, db, "from-task-notfound-proj", "/tmp/notfound.git", "master")
 	nonexistent := uuid.New()
 
-	_, err := CreateFromTask(db, proj.ID, nonexistent, "Should fail", "desc", []string{"a", "b"}, "a", false)
+	opts := FromTaskOpts{
+		Title:          "Should fail",
+		Description:    "desc",
+		Profiles:       []string{"a", "b"},
+		DefaultProfile: "a",
+		ReusePlan:      false,
+	}
+	_, err := CreateFromTask(db, proj.ID, nonexistent, opts)
 	if err == nil {
 		t.Fatal("expected error for nonexistent source task, got nil")
 	}
@@ -266,7 +294,14 @@ func TestCreateFromTaskTooFewProfiles(t *testing.T) {
 	proj := testutil.CreateProject(t, db, "from-task-fewprof-proj", "/tmp/fewprof.git", "master")
 	src := testutil.CreateTask(t, db, proj.ID, "Done task", model.StatusDone)
 
-	_, err := CreateFromTask(db, proj.ID, src.ID, "One profile", "desc", []string{"solo"}, "solo", false)
+	opts := FromTaskOpts{
+		Title:          "One profile",
+		Description:    "desc",
+		Profiles:       []string{"solo"},
+		DefaultProfile: "solo",
+		ReusePlan:      false,
+	}
+	_, err := CreateFromTask(db, proj.ID, src.ID, opts)
 	if err == nil {
 		t.Fatal("expected error for <2 profiles, got nil")
 	}
@@ -277,7 +312,14 @@ func TestCreateFromTaskTooManyProfiles(t *testing.T) {
 	proj := testutil.CreateProject(t, db, "from-task-manyprof-proj", "/tmp/manyprof.git", "master")
 	src := testutil.CreateTask(t, db, proj.ID, "Done task", model.StatusDone)
 
-	_, err := CreateFromTask(db, proj.ID, src.ID, "Four profiles", "desc", []string{"a", "b", "c", "d"}, "a", false)
+	opts := FromTaskOpts{
+		Title:          "Four profiles",
+		Description:    "desc",
+		Profiles:       []string{"a", "b", "c", "d"},
+		DefaultProfile: "a",
+		ReusePlan:      false,
+	}
+	_, err := CreateFromTask(db, proj.ID, src.ID, opts)
 	if err == nil {
 		t.Fatal("expected error for >3 profiles, got nil")
 	}
@@ -288,7 +330,14 @@ func TestCreateFromTaskDefaultNotInProfiles(t *testing.T) {
 	proj := testutil.CreateProject(t, db, "from-task-baddefault-proj", "/tmp/baddefault.git", "master")
 	src := testutil.CreateTask(t, db, proj.ID, "Done task", model.StatusDone)
 
-	_, err := CreateFromTask(db, proj.ID, src.ID, "Bad default", "desc", []string{"x", "y"}, "z", false)
+	opts := FromTaskOpts{
+		Title:          "Bad default",
+		Description:    "desc",
+		Profiles:       []string{"x", "y"},
+		DefaultProfile: "z",
+		ReusePlan:      false,
+	}
+	_, err := CreateFromTask(db, proj.ID, src.ID, opts)
 	if err == nil {
 		t.Fatal("expected error for default not in profiles, got nil")
 	}
