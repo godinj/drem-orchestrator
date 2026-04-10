@@ -168,6 +168,7 @@ func Generate(opts Opts) string {
 	switch opts.AgentType {
 	case model.AgentPlanner:
 		sections = append(sections, plannerInstructions()...)
+		sections = append(sections, targetModelGuidance(opts.TargetCoderProvider, opts.TargetCoderModel)...)
 	case model.AgentCoder:
 		sections = append(sections, coderInstructions(opts)...)
 	case model.AgentResearcher:
