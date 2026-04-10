@@ -378,3 +378,124 @@ func readContextFiles(worktreePath string) string {
 
 	return header + "\n" + strings.Join(parts, "\n\n") + "\n"
 }
+
+// prepDataBrief renders the prep agent's tactical output as prompt sections
+// for a coder agent. Returns nil if no prep data exists in the task context.
+func prepDataBrief(opts Opts) []string {
+	if opts.Task == nil || opts.Task.Context == nil {
+		return nil
+	}
+	raw, ok := opts.Task.Context["prep_data"]
+	if !ok {
+		return nil
+	}
+
+	// The prep data is stored as a map[string]any after JSON round-tripping
+	// through GORM. Re-marshal and unmarshal to get typed access.
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+
+	var prep struct {
+		TargetFiles []struct {
+			Path        string   `json:"path"`
+			Definitions string   `json:"relevant_definitions"`
+			Methods     []string `json:"methods"`
+			Notes       string   `json:"notes"`
+		} `json:"target_files"`
+		Insertions []struct {
+			File     string `json:"file"`
+			Location string `json:"location"`
+			What     string `json:"what"`
+		} `json:"insertion_points"`
+		Patterns []struct {
+			Description string `json:"description"`
+			Example     string `json:"example"`
+			SourceFile  string `json:"source_file"`
+		} `json:"patterns_to_follow"`
+		Warnings     []string `json:"warnings"`
+		Constructors []struct {
+			StructName  string   `json:"struct_name"`
+			Constructor string   `json:"constructor"`
+			TestHelpers []string `json:"test_helpers"`
+		} `json:"constructors"`
+	}
+	if err := json.Unmarshal(data, &prep); err != nil {
+		return nil
+	}
+
+	var sections []string
+	sections = append(sections,
+		"## Tactical Implementation Brief (from prep agent)",
+		"",
+		"A reconnaissance agent has already analyzed the codebase for this task.",
+		"Use this brief to guide your implementation — it saves you from exploratory reads.",
+		"",
+	)
+
+	// Target files
+	if len(prep.TargetFiles) > 0 {
+		sections = append(sections, "### Target Files", "")
+		for _, tf := range prep.TargetFiles {
+			sections = append(sections, fmt.Sprintf("**`%s`**", tf.Path))
+			if tf.Definitions != "" {
+				sections = append(sections, fmt.Sprintf("- Relevant definitions: %s", tf.Definitions))
+			}
+			if len(tf.Methods) > 0 {
+				sections = append(sections, fmt.Sprintf("- Key methods: %s", strings.Join(tf.Methods, ", ")))
+			}
+			if tf.Notes != "" {
+				sections = append(sections, fmt.Sprintf("- Notes: %s", tf.Notes))
+			}
+			sections = append(sections, "")
+		}
+	}
+
+	// Insertion points
+	if len(prep.Insertions) > 0 {
+		sections = append(sections, "### Insertion Points", "")
+		for _, ins := range prep.Insertions {
+			sections = append(sections, fmt.Sprintf("- **`%s`** at %s — %s", ins.File, ins.Location, ins.What))
+		}
+		sections = append(sections, "")
+	}
+
+	// Patterns to follow
+	if len(prep.Patterns) > 0 {
+		sections = append(sections, "### Patterns to Follow", "")
+		for _, pat := range prep.Patterns {
+			sections = append(sections, fmt.Sprintf("- %s", pat.Description))
+			if pat.Example != "" {
+				sections = append(sections, fmt.Sprintf("  Example: `%s`", pat.Example))
+			}
+			if pat.SourceFile != "" {
+				sections = append(sections, fmt.Sprintf("  Source: `%s`", pat.SourceFile))
+			}
+		}
+		sections = append(sections, "")
+	}
+
+	// Constructors that may need updating
+	if len(prep.Constructors) > 0 {
+		sections = append(sections, "### Constructors / Factories to Update", "")
+		for _, c := range prep.Constructors {
+			sections = append(sections, fmt.Sprintf("- Struct `%s` → constructor `%s`", c.StructName, c.Constructor))
+			if len(c.TestHelpers) > 0 {
+				sections = append(sections, fmt.Sprintf("  Test helpers: %s", strings.Join(c.TestHelpers, ", ")))
+			}
+		}
+		sections = append(sections, "")
+	}
+
+	// Warnings
+	if len(prep.Warnings) > 0 {
+		sections = append(sections, "### ⚠ Warnings", "")
+		for _, w := range prep.Warnings {
+			sections = append(sections, fmt.Sprintf("- %s", w))
+		}
+		sections = append(sections, "")
+	}
+
+	return sections
+}
