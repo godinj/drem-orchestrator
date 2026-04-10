@@ -334,6 +334,92 @@ func fileSnapshotContext(worktreePath string, task interface{ GetEstimatedFiles(
 		strings.Join(parts, "\n\n") + "\n"
 }
 
+// estimatedFilesFromTask extracts the estimated_files list from a task's
+// Context field. Returns nil if not present or not a string slice.
+func estimatedFilesFromTask(task *model.Task) []string {
+	if task == nil || task.Context == nil {
+		return nil
+	}
+	raw, ok := task.Context["estimated_files"]
+	if !ok {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []any:
+		var files []string
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				files = append(files, s)
+			}
+		}
+		return files
+	case []string:
+		return v
+	default:
+		return nil
+	}
+}
+
+// FileSnapshotForTask generates file snapshot context for a task using its
+// estimated_files list. This is the public entry point used by Generate().
+func fileSnapshotForTask(worktreePath string, task *model.Task) string {
+	if worktreePath == "" || task == nil {
+		return ""
+	}
+
+	files := estimatedFilesFromTask(task)
+	if len(files) == 0 {
+		return ""
+	}
+
+	var parts []string
+	const maxLinesPerFile = 80
+	const maxTotalBytes = 8000 // ~2K tokens budget for all snapshots
+
+	totalBytes := 0
+	for _, relPath := range files {
+		if totalBytes >= maxTotalBytes {
+			break
+		}
+
+		absPath := filepath.Join(worktreePath, relPath)
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			// File doesn't exist yet (new file) — skip.
+			continue
+		}
+
+		// Take first N lines.
+		content := string(data)
+		lines := strings.SplitN(content, "\n", maxLinesPerFile+1)
+		if len(lines) > maxLinesPerFile {
+			lines = lines[:maxLinesPerFile]
+			lines = append(lines, fmt.Sprintf("// ... (%d more lines)", strings.Count(content, "\n")-maxLinesPerFile))
+		}
+
+		snapshot := strings.Join(lines, "\n")
+		if totalBytes+len(snapshot) > maxTotalBytes {
+			remaining := maxTotalBytes - totalBytes
+			if remaining < 200 {
+				break
+			}
+			snapshot = snapshot[:remaining] + "\n// ... (truncated)"
+		}
+
+		parts = append(parts, fmt.Sprintf("### `%s`\n\n```\n%s\n```", relPath, snapshot))
+		totalBytes += len(snapshot)
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return "## Target File Snapshots\n\n" +
+		"The following are the first ~80 lines of each file you will modify.\n" +
+		"Use these to understand existing types, patterns, and conventions.\n\n" +
+		strings.Join(parts, "\n\n") + "\n"
+}
+
 // readCriticalRules reads the standing critical rules library from
 // .drem/critical-rules.md in the worktree root. Returns the content wrapped
 // in a section header, or empty string if the file is absent (graceful degradation).
