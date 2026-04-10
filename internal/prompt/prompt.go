@@ -759,6 +759,113 @@ func classifierInstructions(worktreePath, taskID string) []string {
 	}
 }
 
+// prepInstructions returns prompt sections for task preparation agents.
+// The prep agent is read-only: it explores the codebase and writes a
+// task-prep.json file that enriches the subsequent coder agent's prompt
+// with tactical context about the target files.
+func prepInstructions(opts Opts) []string {
+	task := opts.Task
+	outputFile := filepath.Join(opts.WorktreePath, fmt.Sprintf("task-prep-%s.json", task.ID.String()))
+
+	sections := []string{
+		"## Instructions",
+		"",
+		"You are a **task preparation** agent. Your job is to explore the codebase",
+		"and produce a tactical implementation brief for a coding agent that will",
+		"execute this task next.",
+		"",
+		"**IMPORTANT: Do NOT modify any source code files.** Your only permitted",
+		fmt.Sprintf("write is the prep output file at `%s`.", outputFile),
+		"",
+	}
+
+	// Include estimated files from task context if present.
+	if len(task.Context) > 0 {
+		if files, ok := task.Context["estimated_files"]; ok {
+			sections = append(sections, fmt.Sprintf("Target files to investigate: %v", files), "")
+		}
+	}
+
+	sections = append(sections,
+		"### Process",
+		"",
+		"1. Read the task description above carefully.",
+		"2. Open each target file listed above. For EACH file, extract:",
+		"   - Type/struct/class/interface definitions relevant to the task",
+		"   - Constructor or factory function signatures",
+		"   - Method signatures on types the task will modify",
+		"   - Import conventions and package structure",
+		"3. Identify **insertion points** — where exactly should new code go?",
+		"   Note the function name and what comes before/after the insertion point.",
+		"4. Identify **existing patterns** — how does the codebase already do similar",
+		"   things? Find a concrete example and note the file and pattern.",
+		"5. Identify **pitfalls** — nullable/pointer fields, interface constraints,",
+		"   naming conventions, anything that could trip up the coder.",
+		"6. If the task requires adding a new field to a struct, find ALL places that",
+		"   construct that struct (constructors, factory functions, test helpers) and",
+		"   note them.",
+		"",
+		"### Output Format",
+		"",
+		fmt.Sprintf("Write a JSON file at `%s` with this schema:", outputFile),
+		"",
+		"```json",
+		"{",
+		`  "target_files": [`,
+		"    {",
+		`      "path": "internal/orchestrator/orchestrator.go",`,
+		`      "relevant_definitions": "type Orchestrator struct { db *gorm.DB; runner *agent.Runner; ... }",`,
+		`      "methods": ["func (o *Orchestrator) SetTestGateConfig(cfg TestGateConfig)", "..."],`,
+		`      "notes": "Struct has 15 fields. New fields go before experimentScheduler. Constructor is New() at line 133."`,
+		"    }",
+		"  ],",
+		`  "insertion_points": [`,
+		"    {",
+		`      "file": "internal/orchestrator/handlers.go",`,
+		`      "location": "Inside HandlePlanRejected, after task.Plan = nil and before task.AssignedAgentID = nil",`,
+		`      "what": "Add metric recording call"`,
+		"    }",
+		"  ],",
+		`  "patterns_to_follow": [`,
+		"    {",
+		`      "description": "Nil-guarded optional dependency usage",`,
+		`      "example": "if o.bus != nil { o.bus.Publish(...) }",`,
+		`      "source_file": "internal/orchestrator/orchestrator.go"`,
+		"    }",
+		"  ],",
+		`  "warnings": [`,
+		`    "AssignedAgentID is *uuid.UUID (pointer) — nil-check before dereferencing",`,
+		`    "Do not shadow the 'experiment' package name with a local variable"`,
+		"  ],",
+		`  "constructors": [`,
+		"    {",
+		`      "struct_name": "Orchestrator",`,
+		`      "constructor": "func New(...) *Orchestrator at orchestrator.go:133",`,
+		`      "test_helpers": ["setupOrchestrator() in orchestrator_test.go"]`,
+		"    }",
+		"  ]",
+		"}",
+		"```",
+		"",
+		"### Rules",
+		"",
+		"- Be CONCISE. The coder has limited context. Only include information",
+		"  directly relevant to THIS task.",
+		"- Use the Repository Map above to navigate — do NOT read every file.",
+		"- For struct definitions, include the FULL field list (the coder needs to",
+		"  know what fields already exist to avoid duplicates).",
+		"- For patterns, include a REAL code snippet from the codebase, not a",
+		"  hypothetical example.",
+		"- If a target file does not exist yet (new file), note that and describe",
+		"  the nearest similar file the coder should use as a template.",
+		"- Maximum 5 target files. If more are listed, focus on the ones most",
+		"  critical to the task.",
+		"",
+	}
+
+	return sections
+}
+
 // bugReportInstructions returns prompt sections instructing agents how to
 // file structured bug reports. This section is included for all agent types.
 func bugReportInstructions() []string {
