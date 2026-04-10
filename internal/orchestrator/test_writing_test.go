@@ -1796,7 +1796,6 @@ func TestMergeAutoCommitsDirtyWorktree(t *testing.T) {
 	// The auto-commit happens inside merge.Orchestrator.MergeAgentIntoFeature,
 	// which we can't easily call without a full setup. Instead, verify that
 	// CommitUnstagedChanges works correctly.
-	//
 	// TODO: CommitUnstagedChanges returns false here — investigate why the
 	// untracked plan.json is not picked up. Skipping assertion until root
 	// cause is fixed.
