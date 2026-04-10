@@ -1,0 +1,132 @@
+{
+  "target_files": [
+    {
+      "path": "internal/watcher/lifecycle.go",
+      "relevant_definitions": "const defaultTimeout = 3 * time.Minute\n\ntype LifecycleManager struct {\n\tClaudeBin    string\n\tWorkDir      string\n\tTimeout      time.Duration\n\tMetricsStore *MetricsStore\n\tdb           *gorm.DB\n\tcfg          Config\n\trunner       CommandRunner\n\tmu           sync.Mutex\n\trunning      map[string]bool\n\tqueued       map[string]bool\n\twg           sync.WaitGroup\n\tctx          context.Context\n\tcancel       context.CancelFunc\n}",
+      "methods": [
+        "func NewLifecycleManagerFromStore(store *MetricsStore) *LifecycleManager (line 55)",
+        "func (m *LifecycleManager) RunTurn(agent string, systemPrompt string) (*LifecycleResult, error) (line 69)",
+        "func NewLifecycleManager(db *gorm.DB, cfg Config, runner CommandRunner) *LifecycleManager (line 150)",
+        "func (m *LifecycleManager) TriggerAgent(name string) TriggerResult (line 168)",
+        "func (m *LifecycleManager) Close() (line 189)",
+        "func (m *LifecycleManager) isAllowed(name string) bool (line 195)",
+        "func (m *LifecycleManager) runTurnAsync(agent string) (line 215)",
+        "func (m *LifecycleManager) drainQueue(agent string) (line 260)"
+      ],
+      "notes": "274 lines total. Must add: (1) lastTurnEnd field to struct at line 46, (2) defaultTurnCooldown const at line 19, (3) initialize lastTurnEnd in NewLifecycleManager at line 152, (4) cooldown check in TriggerAgent between line 176 and 181, (5) runTurnAfterDelay new method, (6) rewrite drainQueue to set lastTurnEnd and schedule delayed turns."
+    },
+    {
+      "path": "internal/watcher/dedup.go",
+      "relevant_definitions": "type TriggerResult int\n\nconst (\n\tStarted  TriggerResult = iota\n\tQueued\n\tDropped\n\tRefused\n)",
+      "methods": [],
+      "notes": "Cooldown constant must be added AFTER Refused (line 31). It becomes iota value 4. Add: Cooldown  // Cooldown indicates the agent is in a post-turn cooldown period; trigger is queued."
+    },
+    {
+      "path": "internal/watcher/types.go",
+      "relevant_definitions": "type Config struct {\n\tAllowedAgents []string\n\tPrecheck      TurnPrecheck\n}\n\nconst (\n\tTriggerStarted = Started\n\tTriggerQueued  = Queued\n\tTriggerRefused = Refused\n)",
+      "methods": [],
+      "notes": "Must add TurnCooldown time.Duration field to Config (after Precheck, around line 22). Must add TriggerCooldown = Cooldown alias in const block (after TriggerRefused, around line 37). Import 'time' package needed — already imported at line 9."
+    },
+    {
+      "path": "internal/watcher/cooldown_test.go",
+      "relevant_definitions": "FILE DOES NOT EXIST YET — must be created",
+      "methods": [],
+      "notes": "New file in package watcher_test. Uses lifecycleMockRunner and allowedCfg() from lifecycle_integration_test.go (same package). Uses testutil.NewTestDBWithModels(t, &watcher.TurnMetric{}). Must test 5 scenarios: TriggerDuringCooldown, QueuedTurnRespectsCooldown, ZeroMeansNoCooldown, IndependentPerAgent, CloseDoesNotHang."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/watcher/lifecycle.go",
+      "location": "Line 18, after 'const defaultTimeout = 3 * time.Minute'. Add new line below it.",
+      "what": "Add: const defaultTurnCooldown = 3 * time.Minute"
+    },
+    {
+      "file": "internal/watcher/lifecycle.go",
+      "location": "Line 46, inside LifecycleManager struct, after 'queued  map[string]bool' and before 'wg sync.WaitGroup'",
+      "what": "Add: lastTurnEnd map[string]time.Time"
+    },
+    {
+      "file": "internal/watcher/lifecycle.go",
+      "location": "Line 152, inside NewLifecycleManager return literal, after 'queued:  make(map[string]bool),'",
+      "what": "Add: lastTurnEnd: make(map[string]time.Time),"
+    },
+    {
+      "file": "internal/watcher/lifecycle.go",
+      "location": "Line 176-181, inside TriggerAgent, AFTER 'm.running[name]' check returns Queued, BEFORE 'm.running[name] = true'",
+      "what": "Insert cooldown check block: if TurnCooldown != 0 and agent is in cooldown, set running=true, wg.Add(1), launch runTurnAfterDelay, return Cooldown"
+    },
+    {
+      "file": "internal/watcher/lifecycle.go",
+      "location": "After drainQueue method (end of file, line 273)",
+      "what": "Add cooldownDuration() helper method and runTurnAfterDelay() method"
+    },
+    {
+      "file": "internal/watcher/lifecycle.go",
+      "location": "Line 260-273, drainQueue method body — REPLACE entirely",
+      "what": "Rewrite drainQueue to: (1) set m.lastTurnEnd[agent] = time.Now() first, (2) if wasQueued and TurnCooldown != 0, schedule via runTurnAfterDelay with full cooldown delay, (3) else if wasQueued, go m.runTurnAsync immediately, (4) else delete(m.running)"
+    },
+    {
+      "file": "internal/watcher/dedup.go",
+      "location": "Line 31-32, after 'Refused' constant, before closing paren of const block",
+      "what": "Add: Cooldown  // Cooldown indicates the agent is in a post-turn cooldown period; trigger is queued."
+    },
+    {
+      "file": "internal/watcher/types.go",
+      "location": "Line 22, after 'Precheck TurnPrecheck' field in Config struct",
+      "what": "Add: TurnCooldown time.Duration"
+    },
+    {
+      "file": "internal/watcher/types.go",
+      "location": "Line 37, after 'TriggerRefused = Refused' in const block",
+      "what": "Add: TriggerCooldown = Cooldown"
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Lock/unlock pattern in TriggerAgent for running/queued state",
+      "example": "m.mu.Lock()\ndefer m.mu.Unlock()\nif m.running[name] {\n\tm.queued[name] = true\n\treturn Queued\n}\nm.running[name] = true\nm.wg.Add(1)\ngo m.runTurnAsync(name)",
+      "source_file": "internal/watcher/lifecycle.go:173-184"
+    },
+    {
+      "description": "drainQueue lock/unlock with conditional goroutine launch",
+      "example": "m.mu.Lock()\nwasQueued := m.queued[agent]\ndelete(m.queued, agent)\nif wasQueued {\n\tm.wg.Add(1)\n\tm.mu.Unlock()\n\tgo m.runTurnAsync(agent)\n} else {\n\tdelete(m.running, agent)\n\tm.mu.Unlock()\n}",
+      "source_file": "internal/watcher/lifecycle.go:260-273"
+    },
+    {
+      "description": "Context cancellation via ctx.Done() for graceful shutdown",
+      "example": "ctx, cancel := context.WithCancel(context.Background()) — stored as m.ctx, m.cancel. Close() calls m.wg.Wait() then m.cancel()",
+      "source_file": "internal/watcher/lifecycle.go:151,189-192"
+    },
+    {
+      "description": "Test DB creation and mock runner pattern",
+      "example": "db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})\nrunner := &lifecycleMockRunner{output: claudeJSON(100, 50)}\nlm := watcher.NewLifecycleManager(db, allowedCfg(), runner)",
+      "source_file": "internal/watcher/lifecycle_integration_test.go:102-104"
+    },
+    {
+      "description": "Blocking runner with ready channel for concurrency sync",
+      "example": "block := make(chan struct{})\nready := make(chan struct{})\nrunner := &lifecycleMockRunner{output: claudeJSON(100, 50), block: block, ready: ready}\n// ... trigger, <-ready, trigger again, close(block), lm.Close()",
+      "source_file": "internal/watcher/lifecycle_integration_test.go:167-178"
+    }
+  ],
+  "warnings": [
+    "Close() calls m.wg.Wait() THEN m.cancel(). For cooldown delays, runTurnAfterDelay must call wg.Done() when ctx.Done() fires. But Close() calls wg.Wait() before cancel() — this means pending cooldown delays will block Close forever unless something else cancels ctx. The task description's runTurnAfterDelay does 'case <-m.ctx.Done(): ... m.wg.Done()' but Close() does 'wg.Wait(); cancel()'. The coder MUST change Close() to call cancel() BEFORE wg.Wait(), or the TestCooldown_CloseDoesNotHang test will deadlock. New Close: m.cancel(); m.wg.Wait().",
+    "The running[name] flag must stay true during cooldown delay so concurrent triggers return Queued, not Started — don't delete it until the delayed turn actually starts or is cancelled.",
+    "When runTurnAfterDelay fires after delay, it calls runTurnAsync which calls defer m.wg.Done() — so runTurnAfterDelay must NOT call wg.Done() in the delay-expired path (runTurnAsync handles it). Only call wg.Done() in the ctx.Done() cancellation path.",
+    "TurnCooldown == 0 (zero value) means no cooldown — must preserve exact existing behavior. The cooldownDuration() helper returns defaultTurnCooldown when cfg.TurnCooldown == 0, but the caller checks cfg.TurnCooldown != 0 before using it, so zero-config skips the entire block.",
+    "drainQueue: when wasQueued and delay > 0, keep running[agent] = true (don't delete it) — it's implicitly true because we never deleted it. Only delete running[agent] in the !wasQueued branch.",
+    "The cooldown_test.go file must be in package watcher_test (external test package), not package watcher.",
+    "Iota ordering: Cooldown must come after Refused (value 4). Adding it before Refused would change Refused's value and break existing code."
+  ],
+  "constructors": [
+    {
+      "struct_name": "LifecycleManager",
+      "constructor": "func NewLifecycleManager(db *gorm.DB, cfg Config, runner CommandRunner) *LifecycleManager at lifecycle.go:150",
+      "test_helpers": ["allowedCfg() in lifecycle_integration_test.go:70 — returns Config with AllowedAgents: []string{\"mike\", \"alex\", \"ross\", \"seth\"}"]
+    },
+    {
+      "struct_name": "Config",
+      "constructor": "struct literal — no factory function. Constructed inline in tests and cmd/csuite-watcher",
+      "test_helpers": ["allowedCfg() in lifecycle_integration_test.go:70"]
+    }
+  ]
+}
