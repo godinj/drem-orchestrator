@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/godinj/drem-orchestrator/internal/experiment"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
@@ -415,5 +416,14 @@ func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task
 		}
 		o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, publishReason)
 	}
+
+	// Check if this task belongs to an experiment variant
+	exp, expErr := experiment.GetVariantByTaskID(o.db, task.ID)
+	if expErr == nil && exp != nil {
+		if err := o.handleExperimentVariantFailed(task, exp); err != nil {
+			o.logger.Warn("experiment variant failure handling failed", "error", err)
+		}
+	}
+
 	return nil
 }

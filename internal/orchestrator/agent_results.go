@@ -10,6 +10,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/constraints"
+	"github.com/godinj/drem-orchestrator/internal/experiment"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
@@ -283,6 +284,16 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 					o.logger.Error("process test writing after subtask done",
 						"parent_id", parent.ID, "error", checkErr)
 				}
+			}
+		}
+	}
+
+	// Check if this task belongs to an experiment variant
+	if task.ParentTaskID == nil {
+		exp, expErr := experiment.GetVariantByTaskID(o.db, task.ID)
+		if expErr == nil && exp != nil {
+			if err := o.handleExperimentVariantCompleted(task, exp); err != nil {
+				o.logger.Warn("experiment variant completion handling failed", "error", err)
 			}
 		}
 	}
