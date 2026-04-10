@@ -209,6 +209,16 @@ func (o *Orchestrator) evaluateConstraintGate(task *model.Task) (bool, error) {
 	task.Context["constraint_gate_next_check"] = time.Now().Add(delay).Format(time.RFC3339)
 	task.Context["constraint_violations"] = constraints.FormatReport(featureReport)
 
+	// Add constraint violation counting
+	violationCount := comparison.Magnitude()
+	if task.AssignedAgentID != nil {
+		var ag model.Agent
+		if err := o.db.First(&ag, "id = ?", *task.AssignedAgentID).Error; err == nil {
+			ag.ConstraintViolations += violationCount
+			o.db.Save(&ag)
+		}
+	}
+
 	if err := o.db.Save(task).Error; err != nil {
 		return true, fmt.Errorf("save constraint gate state: %w", err)
 	}

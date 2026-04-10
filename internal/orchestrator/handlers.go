@@ -148,6 +148,10 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 	}
 
 	// Clear planner agent assignment now that review is complete.
+	// Record plan rejection metric before clearing assignment
+	if o.metrics != nil && task.AssignedAgentID != nil {
+		o.metrics.Record(*task.AssignedAgentID, "plan_rejected", 1.0, nil)
+	}
 	task.AssignedAgentID = nil
 
 	// Write plan.json to the integration worktree as an untracked file.

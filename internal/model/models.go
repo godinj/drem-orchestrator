@@ -76,15 +76,16 @@ type Agent struct {
 	Config         JSONField `gorm:"type:text"`
 
 	// Enrichment fields (populated at spawn/completion time)
-	Provider        string     `gorm:"column:provider;default:''"`         // "" means Claude (backwards compatible)
-	ModelID         string     `gorm:"column:model_id;default:'';index"`   // model identifier (populated at spawn time)
-	Effort          string     `gorm:"column:effort;default:''"`           // effort level (populated at spawn time)
-	CompletedAt     *time.Time `gorm:"column:completed_at;index"`          // when agent finished (populated at completion)
-	ExitReason      string     `gorm:"column:exit_reason;default:''"`      // why agent stopped (populated at completion)
-	TotalCostUSD    float64    `gorm:"column:total_cost_usd;type:float"`   // total API cost in USD (populated at completion)
-	FinalContextPct int        `gorm:"column:final_context_pct;default:0"` // final context % (populated at completion)
-	TokensIn        int        `gorm:"column:tokens_in;default:0"`         // total input tokens consumed (populated at completion)
-	TokensOut       int        `gorm:"column:tokens_out;default:0"`        // total output tokens consumed (populated at completion)
+	Provider             string     `gorm:"column:provider;default:''"`         // "" means Claude (backwards compatible)
+	ModelID              string     `gorm:"column:model_id;default:'';index"`   // model identifier (populated at spawn time)
+	Effort               string     `gorm:"column:effort;default:''"`           // effort level (populated at spawn time)
+	CompletedAt          *time.Time `gorm:"column:completed_at;index"`          // when agent finished (populated at completion)
+	ExitReason           string     `gorm:"column:exit_reason;default:''"`      // why agent stopped (populated at completion)
+	TotalCostUSD         float64    `gorm:"column:total_cost_usd;type:float"`   // total API cost in USD (populated at completion)
+	FinalContextPct      int        `gorm:"column:final_context_pct;default:0"` // final context % (populated at completion)
+	TokensIn             int        `gorm:"column:tokens_in;default:0"`         // total input tokens consumed (populated at completion)
+	TokensOut            int        `gorm:"column:tokens_out;default:0"`        // total output tokens consumed (populated at completion"
+	ConstraintViolations int        `gorm:"column:constraint_violations;default:0"`
 
 	CreatedAt time.Time
 	UpdatedAt time.Time

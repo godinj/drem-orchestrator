@@ -387,6 +387,11 @@ func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task
 		return fmt.Errorf("on agent completed: save agent: %w", err)
 	}
 
+	// Record merge conflict metric
+	if o.metrics != nil {
+		o.metrics.Record(ag.ID, "merge_conflict", 1.0, nil)
+	}
+
 	failureReason := "merge into feature branch failed, agent branch preserved"
 	publishReason := "merge into feature branch failed"
 	if result != nil {

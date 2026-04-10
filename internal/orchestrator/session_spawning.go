@@ -182,6 +182,16 @@ func (o *Orchestrator) SpawnFixerSession(taskID uuid.UUID) (string, error) {
 		return "", fmt.Errorf("spawn fixer: %w", err)
 	}
 
+	// Record fixer spawn metric
+	if o.metrics != nil && task.AssignedAgentID != nil {
+		var parentAgent model.Agent
+		if err := o.db.First(&parentAgent, "id = ?", *task.AssignedAgentID).Error; err == nil {
+			o.metrics.Record(parentAgent.ID, "fixer_spawn", 1.0, map[string]string{
+				"parent_model": parentAgent.ModelID,
+			})
+		}
+	}
+
 	o.emit("fixer_spawned", map[string]any{"task_id": taskID, "agent_id": ag.ID})
 	o.logger.Info("fixer spawned", "task_id", taskID, "agent_id", ag.ID)
 	return ag.TmuxSession, nil

@@ -1,4 +1,5 @@
 <<<<<<< HEAD
+<<<<<<< HEAD
 # Task: Auto-merge Default Variant & Challenger Promotion (5c)
 
 ## Goal
@@ -22,10 +23,40 @@ if task.ParentTaskID == nil {
         if err := o.handleExperimentVariantCompleted(task, exp); err != nil {
             o.logger.Warn("experiment variant completion handling failed", "error", err)
         }
+=======
+# Task: Quality Metrics Model Field + Hooks (6a)
+
+## Goal
+Add ConstraintViolations field to Agent model AND populate it. Add metrics.Record() calls at 4 integration points.
+
+## CRITICAL RULES
+- **ALWAYS guard with `if o.metrics != nil`** before calling o.metrics.Record()
+- **`task.AssignedAgentID` is `*uuid.UUID` (pointer)** — dereference with `*task.AssignedAgentID` and nil-check first
+- Place metrics BEFORE any field is cleared (e.g., record plan rejection BEFORE `task.AssignedAgentID = nil`)
+
+## What to build
+
+### 1. Add ConstraintViolations to Agent model
+**File:** `internal/model/models.go` — add to Agent struct after TokensOut:
+```go
+ConstraintViolations int `gorm:"column:constraint_violations;default:0"`
+```
+
+### 2. Populate ConstraintViolations in constraint gate
+**File:** `internal/orchestrator/constraint_gate_policy.go` — find where violations are counted.
+After violation count is computed, add:
+```go
+if task.AssignedAgentID != nil {
+    var ag model.Agent
+    if err := o.db.First(&ag, "id = ?", *task.AssignedAgentID).Error; err == nil {
+        ag.ConstraintViolations += violationCount
+        o.db.Save(&ag)
+>>>>>>> 91bf620 (feat: worker-022 qwen3-coder round 2 output)
     }
 }
 ```
 
+<<<<<<< HEAD
 ### 2. Add experiment check in onAgentFailed (agent_failure.go)
 At the END of the existing function (before final return), add similar logic:
 ```go
@@ -33,10 +64,22 @@ exp, expErr := experiment.FindVariantByTaskID(o.db, task.ID)
 if expErr == nil && exp != nil {
     if err := o.handleExperimentVariantFailed(task, exp); err != nil {
         o.logger.Warn("experiment variant failure handling failed", "error", err)
+=======
+### 3. Fixer spawn tracking
+**File:** `internal/orchestrator/session_spawning.go:109` — in SpawnFixerSession, after fixer agent is created:
+```go
+if o.metrics != nil && task.AssignedAgentID != nil {
+    var parentAgent model.Agent
+    if err := o.db.First(&parentAgent, "id = ?", *task.AssignedAgentID).Error; err == nil {
+        o.metrics.Record(parentAgent.ID, "fixer_spawn", 1.0, map[string]string{
+            "parent_model": parentAgent.ModelID,
+        })
+>>>>>>> 91bf620 (feat: worker-022 qwen3-coder round 2 output)
     }
 }
 ```
 
+<<<<<<< HEAD
 ### 3. Create handleExperimentVariantCompleted and handleExperimentVariantFailed
 New file: `internal/orchestrator/experiment_hooks.go` (~80-120 lines)
 - `handleExperimentVariantCompleted`: If variant.IsDefault, trigger merge. Check if all variants done → transition experiment to "review".
@@ -94,21 +137,62 @@ a1b2c3d4    | running  | 2026-04-09 | 3/3 done | default
 - ONE existing sub-model (e.g., agents or board) — for the pattern to follow
 - `internal/experiment/experiment.go` — experiment data model
 >>>>>>> 2476ed2 (feat: worker-023 qwen3-coder round 2 output)
+=======
+### 4. Plan rejection tracking
+**File:** `internal/orchestrator/handlers.go` — find where task transitions from plan_review to rejected. BEFORE `task.AssignedAgentID` is cleared, add:
+```go
+if o.metrics != nil && task.AssignedAgentID != nil {
+    o.metrics.Record(*task.AssignedAgentID, "plan_rejected", 1.0, nil)
+}
+```
+
+### 5. Merge conflict tracking
+**File:** `internal/orchestrator/agent_failure.go` — in the merge conflict handling path (around line 372), add:
+```go
+if o.metrics != nil {
+    o.metrics.Record(ag.ID, "merge_conflict", 1.0, nil)
+}
+```
+
+### 6. Constraint violation metric
+**File:** `internal/orchestrator/constraint_gate_policy.go` — where violations are detected:
+```go
+if o.metrics != nil && task.AssignedAgentID != nil {
+    o.metrics.Record(*task.AssignedAgentID, "constraint_violations", float64(violationCount), nil)
+}
+```
+
+## Key files (check repo-map.md first, only read files you modify)
+- `internal/model/models.go:64` — Agent struct
+- `internal/metrics/store.go:70` — Record() signature
+- `internal/orchestrator/session_spawning.go:109` — SpawnFixerSession
+- `internal/orchestrator/handlers.go` — plan review handling
+- `internal/orchestrator/agent_failure.go:335` — merge conflict path
+- `internal/orchestrator/constraint_gate_policy.go` — constraint evaluation
+>>>>>>> 91bf620 (feat: worker-022 qwen3-coder round 2 output)
 
 ## BEFORE YOU EXIT
 **ALWAYS commit your work before the session ends.** Run:
 ```bash
 <<<<<<< HEAD
+<<<<<<< HEAD
 git add -A && git commit -m "feat: auto-merge default variant and challenger promotion (5c)"
 =======
 git add -A && git commit -m "feat: add TUI experiment summary view (7a)"
 >>>>>>> 2476ed2 (feat: worker-023 qwen3-coder round 2 output)
+=======
+git add -A && git commit -m "feat: add quality metrics model field and integration hooks (6a)"
+>>>>>>> 91bf620 (feat: worker-022 qwen3-coder round 2 output)
 ```
 Even if tests fail, commit what you have with a WIP note. Uncommitted work WILL BE LOST.
 
 ## Verification
 <<<<<<< HEAD
+<<<<<<< HEAD
 Run `go vet ./... && go test ./internal/orchestrator/...` in ONE command. Max 2 fix cycles.
 =======
 Run `go vet ./... && go test ./internal/tui/...` in ONE command. Max 2 fix cycles.
 >>>>>>> 2476ed2 (feat: worker-023 qwen3-coder round 2 output)
+=======
+Run `go vet ./... && go test ./internal/orchestrator/...` in ONE command. Max 2 fix cycles.
+>>>>>>> 91bf620 (feat: worker-022 qwen3-coder round 2 output)
