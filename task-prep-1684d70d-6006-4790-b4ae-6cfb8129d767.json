@@ -1,0 +1,55 @@
+{
+  "target_files": [
+    {
+      "path": "internal/prompt/prompt_test.go",
+      "relevant_definitions": "package prompt; imports: os, path/filepath, strings, testing, model. Helper: minimalOpts() returns Opts{Task: &model.Task{Title: \"Test Task\", Description: \"A test task description\"}, Project: &model.Project{Name: \"test-project\", BareRepoPath: \"/tmp/test-repo.git\"}, AgentType: model.AgentCoder, WorktreePath: \"/tmp/worktrees/test-branch\"}",
+      "methods": [],
+      "notes": "File is 1067 lines. Append new tests after line 1067 (after TestGenerate_BugReportInstructionsAllAgentTypes). No uuid import exists — the task says to use uuid.New() but existing tests never use uuid. Since model.Task{} works without ID for Generate(), just use model.Task{Title: \"test\", Description: \"desc\"} like existing tests. The file is a _test.go so no 800-line ceiling applies."
+    },
+    {
+      "path": "internal/prompt/prompt.go",
+      "relevant_definitions": "func Generate(opts Opts) string — lines 43+. At line 65-69: readRepoMap. At line 72-83: Context Efficiency (guarded by repoMap != \"\"). At line 85-96: Verification Strategy (always appended). At line 98-102: readCriticalRules.",
+      "methods": ["func Generate(opts Opts) string"],
+      "notes": "This is the IMPLEMENTATION file that the sibling task will modify. The tests we write here will FAIL until that sibling task adds the AgentClassifier guards. That's expected for TDD — tests come first."
+    },
+    {
+      "path": "internal/prompt/prompt_helpers.go",
+      "relevant_definitions": "func readRepoMap(worktreePath string) string — reads worktreePath/repo-map.md, prepends '## Repository Map\\n\\n'. func readCriticalRules(worktreePath string) string — reads worktreePath/.drem/critical-rules.md, returns raw content.",
+      "methods": ["readRepoMap", "readCriticalRules"],
+      "notes": "readRepoMap looks for 'repo-map.md' in the worktree root. readCriticalRules looks for '.drem/critical-rules.md'. Both return empty string on missing file or empty worktreePath."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/prompt/prompt_test.go",
+      "location": "After line 1067 (end of file, after closing brace of TestGenerate_BugReportInstructionsAllAgentTypes)",
+      "what": "Append 5 new test functions: TestGenerate_ClassifierExcludesRepoMap, TestGenerate_ClassifierExcludesVerificationStrategy, TestGenerate_ClassifierExcludesCriticalRules, TestGenerate_ClassifierRetainsTaskDescription, TestGenerate_NonClassifierStillGetsRepoMap"
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Temp dir with repo-map.md for Generate() tests",
+      "example": "dir := t.TempDir()\ncontent := \"# Repo Map\\n\\nfunc Baz() string\"\nif err := os.WriteFile(filepath.Join(dir, \"repo-map.md\"), []byte(content), 0644); err != nil {\n\tt.Fatal(err)\n}\nopts := Opts{\n\tTask: &model.Task{Title: \"Test task\", Description: \"A test task description\"},\n\tAgentType: model.AgentCoder,\n\tWorktreePath: dir,\n}\nprompt := Generate(opts)\nif !strings.Contains(prompt, \"## Repository Map\") {\n\tt.Error(\"expected generated prompt to contain Repository Map section\")\n}",
+      "source_file": "internal/prompt/prompt_test.go:971-994 (TestGenerate_IncludesRepoMapBeforeTaskDescription)"
+    },
+    {
+      "description": "Negative assertion pattern — assert section is NOT in output",
+      "example": "if strings.Contains(prompt, \"## Repository Map\") {\n\tt.Error(\"expected no Repository Map section when file is absent\")\n}\nif strings.Contains(prompt, \"## Context Efficiency\") {\n\tt.Error(\"expected no Context Efficiency section when repo map is absent\")\n}",
+      "source_file": "internal/prompt/prompt_test.go:1013-1033 (TestGenerate_NoRepoMap_NoContextEfficiency)"
+    },
+    {
+      "description": "Using minimalOpts() helper and overriding AgentType",
+      "example": "opts := minimalOpts()\nopts.AgentType = model.AgentCoder\noutput := Generate(opts)\nif !strings.Contains(output, \"Implement the described task\") {\n\tt.Error(\"expected default coder instructions\")\n}",
+      "source_file": "internal/prompt/prompt_test.go:144-152 (TestGenerate_CoderDefaultPhase)"
+    }
+  ],
+  "warnings": [
+    "No uuid import exists in prompt_test.go. The task description says to use uuid.New() but existing tests create model.Task{} without setting ID — follow the existing pattern (no uuid needed) since Generate() doesn't use Task.ID.",
+    "These tests are TDD — they will FAIL until the sibling implementation task (subtask 4: 'Implement classifier prompt context reduction in Generate()') adds the AgentClassifier guards to prompt.go. This is expected.",
+    "model.AgentClassifier is defined in internal/model/enums.go:125 as AgentClassifier AgentType = \"classifier\".",
+    "readCriticalRules reads from .drem/critical-rules.md (note the .drem subdirectory). Must os.MkdirAll the .drem dir before writing the file.",
+    "readRepoMap prepends '## Repository Map\\n\\n' header to the file contents — so assert on '## Repository Map', not the raw file content header.",
+    "The Verification Strategy section (lines 85-96 in prompt.go) is always appended unconditionally — no file read needed, no temp dir setup needed for that test."
+  ],
+  "constructors": []
+}
