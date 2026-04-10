@@ -108,6 +108,13 @@ type Runner struct {
 	dispatchLimiter dispatchLimiter // optional rate limiter; nil means no limit
 }
 
+// AgentConfig returns the resolved CLI configuration for a given agent type.
+// This allows the orchestrator to query what model/provider a coder will use
+// without spawning it, e.g. for model-aware planner prompts.
+func (r *Runner) AgentConfig(agentType model.AgentType) model.AgentCLIConfig {
+	return r.agentConfigs(agentType)
+}
+
 // SetMetricsRecorder injects a MetricsRecorder for time-series metric
 // collection during agent runs. When set, contextMonitorLoop records five
 // metric samples per tick: context_pct, cost_usd, token_input, token_output,
