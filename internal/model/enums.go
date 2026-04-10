@@ -123,6 +123,7 @@ const (
 	AgentReviewer     AgentType = "reviewer"
 	AgentFixer        AgentType = "fixer"
 	AgentClassifier   AgentType = "classifier"
+	AgentPrep         AgentType = "prep"
 )
 
 // allAgentTypes lists every valid AgentType value for parsing.
