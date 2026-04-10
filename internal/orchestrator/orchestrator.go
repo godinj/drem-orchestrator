@@ -467,6 +467,12 @@ func (o *Orchestrator) recoverStuckAgents() {
 
 	now := time.Now()
 	for _, ag := range agents {
+		// OpenCode agents don't use .claude/agent-idle — they're monitored
+		// by process exit. Skip to avoid false idle detection from stale files.
+		if ag.Provider == string(model.ProviderOpenCode) {
+			continue
+		}
+
 		// Grace period: skip agents that were recently spawned. This prevents
 		// a race where a stale idle signal file (from a previous agent in the
 		// same worktree) causes a freshly-spawned agent to be immediately
