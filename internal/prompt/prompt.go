@@ -871,7 +871,7 @@ func prepInstructions(opts Opts) []string {
 		"- Maximum 5 target files. If more are listed, focus on the ones most",
 		"  critical to the task.",
 		"",
-	}
+	)
 
 	return sections
 }
