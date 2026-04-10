@@ -214,6 +214,126 @@ func genericDepthGuidance() string {
 	}, "\n")
 }
 
+// targetModelGuidance returns prompt sections telling the planner about
+// the downstream coding model so it can adjust subtask detail level.
+// Returns an empty slice if no target model is configured (backward compatible).
+func targetModelGuidance(provider, modelName string) []string {
+	if provider == "" && modelName == "" {
+		return nil
+	}
+
+	isLocal := provider == "opencode" || provider == "vllm" || provider == "ollama"
+
+	var sections []string
+	sections = append(sections, "## Target Coding Agent", "")
+	sections = append(sections, fmt.Sprintf("The coding agents that will execute your subtasks run on: **%s** (provider: %s).", modelName, provider), "")
+
+	if isLocal {
+		sections = append(sections,
+			"This is a local model with limited context and exploration ability. "+
+				"Adjust your subtask descriptions to be **highly specific**:",
+			"",
+			"1. **Include tactical context**: For each file the subtask will modify, "+
+				"note the relevant struct/class/interface definitions, key field names, "+
+				"and existing patterns to follow. Example: \"The Orchestrator struct "+
+				"(orchestrator.go) has fields: db, runner, worktree, merger, bus, supervisor. "+
+				"Add a new field following the SetEventBus() wiring pattern.\"",
+			"",
+			"2. **Warn about pitfalls**: If a file has pointer types, nullable fields, "+
+				"or unusual conventions, call them out explicitly. Example: \"AssignedAgentID "+
+				"is *uuid.UUID (pointer) — nil-check before dereferencing.\"",
+			"",
+			"3. **Specify insertion points**: Don't just say \"add a hook\" — say WHERE. "+
+				"Example: \"Add the metric recording call inside HandlePlanRejected, after "+
+				"task.Plan = nil and before task.AssignedAgentID = nil.\"",
+			"",
+			"4. **Include code patterns**: Show the exact pattern the agent should follow. "+
+				"Example: \"Follow this guard pattern: if o.metrics != nil { o.metrics.Record(...) }\"",
+			"",
+			"5. **Keep subtask descriptions under 500 words** — the model has limited "+
+				"context and needs room for the code itself.",
+			"",
+			"The standing critical rules library is injected automatically into every "+
+				"coder prompt, so you do NOT need to repeat generic rules (nil-guards, "+
+				"brace balance, etc.). Focus on task-SPECIFIC tactical context.",
+			"",
+		)
+	} else {
+		sections = append(sections,
+			"This is a cloud-hosted model with large context and strong exploration ability. "+
+				"Keep subtask descriptions **architectural** — specify what to build and where, "+
+				"but do not pre-chew tactical details. The model can explore the codebase effectively.",
+			"",
+		)
+	}
+
+	return sections
+}
+
+// fileSnapshotContext reads the head of each target file listed in a subtask's
+// estimated_files context and returns a formatted section with the file headers.
+// This provides language-agnostic reconnaissance: the coder sees actual type
+// definitions, import blocks, and existing patterns without any parsing.
+// Returns empty string if no files are listed or none can be read.
+func fileSnapshotContext(worktreePath string, task interface{ GetEstimatedFiles() []string }) string {
+	if worktreePath == "" || task == nil {
+		return ""
+	}
+
+	files := task.GetEstimatedFiles()
+	if len(files) == 0 {
+		return ""
+	}
+
+	var parts []string
+	const maxLinesPerFile = 80
+	const maxTotalBytes = 8000 // ~2K tokens budget for all snapshots
+
+	totalBytes := 0
+	for _, relPath := range files {
+		if totalBytes >= maxTotalBytes {
+			break
+		}
+
+		absPath := filepath.Join(worktreePath, relPath)
+		data, err := os.ReadFile(absPath)
+		if err != nil {
+			// File doesn't exist yet (new file) — skip.
+			continue
+		}
+
+		// Take first N lines.
+		content := string(data)
+		lines := strings.SplitN(content, "\n", maxLinesPerFile+1)
+		if len(lines) > maxLinesPerFile {
+			lines = lines[:maxLinesPerFile]
+			lines = append(lines, fmt.Sprintf("// ... (%d more lines)", strings.Count(content, "\n")-maxLinesPerFile))
+		}
+
+		snapshot := strings.Join(lines, "\n")
+		if totalBytes+len(snapshot) > maxTotalBytes {
+			// Truncate this file to fit budget.
+			remaining := maxTotalBytes - totalBytes
+			if remaining < 200 {
+				break
+			}
+			snapshot = snapshot[:remaining] + "\n// ... (truncated)"
+		}
+
+		parts = append(parts, fmt.Sprintf("### `%s`\n\n```\n%s\n```", relPath, snapshot))
+		totalBytes += len(snapshot)
+	}
+
+	if len(parts) == 0 {
+		return ""
+	}
+
+	return "## Target File Snapshots\n\n" +
+		"The following are the first ~80 lines of each file you will modify.\n" +
+		"Use these to understand existing types, patterns, and conventions.\n\n" +
+		strings.Join(parts, "\n\n") + "\n"
+}
+
 // readCriticalRules reads the standing critical rules library from
 // .drem/critical-rules.md in the worktree root. Returns the content wrapped
 // in a section header, or empty string if the file is absent (graceful degradation).
