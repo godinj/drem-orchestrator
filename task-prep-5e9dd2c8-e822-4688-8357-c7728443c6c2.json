@@ -1,0 +1,67 @@
+{
+  "target_files": [
+    {
+      "path": "internal/orchestrator/classifying_test.go",
+      "relevant_definitions": "File is 1266 lines. Contains setupClassifyingTest() helper (line 24) that creates Orchestrator with nil runner. Tests for onClassifierCompleted, onClassifierFailed, parkClassifierForTriage, handleClarificationRequest, applyClassification, ingestBugReports, classifyNewBugReports.",
+      "methods": [],
+      "notes": "Append new tests after line 1266. The file imports: encoding/json, fmt, log/slog, os, path/filepath, testing, time, uuid, agent, dbpkg, model, testutil, worktree. New tests need the same imports that classifier_dispatch_test.go uses (log/slog, os, path/filepath, testing, uuid, agent, model, testutil, worktree) — all already imported EXCEPT agent.NewRunner usage needs agent import (already present)."
+    },
+    {
+      "path": "internal/orchestrator/classifier_dispatch_test.go",
+      "relevant_definitions": "TestClassifierDispatchPicksUpNewlyFiledTasks (line 29) — the EXACT pattern to follow for test setup.",
+      "methods": [],
+      "notes": "Setup pattern: bareRepo := testutil.InitBareRepoWithMainWorktree(t); defaultBranch := testutil.GetDefaultBranch(t, bareRepo); db := testutil.NewTestDB(t); project create; fake claude binary; runner := agent.NewRunner(db, nil, wt, fakeBin, \"\", 4, nil); Orchestrator literal with runner. Uses orch.doTick(nil) to trigger processing."
+    },
+    {
+      "path": "internal/orchestrator/classifying.go",
+      "relevant_definitions": "processClassifyingTasks() at line 36. Queries tasks with status=CLASSIFYING and assigned_agent_id IS NULL. Loop skips human_triage tasks (line 66-70), checks CanSpawn (line 73), spawns classifier, assigns agent ID (line 90), saves task (line 91). parkClassifierForTriage at line 162 sets human_triage=true in Context and saves.",
+      "methods": ["processClassifyingTasks()", "parkClassifierForTriage(task, reason)"],
+      "notes": "The spawn cap guard will be inserted AFTER the human_triage skip block (after line 70) and BEFORE the CanSpawn check (line 73). The counter increment goes after line 90 (task.AssignedAgentID = &ag.ID) and before line 91 (o.db.Save). maxClassifierSpawns constant (value 3) will be added at top of file."
+    },
+    {
+      "path": "internal/model/json.go",
+      "relevant_definitions": "type JSONField map[string]any — used for task.Context field. Implements driver.Valuer and sql.Scanner for GORM JSON serialization.",
+      "methods": [],
+      "notes": "After GORM round-trip, numeric values in JSONField come back as float64 (standard JSON unmarshaling). Tests must use float64 for numeric comparisons."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/orchestrator/classifying_test.go",
+      "location": "After line 1266 (end of file, after the closing brace of TestOnClassifierCompleted_ApplyClassification_TransitionsToBacklog)",
+      "what": "Append three new test functions: TestClassifierSpawnCap_BlocksAtCap, TestClassifierSpawnCap_IncrementsCounter, TestClassifierSpawnCap_AllowsBelowCap"
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Test setup with real runner and bare repo for classifier dispatch tests",
+      "example": "bareRepo := testutil.InitBareRepoWithMainWorktree(t)\ndefaultBranch := testutil.GetDefaultBranch(t, bareRepo)\ndb := testutil.NewTestDB(t)\nprojectID := uuid.New()\nevents := make(chan Event, 100)\nwt := worktree.NewManager(bareRepo, defaultBranch)\nproject := model.Project{ID: projectID, Name: \"test\", BareRepoPath: bareRepo, DefaultBranch: defaultBranch}\ndb.Create(&project)\nbinDir := t.TempDir()\nfakeBin := filepath.Join(binDir, \"fake-claude\")\nos.WriteFile(fakeBin, []byte(\"#!/bin/sh\\ncat > /dev/null\\nexit 0\\n\"), 0o755)\nrunner := agent.NewRunner(db, nil, wt, fakeBin, \"\", 4, nil)\norch := &Orchestrator{db: db, projectID: projectID, worktree: wt, runner: runner, events: events, contextWarnPct: 75, contextStopPct: 90, contextFixerPct: 85, logger: slog.Default().With(\"component\", \"test\")}",
+      "source_file": "internal/orchestrator/classifier_dispatch_test.go"
+    },
+    {
+      "description": "Setting task Context before tick and reloading after",
+      "example": "task := testutil.CreateTask(t, db, projectID, \"title\", model.StatusClassifying)\ntask.Context = model.JSONField{\"total_classifier_spawns\": float64(3)}\ndb.Save(&task)\norch.doTick(nil)\nvar reloaded model.Task\ndb.First(&reloaded, \"id = ?\", task.ID)\n// Assert on reloaded fields",
+      "source_file": "internal/orchestrator/classifier_dispatch_test.go"
+    },
+    {
+      "description": "Asserting on assigned agent and task state after tick",
+      "example": "if reloadedInitial.AssignedAgentID == nil {\n    t.Fatal(\"expected initial task to have an assigned classifier agent after first tick\")\n}",
+      "source_file": "internal/orchestrator/classifier_dispatch_test.go"
+    }
+  ],
+  "warnings": [
+    "The spawn cap guard implementation does NOT exist yet in classifying.go — these tests will FAIL until the sibling implementation subtask adds the guard. This is expected TDD (red phase).",
+    "testutil.CreateTask returns model.Task (value, not pointer). To modify Context before tick, assign to the returned value and db.Save(&task).",
+    "After GORM round-trip, JSONField numeric values deserialize as float64. Always compare with float64, not int.",
+    "task.Context may be nil after reload if it was never set — nil-check before accessing keys.",
+    "The doTick method takes a parameter: orch.doTick(nil). Pass nil for the context parameter.",
+    "All imports needed (log/slog, os, path/filepath, testing, uuid, agent, model, testutil, worktree) are already in classifying_test.go's import block EXCEPT some may need to be verified — agent and worktree are present but check the exact import paths."
+  ],
+  "constructors": [
+    {
+      "struct_name": "Orchestrator",
+      "constructor": "func New(...) *Orchestrator at orchestrator.go:135 — but tests construct directly via struct literal",
+      "test_helpers": ["setupClassifyingTest() in classifying_test.go (nil runner, no bare repo)", "Direct struct literal in classifier_dispatch_test.go (with runner and bare repo)"]
+    }
+  ]
+}
