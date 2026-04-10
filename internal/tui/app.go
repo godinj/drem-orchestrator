@@ -32,6 +32,8 @@ const (
 	FocusBugReports
 	// FocusCsuite means the C-Suite agent dashboard is focused.
 	FocusCsuite
+	// FocusExperiments means the experiment summary panel is focused.
+	FocusExperiments
 )
 
 // Model is the root Bubble Tea model that composes all TUI sub-models.
@@ -43,13 +45,14 @@ type Model struct {
 	events      <-chan Event
 	csuiteSnaps <-chan csuiteStateSnapshot
 
-	board      BoardModel
-	agents     AgentsModel
-	detail     DetailModel
-	create     CreateModel
-	feedback   FeedbackModel
-	bugreports BugReportsModel
-	csuite     CsuiteModel
+	board       BoardModel
+	agents      AgentsModel
+	detail      DetailModel
+	create      CreateModel
+	feedback    FeedbackModel
+	bugreports  BugReportsModel
+	csuite      CsuiteModel
+	experiments ExperimentView
 
 	bugreportSvc   *bugReportSvc
 	logPath        string
@@ -446,4 +449,29 @@ func (m *Model) toggleBoardCollapse() {
 		}
 	}
 	m.board.trackSelected()
+}
+
+// renderExperimentsScreen renders the experiments view.
+func (m Model) renderExperimentsScreen() string {
+	// Title bar.
+	titleBar := titleStyle.Render("Drem Orchestrator - Experiments")
+
+	// Status bar with task counts per status.
+	statusBar := m.renderStatusBar()
+
+	// Help bar at the bottom.
+	helpBar := m.renderHelpBar()
+
+	// Main content area
+	content := m.experiments.View()
+
+	// Create a layout with title, status bar, content, and help bar
+	parts := []string{
+		titleBar,
+		statusBar,
+		content,
+		helpBar,
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left, parts...)
 }

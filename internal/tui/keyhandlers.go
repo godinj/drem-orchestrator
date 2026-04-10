@@ -151,6 +151,9 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "w":
 		m.focus = FocusCsuite
 		return m, nil
+	case "e":
+		m.focus = FocusExperiments
+		return m, nil
 	}
 
 	return m, nil

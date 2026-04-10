@@ -28,6 +28,7 @@ type keyMap struct {
 	Reap          key.Binding // C - clean up dead tmux sessions
 	Shell         key.Binding // i - open shell at integration dir
 	Csuite        key.Binding // w - C-Suite agent dashboard
+	Experiments   key.Binding // e - experiments view
 	Help          key.Binding // ? - toggle help overlay
 	Esc           key.Binding
 }
@@ -130,6 +131,10 @@ func defaultKeyMap() keyMap {
 		Csuite: key.NewBinding(
 			key.WithKeys("w"),
 			key.WithHelp("w", "C-Suite dashboard"),
+		),
+		Experiments: key.NewBinding(
+			key.WithKeys("e"),
+			key.WithHelp("e", "experiments"),
 		),
 		Help: key.NewBinding(
 			key.WithKeys("?"),
