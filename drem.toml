@@ -3,6 +3,7 @@ default_branch        = "master"
 max_concurrent_agents = 6
 opencode_bin              = "opencode"
 opencode_context_window   = 73728
+llama_server_endpoint     = "http://localhost:8081"
 test_command              = "go test ./..."
 compile_command       = "go vet ./..."
 
