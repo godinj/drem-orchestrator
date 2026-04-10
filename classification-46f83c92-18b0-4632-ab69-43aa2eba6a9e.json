@@ -1,0 +1,12 @@
+{
+  "category": "standard",
+  "complexity_score": 6,
+  "title": "Agent reaper fails to reap stale working classifiers",
+  "description": "The issue is that classifier agents are staying in 'working' status with stale heartbeats (>5min) but are not being reaped by the orchestrator. While the orchestrator has a CleanupStaleAgents function that should reap stale agents, it appears the heartbeat mechanism for classifiers isn't working properly or classifiers are not triggering heartbeat updates. The bug report specifically mentions classifiers f7d91f4f, 3b6813d1, 49950b19 with heartbeats from 11:26 (7+ hours stale). These classifiers are marked as 'working' but have no tmux sessions.",
+  "target_files": [
+    "internal/agent/runner.go",
+    "internal/agent/heartbeat.go",
+    "internal/orchestrator/orchestrator.go"
+  ],
+  "rationale": "The orchestrator has a CleanupStaleAgents function that should reap agents with stale heartbeats (older than 5 minutes), but this isn't working for classifiers. Looking at the code, I can see that heartbeatLoop is called in both startClaudeAgent and startOpenCodeAgent but the issue suggests that classifiers (which work differently - they run in the bare repo without worktrees) may not be triggering the heartbeat correctly or the heartbeat isn't being maintained properly."
+}
