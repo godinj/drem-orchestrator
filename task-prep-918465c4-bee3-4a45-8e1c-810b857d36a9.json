@@ -1,0 +1,61 @@
+{
+  "target_files": [
+    {
+      "path": "internal/orchestrator/classifying.go",
+      "relevant_definitions": "type ClassifierOutput struct { Category, ComplexityScore, Title, Description, TargetFiles, Rationale, NeedsClarification, Questions }\nmodel.JSONField = map[string]any",
+      "methods": [
+        "func (o *Orchestrator) processClassifyingTasks() — line 36",
+        "func (o *Orchestrator) onClassifierCompleted(ag *model.Agent, task *model.Task) error — line 104",
+        "func (o *Orchestrator) onClassifierFailed(ag *model.Agent, task *model.Task) error — line 138",
+        "func (o *Orchestrator) parkClassifierForTriage(task *model.Task, reason string) error — line 162",
+        "func (o *Orchestrator) handleClarificationRequest(task *model.Task, questions []string) error — line 177",
+        "func (o *Orchestrator) applyClassification(task *model.Task, output *ClassifierOutput) error — line 196",
+        "func (o *Orchestrator) ingestBugReports() — line 239",
+        "func (o *Orchestrator) classifyNewBugReports() — line 256"
+      ],
+      "notes": "File is 321 lines. Ceiling is 800. Imports: encoding/json, fmt, os, path/filepath, uuid, bugreport, model, prompt, state. The fmt package is already imported (needed for Sprintf in the guard)."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/orchestrator/classifying.go",
+      "location": "After line 15 (closing paren of imports) and before line 17 (ClassifierOutput comment on line 17). Insert the constant between the import block and the ClassifierOutput struct.",
+      "what": "Add `const maxClassifierSpawns = 3` with comment"
+    },
+    {
+      "file": "internal/orchestrator/classifying.go",
+      "location": "Inside processClassifyingTasks(), after line 70 (closing `}` of the human_triage skip block) and before line 72 (the CanSpawn check `if !o.runner.CanSpawn()`). Insert the spawn cap guard here.",
+      "what": "Add inline spawn cap guard: read classifierSpawns from task.Context, compare to maxClassifierSpawns, call parkClassifierForTriage and continue if at cap"
+    },
+    {
+      "file": "internal/orchestrator/classifying.go",
+      "location": "After line 90 (`task.AssignedAgentID = &ag.ID`) and before line 91 (`if err := o.db.Save(task).Error`). Insert the counter increment here.",
+      "what": "Increment total_classifier_spawns in task.Context before saving"
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Reading a float64 value from task.Context (JSONField is map[string]any, JSON numbers unmarshal as float64)",
+      "example": "if ht, ok := task.Context[\"human_triage\"]; ok && ht == true {\n\tcontinue\n}",
+      "source_file": "internal/orchestrator/classifying.go (lines 66-69)"
+    },
+    {
+      "description": "Nil-guard and lazy-init of task.Context before writing",
+      "example": "if task.Context == nil {\n\ttask.Context = make(model.JSONField)\n}\ntask.Context[\"human_triage\"] = true",
+      "source_file": "internal/orchestrator/classifying.go (lines 148-151)"
+    },
+    {
+      "description": "parkClassifierForTriage reuse — sets human_triage=true, classifier_error=reason, saves task, logs",
+      "example": "return o.parkClassifierForTriage(task, fmt.Sprintf(\"read classification-%s.json: %v\", task.ID, err))",
+      "source_file": "internal/orchestrator/classifying.go (line 118)"
+    }
+  ],
+  "warnings": [
+    "JSON round-trip stores numbers as float64 — use float64 type assertion when reading total_classifier_spawns from task.Context",
+    "parkClassifierForTriage returns an error but the task description uses `_ =` to discard it — this matches the pattern in the for loop where errors use `continue`",
+    "fmt is already imported — no new imports needed for this change",
+    "Do NOT add any new internal/ imports — the orchestrator package is at baseline 11 (grandfathered), must not grow",
+    "File is 321 lines, well under 800 ceiling — adding ~15 lines is safe"
+  ],
+  "constructors": []
+}
