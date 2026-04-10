@@ -523,13 +523,12 @@ func testPhaseCoderInstructions(opts Opts) []string {
 		"before implementation begins. Your stubs ARE the interface specification.",
 		"",
 		"After writing tests and stubs:",
-		"1. Run the build command to verify test files AND stubs compile and link",
-		"2. Run the tests — they SHOULD fail (that's expected for TDD)",
-		"3. Verify failures are ASSERTION failures, not compilation or linker errors",
-		"4. If tests fail to compile, fix your stubs until the build succeeds",
-		"5. Run `git add` for all new/untracked files, then commit both test files AND stub files "+
+		"1. Run `go vet ./... && go test ./...` in ONE command to verify compilation and test status",
+		"2. Tests SHOULD fail on assertions (that's expected for TDD) — verify failures are not compilation errors",
+		"3. If compilation fails, fix ALL errors in one pass, then re-run ONE more time",
+		"4. Run `git add` for all new/untracked files, then commit both test files AND stub files "+
 			`together with message: "test: <what these tests verify>"`,
-		"6. Do NOT push to remote",
+		"5. Do NOT push to remote",
 		"",
 	)
 
