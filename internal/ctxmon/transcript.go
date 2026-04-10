@@ -128,9 +128,11 @@ func ReadTranscriptUsage(worktreePath string) (*Usage, error) {
 }
 
 // parseTranscriptUsage reads a JSONL transcript file and accumulates token
-// usage across all assistant entries to produce cumulative totals. It also
-// estimates cost from the model name and token counts when the status line
-// script has not provided cost data.
+// usage across all assistant entries to produce cumulative totals for billing.
+// Context window fill (UsedPercent) is derived from the LAST assistant turn's
+// input tokens, since each turn's input_tokens already includes the full
+// conversation history. Cost is estimated from the model name and cumulative
+// token counts.
 func parseTranscriptUsage(path string) (*Usage, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -143,8 +145,14 @@ func parseTranscriptUsage(path string) (*Usage, error) {
 		totalCacheCreation int
 		totalCacheRead     int
 		totalOutput        int
-		model              string
-		found              bool
+		// Last turn's input tokens — each turn's input_tokens already
+		// includes the full conversation history, so only the last
+		// turn reflects actual context window fill.
+		lastInput         int
+		lastCacheCreation int
+		lastCacheRead     int
+		model             string
+		found             bool
 	)
 
 	scanner := bufio.NewScanner(f)
@@ -167,6 +175,9 @@ func parseTranscriptUsage(path string) (*Usage, error) {
 		totalCacheCreation += u.CacheCreationInputTokens
 		totalCacheRead += u.CacheReadInputTokens
 		totalOutput += u.OutputTokens
+		lastInput = u.InputTokens
+		lastCacheCreation = u.CacheCreationInputTokens
+		lastCacheRead = u.CacheReadInputTokens
 		if entry.Message.Model != "" {
 			model = entry.Message.Model
 		}
@@ -177,9 +188,10 @@ func parseTranscriptUsage(path string) (*Usage, error) {
 	}
 
 	allInput := totalInput + totalCacheCreation + totalCacheRead
+	lastAllInput := lastInput + lastCacheCreation + lastCacheRead
 	ctxSize := defaultContextWindowSize
 
-	usedPct := allInput * 100 / ctxSize
+	usedPct := lastAllInput * 100 / ctxSize
 	if usedPct > 100 {
 		usedPct = 100
 	}

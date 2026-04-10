@@ -56,8 +56,11 @@ func TestParseTranscriptUsage(t *testing.T) {
 		t.Errorf("TotalOutputTokens = %d, want %d", usage.TotalOutputTokens, wantOutput)
 	}
 
-	// 41650 / 200000 = 20%
-	wantPct := 20
+	// UsedPercent is based on the LAST turn's input tokens (each turn
+	// includes the full conversation history, not incremental tokens):
+	// last turn: 50 + 1000 + 30000 = 31050
+	// 31050 / 200000 = 15%
+	wantPct := 15
 	if usage.UsedPercent != wantPct {
 		t.Errorf("UsedPercent = %d, want %d", usage.UsedPercent, wantPct)
 	}
