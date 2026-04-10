@@ -39,8 +39,9 @@ const (
 	// reconciliation bypasses. 6 allows 2 full planning cycles with room
 	// for 1-2 transient failures.
 	MaxTotalPlannerSpawns  = 6
-	defaultContextFixerPct = 85
-	fixerEscalatePct       = 80 // fixer agents at this % → stop and escalate to human
+	defaultContextFixerPct  = 85
+	fixerEscalatePct        = 80 // fixer agents at this % → stop and escalate to human
+	classifierContextStopPct = 70 // classifier agents at this % → stop and park for triage
 	maxTestOutputLen       = 5000
 	maxGitDiffLen          = 10000
 	maxCmdOutputLen        = 5000
