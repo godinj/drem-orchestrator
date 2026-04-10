@@ -214,6 +214,28 @@ func genericDepthGuidance() string {
 	}, "\n")
 }
 
+// readCriticalRules reads the standing critical rules library from
+// .drem/critical-rules.md in the worktree root. Returns the content wrapped
+// in a section header, or empty string if the file is absent (graceful degradation).
+func readCriticalRules(worktreePath string) string {
+	if worktreePath == "" {
+		return ""
+	}
+
+	rulesPath := filepath.Join(worktreePath, ".drem", "critical-rules.md")
+	data, err := os.ReadFile(rulesPath)
+	if err != nil {
+		return ""
+	}
+
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return ""
+	}
+
+	return content + "\n"
+}
+
 // readRepoMap reads the repo-map.md file from the worktree root and returns
 // its contents wrapped in a section header. Returns an empty string if the file
 // does not exist or is unreadable (graceful degradation).
