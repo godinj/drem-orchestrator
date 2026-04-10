@@ -1,9 +1,7 @@
 package agent
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -162,45 +160,35 @@ func (r *Runner) readClaudeUsage(worktreePath string, agentID uuid.UUID) *ctxmon
 	return usage
 }
 
-// readOpenCodeUsage reads context usage for an OpenCode agent by scanning the
-// JSONL output log for step_finish events and accumulating token counts.
+// readOpenCodeUsage reads context usage for an OpenCode agent. It tries the
+// per-agent JSONL output log first (fastest), then falls back to the shared
+// OpenCode SQLite database.
 func (r *Runner) readOpenCodeUsage(worktreePath string, agentID uuid.UUID) *ctxmon.Usage {
-	logPath := filepath.Join(worktreePath, ".opencode", "agent-output.jsonl")
-	f, err := os.Open(logPath)
+	ctxWindow := r.openCodeContextWindow // 0 → ctxmon default
+
+	// Primary: read from per-agent JSONL log in the worktree.
+	logPath := ctxmon.OpenCodeLogPath(worktreePath)
+	usage, err := ctxmon.ReadOpenCodeJSONLUsage(logPath, ctxWindow)
 	if err != nil {
-		return nil
+		slog.Warn("context monitor: read opencode jsonl", "agent_id", agentID, "error", err)
 	}
-	defer f.Close()
+	if usage != nil {
+		return usage
+	}
 
-	var totalIn, totalOut int
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	// Fallback: query the shared OpenCode SQLite database.
+	dbPath := ctxmon.DefaultOpenCodeDBPath()
+	if dbPath != "" {
+		usage, err = ctxmon.ReadOpenCodeDBUsage(dbPath, worktreePath, ctxWindow)
+		if err != nil {
+			slog.Warn("context monitor: read opencode db", "agent_id", agentID, "error", err)
 		}
-		var evt openCodeEvent
-		if err := json.Unmarshal(line, &evt); err != nil {
-			continue
-		}
-		if evt.Type == "step_finish" {
-			totalIn += evt.Part.Tokens.Input
-			totalOut += evt.Part.Tokens.Output
+		if usage != nil {
+			return usage
 		}
 	}
 
-	if totalIn == 0 && totalOut == 0 {
-		return nil
-	}
-
-	return &ctxmon.Usage{
-		TotalInputTokens:  totalIn,
-		TotalOutputTokens: totalOut,
-		UsedPercent:       0, // no context window tracking for OpenCode yet
-		TotalCostUSD:      0, // local model, no cost
-		LastUpdated:       time.Now(),
-	}
+	return nil
 }
 
 // recordMetrics appends five metric rows per tick: context_pct, cost_usd,

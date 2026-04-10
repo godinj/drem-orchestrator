@@ -98,7 +98,8 @@ type Runner struct {
 	openCodeBin     string
 	maxConcurrent   int
 	agentConfigs    func(model.AgentType) model.AgentCLIConfig // per-type CLI flags
-	metricsRecorder MetricsRecorder                            // optional; nil means no time-series recording
+	metricsRecorder        MetricsRecorder                            // optional; nil means no time-series recording
+	openCodeContextWindow int                                        // vLLM context window size; 0 → ctxmon default
 
 	mu              sync.Mutex
 	running         map[uuid.UUID]*RunningAgent
@@ -113,6 +114,13 @@ type Runner struct {
 // and tool_count.
 func (r *Runner) SetMetricsRecorder(mr MetricsRecorder) {
 	r.metricsRecorder = mr
+}
+
+// SetOpenCodeContextWindow sets the context window size (in tokens) used for
+// computing context usage percentages for OpenCode agents. Pass 0 to use
+// the default (ctxmon.DefaultOpenCodeContextWindow = 43904).
+func (r *Runner) SetOpenCodeContextWindow(size int) {
+	r.openCodeContextWindow = size
 }
 
 // NewRunner creates an agent Runner. Headless agents are started via

@@ -189,6 +189,7 @@ func main() {
 	runner := agent.NewRunner(database, tmux, wt, cfg.ClaudeBin, cfg.OpenCodeBin, cfg.MaxConcurrentAgents, cfg.Agents.ForAgentType)
 	runner.SetDispatchLimiter(ratelimit.New(cfg.MaxDispatchRate, cfg.DispatchWindow))
 	runner.SetMetricsRecorder(metrics.NewStore(database))
+	runner.SetOpenCodeContextWindow(cfg.OpenCodeContextWindow)
 	merger := merge.NewMergeQueue(merge.NewOrchestrator(wt, database), wt)
 	mem := memory.NewManager(database)
 

@@ -88,9 +88,10 @@ type Config struct {
 	ContextFixerPercent int                      `toml:"context_fixer_percent"`
 	TmuxSocket          string                   `toml:"tmux_socket"`
 	TmuxConfigFile      string                   `toml:"tmux_config_file"`
-	MaxDispatchRate     int                      `toml:"max_dispatch_rate"`
-	DispatchWindow      time.Duration            `toml:"dispatch_window"`
-	Agents              AgentsConfig             `toml:"agents"`
+	MaxDispatchRate        int                      `toml:"max_dispatch_rate"`
+	DispatchWindow         time.Duration            `toml:"dispatch_window"`
+	OpenCodeContextWindow int                      `toml:"opencode_context_window"`
+	Agents                 AgentsConfig             `toml:"agents"`
 	Profiles            map[string]ProfileConfig `toml:"profiles"`
 }
 
