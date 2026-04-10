@@ -37,6 +37,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleBugReportKeys(msg)
 	case FocusCsuite:
 		return m.handleCsuiteKeys(msg)
+	case FocusExperiments:
+		return m.handleExperimentKeys(msg)
 	case FocusAgents:
 		return m.handleAgentKeys(msg)
 	case FocusDetail:
@@ -416,6 +418,16 @@ func (m Model) handleCsuiteKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// esc within subviews, etc.)
 	cmd := m.csuite.Update(msg)
 	return m, cmd
+}
+
+// handleExperimentKeys handles keys when the experiments panel is focused.
+func (m Model) handleExperimentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "e", "esc":
+		m.focus = FocusBoard
+		return m, nil
+	}
+	return m, nil
 }
 
 // handleDeleteModeKeys handles keys while in delete selection mode.

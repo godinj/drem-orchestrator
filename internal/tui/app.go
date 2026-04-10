@@ -99,6 +99,7 @@ func NewModel(
 		feedback:     NewFeedbackModel("Feedback"),
 		bugreports:   NewBugReportsModel(db, bugreportSvc, projectID),
 		csuite:       cs,
+		experiments:  NewExperimentView(db),
 		focus:        FocusBoard,
 		keys:         defaultKeyMap(),
 	}
@@ -293,6 +294,11 @@ func (m Model) View() string {
 	// C-Suite dashboard replaces the main dashboard.
 	if m.focus == FocusCsuite {
 		return m.renderCsuiteScreen()
+	}
+
+	// Experiments screen replaces the main dashboard.
+	if m.focus == FocusExperiments {
+		return m.renderExperimentsScreen()
 	}
 
 	// Title bar.
