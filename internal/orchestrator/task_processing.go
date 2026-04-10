@@ -427,6 +427,39 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 			}
 		}
 
+		// Prep agent intercept: if the subtask needs task preparation (local
+		// model coder with estimated_files), route to the prep agent pipeline
+		// instead of spawning a coder directly. The prep agent reads the
+		// codebase and produces a tactical brief; when it completes,
+		// onPrepCompleted marks the subtask prep_complete and it gets
+		// dispatched to a coder on the next tick.
+		if agentType == model.AgentCoder && o.needsPrep(sub) {
+			if err := o.spawnPrepAgent(sub, parent); err != nil {
+				o.logger.Error("spawn prep agent failed, proceeding without prep",
+					"subtask_id", sub.ID, "error", err)
+				// Graceful degradation: mark prep as failed and let coder proceed.
+				if sub.Context == nil {
+					sub.Context = make(model.JSONField)
+				}
+				sub.Context["prep_complete"] = true
+				sub.Context["prep_failed"] = true
+				if err := o.db.Save(sub).Error; err != nil {
+					o.logger.Error("save subtask after prep failure", "subtask_id", sub.ID, "error", err)
+				}
+				// Fall through to spawn coder without prep data.
+			} else {
+				// Prep agent spawned successfully — skip coder spawn this tick.
+				continue
+			}
+		}
+
+		// Skip subtasks that are currently being prepped (waiting for prep agent).
+		if sub.Context != nil {
+			if _, inProgress := sub.Context["prep_in_progress"]; inProgress {
+				continue
+			}
+		}
+
 		// Use the feature integration worktree for prompt generation context.
 		// The actual agent worktree is created inside SpawnAgent.
 		featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
