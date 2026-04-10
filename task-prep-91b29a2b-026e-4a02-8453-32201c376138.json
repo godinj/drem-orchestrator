@@ -1,0 +1,86 @@
+{
+  "target_files": [
+    {
+      "path": "internal/orchestrator/classifying.go",
+      "relevant_definitions": "320 lines. Contains processClassifyingTasks(), parkClassifierForTriage(), ClassifierOutput struct, onClassifierCompleted(). 4 internal imports: bugreport, model, prompt, state.",
+      "methods": [
+        "func (o *Orchestrator) processClassifyingTasks() — line 36, dispatches classifier agents",
+        "func (o *Orchestrator) parkClassifierForTriage(task *model.Task, reason string) error — line 162, sets human_triage=true and saves"
+      ],
+      "notes": "MISSING: maxClassifierSpawns constant and spawn cap guard. The plan calls for inserting a const after imports (line 15) and a guard block after the human_triage skip (after line 70) and before CanSpawn check (line 73). Also needs counter increment after task.AssignedAgentID = &ag.ID (line 90) and before db.Save (line 91). None of this code exists yet."
+    },
+    {
+      "path": "internal/prompt/prompt.go",
+      "relevant_definitions": "925 lines (OVER 800 line limit). 10 functions. Already has 4 AgentClassifier guards at lines 68, 76, 90, 106 plus case statement at line 189.",
+      "methods": [
+        "func Generate(opts Opts) string — line 43",
+        "func classifierInstructions(worktreePath, taskID string) []string — line 728",
+        "func prepInstructions(opts Opts) []string — line 785",
+        "func bugReportInstructions() []string — line 890"
+      ],
+      "notes": "Classifier prompt exclusions ARE implemented. BUT file is 925 lines, over 800 ceiling. Was already 916 on master (pre-existing violation). The integration agent must extract functions to bring it under 800. Candidates for extraction: classifierInstructions (lines 728-783, 55 lines), prepInstructions (lines 785-888, 103 lines), bugReportInstructions (lines 890-925, 35 lines) — total ~193 lines. Moving these to a new file like prompt_agent_instructions.go would bring prompt.go to ~732 lines."
+    },
+    {
+      "path": "internal/orchestrator/classifying_test.go",
+      "relevant_definitions": "Test file for classifying.go. No TestClassifierSpawnCap tests exist yet.",
+      "methods": [],
+      "notes": "Spawn cap tests (TestClassifierSpawnCap_BlocksAtCap, TestClassifierSpawnCap_IncrementsCounter, TestClassifierSpawnCap_AllowsBelowCap) are NOT implemented yet. These are part of subtask 1 in the plan."
+    },
+    {
+      "path": "internal/prompt/prompt_test.go",
+      "relevant_definitions": "Test file for prompt.go. No TestGenerate_Classifier tests exist yet.",
+      "methods": [],
+      "notes": "Classifier prompt exclusion tests (TestGenerate_ClassifierExcludesRepoMap, etc.) are NOT implemented yet. These are part of subtask 3 in the plan."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/orchestrator/classifying.go",
+      "location": "After imports block (line 15), before ClassifierOutput struct definition",
+      "what": "Add `const maxClassifierSpawns = 3` with comment"
+    },
+    {
+      "file": "internal/orchestrator/classifying.go",
+      "location": "Inside for loop in processClassifyingTasks(), after human_triage skip block closing brace (line 70), before CanSpawn check (line 73)",
+      "what": "Add spawn cap guard: read total_classifier_spawns from task.Context, if >= maxClassifierSpawns call parkClassifierForTriage and continue"
+    },
+    {
+      "file": "internal/orchestrator/classifying.go",
+      "location": "After task.AssignedAgentID = &ag.ID (line 90), before o.db.Save(task) (line 91)",
+      "what": "Initialize task.Context if nil, set task.Context[\"total_classifier_spawns\"] = float64(classifierSpawns + 1)"
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Reading typed value from task.Context JSONField with type assertion",
+      "example": "if ht, ok := task.Context[\"human_triage\"]; ok && ht == true {",
+      "source_file": "internal/orchestrator/classifying.go:67"
+    },
+    {
+      "description": "Using parkClassifierForTriage to flag tasks for human review",
+      "example": "return o.parkClassifierForTriage(task, fmt.Sprintf(\"read classification-%s.json: %v\", task.ID, err))",
+      "source_file": "internal/orchestrator/classifying.go:118"
+    },
+    {
+      "description": "Initializing nil Context before writing",
+      "example": "if task.Context == nil { task.Context = make(model.JSONField) }",
+      "source_file": "internal/orchestrator/classifying.go:148-150"
+    }
+  ],
+  "warnings": [
+    "prompt.go is 925 lines (over 800 ceiling). Was 916 on master — pre-existing violation worsened by +9 lines. Must extract functions to bring under 800.",
+    "classifying.go spawn cap guard is NOT implemented yet — only prep commits exist on integration branch. The coding agent must implement it.",
+    "No classifier test files exist yet (TestClassifierSpawnCap_*, TestGenerate_Classifier*). The coding agent must write these.",
+    "TestMergeAutoCommitsDirtyWorktree fails on BOTH master and integration — pre-existing failure, NOT caused by our changes. Ignore it.",
+    "gofmt violations exist in 5 files (runner.go, llamaserver.go, opencode_test.go, task_prep.go, config.go) — all pre-existing on master, not our changes.",
+    "task.Context values from JSON are float64 (not int) — use .(float64) type assertion and int() conversion.",
+    "parkClassifierForTriage uses error return (not _ =) — but the plan says _ = which is fine for the loop continue pattern."
+  ],
+  "constructors": [
+    {
+      "struct_name": "Orchestrator",
+      "constructor": "func New(...) *Orchestrator in orchestrator.go — no changes needed, spawn cap is inline logic",
+      "test_helpers": ["Direct struct construction in tests: &Orchestrator{db: db, projectID: projectID, ...}"]
+    }
+  ]
+}
