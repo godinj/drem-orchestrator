@@ -32,6 +32,11 @@ type Opts struct {
 	Diagnosis     string   // root cause diagnosis
 	AffectedFiles []string // files to fix
 	SuggestedFix  string   // suggested fix from diagnosis
+
+	// Model-awareness: tells the planner what model the downstream coders use.
+	// Empty fields mean "unknown / use defaults".
+	TargetCoderProvider string // "claude", "opencode", etc.
+	TargetCoderModel    string // e.g. "Qwen3-Coder-30B-A3B", "claude-sonnet-4-6"
 }
 
 // Generate builds a full markdown prompt for a Claude Code agent.
