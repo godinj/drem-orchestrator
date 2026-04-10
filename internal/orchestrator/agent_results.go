@@ -67,6 +67,8 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		return o.onFixerCompleted(ag, task)
 	case model.AgentClassifier:
 		return o.onClassifierCompleted(ag, task)
+	case model.AgentPrep:
+		return o.onPrepCompleted(ag, task)
 	}
 
 	// Extract memories from agent output.
