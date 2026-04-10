@@ -1,0 +1,115 @@
+{
+  "target_files": [
+    {
+      "path": "internal/watcher/dedup.go",
+      "relevant_definitions": "type TriggerResult int\n\nconst (\n\tStarted TriggerResult = iota\n\tQueued\n\tDropped\n\tRefused\n)",
+      "methods": [],
+      "notes": "Iota block is at lines 21-33. Cooldown must be added after Refused (line 32), before the closing paren on line 33. It gets value 4."
+    },
+    {
+      "path": "internal/watcher/types.go",
+      "relevant_definitions": "type Config struct {\n\tAllowedAgents []string\n\tPrecheck TurnPrecheck\n}\n\nconst (\n\tTriggerStarted = Started\n\tTriggerQueued  = Queued\n\tTriggerRefused = Refused\n)",
+      "methods": [],
+      "notes": "Config struct ends at line 23. TurnCooldown time.Duration goes after Precheck (line 22). Alias block ends at line 38. TriggerCooldown = Cooldown goes after TriggerRefused (line 37). Must add 'time' to import block (line 9)."
+    },
+    {
+      "path": "internal/watcher/cooldown_test.go",
+      "relevant_definitions": "NEW FILE — does not exist yet",
+      "methods": [],
+      "notes": "Package watcher_test. Use lifecycle_integration_test.go as the template. That file defines lifecycleMockRunner (with block/ready channels, output, exitCode, runCount()), allowedCfg() (permits mike/alex/ross/seth), and integrationJSON(). The claudeJSON() helper is in lifecycle_test.go (same package). All are accessible from the new file."
+    },
+    {
+      "path": "internal/watcher/lifecycle.go",
+      "relevant_definitions": "type LifecycleManager struct {\n\tClaudeBin string\n\tWorkDir string\n\tTimeout time.Duration\n\tMetricsStore *MetricsStore\n\tdb *gorm.DB\n\tcfg Config\n\trunner CommandRunner\n\tmu sync.Mutex\n\trunning map[string]bool\n\tqueued map[string]bool\n\twg sync.WaitGroup\n\tctx context.Context\n\tcancel context.CancelFunc\n}",
+      "methods": [
+        "func NewLifecycleManager(db *gorm.DB, cfg Config, runner CommandRunner) *LifecycleManager — line 150",
+        "func (m *LifecycleManager) TriggerAgent(name string) TriggerResult — line 168",
+        "func (m *LifecycleManager) Close() — line 189",
+        "func (m *LifecycleManager) runTurnAsync(agent string) — line 215",
+        "func (m *LifecycleManager) drainQueue(agent string) — line 260"
+      ],
+      "notes": "Tests will call TriggerAgent and Close. Close() calls m.wg.Wait() then m.cancel(). The tests should NOT modify this file — only dedup.go and types.go get source changes."
+    },
+    {
+      "path": "internal/watcher/lifecycle_integration_test.go",
+      "relevant_definitions": "type lifecycleMockRunner struct { output string; exitCode int; block chan struct{}; ready chan struct{}; mu sync.Mutex; count int }\nfunc (r *lifecycleMockRunner) Run(_ context.Context, _ string) ([]byte, int, error)\nfunc (r *lifecycleMockRunner) runCount() int\nfunc allowedCfg() watcher.Config\nfunc integrationJSON(inputTokens, outputTokens, eventsProcessed, messagesSent int) string",
+      "methods": [],
+      "notes": "Template file — DO NOT MODIFY. New cooldown_test.go reuses these helpers (same package watcher_test). The block channel pattern: create chan, pass to runner, close to unblock. ready channel: closed on first Run() call."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/watcher/dedup.go",
+      "location": "After line 32 (Refused constant with its comment), before line 33 (closing paren ')')",
+      "what": "Add: Cooldown  // Cooldown indicates the agent is in a post-turn cooldown period; trigger is queued."
+    },
+    {
+      "file": "internal/watcher/types.go",
+      "location": "After line 22 (Precheck TurnPrecheck field), before line 23 (closing brace '}')",
+      "what": "Add: TurnCooldown time.Duration"
+    },
+    {
+      "file": "internal/watcher/types.go",
+      "location": "After line 37 (TriggerRefused = Refused), before line 38 (closing paren ')')",
+      "what": "Add: TriggerCooldown = Cooldown"
+    },
+    {
+      "file": "internal/watcher/types.go",
+      "location": "Import block at line 9 — add 'time' import",
+      "what": "Add 'time' to the import list. Current imports: context, errors, time. Actually time is already imported on line 9."
+    },
+    {
+      "file": "internal/watcher/cooldown_test.go",
+      "location": "New file",
+      "what": "Create entire file with 5 test functions"
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Test DB creation with TurnMetric model",
+      "example": "db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})",
+      "source_file": "internal/watcher/lifecycle_integration_test.go"
+    },
+    {
+      "description": "LifecycleManager creation with config",
+      "example": "runner := &lifecycleMockRunner{output: claudeJSON(100, 50)}\nlm := watcher.NewLifecycleManager(db, allowedCfg(), runner)",
+      "source_file": "internal/watcher/lifecycle_integration_test.go"
+    },
+    {
+      "description": "Blocking runner pattern for concurrency tests",
+      "example": "block := make(chan struct{})\nready := make(chan struct{})\nrunner := &lifecycleMockRunner{\n\toutput: claudeJSON(100, 50),\n\tblock:  block,\n\tready:  ready,\n}\n// ... trigger, <-ready, then close(block) to unblock",
+      "source_file": "internal/watcher/lifecycle_integration_test.go"
+    },
+    {
+      "description": "TriggerResult assertion pattern",
+      "example": "result := lm.TriggerAgent(\"mike\")\nif result != watcher.TriggerStarted {\n\tt.Errorf(\"TriggerAgent(\\\"mike\\\"): got %v, want TriggerStarted (%v)\", result, watcher.TriggerStarted)\n}",
+      "source_file": "internal/watcher/lifecycle_integration_test.go"
+    },
+    {
+      "description": "Querying turn_metrics for assertions",
+      "example": "var metrics []watcher.TurnMetric\nif err := db.Where(\"agent = ?\", \"mike\").Find(&metrics).Error; err != nil {\n\tt.Fatalf(\"query turn_metrics: %v\", err)\n}\nif len(metrics) != 2 {\n\tt.Errorf(\"expected 2 turn_metrics rows, got %d\", len(metrics))\n}",
+      "source_file": "internal/watcher/lifecycle_integration_test.go"
+    }
+  ],
+  "warnings": [
+    "types.go already imports 'time' (line 9) — no need to add it",
+    "Close() calls m.wg.Wait() THEN m.cancel() — tests that call Close() will block until all turns finish, so the cooldown timer cancellation via ctx.Done() only works if Close() is changed to cancel-then-wait (that's the implementation subtask's problem, not this one)",
+    "The Cooldown constant must come AFTER Refused in the iota block to get value 4 — order matters",
+    "Tests are expected to FAIL because lifecycle.go does not implement cooldown logic yet — do not try to make them pass",
+    "The test for TestCooldown_CloseDoesNotHang needs a timeout mechanism (e.g., channel + select with time.After) to detect if Close() hangs beyond 1s, since the test itself must not hang forever",
+    "lifecycleMockRunner.ready channel is only closed on the FIRST Run() call — subsequent calls do not close it. For tests needing to detect when the second turn starts, a different synchronization approach is needed",
+    "TurnMetric.StartedAt and EndedAt are time.Time fields — for cooldown timing assertions, query with db.Order(\"started_at ASC\") to get chronological order"
+  ],
+  "constructors": [
+    {
+      "struct_name": "LifecycleManager",
+      "constructor": "func NewLifecycleManager(db *gorm.DB, cfg Config, runner CommandRunner) *LifecycleManager at lifecycle.go:150",
+      "test_helpers": ["allowedCfg() in lifecycle_integration_test.go returns Config{AllowedAgents: [mike, alex, ross, seth]}"]
+    },
+    {
+      "struct_name": "Config",
+      "constructor": "Struct literal — no constructor function. Used as: watcher.Config{AllowedAgents: []string{...}, Precheck: ...}",
+      "test_helpers": ["allowedCfg() in lifecycle_integration_test.go"]
+    }
+  ]
+}
