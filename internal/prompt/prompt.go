@@ -597,13 +597,12 @@ func implPhaseCoderInstructions(opts Opts) []string {
 		"4. If you believe a test is wrong, note it in your commit message but make it pass anyway",
 		"",
 		"After implementation:",
-		"1. Run the build command to verify compilation",
-		"2. Run the FULL test suite — ALL tests must pass",
-		"3. If any test fails, fix your implementation (not the test)",
-		"4. NEVER modify pre-written TDD tests. Fix your code to match the tests.",
-		"5. Run `git add` for all new/untracked files, then commit with "+
+		"1. Run `go vet ./... && go test ./...` in ONE command",
+		"2. If anything fails, read ALL errors, fix ALL issues in one pass, re-run ONCE",
+		"3. NEVER modify pre-written TDD tests. Fix your code to match the tests.",
+		"4. Run `git add` for all new/untracked files, then commit with "+
 			`message: "feat: <what was implemented>"`,
-		"6. Do NOT push to remote",
+		"5. Do NOT push to remote",
 		"",
 	)
 
