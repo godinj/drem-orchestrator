@@ -1,0 +1,84 @@
+{
+  "target_files": [
+    {
+      "path": "internal/watcher/precheck.go",
+      "relevant_definitions": "type TurnPrecheck interface { HasWork(agent string) bool }\nfunc HasInboxMessages(baseDir, agent string) bool",
+      "methods": ["HasInboxMessages(baseDir, agent string) bool"],
+      "notes": "37 lines. Imports: log, path/filepath. No eventbus import yet — must add. Stubs go after HasInboxMessages (after line 36). The TurnPrecheck interface is at line 18. Package is 'watcher'."
+    },
+    {
+      "path": "internal/watcher/precheck_test.go",
+      "relevant_definitions": "package watcher_test. Existing tests cover HasInboxMessages only.",
+      "methods": [],
+      "notes": "110 lines. Uses external test package (watcher_test). Imports: os, path/filepath, testing, watcher. New tests append here. Must add eventbus and time imports for new tests."
+    },
+    {
+      "path": "internal/eventbus/eventbus.go",
+      "relevant_definitions": "type Event struct { ID, Type(EventType/string), Source, TaskID, FromStatus, ToStatus, Details, CreatedAt }\ntype EventDelivery struct { EventID, Agent, DeliveredAt, AckedAt(*time.Time) }\ntype Bus struct { db *gorm.DB }",
+      "methods": ["New(dbPath string) (*Bus, error)", "Publish(e *Event) error", "Deliver(eventID string, agent string) error", "UnackedDeliveries(agent string) ([]Event, error)", "Ack(agent string, eventIDs []string) error", "Close() error"],
+      "notes": "167 lines. Event.Type is gorm column 'event_type'. Bus.Publish auto-assigns UUID. Bus.Ack takes agent + []string of event IDs. UnackedDeliveries returns []Event (not pointers). Tests use pointer &eventbus.Event{} for Publish."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/watcher/precheck.go",
+      "location": "After HasInboxMessages function (after line 36, end of file). Add eventbus import to the import block at line 3-6.",
+      "what": "Add AgentRelevanceRule type, FilteredEventPrecheck struct, and stub HasWork method. Must add 'github.com/godinj/drem-orchestrator/internal/eventbus' to imports."
+    },
+    {
+      "file": "internal/watcher/precheck_test.go",
+      "location": "After line 110 (end of file). Append all 8 new test functions.",
+      "what": "Add TestFilteredPrecheck_* test functions. Must add imports: time, eventbus."
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Creating eventbus.Bus in tests",
+      "example": "bus, err := eventbus.New(filepath.Join(t.TempDir(), \"test.db\"))\nif err != nil {\n    t.Fatalf(\"New: %v\", err)\n}",
+      "source_file": "internal/eventbus/bus_test.go"
+    },
+    {
+      "description": "Publishing and delivering events in tests",
+      "example": "e := &eventbus.Event{Type: \"task.status_changed\", Source: \"orchestrator\", Details: \"{}\"}\nif err := bus.Publish(e); err != nil {\n    t.Fatalf(\"Publish: %v\", err)\n}\nif err := bus.Deliver(e.ID, \"watcher-agent\"); err != nil {\n    t.Fatalf(\"Deliver: %v\", err)\n}",
+      "source_file": "internal/eventbus/bus_test.go"
+    },
+    {
+      "description": "Inbox directory setup in precheck tests",
+      "example": "base := t.TempDir()\ninbox := filepath.Join(base, \"mike\", \"inbox\")\nif err := os.MkdirAll(inbox, 0o755); err != nil {\n    t.Fatal(err)\n}\nif err := os.WriteFile(filepath.Join(inbox, \"20260329-011834-kyle.md\"), []byte(\"hello\"), 0o644); err != nil {\n    t.Fatal(err)\n}",
+      "source_file": "internal/watcher/precheck_test.go"
+    },
+    {
+      "description": "Test function naming convention in precheck_test.go",
+      "example": "func TestHasInboxMessages_WithMessages(t *testing.T) { ... }",
+      "source_file": "internal/watcher/precheck_test.go"
+    },
+    {
+      "description": "Checking UnackedDeliveries count for verification",
+      "example": "remaining, err := bus.UnackedDeliveries(\"watcher-agent\")\nif err != nil {\n    t.Fatalf(\"UnackedDeliveries: %v\", err)\n}\nif len(remaining) != 0 {\n    t.Errorf(\"got %d unacked events, want 0\", len(remaining))\n}",
+      "source_file": "internal/eventbus/bus_test.go"
+    }
+  ],
+  "warnings": [
+    "Event.Type field uses gorm column 'event_type' but in Go code it's just ev.Type — use Type not EventType when constructing events",
+    "Bus.Publish takes *Event (pointer), not Event value. Tests must use &eventbus.Event{}",
+    "Bus.Ack takes (agent string, eventIDs []string) — agent first, then slice of IDs",
+    "Task description says Type='task_status_changed' but existing bus_test.go uses 'task.status_changed' with dots. Use underscores as the task specifies since this is for the watcher domain events, not orchestrator events",
+    "The stub HasWork must return true (as specified) so tests that expect false will fail — this is intentional for test-first TDD",
+    "FilteredEventPrecheck.Bus is *eventbus.Bus (pointer) — eventbus.New returns (*Bus, error)",
+    "precheck_test.go uses external test package 'watcher_test' — FilteredEventPrecheck fields must be exported (they are: InboxBaseDir, Bus, Relevance)",
+    "Do NOT use testutil.NewTestDB for eventbus — eventbus has its own New() constructor. The testutil rule applies to gorm.DB test databases only",
+    "Event.CreatedAt should be set via time.Now() in test events for ordering to work correctly"
+  ],
+  "constructors": [
+    {
+      "struct_name": "FilteredEventPrecheck",
+      "constructor": "No constructor — struct literal initialization with exported fields: FilteredEventPrecheck{InboxBaseDir: ..., Bus: ..., Relevance: ...}",
+      "test_helpers": []
+    },
+    {
+      "struct_name": "Bus",
+      "constructor": "func New(dbPath string) (*Bus, error) at eventbus.go:65",
+      "test_helpers": ["newTempDB(t) in bus_test.go — but this is in eventbus_test package, not accessible from watcher_test"]
+    }
+  ]
+}

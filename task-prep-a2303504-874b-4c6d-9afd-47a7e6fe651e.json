@@ -1,0 +1,72 @@
+{
+  "target_files": [
+    {
+      "path": "internal/watcher/precheck.go",
+      "relevant_definitions": "package watcher\n\nimport (\n\t\"log\"\n\t\"path/filepath\"\n)\n\ntype TurnPrecheck interface { HasWork(agent string) bool }\n\nfunc HasInboxMessages(baseDir, agent string) bool { ... }",
+      "methods": [
+        "func HasInboxMessages(baseDir, agent string) bool"
+      ],
+      "notes": "File is 37 lines. The FilteredEventPrecheck struct, AgentRelevanceRule type, and HasWork stub do NOT exist yet — they must be added by this task (or the test subtask that runs first). The eventbus import is not present yet; it must be added. Insert new types and the HasWork implementation AFTER the HasInboxMessages function (after line 36). Add DefaultAgentRelevance and knownEventTypes as package-level vars after the FilteredEventPrecheck type."
+    },
+    {
+      "path": "internal/watcher/precheck_test.go",
+      "relevant_definitions": "package watcher_test — existing tests cover HasInboxMessages only (5 tests, 110 lines)",
+      "methods": [],
+      "notes": "The test subtask will add FilteredEventPrecheck tests here. DO NOT modify this file. Tests import github.com/godinj/drem-orchestrator/internal/eventbus and use eventbus.New(filepath.Join(t.TempDir(), \"test.db\")) for bus creation."
+    },
+    {
+      "path": "internal/eventbus/eventbus.go",
+      "relevant_definitions": "type Event struct { ID, Type(EventType/string), Source, TaskID, FromStatus, ToStatus, Details, CreatedAt }\ntype EventDelivery struct { EventID, Agent, DeliveredAt, AckedAt(*time.Time) }\ntype Bus struct { db *gorm.DB }",
+      "methods": [
+        "func (b *Bus) Publish(e *Event) error",
+        "func (b *Bus) Events() ([]Event, error)",
+        "func (b *Bus) Poll(agent string) ([]Event, error)",
+        "func (b *Bus) Deliver(eventID string, agent string) error",
+        "func (b *Bus) UnackedDeliveries(agent string) ([]Event, error)",
+        "func (b *Bus) Ack(agent string, eventIDs []string) error",
+        "func (b *Bus) Close() error"
+      ],
+      "notes": "File is 167 lines. UnackedDeliveriesByTypes does NOT exist yet — a sibling subtask will add it. The HasWork implementation in this task uses UnackedDeliveries (line 129), NOT UnackedDeliveriesByTypes. The Event.Type field has GORM column tag 'event_type'. Event.ToStatus has column tag 'to_status'."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/watcher/precheck.go",
+      "location": "After the HasInboxMessages function (after line 36, end of file). Add import for eventbus package in the import block.",
+      "what": "Add AgentRelevanceRule type, FilteredEventPrecheck struct, HasWork method implementation, knownEventTypes map, and DefaultAgentRelevance map"
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Error-safe precheck returning true on failure (existing pattern in same file)",
+      "example": "matches, err := filepath.Glob(pattern)\nif err != nil {\n\tlog.Printf(\"precheck: glob inbox for %s: %v\", agent, err)\n\treturn true\n}",
+      "source_file": "internal/watcher/precheck.go:30-34"
+    },
+    {
+      "description": "Existing inboxEventPrecheck.HasWork pattern in main.go (being replaced, but shows the inbox+eventbus check flow)",
+      "example": "func (p *inboxEventPrecheck) HasWork(agent string) bool {\n\tif watcher.HasInboxMessages(p.inboxBaseDir, agent) {\n\t\treturn true\n\t}\n\tunacked, err := p.bus.UnackedDeliveries(agent)\n\tif err != nil {\n\t\tlog.Printf(\"precheck: event bus query for %s: %v\", agent, err)\n\t\treturn true\n\t}\n\treturn len(unacked) > 0\n}",
+      "source_file": "cmd/csuite-watcher/main.go:299-310"
+    },
+    {
+      "description": "Bus.Ack call pattern with string slice of event IDs",
+      "example": "func (b *Bus) Ack(agent string, eventIDs []string) error {\n\tif len(eventIDs) == 0 {\n\t\treturn nil\n\t}\n\treturn b.db.Model(&EventDelivery{}).\n\t\tWhere(\"agent = ? AND event_id IN ?\", agent, eventIDs).\n\t\tUpdate(\"acked_at\", time.Now()).Error\n}",
+      "source_file": "internal/eventbus/eventbus.go:150-157"
+    }
+  ],
+  "warnings": [
+    "The HasWork implementation uses Bus.UnackedDeliveries (not UnackedDeliveriesByTypes) — the task description specifies this exact method",
+    "Event.ID is a string (UUID), not uuid.UUID — irrelevantIDs must be []string",
+    "Event.Type is aliased as EventType = string with GORM column 'event_type'",
+    "Bus field is *eventbus.Bus (pointer) — must import github.com/godinj/drem-orchestrator/internal/eventbus",
+    "The import block in precheck.go currently has 'log' and 'path/filepath' — add eventbus import as a separate group (stdlib group + blank line + project imports)",
+    "Do NOT add the FilteredEventPrecheck tests — those are written by the test subtask. Only add the struct, type, HasWork implementation, and DefaultAgentRelevance",
+    "knownEventTypes should be unexported (lowercase) — it's an implementation detail used only by DefaultAgentRelevance rules"
+  ],
+  "constructors": [
+    {
+      "struct_name": "FilteredEventPrecheck",
+      "constructor": "No constructor — struct literal initialization with exported fields: InboxBaseDir string, Bus *eventbus.Bus, Relevance map[string]AgentRelevanceRule",
+      "test_helpers": ["Tests construct via struct literal: &watcher.FilteredEventPrecheck{InboxBaseDir: ..., Bus: bus, Relevance: map[string]watcher.AgentRelevanceRule{...}}"]
+    }
+  ]
+}

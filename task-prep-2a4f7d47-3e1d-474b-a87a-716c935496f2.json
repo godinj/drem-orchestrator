@@ -1,0 +1,51 @@
+{
+  "target_files": [
+    {
+      "path": "internal/eventbus/eventbus.go",
+      "relevant_definitions": "type Event struct { ID string; Type EventType `gorm:\"column:event_type;not null\"`; Source string; TaskID string; FromStatus string; ToStatus string; Details string; CreatedAt time.Time }\ntype EventDelivery struct { EventID string; Agent string; DeliveredAt time.Time; AckedAt *time.Time }\ntype Bus struct { db *gorm.DB }",
+      "methods": [
+        "func (b *Bus) Publish(e *Event) error",
+        "func (b *Bus) Events() ([]Event, error)",
+        "func (b *Bus) Poll(agent string) ([]Event, error)",
+        "func (b *Bus) Deliver(eventID string, agent string) error",
+        "func (b *Bus) UnackedDeliveries(agent string) ([]Event, error)",
+        "func (b *Bus) Ack(agent string, eventIDs []string) error",
+        "func (b *Bus) Close() error"
+      ],
+      "notes": "File is 167 lines. No stub for UnackedDeliveriesByTypes exists yet — the test subtask has NOT run. The new method must be inserted after UnackedDeliveries (line 144) and before Ack (line 150). Event.Type is mapped to GORM column 'event_type' — the SQL WHERE clause must use 'e.event_type IN ?' not 'e.type IN ?'."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/eventbus/eventbus.go",
+      "location": "After line 144 (closing brace of UnackedDeliveries), before line 146 (doc comment for Ack). Insert a blank line, then the new method.",
+      "what": "Add the full UnackedDeliveriesByTypes method. Replace any stub if one exists from a prior subtask; if no stub, just insert the complete method."
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "UnackedDeliveries query pattern with nil-to-empty-slice guard",
+      "example": "func (b *Bus) UnackedDeliveries(agent string) ([]Event, error) {\n\tvar events []Event\n\terr := b.db.Raw(`\n\t\tSELECT e.* FROM events e\n\t\tJOIN event_deliveries d ON d.event_id = e.id\n\t\tWHERE d.agent = ? AND d.acked_at IS NULL\n\t\tORDER BY e.created_at ASC\n\t`, agent).Scan(&events).Error\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tif events == nil {\n\t\tevents = []Event{}\n\t}\n\treturn events, nil\n}",
+      "source_file": "internal/eventbus/eventbus.go:129-144"
+    },
+    {
+      "description": "GORM IN clause for string slices (used in Ack)",
+      "example": "Where(\"agent = ? AND event_id IN ?\", agent, eventIDs)",
+      "source_file": "internal/eventbus/eventbus.go:154"
+    }
+  ],
+  "warnings": [
+    "Event.Type GORM column is 'event_type', NOT 'type'. The SQL must use 'e.event_type IN ?' to match.",
+    "When types slice is empty, return []Event{} immediately — GORM's IN clause with empty slice generates invalid SQL ('IN ()').",
+    "GORM Raw().Scan() returns nil slice when no rows match — must guard with 'if events == nil { events = []Event{} }' to match UnackedDeliveries contract.",
+    "No stub exists yet. The test subtask (subtask 0) was supposed to create a stub returning nil,nil but has not run. The coder must add the full implementation directly.",
+    "The tests for this method (TestUnackedDeliveriesByTypes_*) also do not exist yet in bus_test.go. The task says 'pre-written tests must pass without modification' — verify whether tests exist before assuming they do. If tests don't exist, the implementation is still correct per the task spec."
+  ],
+  "constructors": [
+    {
+      "struct_name": "Bus",
+      "constructor": "func New(dbPath string) (*Bus, error) at eventbus.go:65",
+      "test_helpers": ["newTempDB(t) in bus_test.go:16 returns a temp SQLite path"]
+    }
+  ]
+}

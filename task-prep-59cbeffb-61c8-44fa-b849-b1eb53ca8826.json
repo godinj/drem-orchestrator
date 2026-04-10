@@ -1,0 +1,53 @@
+{
+  "target_files": [
+    {
+      "path": "cmd/csuite-watcher/main.go",
+      "relevant_definitions": "type inboxEventPrecheck struct { inboxBaseDir string; bus *eventbus.Bus } — lines 292-295\nfunc (p *inboxEventPrecheck) HasWork(agent string) bool — lines 299-310",
+      "methods": [
+        "func (p *inboxEventPrecheck) HasWork(agent string) bool"
+      ],
+      "notes": "Import for watcher already exists at line 35. Import for eventbus at line 34. The precheck wiring is at lines 213-216. The inboxEventPrecheck struct + HasWork method to delete spans lines 289-310. claudeCommandRunner struct starts at line 314 — do NOT delete into it."
+    },
+    {
+      "path": "internal/watcher/precheck.go",
+      "relevant_definitions": "type TurnPrecheck interface { HasWork(agent string) bool } — lines 18-20\nfunc HasInboxMessages(baseDir, agent string) bool — lines 28-36",
+      "methods": [
+        "func HasInboxMessages(baseDir, agent string) bool"
+      ],
+      "notes": "This file currently has NO FilteredEventPrecheck or DefaultAgentRelevance. The prior subtasks (test + impl for precheck) have only prep briefs committed — no code yet. The coder for THIS task must expect that FilteredEventPrecheck and DefaultAgentRelevance will be added by earlier subtasks BEFORE this task runs. If they don't exist at execution time, this task CANNOT proceed."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "cmd/csuite-watcher/main.go",
+      "location": "Lines 213-216: replace the inboxEventPrecheck construction with FilteredEventPrecheck",
+      "what": "Replace `runnerCfg.Precheck = &inboxEventPrecheck{inboxBaseDir: runnerCfg.InboxBaseDir, bus: bus}` with `runnerCfg.Precheck = &watcher.FilteredEventPrecheck{InboxBaseDir: runnerCfg.InboxBaseDir, Bus: bus, Relevance: watcher.DefaultAgentRelevance}`"
+    },
+    {
+      "file": "cmd/csuite-watcher/main.go",
+      "location": "Lines 289-310: delete the entire inboxEventPrecheck struct and HasWork method",
+      "what": "Delete the comment block (lines 289-291), the struct definition (lines 292-295), the HasWork comment (lines 297-298), and the HasWork method (lines 299-310). The claudeCommandRunner struct at line 312 must remain."
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "The replacement follows the same field pattern — InboxBaseDir, Bus — just with exported names and an added Relevance field",
+      "example": "runnerCfg.Precheck = &inboxEventPrecheck{\n\tinboxBaseDir: runnerCfg.InboxBaseDir,\n\tbus:          bus,\n}",
+      "source_file": "cmd/csuite-watcher/main.go:213-216"
+    },
+    {
+      "description": "The comment above the precheck wiring (lines 211-212) should be updated to mention event-type filtering",
+      "example": "// Pre-trigger inbox check: skip turns when agent has no inbox messages\n// and no unacked event bus deliveries.",
+      "source_file": "cmd/csuite-watcher/main.go:211-212"
+    }
+  ],
+  "warnings": [
+    "DEPENDENCY: FilteredEventPrecheck and DefaultAgentRelevance must exist in internal/watcher/precheck.go BEFORE this task runs. They are created by earlier subtasks in the plan. Verify with: grep -n 'FilteredEventPrecheck' internal/watcher/precheck.go",
+    "DEPENDENCY: UnackedDeliveriesByTypes must exist in internal/eventbus/eventbus.go. Verify with: grep -n 'UnackedDeliveriesByTypes' internal/eventbus/eventbus.go",
+    "The eventbus import (line 34) will become UNUSED after removing inboxEventPrecheck — the eventbus.Bus is still used at line 204 to create `bus`, so the import stays. Double-check this.",
+    "Do NOT delete lines beyond 310 — claudeCommandRunner starts at line 312/314 and is still needed",
+    "No new imports needed — watcher (line 35) and eventbus (line 34) are already imported",
+    "The Ack method signature is: func (b *Bus) Ack(agent string, eventIDs []string) error — takes []string not []int"
+  ],
+  "constructors": []
+}

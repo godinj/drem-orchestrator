@@ -1,0 +1,74 @@
+{
+  "target_files": [
+    {
+      "path": "internal/eventbus/bus_test.go",
+      "relevant_definitions": "package eventbus_test; imports: database/sql, os, path/filepath, testing, github.com/mattn/go-sqlite3, github.com/godinj/drem-orchestrator/internal/eventbus",
+      "methods": [
+        "func newTempDB(t *testing.T) string — helper returning filepath.Join(t.TempDir(), \"test.db\")",
+        "func openRaw(t *testing.T, path string) *sql.DB — opens raw SQL connection for PRAGMA queries"
+      ],
+      "notes": "File is 679 lines. Tests use external test package (eventbus_test). Pattern: create bus with eventbus.New(newTempDB(t)), publish with bus.Publish(&eventbus.Event{...}), deliver with bus.Deliver(e.ID, agent), assert with bus.UnackedDeliveries(agent). New tests go at end of file after line 679. No testify/require used — all assertions use stdlib t.Fatalf/t.Errorf. Import time package will be needed for CreatedAt field."
+    },
+    {
+      "path": "internal/eventbus/eventbus.go",
+      "relevant_definitions": "type Event struct { ID string, Type EventType, Source string, TaskID string, FromStatus string, ToStatus string, Details string, CreatedAt time.Time }; type EventDelivery struct { EventID string, Agent string, DeliveredAt time.Time, AckedAt *time.Time }; type Bus struct { db *gorm.DB }",
+      "methods": [
+        "func (b *Bus) Publish(e *Event) error",
+        "func (b *Bus) Deliver(eventID string, agent string) error",
+        "func (b *Bus) UnackedDeliveries(agent string) ([]Event, error)",
+        "func (b *Bus) Ack(agent string, eventIDs []string) error",
+        "func (b *Bus) Close() error"
+      ],
+      "notes": "File is 167 lines. The stub UnackedDeliveriesByTypes must be added after the existing UnackedDeliveries method (line 144). Event.Type uses GORM column name 'event_type'. The new method filters by Event.Type field values."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/eventbus/bus_test.go",
+      "location": "After line 679 (end of file), after TestAck_BatchMultipleEvents",
+      "what": "Add new test section with header comment and 5 test functions: TestUnackedDeliveriesByTypes_FiltersCorrectly, TestUnackedDeliveriesByTypes_MultipleTypes, TestUnackedDeliveriesByTypes_EmptyTypes, TestUnackedDeliveriesByTypes_NoMatch, TestUnackedDeliveriesByTypes_AckedExcluded"
+    },
+    {
+      "file": "internal/eventbus/eventbus.go",
+      "location": "After line 144 (end of UnackedDeliveries method), before the Ack method at line 150",
+      "what": "Add stub method: func (b *Bus) UnackedDeliveriesByTypes(agent string, types []string) ([]Event, error) { return nil, nil }"
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Test setup pattern: create bus, publish event, deliver, then assert",
+      "example": "dbPath := newTempDB(t)\nbus, err := eventbus.New(dbPath)\nif err != nil { t.Fatalf(\"New: %v\", err) }\ne := &eventbus.Event{Type: \"task.status_changed\", Source: \"orchestrator\", Details: \"{}\"}\nif err := bus.Publish(e); err != nil { t.Fatalf(\"Publish: %v\", err) }\nif err := bus.Deliver(e.ID, \"watcher-agent\"); err != nil { t.Fatalf(\"Deliver: %v\", err) }",
+      "source_file": "internal/eventbus/bus_test.go:417-431"
+    },
+    {
+      "description": "Assertion style: stdlib t.Fatalf for setup failures, t.Errorf for test assertions, no testify",
+      "example": "events, err := bus.UnackedDeliveries(\"watcher-agent\")\nif err != nil { t.Fatalf(\"UnackedDeliveries: %v\", err) }\nif len(events) != 1 { t.Fatalf(\"got %d events, want 1\", len(events)) }\nif events[0].ID != e.ID { t.Errorf(\"event ID = %q, want %q\", events[0].ID, e.ID) }",
+      "source_file": "internal/eventbus/bus_test.go:433-443"
+    },
+    {
+      "description": "Section header comments separating test groups",
+      "example": "// ---------------------------------------------------------------------------\n// UnackedDeliveries\n// ---------------------------------------------------------------------------",
+      "source_file": "internal/eventbus/bus_test.go:410-412"
+    },
+    {
+      "description": "Import: time package is NOT currently imported in bus_test.go — will need to add it for CreatedAt field in Event construction",
+      "example": "The existing tests don't set CreatedAt explicitly; they rely on GORM/SQLite defaults. The task description sets CreatedAt: time.Now() but the existing tests omit it. Follow existing test pattern and omit CreatedAt unless needed.",
+      "source_file": "internal/eventbus/bus_test.go:1-12"
+    }
+  ],
+  "warnings": [
+    "bus_test.go uses package eventbus_test (external test package) — all eventbus types must be prefixed with eventbus.",
+    "Do NOT import time unless necessary — existing tests do not set CreatedAt and it works fine via GORM defaults",
+    "The stub must return nil, nil (not []Event{}, nil) so that tests like EmptyTypes and NoMatch will FAIL against it, proving the tests are meaningful",
+    "Event.Type field uses GORM column 'event_type' — the test uses the Go struct field 'Type' not the column name",
+    "bus_test.go is currently 679 lines. Adding 5 tests (~120 lines) keeps it well under 800 line ceiling for test files (test files are exempt from the 800-line rule but keep it reasonable)",
+    "The task says agent name 'mike' — existing tests use 'watcher-agent'. Use 'mike' as specified in the task description"
+  ],
+  "constructors": [
+    {
+      "struct_name": "Bus",
+      "constructor": "func New(dbPath string) (*Bus, error) at eventbus.go:65",
+      "test_helpers": ["newTempDB(t) at bus_test.go:16 — returns filepath.Join(t.TempDir(), \"test.db\")"]
+    }
+  ]
+}
