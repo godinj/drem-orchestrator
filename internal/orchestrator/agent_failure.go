@@ -22,6 +22,12 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 		return o.onClassifierFailed(ag, task)
 	}
 
+	// Prep agents degrade gracefully — mark prep as failed and let the coder
+	// proceed without enrichment on the next dispatch tick.
+	if ag.AgentType == model.AgentPrep {
+		return o.onPrepFailed(ag, task)
+	}
+
 	// Read agent output for error details.
 	output, err := o.runner.GetAgentOutput(ag.ID)
 	if err != nil {
