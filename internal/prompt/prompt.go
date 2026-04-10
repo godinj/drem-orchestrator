@@ -646,17 +646,14 @@ func defaultCoderInstructions(opts Opts) []string {
 
 	sections = append(sections,
 		"After implementation:",
-		"1. Run the build command to verify compilation",
-		"2. Run the FULL test suite — not just your new tests",
-		"3. ALL tests must pass. Do not commit if any test fails.",
-		"4. If a test fails:",
-		"   - If it's a test you wrote or modified: fix it",
-		"   - If it's a pre-existing test broken by your changes: fix your implementation, not the test",
-		"5. If this is an integration subtask and the feature changes user-facing "+
+		"1. Run `go vet ./... && go test ./...` in ONE command — not separately",
+		"2. If anything fails, read ALL errors, fix ALL in one pass, re-run ONCE more",
+		"3. If a pre-existing test breaks: fix your implementation, not the test",
+		"4. If this is an integration subtask and the feature changes user-facing "+
 			"behavior (CLI, config, TUI, new capabilities), update the README "+
 			"or relevant documentation to reflect the changes",
-		"6. Run `git add` for all new/untracked files, then commit your changes with a descriptive message",
-		"7. Do NOT push to remote",
+		"5. Run `git add` for all new/untracked files, then commit your changes with a descriptive message",
+		"6. Do NOT push to remote",
 		"",
 	)
 
