@@ -754,3 +754,4 @@ func handleExperimentFromTask(db *gorm.DB, args []string, w io.Writer, jsonMode 
 		fmt.Fprintf(w, "  %s %s (task %s)\n", marker, v.ProfileName, shortID(v.TaskID))
 	}
 	return nil
+}
