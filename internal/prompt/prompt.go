@@ -179,6 +179,8 @@ func Generate(opts Opts) string {
 		sections = append(sections, fixerInstructions(opts)...)
 	case model.AgentClassifier:
 		sections = append(sections, classifierInstructions(opts.WorktreePath, opts.Task.ID.String())...)
+	case model.AgentPrep:
+		sections = append(sections, prepInstructions(opts)...)
 	default:
 		sections = append(sections, defaultInstructions()...)
 	}
