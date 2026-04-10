@@ -16,6 +16,7 @@ import "sync"
 //	Queued   — a turn was running; this trigger will fire after it completes
 //	Dropped  — a queued trigger already exists; this one is discarded
 //	Refused  — the agent is permanently ineligible (kyle exception)
+//	Cooldown — the agent is in a post-turn cooldown period; trigger is queued
 type TriggerResult int
 
 const (
@@ -30,6 +31,8 @@ const (
 	// Refused indicates the agent is permanently ineligible for turns.
 	// Currently only "kyle" triggers this result.
 	Refused
+	// Cooldown indicates the agent is in a post-turn cooldown period; trigger is queued.
+	Cooldown
 )
 
 // TurnRunner executes a single agent turn synchronously. The call blocks

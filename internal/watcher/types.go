@@ -20,6 +20,10 @@ type Config struct {
 	// message, saving the cost of an idle subprocess. When nil, every
 	// triggered turn launches a subprocess unconditionally.
 	Precheck TurnPrecheck
+
+	// TurnCooldown specifies the minimum time between agent turns.
+	// Zero value means no cooldown.
+	TurnCooldown time.Duration
 }
 
 // CommandRunner abstracts agent turn subprocess execution so tests can inject
@@ -32,9 +36,10 @@ type CommandRunner interface {
 // TriggerStarted, TriggerQueued, and TriggerRefused are aliases for the
 // TriggerResult constants from dedup.go, used by LifecycleManager's trigger API.
 const (
-	TriggerStarted = Started
-	TriggerQueued  = Queued
-	TriggerRefused = Refused
+	TriggerStarted  = Started
+	TriggerQueued   = Queued
+	TriggerRefused  = Refused
+	TriggerCooldown = Cooldown
 )
 
 // ErrKyleException is returned by RunTurn when the agent is "kyle".

@@ -16,6 +16,7 @@ import (
 )
 
 const defaultTimeout = 3 * time.Minute
+const defaultTurnCooldown = 3 * time.Minute
 
 // LifecycleManager launches agent turns as claude subprocesses, waits for
 // completion, parses JSON output for token counts, and records metrics.
@@ -44,9 +45,11 @@ type LifecycleManager struct {
 	running map[string]bool
 	queued  map[string]bool
 	wg      sync.WaitGroup
+	ctx     context.Context
+	cancel  context.CancelFunc
 
-	ctx    context.Context
-	cancel context.CancelFunc
+	// lastTurnEnd tracks when each agent's last turn ended, used for cooldown calculation
+	lastTurnEnd map[string]time.Time
 }
 
 // NewLifecycleManagerFromStore creates a LifecycleManager with default settings
@@ -150,13 +153,14 @@ func (m *LifecycleManager) RunTurn(agent string, systemPrompt string) (*Lifecycl
 func NewLifecycleManager(db *gorm.DB, cfg Config, runner CommandRunner) *LifecycleManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &LifecycleManager{
-		db:      db,
-		cfg:     cfg,
-		runner:  runner,
-		running: make(map[string]bool),
-		queued:  make(map[string]bool),
-		ctx:     ctx,
-		cancel:  cancel,
+		db:          db,
+		cfg:         cfg,
+		runner:      runner,
+		running:     make(map[string]bool),
+		queued:      make(map[string]bool),
+		ctx:         ctx,
+		cancel:      cancel,
+		lastTurnEnd: make(map[string]time.Time),
 	}
 }
 
@@ -165,6 +169,7 @@ func NewLifecycleManager(db *gorm.DB, cfg Config, runner CommandRunner) *Lifecyc
 //   - Queued: a turn is already running; this trigger is queued and
 //     will auto-start as soon as the current turn completes.
 //   - Refused: name is not in Config.AllowedAgents; no action taken.
+//   - Cooldown: agent is in a post-turn cooldown period; trigger is queued.
 func (m *LifecycleManager) TriggerAgent(name string) TriggerResult {
 	if !m.isAllowed(name) {
 		return Refused
@@ -172,6 +177,17 @@ func (m *LifecycleManager) TriggerAgent(name string) TriggerResult {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Check if agent is in cooldown period
+	if m.cfg.TurnCooldown != 0 {
+		if lastEnd, ok := m.lastTurnEnd[name]; ok {
+			cooldownDuration := m.cooldownDuration()
+			if time.Since(lastEnd) < cooldownDuration {
+				// Agent is in cooldown period
+				return Cooldown
+			}
+		}
+	}
 
 	if m.running[name] {
 		m.queued[name] = true
@@ -187,8 +203,8 @@ func (m *LifecycleManager) TriggerAgent(name string) TriggerResult {
 // Close shuts down the LifecycleManager, waiting for any active or queued
 // turns to complete before returning.
 func (m *LifecycleManager) Close() {
-	m.wg.Wait()
 	m.cancel()
+	m.wg.Wait()
 }
 
 // isAllowed reports whether name is in cfg.AllowedAgents.
@@ -262,12 +278,58 @@ func (m *LifecycleManager) drainQueue(agent string) {
 	wasQueued := m.queued[agent]
 	delete(m.queued, agent)
 	if wasQueued {
-		// Keep running[agent] = true and launch a new goroutine.
-		m.wg.Add(1)
-		m.mu.Unlock()
-		go m.runTurnAsync(agent)
+		// Check if we need to apply a cooldown delay
+		if m.cfg.TurnCooldown != 0 {
+			// Set the last turn end time before scheduling the delayed turn
+			m.lastTurnEnd[agent] = time.Now()
+
+			// Schedule the delayed turn
+			m.wg.Add(1)
+			m.mu.Unlock()
+			go m.runTurnAfterDelay(agent)
+		} else {
+			// No cooldown - proceed immediately
+			m.wg.Add(1)
+			m.mu.Unlock()
+			go m.runTurnAsync(agent)
+		}
 	} else {
+		// Record turn end time for cooldown tracking
+		if m.cfg.TurnCooldown != 0 {
+			m.lastTurnEnd[agent] = time.Now()
+		}
 		delete(m.running, agent)
 		m.mu.Unlock()
 	}
+}
+
+// runTurnAfterDelay waits for the cooldown period to expire and then runs the turn.
+// It is responsible for handling the cooldown delay between agent turns.
+func (m *LifecycleManager) runTurnAfterDelay(agent string) {
+	defer m.wg.Done()
+
+	cooldownDuration := m.cooldownDuration()
+
+	// Wait for the cooldown period to expire or context to be cancelled
+	timer := time.NewTimer(cooldownDuration)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		// Time is up, run the turn
+		m.runTurnAsync(agent)
+	case <-m.ctx.Done():
+		// Context cancelled, probably due to Close() being called
+		// We don't need to do anything special here, just return
+		return
+	}
+}
+
+// cooldownDuration returns the cooldown duration to use for the turn.
+// If TurnCooldown is configured, it uses that. Otherwise it falls back to the default.
+func (m *LifecycleManager) cooldownDuration() time.Duration {
+	if m.cfg.TurnCooldown != 0 {
+		return m.cfg.TurnCooldown
+	}
+	return defaultTurnCooldown
 }
