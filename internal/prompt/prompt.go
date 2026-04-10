@@ -164,6 +164,16 @@ func Generate(opts Opts) string {
 	}
 	sections = append(sections, "")
 
+	// 4b. File Snapshots — language-agnostic recon for coder agents.
+	// Reads the head of each target file so the coder sees existing types,
+	// patterns, and conventions without burning context on exploration.
+	if opts.AgentType == model.AgentCoder || opts.AgentType == model.AgentFixer {
+		snapshot := fileSnapshotForTask(opts.WorktreePath, opts.Task)
+		if snapshot != "" {
+			sections = append(sections, snapshot)
+		}
+	}
+
 	// 5. Agent-Type Instructions
 	switch opts.AgentType {
 	case model.AgentPlanner:
