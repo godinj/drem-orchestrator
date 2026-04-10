@@ -652,6 +652,15 @@ func handleExperimentCreate(db *gorm.DB, args []string, w io.Writer, jsonMode bo
 		projectID = project.ID
 	}
 
+	// Check concurrent experiment cap before creating any experiment
+	activeCount, err := experiment.CountActiveExperiments(db)
+	if err != nil {
+		return fmt.Errorf("check active experiments: %w", err)
+	}
+	if activeCount >= 3 {
+		return fmt.Errorf("cannot create experiment: maximum of 3 concurrent experiments allowed, %d already active", activeCount)
+	}
+
 	// Auto-migrate experiment tables so the command works without
 	// requiring the caller to have migrated them beforehand.
 	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
@@ -706,6 +715,15 @@ func handleExperimentFromTask(db *gorm.DB, args []string, w io.Writer, jsonMode 
 	src, err := resolveTaskByPrefix(db, taskIDStr)
 	if err != nil {
 		return fmt.Errorf("source task: %w", err)
+	}
+
+	// Check concurrent experiment cap before creating any experiment
+	activeCount, err := experiment.CountActiveExperiments(db)
+	if err != nil {
+		return fmt.Errorf("check active experiments: %w", err)
+	}
+	if activeCount >= 3 {
+		return fmt.Errorf("cannot create experiment: maximum of 3 concurrent experiments allowed, %d already active", activeCount)
 	}
 
 	if err := db.AutoMigrate(&experiment.Experiment{}, &experiment.Variant{}); err != nil {
