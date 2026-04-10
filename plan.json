@@ -1,8 +1,8 @@
 {
   "subtasks": [
     {
-      "title": "Write tests for classifier context budget guard",
-      "description": "Write tests for the ClassifierBudgetGuard policy in `internal/orchestrator/classifier_budget_guard.go`. Follow the exact pattern from `empty_subtask_guard_test.go` — table-driven tests on a policy struct with an Evaluate method.\n\nThe guard tracks `total_classifier_spawns` (float64) in `task.Context` and compares against a configurable max (default 2). It returns one of three actions: `ClassifierContinue` (spawn allowed), `ClassifierRetry` (agent failed, retry allowed), or `ClassifierFail` (spawn cap reached, park for triage).\n\nTest cases to cover:\n1. First spawn (no counter) → ClassifierContinue, counter becomes 1\n2. Second spawn (counter=1) at default max=2 → ClassifierContinue, counter becomes 2\n3. Third spawn attempt (counter=2) at default max=2 → ClassifierFail\n4. Custom max=3 allows third spawn\n5. Custom max=1 fails on first attempt after one spawn\n6. Nil task.Context is initialized\n\nAlso write a stub `classifier_budget_guard.go` with the types (ClassifierBudgetAction, ClassifierBudgetGuard struct, Evaluate method) that returns zero values — just enough for the test file to compile.\n\nUse `model.JSONField` for task.Context (same as empty_subtask_guard_test.go). Do NOT import testutil — this is a pure unit test on a policy struct.",
+      "title": "Write tests for classifier budget guard",
+      "description": "Write table-driven tests for a ClassifierBudgetGuard policy struct in `internal/orchestrator/classifier_budget_guard_test.go`. Follow the exact pattern of `empty_subtask_guard_test.go` (same package, same test structure).\n\nThe guard tracks `total_classifier_spawns` (float64) in `task.Context` and returns a `ClassifierBudgetAction` enum. Two actions: `ClassifierContinue` (spawn allowed) and `ClassifierFail` (cap reached, park for triage).\n\nTest cases:\n1. First spawn (nil context) → ClassifierContinue, counter set to 1\n2. Second spawn (counter=1, default max=2) → ClassifierContinue, counter set to 2\n3. Third spawn (counter=2, default max=2) → ClassifierFail, counter set to 3\n4. Counter already exceeds max → ClassifierFail\n5. Custom MaxSpawns=3 allows third spawn → ClassifierContinue\n6. Custom MaxSpawns=1 → first spawn ClassifierContinue, second ClassifierFail\n\nPattern to follow from empty_subtask_guard_test.go:\n```go\ntask := &model.Task{ID: uuid.New(), Context: tt.context}\npolicy := &ClassifierBudgetGuard{MaxSpawns: tt.maxSpawns}\ngot := policy.Evaluate(task)\n```\nAssert on action and counter value in task.Context[classifierSpawnCounterKey].\n\nAlso create a stub `classifier_budget_guard.go` with:\n- `ClassifierBudgetAction` type (int)\n- `ClassifierContinue`, `ClassifierFail` constants\n- `DefaultMaxClassifierSpawns = 2` constant\n- `classifierSpawnCounterKey = \"total_classifier_spawns\"` (unexported)\n- `ClassifierBudgetGuard` struct with `MaxSpawns int` field\n- `Evaluate(task *model.Task) ClassifierBudgetAction` method returning `ClassifierContinue` (stub)\n\nImports: `model` package, `uuid` package, `testing`. No testutil needed — pure unit test.",
       "agent_type": "coder",
       "phase": "test",
       "tests_for": [1],
@@ -13,15 +13,15 @@
       "dependencies": [],
       "priority": 1,
       "module_boundaries": [
-        {"package": "internal/orchestrator", "description": "Classifier spawn-cap policy preventing runaway classifier agent spawns", "exports": 4}
+        {"package": "internal/orchestrator", "description": "Classifier spawn-cap policy preventing runaway classifier agent spawns via counter in task.Context", "exports": 4}
       ],
       "interface_shapes": [
         {"package": "internal/orchestrator", "functions": ["ClassifierBudgetGuard.Evaluate(task *model.Task) ClassifierBudgetAction"], "types": ["ClassifierBudgetGuard", "ClassifierBudgetAction"]}
       ]
     },
     {
-      "title": "Implement classifier context budget guard",
-      "description": "Implement the ClassifierBudgetGuard policy in `internal/orchestrator/classifier_budget_guard.go`. This follows the exact same pattern as `empty_subtask_guard.go`.\n\nDefine:\n- `ClassifierBudgetAction` int enum with constants: `ClassifierContinue`, `ClassifierRetry`, `ClassifierFail`\n- `classifierSpawnCounterKey = \"total_classifier_spawns\"` (unexported const)\n- `DefaultMaxClassifierSpawns = 2` (exported const) — classifiers are lightweight read-only agents, 2 attempts is plenty\n- `ClassifierBudgetGuard` struct with `MaxSpawns int` field\n- `Evaluate(task *model.Task) ClassifierBudgetAction` method:\n  1. Initialize `task.Context` if nil\n  2. Read counter from `task.Context[classifierSpawnCounterKey].(float64)`\n  3. Increment counter, write back as `float64`\n  4. If counter > maxSpawns (use DefaultMaxClassifierSpawns if MaxSpawns==0), return `ClassifierFail`\n  5. Otherwise return `ClassifierContinue`\n\nThen wire the guard into `processClassifyingTasks()` in `classifying.go`. Add the check BEFORE the `o.runner.CanSpawn()` call (line 73). Pattern:\n```go\nguard := &ClassifierBudgetGuard{}\naction := guard.Evaluate(task)\nif action == ClassifierFail {\n    _ = o.parkClassifierForTriage(task, fmt.Sprintf(\"classifier spawn cap reached (%s)\", task.ID))\n    continue\n}\n```\n\nAlso wire it into `onClassifierFailed()` in `classifying.go` — before parking for triage, increment the counter so the next tick's guard check accounts for the failed attempt. Currently `onClassifierFailed` sets `human_triage=true` which prevents respawn. The guard is a defense-in-depth layer.\n\nDo NOT modify any test files. Make the pre-written tests pass.",
+      "title": "Implement classifier budget guard and wire into processClassifyingTasks",
+      "description": "Implement the ClassifierBudgetGuard policy and integrate it into the classifier spawning flow.\n\n**Part 1: classifier_budget_guard.go** — Replace the stub Evaluate with real logic:\n\n```go\nfunc (g *ClassifierBudgetGuard) Evaluate(task *model.Task) ClassifierBudgetAction {\n    if task.Context == nil {\n        task.Context = make(model.JSONField)\n    }\n    maxSpawns := g.MaxSpawns\n    if maxSpawns == 0 {\n        maxSpawns = DefaultMaxClassifierSpawns\n    }\n    counter, _ := task.Context[classifierSpawnCounterKey].(float64)\n    counter++\n    task.Context[classifierSpawnCounterKey] = counter\n    if int(counter) > maxSpawns {\n        return ClassifierFail\n    }\n    return ClassifierContinue\n}\n```\n\nConstants: `DefaultMaxClassifierSpawns = 2`, `classifierSpawnCounterKey = \"total_classifier_spawns\"`.\n\n**Part 2: classifying.go** — Add guard check in `processClassifyingTasks()`, inside the `for i := range tasks` loop, AFTER the human_triage skip (line 70) and BEFORE the `o.runner.CanSpawn()` check (line 73). Insert:\n\n```go\n// Budget guard: prevent runaway classifier spawns.\nguard := &ClassifierBudgetGuard{}\nif guard.Evaluate(task) == ClassifierFail {\n    _ = o.parkClassifierForTriage(task, fmt.Sprintf(\n        \"classifier spawn cap reached for task %s\", task.ID))\n    continue\n}\nif err := o.db.Save(task).Error; err != nil {\n    o.logger.Error(\"save classifier spawn count\", \"task_id\", task.ID, \"error\", err)\n    continue\n}\n```\n\nDo NOT modify test files. Make the pre-written tests pass.",
       "agent_type": "coder",
       "phase": "implementation",
       "tests_for": [],
@@ -32,154 +32,125 @@
       "dependencies": [],
       "priority": 1,
       "module_boundaries": [
-        {"package": "internal/orchestrator", "description": "Classifier spawn-cap policy preventing runaway classifier agent spawns", "exports": 4}
+        {"package": "internal/orchestrator", "description": "Classifier spawn-cap policy preventing runaway classifier agent spawns via counter in task.Context", "exports": 4}
       ],
       "interface_shapes": [
         {"package": "internal/orchestrator", "functions": ["ClassifierBudgetGuard.Evaluate(task *model.Task) ClassifierBudgetAction"], "types": ["ClassifierBudgetGuard", "ClassifierBudgetAction"]}
       ]
     },
     {
-      "title": "Write tests for classifier prompt context efficiency",
-      "description": "Write tests in `internal/prompt/prompt_test.go` verifying that classifier prompts include context efficiency guidance. The existing `prompt_test.go` likely has test patterns to follow — check for `TestGenerate` or similar.\n\nAdd a test function `TestClassifierPromptIncludesContextEfficiency` that:\n1. Calls `prompt.Generate(prompt.Opts{Task: &model.Task{...}, AgentType: model.AgentClassifier, WorktreePath: \"/tmp/test\"})` \n2. Asserts the output contains the string `Context Budget` (the new section heading)\n3. Asserts the output contains `grep` or `search` (efficiency guidance)\n4. Asserts the output contains `Do NOT read entire files` or similar budget constraint language\n\nAlso add `TestClassifierPromptIncludesTargetFileLimit` that verifies the prompt mentions a limit on target files (e.g., `target_files` should have at most 10 entries).\n\nUse `strings.Contains` for assertions. Import `model` and `prompt` packages. The test file already exists — ADD to it, do not replace existing tests.",
+      "title": "Write tests for classifier context routing and prompt budget",
+      "description": "Write tests for two changes in different packages. These tests should initially FAIL.\n\n**File 1: internal/orchestrator/context_monitor_classifier_test.go**\n\nTest `handleAgentContextExhausted` routes classifiers to `parkClassifierForTriage` instead of `failTask`. Setup: create an Orchestrator with `testutil.NewTestDB()`, a project, a task in StatusClassifying (no ParentTaskID, no phase in Context), and an agent with AgentType=model.AgentClassifier.\n\nTest cases:\n1. `TestHandleAgentContextExhausted_ClassifierParksForTriage`: Call `o.handleAgentContextExhausted(&task, &agent, 92)`. Reload task from DB. Assert `task.Context[\"human_triage\"] == true` and `task.Context[\"classifier_error\"]` contains \"context\". Assert task.Status is still StatusClassifying (NOT StatusFailed).\n2. `TestHandleAgentContextExhausted_ClassifierAgentMarkedDead`: Assert agent.Status == model.AgentDead after the call.\n\nSetup helper pattern (from classifying_test.go in same package):\n```go\ndb := testutil.NewTestDB(t)\nproject := testutil.CreateProject(t, db, \"test-project\", \"/tmp/bare\")\ntask := testutil.CreateTask(t, db, project.ID, \"test task\", model.StatusClassifying)\nagent := &model.Agent{ID: uuid.New(), AgentType: model.AgentClassifier, Status: model.AgentWorking, CurrentTaskID: &task.ID}\ndb.Create(agent)\n```\nCreate Orchestrator with: `o := &Orchestrator{db: db, projectID: project.ID, logger: slog.Default()}`.\n\n**File 2: internal/prompt/prompt_classifier_test.go**\n\nTest that `classifierInstructions` includes context budget guidance.\n```go\nfunc TestClassifierInstructionsIncludesContextBudget(t *testing.T) {\n    sections := classifierInstructions(\"/tmp/test\", \"test-id\")\n    joined := strings.Join(sections, \"\\n\")\n    if !strings.Contains(joined, \"Context Budget\") {\n        t.Error(\"classifier instructions missing Context Budget section\")\n    }\n    if !strings.Contains(joined, \"grep\") {\n        t.Error(\"classifier instructions should recommend grep over full file reads\")\n    }\n}\n```\nNote: `classifierInstructions` is unexported — the test must be in package `prompt` (not `prompt_test`).",
       "agent_type": "coder",
       "phase": "test",
       "tests_for": [3],
       "files": [
-        "internal/prompt/prompt_test.go"
+        "internal/orchestrator/context_monitor_classifier_test.go",
+        "internal/prompt/prompt_classifier_test.go"
       ],
       "dependencies": [],
       "priority": 1,
       "module_boundaries": [
-        {"package": "internal/prompt", "description": "Prompt builder with context-efficient classifier instructions", "exports": 2}
+        {"package": "internal/orchestrator", "description": "Context monitoring with classifier-aware exhaustion handling that parks instead of failing", "exports": 0},
+        {"package": "internal/prompt", "description": "Prompt builder with context-budget guidance for resource-constrained classifier agents", "exports": 0}
       ],
       "interface_shapes": [
-        {"package": "internal/prompt", "functions": ["Generate(opts Opts) string"], "types": ["Opts"]}
+        {"package": "internal/orchestrator", "functions": ["Orchestrator.handleAgentContextExhausted(subtask *model.Task, ag *model.Agent, pct int) error"], "types": []},
+        {"package": "internal/prompt", "functions": ["classifierInstructions(worktreePath, taskID string) []string"], "types": []}
       ]
     },
     {
-      "title": "Implement classifier prompt context efficiency",
-      "description": "Optimize the classifier prompt in `internal/prompt/prompt.go` function `classifierInstructions()` (line 714-769) to reduce unnecessary context loading by classifier agents.\n\nAdd a new `## Context Budget` section AFTER the `### Classification Guide` section (after line 767, before the final empty string on line 768). Insert these lines:\n\n```go\n\"## Context Budget\",\n\"\",\n\"You have a LIMITED context window. Exhausting it wastes pipeline resources.\",\n\"\",\n\"1. Use `grep` or `rg` to find relevant code — Do NOT read entire files\",\n\"2. Read only the specific functions or structs you need, using line ranges\",\n\"3. Stop exploring once you have enough evidence to classify — do not be exhaustive\",\n\"4. Limit `target_files` to at most 10 entries — list only files that MUST change\",\n\"5. If the Repository Map above answers your question, do not re-read the file\",\n\"\",\n\"Your budget: classify the task in under 20 tool calls. If you exceed this,\",\n\"you are over-exploring.\",\n\"\",\n```\n\nThe key insight: classifiers were reading entire files to understand code structure when grep + Repository Map would suffice. This guidance steers them toward efficient exploration.\n\nDo NOT modify any test files. Make the pre-written tests pass.",
+      "title": "Implement classifier context routing and prompt budget guidance",
+      "description": "Two changes in separate files. Make the pre-written tests pass.\n\n**Part 1: internal/orchestrator/context_monitor.go**\n\nModify `handleAgentContextExhausted()` (line 308-322). Add a classifier check AFTER the agent status save (line 314) and BEFORE the phase check (line 316). Insert:\n```go\nif ag.AgentType == model.AgentClassifier {\n    return o.parkClassifierForTriage(subtask, fmt.Sprintf(\n        \"classifier agent %s exhausted context window at %d%%\", ag.ID, pct))\n}\n```\n`parkClassifierForTriage` already exists in classifying.go line 162. It sets human_triage=true + classifier_error in task.Context and saves. Do NOT recreate it.\n\nAlso modify `checkContextUsage()` (line 72-152). Inside the `pct >= o.contextFixerPct` block (line 111), add a classifier check BEFORE the phase checks (line 113). Insert after line 112:\n```go\nif ag.AgentType == model.AgentClassifier {\n    if err := o.runner.StopAgent(ag.ID); err != nil {\n        o.logger.Error(\"checkContextUsage: stop classifier\", \"agent_id\", ag.ID, \"error\", err)\n        continue\n    }\n    if err := o.handleAgentContextExhausted(&subtask, &ag, pct); err != nil {\n        o.logger.Error(\"checkContextUsage: handle classifier exhausted\", \"agent_id\", ag.ID, \"error\", err)\n    }\n    continue\n}\n```\nThis stops classifiers at 85% instead of letting them hit the 90% hard stop.\n\n**Part 2: internal/prompt/prompt.go**\n\nModify `classifierInstructions()` (line 719-769). Add a `### Context Budget` section AFTER the \"Base your classification...\" line (line 767) and BEFORE the final empty string (line 768). Insert these strings into the return slice:\n```go\n\"\",\n\"### Context Budget\",\n\"\",\n\"You have a LIMITED context window. Be efficient:\",\n\"\",\n\"- Use `grep` to find relevant identifiers — do NOT read entire files.\",\n\"- When you must read a file, use line ranges (offset/limit) for just the relevant section.\",\n\"- Stop exploring once you have enough evidence to classify.\",\n\"- Limit `target_files` to at most 10 entries.\",\n\"- Write your classification file EARLY — an empty output is a pipeline failure.\",\n\"\",\n\"Budget: classify the task in under 20 tool calls.\",\n```\n\nDo NOT modify any test files.",
       "agent_type": "coder",
       "phase": "implementation",
       "tests_for": [],
       "files": [
+        "internal/orchestrator/context_monitor.go",
         "internal/prompt/prompt.go"
       ],
       "dependencies": [],
-      "priority": 2,
-      "module_boundaries": [
-        {"package": "internal/prompt", "description": "Prompt builder with context-efficient classifier instructions", "exports": 2}
-      ],
-      "interface_shapes": [
-        {"package": "internal/prompt", "functions": ["Generate(opts Opts) string"], "types": ["Opts"]}
-      ]
-    },
-    {
-      "title": "Write tests for classifier-aware context exhaustion handling",
-      "description": "Write tests in `internal/orchestrator/context_monitor_test.go` (new file) for classifier-specific behavior in `handleAgentContextExhausted`.\n\nTest function: `TestHandleAgentContextExhausted_Classifier`\n\nSetup pattern: follow `classifying_test.go`'s `setupClassifyingTest()` — create an Orchestrator with a real in-memory DB, project, no runner. You'll need:\n- A task in StatusClassifying with no ParentTaskID\n- An agent with AgentType=model.AgentClassifier, Status=model.AgentDead\n\nTest cases:\n1. **Classifier at context stop → parks for triage**: Call `o.handleAgentContextExhausted(&task, &agent, 92)`. Assert task.Context[\"human_triage\"] == true AND task.Context[\"classifier_error\"] contains \"context\" (not just generic fail).\n2. **Classifier at context stop → agent marked dead**: Assert agent.Status == model.AgentDead after the call.\n\nThe current code calls `failTask()` for classifiers which transitions to FAILED. The new behavior should call `parkClassifierForTriage()` instead, giving a more specific error message about context exhaustion.\n\nImport testutil for `testutil.NewTestDB`. Use `setupClassifyingTest` helper from classifying_test.go (it's in the same package). Create a mock runner that implements the runner interface if needed, or set runner to nil since handleAgentContextExhausted doesn't use the runner.\n\nStub: The test will initially fail because `handleAgentContextExhausted` currently calls `failTask` for classifiers instead of `parkClassifierForTriage`.",
-      "agent_type": "coder",
-      "phase": "test",
-      "tests_for": [5],
-      "files": [
-        "internal/orchestrator/context_monitor_test.go"
-      ],
-      "dependencies": [],
       "priority": 1,
       "module_boundaries": [
-        {"package": "internal/orchestrator", "description": "Context monitoring with classifier-aware exhaustion handling", "exports": 0}
+        {"package": "internal/orchestrator", "description": "Context monitoring with classifier-aware exhaustion handling that parks instead of failing", "exports": 0},
+        {"package": "internal/prompt", "description": "Prompt builder with context-budget guidance for resource-constrained classifier agents", "exports": 0}
       ],
       "interface_shapes": [
-        {"package": "internal/orchestrator", "functions": [], "types": []}
-      ]
-    },
-    {
-      "title": "Implement classifier-aware context exhaustion handling",
-      "description": "Modify `handleAgentContextExhausted()` in `internal/orchestrator/context_monitor.go` (line 308-322) to handle classifier agents specially.\n\nCurrent code:\n```go\nfunc (o *Orchestrator) handleAgentContextExhausted(subtask *model.Task, ag *model.Agent, pct int) error {\n    ag.Status = model.AgentDead\n    ag.CurrentTaskID = nil\n    if err := o.db.Save(ag).Error; err != nil { ... }\n    phase := o.getTaskPhase(subtask)\n    if phase == \"test\" {\n        return o.handleTestWritingFailure(subtask, ag)\n    }\n    return o.failTask(subtask, fmt.Sprintf(\"agent exhausted context window (%d%%)\", pct))\n}\n```\n\nAdd a classifier check AFTER the agent save and BEFORE the phase check (after line 315). Insert:\n```go\nif ag.AgentType == model.AgentClassifier {\n    return o.parkClassifierForTriage(subtask, fmt.Sprintf(\n        \"classifier agent %s exhausted context window at %d%%\", ag.ID, pct))\n}\n```\n\nThis routes classifier context exhaustion to the existing `parkClassifierForTriage()` function in `classifying.go` (line 162), which sets `human_triage=true` and `classifier_error` — keeping the task in CLASSIFYING for human review rather than transitioning to FAILED.\n\nAlso add classifier handling in `checkContextUsage()` (line 111-131). Currently classifiers have no phase (empty string), so they skip the fixer threshold entirely and only hit the hard stop. Add a check at the start of the `pct >= o.contextFixerPct` block (before line 113):\n```go\nif ag.AgentType == model.AgentClassifier {\n    // Classifiers at 85%+ are over-exploring — stop early.\n    if err := o.runner.StopAgent(ag.ID); err != nil {\n        o.logger.Error(\"checkContextUsage: stop classifier\", \"agent_id\", ag.ID, \"error\", err)\n        continue\n    }\n    if err := o.handleAgentContextExhausted(&subtask, &ag, pct); err != nil {\n        o.logger.Error(\"checkContextUsage: handle classifier exhausted\", \"agent_id\", ag.ID, \"error\", err)\n    }\n    continue\n}\n```\n\nThis stops classifiers at the fixer threshold (85%) instead of waiting for the hard stop (90%), since classifiers shouldn't need that much context.\n\nDo NOT modify any test files.",
-      "agent_type": "coder",
-      "phase": "implementation",
-      "tests_for": [],
-      "files": [
-        "internal/orchestrator/context_monitor.go"
-      ],
-      "dependencies": [],
-      "priority": 1,
-      "module_boundaries": [
-        {"package": "internal/orchestrator", "description": "Context monitoring with classifier-aware exhaustion handling", "exports": 0}
-      ],
-      "interface_shapes": [
-        {"package": "internal/orchestrator", "functions": [], "types": []}
+        {"package": "internal/orchestrator", "functions": ["Orchestrator.handleAgentContextExhausted(subtask *model.Task, ag *model.Agent, pct int) error", "Orchestrator.checkContextUsage()"], "types": []},
+        {"package": "internal/prompt", "functions": ["classifierInstructions(worktreePath, taskID string) []string"], "types": []}
       ]
     },
     {
       "title": "Integration: verify classifier budget guard end-to-end",
-      "description": "Integration wiring: verify that all three components work together.\n\n1. In `classifying.go`, verify the budget guard is called in `processClassifyingTasks()` before spawning.\n2. In `context_monitor.go`, verify the classifier-specific handling is wired into `checkContextUsage()` and `handleAgentContextExhausted()`.\n3. In `prompt.go`, verify the Context Budget section appears in classifier prompts.\n4. Run `go vet ./... && go test ./...` to verify all tests pass.\n5. Run `wc -l` on modified files to verify no file exceeds 800 lines.\n6. Check that `classifying.go` line count hasn't grown excessively (currently 320 lines — budget guard adds ~10 lines).\n\nThis subtask does NOT create new code — it verifies the integration of subtasks 1, 3, and 5. If any component is missing or broken, fix the wiring (not the component itself).\n\nNo new files. No test modifications.",
+      "description": "Verify all three components work together and pass all constraints.\n\n1. Run `go vet ./... && go test ./...` — all tests must pass.\n2. Verify file lengths with `wc -l`:\n   - `classifier_budget_guard.go` must be under 800 lines\n   - `classifying.go` was 321 lines — must not exceed ~340 after guard wiring\n   - `context_monitor.go` was 445 lines — must not exceed ~465 after classifier routing\n   - `prompt.go` — verify under 800 lines\n3. Verify no new internal imports added to `internal/orchestrator/` (import ceiling is 10, grandfathered from 11).\n4. Run `gofmt -l ./internal/ ./cmd/` — no output.\n\nIf any tests fail, fix the IMPLEMENTATION (not the tests). If constraint violations exist, extract code to stay within limits.\n\nThis subtask creates no new files — it only verifies and fixes integration issues.",
       "agent_type": "coder",
       "phase": "integration",
       "tests_for": [],
       "files": [
         "internal/orchestrator/classifying.go",
         "internal/orchestrator/context_monitor.go",
+        "internal/orchestrator/classifier_budget_guard.go",
         "internal/prompt/prompt.go"
       ],
-      "dependencies": [1, 3, 5],
-      "priority": 3,
+      "dependencies": [1, 3],
+      "priority": 2,
       "module_boundaries": [],
       "interface_shapes": []
     }
   ],
   "tdd_exceptions": [
     {
-      "subtask_index": 6,
-      "justification": "Integration wiring connecting already-tested components — verification via go vet + go test, no new behavior to test"
+      "subtask_index": 4,
+      "justification": "Integration wiring connecting already-tested components — verification via go vet + go test + constitution constraint checks, no new behavior to test."
     }
   ],
   "coverage": [
+    {
+      "criterion": "Add context budget guard for classifier agents (spawn cap to prevent runaway retries)",
+      "subtask_indices": [0, 1]
+    },
     {
       "criterion": "Optimize classifier prompt to reduce unnecessary context loading",
       "subtask_indices": [2, 3]
     },
     {
-      "criterion": "Add a context budget guard for classifier agents (same pattern as planner guard)",
-      "subtask_indices": [0, 1]
+      "criterion": "Handle classifier context exhaustion gracefully (park for triage at 85% instead of failing at 90%)",
+      "subtask_indices": [2, 3]
     },
     {
-      "criterion": "Handle classifier context exhaustion gracefully (park for triage instead of failing)",
-      "subtask_indices": [4, 5]
+      "criterion": "Stop classifiers earlier at fixer threshold (85%) since they are read-only and should not need deep context",
+      "subtask_indices": [2, 3]
     },
     {
-      "criterion": "Stop classifiers earlier at fixer threshold (85%) since they shouldn't need deep context",
-      "subtask_indices": [4, 5]
-    },
-    {
-      "criterion": "End-to-end integration of all three fixes",
-      "subtask_indices": [6]
+      "criterion": "End-to-end verification of all components and constitution compliance",
+      "subtask_indices": [4]
     }
   ],
   "assumptions": [
     {
       "decision": "DefaultMaxClassifierSpawns = 2 (max classifier spawn attempts per task)",
       "alternatives": ["3 (matching MaxPlannerRetries)", "1 (classifiers are simple, one attempt should suffice)"],
-      "why_chosen": "Classifiers are lightweight read-only agents. 2 attempts gives one retry after context exhaustion while limiting waste. Planners get 6 total because they do complex generation; classifiers just need to grep and classify."
+      "why_chosen": "Classifiers are lightweight read-only agents. 2 attempts gives one retry after failure while limiting waste. Planners get 6 total spawns because planning is complex; classifiers just grep and classify."
     },
     {
-      "decision": "Stop classifiers at the fixer threshold (85%) instead of waiting for the hard stop (90%)",
-      "alternatives": ["Keep classifiers at 90% like other agents", "Use a new classifier-specific threshold (e.g., 75%)"],
-      "why_chosen": "Reusing the existing contextFixerPct (85%) avoids adding a new config field. Classifiers using 85%+ context are clearly over-exploring — the prompt optimization should keep them well below this. A new threshold would add config complexity for minimal benefit."
+      "decision": "Stop classifiers at the existing fixer threshold (85%) instead of a custom threshold",
+      "alternatives": ["Keep classifiers at 90% like other agents", "New classifier-specific threshold (e.g., 75%)"],
+      "why_chosen": "Reusing contextFixerPct (85%) avoids adding a new config field. Classifiers using 85%+ context are clearly over-exploring — the prompt optimization should keep them well below this. A custom threshold adds config complexity for minimal benefit."
     },
     {
-      "decision": "Park exhausted classifiers for triage (parkClassifierForTriage) instead of transitioning to FAILED",
+      "decision": "Park exhausted classifiers for triage via parkClassifierForTriage instead of transitioning to FAILED",
       "alternatives": ["Transition to FAILED like other agents", "Auto-retry with a simpler prompt"],
-      "why_chosen": "parkClassifierForTriage keeps the task in CLASSIFYING with human_triage=true, which is the existing recovery path for classifier issues. FAILED would require a separate recovery mechanism. Auto-retry is handled by the budget guard allowing re-spawn on the next tick."
+      "why_chosen": "parkClassifierForTriage keeps the task in CLASSIFYING with human_triage=true, which is the existing recovery path. FAILED would require a separate recovery mechanism. Auto-retry is handled by the budget guard allowing re-spawn on the next tick when human_triage is not set."
     },
     {
-      "decision": "Create a new ClassifierBudgetGuard policy struct (separate file) rather than inlining the check",
-      "alternatives": ["Inline the spawn counter check directly in processClassifyingTasks()", "Extend SubtaskRecoveryPolicy to handle classifiers too"],
-      "why_chosen": "The policy struct pattern (from empty_subtask_guard.go) is testable in isolation, matches the existing codebase convention, and keeps classifying.go focused. SubtaskRecoveryPolicy has different semantics (replan vs. fail) that don't apply to classifiers."
+      "decision": "ClassifierBudgetGuard as separate policy struct file (following empty_subtask_guard.go pattern)",
+      "alternatives": ["Inline spawn counter check in processClassifyingTasks()", "Extend SubtaskRecoveryPolicy for classifiers"],
+      "why_chosen": "The policy struct pattern is established in this codebase, is independently testable, and keeps classifying.go focused on orchestration flow. SubtaskRecoveryPolicy has different semantics (replan vs. fail) that don't apply."
     },
     {
-      "decision": "Budget guidance says '20 tool calls' as the classifier context budget",
-      "alternatives": ["No specific number, just general efficiency guidance", "10 tool calls (stricter)", "Token-based budget"],
-      "why_chosen": "A concrete number gives the model a clear target. 20 is generous enough for grep + targeted reads on a medium codebase. Token budgets aren't actionable for the agent. The number is advisory (in the prompt), not enforced by code."
+      "decision": "Prompt guidance says 20 tool calls as the classifier budget",
+      "alternatives": ["No specific number", "10 tool calls (stricter)", "Token-based budget"],
+      "why_chosen": "A concrete number gives the model a clear target. 20 is generous for grep + targeted reads. Token budgets aren't actionable for the agent. The number is advisory, not enforced."
     }
   ]
 }
