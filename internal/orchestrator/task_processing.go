@@ -215,12 +215,21 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
 	featureDir := o.worktree.FeatureWorktreePath(featureName)
 	comments, _ := o.GetComments(task.ID)
+	// Resolve the target coder model so the planner can adjust detail level.
+	var targetProvider, targetModel string
+	if o.runner != nil {
+		coderCfg := o.runner.AgentConfig(model.AgentCoder)
+		targetProvider = string(coderCfg.EffectiveProvider())
+		targetModel = coderCfg.Model
+	}
 	plannerPrompt := prompt.Generate(prompt.Opts{
-		Task:         task,
-		Project:      &project,
-		AgentType:    model.AgentPlanner,
-		WorktreePath: featureDir,
-		Comments:     comments,
+		Task:                task,
+		Project:             &project,
+		AgentType:           model.AgentPlanner,
+		WorktreePath:        featureDir,
+		Comments:            comments,
+		TargetCoderProvider: targetProvider,
+		TargetCoderModel:    targetModel,
 	})
 
 	// Spawn planner agent.
