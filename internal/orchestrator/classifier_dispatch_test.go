@@ -54,7 +54,7 @@ func TestClassifierDispatchPicksUpNewlyFiledTasks(t *testing.T) {
 		t.Fatalf("write fake claude binary: %v", err)
 	}
 
-	runner := agent.NewRunner(db, nil, wt, fakeBin, 4, nil)
+	runner := agent.NewRunner(db, nil, wt, fakeBin, "", 4, nil)
 
 	orch := &Orchestrator{
 		db:              db,

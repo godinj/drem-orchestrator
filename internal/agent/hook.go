@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -133,5 +134,58 @@ func enrichCompletion(comp *Completion, projectDir string) {
 		ExitReason:  latest.ExitReason,
 		LastTool:    latest.LastTool,
 		ExitSummary: latest.Summary,
+	}
+}
+
+// openCodeEvent represents a single JSON event from the OpenCode JSONL output
+// stream. Only the fields needed for exit info enrichment are included.
+type openCodeEvent struct {
+	Type string `json:"type"`
+	Part struct {
+		Reason string `json:"reason"`
+		Tokens struct {
+			Total     int `json:"total"`
+			Input     int `json:"input"`
+			Output    int `json:"output"`
+			Reasoning int `json:"reasoning"`
+		} `json:"tokens"`
+	} `json:"part"`
+}
+
+// enrichOpenCodeCompletion reads the OpenCode JSONL output log and populates
+// comp.ExitInfo from the last step_finish event. If the file doesn't exist or
+// no step_finish event is found, it returns without setting ExitInfo.
+func enrichOpenCodeCompletion(comp *Completion, logPath string) {
+	f, err := os.Open(logPath)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	var lastFinish *openCodeEvent
+	scanner := bufio.NewScanner(f)
+	// Allow large lines (OpenCode events can be sizeable).
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var evt openCodeEvent
+		if err := json.Unmarshal(line, &evt); err != nil {
+			continue
+		}
+		if evt.Type == "step_finish" {
+			copied := evt
+			lastFinish = &copied
+		}
+	}
+
+	if lastFinish == nil {
+		return
+	}
+
+	comp.ExitInfo = &ExitInfo{
+		ExitReason: lastFinish.Part.Reason,
 	}
 }

@@ -14,10 +14,11 @@ import (
 
 var profileNameRE = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-// AgentConfig holds per-agent-type CLI flags for Claude Code invocations.
+// AgentConfig holds per-agent-type CLI flags for agent invocations.
 type AgentConfig struct {
-	Model  string `toml:"model"`
-	Effort string `toml:"effort"`
+	Model    string `toml:"model"`
+	Effort   string `toml:"effort"`
+	Provider string `toml:"provider"`
 }
 
 // AgentsConfig holds per-agent-type configuration keyed by role.
@@ -51,7 +52,7 @@ func (a AgentsConfig) ForAgentType(at model.AgentType) model.AgentCLIConfig {
 	default:
 		ac = AgentConfig{Effort: "medium"}
 	}
-	return model.AgentCLIConfig{Model: ac.Model, Effort: ac.Effort}
+	return model.AgentCLIConfig{Provider: model.ProviderType(ac.Provider), Model: ac.Model, Effort: ac.Effort}
 }
 
 // SupervisorCLIConfig returns the AgentCLIConfig for synchronous supervisor calls.
@@ -70,6 +71,7 @@ type Config struct {
 	BareRepoPath        string                   `toml:"bare_repo_path"`
 	DefaultBranch       string                   `toml:"default_branch"`
 	ClaudeBin           string                   `toml:"claude_bin"`
+	OpenCodeBin         string                   `toml:"opencode_bin"`
 	MaxConcurrentAgents int                      `toml:"max_concurrent_agents"`
 	TickInterval        time.Duration            `toml:"tick_interval"`
 	HeartbeatInterval   time.Duration            `toml:"heartbeat_interval"`
@@ -100,6 +102,7 @@ func DefaultConfig() Config {
 		BareRepoPath:        "",
 		DefaultBranch:       "master",
 		ClaudeBin:           "claude",
+		OpenCodeBin:         "opencode",
 		MaxConcurrentAgents: 5,
 		TickInterval:        5 * time.Second,
 		HeartbeatInterval:   30 * time.Second,

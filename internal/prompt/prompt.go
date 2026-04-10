@@ -494,7 +494,7 @@ func testPhaseCoderInstructions(opts Opts) []string {
 		"2. Run the tests — they SHOULD fail (that's expected for TDD)",
 		"3. Verify failures are ASSERTION failures, not compilation or linker errors",
 		"4. If tests fail to compile, fix your stubs until the build succeeds",
-		"5. Run `git add` for all new/untracked files, then commit both test files AND stub files " +
+		"5. Run `git add` for all new/untracked files, then commit both test files AND stub files "+
 			`together with message: "test: <what these tests verify>"`,
 		"6. Do NOT push to remote",
 		"",
@@ -569,7 +569,7 @@ func implPhaseCoderInstructions(opts Opts) []string {
 		"2. Run the FULL test suite — ALL tests must pass",
 		"3. If any test fails, fix your implementation (not the test)",
 		"4. NEVER modify pre-written TDD tests. Fix your code to match the tests.",
-		"5. Run `git add` for all new/untracked files, then commit with " +
+		"5. Run `git add` for all new/untracked files, then commit with "+
 			`message: "feat: <what was implemented>"`,
 		"6. Do NOT push to remote",
 		"",

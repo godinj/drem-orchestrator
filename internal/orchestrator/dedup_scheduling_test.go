@@ -45,7 +45,7 @@ func setupDedupSchedulingTest(t *testing.T) (*Orchestrator, *gorm.DB, uuid.UUID,
 	wtMgr := &worktree.Manager{BareRepoPath: bareRepo, DefaultBranch: defaultBranch}
 
 	// Runner with maxConcurrent=0 so CanSpawn returns false without panicking.
-	runner := agent.NewRunner(db, nil, wtMgr, "/bin/false", 0, nil)
+	runner := agent.NewRunner(db, nil, wtMgr, "/bin/false", "", 0, nil)
 
 	orch := &Orchestrator{
 		db:        db,

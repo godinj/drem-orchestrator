@@ -1,27 +1,33 @@
 bare_repo_path        = "/home/godinj/git/drem-orchestrator.git"
 default_branch        = "master"
 max_concurrent_agents = 6
+opencode_bin          = "opencode"
 test_command          = "go test ./..."
 compile_command       = "go vet ./..."
 
 [agents.classifier]
-  effort = "medium"
+  provider = "opencode"
+  model    = "llamacpp/qwen35-27b-iq4xs-128k"
+  effort   = "medium"
 
 [agents.planner]
   model  = "claude-opus-4-6"
   effort = "medium"
 
 [agents.coder]
-  model  = "claude-sonnet-4-6"
-  effort = "medium"
+  provider = "opencode"
+  model    = "llamacpp/qwen35-27b-iq4xs-128k"
+  effort   = "medium"
 
 [agents.reviewer]
-  model  = "claude-sonnet-4-6"
-  effort = "medium"
+  provider = "opencode"
+  model    = "llamacpp/qwen35-27b-iq4xs-128k"
+  effort   = "medium"
 
 [agents.fixer]
-  model  = "claude-sonnet-4-6"
-  effort = "medium"
+  provider = "opencode"
+  model    = "llamacpp/qwen35-27b-iq4xs-128k"
+  effort   = "medium"
 
 [agents.supervisor]
   effort = "low"

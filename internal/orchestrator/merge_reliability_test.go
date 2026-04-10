@@ -63,7 +63,7 @@ func TestMergeFailedEvent_EmitsStructuredDiagnostics(t *testing.T) {
 	db.Create(&project)
 
 	tm := tmux.NewManager("test-merge-diag")
-	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", 4, nil)
+	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", "", 4, nil)
 
 	o := &Orchestrator{
 		db:        db,
@@ -217,7 +217,7 @@ func TestOnAgentFailed_AlreadyMerged_FastTracksToDone(t *testing.T) {
 	db.Create(&project)
 
 	tm := tmux.NewManager("test-already-merged")
-	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", 4, nil)
+	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", "", 4, nil)
 
 	o := &Orchestrator{
 		db:        db,
@@ -311,7 +311,7 @@ func TestOnAgentFailed_NotMerged_FailsNormally(t *testing.T) {
 	db.Create(&project)
 
 	tm := tmux.NewManager("test-not-merged")
-	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", 4, nil)
+	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", "", 4, nil)
 
 	o := &Orchestrator{
 		db:        db,

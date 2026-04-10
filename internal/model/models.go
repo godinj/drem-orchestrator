@@ -76,6 +76,7 @@ type Agent struct {
 	Config         JSONField `gorm:"type:text"`
 
 	// Enrichment fields (populated at spawn/completion time)
+	Provider        string     `gorm:"column:provider;default:''"`         // "" means Claude (backwards compatible)
 	ModelID         string     `gorm:"column:model_id;default:'';index"`   // model identifier (populated at spawn time)
 	Effort          string     `gorm:"column:effort;default:''"`           // effort level (populated at spawn time)
 	CompletedAt     *time.Time `gorm:"column:completed_at;index"`          // when agent finished (populated at completion)

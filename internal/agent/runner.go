@@ -70,8 +70,9 @@ type RunningAgent struct {
 	WorktreePath string
 	Branch       string
 	TmuxSession  string
-	Process      *AgentProcess // subprocess handle; nil for supervisors
-	LogPath      string        // path to agent-output.log
+	Process      *AgentProcess      // subprocess handle; nil for supervisors
+	LogPath      string             // path to agent-output.log
+	Provider     model.ProviderType // provider backend ("claude" or "opencode")
 	StartedAt    time.Time
 	ContextUsage *ctxmon.Usage      // latest context window usage; nil until first read
 	ActivityMon  *agentmon.Monitor  // activity monitor; nil until started
@@ -94,6 +95,7 @@ type Runner struct {
 	tmuxSessionName string         // dashboard session name prefix
 	worktree        *worktree.Manager
 	claudeBin       string
+	openCodeBin     string
 	maxConcurrent   int
 	agentConfigs    func(model.AgentType) model.AgentCLIConfig // per-type CLI flags
 	metricsRecorder MetricsRecorder                            // optional; nil means no time-series recording
@@ -117,7 +119,7 @@ func (r *Runner) SetMetricsRecorder(mr MetricsRecorder) {
 // StartAgentProcess; supervisors and shells use the tmux Manager.
 // agentConfigs maps agent types to CLI flags; pass nil for default behavior
 // (effort=medium, no model override).
-func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin string, maxConcurrent int, agentConfigs func(model.AgentType) model.AgentCLIConfig) *Runner {
+func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin, openCodeBin string, maxConcurrent int, agentConfigs func(model.AgentType) model.AgentCLIConfig) *Runner {
 	if agentConfigs == nil {
 		agentConfigs = func(model.AgentType) model.AgentCLIConfig {
 			return model.AgentCLIConfig{Effort: "medium"}
@@ -134,6 +136,7 @@ func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin st
 		tmuxSessionName: sessionName,
 		worktree:        wt,
 		claudeBin:       claudeBin,
+		openCodeBin:     openCodeBin,
 		maxConcurrent:   maxConcurrent,
 		agentConfigs:    agentConfigs,
 		running:         make(map[uuid.UUID]*RunningAgent),
@@ -322,6 +325,7 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 		TmuxSession:    sessionName,
 		ModelID:        cliConfig.Model,
 		Effort:         cliConfig.Effort,
+		Provider:       string(cliConfig.EffectiveProvider()),
 		HeartbeatAt:    &now,
 	}
 	if err := r.db.Create(agent).Error; err != nil {
@@ -387,9 +391,19 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 	return agent, nil
 }
 
-// startAgent writes the prompt file and settings, starts the agent as a
-// subprocess, stores the RunningAgent, and launches monitoring goroutines.
+// startAgent dispatches to the provider-specific agent start method based on
+// the resolved CLI config for the agent type.
 func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, sessionName, prompt string, agentType model.AgentType) error {
+	cliConfig := r.agentConfigs(agentType)
+	if cliConfig.EffectiveProvider() == model.ProviderOpenCode {
+		return r.startOpenCodeAgent(agentID, taskID, worktreePath, branch, sessionName, prompt, agentType)
+	}
+	return r.startClaudeAgent(agentID, taskID, worktreePath, branch, sessionName, prompt, agentType)
+}
+
+// startClaudeAgent writes the prompt file and settings, starts a Claude Code
+// subprocess, stores the RunningAgent, and launches monitoring goroutines.
+func (r *Runner) startClaudeAgent(agentID, taskID uuid.UUID, worktreePath, branch, sessionName, prompt string, agentType model.AgentType) error {
 	// Ensure .claude directory exists.
 	claudeDir := filepath.Join(worktreePath, ".claude")
 	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
@@ -488,6 +502,65 @@ func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, ses
 		TmuxSession:  sessionName,
 		Process:      proc,
 		LogPath:      proc.LogPath(),
+		Provider:     model.ProviderClaude,
+		StartedAt:    time.Now(),
+		cancel:       cancel,
+	}
+
+	r.mu.Lock()
+	r.running[agentID] = ra
+	r.mu.Unlock()
+
+	go r.monitorAgent(ctx, agentID, proc, worktreePath)
+	go r.heartbeatLoop(ctx, agentID)
+	go r.contextMonitorLoop(ctx, agentID, worktreePath)
+
+	return nil
+}
+
+// startOpenCodeAgent sets up and starts an OpenCode agent subprocess. OpenCode
+// agents skip Claude-specific settings (settings.json, hooks, status scripts,
+// exit-log script) and instead write minimal metadata to .opencode/.
+func (r *Runner) startOpenCodeAgent(agentID, taskID uuid.UUID, worktreePath, branch, sessionName, prompt string, agentType model.AgentType) error {
+	// Ensure .opencode directory exists.
+	ocDir := filepath.Join(worktreePath, ".opencode")
+	if err := os.MkdirAll(ocDir, 0o755); err != nil {
+		return fmt.Errorf("start opencode agent: mkdir .opencode: %w", err)
+	}
+
+	// Write prompt to .opencode/agent-prompt.md (for reference/debugging).
+	promptPath := filepath.Join(ocDir, "agent-prompt.md")
+	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
+		return fmt.Errorf("start opencode agent: write prompt: %w", err)
+	}
+
+	// Write agent metadata JSON to .opencode/agent-metadata.json.
+	if err := writeAgentMetadata(ocDir, agentID, taskID); err != nil {
+		return fmt.Errorf("start opencode agent: write agent metadata: %w", err)
+	}
+
+	// Remove stale idle signal from a previous agent in this worktree.
+	os.Remove(filepath.Join(ocDir, "agent-idle")) // ignore error
+
+	// Start OpenCode subprocess.
+	cliConfig := r.agentConfigs(agentType)
+	proc, err := StartOpenCodeProcess(context.Background(), r.openCodeBin, promptPath, worktreePath, cliConfig.CLIArgs())
+	if err != nil {
+		return fmt.Errorf("start opencode agent: start subprocess: %w", err)
+	}
+
+	// Context for monitor and heartbeat goroutines.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ra := &RunningAgent{
+		AgentID:      agentID,
+		TaskID:       taskID,
+		WorktreePath: worktreePath,
+		Branch:       branch,
+		TmuxSession:  sessionName,
+		Process:      proc,
+		LogPath:      proc.LogPath(),
+		Provider:     model.ProviderOpenCode,
 		StartedAt:    time.Now(),
 		cancel:       cancel,
 	}
@@ -561,7 +634,11 @@ func (r *Runner) GetAgentOutput(agentID uuid.UUID) (string, error) {
 		if agent.WorktreePath == "" {
 			return "", nil
 		}
-		logPath = filepath.Join(agent.WorktreePath, ".claude", "agent-output.log")
+		if agent.Provider == string(model.ProviderOpenCode) {
+			logPath = filepath.Join(agent.WorktreePath, ".opencode", "agent-output.jsonl")
+		} else {
+			logPath = filepath.Join(agent.WorktreePath, ".claude", "agent-output.log")
+		}
 	}
 
 	return readLogTail(logPath, maxLogTailBytes)
@@ -630,6 +707,7 @@ func (r *Runner) GetRunningAgents() []RunningAgent {
 			TmuxSession:  ra.TmuxSession,
 			Process:      ra.Process,
 			LogPath:      ra.LogPath,
+			Provider:     ra.Provider,
 			StartedAt:    ra.StartedAt,
 			ContextUsage: ra.ContextUsage,
 			Activity:     ra.Activity,

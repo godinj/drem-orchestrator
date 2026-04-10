@@ -186,7 +186,7 @@ func main() {
 	}
 	wt.MigrateAgentPaths(database)
 
-	runner := agent.NewRunner(database, tmux, wt, cfg.ClaudeBin, cfg.MaxConcurrentAgents, cfg.Agents.ForAgentType)
+	runner := agent.NewRunner(database, tmux, wt, cfg.ClaudeBin, cfg.OpenCodeBin, cfg.MaxConcurrentAgents, cfg.Agents.ForAgentType)
 	runner.SetDispatchLimiter(ratelimit.New(cfg.MaxDispatchRate, cfg.DispatchWindow))
 	runner.SetMetricsRecorder(metrics.NewStore(database))
 	merger := merge.NewMergeQueue(merge.NewOrchestrator(wt, database), wt)

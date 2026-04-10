@@ -26,7 +26,7 @@ func TestNewRunner(t *testing.T) {
 	db := testutil.NewTestDB(t)
 
 	t.Run("with nil tmux manager", func(t *testing.T) {
-		r := NewRunner(db, nil, nil, "/usr/bin/claude", 4, nil)
+		r := NewRunner(db, nil, nil, "/usr/bin/claude", "", 4, nil)
 		if r == nil {
 			t.Fatal("NewRunner returned nil")
 		}

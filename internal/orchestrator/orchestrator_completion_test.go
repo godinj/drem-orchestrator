@@ -35,7 +35,7 @@ func completionTestOrchestrator(t *testing.T) *Orchestrator {
 
 	// Create a minimal runner backed by a fake tmux session name.
 	tm := tmux.NewManager("test-completion")
-	runner := agent.NewRunner(db, tm, &worktree.Manager{DefaultBranch: "main"}, "/usr/bin/false", 4, nil)
+	runner := agent.NewRunner(db, tm, &worktree.Manager{DefaultBranch: "main"}, "/usr/bin/false", "", 4, nil)
 
 	o := &Orchestrator{
 		db:        db,

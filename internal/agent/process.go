@@ -107,6 +107,75 @@ func StartAgentProcess(ctx context.Context, claudeBin, promptPath, cwd string, e
 	return p, nil
 }
 
+// StartOpenCodeProcess starts an OpenCode subprocess.
+// extraArgs carries pre-built flags like ["--model", "ollama/qwen3-coder-iq4xs-128k",
+// "--variant", "minimal", "--format", "json", "--agent", "build"].
+// The prompt is read from promptPath and passed as the final positional argument
+// (OpenCode does not use stdin for prompt delivery).
+// Stdout+stderr are redirected to <cwd>/.opencode/agent-output.jsonl.
+func StartOpenCodeProcess(ctx context.Context, openCodeBin, promptPath, cwd string, extraArgs []string) (*AgentProcess, error) {
+	// 1. Ensure .opencode directory exists.
+	openCodeDir := filepath.Join(cwd, ".opencode")
+	if err := os.MkdirAll(openCodeDir, 0o755); err != nil {
+		return nil, fmt.Errorf("start opencode process: mkdir .opencode: %w", err)
+	}
+
+	// 2. Create log file at <cwd>/.opencode/agent-output.jsonl.
+	logPath := filepath.Join(openCodeDir, "agent-output.jsonl")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return nil, fmt.Errorf("start opencode process: create log: %w", err)
+	}
+
+	// 3. Read prompt content from file.
+	promptData, err := os.ReadFile(promptPath)
+	if err != nil {
+		logFile.Close()
+		return nil, fmt.Errorf("start opencode process: read prompt: %w", err)
+	}
+
+	// 4. Build command: opencode run <extraArgs...> --dir <cwd> <prompt-content>
+	args := []string{"run"}
+	args = append(args, extraArgs...)
+	args = append(args, "--dir", cwd, string(promptData))
+	cmd := exec.CommandContext(ctx, openCodeBin, args...)
+	cmd.Dir = cwd
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	// 5. Start process.
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		return nil, fmt.Errorf("start opencode process: start: %w", err)
+	}
+
+	p := &AgentProcess{
+		cmd:     cmd,
+		logFile: logFile,
+		logPath: logPath,
+		pid:     cmd.Process.Pid,
+		done:    make(chan struct{}),
+	}
+
+	// 6. Start a goroutine that waits for the process to exit.
+	go func() {
+		err := cmd.Wait()
+		p.mu.Lock()
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				p.exitCode = exitErr.ExitCode()
+			} else {
+				p.exitCode = -1
+			}
+		}
+		p.mu.Unlock()
+		logFile.Close()
+		close(p.done)
+	}()
+
+	return p, nil
+}
+
 // SendExit sends SIGTERM to the process for graceful shutdown.
 // In -p mode stdin is closed after the prompt is written, so we use a signal
 // rather than writing /exit to stdin.

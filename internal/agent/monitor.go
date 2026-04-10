@@ -1,7 +1,9 @@
 package agent
 
 import (
+	"bufio"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -26,9 +28,6 @@ const (
 // contextMonitorLoop polls the context usage file and compaction signal for
 // a running agent, updating in-memory state and the DB Config field.
 func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, worktreePath string) {
-	usagePath := ctxmon.UsageFilePath(worktreePath)
-	signalPath := ctxmon.CompactionSignalPath(worktreePath)
-
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -39,41 +38,28 @@ func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, work
 		case <-ticker.C:
 		}
 
-		usage, err := ctxmon.ReadUsageFile(usagePath)
-		if err != nil {
-			slog.Warn("context monitor: read usage file", "agent_id", agentID, "error", err)
-		}
-
-		// Fall back to reading the session transcript directly if the
-		// status line script hasn't produced a usage file (e.g. in -p mode).
-		if usage == nil {
-			usage, err = ctxmon.ReadTranscriptUsage(worktreePath)
-			if err != nil {
-				slog.Warn("context monitor: read transcript", "agent_id", agentID, "error", err)
-				continue
-			}
-		}
-
-		// Check compaction signal.
-		compacted := false
-		if _, err := os.Stat(signalPath); err == nil {
-			compacted = true
-			os.Remove(signalPath)
-		}
-
-		if usage == nil && compacted {
-			usage = &ctxmon.Usage{
-				UsedPercent:         100,
-				CompactionTriggered: true,
-				LastUpdated:         time.Now(),
-			}
-		} else if usage != nil && compacted {
-			usage.CompactionTriggered = true
-		}
-
-		// Scan activity monitor (independent of context usage).
+		// Resolve provider for this agent.
 		r.mu.Lock()
 		ra, ok := r.running[agentID]
+		var provider model.ProviderType
+		if ok {
+			provider = ra.Provider
+		}
+		r.mu.Unlock()
+		if !ok {
+			return
+		}
+
+		var usage *ctxmon.Usage
+		if provider == model.ProviderOpenCode {
+			usage = r.readOpenCodeUsage(worktreePath, agentID)
+		} else {
+			usage = r.readClaudeUsage(worktreePath, agentID)
+		}
+
+		// Scan activity monitor (independent of context usage — works for both providers).
+		r.mu.Lock()
+		ra, ok = r.running[agentID]
 		var actMon *agentmon.Monitor
 		if ok && ra.ActivityMon != nil {
 			actMon = ra.ActivityMon
@@ -135,6 +121,88 @@ func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, work
 	}
 }
 
+// readClaudeUsage reads context usage for a Claude agent from the usage file
+// and transcript, including compaction signal detection.
+func (r *Runner) readClaudeUsage(worktreePath string, agentID uuid.UUID) *ctxmon.Usage {
+	usagePath := ctxmon.UsageFilePath(worktreePath)
+	signalPath := ctxmon.CompactionSignalPath(worktreePath)
+
+	usage, err := ctxmon.ReadUsageFile(usagePath)
+	if err != nil {
+		slog.Warn("context monitor: read usage file", "agent_id", agentID, "error", err)
+	}
+
+	// Fall back to reading the session transcript directly if the
+	// status line script hasn't produced a usage file (e.g. in -p mode).
+	if usage == nil {
+		usage, err = ctxmon.ReadTranscriptUsage(worktreePath)
+		if err != nil {
+			slog.Warn("context monitor: read transcript", "agent_id", agentID, "error", err)
+			return nil
+		}
+	}
+
+	// Check compaction signal.
+	compacted := false
+	if _, err := os.Stat(signalPath); err == nil {
+		compacted = true
+		os.Remove(signalPath)
+	}
+
+	if usage == nil && compacted {
+		usage = &ctxmon.Usage{
+			UsedPercent:         100,
+			CompactionTriggered: true,
+			LastUpdated:         time.Now(),
+		}
+	} else if usage != nil && compacted {
+		usage.CompactionTriggered = true
+	}
+
+	return usage
+}
+
+// readOpenCodeUsage reads context usage for an OpenCode agent by scanning the
+// JSONL output log for step_finish events and accumulating token counts.
+func (r *Runner) readOpenCodeUsage(worktreePath string, agentID uuid.UUID) *ctxmon.Usage {
+	logPath := filepath.Join(worktreePath, ".opencode", "agent-output.jsonl")
+	f, err := os.Open(logPath)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var totalIn, totalOut int
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var evt openCodeEvent
+		if err := json.Unmarshal(line, &evt); err != nil {
+			continue
+		}
+		if evt.Type == "step_finish" {
+			totalIn += evt.Part.Tokens.Input
+			totalOut += evt.Part.Tokens.Output
+		}
+	}
+
+	if totalIn == 0 && totalOut == 0 {
+		return nil
+	}
+
+	return &ctxmon.Usage{
+		TotalInputTokens:  totalIn,
+		TotalOutputTokens: totalOut,
+		UsedPercent:       0, // no context window tracking for OpenCode yet
+		TotalCostUSD:      0, // local model, no cost
+		LastUpdated:       time.Now(),
+	}
+}
+
 // recordMetrics appends five metric rows per tick: context_pct, cost_usd,
 // token_input, token_output, and tool_count. Errors are logged but do not
 // interrupt the monitoring loop.
@@ -173,36 +241,55 @@ func (r *Runner) GetContextUsage(agentID uuid.UUID) *ctxmon.Usage {
 
 // monitorAgent is a background goroutine that waits for the agent subprocess
 // to become idle (via the idle signal file) or exit, then gracefully shuts it
-// down and sends a completion.
+// down and sends a completion. For OpenCode agents, idle signal polling is
+// skipped — only process exit is monitored.
 func (r *Runner) monitorAgent(ctx context.Context, agentID uuid.UUID, proc *AgentProcess, worktreePath string) {
-	idleSignal := filepath.Join(worktreePath, ".claude", "agent-idle")
+	// Resolve provider for this agent.
+	r.mu.Lock()
+	ra, raOk := r.running[agentID]
+	var provider model.ProviderType
+	if raOk {
+		provider = ra.Provider
+	}
+	r.mu.Unlock()
 
-	// Poll for idle signal or process exit.
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	for {
+	if provider == model.ProviderOpenCode {
+		// OpenCode agents: no idle detection — just wait for process exit.
 		select {
 		case <-ctx.Done():
-			return // StopAgent was called
+			return
 		case <-proc.done:
-			// Process exited on its own.
 			goto done
-		case <-ticker.C:
-			if _, err := os.Stat(idleSignal); err == nil {
-				// Idle signal detected — send /exit and wait.
-				proc.SendExit()
-				timer := time.NewTimer(sendExitGracePeriod)
-				select {
-				case <-proc.done:
-					timer.Stop()
-				case <-timer.C:
-					proc.Kill()
-				case <-ctx.Done():
-					timer.Stop()
-					return
-				}
+		}
+	} else {
+		// Claude agents: poll for idle signal or process exit.
+		idleSignal := filepath.Join(worktreePath, ".claude", "agent-idle")
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return // StopAgent was called
+			case <-proc.done:
+				// Process exited on its own.
 				goto done
+			case <-ticker.C:
+				if _, err := os.Stat(idleSignal); err == nil {
+					// Idle signal detected — send /exit and wait.
+					proc.SendExit()
+					timer := time.NewTimer(sendExitGracePeriod)
+					select {
+					case <-proc.done:
+						timer.Stop()
+					case <-timer.C:
+						proc.Kill()
+					case <-ctx.Done():
+						timer.Stop()
+						return
+					}
+					goto done
+				}
 			}
 		}
 	}
@@ -217,12 +304,17 @@ done:
 
 	exitCode, _ := proc.Wait()
 
-	// Build completion and enrich with exit log data.
+	// Build completion and enrich with exit info by provider.
 	comp := Completion{AgentID: agentID, ReturnCode: exitCode}
-	homeDir, _ := os.UserHomeDir()
-	if homeDir != "" {
-		projectDir := filepath.Join(homeDir, ".claude", "projects", ctxmon.ProjectDirName(worktreePath))
-		enrichCompletion(&comp, projectDir)
+	if provider == model.ProviderOpenCode {
+		logPath := filepath.Join(worktreePath, ".opencode", "agent-output.jsonl")
+		enrichOpenCodeCompletion(&comp, logPath)
+	} else {
+		homeDir, _ := os.UserHomeDir()
+		if homeDir != "" {
+			projectDir := filepath.Join(homeDir, ".claude", "projects", ctxmon.ProjectDirName(worktreePath))
+			enrichCompletion(&comp, projectDir)
+		}
 	}
 
 	// Send completion.

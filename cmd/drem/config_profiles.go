@@ -52,6 +52,9 @@ func (c Config) ForAgentTypeWithProfile(at model.AgentType, profile string) (mod
 	if override.Effort != "" {
 		base.Effort = override.Effort
 	}
+	if override.Provider != "" {
+		base.Provider = model.ProviderType(override.Provider)
+	}
 
 	return base, nil
 }

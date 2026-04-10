@@ -44,7 +44,7 @@ func agentResultOrchestrator(t *testing.T, bareRepoPath string) (*Orchestrator, 
 	// is needed to avoid nil-pointer panics in onAgentCompleted; it will
 	// return errors from GetAgentOutput which the caller handles gracefully.
 	tm := tmux.NewManager("test-agent-result")
-	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", 4, nil)
+	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", "", 4, nil)
 
 	o := &Orchestrator{
 		db:        db,
