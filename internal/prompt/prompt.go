@@ -90,6 +90,12 @@ func Generate(opts Opts) string {
 		"",
 	)
 
+	// 2e. Critical Rules Library — standing guardrails from observed failure patterns
+	criticalRules := readCriticalRules(opts.WorktreePath)
+	if criticalRules != "" {
+		sections = append(sections, criticalRules)
+	}
+
 	// 3. Task Details
 	sections = append(sections, "## Task Description", "")
 	sections = append(sections, opts.Task.Description, "")
