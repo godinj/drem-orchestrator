@@ -50,6 +50,10 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 		o.emit("merge_complete", map[string]any{"task_id": task.ID})
 		o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "merge complete")
 		o.logger.Info("merge complete", "task_id", task.ID)
+
+		// Regenerate the repo map for the main branch so the next batch of
+		// workers sees updated package/function signatures.
+		go o.worktree.GenerateRepoMapForMain()
 	} else {
 		// Quick fix tasks: flag for human review on merge failure, no fixer agent.
 		if task.Category.IsQuickFix() {
