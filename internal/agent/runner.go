@@ -549,6 +549,13 @@ func (r *Runner) startOpenCodeAgent(agentID, taskID uuid.UUID, worktreePath, bra
 		return fmt.Errorf("start opencode agent: mkdir .opencode: %w", err)
 	}
 
+	// Copy global opencode config so the vllm provider is available in worktrees.
+	homeDir, _ := os.UserHomeDir()
+	globalCfg := filepath.Join(homeDir, ".config", "opencode", "opencode.json")
+	if data, err := os.ReadFile(globalCfg); err == nil {
+		_ = os.WriteFile(filepath.Join(ocDir, "opencode.json"), data, 0o644)
+	}
+
 	// Write prompt to .opencode/agent-prompt.md (for reference/debugging).
 	promptPath := filepath.Join(ocDir, "agent-prompt.md")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
