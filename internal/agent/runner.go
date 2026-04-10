@@ -173,6 +173,8 @@ func AgentTypeLabel(at model.AgentType) string {
 		return "review"
 	case model.AgentFixer:
 		return "fix"
+	case model.AgentPrep:
+		return "prep"
 	default:
 		return string(at)
 	}
