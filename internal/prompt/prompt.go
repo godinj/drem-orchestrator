@@ -463,16 +463,26 @@ func plannerInstructions() []string {
 }
 
 // coderInstructions returns prompt sections for coder agents, dispatching
-// by the task's Phase field to provide TDD-specific guidance.
+// by the task's Phase field to provide TDD-specific guidance. If a prep agent
+// produced a tactical brief (stored in task context as prep_data), it is
+// appended to the instructions so the coder has pre-analyzed context.
 func coderInstructions(opts Opts) []string {
+	var sections []string
 	switch opts.Task.Phase {
 	case "test":
-		return testPhaseCoderInstructions(opts)
+		sections = testPhaseCoderInstructions(opts)
 	case "implementation":
-		return implPhaseCoderInstructions(opts)
+		sections = implPhaseCoderInstructions(opts)
 	default:
-		return defaultCoderInstructions(opts)
+		sections = defaultCoderInstructions(opts)
 	}
+
+	// Inject prep agent's tactical brief if available.
+	if brief := prepDataBrief(opts); len(brief) > 0 {
+		sections = append(sections, brief...)
+	}
+
+	return sections
 }
 
 // testPhaseCoderInstructions returns instructions for writing tests BEFORE
