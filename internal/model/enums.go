@@ -135,6 +135,7 @@ var allAgentTypes = []AgentType{
 	AgentReviewer,
 	AgentFixer,
 	AgentClassifier,
+	AgentPrep,
 }
 
 // String returns the string representation of an AgentType.
