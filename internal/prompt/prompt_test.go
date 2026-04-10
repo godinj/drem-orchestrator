@@ -924,7 +924,115 @@ func TestReadBuildCommands(t *testing.T) {
 	}
 }
 
-// ── 13. Bug report instructions for all agent types ────────────────────────
+// ── 13. readRepoMap ───────────────────────────────────────────────────────
+
+func TestReadRepoMap_FileDoesNotExist(t *testing.T) {
+	result := readRepoMap(t.TempDir())
+	if result != "" {
+		t.Errorf("expected empty string when repo-map.md does not exist, got %q", result)
+	}
+}
+
+func TestReadRepoMap_EmptyWorktreePath(t *testing.T) {
+	result := readRepoMap("")
+	if result != "" {
+		t.Errorf("expected empty string for empty worktree path, got %q", result)
+	}
+}
+
+func TestReadRepoMap_EmptyFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "repo-map.md"), []byte(""), 0644); err != nil {
+		t.Fatal(err)
+	}
+	result := readRepoMap(dir)
+	if result != "" {
+		t.Errorf("expected empty string for empty repo-map.md, got %q", result)
+	}
+}
+
+func TestReadRepoMap_ReturnsContentsWithHeader(t *testing.T) {
+	dir := t.TempDir()
+	content := "## Package foo\n\nfunc Bar() error"
+	if err := os.WriteFile(filepath.Join(dir, "repo-map.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	result := readRepoMap(dir)
+
+	if !strings.HasPrefix(result, "## Repository Map") {
+		t.Errorf("expected result to start with section header, got %q", result)
+	}
+	if !strings.Contains(result, "func Bar() error") {
+		t.Errorf("expected result to contain file contents, got %q", result)
+	}
+}
+
+func TestGenerate_IncludesRepoMapBeforeTaskDescription(t *testing.T) {
+	dir := t.TempDir()
+	content := "# Repo Map\n\nfunc Baz() string"
+	if err := os.WriteFile(filepath.Join(dir, "repo-map.md"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := Opts{
+		Task: &model.Task{
+			Title:       "Test task",
+			Description: "A test task description",
+		},
+		AgentType:    model.AgentCoder,
+		WorktreePath: dir,
+	}
+
+	prompt := Generate(opts)
+
+	if !strings.Contains(prompt, "## Repository Map") {
+		t.Error("expected generated prompt to contain Repository Map section")
+	}
+	if !strings.Contains(prompt, "func Baz() string") {
+		t.Error("expected generated prompt to contain repo map contents")
+	}
+	if !strings.Contains(prompt, "## Context Efficiency") {
+		t.Error("expected generated prompt to contain Context Efficiency section")
+	}
+
+	// Verify repo map appears before task description
+	repoMapIdx := strings.Index(prompt, "## Repository Map")
+	taskDescIdx := strings.Index(prompt, "## Task Description")
+	if repoMapIdx >= taskDescIdx {
+		t.Error("expected Repository Map to appear before Task Description")
+	}
+
+	// Verify context efficiency appears before task description
+	ctxEffIdx := strings.Index(prompt, "## Context Efficiency")
+	if ctxEffIdx >= taskDescIdx {
+		t.Error("expected Context Efficiency to appear before Task Description")
+	}
+}
+
+func TestGenerate_NoRepoMap_NoContextEfficiency(t *testing.T) {
+	dir := t.TempDir() // no repo-map.md
+
+	opts := Opts{
+		Task: &model.Task{
+			Title:       "Test task",
+			Description: "A test task description",
+		},
+		AgentType:    model.AgentCoder,
+		WorktreePath: dir,
+	}
+
+	prompt := Generate(opts)
+
+	if strings.Contains(prompt, "## Repository Map") {
+		t.Error("expected no Repository Map section when file is absent")
+	}
+	if strings.Contains(prompt, "## Context Efficiency") {
+		t.Error("expected no Context Efficiency section when repo map is absent")
+	}
+}
+
+// ── 14. Bug report instructions for all agent types ────────────────────────
 
 func TestGenerate_BugReportInstructionsAllAgentTypes(t *testing.T) {
 	agentTypes := []struct {

@@ -276,6 +276,10 @@ func (r *Runner) SpawnAgent(task *model.Task, featureName string, agentType mode
 	if err != nil {
 		return nil, fmt.Errorf("spawn agent: create worktree: %w", err)
 	}
+
+	// Generate repo map in the new worktree (non-blocking on failure).
+	worktree.GenerateRepoMapAsync(wtInfo.Path)
+
 	return r.spawnNewAgent(task, wtInfo.Path, wtInfo.Branch, agentType, prompt)
 }
 

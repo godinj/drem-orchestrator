@@ -7,6 +7,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/state"
+	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // MaxQuickFixRetries is the number of times the orchestrator will retry a
@@ -61,6 +62,10 @@ func (o *Orchestrator) processQuickFix(task *model.Task) error {
 		if err != nil {
 			return fmt.Errorf("process quick fix: create feature: %w", err)
 		}
+
+		// Generate repo map in the new feature worktree (non-blocking on failure).
+		worktree.GenerateRepoMapAsync(wtInfo.Path)
+
 		task.WorktreeBranch = wtInfo.Branch
 		if err := o.db.Save(task).Error; err != nil {
 			return fmt.Errorf("process quick fix: save worktree branch: %w", err)

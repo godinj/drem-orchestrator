@@ -57,6 +57,26 @@ func Generate(opts Opts) string {
 		sections = append(sections, "")
 	}
 
+	// 2b. Repository Map — structural overview before task details
+	repoMap := readRepoMap(opts.WorktreePath)
+	if repoMap != "" {
+		sections = append(sections, repoMap)
+	}
+
+	// 2c. Context Efficiency
+	if repoMap != "" {
+		sections = append(sections,
+			"## Context Efficiency",
+			"",
+			"You have a limited context window. Before reading a file:",
+			"1. Check the Repository Map above for the file's function signatures",
+			"2. Only read files you need to MODIFY, not files you need to UNDERSTAND",
+			"3. Use grep/search to find specific lines rather than reading entire files",
+			"4. If you need to understand an interface, check the Repository Map first",
+			"",
+		)
+	}
+
 	// 3. Task Details
 	sections = append(sections, "## Task Description", "")
 	sections = append(sections, opts.Task.Description, "")

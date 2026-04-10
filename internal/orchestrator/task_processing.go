@@ -201,6 +201,10 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 		if err != nil {
 			return fmt.Errorf("process planning: create feature: %w", err)
 		}
+
+		// Generate repo map in the new feature worktree (non-blocking on failure).
+		worktree.GenerateRepoMapAsync(wtInfo.Path)
+
 		task.WorktreeBranch = wtInfo.Branch
 		if err := o.db.Save(task).Error; err != nil {
 			return fmt.Errorf("process planning: save worktree branch: %w", err)

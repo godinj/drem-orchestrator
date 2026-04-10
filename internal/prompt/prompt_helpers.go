@@ -214,6 +214,28 @@ func genericDepthGuidance() string {
 	}, "\n")
 }
 
+// readRepoMap reads the repo-map.md file from the worktree root and returns
+// its contents wrapped in a section header. Returns an empty string if the file
+// does not exist or is unreadable (graceful degradation).
+func readRepoMap(worktreePath string) string {
+	if worktreePath == "" {
+		return ""
+	}
+
+	repoMap := filepath.Join(worktreePath, "repo-map.md")
+	data, err := os.ReadFile(repoMap)
+	if err != nil {
+		return ""
+	}
+
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		return ""
+	}
+
+	return "## Repository Map\n\n" + content + "\n"
+}
+
 // readBuildCommands attempts to read build/test commands from CLAUDE.md in the
 // worktree. Returns the commands block or an empty string if the file is absent
 // or unreadable.

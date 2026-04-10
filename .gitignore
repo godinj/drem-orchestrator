@@ -40,3 +40,4 @@ journals/
 # Ephemeral per-feature artifacts (orchestrator reads from agent worktrees, stores in DB)
 plan.json
 CLAUDE.md
+repo-map.md

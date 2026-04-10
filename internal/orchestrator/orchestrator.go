@@ -228,6 +228,9 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	// Startup cleanup: clear stale agent assignments left from previous runs.
 	o.cleanupOrphanedAssignments()
 
+	// Generate repo map for the default branch worktree at startup.
+	go o.worktree.GenerateRepoMapForMain()
+
 	ticker := time.NewTicker(o.tick)
 	defer ticker.Stop()
 	o.logger.Info("orchestrator started", "project_id", o.projectID)
