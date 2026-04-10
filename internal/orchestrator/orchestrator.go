@@ -22,6 +22,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/eventbus"
 	"github.com/godinj/drem-orchestrator/internal/memory"
+	"github.com/godinj/drem-orchestrator/internal/metrics"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
@@ -122,6 +123,7 @@ type Orchestrator struct {
 	contextFixerPct             int // percentage: spawn fixer instead of failing
 	subtaskRecovery             SubtaskRecoveryPolicy
 	interactiveSupervisorConfig model.AgentCLIConfig // model/effort for interactive supervisor sessions
+	metrics                     *metrics.Store       // nil-safe: callers nil-check before use
 	experimentScheduler         *ExperimentScheduler // experiment-aware scheduling
 	logger                      *slog.Logger
 }

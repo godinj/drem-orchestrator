@@ -84,7 +84,7 @@ type Agent struct {
 	TotalCostUSD         float64    `gorm:"column:total_cost_usd;type:float"`   // total API cost in USD (populated at completion)
 	FinalContextPct      int        `gorm:"column:final_context_pct;default:0"` // final context % (populated at completion)
 	TokensIn             int        `gorm:"column:tokens_in;default:0"`         // total input tokens consumed (populated at completion)
-	TokensOut            int        `gorm:"column:tokens_out;default:0"`        // total output tokens consumed (populated at completion"
+	TokensOut            int        `gorm:"column:tokens_out;default:0"`        // total output tokens consumed (populated at completion)
 	ConstraintViolations int        `gorm:"column:constraint_violations;default:0"`
 
 	CreatedAt time.Time
