@@ -359,14 +359,18 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 		return nil, fmt.Errorf("spawn agent: start: %w", err)
 	}
 
-	// Store PID in agent Config for orphan cleanup.
+	// Store PID and log path in agent Config for orphan cleanup and log retrieval.
 	r.mu.Lock()
 	ra := r.running[agent.ID]
 	r.mu.Unlock()
 	if ra != nil && ra.Process != nil {
-		r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("config", model.JSONField{
+		cfg := model.JSONField{
 			"pid": ra.Process.Pid(),
-		})
+		}
+		if ra.LogPath != "" {
+			cfg["log_path"] = ra.LogPath
+		}
+		r.db.Model(&model.Agent{}).Where("id = ?", agent.ID).Update("config", cfg)
 	}
 
 	// Create activity monitor with estimated files from task context.
@@ -541,38 +545,44 @@ func (r *Runner) startClaudeAgent(agentID, taskID uuid.UUID, worktreePath, branc
 
 // startOpenCodeAgent sets up and starts an OpenCode agent subprocess. OpenCode
 // agents skip Claude-specific settings (settings.json, hooks, status scripts,
-// exit-log script) and instead write minimal metadata to .opencode/.
+// exit-log script) and instead write minimal metadata to a per-agent
+// subdirectory under .opencode/agents/<agentID>/ to avoid file collisions
+// when multiple agents share the same worktree.
 func (r *Runner) startOpenCodeAgent(agentID, taskID uuid.UUID, worktreePath, branch, sessionName, prompt string, agentType model.AgentType) error {
-	// Ensure .opencode directory exists.
-	ocDir := filepath.Join(worktreePath, ".opencode")
+	// Ensure per-agent directory exists under .opencode/agents/<agentID>/.
+	// Each agent gets its own subdirectory so concurrent agents in the same
+	// worktree don't overwrite each other's prompt, metadata, or log files.
+	ocDir := filepath.Join(worktreePath, ".opencode", "agents", agentID.String())
 	if err := os.MkdirAll(ocDir, 0o755); err != nil {
-		return fmt.Errorf("start opencode agent: mkdir .opencode: %w", err)
+		return fmt.Errorf("start opencode agent: mkdir .opencode/agents: %w", err)
 	}
 
-	// Copy global opencode config so the vllm provider is available in worktrees.
+	// Copy global opencode config into the shared .opencode/ root where
+	// OpenCode discovers it (relative to --dir), not the per-agent subdir.
+	ocRoot := filepath.Join(worktreePath, ".opencode")
 	homeDir, _ := os.UserHomeDir()
 	globalCfg := filepath.Join(homeDir, ".config", "opencode", "opencode.json")
 	if data, err := os.ReadFile(globalCfg); err == nil {
-		_ = os.WriteFile(filepath.Join(ocDir, "opencode.json"), data, 0o644)
+		_ = os.WriteFile(filepath.Join(ocRoot, "opencode.json"), data, 0o644)
 	}
 
-	// Write prompt to .opencode/agent-prompt.md (for reference/debugging).
+	// Write prompt to per-agent dir (for reference/debugging).
 	promptPath := filepath.Join(ocDir, "agent-prompt.md")
 	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
 		return fmt.Errorf("start opencode agent: write prompt: %w", err)
 	}
 
-	// Write agent metadata JSON to .opencode/agent-metadata.json.
+	// Write agent metadata JSON to per-agent dir.
 	if err := writeAgentMetadata(ocDir, agentID, taskID); err != nil {
 		return fmt.Errorf("start opencode agent: write agent metadata: %w", err)
 	}
 
-	// Remove stale idle signal from a previous agent in this worktree.
+	// Remove stale idle signal from previous agent in this per-agent dir.
 	os.Remove(filepath.Join(ocDir, "agent-idle")) // ignore error
 
-	// Start OpenCode subprocess.
+	// Start OpenCode subprocess with per-agent log directory.
 	cliConfig := r.agentConfigs(agentType)
-	proc, err := StartOpenCodeProcess(context.Background(), r.openCodeBin, promptPath, worktreePath, cliConfig.CLIArgs())
+	proc, err := StartOpenCodeProcess(context.Background(), r.openCodeBin, promptPath, worktreePath, cliConfig.CLIArgs(), ocDir)
 	if err != nil {
 		return fmt.Errorf("start opencode agent: start subprocess: %w", err)
 	}
@@ -663,7 +673,16 @@ func (r *Runner) GetAgentOutput(agentID uuid.UUID) (string, error) {
 			return "", nil
 		}
 		if agent.Provider == string(model.ProviderOpenCode) {
-			logPath = filepath.Join(agent.WorktreePath, ".opencode", "agent-output.jsonl")
+			// Check Config for per-agent log path (stored at spawn time);
+			// fall back to legacy shared path for older agents.
+			if agent.Config != nil {
+				if lp, ok := agent.Config["log_path"].(string); ok && lp != "" {
+					logPath = lp
+				}
+			}
+			if logPath == "" {
+				logPath = filepath.Join(agent.WorktreePath, ".opencode", "agent-output.jsonl")
+			}
 		} else {
 			logPath = filepath.Join(agent.WorktreePath, ".claude", "agent-output.log")
 		}

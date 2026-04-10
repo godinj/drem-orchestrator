@@ -166,8 +166,18 @@ func (r *Runner) readClaudeUsage(worktreePath string, agentID uuid.UUID) *ctxmon
 func (r *Runner) readOpenCodeUsage(worktreePath string, agentID uuid.UUID) *ctxmon.Usage {
 	ctxWindow := r.openCodeContextWindow // 0 → ctxmon default
 
-	// Primary: read from per-agent JSONL log in the worktree.
-	logPath := ctxmon.OpenCodeLogPath(worktreePath)
+	// Primary: read from per-agent JSONL log. Use the agent-specific log path
+	// stored in RunningAgent (which points to the per-agent subdirectory)
+	// rather than the shared .opencode/ root.
+	r.mu.Lock()
+	logPath := ""
+	if ra, ok := r.running[agentID]; ok {
+		logPath = ra.LogPath
+	}
+	r.mu.Unlock()
+	if logPath == "" {
+		logPath = ctxmon.OpenCodeLogPath(worktreePath)
+	}
 	usage, err := ctxmon.ReadOpenCodeJSONLUsage(logPath, ctxWindow)
 	if err != nil {
 		slog.Warn("context monitor: read opencode jsonl", "agent_id", agentID, "error", err)
@@ -295,7 +305,18 @@ done:
 	// Build completion and enrich with exit info by provider.
 	comp := Completion{AgentID: agentID, ReturnCode: exitCode}
 	if provider == model.ProviderOpenCode {
-		logPath := filepath.Join(worktreePath, ".opencode", "agent-output.jsonl")
+		// Use the per-agent log path stored in RunningAgent rather than
+		// hardcoding the shared .opencode/ directory, since each agent now
+		// has its own log directory to avoid concurrent file collisions.
+		r.mu.Lock()
+		logPath := ""
+		if ra, ok := r.running[agentID]; ok {
+			logPath = ra.LogPath
+		}
+		r.mu.Unlock()
+		if logPath == "" {
+			logPath = filepath.Join(worktreePath, ".opencode", "agent-output.jsonl")
+		}
 		enrichOpenCodeCompletion(&comp, logPath)
 	} else {
 		homeDir, _ := os.UserHomeDir()

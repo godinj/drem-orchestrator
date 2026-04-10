@@ -112,16 +112,20 @@ func StartAgentProcess(ctx context.Context, claudeBin, promptPath, cwd string, e
 // "--variant", "minimal", "--format", "json", "--agent", "build"].
 // The prompt is read from promptPath and passed as the final positional argument
 // (OpenCode does not use stdin for prompt delivery).
-// Stdout+stderr are redirected to <cwd>/.opencode/agent-output.jsonl.
-func StartOpenCodeProcess(ctx context.Context, openCodeBin, promptPath, cwd string, extraArgs []string) (*AgentProcess, error) {
-	// 1. Ensure .opencode directory exists.
-	openCodeDir := filepath.Join(cwd, ".opencode")
-	if err := os.MkdirAll(openCodeDir, 0o755); err != nil {
-		return nil, fmt.Errorf("start opencode process: mkdir .opencode: %w", err)
+// logDir specifies the per-agent directory for the output log file, isolating
+// concurrent agents that share the same worktree (cwd). If empty, it defaults
+// to <cwd>/.opencode for backward compatibility.
+func StartOpenCodeProcess(ctx context.Context, openCodeBin, promptPath, cwd string, extraArgs []string, logDir string) (*AgentProcess, error) {
+	// 1. Resolve log directory (per-agent subdir or legacy shared dir).
+	if logDir == "" {
+		logDir = filepath.Join(cwd, ".opencode")
+	}
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return nil, fmt.Errorf("start opencode process: mkdir log dir: %w", err)
 	}
 
-	// 2. Create log file at <cwd>/.opencode/agent-output.jsonl.
-	logPath := filepath.Join(openCodeDir, "agent-output.jsonl")
+	// 2. Create log file in the per-agent log directory.
+	logPath := filepath.Join(logDir, "agent-output.jsonl")
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		return nil, fmt.Errorf("start opencode process: create log: %w", err)
