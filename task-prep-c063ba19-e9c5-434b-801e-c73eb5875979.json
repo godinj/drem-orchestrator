@@ -1,0 +1,38 @@
+{
+  "target_files": [
+    {
+      "path": "ARCHITECTURE.md",
+      "relevant_definitions": "Configuration table at lines 113-137. Each row: | Option | TOML key | Type | Default | Description |",
+      "methods": [],
+      "notes": "Insert new TurnCooldown row after line 137 (Dispatch window row) and before line 138 (Model profiles row). The new row is: | Turn cooldown | `turn_cooldown` | duration | `3m` | Minimum gap between consecutive turns for the same C-Suite agent |"
+    },
+    {
+      "path": "internal/watcher/lifecycle.go",
+      "relevant_definitions": "LifecycleManager struct with fields: ClaudeBin, WorkDir, Timeout, MetricsStore, cfg, ctx, cancel, mu, running, queued, wg, db. Expected new fields: lastTurnEnd map[string]time.Time. Expected new constant: defaultTurnCooldown.",
+      "methods": ["NewLifecycleManager", "TriggerAgent", "Close", "drainQueue", "runTurnAsync", "runTurnAfterDelay (new)", "cooldownDuration (new)"],
+      "notes": "Currently 273 lines. After cooldown implementation expected ~310 lines. Well under 800-line ceiling. Verify line count after other subtasks have merged their changes."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "ARCHITECTURE.md",
+      "location": "Line 137, after the Dispatch window row: `| Dispatch window | `dispatch_window` | duration | `60s` | ...` and before the Model profiles row on line 138",
+      "what": "Add new config table row: | Turn cooldown           | `turn_cooldown`         | duration   | `3m`           | Minimum gap between consecutive turns for the same C-Suite agent  |"
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Configuration table row format in ARCHITECTURE.md",
+      "example": "| Dispatch window         | `dispatch_window`       | duration   | `60s`          | Sliding window duration for dispatch rate limiting        |",
+      "source_file": "ARCHITECTURE.md"
+    }
+  ],
+  "warnings": [
+    "The ARCHITECTURE.md config table uses fixed-width columns with padding — match the existing alignment exactly",
+    "The new row must go BEFORE the Model profiles row (line 137 currently) which is the last row in the main table",
+    "Run `go vet ./... && go test ./...` BEFORE making the doc change to verify the test+implementation subtasks merged correctly",
+    "lifecycle.go line count must stay under 800 — verify with `wc -l` after all changes are merged",
+    "Do NOT modify any test files or source code — only ARCHITECTURE.md gets edited"
+  ],
+  "constructors": []
+}
