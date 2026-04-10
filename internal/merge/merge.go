@@ -72,8 +72,9 @@ type mergeWorktreeClient interface {
 
 // Orchestrator coordinates multi-step merges.
 type Orchestrator struct {
-	wt *worktree.Manager
-	db *gorm.DB
+	wt          *worktree.Manager
+	db          *gorm.DB
+	TestCommand string // optional override; when set, VerifyBuild uses this instead of DetectBuildCommand
 }
 
 // NewOrchestrator creates a merge Orchestrator.
@@ -429,7 +430,14 @@ func (o *Orchestrator) MergeFeatureIntoMain(task *model.Task) (*worktree.MergeRe
 // test command with a 5-minute timeout.  It returns whether the build passed,
 // the combined stdout/stderr output, and any execution error.
 func (o *Orchestrator) VerifyBuild(worktreePath string) (bool, string, error) {
-	cmd, args := DetectBuildCommand(worktreePath)
+	var cmd string
+	var args []string
+	if o.TestCommand != "" {
+		parts := strings.Fields(o.TestCommand)
+		cmd, args = parts[0], parts[1:]
+	} else {
+		cmd, args = DetectBuildCommand(worktreePath)
+	}
 	if cmd == "" {
 		return true, "no build system detected", nil
 	}

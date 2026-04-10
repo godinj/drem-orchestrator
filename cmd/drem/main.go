@@ -190,7 +190,9 @@ func main() {
 	runner.SetDispatchLimiter(ratelimit.New(cfg.MaxDispatchRate, cfg.DispatchWindow))
 	runner.SetMetricsRecorder(metrics.NewStore(database))
 	runner.SetOpenCodeContextWindow(cfg.OpenCodeContextWindow)
-	merger := merge.NewMergeQueue(merge.NewOrchestrator(wt, database), wt)
+	mergeOrch := merge.NewOrchestrator(wt, database)
+	mergeOrch.TestCommand = cfg.TestCommand
+	merger := merge.NewMergeQueue(mergeOrch, wt)
 	mem := memory.NewManager(database)
 
 	var sup *supervisor.Supervisor
@@ -208,6 +210,18 @@ func main() {
 	orchEvents := make(chan orchestrator.Event, 100)
 	orch := orchestrator.NewWithExperimentScheduling(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.MaxConcurrentAgents, cfg.ContextFixerPercent)
 	orch.SetInteractiveSupervisorConfig(cfg.Agents.InteractiveSupervisorCLIConfig())
+
+	// Wire test gate config from drem.toml so test_command is respected.
+	scopedTests := true
+	if cfg.ScopedTests != nil {
+		scopedTests = *cfg.ScopedTests
+	}
+	orch.SetTestGateConfig(orchestrator.TestGateConfig{
+		TestCommand:    cfg.TestCommand,
+		CompileCommand: cfg.CompileCommand,
+		ScopedTests:    scopedTests,
+		TestTimeout:    cfg.TestTimeout,
+	})
 
 	// Wire event bus so task transitions produce events for C-Suite agents.
 	if bus, err := eventbus.New(filepath.Join(os.Getenv("HOME"), ".drem-csuite", "csuite.db")); err != nil {
