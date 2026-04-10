@@ -77,6 +77,19 @@ func Generate(opts Opts) string {
 		)
 	}
 
+	// 2d. Verification Efficiency
+	sections = append(sections,
+		"## Verification Strategy",
+		"",
+		"Each turn costs context. Minimize verification rounds:",
+		"1. Write ALL code changes before running any verification",
+		"2. Run `go vet ./... && go test ./...` in a SINGLE command — never separately",
+		"3. If verification fails, read ALL errors, fix ALL issues in one pass, then verify ONCE more",
+		"4. Maximum 2 verification cycles. If tests still fail after 2 fix attempts, commit what you have with a note",
+		"5. Do NOT re-read files you already read — use your memory of their contents",
+		"",
+	)
+
 	// 3. Task Details
 	sections = append(sections, "## Task Description", "")
 	sections = append(sections, opts.Task.Description, "")
