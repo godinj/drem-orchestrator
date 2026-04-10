@@ -62,14 +62,18 @@ func Generate(opts Opts) string {
 		sections = append(sections, "")
 	}
 
-	// 2b. Repository Map — structural overview before task details
-	repoMap := readRepoMap(opts.WorktreePath)
-	if repoMap != "" {
-		sections = append(sections, repoMap)
+	// 2b. Repository Map — structural overview before task details.
+	// Skip for classifiers: they explore with grep, not a static map.
+	var repoMap string
+	if opts.AgentType != model.AgentClassifier {
+		repoMap = readRepoMap(opts.WorktreePath)
+		if repoMap != "" {
+			sections = append(sections, repoMap)
+		}
 	}
 
 	// 2c. Context Efficiency
-	if repoMap != "" {
+	if repoMap != "" && opts.AgentType != model.AgentClassifier {
 		sections = append(sections,
 			"## Context Efficiency",
 			"",
@@ -82,23 +86,28 @@ func Generate(opts Opts) string {
 		)
 	}
 
-	// 2d. Verification Efficiency
-	sections = append(sections,
-		"## Verification Strategy",
-		"",
-		"Each turn costs context. Minimize verification rounds:",
-		"1. Write ALL code changes before running any verification",
-		"2. Run `go vet ./... && go test ./...` in a SINGLE command — never separately",
-		"3. If verification fails, read ALL errors, fix ALL issues in one pass, then verify ONCE more",
-		"4. Maximum 2 verification cycles. If tests still fail after 2 fix attempts, commit what you have with a note",
-		"5. Do NOT re-read files you already read — use your memory of their contents",
-		"",
-	)
+	// 2d. Verification Efficiency — not needed for read-only classifiers.
+	if opts.AgentType != model.AgentClassifier {
+		sections = append(sections,
+			"## Verification Strategy",
+			"",
+			"Each turn costs context. Minimize verification rounds:",
+			"1. Write ALL code changes before running any verification",
+			"2. Run `go vet ./... && go test ./...` in a SINGLE command — never separately",
+			"3. If verification fails, read ALL errors, fix ALL issues in one pass, then verify ONCE more",
+			"4. Maximum 2 verification cycles. If tests still fail after 2 fix attempts, commit what you have with a note",
+			"5. Do NOT re-read files you already read — use your memory of their contents",
+			"",
+		)
+	}
 
-	// 2e. Critical Rules Library — standing guardrails from observed failure patterns
-	criticalRules := readCriticalRules(opts.WorktreePath)
-	if criticalRules != "" {
-		sections = append(sections, criticalRules)
+	// 2e. Critical Rules Library — standing guardrails from observed failure patterns.
+	// Skip for classifiers: they don't write code, so build/style rules don't apply.
+	if opts.AgentType != model.AgentClassifier {
+		criticalRules := readCriticalRules(opts.WorktreePath)
+		if criticalRules != "" {
+			sections = append(sections, criticalRules)
+		}
 	}
 
 	// 3. Task Details

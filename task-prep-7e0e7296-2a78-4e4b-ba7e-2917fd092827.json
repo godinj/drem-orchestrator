@@ -1,0 +1,44 @@
+{
+  "target_files": [
+    {
+      "path": "internal/prompt/prompt.go",
+      "relevant_definitions": "type Opts struct { Task *model.Task; Project *model.Project; AgentType model.AgentType; WorktreePath string; Memories []*model.Memory; Comments []*model.TaskComment; ParentCtx string; ReviewMode bool; PlanJSON string; GitDiff string; Diagnosis string; AffectedFiles []string; SuggestedFix string; TargetCoderProvider string; TargetCoderModel string }",
+      "methods": ["func Generate(opts Opts) string", "func readRepoMap(worktreePath string) string", "func readCriticalRules(worktreePath string) string"],
+      "notes": "All 4 changes applied: repo map skip (line 65-74), context efficiency guard (line 77), verification strategy wrap (line 86-98), critical rules wrap (line 100-107). model.AgentClassifier is used for all checks."
+    }
+  ],
+  "insertion_points": [
+    {
+      "file": "internal/prompt/prompt.go",
+      "location": "Line 65-74: repo map block now wrapped in AgentClassifier check",
+      "what": "Change 1: Skip repo map for classifiers"
+    },
+    {
+      "file": "internal/prompt/prompt.go",
+      "location": "Line 77: context efficiency condition now includes AgentClassifier check",
+      "what": "Change 2: Skip context efficiency for classifiers"
+    },
+    {
+      "file": "internal/prompt/prompt.go",
+      "location": "Line 86-98: verification strategy block now wrapped in AgentClassifier check",
+      "what": "Change 3: Skip verification strategy for classifiers"
+    },
+    {
+      "file": "internal/prompt/prompt.go",
+      "location": "Line 100-107: critical rules block now wrapped in AgentClassifier check",
+      "what": "Change 4: Skip critical rules for classifiers"
+    }
+  ],
+  "patterns_to_follow": [
+    {
+      "description": "Agent type check pattern used throughout prompt.go",
+      "example": "if opts.AgentType != model.AgentClassifier {",
+      "source_file": "internal/prompt/prompt.go"
+    }
+  ],
+  "warnings": [
+    "repoMap variable is now declared with var (zero value empty string) instead of := assignment for classifiers",
+    "Context efficiency section is doubly guarded (repoMap != '' AND AgentType check) for clarity"
+  ],
+  "constructors": []
+}
