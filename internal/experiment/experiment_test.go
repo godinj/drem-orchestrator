@@ -293,3 +293,461 @@ func TestCreateFromTaskDefaultNotInProfiles(t *testing.T) {
 		t.Fatal("expected error for default not in profiles, got nil")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Lifecycle State Machine Tests
+// ---------------------------------------------------------------------------
+
+func TestStartExperiment(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "lifecycle-proj", "/tmp/lifecycle.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Lifecycle test", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	err = StartExperiment(db, exp.ID)
+	if err != nil {
+		t.Fatalf("StartExperiment: %v", err)
+	}
+
+	var reloaded Experiment
+	if err := db.Preload("Variants").First(&reloaded, "id = ?", exp.ID).Error; err != nil {
+		t.Fatalf("reload experiment: %v", err)
+	}
+
+	if reloaded.Status != StatusRunning {
+		t.Errorf("expected experiment status running, got %q", reloaded.Status)
+	}
+
+	for _, v := range reloaded.Variants {
+		if v.Status != VariantRunning {
+			t.Errorf("variant %s: expected status running, got %q", v.ProfileName, v.Status)
+		}
+	}
+}
+
+func TestStartExperimentNotPending(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "not-pending-proj", "/tmp/notpending.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Already running", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	StartExperiment(db, exp.ID)
+
+	err = StartExperiment(db, exp.ID)
+	if err == nil {
+		t.Fatal("expected error for non-pending experiment, got nil")
+	}
+}
+
+func TestMoveToReview(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "review-proj", "/tmp/review.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Review test", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	StartExperiment(db, exp.ID)
+
+	var expWithVariants Experiment
+	db.Preload("Variants").First(&expWithVariants, "id = ?", exp.ID)
+
+	for _, v := range expWithVariants.Variants {
+		PassVariant(db, v.ID)
+	}
+
+	err = MoveToReview(db, exp.ID)
+	if err != nil {
+		t.Fatalf("MoveToReview: %v", err)
+	}
+
+	var reloaded Experiment
+	db.First(&reloaded, "id = ?", exp.ID)
+	if reloaded.Status != StatusReview {
+		t.Errorf("expected experiment status review, got %q", reloaded.Status)
+	}
+}
+
+func TestMoveToReviewVariantsNotTerminal(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "not-terminal-proj", "/tmp/notterminal.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Not terminal", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	StartExperiment(db, exp.ID)
+
+	err = MoveToReview(db, exp.ID)
+	if err == nil {
+		t.Fatal("expected error for non-terminal variants, got nil")
+	}
+}
+
+func TestCompleteExperiment(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "complete-proj", "/tmp/complete.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Complete test", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	exp.Status = StatusReview
+	db.Save(&exp)
+
+	err = CompleteExperiment(db, exp.ID)
+	if err != nil {
+		t.Fatalf("CompleteExperiment: %v", err)
+	}
+
+	var reloaded Experiment
+	db.First(&reloaded, "id = ?", exp.ID)
+	if reloaded.Status != StatusCompleted {
+		t.Errorf("expected experiment status completed, got %q", reloaded.Status)
+	}
+}
+
+func TestCompleteExperimentNotReview(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "not-review-proj", "/tmp/notreview.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Not review", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	err = CompleteExperiment(db, exp.ID)
+	if err == nil {
+		t.Fatal("expected error for non-review experiment, got nil")
+	}
+}
+
+func TestCancelExperiment(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "cancel-proj", "/tmp/cancel.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Cancel test", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	StartExperiment(db, exp.ID)
+
+	err = CancelExperiment(db, exp.ID)
+	if err != nil {
+		t.Fatalf("CancelExperiment: %v", err)
+	}
+
+	var reloaded Experiment
+	if err := db.Preload("Variants").First(&reloaded, "id = ?", exp.ID).Error; err != nil {
+		t.Fatalf("reload experiment: %v", err)
+	}
+
+	if reloaded.Status != StatusCancelled {
+		t.Errorf("expected experiment status cancelled, got %q", reloaded.Status)
+	}
+
+	for _, v := range reloaded.Variants {
+		if v.Status != VariantFailed {
+			t.Errorf("variant %s: expected status failed, got %q", v.ProfileName, v.Status)
+		}
+	}
+}
+
+func TestCancelExperimentCompleted(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "completed-proj", "/tmp/completed.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Completed", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	exp.Status = StatusCompleted
+	db.Save(&exp)
+
+	err = CancelExperiment(db, exp.ID)
+	if err == nil {
+		t.Fatal("expected error for completed experiment, got nil")
+	}
+}
+
+func TestPassVariant(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "pass-proj", "/tmp/pass.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Pass test", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	StartExperiment(db, exp.ID)
+
+	var expWithVariants Experiment
+	db.Preload("Variants").First(&expWithVariants, "id = ?", exp.ID)
+
+	v := expWithVariants.Variants[0]
+	err = PassVariant(db, v.ID)
+	if err != nil {
+		t.Fatalf("PassVariant: %v", err)
+	}
+
+	var reloaded Variant
+	db.First(&reloaded, "id = ?", v.ID)
+	if reloaded.Status != VariantPassed {
+		t.Errorf("expected variant status passed, got %q", reloaded.Status)
+	}
+}
+
+func TestPassVariantAlreadyTerminal(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "already-terminal-proj", "/tmp/alreadyterminal.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Already terminal", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	StartExperiment(db, exp.ID)
+
+	var expWithVariants Experiment
+	db.Preload("Variants").First(&expWithVariants, "id = ?", exp.ID)
+
+	v := expWithVariants.Variants[0]
+	PassVariant(db, v.ID)
+
+	err = PassVariant(db, v.ID)
+	if err == nil {
+		t.Fatal("expected error for already passed variant, got nil")
+	}
+}
+
+func TestFailVariant(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "fail-proj", "/tmp/fail.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Fail test", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	StartExperiment(db, exp.ID)
+
+	var expWithVariants Experiment
+	db.Preload("Variants").First(&expWithVariants, "id = ?", exp.ID)
+
+	v := expWithVariants.Variants[0]
+	err = FailVariant(db, v.ID)
+	if err != nil {
+		t.Fatalf("FailVariant: %v", err)
+	}
+
+	var reloaded Variant
+	db.First(&reloaded, "id = ?", v.ID)
+	if reloaded.Status != VariantFailed {
+		t.Errorf("expected variant status failed, got %q", reloaded.Status)
+	}
+}
+
+func TestFailVariantAlreadyTerminal(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "fail-terminal-proj", "/tmp/failterminal.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Already terminal", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	StartExperiment(db, exp.ID)
+
+	var expWithVariants Experiment
+	db.Preload("Variants").First(&expWithVariants, "id = ?", exp.ID)
+
+	v := expWithVariants.Variants[0]
+	FailVariant(db, v.ID)
+
+	err = FailVariant(db, v.ID)
+	if err == nil {
+		t.Fatal("expected error for already failed variant, got nil")
+	}
+}
+
+func TestPromoteVariant(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "promote-proj", "/tmp/promote.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Promote test", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	StartExperiment(db, exp.ID)
+
+	var expWithVariants Experiment
+	db.Preload("Variants").First(&expWithVariants, "id = ?", exp.ID)
+
+	v := expWithVariants.Variants[0]
+	PassVariant(db, v.ID)
+
+	err = PromoteVariant(db, v.ID)
+	if err != nil {
+		t.Fatalf("PromoteVariant: %v", err)
+	}
+
+	var reloaded Variant
+	db.First(&reloaded, "id = ?", v.ID)
+	if reloaded.Status != VariantWinner {
+		t.Errorf("expected variant status winner, got %q", reloaded.Status)
+	}
+}
+
+func TestPromoteVariantNotPassed(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "not-passed-proj", "/tmp/notpassed.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Not passed", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	StartExperiment(db, exp.ID)
+
+	var expWithVariants Experiment
+	db.Preload("Variants").First(&expWithVariants, "id = ?", exp.ID)
+
+	v := expWithVariants.Variants[0]
+	err = PromoteVariant(db, v.ID)
+	if err == nil {
+		t.Fatal("expected error for non-passed variant, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Query Helper Tests
+// ---------------------------------------------------------------------------
+
+func TestListActiveExperiments(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "list-proj", "/tmp/list.git", "master")
+
+	exp1, err := CreateExperiment(db, proj.ID, "Active 1", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+	StartExperiment(db, exp1.ID)
+
+	exp2, err := CreateExperiment(db, proj.ID, "Active 2", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+	StartExperiment(db, exp2.ID)
+
+	exp3, err := CreateExperiment(db, proj.ID, "Active 3", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+	StartExperiment(db, exp3.ID)
+
+	exp4, err := CreateExperiment(db, proj.ID, "Completed", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+	exp4.Status = StatusCompleted
+	db.Save(&exp4)
+
+	active, err := ListActiveExperiments(db)
+	if err != nil {
+		t.Fatalf("ListActiveExperiments: %v", err)
+	}
+
+	if len(active) != 3 {
+		t.Errorf("expected 3 active experiments, got %d", len(active))
+	}
+}
+
+func TestGetExperimentByID(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "get-proj", "/tmp/get.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Get test", "desc", []string{"a", "b", "c"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	got, err := GetExperimentByID(db, exp.ID)
+	if err != nil {
+		t.Fatalf("GetExperimentByID: %v", err)
+	}
+
+	if got.ID != exp.ID {
+		t.Errorf("expected ID %s, got %s", exp.ID, got.ID)
+	}
+	if len(got.Variants) != 3 {
+		t.Errorf("expected 3 variants, got %d", len(got.Variants))
+	}
+}
+
+func TestGetVariantByTaskID(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "variant-proj", "/tmp/variant.git", "master")
+
+	exp, err := CreateExperiment(db, proj.ID, "Variant test", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+
+	taskID := exp.Variants[0].TaskID
+	v, err := GetVariantByTaskID(db, taskID)
+	if err != nil {
+		t.Fatalf("GetVariantByTaskID: %v", err)
+	}
+
+	if v.TaskID != taskID {
+		t.Errorf("expected task ID %s, got %s", taskID, v.TaskID)
+	}
+	if v.ProfileName != "a" {
+		t.Errorf("expected profile name 'a', got %q", v.ProfileName)
+	}
+}
+
+func TestCountActiveExperiments(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &Experiment{}, &Variant{})
+	proj := testutil.CreateProject(t, db, "count-proj", "/tmp/count.git", "master")
+
+	exp1, err := CreateExperiment(db, proj.ID, "Active 1", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+	StartExperiment(db, exp1.ID)
+
+	exp2, err := CreateExperiment(db, proj.ID, "Active 2", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+	StartExperiment(db, exp2.ID)
+
+	exp3, err := CreateExperiment(db, proj.ID, "Completed", "desc", []string{"a", "b"}, "a")
+	if err != nil {
+		t.Fatalf("CreateExperiment: %v", err)
+	}
+	exp3.Status = StatusCompleted
+	db.Save(&exp3)
+
+	count, err := CountActiveExperiments(db)
+	if err != nil {
+		t.Fatalf("CountActiveExperiments: %v", err)
+	}
+
+	if count != 2 {
+		t.Errorf("expected 2 active experiments, got %d", count)
+	}
+}

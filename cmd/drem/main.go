@@ -205,7 +205,7 @@ func main() {
 	bugReportSvc := bugreport.New(database)
 
 	orchEvents := make(chan orchestrator.Event, 100)
-	orch := orchestrator.New(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.ContextFixerPercent)
+	orch := orchestrator.NewWithExperimentScheduling(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.MaxConcurrentAgents, cfg.ContextFixerPercent)
 	orch.SetInteractiveSupervisorConfig(cfg.Agents.InteractiveSupervisorCLIConfig())
 
 	// Wire event bus so task transitions produce events for C-Suite agents.

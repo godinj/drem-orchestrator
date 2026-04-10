@@ -122,12 +122,14 @@ type Orchestrator struct {
 	contextFixerPct             int // percentage: spawn fixer instead of failing
 	subtaskRecovery             SubtaskRecoveryPolicy
 	interactiveSupervisorConfig model.AgentCLIConfig // model/effort for interactive supervisor sessions
+	experimentScheduler         *ExperimentScheduler // experiment-aware scheduling
 	logger                      *slog.Logger
 }
 
 // New creates an Orchestrator. The supervisor parameter is optional — pass nil
 // to disable LLM-powered decision points and fall back to existing behavior.
 // The bugSvc parameter is optional — pass nil to disable bug report ingestion.
+// maxConcurrent is used for experiment-aware scheduling.
 func New(
 	db *gorm.DB,
 	dbPath string,
@@ -170,6 +172,33 @@ func New(
 		contextFixerPct: fixerPct,
 		logger:          slog.Default().With("component", "orchestrator", "project_id", projectID),
 	}
+}
+
+// NewWithExperimentScheduling creates an Orchestrator with experiment-aware
+// scheduling enabled. When experiments are active, normal tasks are paused
+// and the agent pool is partitioned across experiment variants.
+func NewWithExperimentScheduling(
+	db *gorm.DB,
+	dbPath string,
+	runner *agent.Runner,
+	wt *worktree.Manager,
+	merger mergerClient,
+	mem *memory.Manager,
+	sup *supervisor.Supervisor,
+	projectID uuid.UUID,
+	events chan<- Event,
+	tickInterval time.Duration,
+	staleTimeout time.Duration,
+	contextWarnPct int,
+	contextStopPct int,
+	bugSvc *bugreport.Service,
+	bugDir string,
+	maxConcurrent int,
+	contextFixerPct ...int,
+) *Orchestrator {
+	orch := New(db, dbPath, runner, wt, merger, mem, sup, projectID, events, tickInterval, staleTimeout, contextWarnPct, contextStopPct, bugSvc, bugDir, contextFixerPct...)
+	orch.experimentScheduler = NewExperimentScheduler(db, maxConcurrent)
+	return orch
 }
 
 // SetTestGateConfig updates the test gate configuration. Call this after

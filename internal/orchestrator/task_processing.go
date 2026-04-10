@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -17,9 +18,21 @@ import (
 // Quick fix tasks skip planning and go directly to IN_PROGRESS.
 // When replanning (PlanFeedback is set), it detaches old subtasks first
 // to prevent the planner from seeing stale done subtasks and auto-advancing.
+// When experiments are active, normal (non-experiment) tasks are blocked.
 func (o *Orchestrator) processBacklog(task *model.Task) error {
 	if task.Category.IsQuickFix() {
 		return o.processQuickFix(task)
+	}
+
+	// Experiment-aware scheduling: block normal tasks when experiments are active.
+	if o.experimentScheduler != nil {
+		canSchedule, reason, err := o.experimentScheduler.CanScheduleTask(task.ID)
+		if err != nil {
+			o.logger.Warn("experiment scheduler check failed", "task_id", task.ID, "error", err)
+		} else if !canSchedule {
+			o.logger.Debug("task blocked by experiment scheduler", "task_id", task.ID, "reason", reason)
+			return nil
+		}
 	}
 
 	if task.PlanFeedback != "" {
@@ -242,6 +255,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 // that have their dependencies met and spawns agents for them.
 // If phaseFilter is non-empty, only subtasks with a matching Phase are
 // considered (used by processTestWriting to limit scheduling to test-phase).
+// When experiments are active, variant tasks are preferred based on under-allocation.
 func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...string) error {
 	var subtasks []model.Task
 	if err := o.db.Where(
@@ -267,6 +281,15 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 	}
 	if len(candidates) == 0 {
 		return nil
+	}
+
+	// Experiment-aware ordering: when experiments are active, reorder candidates
+	// to prefer variant tasks from under-allocated variants.
+	if o.experimentScheduler != nil {
+		active, _ := o.experimentScheduler.IsActive()
+		if active {
+			candidates = o.orderCandidatesByExperimentPriority(candidates)
+		}
 	}
 
 	// Query in-progress sibling tasks for conflict detection.
@@ -675,4 +698,67 @@ func (o *Orchestrator) dispatchPendingSubtasks() {
 			o.logger.Error("dispatch pending subtasks", "parent_id", parent.ID, "error", err)
 		}
 	}
+}
+
+// orderCandidatesByExperimentPriority reorders candidates to prefer variant tasks
+// from under-allocated experiment variants. Non-experiment tasks are moved to
+// the end. Within experiment tasks, those from more under-allocated variants
+// come first.
+func (o *Orchestrator) orderCandidatesByExperimentPriority(candidates []model.Task) []model.Task {
+	if o.experimentScheduler == nil {
+		return candidates
+	}
+
+	// Get under-allocated variants
+	underAllocated, err := o.experimentScheduler.GetUnderAllocatedVariants()
+	if err != nil {
+		o.logger.Warn("failed to get under-allocated variants", "error", err)
+		return candidates
+	}
+
+	// Build a priority map: task ID -> priority (lower is higher priority)
+	priorityMap := make(map[uuid.UUID]int)
+	priority := 0
+
+	// First, add experiment tasks from under-allocated variants
+	for _, va := range underAllocated {
+		variant := va.Variant
+		// Find tasks that belong to this variant
+		for i := range candidates {
+			if candidates[i].ID == variant.TaskID {
+				priorityMap[candidates[i].ID] = priority
+				priority++
+			}
+		}
+	}
+
+	// Add remaining experiment tasks (from variants at capacity)
+	for i := range candidates {
+		task := &candidates[i]
+		if _, exists := priorityMap[task.ID]; exists {
+			continue
+		}
+		isExperimentTask, _, _ := o.experimentScheduler.IsExperimentTask(task.ID)
+		if isExperimentTask {
+			priorityMap[task.ID] = priority
+			priority++
+		}
+	}
+
+	// Add non-experiment tasks at the end
+	for i := range candidates {
+		task := &candidates[i]
+		if _, exists := priorityMap[task.ID]; exists {
+			continue
+		}
+		priorityMap[task.ID] = priority
+		priority++
+	}
+
+	// Sort candidates by priority
+	sort.SliceStable(candidates, func(i, j int) bool {
+		return priorityMap[candidates[i].ID] < priorityMap[candidates[j].ID]
+	})
+
+	return candidates
 }
