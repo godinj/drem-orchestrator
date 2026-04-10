@@ -208,12 +208,13 @@ func runWatcher(args []string, stderr io.Writer) int {
 	}
 	defer bus.Close()
 
-	// Pre-trigger inbox check: skip turns when agent has no inbox messages
-	// and no unacked event bus deliveries.
-	runnerCfg.Precheck = &inboxEventPrecheck{
-		inboxBaseDir: runnerCfg.InboxBaseDir,
-		bus:          bus,
-	}
+	// Pre-trigger inbox check: skip turns when agent has no relevant inbox
+	// messages or unacked event bus deliveries. Filters events by type per
+	// agent and auto-acks non-relevant events.
+	runnerCfg.Precheck = watcher.NewFilteredPrecheck(
+		runnerCfg.InboxBaseDir,
+		&busAdapter{bus: bus},
+	)
 
 	// Create a real CommandRunner that spawns claude subprocesses.
 	runner := &claudeCommandRunner{
@@ -286,27 +287,38 @@ func toRunnerConfig(cfg watcherTomlConfig) watcher.RunnerConfig {
 	return rc
 }
 
-// inboxEventPrecheck implements watcher.TurnPrecheck by checking both the
-// filesystem inbox and the event bus. A turn is skipped only when BOTH are
-// empty; either one having work is sufficient to run.
-type inboxEventPrecheck struct {
-	inboxBaseDir string
-	bus          *eventbus.Bus
+// busAdapter wraps *eventbus.Bus to satisfy watcher.FilteredEventBus,
+// converting eventbus.Event to watcher.EventInfo.
+type busAdapter struct {
+	bus *eventbus.Bus
 }
 
-// HasWork returns true if the agent has unarchived inbox messages or unacked
-// event bus deliveries.
-func (p *inboxEventPrecheck) HasWork(agent string) bool {
-	if watcher.HasInboxMessages(p.inboxBaseDir, agent) {
-		return true
-	}
-	unacked, err := p.bus.UnackedDeliveries(agent)
+func (a *busAdapter) UnackedDeliveries(agent string) ([]watcher.EventInfo, error) {
+	events, err := a.bus.UnackedDeliveries(agent)
 	if err != nil {
-		// On error, err on the side of running the turn.
-		log.Printf("precheck: event bus query for %s: %v", agent, err)
-		return true
+		return nil, err
 	}
-	return len(unacked) > 0
+	infos := make([]watcher.EventInfo, len(events))
+	for i, e := range events {
+		infos[i] = watcher.EventInfo{ID: e.ID, Type: e.Type}
+	}
+	return infos, nil
+}
+
+func (a *busAdapter) UnackedDeliveriesByTypes(agent string, eventTypes []string) ([]watcher.EventInfo, error) {
+	events, err := a.bus.UnackedDeliveriesByTypes(agent, eventTypes)
+	if err != nil {
+		return nil, err
+	}
+	infos := make([]watcher.EventInfo, len(events))
+	for i, e := range events {
+		infos[i] = watcher.EventInfo{ID: e.ID, Type: e.Type}
+	}
+	return infos, nil
+}
+
+func (a *busAdapter) Ack(agent string, eventIDs []string) error {
+	return a.bus.Ack(agent, eventIDs)
 }
 
 // claudeCommandRunner is the production CommandRunner that spawns claude

@@ -597,6 +597,131 @@ func TestUnackedDeliveries_OrderedByCreatedAt(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// UnackedDeliveriesByTypes
+// ---------------------------------------------------------------------------
+
+// TestUnackedDeliveriesByTypes_FiltersEventType verifies that
+// UnackedDeliveriesByTypes only returns events matching the requested types.
+func TestUnackedDeliveriesByTypes_FiltersEventType(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Publish events of different types.
+	relevant := &eventbus.Event{Type: "task_status_changed", Source: "orchestrator", Details: "{}"}
+	irrelevant := &eventbus.Event{Type: "comment_added", Source: "orchestrator", Details: "{}"}
+	for _, e := range []*eventbus.Event{relevant, irrelevant} {
+		if err := bus.Publish(e); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+		if err := bus.Deliver(e.ID, "mike"); err != nil {
+			t.Fatalf("Deliver: %v", err)
+		}
+	}
+
+	events, err := bus.UnackedDeliveriesByTypes("mike", []string{"task_status_changed"})
+	if err != nil {
+		t.Fatalf("UnackedDeliveriesByTypes: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("got %d events, want 1", len(events))
+	}
+	if events[0].ID != relevant.ID {
+		t.Errorf("event ID = %q, want %q", events[0].ID, relevant.ID)
+	}
+}
+
+// TestUnackedDeliveriesByTypes_EmptyTypes verifies that passing an empty
+// eventTypes slice returns an empty result (not an error).
+func TestUnackedDeliveriesByTypes_EmptyTypes(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	e := &eventbus.Event{Type: "task_status_changed", Source: "orchestrator", Details: "{}"}
+	if err := bus.Publish(e); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if err := bus.Deliver(e.ID, "mike"); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	events, err := bus.UnackedDeliveriesByTypes("mike", []string{})
+	if err != nil {
+		t.Fatalf("UnackedDeliveriesByTypes: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("got %d events, want 0 (empty types)", len(events))
+	}
+}
+
+// TestUnackedDeliveriesByTypes_MultipleTypes verifies that passing multiple
+// types returns events matching any of them.
+func TestUnackedDeliveriesByTypes_MultipleTypes(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	types := []string{"task_status_changed", "comment_added", "unrelated_event"}
+	for _, typ := range types {
+		e := &eventbus.Event{Type: typ, Source: "orchestrator", Details: "{}"}
+		if err := bus.Publish(e); err != nil {
+			t.Fatalf("Publish: %v", err)
+		}
+		if err := bus.Deliver(e.ID, "mike"); err != nil {
+			t.Fatalf("Deliver: %v", err)
+		}
+	}
+
+	events, err := bus.UnackedDeliveriesByTypes("mike", []string{"task_status_changed", "comment_added"})
+	if err != nil {
+		t.Fatalf("UnackedDeliveriesByTypes: %v", err)
+	}
+	if len(events) != 2 {
+		t.Errorf("got %d events, want 2", len(events))
+	}
+}
+
+// TestUnackedDeliveriesByTypes_ExcludesAcked verifies that acked events
+// are excluded even when their type matches.
+func TestUnackedDeliveriesByTypes_ExcludesAcked(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	e := &eventbus.Event{Type: "task_status_changed", Source: "orchestrator", Details: "{}"}
+	if err := bus.Publish(e); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if err := bus.Deliver(e.ID, "mike"); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+	if err := bus.Ack("mike", []string{e.ID}); err != nil {
+		t.Fatalf("Ack: %v", err)
+	}
+
+	events, err := bus.UnackedDeliveriesByTypes("mike", []string{"task_status_changed"})
+	if err != nil {
+		t.Fatalf("UnackedDeliveriesByTypes: %v", err)
+	}
+	if len(events) != 0 {
+		t.Errorf("got %d events, want 0 (acked)", len(events))
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Ack: batch and idempotent behavior
 // ---------------------------------------------------------------------------
 

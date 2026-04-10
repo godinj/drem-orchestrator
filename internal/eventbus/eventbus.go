@@ -143,6 +143,32 @@ func (b *Bus) UnackedDeliveries(agent string) ([]Event, error) {
 	return events, nil
 }
 
+// UnackedDeliveriesByTypes returns unacked deliveries for the given agent
+// filtered to only include events whose event_type matches one of the
+// provided eventTypes. Returns an empty slice (not an error) when no
+// matching unacked deliveries exist. If eventTypes is empty, returns an
+// empty slice (no types means no matches).
+func (b *Bus) UnackedDeliveriesByTypes(agent string, eventTypes []string) ([]Event, error) {
+	if len(eventTypes) == 0 {
+		return []Event{}, nil
+	}
+	var events []Event
+	err := b.db.Raw(`
+		SELECT e.* FROM events e
+		JOIN event_deliveries d ON d.event_id = e.id
+		WHERE d.agent = ? AND d.acked_at IS NULL
+		  AND e.event_type IN ?
+		ORDER BY e.created_at ASC
+	`, agent, eventTypes).Scan(&events).Error
+	if err != nil {
+		return nil, err
+	}
+	if events == nil {
+		events = []Event{}
+	}
+	return events, nil
+}
+
 // Ack sets acked_at = now on every event_deliveries row that matches the
 // given agent and any of the provided eventIDs. It is idempotent: calling
 // Ack on an already-acknowledged event is a no-op, not an error.
