@@ -162,8 +162,11 @@ Description: %s
 // runTestSuite runs the test suite in the given worktree and returns whether
 // tests passed and the combined output.
 func (o *Orchestrator) runTestSuite(worktreePath string) (passed bool, output string) {
-	// Run go test for Go projects.
-	result, err := runCommand(worktreePath, "go test ./...")
+	cmd := o.testGate.TestCommand
+	if cmd == "" {
+		cmd = "go test ./..."
+	}
+	result, err := runCommand(worktreePath, cmd)
 	if err != nil || result.ExitCode != 0 {
 		return false, result.Output
 	}
