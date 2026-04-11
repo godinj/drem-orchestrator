@@ -89,16 +89,16 @@ type MetricsRecorder interface {
 // Runner manages Claude Code agent lifecycles. Headless agents run as
 // subprocesses; supervisors and shells still use tmux.
 type Runner struct {
-	db              *gorm.DB
-	startProcess    ProcessStarter // creates subprocess; overridable for tests
-	tmuxMgr         *tmux.Manager  // for supervisors/shells only
-	tmuxSessionName string         // dashboard session name prefix
-	worktree        *worktree.Manager
-	claudeBin       string
-	openCodeBin     string
-	maxConcurrent   int
-	agentConfigs    func(model.AgentType) model.AgentCLIConfig // per-type CLI flags
-	metricsRecorder        MetricsRecorder                            // optional; nil means no time-series recording
+	db                    *gorm.DB
+	startProcess          ProcessStarter // creates subprocess; overridable for tests
+	tmuxMgr               *tmux.Manager  // for supervisors/shells only
+	tmuxSessionName       string         // dashboard session name prefix
+	worktree              *worktree.Manager
+	claudeBin             string
+	openCodeBin           string
+	maxConcurrent         int
+	agentConfigs          func(model.AgentType) model.AgentCLIConfig // per-type CLI flags
+	metricsRecorder       MetricsRecorder                            // optional; nil means no time-series recording
 	openCodeContextWindow int                                        // vLLM context window size; 0 → ctxmon default
 
 	mu              sync.Mutex
