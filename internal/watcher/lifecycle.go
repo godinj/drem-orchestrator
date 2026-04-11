@@ -15,7 +15,7 @@ import (
 	"gorm.io/gorm"
 )
 
-const defaultTimeout = 3 * time.Minute
+const defaultTimeout = 99 * time.Minute
 const defaultTurnCooldown = 3 * time.Minute
 
 // LifecycleManager launches agent turns as claude subprocesses, waits for

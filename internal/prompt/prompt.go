@@ -188,8 +188,6 @@ func Generate(opts Opts) string {
 		sections = append(sections, fixerInstructions(opts)...)
 	case model.AgentClassifier:
 		sections = append(sections, classifierInstructions(opts.WorktreePath, opts.Task.ID.String())...)
-	case model.AgentPrep:
-		sections = append(sections, prepInstructions(opts)...)
 	default:
 		sections = append(sections, defaultInstructions()...)
 	}
@@ -207,8 +205,9 @@ func Generate(opts Opts) string {
 	}
 
 	// 7. Build & Verify — read CLAUDE.md if present
+	// Skip for classifiers: they don't write code.
 	buildCmds := readBuildCommands(opts.WorktreePath)
-	if buildCmds != "" {
+	if buildCmds != "" && opts.AgentType != model.AgentClassifier {
 		sections = append(sections, "## Build & Verify", "")
 		sections = append(sections, "```bash")
 		sections = append(sections, buildCmds)
@@ -216,36 +215,43 @@ func Generate(opts Opts) string {
 	}
 
 	// 8. Architecture & Constraints — read context files from .drem/constraints.toml
+	// Skip for classifiers: they don't write code.
 	ctxFiles := readContextFiles(opts.WorktreePath)
-	if ctxFiles != "" {
+	if ctxFiles != "" && opts.AgentType != model.AgentClassifier {
 		sections = append(sections, ctxFiles)
 	}
 
 	// Scope limitation
-	sections = append(sections, "## Scope", "")
-	sections = append(sections,
-		"Only modify files directly relevant to this task. "+
-			"Do not refactor unrelated code or change project configuration "+
-			"unless the task explicitly requires it.",
-		"",
-	)
+	// Skip for classifiers: they don't write code.
+	if opts.AgentType != model.AgentClassifier {
+		sections = append(sections, "## Scope", "")
+		sections = append(sections,
+			"Only modify files directly relevant to this task. "+
+				"Do not refactor unrelated code or change project configuration "+
+				"unless the task explicitly requires it.",
+			"",
+		)
+	}
 
 	// Completion instructions (reviewer agents don't commit)
-	sections = append(sections, "## Completion", "")
-	if opts.AgentType == model.AgentReviewer {
-		sections = append(sections,
-			"When you have completed your review, ensure `review.json` has been written "+
-				"to the working directory root. Do NOT commit any changes or modify code.",
-			"",
-		)
-	} else {
-		sections = append(sections,
-			"When you have completed the task, you MUST commit all changes before exiting. "+
-				"Run `git add` for any new or untracked files (do NOT rely solely on `git add -u`, "+
-				"which skips untracked files), then run `git commit` with a descriptive message. "+
-				"Ensure all tests pass before committing.",
-			"",
-		)
+	// Skip for classifiers: they don't write code.
+	if opts.AgentType != model.AgentClassifier {
+		sections = append(sections, "## Completion", "")
+		if opts.AgentType == model.AgentReviewer {
+			sections = append(sections,
+				"When you have completed your review, ensure `review.json` has been written "+
+					"to the working directory root. Do NOT commit any changes or modify code.",
+				"",
+			)
+		} else {
+			sections = append(sections,
+				"When you have completed the task, you MUST commit all changes before exiting. "+
+					"Run `git add` for any new or untracked files (do NOT rely solely on `git add -u`, "+
+					"which skips untracked files), then run `git commit` with a descriptive message. "+
+					"Ensure all tests pass before committing.",
+				"",
+			)
+		}
 	}
 
 	return strings.Join(sections, "\n")
