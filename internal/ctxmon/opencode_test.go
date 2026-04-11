@@ -1,13 +1,12 @@
 package ctxmon
 
 import (
-	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
-	_ "github.com/mattn/go-sqlite3"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
 func TestReadOpenCodeJSONLUsage(t *testing.T) {
@@ -162,7 +161,7 @@ func TestReadOpenCodeDBUsage(t *testing.T) {
 	worktree := "/tmp/test-worktree"
 
 	// Create a minimal OpenCode DB schema.
-	db := createTestOpenCodeDB(t, dbPath)
+	db := testutil.NewTestOpenCodeDB(t, dbPath)
 
 	// Insert a session matching our worktree.
 	sessionID := "ses_test123"
@@ -224,7 +223,7 @@ func TestReadOpenCodeDBUsage_NoMatchingSession(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "opencode.db")
 
-	db := createTestOpenCodeDB(t, dbPath)
+	db := testutil.NewTestOpenCodeDB(t, dbPath)
 	// Insert a session for a different directory.
 	_, err := db.Exec(`INSERT INTO session (id, project_id, directory, slug, title, version, time_created, time_updated)
 		VALUES ('ses_other', 'proj1', '/other/dir', 'other', 'Other', '1', 1000, 2000)`)
@@ -257,7 +256,7 @@ func TestReadOpenCodeDBUsage_PicksLatestSession(t *testing.T) {
 	dbPath := filepath.Join(dir, "opencode.db")
 	worktree := "/tmp/wt"
 
-	db := createTestOpenCodeDB(t, dbPath)
+	db := testutil.NewTestOpenCodeDB(t, dbPath)
 
 	// Insert an older session.
 	_, err := db.Exec(`INSERT INTO session (id, project_id, directory, slug, title, version, time_created, time_updated)
@@ -461,37 +460,3 @@ func writeJSONLEvents(t *testing.T, path string, events []openCodeStepEvent) {
 	}
 }
 
-func createTestOpenCodeDB(t *testing.T, dbPath string) *sql.DB {
-	t.Helper()
-	db, err := sql.Open("sqlite3", dbPath)
-	if err != nil {
-		t.Fatalf("create test db: %v", err)
-	}
-	// Create minimal schema matching the real OpenCode DB.
-	stmts := []string{
-		`CREATE TABLE session (
-			id TEXT PRIMARY KEY,
-			project_id TEXT NOT NULL,
-			directory TEXT NOT NULL,
-			slug TEXT NOT NULL,
-			title TEXT NOT NULL,
-			version TEXT NOT NULL,
-			time_created INTEGER NOT NULL,
-			time_updated INTEGER NOT NULL
-		)`,
-		`CREATE TABLE message (
-			id TEXT PRIMARY KEY,
-			session_id TEXT NOT NULL,
-			time_created INTEGER NOT NULL,
-			time_updated INTEGER NOT NULL,
-			data TEXT NOT NULL,
-			FOREIGN KEY (session_id) REFERENCES session(id) ON DELETE CASCADE
-		)`,
-	}
-	for _, stmt := range stmts {
-		if _, err := db.Exec(stmt); err != nil {
-			t.Fatalf("create table: %v", err)
-		}
-	}
-	return db
-}
