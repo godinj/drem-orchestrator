@@ -459,4 +459,3 @@ func writeJSONLEvents(t *testing.T, path string, events []openCodeStepEvent) {
 		}
 	}
 }
-
