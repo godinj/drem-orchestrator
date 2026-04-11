@@ -22,22 +22,16 @@ const maxPlanRejections = 3
 // Public methods for TUI interaction (task processing)
 // ---------------------------------------------------------------------------
 
-// HandlePlanApproved creates subtask records from the plan and transitions the
-// task to IN_PROGRESS (or TEST_WRITING for TDD plans).
-func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
-	var task model.Task
-	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
-		return fmt.Errorf("handle plan approved: load task: %w", err)
-	}
-
-	if task.Status != model.StatusPlanReview {
-		return fmt.Errorf("handle plan approved: task %s is in %s, expected plan_review", taskID, task.Status)
-	}
-
-	// Parse the plan (full format with TDD exceptions).
+// materializeSubtasks parses the plan from a parent task and creates subtask
+// records in the DB, including dependency and TestsFor mappings. It returns
+// the parsed plan result and created subtask IDs, or an error.
+// This is shared by HandlePlanApproved and the defensive check in
+// processTestWriting (for plans approved via raw DB update that bypassed
+// subtask creation).
+func (o *Orchestrator) materializeSubtasks(task *model.Task) (*parsePlanResult, []uuid.UUID, error) {
 	planResult, err := parsePlan(task.Plan)
 	if err != nil {
-		return fmt.Errorf("handle plan approved: %w", err)
+		return nil, nil, fmt.Errorf("materialize subtasks: %w", err)
 	}
 	subtaskPlans := planResult.Subtasks
 
@@ -71,7 +65,7 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 		}
 
 		if err := o.db.Create(&sub).Error; err != nil {
-			return fmt.Errorf("handle plan approved: create subtask %d: %w", i, err)
+			return nil, nil, fmt.Errorf("materialize subtasks: create subtask %d: %w", i, err)
 		}
 	}
 
@@ -89,7 +83,7 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 		if len(depIDs) > 0 {
 			if err := o.db.Model(&model.Task{}).Where("id = ?", createdIDs[i]).
 				Update("dependency_ids", depIDs).Error; err != nil {
-				return fmt.Errorf("handle plan approved: update dependencies for subtask %d: %w", i, err)
+				return nil, nil, fmt.Errorf("materialize subtasks: update dependencies for subtask %d: %w", i, err)
 			}
 		}
 	}
@@ -109,6 +103,27 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 			}
 		}
 	}
+
+	return planResult, createdIDs, nil
+}
+
+// HandlePlanApproved creates subtask records from the plan and transitions the
+// task to IN_PROGRESS (or TEST_WRITING for TDD plans).
+func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return fmt.Errorf("handle plan approved: load task: %w", err)
+	}
+
+	if task.Status != model.StatusPlanReview {
+		return fmt.Errorf("handle plan approved: task %s is in %s, expected plan_review", taskID, task.Status)
+	}
+
+	planResult, _, err := o.materializeSubtasks(&task)
+	if err != nil {
+		return fmt.Errorf("handle plan approved: %w", err)
+	}
+	subtaskPlans := planResult.Subtasks
 
 	// Store TDD exceptions on the parent task.
 	if len(planResult.TDDExceptions) > 0 {

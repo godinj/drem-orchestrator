@@ -2216,6 +2216,133 @@ func TestOnAgentCompleted_TestWritingParent_InProgressParentUnchanged(t *testing
 }
 
 // ---------------------------------------------------------------------------
+// Defensive subtask materialization tests
+// ---------------------------------------------------------------------------
+
+func TestProcessTestWriting_DefensiveMaterializeSubtasks(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	// Build a plan with test-phase subtasks.
+	planJSON := model.JSONField{
+		"subtasks": []map[string]any{
+			{
+				"title":       "Tests for auth",
+				"description": "Write auth tests",
+				"agent_type":  "coder",
+				"phase":       "test",
+			},
+			{
+				"title":       "Implement auth",
+				"description": "Implement auth module",
+				"agent_type":  "coder",
+				"phase":       "implementation",
+			},
+		},
+	}
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-defensive",
+		Description: "task with plan but no subtask rows",
+		Status:      model.StatusTestWriting,
+		Plan:        planJSON,
+	}
+	db.Create(&parent)
+
+	// Verify zero subtask rows exist before the call.
+	var countBefore int64
+	db.Model(&model.Task{}).Where("parent_task_id = ?", parentID).Count(&countBefore)
+	if countBefore != 0 {
+		t.Fatalf("expected 0 subtasks before processTestWriting, got %d", countBefore)
+	}
+
+	// processTestWriting should auto-materialize subtasks from the plan.
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify subtask rows were created.
+	var subtasks []model.Task
+	db.Where("parent_task_id = ?", parentID).Find(&subtasks)
+	if len(subtasks) != 2 {
+		t.Fatalf("expected 2 subtasks after defensive materialization, got %d", len(subtasks))
+	}
+
+	// Verify phases are correct.
+	phaseCount := map[string]int{}
+	for _, s := range subtasks {
+		phaseCount[s.Phase]++
+	}
+	if phaseCount["test"] != 1 {
+		t.Errorf("expected 1 test-phase subtask, got %d", phaseCount["test"])
+	}
+	if phaseCount["implementation"] != 1 {
+		t.Errorf("expected 1 implementation-phase subtask, got %d", phaseCount["implementation"])
+	}
+}
+
+func TestProcessTestWriting_SkipsMaterializeWhenSubtasksExist(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	planJSON := model.JSONField{
+		"subtasks": []map[string]any{
+			{
+				"title":       "Tests for auth",
+				"description": "Write auth tests",
+				"agent_type":  "coder",
+				"phase":       "test",
+			},
+		},
+	}
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-existing",
+		Description: "task with plan AND existing subtask rows",
+		Status:      model.StatusTestWriting,
+		Plan:        planJSON,
+	}
+	db.Create(&parent)
+
+	// Pre-create a subtask so the defensive check should NOT trigger.
+	existing := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "existing-test-sub",
+		Description:  "already created",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	db.Create(&existing)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Should still have only 1 subtask (no duplicates from materialization).
+	var count int64
+	db.Model(&model.Task{}).Where("parent_task_id = ?", parentID).Count(&count)
+	if count != 1 {
+		t.Errorf("expected 1 subtask (no duplicate materialization), got %d", count)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Suppress unused import warning
 // ---------------------------------------------------------------------------
 
