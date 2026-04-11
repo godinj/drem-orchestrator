@@ -210,6 +210,33 @@ func (o *Orchestrator) SetEventBus(bus *eventbus.Bus) {
 	o.bus = bus
 }
 
+// NewWithExperimentScheduling creates an Orchestrator with experiment-aware
+// scheduling enabled. When experiments are active, normal tasks are paused
+// and the agent pool is partitioned across experiment variants.
+func NewWithExperimentScheduling(
+	db *gorm.DB,
+	dbPath string,
+	runner *agent.Runner,
+	wt *worktree.Manager,
+	merger mergerClient,
+	mem *memory.Manager,
+	sup *supervisor.Supervisor,
+	projectID uuid.UUID,
+	events chan<- Event,
+	tickInterval time.Duration,
+	staleTimeout time.Duration,
+	contextWarnPct int,
+	contextStopPct int,
+	bugSvc *bugreport.Service,
+	bugDir string,
+	maxConcurrent int,
+	contextFixerPct ...int,
+) *Orchestrator {
+	orch := New(db, dbPath, runner, wt, merger, mem, sup, projectID, events, tickInterval, staleTimeout, contextWarnPct, contextStopPct, bugSvc, bugDir, contextFixerPct...)
+	orch.experimentScheduler = NewExperimentScheduler(db, maxConcurrent)
+	return orch
+}
+
 // Run starts the main loop. It blocks until ctx is cancelled.
 func (o *Orchestrator) Run(ctx context.Context) {
 	// Startup cleanup: clear stale agent assignments left from previous runs.
