@@ -174,10 +174,10 @@ func TestReadOpenCodeDBUsage(t *testing.T) {
 
 	// Insert messages with token data.
 	messages := []struct {
-		id       string
-		tokensIn int
+		id        string
+		tokensIn  int
 		tokensOut int
-		created  int
+		created   int
 	}{
 		{"msg1", 5000, 200, 100},
 		{"msg2", 12000, 300, 200},

@@ -13,18 +13,18 @@ import (
 // LlamaSlot represents a single slot from llama-server's GET /slots endpoint.
 // Each slot tracks one concurrent inference context with its own KV cache.
 type LlamaSlot struct {
-	ID        int    `json:"id"`
-	NCtx      int    `json:"n_ctx"`      // total context window size for this slot
-	NPast     int    `json:"n_past"`     // tokens currently in the KV cache
-	NPredict  int    `json:"n_predict"`  // max tokens to predict (-1 = unlimited)
-	State     int    `json:"state"`      // 0=idle, 1=processing
-	IsActive  bool   `json:"is_processing"`
-	TaskID    int    `json:"id_task"`
-	DynModel  string `json:"dynatemp_model,omitempty"`
+	ID       int    `json:"id"`
+	NCtx     int    `json:"n_ctx"`     // total context window size for this slot
+	NPast    int    `json:"n_past"`    // tokens currently in the KV cache
+	NPredict int    `json:"n_predict"` // max tokens to predict (-1 = unlimited)
+	State    int    `json:"state"`     // 0=idle, 1=processing
+	IsActive bool   `json:"is_processing"`
+	TaskID   int    `json:"id_task"`
+	DynModel string `json:"dynatemp_model,omitempty"`
 
 	// Token counters for this slot's lifetime.
-	NPromptTokensProcessed    int `json:"n_decoded,omitempty"`       // prompt tokens evaluated
-	NTokensPredicted          int `json:"tokens_predicted,omitempty"` // generation tokens produced
+	NPromptTokensProcessed     int `json:"n_decoded,omitempty"`        // prompt tokens evaluated
+	NTokensPredicted           int `json:"tokens_predicted,omitempty"` // generation tokens produced
 	PromptTokensProcessedTotal int `json:"prompt_tokens_processed,omitempty"`
 }
 
@@ -37,14 +37,14 @@ const (
 // LlamaServerMetrics holds parsed llama-server Prometheus metrics relevant
 // to context and load monitoring, fetched from GET /metrics.
 type LlamaServerMetrics struct {
-	KVCacheUsageRatio        float64 // llamacpp:kv_cache_usage_ratio
-	KVCacheTokens            int64   // llamacpp:kv_cache_tokens_count
-	RequestsProcessing       int     // llamacpp:requests_processing
-	RequestsPending          int     // llamacpp:requests_pending
-	TokensPredictedTotal     int64   // llamacpp:tokens_predicted_total
-	TokensEvaluatedTotal     int64   // llamacpp:prompt_tokens_total
-	SlotsIdle                int     // llamacpp:slots_idle
-	SlotsProcessing          int     // llamacpp:slots_processing
+	KVCacheUsageRatio    float64 // llamacpp:kv_cache_usage_ratio
+	KVCacheTokens        int64   // llamacpp:kv_cache_tokens_count
+	RequestsProcessing   int     // llamacpp:requests_processing
+	RequestsPending      int     // llamacpp:requests_pending
+	TokensPredictedTotal int64   // llamacpp:tokens_predicted_total
+	TokensEvaluatedTotal int64   // llamacpp:prompt_tokens_total
+	SlotsIdle            int     // llamacpp:slots_idle
+	SlotsProcessing      int     // llamacpp:slots_processing
 }
 
 // ReadLlamaServerSlots fetches and parses llama-server's /slots endpoint.
