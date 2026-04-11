@@ -91,6 +91,7 @@ type Config struct {
 	MaxDispatchRate       int                      `toml:"max_dispatch_rate"`
 	DispatchWindow        time.Duration            `toml:"dispatch_window"`
 	OpenCodeContextWindow int                      `toml:"opencode_context_window"`
+	SkipConstraintGate    bool                     `toml:"skip_constraint_gate"`
 	Agents                AgentsConfig             `toml:"agents"`
 	Profiles              map[string]ProfileConfig `toml:"profiles"`
 }

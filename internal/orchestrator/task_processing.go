@@ -627,7 +627,7 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 
 		// Run full constraint evaluation on the integration worktree before
 		// allowing transition to testing_ready, with retry/backoff gating.
-		if parent.WorktreeBranch != "" {
+		if parent.WorktreeBranch != "" && !o.skipConstraintGate {
 			blocked, err := o.evaluateConstraintGate(parent)
 			if err != nil {
 				return err
