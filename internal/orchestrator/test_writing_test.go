@@ -2343,6 +2343,33 @@ func TestProcessTestWriting_SkipsMaterializeWhenSubtasksExist(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// SetExperimentScheduling tests
+// ---------------------------------------------------------------------------
+
+func TestSetExperimentScheduling(t *testing.T) {
+	db := testutil.NewTestDB(t)
+
+	o := testOrchestrator(t, db, nil)
+
+	// Before calling the setter, experimentScheduler must be nil.
+	if o.experimentScheduler != nil {
+		t.Fatal("expected experimentScheduler to be nil after New()")
+	}
+
+	o.SetExperimentScheduling(5)
+
+	// After calling the setter, experimentScheduler must be non-nil.
+	if o.experimentScheduler == nil {
+		t.Fatal("expected experimentScheduler to be non-nil after SetExperimentScheduling")
+	}
+
+	// Verify maxConcurrent was wired correctly.
+	if o.experimentScheduler.maxConcurrent != 5 {
+		t.Fatalf("expected maxConcurrent=5, got %d", o.experimentScheduler.maxConcurrent)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Suppress unused import warning
 // ---------------------------------------------------------------------------
 
