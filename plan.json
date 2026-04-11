@@ -1,0 +1,128 @@
+{
+  "subtasks": [
+    {
+      "title": "Write tests for subtask scheduling functions",
+      "description": "Create subtask_scheduling_test.go with tests that exercise the three functions being extracted: scheduleSubtasks, dispatchPendingSubtasks, and orderCandidatesByExperimentPriority. These functions already have coverage in existing test files (scheduling_test.go, experiment_scheduling_test.go, dedup_scheduling_test.go, dispatch_stall_test.go), but this subtask creates a focused test file in the new location to verify the functions remain accessible after extraction.\n\nWrite 3 tests:\n1. TestScheduleSubtasks_SkipsWhenNoCandidates — create a parent task with no backlog subtasks, call scheduleSubtasks, assert no error and no state changes.\n2. TestDispatchPendingSubtasks_SkipsTerminalParents — create a parent in StatusDone with a backlog subtask, call dispatchPendingSubtasks, assert the subtask remains in backlog (not dispatched).\n3. TestOrderCandidatesByExperimentPriority_NilScheduler — call orderCandidatesByExperimentPriority with experimentScheduler=nil, assert candidates returned unchanged.\n\nUse testutil.NewTestDB for DB setup. Use testutil.CreateProject and testutil.CreateTask for entity creation. The Orchestrator struct is in orchestrator.go — instantiate with: o := &Orchestrator{db: db, projectID: project.ID, logger: slog.Default()}. Set o.experimentScheduler = nil for test 3.\n\nThese tests verify behavioral contracts that must hold after the file move.",
+      "agent_type": "coder",
+      "phase": "test",
+      "tests_for": [1],
+      "files": [
+        "internal/orchestrator/subtask_scheduling_test.go"
+      ],
+      "dependencies": [],
+      "priority": 1,
+      "module_boundaries": [
+        {
+          "package": "internal/orchestrator",
+          "description": "Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch",
+          "exports": 10
+        }
+      ],
+      "interface_shapes": [
+        {
+          "package": "internal/orchestrator",
+          "functions": [
+            "(*Orchestrator).scheduleSubtasks(parent *model.Task, phaseFilter ...string) error",
+            "(*Orchestrator).dispatchPendingSubtasks()",
+            "(*Orchestrator).orderCandidatesByExperimentPriority(candidates []model.Task) []model.Task"
+          ],
+          "types": []
+        }
+      ]
+    },
+    {
+      "title": "Extract subtask scheduling functions to subtask_scheduling.go",
+      "description": "Move three functions from task_processing.go to a new file subtask_scheduling.go in the same package. This is a pure structural refactor — no behavioral or API changes.\n\n**Functions to extract (cut from task_processing.go, paste into subtask_scheduling.go):**\n1. scheduleSubtasks (lines 266-544 in task_processing.go) — includes the doc comment starting at line 266\n2. dispatchPendingSubtasks (lines 706-747) — includes doc comment starting at line 706\n3. orderCandidatesByExperimentPriority (lines 749-810) — includes doc comment starting at line 749\n\n**New file subtask_scheduling.go structure:**\n```go\npackage orchestrator\n\nimport (\n\t\"fmt\"\n\t\"sort\"\n\t\"strings\"\n\n\t\"github.com/google/uuid\"\n\n\t\"github.com/godinj/drem-orchestrator/internal/model\"\n\t\"github.com/godinj/drem-orchestrator/internal/prompt\"\n\t\"github.com/godinj/drem-orchestrator/internal/state\"\n)\n```\nThen paste the three functions verbatim (no modifications to function bodies).\n\n**Modifications to task_processing.go:**\n- Remove the three functions listed above (cut, don't copy)\n- Remove `sort` from the import block (only used by orderCandidatesByExperimentPriority)\n- Keep all other imports — `fmt`, `log/slog`, `strings`, `uuid`, `model`, `prompt`, `state`, `worktree` are all used by remaining functions\n\n**After extraction, task_processing.go should contain only:**\n- processBacklog\n- processPlanning\n- findCurrentGroup\n- checkFeatureCompletion\n- handlePaused\n\n**Verification:** Run `go vet ./internal/orchestrator/... && go test ./internal/orchestrator/... -count=1` to confirm no compilation errors and all existing tests pass.\n\n**Line count target:** task_processing.go must be ≤800 lines (expect ~430 lines). subtask_scheduling.go should be ~390 lines.",
+      "agent_type": "coder",
+      "phase": "implementation",
+      "tests_for": [],
+      "files": [
+        "internal/orchestrator/task_processing.go",
+        "internal/orchestrator/subtask_scheduling.go"
+      ],
+      "dependencies": [],
+      "priority": 1,
+      "module_boundaries": [
+        {
+          "package": "internal/orchestrator",
+          "description": "Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch",
+          "exports": 10
+        }
+      ],
+      "interface_shapes": [
+        {
+          "package": "internal/orchestrator",
+          "functions": [
+            "(*Orchestrator).scheduleSubtasks(parent *model.Task, phaseFilter ...string) error",
+            "(*Orchestrator).dispatchPendingSubtasks()",
+            "(*Orchestrator).orderCandidatesByExperimentPriority(candidates []model.Task) []model.Task"
+          ],
+          "types": []
+        }
+      ]
+    },
+    {
+      "title": "Integration verification",
+      "description": "Verify the extraction is correct end-to-end:\n1. Run `wc -l internal/orchestrator/task_processing.go` — must be ≤800 lines\n2. Run `wc -l internal/orchestrator/subtask_scheduling.go` — should be ~390 lines\n3. Run `gofmt -l internal/orchestrator/subtask_scheduling.go internal/orchestrator/task_processing.go` — must produce no output\n4. Run `go vet ./internal/orchestrator/...` — must pass\n5. Run `go test ./internal/orchestrator/... -count=1` — all existing tests must pass\n6. Run `grep -c '^func ' internal/orchestrator/subtask_scheduling.go` — must be exactly 3\n7. Run `grep -c '^func ' internal/orchestrator/task_processing.go` — must be exactly 5\n\nThis subtask does not need to create or modify any files — it only validates. If any check fails, fix the issue in the relevant file.\n\nNo new features, no documentation changes needed — this is a same-package file split with zero user-facing impact.",
+      "agent_type": "coder",
+      "phase": "integration",
+      "tests_for": [],
+      "files": [
+        "internal/orchestrator/task_processing.go",
+        "internal/orchestrator/subtask_scheduling.go"
+      ],
+      "dependencies": [1],
+      "priority": 2,
+      "module_boundaries": [],
+      "interface_shapes": []
+    }
+  ],
+  "tdd_exceptions": [],
+  "coverage": [
+    {
+      "criterion": "Extract scheduleSubtasks, dispatchPendingSubtasks, and orderCandidatesByExperimentPriority from task_processing.go",
+      "subtask_indices": [1]
+    },
+    {
+      "criterion": "Create new subtask_scheduling.go file with extracted functions",
+      "subtask_indices": [1]
+    },
+    {
+      "criterion": "Reduce task_processing.go from 810 to ≤800 lines",
+      "subtask_indices": [1, 2]
+    },
+    {
+      "criterion": "Maintain same-package imports (no cross-package changes)",
+      "subtask_indices": [1]
+    },
+    {
+      "criterion": "All existing tests continue to pass",
+      "subtask_indices": [0, 2]
+    }
+  ],
+  "assumptions": [
+    {
+      "decision": "Extract all three functions together into one file rather than splitting across multiple files",
+      "alternatives": [
+        "Extract only orderCandidatesByExperimentPriority (smallest, ~62 lines) to minimally meet the 800-line ceiling",
+        "Extract each function to its own file"
+      ],
+      "why_chosen": "The three functions form a coherent scheduling concern (scheduleSubtasks is the core, dispatchPendingSubtasks is its catch-all caller, orderCandidatesByExperimentPriority is a helper it uses). Extracting them together keeps related logic co-located and produces a well-scoped file."
+    },
+    {
+      "decision": "Name the new file subtask_scheduling.go",
+      "alternatives": [
+        "scheduling_dispatch.go",
+        "subtask_dispatch.go"
+      ],
+      "why_chosen": "subtask_scheduling.go matches the task description's naming and accurately describes the file's contents — scheduling logic for subtasks."
+    },
+    {
+      "decision": "Remove sort import from task_processing.go after extraction",
+      "alternatives": [
+        "Leave the import (would cause compile error)"
+      ],
+      "why_chosen": "sort.SliceStable is only used in orderCandidatesByExperimentPriority which is being extracted. Leaving an unused import causes a Go compile error."
+    }
+  ]
+}
