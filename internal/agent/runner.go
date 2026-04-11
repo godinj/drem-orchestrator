@@ -559,10 +559,27 @@ func (r *Runner) startOpenCodeAgent(agentID, taskID uuid.UUID, worktreePath, bra
 
 	// Copy global opencode config into the shared .opencode/ root where
 	// OpenCode discovers it (relative to --dir), not the per-agent subdir.
+	// Ensure external_directory permission is always set to "allow" so
+	// headless agents can access files outside their worktree root (e.g.
+	// sibling worktrees, bare repo). Without this, OpenCode's headless mode
+	// auto-rejects any "ask" permission, causing "external_directory
+	// auto-rejected" failures.
 	ocRoot := filepath.Join(worktreePath, ".opencode")
 	homeDir, _ := os.UserHomeDir()
 	globalCfg := filepath.Join(homeDir, ".config", "opencode", "opencode.json")
 	if data, err := os.ReadFile(globalCfg); err == nil {
+		var cfg map[string]any
+		if json.Unmarshal(data, &cfg) == nil {
+			perm, _ := cfg["permission"].(map[string]any)
+			if perm == nil {
+				perm = make(map[string]any)
+			}
+			perm["external_directory"] = "allow"
+			cfg["permission"] = perm
+			if patched, err := json.MarshalIndent(cfg, "", "  "); err == nil {
+				data = patched
+			}
+		}
 		_ = os.WriteFile(filepath.Join(ocRoot, "opencode.json"), data, 0o644)
 	}
 
