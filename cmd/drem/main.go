@@ -222,6 +222,7 @@ func main() {
 		ScopedTests:    scopedTests,
 		TestTimeout:    cfg.TestTimeout,
 	})
+	orch.SetSkipConstraintGate(cfg.SkipConstraintGate)
 
 	// Wire event bus so task transitions produce events for C-Suite agents.
 	if bus, err := eventbus.New(filepath.Join(os.Getenv("HOME"), ".drem-csuite", "csuite.db")); err != nil {

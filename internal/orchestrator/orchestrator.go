@@ -123,6 +123,7 @@ type Orchestrator struct {
 	contextStopPct              int
 	contextFixerPct             int // percentage: spawn fixer instead of failing
 	subtaskRecovery             SubtaskRecoveryPolicy
+	skipConstraintGate          bool                 // bypass constraint gate evaluation
 	interactiveSupervisorConfig model.AgentCLIConfig // model/effort for interactive supervisor sessions
 	metrics                     *metrics.Store       // nil-safe: callers nil-check before use
 	experimentScheduler         *ExperimentScheduler // experiment-aware scheduling
@@ -217,6 +218,16 @@ func (o *Orchestrator) SetTestGateConfig(cfg TestGateConfig) {
 // spawning interactive supervisor sessions via tmux.
 func (o *Orchestrator) SetInteractiveSupervisorConfig(cfg model.AgentCLIConfig) {
 	o.interactiveSupervisorConfig = cfg
+}
+
+// SetSkipConstraintGate disables the constraint gate, allowing tasks to
+// transition without passing constitution checks. Use temporarily when
+// master has pre-existing violations that block all merges.
+func (o *Orchestrator) SetSkipConstraintGate(skip bool) {
+	o.skipConstraintGate = skip
+	if skip {
+		o.logger.Warn("constraint gate BYPASSED — tasks will skip constitution checks")
+	}
 }
 
 // SetEventBus connects the orchestrator to the C-Suite event bus. When set,
@@ -617,7 +628,7 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 
 		// Run full constraint evaluation on the integration worktree before
 		// allowing transition to test_review, with retry/backoff gating.
-		if parent.WorktreeBranch != "" {
+		if parent.WorktreeBranch != "" && !o.skipConstraintGate {
 			blocked, err := o.evaluateConstraintGate(parent)
 			if err != nil {
 				return err
