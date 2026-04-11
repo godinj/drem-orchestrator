@@ -4,6 +4,7 @@
 package testutil
 
 import (
+	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	_ "github.com/mattn/go-sqlite3"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -126,6 +128,44 @@ func NewSharedTestDB(t *testing.T) *gorm.DB {
 		&model.TaskComment{},
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
+	}
+	return db
+}
+
+// NewTestOpenCodeDB creates a file-based SQLite database at dbPath with the
+// minimal OpenCode schema (session + message tables). It uses database/sql
+// directly (not GORM) to match the production OpenCode reader's access pattern.
+func NewTestOpenCodeDB(t *testing.T, dbPath string) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("create test db: %v", err)
+	}
+	// Create minimal schema matching the real OpenCode DB.
+	stmts := []string{
+		`CREATE TABLE session (
+			id TEXT PRIMARY KEY,
+			project_id TEXT NOT NULL,
+			directory TEXT NOT NULL,
+			slug TEXT NOT NULL,
+			title TEXT NOT NULL,
+			version TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL
+		)`,
+		`CREATE TABLE message (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			time_created INTEGER NOT NULL,
+			time_updated INTEGER NOT NULL,
+			data TEXT NOT NULL,
+			FOREIGN KEY (session_id) REFERENCES session(id) ON DELETE CASCADE
+		)`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatalf("create table: %v", err)
+		}
 	}
 	return db
 }
