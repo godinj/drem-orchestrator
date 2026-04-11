@@ -406,14 +406,7 @@ func TestReadLlamaServerSlots_HTTPError(t *testing.T) {
 	}
 }
 
-func TestReadLlamaServerMetrics_HTTP(t *testing.T) {
-	metricsBody := `# HELP llamacpp:kv_cache_usage_ratio KV-cache usage.
-# TYPE llamacpp:kv_cache_usage_ratio gauge
-llamacpp:kv_cache_usage_ratio 0.65
-# HELP llamacpp:tokens_predicted_total Tokens predicted.
-# TYPE llamacpp:tokens_predicted_total counter
-llamacpp:tokens_predicted_total 12345
-`
+
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.Write([]byte(metricsBody))
