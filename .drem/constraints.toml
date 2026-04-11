@@ -63,6 +63,11 @@ path           = "internal/orchestrator/"
 rule           = "shrink-only"
 baseline_count = 11
 
+[[max_matches.exception]]
+path           = "internal/tui/"
+rule           = "shrink-only"
+baseline_count = 10
+
 [[max_matches]]
 name    = "GORM hook consolidation"
 glob    = "internal/model/models.go"
