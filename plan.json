@@ -1,0 +1,109 @@
+{
+  "subtasks": [
+    {
+      "title": "Write test for SetExperimentScheduling setter",
+      "description": "Write a test verifying the new SetExperimentScheduling setter method works correctly on an existing Orchestrator instance.\n\nThe setter replaces the exported constructor NewWithExperimentScheduling (orchestrator.go:184-206), which has NO external callers — it's defined but never called outside the package. The new setter should:\n- Accept (db *gorm.DB, maxConcurrent int) parameters\n- Set o.experimentScheduler = NewExperimentScheduler(db, maxConcurrent)\n\nTest cases to write in test_writing_test.go:\n1. TestSetExperimentScheduling_EnablesScheduler: Create Orchestrator via New(), call SetExperimentScheduling(), verify experimentScheduler field is non-nil.\n2. TestSetExperimentScheduling_SchedulerIsUsable: After calling setter, verify the scheduler can be used (call CanScheduleTask or IsActive without panic).\n\nUse testutil.NewTestDB() for database setup. The Orchestrator struct is at orchestrator.go:105-131. Use the existing New() constructor (line 137) to create instances.\n\nA stub implementation of SetExperimentScheduling must be added to orchestrator.go for compilation:\n```go\nfunc (o *Orchestrator) SetExperimentScheduling(db *gorm.DB, maxConcurrent int) {\n    // stub: will be implemented\n}\n```\n\nAppend the test at the END of test_writing_test.go to avoid merge conflicts with existing tests.",
+      "agent_type": "coder",
+      "phase": "test",
+      "tests_for": [1],
+      "files": [
+        "internal/orchestrator/test_writing_test.go",
+        "internal/orchestrator/orchestrator.go"
+      ],
+      "dependencies": [],
+      "priority": 1,
+      "module_boundaries": [
+        {"package": "internal/orchestrator", "description": "Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch", "exports": 2}
+      ],
+      "interface_shapes": [
+        {"package": "internal/orchestrator", "functions": ["(*Orchestrator).SetExperimentScheduling(db *gorm.DB, maxConcurrent int)"], "types": ["Orchestrator"]}
+      ]
+    },
+    {
+      "title": "Extract test-writing methods to test_writing.go and convert NewWithExperimentScheduling to setter",
+      "description": "Two changes to orchestrator.go, both reducing its line count:\n\n**Change 1: Extract 4 methods to new file test_writing.go**\n\nCut these methods from orchestrator.go and paste into a new file internal/orchestrator/test_writing.go:\n\n1. `processTestWriting` (lines 519-669, ~151 lines) — method on *Orchestrator\n2. `spawnDiagnosticAgent` (lines 671-750, ~80 lines) — method on *Orchestrator\n3. `extractTestFiles` (lines 811-834, ~24 lines) — method on *Orchestrator\n4. `isTestFile` (lines 837-874, ~38 lines) — package-level function, no receiver\n\nThe new file test_writing.go must:\n- Use `package orchestrator` declaration\n- Import only what the extracted methods need. Based on the method bodies, the required imports are:\n  - `fmt`, `log/slog`, `os/exec`, `path/filepath`, `regexp`, `strings`\n  - `github.com/google/uuid`\n  - `gorm.io/gorm`\n  - `github.com/godinj/drem-orchestrator/internal/agent`\n  - `github.com/godinj/drem-orchestrator/internal/model`\n  - `github.com/godinj/drem-orchestrator/internal/state`\n  - `github.com/godinj/drem-orchestrator/internal/worktree`\n- Add a file-level comment: `// test_writing.go contains the test-writing lifecycle: processTestWriting, spawnDiagnosticAgent, extractTestFiles, and isTestFile.`\n\nDo NOT modify function signatures or bodies. This is a pure cut-and-paste extraction.\n\nCall sites remain unchanged because all methods are unexported and in the same package:\n- processTestWriting: called in orchestrator.go:330 (doTick) and agent_results.go:285\n- spawnDiagnosticAgent: called in handlers.go:392\n- extractTestFiles: used in orchestrator.go:829 (but that line is INSIDE extractTestFiles itself — it calls isTestFile)\n- isTestFile: called by extractTestFiles (which moves with it)\n\n**Change 2: Convert NewWithExperimentScheduling to SetExperimentScheduling**\n\nReplace the stub from the test subtask with the real implementation. Delete NewWithExperimentScheduling (lines 181-206) and replace with:\n```go\n// SetExperimentScheduling enables experiment-aware scheduling on an existing\n// Orchestrator. When experiments are active, normal tasks are paused and the\n// agent pool is partitioned across experiment variants.\nfunc (o *Orchestrator) SetExperimentScheduling(db *gorm.DB, maxConcurrent int) {\n    o.experimentScheduler = NewExperimentScheduler(db, maxConcurrent)\n}\n```\n\nNewWithExperimentScheduling has NO external callers (verified by grep). It only appears at its definition site.\n\n**Expected result:** orchestrator.go drops from 918 lines to ~689 lines (removing ~151+80+24+38=293 lines of methods, plus ~23 lines of NewWithExperimentScheduling, adding ~4 lines for setter = net ~229 line reduction + stub cleanup).",
+      "agent_type": "coder",
+      "phase": "implementation",
+      "tests_for": [],
+      "files": [
+        "internal/orchestrator/orchestrator.go",
+        "internal/orchestrator/test_writing.go"
+      ],
+      "dependencies": [],
+      "priority": 1,
+      "module_boundaries": [
+        {"package": "internal/orchestrator", "description": "Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch", "exports": 2}
+      ],
+      "interface_shapes": [
+        {"package": "internal/orchestrator", "functions": ["(*Orchestrator).SetExperimentScheduling(db *gorm.DB, maxConcurrent int)", "(*Orchestrator).processTestWriting(parent *model.Task) error", "(*Orchestrator).spawnDiagnosticAgent(parent *model.Task) error", "(*Orchestrator).extractTestFiles(worktreePath, baseBranch string) []string", "isTestFile(name string) bool"], "types": ["Orchestrator"]}
+      ]
+    },
+    {
+      "title": "Integration: verify extraction, line counts, and constraints",
+      "description": "Final verification that:\n1. `go vet ./internal/orchestrator/...` passes\n2. `go test ./internal/orchestrator/...` passes (all existing tests still work)\n3. orchestrator.go line count is below 800 (target: ~689)\n4. test_writing.go exists and contains the 4 extracted methods\n5. NewWithExperimentScheduling no longer exists (grep returns no results)\n6. SetExperimentScheduling exists as a method on *Orchestrator\n7. No new internal imports added to the orchestrator package (stays at or below baseline 11)\n\nThis subtask does NOT need to create integration wiring — the extraction is within a single package and all existing call sites work unchanged. The verification IS the integration step.\n\nIf any tests fail, fix the issue in the extracted file (likely missing imports). Do NOT modify test files.",
+      "agent_type": "coder",
+      "phase": "integration",
+      "tests_for": [],
+      "files": [
+        "internal/orchestrator/orchestrator.go",
+        "internal/orchestrator/test_writing.go"
+      ],
+      "dependencies": [1],
+      "priority": 2,
+      "module_boundaries": [
+        {"package": "internal/orchestrator", "description": "Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch", "exports": 2}
+      ],
+      "interface_shapes": [
+        {"package": "internal/orchestrator", "functions": ["(*Orchestrator).SetExperimentScheduling(db *gorm.DB, maxConcurrent int)"], "types": ["Orchestrator"]}
+      ]
+    }
+  ],
+  "tdd_exceptions": [],
+  "coverage": [
+    {
+      "criterion": "Extract processTestWriting from orchestrator.go to test_writing.go",
+      "subtask_indices": [1]
+    },
+    {
+      "criterion": "Extract spawnDiagnosticAgent from orchestrator.go to test_writing.go",
+      "subtask_indices": [1]
+    },
+    {
+      "criterion": "Extract extractTestFiles from orchestrator.go to test_writing.go",
+      "subtask_indices": [1]
+    },
+    {
+      "criterion": "Extract isTestFile from orchestrator.go to test_writing.go",
+      "subtask_indices": [1]
+    },
+    {
+      "criterion": "Convert NewWithExperimentScheduling to SetExperimentScheduling setter method",
+      "subtask_indices": [0, 1]
+    },
+    {
+      "criterion": "Reduce orchestrator.go below 800-line ceiling",
+      "subtask_indices": [1, 2]
+    },
+    {
+      "criterion": "All existing tests continue to pass after extraction",
+      "subtask_indices": [2]
+    }
+  ],
+  "assumptions": [
+    {
+      "decision": "SetExperimentScheduling takes (db *gorm.DB, maxConcurrent int) matching the two values NewWithExperimentScheduling forwarded beyond New()'s parameters",
+      "alternatives": ["Take an *ExperimentScheduler directly", "Take the full parameter list from NewWithExperimentScheduling"],
+      "why_chosen": "The original function called New() with all shared params then only used db and maxConcurrent to create the scheduler. The setter should accept only the scheduler-specific params since the Orchestrator is already constructed."
+    },
+    {
+      "decision": "No documentation subtask needed",
+      "alternatives": ["Add a subtask to update README or docs"],
+      "why_chosen": "This is an internal structural refactoring with no user-facing behavior change, no new CLI flags, and no API change visible outside the package. NewWithExperimentScheduling has zero external callers."
+    },
+    {
+      "decision": "Imports in test_writing.go determined by reading method bodies",
+      "alternatives": ["Copy all imports from orchestrator.go"],
+      "why_chosen": "Only the imports actually used by the 4 extracted methods should appear. The coder agent should use goimports or let the compiler tell it what's needed."
+    }
+  ]
+}
