@@ -1,0 +1,92 @@
+{
+  "subtasks": [
+    {
+      "title": "Write tests verifying prompt_planner.go extraction",
+      "description": "Add tests in prompt_planner_test.go that verify:\n1. plannerInstructions() is callable and returns non-empty sections (smoke test from new file location)\n2. prompt.go line count is under 800 lines (the acceptance criterion for this refactor)\n3. prepInstructions does not exist as a callable symbol (compile-time verified by absence)\n\nThe test for line count should read prompt.go via os.ReadFile, count newlines, and assert <= 800. This encodes the acceptance criterion as an automated check.\n\nExisting tests in prompt_test.go and prompt_depth_test.go already cover plannerInstructions content thoroughly — do NOT duplicate those. Focus on structural acceptance criteria only.\n\nFile: internal/prompt/prompt_planner_test.go\nPattern: Follow existing test style in prompt_test.go (uses testing package, string matching with strings.Contains).\nThe test for line count uses: bytes.Count(data, []byte(\"\\n\")) and asserts <= 800.",
+      "agent_type": "coder",
+      "phase": "test",
+      "tests_for": [1],
+      "files": ["internal/prompt/prompt_planner_test.go"],
+      "dependencies": [],
+      "priority": 1,
+      "module_boundaries": [
+        {"package": "internal/prompt", "description": "Prompt builder: constructs markdown prompt strings for Claude Code agent sessions", "exports": 2}
+      ],
+      "interface_shapes": [
+        {"package": "internal/prompt", "functions": ["Build(opts Opts) string", "plannerInstructions() []string"], "types": ["Opts"]}
+      ]
+    },
+    {
+      "title": "Extract plannerInstructions to prompt_planner.go and delete prepInstructions",
+      "description": "Two changes to internal/prompt/prompt.go:\n\n**1. Move plannerInstructions to new file prompt_planner.go**\n- CUT lines 260-478 from prompt.go (the comment + plannerInstructions function)\n- CREATE internal/prompt/prompt_planner.go with package declaration and the moved function\n- The function signature is: func plannerInstructions() []string\n- It has NO imports — it only uses string literals and append()\n- The call site at prompt.go:179 (`sections = append(sections, plannerInstructions()...)`) stays unchanged — same package, no import needed\n- Follow the pattern from prompt_review_fixer.go: package declaration, then the function\n\n**2. Delete dead prepInstructions function**\n- DELETE lines 794-938 from prompt.go (comment + prepInstructions function)\n- This function has ZERO callers (confirmed by grep)\n- It uses filepath and fmt imports, but both are still used elsewhere in prompt.go, so no import cleanup needed\n\n**After both changes:**\n- prompt.go shrinks from 938 lines to ~720 lines (under 800-line ceiling)\n- prompt_planner.go is ~219 lines\n- All existing tests pass unchanged (same package, same function signatures)\n\n**Critical: do NOT modify any existing test files. Do NOT change any function signatures. This is a pure code-move + dead-code-delete.**",
+      "agent_type": "coder",
+      "phase": "implementation",
+      "tests_for": [],
+      "files": ["internal/prompt/prompt.go", "internal/prompt/prompt_planner.go"],
+      "dependencies": [],
+      "priority": 1,
+      "module_boundaries": [
+        {"package": "internal/prompt", "description": "Prompt builder: constructs markdown prompt strings for Claude Code agent sessions", "exports": 2}
+      ],
+      "interface_shapes": [
+        {"package": "internal/prompt", "functions": ["Build(opts Opts) string", "plannerInstructions() []string"], "types": ["Opts"]}
+      ]
+    },
+    {
+      "title": "Integration verification",
+      "description": "Verify the extraction is complete and correct:\n1. Run `go vet ./internal/prompt/...` — must pass\n2. Run `go test ./internal/prompt/...` — all existing tests must pass\n3. Verify prompt.go is under 800 lines: `wc -l internal/prompt/prompt.go`\n4. Verify prompt_planner.go exists and contains plannerInstructions\n5. Verify prepInstructions is gone: `grep -r prepInstructions internal/prompt/` should return nothing\n6. Run `gofmt -l internal/prompt/` — no output\n\nThis subtask does not need integration wiring — the extraction is intra-package with no new exports or cross-package changes. The verification is the test.",
+      "agent_type": "coder",
+      "phase": "integration",
+      "tests_for": [],
+      "files": ["internal/prompt/prompt.go", "internal/prompt/prompt_planner.go"],
+      "dependencies": [1],
+      "priority": 2,
+      "module_boundaries": [
+        {"package": "internal/prompt", "description": "Prompt builder: constructs markdown prompt strings for Claude Code agent sessions", "exports": 2}
+      ],
+      "interface_shapes": [
+        {"package": "internal/prompt", "functions": ["Build(opts Opts) string", "plannerInstructions() []string"], "types": ["Opts"]}
+      ]
+    }
+  ],
+  "tdd_exceptions": [],
+  "coverage": [
+    {
+      "criterion": "Move plannerInstructions (218 lines) from prompt.go to prompt_planner.go",
+      "subtask_indices": [1]
+    },
+    {
+      "criterion": "Delete unused prepInstructions function (~145 lines) from prompt.go",
+      "subtask_indices": [1]
+    },
+    {
+      "criterion": "prompt.go line count under 800-line ceiling after extraction",
+      "subtask_indices": [0, 1, 2]
+    },
+    {
+      "criterion": "All existing tests continue to pass (no behavior change)",
+      "subtask_indices": [2]
+    },
+    {
+      "criterion": "New file follows existing prompt_review_fixer.go pattern",
+      "subtask_indices": [1]
+    }
+  ],
+  "assumptions": [
+    {
+      "decision": "prompt_planner.go needs no imports (plannerInstructions uses only string literals and append)",
+      "alternatives": ["Import fmt if any Sprintf calls exist in the function"],
+      "why_chosen": "Verified by reading the function — it contains only string literals appended to a slice, no fmt or other package calls"
+    },
+    {
+      "decision": "No documentation update needed for this refactor",
+      "alternatives": ["Update README or architecture docs to mention prompt_planner.go"],
+      "why_chosen": "This is an internal structural refactor with no user-facing behavior change, no new exports, and no API change. The package map in ARCHITECTURE.md already describes internal/prompt/ generically."
+    },
+    {
+      "decision": "depthScoringGuidance() stays in its current location (not moved with plannerInstructions)",
+      "alternatives": ["Move depthScoringGuidance() to prompt_planner.go too since it's called from plannerInstructions"],
+      "why_chosen": "depthScoringGuidance is a separate function called FROM plannerInstructions but defined elsewhere. Moving it would expand scope beyond the task description. Same-package call works fine."
+    }
+  ]
+}
