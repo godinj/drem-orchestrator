@@ -16,10 +16,10 @@ import (
 // It contains tactical context about target files that enriches the
 // subsequent coder agent's prompt.
 type PrepOutput struct {
-	TargetFiles []PrepTargetFile `json:"target_files"`
-	Insertions  []PrepInsertion  `json:"insertion_points"`
-	Patterns    []PrepPattern    `json:"patterns_to_follow"`
-	Warnings    []string         `json:"warnings"`
+	TargetFiles  []PrepTargetFile  `json:"target_files"`
+	Insertions   []PrepInsertion   `json:"insertion_points"`
+	Patterns     []PrepPattern     `json:"patterns_to_follow"`
+	Warnings     []string          `json:"warnings"`
 	Constructors []PrepConstructor `json:"constructors"`
 }
 
