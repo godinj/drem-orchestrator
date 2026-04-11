@@ -38,21 +38,21 @@ const (
 	// This prevents multiplicative blowup from retry_count resets and
 	// reconciliation bypasses. 6 allows 2 full planning cycles with room
 	// for 1-2 transient failures.
-	MaxTotalPlannerSpawns  = 6
-	defaultContextFixerPct  = 85
-	fixerEscalatePct        = 80 // fixer agents at this % → stop and escalate to human
+	MaxTotalPlannerSpawns    = 6
+	defaultContextFixerPct   = 85
+	fixerEscalatePct         = 80 // fixer agents at this % → stop and escalate to human
 	classifierContextStopPct = 70 // classifier agents at this % → stop and park for triage
-	maxTestOutputLen       = 5000
-	maxGitDiffLen          = 10000
-	maxCmdOutputLen        = 5000
-	maxTestFailureLen      = 2000
-	maxErrorSnippetLen     = 500
-	maxSlugLen             = 40
-	maxBuildRetries        = 3
-	reconcileInterval      = 10               // consistency audit frequency (every N ticks; 0 = disable)
-	shortIDLen             = 4                // UUID characters for short display IDs
-	maxDisplayNameLen      = 30               // max task title length in supervisor session names
-	agentSpawnGracePeriod  = 60 * time.Second // how long to wait after agent spawn before treating it as stuck
+	maxTestOutputLen         = 5000
+	maxGitDiffLen            = 10000
+	maxCmdOutputLen          = 5000
+	maxTestFailureLen        = 2000
+	maxErrorSnippetLen       = 500
+	maxSlugLen               = 40
+	maxBuildRetries          = 3
+	reconcileInterval        = 10               // consistency audit frequency (every N ticks; 0 = disable)
+	shortIDLen               = 4                // UUID characters for short display IDs
+	maxDisplayNameLen        = 30               // max task title length in supervisor session names
+	agentSpawnGracePeriod    = 60 * time.Second // how long to wait after agent spawn before treating it as stuck
 )
 
 // slugRegexp matches non-alphanumeric characters for feature name derivation.
