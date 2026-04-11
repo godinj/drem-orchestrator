@@ -106,25 +106,6 @@ func LlamaServerSlotsUsage(slots []LlamaSlot) *LlamaServerMetrics {
 	return m
 }
 
-// ReadLlamaServerMetrics fetches and parses the llama-server Prometheus
-// metrics endpoint. The endpoint should be the full URL, e.g.
-// "http://localhost:8081/metrics".
-func ReadLlamaServerMetrics(endpoint string) (*LlamaServerMetrics, error) {
-	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(endpoint)
-	if err != nil {
-		return nil, fmt.Errorf("fetch llama-server metrics: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read llama-server metrics body: %w", err)
-	}
-
-	return ParseLlamaServerMetrics(string(body))
-}
-
 // ParseLlamaServerMetrics parses llama-server Prometheus text-format metrics
 // into a LlamaServerMetrics struct. It extracts kv_cache_usage_ratio,
 // kv_cache_tokens_count, tokens_predicted_total, prompt_tokens_total,
