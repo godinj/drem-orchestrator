@@ -406,25 +406,6 @@ func TestReadLlamaServerSlots_HTTPError(t *testing.T) {
 	}
 }
 
-
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte(metricsBody))
-	}))
-	defer ts.Close()
-
-	m, err := ReadLlamaServerMetrics(ts.URL + "/metrics")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if m.KVCacheUsageRatio != 0.65 {
-		t.Errorf("KVCacheUsageRatio = %f, want 0.65", m.KVCacheUsageRatio)
-	}
-	if m.TokensPredictedTotal != 12345 {
-		t.Errorf("TokensPredictedTotal = %d, want 12345", m.TokensPredictedTotal)
-	}
-}
-
 func TestReadLlamaServerSlotsUsage(t *testing.T) {
 	tests := []struct {
 		name      string
