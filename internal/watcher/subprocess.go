@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const defaultSubprocessTimeout = 3 * time.Minute
+const defaultSubprocessTimeout = 99 * time.Minute
 
 // RunClaudeSubprocess executes a claude subprocess for the named agent and
 // returns the stdout bytes, exit code, and any error. The subprocess runs
