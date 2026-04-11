@@ -169,7 +169,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 	// After merge succeeded, check constraints and compute step scores.
 	var implScorePassed, implScoreFailed int
 	var implChangedFiles []string
-	if merged && featureBranch != "" {
+	if merged && featureBranch != "" && !o.skipConstraintGate {
 		fn := strings.TrimPrefix(featureBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
 
