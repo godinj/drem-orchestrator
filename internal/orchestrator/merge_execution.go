@@ -186,7 +186,7 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 // the TESTING_READY state (quickfix tasks skip human test review).
 func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
 	// Run constraint checks on the feature worktree.
-	if task.WorktreeBranch != "" {
+	if task.WorktreeBranch != "" && !o.skipConstraintGate {
 		fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
 
