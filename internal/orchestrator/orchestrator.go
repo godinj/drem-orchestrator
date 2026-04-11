@@ -540,6 +540,21 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		}
 	}
 
+	// Defensive subtask materialization: if the plan contains subtasks but
+	// none exist in the DB, a plan approval bypassed HandlePlanApproved
+	// (e.g. raw DB status update). Auto-materialize to prevent replan loops.
+	if parent.Plan != nil {
+		var existingCount int64
+		o.db.Model(&model.Task{}).Where("parent_task_id = ?", parent.ID).Count(&existingCount)
+		if existingCount == 0 {
+			o.logger.Warn("auto-materializing subtasks from plan (approval bypassed subtask creation)",
+				"task_id", parent.ID)
+			if _, _, err := o.materializeSubtasks(parent); err != nil {
+				return fmt.Errorf("process test writing: defensive materialize: %w", err)
+			}
+		}
+	}
+
 	if failed, ok := parent.Context["baseline_tests_failed"].(bool); !ok || !failed {
 		if err := o.scheduleSubtasks(parent, "test"); err != nil {
 			return fmt.Errorf("process test writing: schedule: %w", err)
