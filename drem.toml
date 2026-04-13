@@ -2,15 +2,15 @@ bare_repo_path        = "/home/godinj/git/drem-orchestrator.git"
 default_branch        = "master"
 max_concurrent_agents = 6
 opencode_bin              = "opencode"
-opencode_context_window   = 73728
+opencode_context_window   = 46080
 llama_server_endpoint     = "http://localhost:8081"
-test_command              = "go test -short ./..."
+test_command              = "go test ./..."
 compile_command       = "go vet ./..."
-skip_constraint_gate  = true
+skip_constraint_gate  = false
 
 [agents.classifier]
   provider = "opencode"
-  model    = "vllm/qwen3-coder"
+  model    = "vllm/gemma4-26b"
   effort   = "medium"
 
 [agents.planner]
@@ -19,17 +19,17 @@ skip_constraint_gate  = true
 
 [agents.coder]
   provider = "opencode"
-  model    = "vllm/qwen3-coder"
+  model    = "vllm/gemma4-26b"
   effort   = "medium"
 
 [agents.reviewer]
   provider = "opencode"
-  model    = "vllm/qwen3-coder"
+  model    = "vllm/gemma4-26b"
   effort   = "medium"
 
 [agents.fixer]
   provider = "opencode"
-  model    = "vllm/qwen3-coder"
+  model    = "vllm/gemma4-26b"
   effort   = "medium"
 
 [agents.supervisor]
