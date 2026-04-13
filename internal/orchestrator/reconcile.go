@@ -224,9 +224,11 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 			if o.isWorkAlreadyMerged(sub, featureDir) {
 				o.logger.Info("reconcile: work already merged, transitioning to quality gate",
 					"subtask_id", sub.ID, "agent_id", ag.ID)
-				// Transition to testing_ready so the quality gate verifies build/tests.
+				// Fast-track subtask to done (matches onAgentCompleted / scheduleSubtasks).
 				transitions := []model.TaskStatus{
 					model.StatusTestingReady,
+					model.StatusMerging,
+					model.StatusDone,
 				}
 				for _, target := range transitions {
 					if sub.Status == target {
@@ -320,9 +322,11 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 			}
 		}
 
-		// Transition subtask to testing_ready so the quality gate verifies build/tests.
+		// Fast-track subtask to done (matches onAgentCompleted / scheduleSubtasks).
 		transitions := []model.TaskStatus{
 			model.StatusTestingReady,
+			model.StatusMerging,
+			model.StatusDone,
 		}
 		for _, target := range transitions {
 			if sub.Status == target {
