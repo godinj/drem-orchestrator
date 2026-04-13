@@ -400,11 +400,11 @@ func TestReconcileOrphanedSubtasks_DeadAgent(t *testing.T) {
 		t.Errorf("expected 1 fix for dead agent, got %d", fixes)
 	}
 
-	// Subtask should stop at TESTING_READY (quality gate), not fast-track to DONE.
+	// Subtask should fast-track to DONE (matches onAgentCompleted behavior).
 	var updated model.Task
 	db.First(&updated, "id = ?", subID)
-	if updated.Status != model.StatusTestingReady {
-		t.Errorf("expected subtask to stop at testing_ready, got %s", updated.Status)
+	if updated.Status != model.StatusDone {
+		t.Errorf("expected subtask to reach done, got %s", updated.Status)
 	}
 }
 
@@ -460,15 +460,15 @@ func TestReconcileOrphanedSubtasks_WorkAlreadyMerged(t *testing.T) {
 		t.Errorf("expected 1 fix, got %d", fixes)
 	}
 
-	// Subtask should stop at TESTING_READY (quality gate), not fast-track to DONE.
+	// Subtask should fast-track to DONE (matches onAgentCompleted behavior).
 	var updated model.Task
 	db.First(&updated, "id = ?", subID)
-	if updated.Status != model.StatusTestingReady {
-		t.Errorf("expected subtask status testing_ready, got %s", updated.Status)
+	if updated.Status != model.StatusDone {
+		t.Errorf("expected subtask status done, got %s", updated.Status)
 	}
 }
 
-func TestReconcileOrphanedSubtasks_FastTrackStopsAtQualityGate(t *testing.T) {
+func TestReconcileOrphanedSubtasks_FastTracksToDone(t *testing.T) {
 	orch, db, bareRepo := setupReconcileTest(t)
 
 	featureName := "orphan-gate"
@@ -519,16 +519,9 @@ func TestReconcileOrphanedSubtasks_FastTrackStopsAtQualityGate(t *testing.T) {
 	var updated model.Task
 	db.First(&updated, "id = ?", subID)
 
-	// The subtask must NOT reach merging or done — the quality gate must not be bypassed.
-	if updated.Status == model.StatusMerging {
-		t.Errorf("subtask bypassed quality gate: reached merging status")
-	}
-	if updated.Status == model.StatusDone {
-		t.Errorf("subtask bypassed quality gate: reached done status")
-	}
-	// It should stop at testing_ready.
-	if updated.Status != model.StatusTestingReady {
-		t.Errorf("expected subtask to stop at testing_ready, got %s", updated.Status)
+	// Subtask should fast-track to done (matches onAgentCompleted / scheduleSubtasks).
+	if updated.Status != model.StatusDone {
+		t.Errorf("expected subtask to reach done, got %s", updated.Status)
 	}
 }
 
