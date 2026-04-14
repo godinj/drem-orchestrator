@@ -12,6 +12,27 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/constraints/depth"
 )
 
+type BaselineStatus string
+
+const (
+	BaselineOK      BaselineStatus = "ok"
+	BaselineFailed  BaselineStatus = "failed"
+	BaselineMissing BaselineStatus = "missing"
+)
+
+type DeltaResult struct {
+	Skipped        bool
+	SkipReason     string
+	BaselineStatus BaselineStatus
+	Comparison     ComparisonResult
+	FeatureReport  *Report
+	BaselineReport *Report
+}
+
+func EvaluateDelta(cfg *Config, featureDir, baselineDir string) (*DeltaResult, error) {
+	return nil, nil
+}
+
 // Evaluate runs all constraints in the config against the given worktree root.
 func Evaluate(cfg *Config, worktreeRoot string) (*Report, error) {
 	var results []Result

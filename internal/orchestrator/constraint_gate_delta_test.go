@@ -305,6 +305,37 @@ func TestConstraintGateDelta_AllPassInBoth_Passes(t *testing.T) {
 	}
 }
 
+// TestConstraintGateDelta_MasterEvalFailure_Skips verifies that when the master
+// worktree has a broken/missing constraints config, the gate SKIPs rather than
+// blocking the task. The task should proceed to testing_ready because we cannot
+// compute a meaningful delta when the baseline is unavailable.
+func TestConstraintGateDelta_MasterEvalFailure_Skips(t *testing.T) {
+	bareRepo, mainDir := setupDeltaRepo(t, deltaConstraintsTOML)
+	featureName := "delta-master-broken"
+
+	// Master: commit a small passing file so feature has something to branch from.
+	writeAndCommit(t, mainDir, "small.go", smallGoContent(), "add passing file to master")
+
+	// Feature: branches from master, adds a big file that violates the constraint.
+	featureDir := createFeatureWorktree(t, bareRepo, featureName)
+	writeAndCommit(t, featureDir, "big.go", bigGoContent(), "add violating file in feature")
+
+	// Corrupt master's constraints.toml AFTER branching so feature still has valid config
+	// but baseline evaluation will fail.
+	if err := os.WriteFile(filepath.Join(mainDir, ".drem", "constraints.toml"), []byte("this is not valid toml [[["), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, mainDir, "add", ".")
+	runGitCmd(t, mainDir, "commit", "-m", "corrupt constraints on master")
+
+	status := runDeltaGate(t, bareRepo, featureName)
+
+	// Master eval fails → gate should SKIP → task reaches testing_ready.
+	if status != model.StatusTestingReady {
+		t.Errorf("expected testing_ready (gate SKIP on master eval failure), got %s", status)
+	}
+}
+
 // TestConstraintGateDelta_BackoffContext_Respected verifies that when the gate
 // has a future next_check timestamp, evaluation is skipped regardless of the
 // worktree state. This ensures the backoff mechanism works with the delta gate.
