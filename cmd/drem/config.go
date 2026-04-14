@@ -19,6 +19,7 @@ type AgentConfig struct {
 	Model    string `toml:"model"`
 	Effort   string `toml:"effort"`
 	Provider string `toml:"provider"`
+	Direct   bool   `toml:"direct"` // classifier only: bypass OpenCode, call SGLang API directly
 }
 
 // AgentsConfig holds per-agent-type configuration keyed by role.
