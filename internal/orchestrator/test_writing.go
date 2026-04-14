@@ -58,10 +58,12 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		}
 	}
 
-	if failed, ok := parent.Context["baseline_tests_failed"].(bool); !ok || !failed {
-		if err := o.scheduleSubtasks(parent, "test"); err != nil {
-			return fmt.Errorf("process test writing: schedule: %w", err)
-		}
+	if failed, ok := parent.Context["baseline_tests_failed"].(bool); ok && failed {
+		o.logger.Warn("baseline tests failed but proceeding with test scheduling — agents work on worktree branches",
+			"task_id", parent.ID)
+	}
+	if err := o.scheduleSubtasks(parent, "test"); err != nil {
+		return fmt.Errorf("process test writing: schedule: %w", err)
 	}
 
 	var testSubtasks []model.Task
