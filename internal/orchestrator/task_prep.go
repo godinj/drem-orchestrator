@@ -6,7 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
@@ -84,10 +88,24 @@ func (o *Orchestrator) needsPrep(sub *model.Task) bool {
 	return coderCfg.EffectiveProvider() != model.ProviderClaude
 }
 
+// SetDirectPrepConfig enables the direct SGLang API prep path.
+// When set, prep agents are handled by calling the SGLang API directly
+// instead of spawning an OpenCode subprocess. Pass nil to disable.
+func (o *Orchestrator) SetDirectPrepConfig(cfg *agent.DirectPrepConfig) {
+	o.directPrepCfg = cfg
+	if cfg != nil {
+		o.logger.Info("direct prep enabled", "endpoint", cfg.Endpoint, "model", cfg.Model)
+	}
+}
+
 // spawnPrepAgent spawns a task preparation agent for a subtask. The prep agent
 // reads the codebase and writes a task-prep-<id>.json file with tactical context.
 // The subtask is marked prep_in_progress to prevent re-dispatch until prep completes.
 func (o *Orchestrator) spawnPrepAgent(sub *model.Task, parent *model.Task) error {
+	if o.directPrepCfg != nil {
+		return o.spawnPrepAgentDirect(sub, parent)
+	}
+
 	featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
 	featureDir := o.worktree.FeatureWorktreePath(featureName)
 
@@ -239,5 +257,142 @@ func (o *Orchestrator) onPrepFailed(ag *model.Agent, task *model.Task) error {
 
 	o.logger.Warn("prep agent failed, coder will proceed without enrichment",
 		"task_id", task.ID, "agent_id", ag.ID)
+	return nil
+}
+
+// spawnPrepAgentDirect handles prep via the direct SGLang API path. It creates
+// a lightweight agent DB record, calls RunDirectPrep synchronously, and stores
+// PrepOutput in the subtask's context.
+func (o *Orchestrator) spawnPrepAgentDirect(sub *model.Task, parent *model.Task) error {
+	cfg := o.directPrepCfg
+
+	featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
+	featureDir := o.worktree.FeatureWorktreePath(featureName)
+	outputPath := filepath.Join(featureDir, fmt.Sprintf("task-prep-%s.json", sub.ID))
+
+	// Build prompt opts from task context.
+	var estimatedFiles []string
+	if ef, ok := sub.Context["estimated_files"]; ok {
+		if files, ok := ef.([]any); ok {
+			for _, f := range files {
+				if s, ok := f.(string); ok {
+					estimatedFiles = append(estimatedFiles, s)
+				}
+			}
+		}
+	}
+
+	opts := agent.PrepPromptOpts{
+		TaskTitle:         sub.Title,
+		TaskDescription:   sub.Description,
+		EstimatedFiles:    estimatedFiles,
+		WorkDir:           featureDir,
+		ParentTitle:       parent.Title,
+		ParentDescription: parent.Description,
+	}
+
+	if parent.Plan != nil {
+		if planJSON, err := json.Marshal(parent.Plan); err == nil {
+			opts.PlanJSON = string(planJSON)
+		}
+	}
+
+	// Create a lightweight agent DB record.
+	agentID := uuid.New()
+	now := time.Now()
+	ag := &model.Agent{
+		ID:            agentID,
+		ProjectID:     sub.ProjectID,
+		AgentType:     model.AgentPrep,
+		Name:          fmt.Sprintf("direct-prep-%s", sub.ID.String()[:4]),
+		Status:        model.AgentWorking,
+		CurrentTaskID: &sub.ID,
+		WorktreePath:  featureDir,
+		Provider:      "sglang-direct",
+		ModelID:       cfg.Model,
+		HeartbeatAt:   &now,
+	}
+	if err := o.db.Create(ag).Error; err != nil {
+		return fmt.Errorf("direct prep: create agent record: %w", err)
+	}
+
+	sub.AssignedAgentID = &ag.ID
+	if sub.Context == nil {
+		sub.Context = make(model.JSONField)
+	}
+	sub.Context["prep_in_progress"] = true
+	if err := o.db.Save(sub).Error; err != nil {
+		return fmt.Errorf("direct prep: save subtask: %w", err)
+	}
+
+	o.logger.Info("direct prep: starting", "task_id", sub.ID, "agent_id", ag.ID)
+
+	result, err := agent.RunDirectPrep(*cfg, opts, outputPath)
+	if err != nil {
+		o.logger.Error("direct prep: API call failed", "task_id", sub.ID, "error", err)
+		ag.Status = model.AgentDead
+		ag.CurrentTaskID = nil
+		_ = o.db.Save(ag).Error
+		sub.AssignedAgentID = nil
+		delete(sub.Context, "prep_in_progress")
+		sub.Context["prep_complete"] = true
+		sub.Context["prep_failed"] = true
+		if err := o.db.Save(sub).Error; err != nil {
+			return fmt.Errorf("direct prep: save task after failure: %w", err)
+		}
+		return nil
+	}
+
+	// Record token usage.
+	if result != nil {
+		ag.TokensIn = result.TokensIn
+		ag.TokensOut = result.TokensOut
+	}
+	ag.Status = model.AgentIdle
+	ag.CurrentTaskID = nil
+	_ = o.db.Save(ag).Error
+
+	// Read and parse the output.
+	data, readErr := os.ReadFile(outputPath)
+	if readErr != nil {
+		o.logger.Warn("direct prep: cannot read output file", "task_id", sub.ID, "error", readErr)
+		sub.AssignedAgentID = nil
+		delete(sub.Context, "prep_in_progress")
+		sub.Context["prep_complete"] = true
+		sub.Context["prep_failed"] = true
+		if err := o.db.Save(sub).Error; err != nil {
+			return fmt.Errorf("direct prep: save task after read failure: %w", err)
+		}
+		return nil
+	}
+
+	var prepOutput PrepOutput
+	if parseErr := json.Unmarshal(data, &prepOutput); parseErr != nil {
+		o.logger.Warn("direct prep: malformed output", "task_id", sub.ID, "error", parseErr)
+		sub.AssignedAgentID = nil
+		delete(sub.Context, "prep_in_progress")
+		sub.Context["prep_complete"] = true
+		sub.Context["prep_failed"] = true
+		if err := o.db.Save(sub).Error; err != nil {
+			return fmt.Errorf("direct prep: save task after parse failure: %w", err)
+		}
+		return nil
+	}
+
+	_ = os.Remove(outputPath)
+
+	sub.AssignedAgentID = nil
+	delete(sub.Context, "prep_in_progress")
+	sub.Context["prep_complete"] = true
+	sub.Context["prep_data"] = prepOutput
+
+	if err := o.db.Save(sub).Error; err != nil {
+		return fmt.Errorf("direct prep: save task: %w", err)
+	}
+
+	o.logger.Info("direct prep completed",
+		"task_id", sub.ID,
+		"target_files", len(prepOutput.TargetFiles),
+		"warnings", len(prepOutput.Warnings))
 	return nil
 }

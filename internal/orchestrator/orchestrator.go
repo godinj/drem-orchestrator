@@ -126,6 +126,7 @@ type Orchestrator struct {
 	skipConstraintGate          bool                          // bypass constraint gate evaluation
 	interactiveSupervisorConfig model.AgentCLIConfig          // model/effort for interactive supervisor sessions
 	directClassifierCfg         *agent.DirectClassifierConfig // nil means use OpenCode subprocess path
+	directPrepCfg               *agent.DirectPrepConfig       // nil means use OpenCode subprocess path
 	metrics                     *metrics.Store                // nil-safe: callers nil-check before use
 	experimentScheduler         *ExperimentScheduler          // experiment-aware scheduling
 	logger                      *slog.Logger
