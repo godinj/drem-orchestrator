@@ -123,12 +123,12 @@ type Orchestrator struct {
 	contextStopPct              int
 	contextFixerPct             int // percentage: spawn fixer instead of failing
 	subtaskRecovery             SubtaskRecoveryPolicy
-	skipConstraintGate          bool                 // bypass constraint gate evaluation
-	interactiveSupervisorConfig model.AgentCLIConfig        // model/effort for interactive supervisor sessions
-	directClassifierCfg        *agent.DirectClassifierConfig // nil means use OpenCode subprocess path
-	metrics                    *metrics.Store                // nil-safe: callers nil-check before use
-	experimentScheduler        *ExperimentScheduler          // experiment-aware scheduling
-	logger                     *slog.Logger
+	skipConstraintGate          bool                          // bypass constraint gate evaluation
+	interactiveSupervisorConfig model.AgentCLIConfig          // model/effort for interactive supervisor sessions
+	directClassifierCfg         *agent.DirectClassifierConfig // nil means use OpenCode subprocess path
+	metrics                     *metrics.Store                // nil-safe: callers nil-check before use
+	experimentScheduler         *ExperimentScheduler          // experiment-aware scheduling
+	logger                      *slog.Logger
 }
 
 // New creates an Orchestrator. The supervisor parameter is optional — pass nil

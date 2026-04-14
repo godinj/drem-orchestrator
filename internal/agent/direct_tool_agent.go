@@ -97,7 +97,7 @@ type toolChatRequest struct {
 type toolChatMsg struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content,omitempty"`
-	ToolCalls  []toolCall `json:"tool_calls,omitempty"`  // present when role=assistant with tool calls
+	ToolCalls  []toolCall `json:"tool_calls,omitempty"`   // present when role=assistant with tool calls
 	ToolCallID string     `json:"tool_call_id,omitempty"` // present when role=tool
 	Name       string     `json:"name,omitempty"`         // present when role=tool (function name)
 }
@@ -215,10 +215,10 @@ func ToolsForRole(role string) []toolDefinition {
 // ---------------------------------------------------------------------------
 
 const (
-	maxReadLines    = 200
-	maxBashOutput   = 2000 // characters
-	maxGrepMatches  = 50
-	maxGlobResults  = 100
+	maxReadLines   = 200
+	maxBashOutput  = 2000 // characters
+	maxGrepMatches = 50
+	maxGlobResults = 100
 )
 
 // ---------------------------------------------------------------------------

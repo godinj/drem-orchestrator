@@ -349,8 +349,8 @@ func TestRunDirectToolAgent_ToolCallLoop(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "The file contains package main.", result.Output)
 	assert.Equal(t, 2, result.Iterations)
-	assert.Equal(t, 300, result.TokensIn)   // 100 + 200
-	assert.Equal(t, 45, result.TokensOut)    // 30 + 15
+	assert.Equal(t, 300, result.TokensIn) // 100 + 200
+	assert.Equal(t, 45, result.TokensOut) // 30 + 15
 	assert.Equal(t, 2, callCount)
 }
 
