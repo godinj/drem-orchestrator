@@ -10,7 +10,7 @@ skip_constraint_gate  = false
 
 [agents.classifier]
   provider = "opencode"
-  model    = "vllm/gemma4-26b"
+  model    = "sglang/gemma4-26b"
   effort   = "medium"
 
 [agents.planner]
@@ -19,17 +19,17 @@ skip_constraint_gate  = false
 
 [agents.coder]
   provider = "opencode"
-  model    = "vllm/gemma4-26b"
+  model    = "sglang/gemma4-26b"
   effort   = "medium"
 
 [agents.reviewer]
   provider = "opencode"
-  model    = "vllm/gemma4-26b"
+  model    = "sglang/gemma4-26b"
   effort   = "medium"
 
 [agents.fixer]
   provider = "opencode"
-  model    = "vllm/gemma4-26b"
+  model    = "sglang/gemma4-26b"
   effort   = "medium"
 
 [agents.supervisor]
