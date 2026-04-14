@@ -30,6 +30,7 @@ type AgentsConfig struct {
 	Reviewer              AgentConfig `toml:"reviewer"`
 	Fixer                 AgentConfig `toml:"fixer"`
 	Researcher            AgentConfig `toml:"researcher"`
+	Prep                  AgentConfig `toml:"prep"`
 	Supervisor            AgentConfig `toml:"supervisor"`
 	InteractiveSupervisor AgentConfig `toml:"interactive_supervisor"`
 }
@@ -50,6 +51,8 @@ func (a AgentsConfig) ForAgentType(at model.AgentType) model.AgentCLIConfig {
 		ac = a.Fixer
 	case model.AgentResearcher:
 		ac = a.Researcher
+	case model.AgentPrep:
+		ac = a.Prep
 	default:
 		ac = AgentConfig{Effort: "medium"}
 	}
@@ -129,6 +132,7 @@ func DefaultConfig() Config {
 			Reviewer:              AgentConfig{Effort: "medium"},
 			Fixer:                 AgentConfig{Effort: "medium"},
 			Researcher:            AgentConfig{Effort: "medium"},
+			Prep:                  AgentConfig{Effort: "medium"},
 			Supervisor:            AgentConfig{Effort: "low"},
 			InteractiveSupervisor: AgentConfig{Effort: "medium"},
 		},
