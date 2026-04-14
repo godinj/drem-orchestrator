@@ -46,6 +46,9 @@ func setupDirectPlanReviewerTest(t *testing.T) (*Orchestrator, string) {
 		events:    events,
 		logger:    slog.Default().With("component", "direct-plan-reviewer-test"),
 	}
+	// A runner is required so that the subprocess path fails cleanly instead
+	// of panicking when the fall-through test exercises it.
+	orch.runner = agent.NewRunner(db, nil, wt, "/nonexistent/claude", "", 0, nil)
 	return orch, bareRepo
 }
 
