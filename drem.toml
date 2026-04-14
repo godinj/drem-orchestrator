@@ -2,7 +2,7 @@ bare_repo_path        = "/home/godinj/git/drem-orchestrator.git"
 default_branch        = "master"
 max_concurrent_agents = 6
 opencode_bin              = "opencode"
-opencode_context_window   = 51306
+opencode_context_window   = 43182
 llama_server_endpoint     = "http://localhost:8081"
 test_command              = "go test ./..."
 compile_command       = "go vet ./..."
@@ -12,31 +12,43 @@ skip_constraint_gate  = false
   provider = "opencode"
   model    = "sglang/gemma4-26b"
   effort   = "medium"
+  direct   = true  # bypass OpenCode, call SGLang API directly
 
 [agents.planner]
   model  = "claude-opus-4-6"
   effort = "medium"
 
+[agents.prep]
+  provider = "sglang-direct"
+  model    = "gemma4-26b"
+
 [agents.coder]
-  provider = "opencode"
-  model    = "sglang/gemma4-26b"
-  effort   = "medium"
+  provider = "sglang-direct"
+  model    = "gemma4-26b"
 
 [agents.reviewer]
-  provider = "opencode"
-  model    = "sglang/gemma4-26b"
-  effort   = "medium"
+  provider = "sglang-direct"
+  model    = "gemma4-26b"
 
 [agents.fixer]
-  provider = "opencode"
-  model    = "sglang/gemma4-26b"
-  effort   = "medium"
+  provider = "sglang-direct"
+  model    = "gemma4-26b"
 
 [agents.supervisor]
   effort = "low"
 
 [agents.interactive_supervisor]
   effort = "medium"
+
+[direct_tool_agent]
+  enabled        = true
+  endpoint       = "http://localhost:8081/v1/chat/completions"
+  model          = "gemma4-26b"
+  max_tokens     = 2048
+  temperature    = 0.1
+  timeout        = "180s"
+  max_iterations = 30
+  bash_timeout   = "60s"
 
 [watcher]
   db_path             = "~/.drem-csuite/watcher.db"
