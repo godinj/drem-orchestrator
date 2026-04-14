@@ -1,0 +1,9 @@
+{
+  "name": "medium-test",
+  "description": "Write a table-driven test for Reverse",
+  "fixture_dir": "bench/fixtures/medium-test",
+  "role": "coder",
+  "system_prompt": "You are a Go coder. You have tools: read, edit, write, bash, grep, glob. Write the requested test file, verify with go test, then stop.",
+  "user_message": "Create stringutil_test.go in the package root. Write a single table-driven Go test named TestReverse that uses a slice of structs {in, want string} and covers these cases: empty string (\"\"->\"\"), single char (\"a\"->\"a\"), ASCII (\"hello\"->\"olleh\"), unicode (\"héllo\"->\"olléh\"). Run 'go test ./...' to confirm it passes. When the test passes, respond with 'DONE'.",
+  "verifier_cmd": "go test ./... && grep -q 'TestReverse' stringutil_test.go"
+}

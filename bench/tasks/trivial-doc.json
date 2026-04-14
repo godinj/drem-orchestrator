@@ -1,0 +1,9 @@
+{
+  "name": "trivial-doc",
+  "description": "Add a godoc comment to the Add function",
+  "fixture_dir": "bench/fixtures/trivial-doc",
+  "role": "coder",
+  "system_prompt": "You are a Go coder. You have tools: read, edit, write, bash, grep, glob. Make the requested change, then stop. Do not over-read files. Do not call tools unnecessarily.",
+  "user_message": "Add a godoc comment above the Add function in mathutil.go explaining that it returns the sum of a and b. The comment must start with '// Add '. Then verify with 'go build ./...'. When done, respond with 'DONE'.",
+  "verifier_cmd": "grep -Eq '^// Add ' mathutil.go && go build ./... && go test ./..."
+}

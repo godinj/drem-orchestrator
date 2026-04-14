@@ -36,8 +36,17 @@ drem.log
 drem.toml
 feature/
 journals/
+bin/
+watcher.log
+.opencode/
+classification-*.json
 
 # Ephemeral per-feature artifacts (orchestrator reads from agent worktrees, stores in DB)
 plan.json
 CLAUDE.md
 repo-map.md
+
+# drembench ephemera (regenerable snapshots / per-run scratch)
+bench/scratch/
+bench/fixtures/real-repo/
+bench/results/*.log

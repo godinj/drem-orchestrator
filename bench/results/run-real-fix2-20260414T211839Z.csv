@@ -1,0 +1,10 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+real-constraint-gate-exhaustion,1,16,160549,2606,44987,stop,false,
+real-constraint-gate-exhaustion,2,15,168912,2470,42674,stop,false,
+real-constraint-gate-exhaustion,3,30,125969,1173,17787,max_iter,false,exceeded max iterations (30)
+real-csuite-inbox-cli,1,30,303744,6132,98511,max_iter,false,exceeded max iterations (30)
+real-csuite-inbox-cli,2,11,46453,5299,66773,api_error,false,"API call failed at iteration 11: API returned status 400: {""object"":""error"",""message"":""Input length (78579 tokens) exceeds the maximum allowed length (43176 tokens). Use a shorter input or enable --al…"
+real-csuite-inbox-cli,3,30,563603,5194,75082,max_iter,false,exceeded max iterations (30)
+real-retry-suppression,1,30,322325,7937,132869,max_iter,true,exceeded max iterations (30)
+real-retry-suppression,2,30,416340,2985,47279,max_iter,false,exceeded max iterations (30)
+real-retry-suppression,3,30,450792,5637,83880,max_iter,false,exceeded max iterations (30)

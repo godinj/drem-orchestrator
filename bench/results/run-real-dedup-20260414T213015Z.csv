@@ -1,0 +1,10 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+real-constraint-gate-exhaustion,1,20,243266,2831,50474,stop,false,
+real-constraint-gate-exhaustion,2,20,288594,2814,50917,stop,false,
+real-constraint-gate-exhaustion,3,30,354709,2324,39264,max_iter,false,exceeded max iterations (30)
+real-csuite-inbox-cli,1,30,489530,8816,127956,max_iter,false,exceeded max iterations (30)
+real-csuite-inbox-cli,2,4,9437,3535,41195,stop,false,
+real-csuite-inbox-cli,3,30,433041,7868,107407,max_iter,false,exceeded max iterations (30)
+real-retry-suppression,1,30,410790,2923,46499,max_iter,false,exceeded max iterations (30)
+real-retry-suppression,2,30,523375,8429,119578,max_iter,false,exceeded max iterations (30)
+real-retry-suppression,3,30,234542,2831,38644,max_iter,false,exceeded max iterations (30)

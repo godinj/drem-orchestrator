@@ -1,0 +1,16 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+hard-refactor,1,30,85862,2860,38736,stop,true,
+hard-refactor,2,30,85790,3293,43317,max_iter,true,exceeded max iterations (30)
+hard-refactor,3,21,46697,2025,25858,stop,true,
+hard-refactor,4,30,85790,3293,38501,max_iter,true,exceeded max iterations (30)
+hard-refactor,5,30,85790,3293,38618,max_iter,true,exceeded max iterations (30)
+medium-test,1,8,7271,261,4023,stop,true,
+medium-test,2,7,6155,246,3384,stop,true,
+medium-test,3,7,6155,246,3306,stop,true,
+medium-test,4,7,6155,246,3356,stop,true,
+medium-test,5,8,7271,261,3666,stop,true,
+trivial-doc,1,6,4128,123,1851,stop,true,
+trivial-doc,2,6,4188,122,1852,stop,true,
+trivial-doc,3,6,4188,122,1532,stop,true,
+trivial-doc,4,6,4128,123,1544,stop,true,
+trivial-doc,5,6,4188,122,1535,stop,true,

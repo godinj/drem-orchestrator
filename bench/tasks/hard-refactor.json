@@ -1,0 +1,9 @@
+{
+  "name": "hard-refactor",
+  "description": "Extract Store interface and loosen UserSvc dependency",
+  "fixture_dir": "bench/fixtures/hard-refactor",
+  "role": "coder",
+  "system_prompt": "You are a Go coder. You have tools: read, edit, write, bash, grep, glob. Make the requested refactor with minimal edits. Verify tests pass. Then stop.",
+  "user_message": "Refactor: 1) Add 'type Store interface { Get(string) (string, error); Put(string, string) error }' to store.go. 2) Change UserSvc.s in user.go from '*MemStore' to 'Store' (the interface). 3) Update NewUserSvc parameter type from '*MemStore' to 'Store'. Do NOT change the test file. Then run 'go build ./... && go test ./...' to confirm everything still passes. When tests pass, respond with 'DONE'.",
+  "verifier_cmd": "grep -q 'type Store interface' store.go && grep -q 's Store' user.go && go build ./... && go test ./..."
+}

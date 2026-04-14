@@ -1,0 +1,4 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+hard-refactor,1,30,85790,3293,38202,max_iter,true,exceeded max iterations (30)
+medium-test,1,8,7363,273,3593,stop,true,
+trivial-doc,1,6,4128,123,1523,stop,true,
