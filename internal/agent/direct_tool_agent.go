@@ -192,6 +192,7 @@ var roleTools = map[string][]string{
 	"coder":    {"read", "edit", "write", "bash", "grep", "glob"},
 	"fixer":    {"read", "edit", "write", "bash", "grep", "glob"},
 	"reviewer": {"read", "bash", "grep", "glob"},
+	"prep":     {"read", "grep", "glob"},
 }
 
 // ToolsForRole returns the tool definitions permitted for the given agent role.
