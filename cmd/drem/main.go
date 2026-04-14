@@ -258,6 +258,14 @@ func main() {
 		orch.SetDirectPrepConfig(&pcfg)
 	}
 
+	// Enable direct SGLang tool-calling agent path for coder/reviewer/fixer
+	// roles when configured. Explicit opt-in via [direct_tool_agent].enabled,
+	// or auto-enable when any of the coder/reviewer/fixer providers resolve
+	// to "sglang-direct".
+	if dta := buildDirectToolAgentConfig(cfg); dta != nil {
+		orch.SetDirectToolAgentConfig(dta)
+	}
+
 	// Wire test gate config from drem.toml so test_command is respected.
 	scopedTests := true
 	if cfg.ScopedTests != nil {
@@ -390,4 +398,48 @@ func main() {
 
 	// Cleanup.
 	cancel()
+}
+
+// buildDirectToolAgentConfig resolves the runtime configuration for the
+// direct SGLang tool-calling agent path. Returns nil when the feature is
+// not enabled.
+//
+// The direct path is enabled when either:
+//  1. [direct_tool_agent].enabled is set to true in drem.toml, or
+//  2. any of the coder/reviewer/fixer agents have provider = "sglang-direct".
+//
+// TOML values in [direct_tool_agent] override the defaults from
+// agent.DefaultDirectToolAgentConfig(). The per-role agent Model is NOT
+// used here — the direct path shares a single served model name across all
+// roles via the [direct_tool_agent].model key.
+func buildDirectToolAgentConfig(cfg Config) *agent.DirectToolAgentConfig {
+	roleDirect := cfg.Agents.Coder.Provider == string(model.ProviderSGLangDirect) ||
+		cfg.Agents.Reviewer.Provider == string(model.ProviderSGLangDirect) ||
+		cfg.Agents.Fixer.Provider == string(model.ProviderSGLangDirect)
+	if !cfg.DirectToolAgent.Enabled && !roleDirect {
+		return nil
+	}
+	resolved := agent.DefaultDirectToolAgentConfig()
+	if cfg.DirectToolAgent.Endpoint != "" {
+		resolved.Endpoint = cfg.DirectToolAgent.Endpoint
+	}
+	if cfg.DirectToolAgent.Model != "" {
+		resolved.Model = cfg.DirectToolAgent.Model
+	}
+	if cfg.DirectToolAgent.MaxTokens > 0 {
+		resolved.MaxTokens = cfg.DirectToolAgent.MaxTokens
+	}
+	if cfg.DirectToolAgent.Temperature != 0 {
+		resolved.Temperature = cfg.DirectToolAgent.Temperature
+	}
+	if cfg.DirectToolAgent.Timeout > 0 {
+		resolved.Timeout = cfg.DirectToolAgent.Timeout
+	}
+	if cfg.DirectToolAgent.MaxIterations > 0 {
+		resolved.MaxIterations = cfg.DirectToolAgent.MaxIterations
+	}
+	if cfg.DirectToolAgent.BashTimeout > 0 {
+		resolved.BashTimeout = cfg.DirectToolAgent.BashTimeout
+	}
+	return &resolved
 }

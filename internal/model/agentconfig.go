@@ -4,8 +4,9 @@ package model
 type ProviderType string
 
 const (
-	ProviderClaude   ProviderType = "claude"
-	ProviderOpenCode ProviderType = "opencode"
+	ProviderClaude       ProviderType = "claude"
+	ProviderOpenCode     ProviderType = "opencode"
+	ProviderSGLangDirect ProviderType = "sglang-direct"
 )
 
 // AgentCLIConfig holds per-agent-type CLI flags for agent invocations.
@@ -25,11 +26,14 @@ func (c AgentCLIConfig) EffectiveProvider() ProviderType {
 }
 
 // CLIArgs returns the command-line arguments for model and effort/variant,
-// dispatching by provider.
+// dispatching by provider. ProviderSGLangDirect returns no args because the
+// direct path calls the SGLang HTTP API — no CLI subprocess is involved.
 func (c AgentCLIConfig) CLIArgs() []string {
 	switch c.EffectiveProvider() {
 	case ProviderOpenCode:
 		return c.openCodeCLIArgs()
+	case ProviderSGLangDirect:
+		return nil
 	default:
 		return c.claudeCLIArgs()
 	}

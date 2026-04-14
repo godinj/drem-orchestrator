@@ -128,6 +128,7 @@ type Orchestrator struct {
 	directClassifierCfg         *agent.DirectClassifierConfig   // nil means use OpenCode subprocess path
 	directPlanReviewerCfg       *agent.DirectPlanReviewerConfig // nil means use subprocess path for plan review
 	directPrepCfg               *agent.DirectPrepConfig         // nil means use OpenCode subprocess path
+	directToolAgentCfg          *agent.DirectToolAgentConfig    // nil means use subprocess path for coder/reviewer/fixer
 	metrics                     *metrics.Store                  // nil-safe: callers nil-check before use
 	experimentScheduler         *ExperimentScheduler            // experiment-aware scheduling
 	logger                      *slog.Logger
@@ -221,6 +222,18 @@ func (o *Orchestrator) SetDirectPlanReviewerConfig(cfg *agent.DirectPlanReviewer
 	o.directPlanReviewerCfg = cfg
 	if cfg != nil {
 		o.logger.Info("direct plan reviewer enabled", "endpoint", cfg.Endpoint, "model", cfg.Model)
+	}
+}
+
+// SetDirectToolAgentConfig enables the direct SGLang API tool-calling agent
+// path for coder, reviewer, and fixer roles. When set (and the per-role
+// provider resolves to ProviderSGLangDirect), those agents bypass the
+// Claude Code / OpenCode subprocess and call the SGLang HTTP API directly
+// via RunDirectToolAgent. Pass nil to disable.
+func (o *Orchestrator) SetDirectToolAgentConfig(cfg *agent.DirectToolAgentConfig) {
+	o.directToolAgentCfg = cfg
+	if cfg != nil {
+		o.logger.Info("direct tool agent enabled", "endpoint", cfg.Endpoint, "model", cfg.Model)
 	}
 }
 

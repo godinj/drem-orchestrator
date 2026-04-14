@@ -176,6 +176,17 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 			}
 		}
 
+		// Direct tool agent intercept: when the SGLang direct path is
+		// configured and this is a coder subtask, bypass the OpenCode/Claude
+		// subprocess and drive the role via RunDirectToolAgent. Saves ~20K
+		// tokens of tool-definition overhead per agent.
+		if agentType == model.AgentCoder && o.shouldUseDirectToolAgent(sub, agentType) {
+			if err := o.processCoderDirect(sub, parent); err != nil {
+				o.logger.Error("direct coder dispatch failed", "subtask_id", sub.ID, "error", err)
+			}
+			continue
+		}
+
 		// Prep agent intercept: if the subtask needs task preparation (local
 		// model coder with estimated_files), route to the prep agent pipeline
 		// instead of spawning a coder directly. The prep agent reads the

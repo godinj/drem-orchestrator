@@ -160,8 +160,66 @@ Supported roles:
 
 - **Classifier** — enable with `Orchestrator.SetDirectClassifierConfig(&agent.DirectClassifierConfig{...})`. Handles all `CLASSIFYING` tasks.
 - **Plan reviewer** — enable with `Orchestrator.SetDirectPlanReviewerConfig(&agent.DirectPlanReviewerConfig{...})`. Engages only when `SpawnReviewerSession` runs with a task in `plan_review`; feature review (`testing_ready`) continues to use the subprocess path unchanged.
+- **Prep** — enable via `[agents.prep]` TOML stanza or auto-enabled when the classifier is direct. Read-only recon role for task preparation.
+- **Coder / Reviewer / Fixer** — see "Direct SGLang Tool Agents" section below.
 
 Defaults target `http://localhost:8081/v1/chat/completions` with `gemma4-26b`. Pass `nil` to either setter to fall back to the subprocess path. Direct agents produce the same output artifacts (`classification-<task>.json`, `review.json`) the subprocess agents emit, so downstream completion handlers are unchanged.
+
+## Direct SGLang Tool Agents
+
+Coder, reviewer, and fixer roles can bypass the Claude Code / OpenCode
+subprocess path and call an SGLang-served local model directly over its
+OpenAI-compatible `/v1/chat/completions` endpoint. Subprocess tool
+definitions consume roughly 20 000 tokens per agent; the direct path emits
+a compact role-specific tool list (about 460 tokens), which keeps a 43 000
+token context budget usable for local models such as Gemma 4.
+
+When enabled, the orchestrator creates a lightweight agent DB record for
+audit and duplicate-dispatch guards, then runs a synchronous tool-call
+loop (`read`, `edit`, `write`, `bash`, `grep`, `glob` — reviewers are
+restricted to read-only tools). On success the completion is funneled
+through the existing `onAgentCompleted` / `onReviewerCompleted` /
+`onFixerCompleted` handlers so merge, review.json parsing, and fixer
+bookkeeping stay unchanged. SGLang must be started with
+`--tool-call-parser gemma4` (or the parser matching your model) so that
+OpenAI tool calls are converted to and from the model's native tool
+tokens.
+
+**Enable the direct path** in `drem.toml`:
+
+```toml
+[direct_tool_agent]
+enabled        = true
+endpoint       = "http://localhost:8081/v1/chat/completions"
+model          = "gemma4-26b"
+max_tokens     = 2048
+temperature    = 0.1
+timeout        = "120s"
+max_iterations = 20
+bash_timeout   = "30s"
+```
+
+All fields are optional when `enabled = true`; omitted values fall back
+to `agent.DefaultDirectToolAgentConfig()`. The feature also auto-enables
+when any of the coder, reviewer, or fixer agents declare
+`provider = "sglang-direct"`:
+
+```toml
+[agents.coder]
+provider = "sglang-direct"
+```
+
+| Role     | Tools                                     | Output                          |
+|----------|-------------------------------------------|---------------------------------|
+| coder    | read, edit, write, bash, grep, glob       | commits on the agent's branch   |
+| reviewer | read, bash, grep, glob (read-only)        | `review.json` in the worktree   |
+| fixer    | read, edit, write, bash, grep, glob       | commits a minimal fix           |
+
+The direct path does not replace Claude Code for high-complexity work —
+it is intended for local, latency-sensitive routing on models that
+struggle with the full Claude Code prompt surface. Leaving
+`[direct_tool_agent].enabled = false` (the default) preserves the
+existing subprocess behavior for every role.
 
 ## Dispatch Throttling
 

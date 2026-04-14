@@ -71,13 +71,19 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		return o.onPrepCompleted(ag, task)
 	}
 
-	// Extract memories from agent output.
-	output, err := o.runner.GetAgentOutput(ag.ID)
-	if err != nil {
-		o.logger.Warn("failed to read agent output for memory extraction", "agent_id", ag.ID, "error", err)
-	} else if output != "" {
-		if _, memErr := o.memory.ExtractMemoriesFromOutput(ag.ID, task.ID, output); memErr != nil {
-			o.logger.Warn("memory extraction failed", "agent_id", ag.ID, "error", memErr)
+	// Extract memories from agent output. Direct tool agents have no
+	// subprocess output file, so skip when the runner is not configured
+	// (also covers tests that omit the runner).
+	var output string
+	if o.runner != nil {
+		var err error
+		output, err = o.runner.GetAgentOutput(ag.ID)
+		if err != nil {
+			o.logger.Warn("failed to read agent output for memory extraction", "agent_id", ag.ID, "error", err)
+		} else if output != "" && o.memory != nil {
+			if _, memErr := o.memory.ExtractMemoriesFromOutput(ag.ID, task.ID, output); memErr != nil {
+				o.logger.Warn("memory extraction failed", "agent_id", ag.ID, "error", memErr)
+			}
 		}
 	}
 
