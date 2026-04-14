@@ -15,6 +15,7 @@ func TestCompareReports(t *testing.T) {
 		wantDominated bool
 		wantNewViol   []string // nil means expect empty
 		wantWorsened  []string // nil means expect empty
+		wantAdditions []string // nil means expect empty
 	}{
 		{
 			// PASS→PASS: constraint stays clean — no regression, gate must allow.
@@ -285,8 +286,8 @@ func TestCompareReports(t *testing.T) {
 		},
 		{
 			// Edge case: constraint appears only in current (not in baseline).
-			// Treated as PASS→FAIL since baseline had no record of failure.
-			name: "constraint only in current: treated as new violation, blocked",
+			// Treated as addition, not regression — baseline had no record of this constraint.
+			name: "constraint only in current: treated as addition, not blocked",
 			baseline: &Report{
 				Results: []Result{},
 			},
@@ -300,8 +301,8 @@ func TestCompareReports(t *testing.T) {
 				},
 				Failed: 1,
 			},
-			wantDominated: true,
-			wantNewViol:   []string{"new depth constraint"},
+			wantDominated: false,
+			wantAdditions: []string{"new depth constraint"},
 		},
 	}
 
@@ -319,6 +320,10 @@ func TestCompareReports(t *testing.T) {
 
 			if !containsExactly(got.Worsened, tt.wantWorsened) {
 				t.Errorf("Worsened = %v, want %v", got.Worsened, tt.wantWorsened)
+			}
+
+			if !containsExactly(got.Additions, tt.wantAdditions) {
+				t.Errorf("Additions = %v, want %v", got.Additions, tt.wantAdditions)
 			}
 		})
 	}

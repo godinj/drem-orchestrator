@@ -30,6 +30,31 @@ import (
 //   constraint_violations           — string, formatted violation report
 // ---------------------------------------------------------------------------
 
+// setupMainWorktreeWithConstraints creates a main worktree with a constraints.toml
+// and a small passing file so the delta comparison has a valid baseline.
+func setupMainWorktreeWithConstraints(t *testing.T, bareRepoPath, constraintsTOML string) string {
+	t.Helper()
+	mainDir := filepath.Join(bareRepoPath, "main")
+	runGitCmd(t, bareRepoPath, "worktree", "add", mainDir, "main")
+	runGitCmd(t, mainDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, mainDir, "config", "user.name", "Test")
+
+	dremDir := filepath.Join(mainDir, ".drem")
+	if err := os.MkdirAll(dremDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dremDir, "constraints.toml"), []byte(constraintsTOML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	smallFile := filepath.Join(mainDir, "baseline.go")
+	if err := os.WriteFile(smallFile, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, mainDir, "add", ".")
+	runGitCmd(t, mainDir, "commit", "-m", "add constraints and baseline")
+	return mainDir
+}
+
 // constraintFailWorktree sets up a feature worktree with a max_lines constraint
 // and a file that violates it (exceeds the line limit).
 func constraintFailWorktree(t *testing.T, bareRepoPath, featureName string, limit int) string {
@@ -128,6 +153,7 @@ func itoa(n int) string {
 // future.
 func TestConstraintGateWiring_TestReview_FirstFailure(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
+	setupMainWorktreeWithConstraints(t, bareRepoPath, "[[max_lines]]\nname = \"file size check\"\nglob = \"*.go\"\nlimit = 5\n")
 	featureName := "gate-retry-first-fail"
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
@@ -272,6 +298,7 @@ func TestConstraintGateWiring_TestReview_BackoffRespected(t *testing.T) {
 // descriptive reason listing which constraints failed.
 func TestConstraintGateWiring_TestReview_MaxRetriesExhausted(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
+	setupMainWorktreeWithConstraints(t, bareRepoPath, "[[max_lines]]\nname = \"file size check\"\nglob = \"*.go\"\nlimit = 5\n")
 	featureName := "gate-retry-max"
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
@@ -438,6 +465,7 @@ func TestConstraintGateWiring_TestReview_EarlyTermination(t *testing.T) {
 // constraint_violations are cleared, and the task transitions to test_review.
 func TestConstraintGateWiring_TestReview_PassAfterFailure(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
+	setupMainWorktreeWithConstraints(t, bareRepoPath, "[[max_lines]]\nname = \"file size check\"\nglob = \"*.go\"\nlimit = 1000\n")
 	featureName := "gate-retry-pass"
 	constraintPassWorktree(t, bareRepoPath, featureName)
 
@@ -512,6 +540,7 @@ func TestConstraintGateWiring_TestReview_PassAfterFailure(t *testing.T) {
 // sets constraint_gate_retries=1, and sets constraint_gate_next_check.
 func TestConstraintGateWiring_TestingReady_FirstFailure(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
+	setupMainWorktreeWithConstraints(t, bareRepoPath, "[[max_lines]]\nname = \"file size check\"\nglob = \"*.go\"\nlimit = 5\n")
 	featureName := "gate-tr-first-fail"
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
@@ -583,6 +612,7 @@ func TestConstraintGateWiring_TestingReady_FirstFailure(t *testing.T) {
 // transitions to failed.
 func TestConstraintGateWiring_TestingReady_MaxRetriesExhausted(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
+	setupMainWorktreeWithConstraints(t, bareRepoPath, "[[max_lines]]\nname = \"file size check\"\nglob = \"*.go\"\nlimit = 5\n")
 	featureName := "gate-tr-max-retry"
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
@@ -647,6 +677,7 @@ func TestConstraintGateWiring_TestingReady_MaxRetriesExhausted(t *testing.T) {
 // transitions to testing_ready and all gate context is cleared.
 func TestConstraintGateWiring_TestingReady_PassAfterRetries(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
+	setupMainWorktreeWithConstraints(t, bareRepoPath, "[[max_lines]]\nname = \"file size check\"\nglob = \"*.go\"\nlimit = 1000\n")
 	featureName := "gate-tr-pass-retry"
 	constraintPassWorktree(t, bareRepoPath, featureName)
 

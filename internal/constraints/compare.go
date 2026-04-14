@@ -11,6 +11,9 @@ type ComparisonResult struct {
 	NewViolations []string
 	// Worsened holds constraint names that transitioned FAIL→FAIL with more violations.
 	Worsened []string
+	// Additions holds constraint names present in current but absent from baseline.
+	// These are informational — they do not affect Dominated.
+	Additions []string
 }
 
 // Magnitude returns the total number of blocking constraints
@@ -34,6 +37,9 @@ func (r ComparisonResult) Summary() string {
 	}
 	for _, name := range r.Worsened {
 		parts = append(parts, "worsened: "+name)
+	}
+	for _, name := range r.Additions {
+		parts = append(parts, "addition: "+name)
 	}
 	return strings.Join(parts, "; ")
 }
@@ -59,16 +65,20 @@ func CompareReports(baseline, current *Report) ComparisonResult {
 	var result ComparisonResult
 	for _, cur := range current.Results {
 		base, found := baselineByName[cur.Name]
-		// If not in baseline, treat as PASS→? (baseline was passing).
-		basePassed := !found || base.Passed
+		if !found {
+			if !cur.Passed {
+				result.Additions = append(result.Additions, cur.Name)
+			}
+			continue
+		}
 
 		switch {
-		case basePassed && cur.Passed:
+		case base.Passed && cur.Passed:
 			// PASS→PASS: no action.
-		case basePassed && !cur.Passed:
+		case base.Passed && !cur.Passed:
 			// PASS→FAIL: new violation.
 			result.NewViolations = append(result.NewViolations, cur.Name)
-		case !basePassed && cur.Passed:
+		case !base.Passed && cur.Passed:
 			// FAIL→PASS: improvement, no action.
 		default:
 			// FAIL→FAIL: check magnitude via message count.

@@ -134,24 +134,47 @@ func (o *Orchestrator) evaluateConstraintGate(task *model.Task) (bool, error) {
 		return false, nil
 	}
 
-	featureReport, evalErr := constraints.Evaluate(constraintCfg, featureDir)
-	if evalErr != nil {
-		o.logger.Warn("constraint evaluation failed at integration gate",
-			"task_id", task.ID, "error", evalErr)
+	masterDir := ""
+	if md, err := o.worktree.MainWorktreePath(); err == nil {
+		masterDir = md
+	} else {
+		o.logger.Warn("master worktree not found for constraint delta",
+			"task_id", task.ID, "error", err)
+		o.emit("constraint_gate_skip", map[string]any{
+			"task_id": task.ID,
+			"reason":  fmt.Sprintf("master worktree not found: %v", err),
+		})
 		return false, nil
 	}
 
-	// Get baseline report from the master worktree for per-constraint delta comparison.
-	masterReport := &constraints.Report{}
-	if masterDir, err := o.worktree.MainWorktreePath(); err == nil {
-		if masterCfg, err := constraints.LoadConfig(masterDir); err == nil && masterCfg != nil {
-			if r, err := constraints.Evaluate(masterCfg, masterDir); err == nil {
-				masterReport = r
-			}
-		}
+	delta, deltaErr := constraints.EvaluateDelta(constraintCfg, featureDir, masterDir)
+	if deltaErr != nil {
+		o.logger.Warn("constraint delta evaluation failed",
+			"task_id", task.ID, "error", deltaErr)
+		return false, nil
 	}
 
-	comparison := constraints.CompareReports(masterReport, featureReport)
+	if delta.Skipped {
+		o.logger.Warn("constraint gate skipped: baseline unavailable",
+			"task_id", task.ID,
+			"baseline_status", delta.BaselineStatus,
+			"reason", delta.SkipReason)
+		o.emit("constraint_gate_skip", map[string]any{
+			"task_id":         task.ID,
+			"baseline_status": string(delta.BaselineStatus),
+			"reason":          delta.SkipReason,
+		})
+		return false, nil
+	}
+
+	featureReport := delta.FeatureReport
+	comparison := delta.Comparison
+
+	if len(comparison.Additions) > 0 {
+		o.logger.Info("new constraints detected (informational, not blocking)",
+			"task_id", task.ID, "additions", comparison.Additions)
+	}
+
 	if !comparison.Dominated {
 		// No regressions relative to master — clear all gate context.
 		for _, key := range constraintGateContextKeys {

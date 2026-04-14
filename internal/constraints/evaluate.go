@@ -30,7 +30,46 @@ type DeltaResult struct {
 }
 
 func EvaluateDelta(cfg *Config, featureDir, baselineDir string) (*DeltaResult, error) {
-	return nil, nil
+	featureReport, err := Evaluate(cfg, featureDir)
+	if err != nil {
+		return nil, fmt.Errorf("evaluate feature constraints: %w", err)
+	}
+
+	baselineCfg, err := LoadConfig(baselineDir)
+	if err != nil {
+		return &DeltaResult{
+			Skipped:        true,
+			SkipReason:     fmt.Sprintf("baseline config load failed: %v", err),
+			BaselineStatus: BaselineFailed,
+			FeatureReport:  featureReport,
+		}, nil
+	}
+	if baselineCfg == nil {
+		return &DeltaResult{
+			Skipped:        true,
+			SkipReason:     "no constraints config in baseline",
+			BaselineStatus: BaselineMissing,
+			FeatureReport:  featureReport,
+		}, nil
+	}
+
+	baselineReport, err := Evaluate(baselineCfg, baselineDir)
+	if err != nil {
+		return &DeltaResult{
+			Skipped:        true,
+			SkipReason:     fmt.Sprintf("baseline evaluation failed: %v", err),
+			BaselineStatus: BaselineFailed,
+			FeatureReport:  featureReport,
+		}, nil
+	}
+
+	comparison := CompareReports(baselineReport, featureReport)
+	return &DeltaResult{
+		BaselineStatus: BaselineOK,
+		Comparison:     comparison,
+		FeatureReport:  featureReport,
+		BaselineReport: baselineReport,
+	}, nil
 }
 
 // Evaluate runs all constraints in the config against the given worktree root.

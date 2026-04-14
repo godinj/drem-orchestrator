@@ -150,6 +150,7 @@ limit = 1000
 // the parent stays in_progress and constraint_violations are stored in context.
 func TestIntegrationGate_ConstraintsFail(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
+	setupMainWorktreeWithConstraints(t, bareRepoPath, "[[no_match]]\nname = \"no debug TODOs\"\nglob = \"*.go\"\npattern = \"TODO: remove this debug\"\n")
 
 	featureName := "gate-fail"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -237,6 +238,7 @@ pattern = "TODO: remove this debug"
 // pass after a previous failure, the constraint_violations context is cleared.
 func TestIntegrationGate_ViolationsClearedOnPass(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
+	setupMainWorktreeWithConstraints(t, bareRepoPath, "[[max_lines]]\nname = \"file size check\"\nglob = \"*.go\"\nlimit = 1000\n")
 
 	featureName := "gate-cleared"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
@@ -317,6 +319,7 @@ limit = 1000
 // that returns a non-zero exit code blocks the transition to testing_ready.
 func TestIntegrationGate_CommandConstraintFails(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
+	setupMainWorktreeWithConstraints(t, bareRepoPath, "[[command]]\nname = \"always-fail check\"\nrun = \"true\"\n")
 
 	featureName := "gate-cmd-fail"
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
