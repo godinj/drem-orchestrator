@@ -123,11 +123,12 @@ type Orchestrator struct {
 	contextStopPct              int
 	contextFixerPct             int // percentage: spawn fixer instead of failing
 	subtaskRecovery             SubtaskRecoveryPolicy
-	skipConstraintGate          bool                          // bypass constraint gate evaluation
-	interactiveSupervisorConfig model.AgentCLIConfig          // model/effort for interactive supervisor sessions
-	directClassifierCfg         *agent.DirectClassifierConfig // nil means use OpenCode subprocess path
-	metrics                     *metrics.Store                // nil-safe: callers nil-check before use
-	experimentScheduler         *ExperimentScheduler          // experiment-aware scheduling
+	skipConstraintGate          bool                            // bypass constraint gate evaluation
+	interactiveSupervisorConfig model.AgentCLIConfig            // model/effort for interactive supervisor sessions
+	directClassifierCfg         *agent.DirectClassifierConfig   // nil means use OpenCode subprocess path
+	directPlanReviewerCfg       *agent.DirectPlanReviewerConfig // nil means use subprocess path for plan review
+	metrics                     *metrics.Store                  // nil-safe: callers nil-check before use
+	experimentScheduler         *ExperimentScheduler            // experiment-aware scheduling
 	logger                      *slog.Logger
 }
 
@@ -211,6 +212,14 @@ func (o *Orchestrator) SetDirectClassifierConfig(cfg *agent.DirectClassifierConf
 	o.directClassifierCfg = cfg
 	if cfg != nil {
 		o.logger.Info("direct classifier enabled", "endpoint", cfg.Endpoint, "model", cfg.Model)
+	}
+}
+
+// SetDirectPlanReviewerConfig enables the direct SGLang plan reviewer path for PLAN_REVIEW tasks. Pass nil to disable.
+func (o *Orchestrator) SetDirectPlanReviewerConfig(cfg *agent.DirectPlanReviewerConfig) {
+	o.directPlanReviewerCfg = cfg
+	if cfg != nil {
+		o.logger.Info("direct plan reviewer enabled", "endpoint", cfg.Endpoint, "model", cfg.Model)
 	}
 }
 

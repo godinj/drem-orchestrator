@@ -152,6 +152,17 @@ effort = "low"
 
 Use `ForAgentTypeWithProfile(agentType, profileName)` in the config API to resolve the effective `AgentCLIConfig` for a given role and profile. If the profile name is unknown, an error is returned — referencing a non-existent profile is always an error, not a silent fallback.
 
+### Direct API Agents
+
+Drem can run selected agent roles as synchronous calls to a local SGLang OpenAI-compatible endpoint instead of spawning an OpenCode subprocess. This bypasses the ~20K-token tool-definition overhead OpenCode loads by default and eliminates process startup cost, cutting typical token usage from ~40K to a few thousand per run.
+
+Supported roles:
+
+- **Classifier** — enable with `Orchestrator.SetDirectClassifierConfig(&agent.DirectClassifierConfig{...})`. Handles all `CLASSIFYING` tasks.
+- **Plan reviewer** — enable with `Orchestrator.SetDirectPlanReviewerConfig(&agent.DirectPlanReviewerConfig{...})`. Engages only when `SpawnReviewerSession` runs with a task in `plan_review`; feature review (`testing_ready`) continues to use the subprocess path unchanged.
+
+Defaults target `http://localhost:8081/v1/chat/completions` with `gemma4-26b`. Pass `nil` to either setter to fall back to the subprocess path. Direct agents produce the same output artifacts (`classification-<task>.json`, `review.json`) the subprocess agents emit, so downstream completion handlers are unchanged.
+
 ## Dispatch Throttling
 
 To prevent API quota exhaustion when many tasks advance simultaneously, the orchestrator rate-limits agent dispatch using a sliding window algorithm.

@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
@@ -79,6 +81,14 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 		}
 	}
 
+	// Direct SGLang path: plan review only. When enabled, call the API
+	// synchronously, write review.json into the worktree, and run the
+	// completion handler inline. Feature reviews fall through to the
+	// subprocess path below.
+	if reviewMode == "plan" && o.directPlanReviewerCfg != nil {
+		return o.spawnDirectPlanReviewer(&task, worktreePath, planJSON)
+	}
+
 	// Generate prompt.
 	comments, _ := o.GetComments(task.ID)
 	reviewerPrompt := prompt.Generate(prompt.Opts{
@@ -101,6 +111,63 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 	o.emit("reviewer_spawned", map[string]any{"task_id": taskID, "agent_id": ag.ID, "mode": reviewMode})
 	o.logger.Info("reviewer spawned", "task_id", taskID, "agent_id", ag.ID, "mode", reviewMode)
 	return ag.TmuxSession, nil
+}
+
+// spawnDirectPlanReviewer runs the direct SGLang plan review synchronously.
+// It mirrors the lightweight-agent pattern from processClassifyingTasksDirect:
+// create an Agent DB record, run the API call, invoke onReviewerCompleted
+// which parses review.json and stores it on task.Context. Returns
+// ("", nil) on success — no tmux session exists for direct agents.
+func (o *Orchestrator) spawnDirectPlanReviewer(task *model.Task, worktreePath, planJSON string) (string, error) {
+	cfg := o.directPlanReviewerCfg
+	now := time.Now()
+	ag := &model.Agent{
+		ID:            uuid.New(),
+		ProjectID:     task.ProjectID,
+		AgentType:     model.AgentReviewer,
+		Name:          fmt.Sprintf("direct-reviewer-%s", task.ID.String()[:4]),
+		Status:        model.AgentWorking,
+		CurrentTaskID: &task.ID,
+		WorktreePath:  worktreePath,
+		Provider:      "sglang-direct",
+		ModelID:       cfg.Model,
+		HeartbeatAt:   &now,
+	}
+	if err := o.db.Create(ag).Error; err != nil {
+		return "", fmt.Errorf("spawn direct reviewer: create agent record: %w", err)
+	}
+
+	task.AssignedAgentID = &ag.ID
+	if err := o.db.Save(task).Error; err != nil {
+		return "", fmt.Errorf("spawn direct reviewer: assign agent to task: %w", err)
+	}
+
+	o.logger.Info("direct plan reviewer: reviewing plan",
+		"task_id", task.ID, "agent_id", ag.ID)
+
+	result, err := agent.RunDirectPlanReviewer(*cfg, task.ID, task.Title, task.Description, planJSON, worktreePath)
+	if err != nil {
+		ag.Status = model.AgentDead
+		ag.CurrentTaskID = nil
+		_ = o.db.Save(ag).Error
+		return "", fmt.Errorf("spawn direct reviewer: %w", err)
+	}
+
+	// Record token usage for observability.
+	ag.TokensIn = result.TokensIn
+	ag.TokensOut = result.TokensOut
+	_ = o.db.Save(ag).Error
+
+	if err := o.onReviewerCompleted(ag, task); err != nil {
+		return "", fmt.Errorf("spawn direct reviewer: on completed: %w", err)
+	}
+
+	o.emit("reviewer_spawned", map[string]any{
+		"task_id":  task.ID,
+		"agent_id": ag.ID,
+		"mode":     "plan-direct",
+	})
+	return "", nil
 }
 
 // SpawnFixerSession spawns a fixer agent for the given task.
