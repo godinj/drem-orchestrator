@@ -21,6 +21,25 @@ import (
 	"time"
 )
 
+// TraceEvent is a single entry in the optional agent trace log. One is written
+// per iteration capturing the assistant reply and every tool call/result pair.
+type TraceEvent struct {
+	Iteration    int         `json:"iteration"`
+	FinishReason string      `json:"finish_reason"`
+	TokensIn     int         `json:"tokens_in"`
+	TokensOut    int         `json:"tokens_out"`
+	Assistant    string      `json:"assistant_content,omitempty"`
+	ToolCalls    []TraceCall `json:"tool_calls,omitempty"`
+}
+
+// TraceCall is one tool invocation and its result as seen by the loop.
+type TraceCall struct {
+	Name   string `json:"name"`
+	Args   string `json:"args"`
+	Result string `json:"result"`
+	Error  string `json:"error,omitempty"`
+}
+
 // ---------------------------------------------------------------------------
 // Configuration
 // ---------------------------------------------------------------------------
@@ -36,6 +55,7 @@ type DirectToolAgentConfig struct {
 	MaxIterations int           // Maximum tool-call loop iterations
 	WorkDir       string        // Working directory; tools restricted to paths under this
 	BashTimeout   time.Duration // Timeout for bash commands (default 30s)
+	TraceWriter   io.Writer     // Optional: JSON-lines trace, one TraceEvent per iteration
 }
 
 // DefaultDirectToolAgentConfig returns a config targeting the local SGLang
@@ -314,10 +334,15 @@ func (te *toolExecutor) execRead(argsJSON string) (string, error) {
 		truncated = true
 	}
 
-	// Format with line numbers.
+	// Format with line numbers. Use a non-whitespace separator ('|') between the
+	// line number and content so models do not confuse the separator with the
+	// file's own indentation when constructing edit strings. (Diagnosis:
+	// a tab-separator triggers a deterministic edit-retry loop where the model
+	// copies "<N>\t\t<content>" into edit.old and strips only "<N>", leaving an
+	// extra phantom tab that never matches the file.)
 	var buf strings.Builder
 	for i, line := range lines {
-		fmt.Fprintf(&buf, "%d\t%s\n", offset+i+1, line)
+		fmt.Fprintf(&buf, "%4d|%s\n", offset+i+1, line)
 	}
 	if truncated {
 		fmt.Fprintf(&buf, "[... truncated at %d lines]", limit)
@@ -608,6 +633,16 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 
 	var totalTokensIn, totalTokensOut int
 
+	// Loop detector state: remember the signature of the last tool call
+	// (name+args) AND its result so we can recognise "no forward progress"
+	// patterns and nudge the model toward a different approach. We consider
+	// a call "stuck" when it repeats with identical args AND produces
+	// identical output as the immediately preceding call — this catches both
+	// failing-edit loops (result is the same error each time) and
+	// successful-but-useless grep/ls loops (result is the same empty or
+	// same-match text each time).
+	var prevToolKey, prevToolOut string
+
 	maxIter := cfg.MaxIterations
 	if maxIter <= 0 {
 		maxIter = 20
@@ -645,8 +680,17 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 
 		choice := resp.Choices[0]
 
+		traceEvent := TraceEvent{
+			Iteration:    iteration,
+			FinishReason: choice.FinishReason,
+			TokensIn:     resp.Usage.PromptTokens,
+			TokensOut:    resp.Usage.CompletionTokens,
+			Assistant:    choice.Message.Content,
+		}
+
 		// If the model is done, return the final content.
 		if choice.FinishReason == "stop" || choice.FinishReason == "end_of_turn" {
+			writeTrace(cfg.TraceWriter, traceEvent)
 			finalOutput := choice.Message.Content
 			result := &DirectToolAgentResult{
 				Output:     finalOutput,
@@ -681,6 +725,13 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			// Append the assistant message with tool calls.
 			messages = append(messages, choice.Message)
 
+			// Intra-iteration dedup: if the model emits multiple tool calls
+			// with identical name+args in a single turn, execute only the first
+			// and stub the rest. Observed in bench: a single turn contained 60
+			// identical `ls -R` calls. Each stub still preserves tool_call_id
+			// so the OpenAI protocol (one result per call) is satisfied.
+			seenThisIter := map[string]string{}
+
 			for _, tc := range choice.Message.ToolCalls {
 				slog.Info("direct tool agent: executing tool",
 					"iteration", iteration,
@@ -688,10 +739,61 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					"call_id", tc.ID,
 				)
 
+				curKey := tc.Function.Name + "\x00" + tc.Function.Arguments
+
+				// If an identical call already ran this turn, stub the rest.
+				if firstResult, dup := seenThisIter[curKey]; dup {
+					slog.Warn("direct tool agent: duplicate tool call in same turn (stubbed)",
+						"iteration", iteration,
+						"tool", tc.Function.Name,
+					)
+					stub := "[HARNESS: duplicate tool call in the same turn — executed once above, re-using result.\n" +
+						"First result was:\n" + truncateForStub(firstResult, 400) +
+						"\n\nDo not emit multiple identical tool calls in one turn. If you need to re-check, do it on the next turn after considering the first result.]"
+					messages = append(messages, toolChatMsg{
+						Role:       "tool",
+						Content:    stub,
+						ToolCallID: tc.ID,
+						Name:       tc.Function.Name,
+					})
+					traceEvent.ToolCalls = append(traceEvent.ToolCalls, TraceCall{
+						Name:   tc.Function.Name,
+						Args:   tc.Function.Arguments,
+						Result: stub,
+					})
+					continue
+				}
+
 				result, toolErr := exec.execute(tc.Function.Name, tc.Function.Arguments)
+				traceCall := TraceCall{
+					Name: tc.Function.Name,
+					Args: tc.Function.Arguments,
+				}
 				if toolErr != nil {
+					traceCall.Error = toolErr.Error()
 					result = "ERROR: " + toolErr.Error()
 				}
+				// Loop detector: if this call has identical name+args AND
+				// produces identical output to the immediately preceding call,
+				// the model is making no forward progress. Inject a nudge
+				// suggesting a different approach. This catches both failing
+				// edits (same error each time) and no-match search loops
+				// (same empty grep output repeated).
+				if curKey == prevToolKey && result == prevToolOut {
+					slog.Warn("direct tool agent: loop detector triggered",
+						"iteration", iteration,
+						"tool", tc.Function.Name,
+					)
+					result += "\n\n[HARNESS NOTE: This is the 2nd consecutive identical call producing identical output. You are making no forward progress. Try a different approach:\n" +
+						" - if searching, broaden or narrow the query, or try a different tool (e.g. glob vs grep, or read a known file directly);\n" +
+						" - if editing and the tool reports an error, re-read the file to confirm its current contents and check whitespace/indentation in your 'old' string, or use 'write' for a full-file replace;\n" +
+						" - if the information you need is not findable, proceed with a reasonable assumption, document it in a code comment, and continue.]"
+				}
+				prevToolKey = curKey
+				prevToolOut = result
+				seenThisIter[curKey] = result
+				traceCall.Result = result
+				traceEvent.ToolCalls = append(traceEvent.ToolCalls, traceCall)
 
 				// Append the tool result message.
 				messages = append(messages, toolChatMsg{
@@ -701,6 +803,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					Name:       tc.Function.Name,
 				})
 			}
+			writeTrace(cfg.TraceWriter, traceEvent)
 			continue
 		}
 
@@ -709,6 +812,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			"finish_reason", choice.FinishReason,
 			"iteration", iteration,
 		)
+		writeTrace(cfg.TraceWriter, traceEvent)
 		return &DirectToolAgentResult{
 			Output:     choice.Message.Content,
 			TokensIn:   totalTokensIn,
@@ -724,6 +828,33 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		Iterations: maxIter,
 		Duration:   time.Since(start),
 	}, fmt.Errorf("exceeded max iterations (%d)", maxIter)
+}
+
+// truncateForStub clamps a result string to n characters so dedup stubs do
+// not blow the context when the original result was large. Used when a
+// duplicate tool call is elided — the second+ result just points back at the
+// first and does not need the full body repeated.
+func truncateForStub(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "\n[...truncated]"
+}
+
+// writeTrace emits one JSON-line TraceEvent if the trace writer is configured.
+// Failures are logged but never surface — tracing is strictly opt-in diagnostic.
+func writeTrace(w io.Writer, ev TraceEvent) {
+	if w == nil {
+		return
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		slog.Warn("direct tool agent: trace marshal failed", "err", err)
+		return
+	}
+	if _, err := w.Write(append(data, '\n')); err != nil {
+		slog.Warn("direct tool agent: trace write failed", "err", err)
+	}
 }
 
 // callToolAPI makes a single chat completions request with tool definitions.

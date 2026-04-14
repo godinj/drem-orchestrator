@@ -77,23 +77,23 @@ func TestExecRead(t *testing.T) {
 	t.Run("read entire file", func(t *testing.T) {
 		result, err := te.execRead(`{"path":"test.txt"}`)
 		require.NoError(t, err)
-		assert.Contains(t, result, "1\tline 1")
-		assert.Contains(t, result, "5\tline 5")
+		assert.Contains(t, result, "   1|line 1")
+		assert.Contains(t, result, "   5|line 5")
 	})
 
 	t.Run("read with offset", func(t *testing.T) {
 		result, err := te.execRead(`{"path":"test.txt","offset":2}`)
 		require.NoError(t, err)
-		assert.Contains(t, result, "3\tline 3")
-		assert.NotContains(t, result, "1\tline 1")
+		assert.Contains(t, result, "   3|line 3")
+		assert.NotContains(t, result, "   1|line 1")
 	})
 
 	t.Run("read with limit", func(t *testing.T) {
 		result, err := te.execRead(`{"path":"test.txt","limit":2}`)
 		require.NoError(t, err)
-		assert.Contains(t, result, "1\tline 1")
-		assert.Contains(t, result, "2\tline 2")
-		assert.NotContains(t, result, "3\tline 3")
+		assert.Contains(t, result, "   1|line 1")
+		assert.Contains(t, result, "   2|line 2")
+		assert.NotContains(t, result, "   3|line 3")
 	})
 
 	t.Run("read nonexistent file", func(t *testing.T) {
