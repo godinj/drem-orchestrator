@@ -16,6 +16,10 @@
 
 - [Model Profiles (PRD)](prd-metrics-and-experiments.md#profiles) — TOML syntax for per-agent model/effort overrides; profile resolution order and fallback chain
 
+## Model Capability Validation
+
+- [Model Capability Validation](model-capability-validation.md) — Startup validation that configured models support required capabilities per agent type
+
 ## Future Work
 
 - [Planner Decomposition Strategy](merge-overhaul/planner-decomposition-strategy.md) — 7 improvements to planner prompts and plan validation
