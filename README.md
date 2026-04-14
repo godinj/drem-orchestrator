@@ -894,6 +894,46 @@ Scores appear in the TUI board as compact badges (T:85 C:100 D:0 Dp:67) and in t
 | **researcher** | Investigates questions, reads code, gathers information |
 | **reviewer** | Reviews plans or diffs; approves or requests changes |
 | **fixer** | Diagnoses and fixes broken merges or failed agent work |
+| **prep** | Read-only recon pass before the coder writes: reads target files and emits a structured tactical brief (target files, insertion points, patterns to follow, warnings, constructors) |
+
+## Direct SGLang Agents
+
+For roles that talk to a local SGLang-served model (typically `gemma4-26b`), drem supports a "direct" path that calls the OpenAI-compatible chat completions endpoint synchronously instead of spawning an OpenCode subprocess. The direct path avoids roughly 20K tokens of tool-definition overhead that OpenCode injects on every turn, which matters for smaller context windows.
+
+Two roles currently have a direct path:
+
+| Role | Tools | Use |
+|------|-------|-----|
+| **classifier** | none | Single-shot task classification via JSON output |
+| **prep** | read, grep, glob | Read-only reconnaissance agent that gathers context for the coder |
+
+The prep role is deliberately restricted to **read, grep, and glob** — it has no edit, write, or bash tool. Its job is to gather signal, not to modify code. The model returns a `PrepOutput` JSON document (target files with relevant definitions and methods, insertion points, patterns to follow, warnings, and affected constructors) which the orchestrator stores in the subtask context. The coder agent that runs next sees that context in its prompt and writes code with better situational awareness.
+
+### Enabling the direct path
+
+Direct classifier and prep are auto-enabled when the classifier role is configured against an SGLang provider. You can also enable either role explicitly:
+
+```toml
+[agents.classifier]
+provider = "opencode"
+model    = "sglang/gemma4-26b"
+direct   = true            # explicit opt-in
+
+[agents.prep]
+provider = "opencode"
+model    = "sglang/gemma4-26b"
+direct   = true            # explicit opt-in; otherwise piggybacks on classifier
+```
+
+When enabled, prep shares the classifier's SGLang endpoint (`http://localhost:8081/v1/chat/completions`) but uses a larger token budget (`MaxTokens = 4096`) because its tool loop needs room for several iterations of tool calls plus a final JSON payload. The prep role falls back to the OpenCode subprocess path if `SetDirectPrepConfig` is left unset, preserving existing behavior.
+
+### Token savings
+
+A subprocess OpenCode classifier burns roughly 20K context tokens on tool definitions alone before seeing the user prompt. The direct path uses only the tools declared in `ToolsForRole("prep")` — read, grep, glob — whose combined JSON schema is under 2K tokens. That keeps prep well within the context budget of a 26B local model without triggering context-exhaustion warnings.
+
+### Failure modes
+
+If the SGLang endpoint errors or returns malformed JSON, the orchestrator degrades gracefully: the subtask is marked `prep_complete = true` and `prep_failed = true`, and the coder dispatches normally without the enrichment context. No retry storm, no dropped tasks.
 
 ## Git Worktree Layout
 

@@ -221,13 +221,41 @@ func main() {
 	// Enable direct SGLang classifier when configured or auto-detected.
 	// Auto-enable when the classifier provider is "opencode" and model contains "sglang",
 	// or when the direct flag is explicitly set.
-	if cfg.Agents.Classifier.Direct || (cfg.Agents.Classifier.Provider == "opencode" && strings.Contains(cfg.Agents.Classifier.Model, "sglang")) {
+	classifierDirect := cfg.Agents.Classifier.Direct || (cfg.Agents.Classifier.Provider == "opencode" && strings.Contains(cfg.Agents.Classifier.Model, "sglang"))
+	if classifierDirect {
 		dcfg := agent.DefaultDirectClassifierConfig()
 		// If the classifier has a model override, use it for the direct path too.
 		if cfg.Agents.Classifier.Model != "" && !strings.Contains(cfg.Agents.Classifier.Model, "sglang") {
 			dcfg.Model = cfg.Agents.Classifier.Model
 		}
 		orch.SetDirectClassifierConfig(&dcfg)
+	}
+
+	// Enable direct SGLang prep agent. Prep is the read-only recon role that
+	// reuses the classifier's SGLang server but with a larger token budget for
+	// tool loops. Auto-enable when the prep role is explicitly set to direct,
+	// when the prep provider is "opencode" with an sglang model, or when the
+	// classifier already runs direct (the prep role piggybacks on the same
+	// SGLang endpoint by default).
+	prepDirect := cfg.Agents.Prep.Direct ||
+		(cfg.Agents.Prep.Provider == "opencode" && strings.Contains(cfg.Agents.Prep.Model, "sglang")) ||
+		classifierDirect
+	if prepDirect {
+		pcfg := agent.DirectPrepConfig{DirectToolAgentConfig: agent.DefaultDirectToolAgentConfig()}
+		// Prep does tool loops, so allow more output tokens than the classifier.
+		// The DirectToolAgent default (2048) is reasonable; raise to 4096 to
+		// give the model room for the final PrepOutput JSON after several
+		// iterations of tool calls.
+		pcfg.MaxTokens = 4096
+		// If the prep role has its own model override, use it. Otherwise fall
+		// back to the classifier's model so both roles target the same server.
+		switch {
+		case cfg.Agents.Prep.Model != "" && !strings.Contains(cfg.Agents.Prep.Model, "sglang"):
+			pcfg.Model = cfg.Agents.Prep.Model
+		case cfg.Agents.Classifier.Model != "" && !strings.Contains(cfg.Agents.Classifier.Model, "sglang"):
+			pcfg.Model = cfg.Agents.Classifier.Model
+		}
+		orch.SetDirectPrepConfig(&pcfg)
 	}
 
 	// Wire test gate config from drem.toml so test_command is respected.

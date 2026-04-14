@@ -127,6 +127,7 @@ type Orchestrator struct {
 	interactiveSupervisorConfig model.AgentCLIConfig            // model/effort for interactive supervisor sessions
 	directClassifierCfg         *agent.DirectClassifierConfig   // nil means use OpenCode subprocess path
 	directPlanReviewerCfg       *agent.DirectPlanReviewerConfig // nil means use subprocess path for plan review
+	directPrepCfg               *agent.DirectPrepConfig         // nil means use OpenCode subprocess path
 	metrics                     *metrics.Store                  // nil-safe: callers nil-check before use
 	experimentScheduler         *ExperimentScheduler            // experiment-aware scheduling
 	logger                      *slog.Logger
