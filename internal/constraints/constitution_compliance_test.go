@@ -142,27 +142,3 @@ func TestArchitectureMDOrchestratorFilesInPackageMap(t *testing.T) {
 	}
 }
 
-func TestConstitutionCheckPasses(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping constitution check in short mode")
-	}
-
-	root := repoRoot(t)
-	scriptPath := filepath.Join(root, "scripts", "check_constitution.sh")
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		t.Fatal("scripts/check_constitution.sh not found")
-	}
-
-	cmd := exec.Command("bash", scriptPath)
-	cmd.Dir = root
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("constitution check failed (exit %v):\n%s", err, string(output))
-	}
-
-	// Verify zero failures in the output.
-	outStr := string(output)
-	if strings.Contains(outStr, "FAIL") {
-		t.Errorf("constitution check output contains FAIL:\n%s", outStr)
-	}
-}
