@@ -1,39 +1,39 @@
 {
   "subtasks": [
     {
-      "title": "Write tests for prep role tool filtering and RunDirectPrep",
-      "description": "Create tests in `internal/agent/direct_prep_test.go` that verify:\n\n1. **ToolsForRole(\"prep\") returns exactly {read, grep, glob}** — assert length 3, assert names match, assert no edit/write/bash.\n2. **PrepSystemPrompt() generates valid prompt** — call the function with a PrepPromptOpts (task title, description, estimated files, work dir), assert the output contains key sections: JSON output schema, tool usage instructions, file list. Assert it does NOT contain edit/write instructions.\n3. **RunDirectPrep() calls RunDirectToolAgent correctly** — use httptest.NewServer to mock the SGLang API. Return a stop response with valid PrepOutput JSON. Assert the returned PrepOutput has expected fields parsed correctly. Assert TokensIn/TokensOut are populated.\n4. **RunDirectPrep() returns error on malformed JSON** — mock returns stop with garbage content. Assert error.\n\nStub file `internal/agent/direct_prep.go` with:\n- `type DirectPrepConfig struct` (embeds DirectToolAgentConfig)\n- `type PrepPromptOpts struct` (TaskTitle, TaskDescription, EstimatedFiles []string, WorkDir string, ParentTitle string, ParentDescription string)\n- `func PrepSystemPrompt(opts PrepPromptOpts) string` (return empty string)\n- `func RunDirectPrep(cfg DirectPrepConfig, opts PrepPromptOpts, outputPath string) (*DirectToolAgentResult, *PrepOutput, error)` (return nil, nil, nil)\n\nAlso add `\"prep\": {\"read\", \"grep\", \"glob\"}` to the `roleTools` map in `direct_tool_agent.go` line 191-195 (inside the existing map literal, after the \"reviewer\" entry).\n\nNote: PrepOutput struct is defined in `internal/orchestrator/task_prep.go` — do NOT redefine it. The stub in direct_prep.go should NOT import orchestrator (circular). Instead, RunDirectPrep should return raw JSON string + *DirectToolAgentResult, and let the caller parse PrepOutput. Revise the stub signature to: `func RunDirectPrep(cfg DirectPrepConfig, opts PrepPromptOpts, outputPath string) (*DirectToolAgentResult, error)`.\n\nExisting test patterns: see `internal/agent/direct_tool_agent_test.go` for httptest mock patterns and `internal/agent/direct_classifier_test.go` for reference.",
+      "title": "Write tests for direct prep agent harness",
+      "description": "Create tests for the new direct prep agent in internal/agent/. These tests verify ToolsForRole(\"prep\"), the prep system prompt, and RunDirectPrep.\n\n**Test file: internal/agent/direct_prep_test.go**\n\nTests to write:\n\n1. **TestToolsForRole_Prep** — `tools := ToolsForRole(\"prep\")` returns exactly {\"read\", \"grep\", \"glob\"}. Assert length 3. Assert no \"edit\", \"write\", \"bash\". Note: this ALREADY works because unknown roles default to read-only, but the test documents the contract.\n\n2. **TestPrepSystemPrompt** — Call `PrepSystemPrompt(PrepPromptOpts{TaskTitle: \"Fix auth\", TaskDescription: \"Fix the auth bug\", EstimatedFiles: []string{\"internal/auth/handler.go\"}, WorkDir: \"/tmp/work\"})`. Assert the returned string contains: \"target_files\", \"insertion_points\", \"patterns_to_follow\", \"constructors\", the task title, the file path. Assert it contains \"read\" and \"grep\" tool references.\n\n3. **TestRunDirectPrep_Success** — Use httptest.NewServer (same pattern as TestRunDirectToolAgent_ToolCallLoop in direct_tool_agent_test.go). Mock returns a tool_calls response first (read tool), then a stop response with valid JSON: `{\"target_files\":[{\"path\":\"auth.go\",\"relevant_definitions\":\"func Auth()\",\"methods\":[\"Auth\"],\"notes\":\"main handler\"}],\"insertion_points\":[],\"patterns_to_follow\":[],\"warnings\":[],\"constructors\":[]}`. Assert result.Output contains the JSON. Assert result.TokensIn > 0.\n\n4. **TestRunDirectPrep_APIFailure** — Mock returns HTTP 500. Assert RunDirectPrep returns error.\n\n**Stub file: internal/agent/direct_prep.go**\n\nCreate with minimal types and stub functions:\n```go\npackage agent\n\ntype PrepPromptOpts struct {\n    TaskTitle        string\n    TaskDescription  string\n    EstimatedFiles   []string\n    WorkDir          string\n    ParentTitle      string\n    ParentDescription string\n    PlanJSON         string\n    RepoMap          string\n}\n\nfunc PrepSystemPrompt(opts PrepPromptOpts) string {\n    return \"\"\n}\n\nfunc RunDirectPrep(cfg DirectToolAgentConfig, opts PrepPromptOpts, outputPath string) (*DirectToolAgentResult, error) {\n    return nil, fmt.Errorf(\"not implemented\")\n}\n```\n\nImport only `fmt` in the stub. Do NOT modify direct_tool_agent.go — the ToolsForRole default already handles \"prep\".",
       "agent_type": "coder",
       "phase": "test",
       "tests_for": [1],
-      "files": ["internal/agent/direct_prep_test.go", "internal/agent/direct_prep.go", "internal/agent/direct_tool_agent.go"],
+      "files": ["internal/agent/direct_prep_test.go", "internal/agent/direct_prep.go"],
       "dependencies": [],
       "priority": 1,
       "module_boundaries": [
-        {"package": "internal/agent", "description": "Agent lifecycle, spawning, and direct API harnesses for SGLang tool-calling agents", "exports": 5}
+        {"package": "internal/agent", "description": "Agent lifecycle, spawning, and direct API harnesses for SGLang tool-calling agents", "exports": 4}
       ],
       "interface_shapes": [
-        {"package": "internal/agent", "functions": ["PrepSystemPrompt(opts PrepPromptOpts) string", "RunDirectPrep(cfg DirectPrepConfig, opts PrepPromptOpts, outputPath string) (*DirectToolAgentResult, error)"], "types": ["DirectPrepConfig", "PrepPromptOpts"]}
+        {"package": "internal/agent", "functions": ["PrepSystemPrompt(opts PrepPromptOpts) string", "RunDirectPrep(cfg DirectToolAgentConfig, opts PrepPromptOpts, outputPath string) (*DirectToolAgentResult, error)"], "types": ["PrepPromptOpts"]}
       ]
     },
     {
       "title": "Implement RunDirectPrep and prep system prompt",
-      "description": "Implement the prep agent's direct SGLang path in `internal/agent/direct_prep.go`. Make the tests from subtask 0 pass.\n\n**DirectPrepConfig**: Embed `DirectToolAgentConfig`. No additional fields needed — the base config has endpoint, model, max_tokens, temperature, timeout, max_iterations, work_dir, bash_timeout.\n\n**PrepPromptOpts**: Struct with fields: TaskTitle string, TaskDescription string, EstimatedFiles []string, WorkDir string, ParentTitle string, ParentDescription string, PlanJSON string (optional, for full plan context).\n\n**PrepSystemPrompt(opts PrepPromptOpts) string**: Build a system prompt that instructs the model to:\n- Read the estimated target files using the read tool\n- Search for patterns, struct definitions, constructors using grep/glob\n- Output a JSON object matching the PrepOutput schema (target_files, insertion_points, patterns_to_follow, warnings, constructors)\n- The prompt should include the PrepOutput JSON schema inline\n- Include the task title, description, estimated files list\n- Include parent task context if available\n- Emphasize: READ-ONLY — do not modify any files\n- Output format: final response must be valid JSON matching PrepOutput schema\n\n**RunDirectPrep(cfg DirectPrepConfig, opts PrepPromptOpts, outputPath string) (*DirectToolAgentResult, error)**:\n- Call `PrepSystemPrompt(opts)` to build system prompt\n- Build user message from task title + description + estimated files\n- Call `ToolsForRole(\"prep\")` to get read-only tools\n- Call `RunDirectToolAgent(cfg.DirectToolAgentConfig, systemPrompt, userMessage, tools, outputPath)`\n- Return the result directly — caller parses the output JSON\n\n**roleTools update**: Add `\"prep\": {\"read\", \"grep\", \"glob\"}` to the map in `direct_tool_agent.go` at line ~194. This is a 1-line addition.\n\nFile budget: direct_prep.go should be ~120-150 lines. direct_tool_agent.go goes from 771 to 772 lines (under 800 ceiling).",
+      "description": "Implement the prep agent's direct SGLang API harness in internal/agent/direct_prep.go. Make the tests from subtask 0 pass.\n\n**File: internal/agent/direct_prep.go** — replace stubs with real implementations.\n\n**PrepSystemPrompt(opts PrepPromptOpts) string:**\nBuild a structured prompt that tells the model to:\n- Role: \"You are a code preparation agent gathering tactical context for a coder agent.\"\n- Read the estimated target files listed in opts.EstimatedFiles\n- Search for struct definitions, constructors, test helpers using grep\n- Find related files using glob\n- Output ONLY valid JSON matching this schema:\n```json\n{\n  \"target_files\": [{\"path\": \"...\", \"relevant_definitions\": \"...\", \"methods\": [...], \"notes\": \"...\"}],\n  \"insertion_points\": [{\"file\": \"...\", \"location\": \"...\", \"what\": \"...\"}],\n  \"patterns_to_follow\": [{\"description\": \"...\", \"example\": \"...\", \"source_file\": \"...\"}],\n  \"warnings\": [\"...\"],\n  \"constructors\": [{\"struct_name\": \"...\", \"constructor\": \"...\", \"test_helpers\": [...]}]\n}\n```\n- Available tools: read, grep, glob. Do NOT attempt to modify files.\n- Include task title, description, estimated files, repo map (if provided)\n- Use strings.Builder to construct the prompt. Use fmt.Fprintf for formatted sections.\n\n**RunDirectPrep(cfg DirectToolAgentConfig, opts PrepPromptOpts, outputPath string) (*DirectToolAgentResult, error):**\n- systemPrompt := PrepSystemPrompt(opts)\n- userMessage := build from task title + description + files list\n- tools := ToolsForRole(\"prep\")\n- Set cfg.WorkDir = opts.WorkDir if not already set\n- Return RunDirectToolAgent(cfg, systemPrompt, userMessage, tools, outputPath)\n\n**File: internal/agent/direct_tool_agent.go** — Add \"prep\" explicitly to roleTools map (line 191-195):\nAdd `\"prep\": {\"read\", \"grep\", \"glob\"},` after the \"reviewer\" entry. This makes the contract explicit rather than relying on the default fallback.\n\n**Verify:** `go vet ./internal/agent/ && go test ./internal/agent/`",
       "agent_type": "coder",
       "phase": "implementation",
       "files": ["internal/agent/direct_prep.go", "internal/agent/direct_tool_agent.go"],
       "dependencies": [],
       "priority": 1,
       "module_boundaries": [
-        {"package": "internal/agent", "description": "Agent lifecycle, spawning, and direct API harnesses for SGLang tool-calling agents", "exports": 5}
+        {"package": "internal/agent", "description": "Agent lifecycle, spawning, and direct API harnesses for SGLang tool-calling agents", "exports": 4}
       ],
       "interface_shapes": [
-        {"package": "internal/agent", "functions": ["PrepSystemPrompt(opts PrepPromptOpts) string", "RunDirectPrep(cfg DirectPrepConfig, opts PrepPromptOpts, outputPath string) (*DirectToolAgentResult, error)"], "types": ["DirectPrepConfig", "PrepPromptOpts"]}
+        {"package": "internal/agent", "functions": ["PrepSystemPrompt(opts PrepPromptOpts) string", "RunDirectPrep(cfg DirectToolAgentConfig, opts PrepPromptOpts, outputPath string) (*DirectToolAgentResult, error)"], "types": ["PrepPromptOpts"]}
       ]
     },
     {
-      "title": "Write tests for orchestrator direct prep wiring",
-      "description": "Create tests in `internal/orchestrator/task_prep_test.go` that verify:\n\n1. **spawnPrepAgentDirect dispatches to RunDirectPrep** — This requires careful test setup. The orchestrator's `spawnPrepAgent` method currently always goes through `runner.SpawnAgent()`. The new behavior: when `o.directPrepCfg != nil`, it should call `RunDirectPrep` directly instead. Test that when directPrepCfg is set, spawnPrepAgent calls the direct path and stores PrepOutput in task.Context[\"prep_data\"].\n\n2. **spawnPrepAgent falls back to subprocess when directPrepCfg is nil** — existing behavior preserved.\n\n3. **Direct prep handles API failure gracefully** — when RunDirectPrep returns error, task gets prep_failed=true, prep_complete=true (graceful degradation).\n\n4. **Direct prep handles malformed output gracefully** — when output is not valid PrepOutput JSON, same graceful degradation.\n\nTest setup pattern: Use `testutil.NewTestDB()` for DB. Create a minimal orchestrator with `directPrepCfg` set. Create a test task with Context[\"estimated_files\"]. The orchestrator needs db, logger, worktree manager.\n\nStub: Add `directPrepCfg *agent.DirectPrepConfig` field to the Orchestrator struct in orchestrator.go (line ~128, after directClassifierCfg). Add `func (o *Orchestrator) SetDirectPrepConfig(cfg *agent.DirectPrepConfig)` following the SetDirectClassifierConfig pattern at line ~210.\n\nIMPORTANT: The Orchestrator struct is in `orchestrator.go` which is grandfathered at its current line count. Adding 2 lines (field + setter) is acceptable only if the file doesn't grow. Check current count. The setter can go in task_prep.go instead to avoid growing orchestrator.go.\n\nExisting test patterns: see `internal/orchestrator/` for test files using testutil.",
+      "title": "Write tests for orchestrator direct prep dispatch",
+      "description": "Create tests for the orchestrator's direct prep dispatch path. When directToolAgentCfg is set on the Orchestrator, spawnPrepAgent should use the SGLang API directly.\n\n**Test file: internal/orchestrator/task_prep_test.go**\n\nTests to write:\n\n1. **TestSpawnPrepAgentDirect_Success** — Create a mock SGLang server (httptest.NewServer) that returns a stop response with valid PrepOutput JSON. Set up: create Orchestrator with directToolAgentCfg pointing to mock server, create a test task with Context[\"estimated_files\"]=[\"internal/foo.go\"], create a parent task with WorktreeBranch. Call spawnPrepAgentDirect. Assert: task.Context[\"prep_complete\"] == true, task.Context[\"prep_data\"] is populated, task.Context[\"prep_in_progress\"] is removed.\n\n2. **TestSpawnPrepAgentDirect_GracefulDegradation** — Mock returns HTTP 500. Assert: task.Context[\"prep_complete\"] == true, task.Context[\"prep_failed\"] == true. Coder can proceed without enrichment.\n\n3. **TestNeedsPrep_DirectConfigDoesNotAffectDecision** — Verify needsPrep() logic is unchanged: it checks provider, not the presence of directToolAgentCfg. The direct config only changes HOW prep runs, not WHETHER it runs.\n\nTest setup: Use `testutil.NewTestDB(t)` for database. Create minimal Orchestrator manually (not via New() since that requires many params). Set fields directly: `o := &Orchestrator{db: db, logger: slog.Default()}`. Set directToolAgentCfg.\n\nIMPORTANT: The Orchestrator type's fields are unexported. Tests in the same package (orchestrator) can access them. Use `o.directToolAgentCfg = &agent.DirectToolAgentConfig{...}`.\n\n**Stubs needed in orchestrator files:**\n\nIn orchestrator.go (~line 128), add field after directClassifierCfg:\n```go\ndirectToolAgentCfg *agent.DirectToolAgentConfig // nil means use OpenCode subprocess path for prep\n```\nIMPORTANT: orchestrator.go is grandfathered — must not grow. Adding 1 line means removing 1 line. Look for a blank line or comment that can be consolidated near the field definitions (lines 120-132).\n\nIn task_prep.go, add stub at bottom:\n```go\nfunc (o *Orchestrator) SetDirectToolAgentConfig(cfg *agent.DirectToolAgentConfig) {\n    o.directToolAgentCfg = cfg\n}\n\nfunc (o *Orchestrator) spawnPrepAgentDirect(sub *model.Task, parent *model.Task) error {\n    return fmt.Errorf(\"not implemented\")\n}\n```\n\nAdd `\"github.com/godinj/drem-orchestrator/internal/agent\"` to task_prep.go imports (agent is already imported by other files in the orchestrator package, so no import ceiling increase).",
       "agent_type": "coder",
       "phase": "test",
       "tests_for": [3],
@@ -41,33 +41,33 @@
       "dependencies": [1],
       "priority": 2,
       "module_boundaries": [
-        {"package": "internal/orchestrator", "description": "Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch", "exports": 3}
+        {"package": "internal/orchestrator", "description": "Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch", "exports": 2}
       ],
       "interface_shapes": [
-        {"package": "internal/orchestrator", "functions": ["(*Orchestrator).SetDirectPrepConfig(cfg *agent.DirectPrepConfig)"], "types": []}
+        {"package": "internal/orchestrator", "functions": ["(*Orchestrator).SetDirectToolAgentConfig(cfg *agent.DirectToolAgentConfig)"], "types": []}
       ]
     },
     {
       "title": "Implement orchestrator direct prep dispatch",
-      "description": "Wire the direct SGLang prep path into the orchestrator. Make the tests from subtask 2 pass.\n\n**orchestrator.go changes** (minimal — grandfathered file, must not grow):\n- Add field `directPrepCfg *agent.DirectPrepConfig` at line ~128, after `directClassifierCfg`. This is 1 line.\n- The setter goes in task_prep.go to avoid growing orchestrator.go.\n\n**task_prep.go changes**:\n- Add `func (o *Orchestrator) SetDirectPrepConfig(cfg *agent.DirectPrepConfig)` — follows SetDirectClassifierConfig pattern. Log when enabled.\n- Modify `spawnPrepAgent` to check `o.directPrepCfg != nil` first. If set, call `spawnPrepAgentDirect` instead of going through `o.runner.SpawnAgent`.\n- Add `func (o *Orchestrator) spawnPrepAgentDirect(sub *model.Task, parent *model.Task) error`:\n  - Build PrepPromptOpts from sub and parent context\n  - Set outputPath to `task-prep-<taskID>.json` in feature worktree\n  - Create lightweight agent DB record (like processClassifyingTasksDirect does)\n  - Call `agent.RunDirectPrep(cfg, opts, outputPath)`\n  - On success: read and parse the output file as PrepOutput, store in task.Context[\"prep_data\"], mark prep_complete=true\n  - On failure: mark prep_complete=true, prep_failed=true (graceful degradation)\n  - Record token usage on agent record\n\nFollow the `processClassifyingTasksDirect` pattern in classifying.go for the agent record creation and token tracking.\n\nIMPORTANT: `agent` package is already imported in task_prep.go's file — NO, check imports. Currently task_prep.go imports model, prompt, worktree. Adding `agent` import is needed. Check the orchestrator package import ceiling (baseline 11, grandfathered). `agent` may already be imported by other files in orchestrator/. Verify with grep before adding.\n\nThe Orchestrator struct field `runner` is `*agent.Runner` — so `agent` is already imported in orchestrator.go. Adding `agent` to task_prep.go's imports does NOT increase the package's unique internal import count.",
+      "description": "Wire the direct SGLang prep path into the orchestrator. Make the tests from subtask 2 pass.\n\n**task_prep.go changes:**\n\n1. Replace `SetDirectToolAgentConfig` stub with logging:\n```go\nfunc (o *Orchestrator) SetDirectToolAgentConfig(cfg *agent.DirectToolAgentConfig) {\n    o.directToolAgentCfg = cfg\n    if cfg != nil {\n        o.logger.Info(\"direct tool agent enabled for prep\", \"endpoint\", cfg.Endpoint, \"model\", cfg.Model)\n    }\n}\n```\n\n2. Modify `spawnPrepAgent` (line 90) — add direct path check at the top, BEFORE the existing logic:\n```go\nfunc (o *Orchestrator) spawnPrepAgent(sub *model.Task, parent *model.Task) error {\n    if o.directToolAgentCfg != nil {\n        return o.spawnPrepAgentDirect(sub, parent)\n    }\n    // ... existing OpenCode subprocess path unchanged ...\n```\n\n3. Replace `spawnPrepAgentDirect` stub with real implementation. Follow the processClassifyingTasksDirect pattern (classifying.go lines 111-203):\n```go\nfunc (o *Orchestrator) spawnPrepAgentDirect(sub *model.Task, parent *model.Task) error {\n    cfg := o.directToolAgentCfg\n    featureName := strings.TrimPrefix(parent.WorktreeBranch, \"feature/\")\n    featureDir := o.worktree.FeatureWorktreePath(featureName)\n\n    // Extract estimated files from context.\n    var files []string\n    if ef, ok := sub.Context[\"estimated_files\"]; ok {\n        // estimated_files is stored as []interface{} after JSON round-trip.\n        if fileList, ok := ef.([]interface{}); ok {\n            for _, f := range fileList {\n                if s, ok := f.(string); ok {\n                    files = append(files, s)\n                }\n            }\n        }\n    }\n\n    // Create lightweight agent DB record for audit trail.\n    agentID := uuid.New()\n    now := time.Now()\n    ag := &model.Agent{\n        ID:            agentID,\n        ProjectID:     sub.ProjectID,\n        AgentType:     model.AgentPrep,\n        Name:          fmt.Sprintf(\"direct-prep-%s\", sub.ID.String()[:4]),\n        Status:        model.AgentWorking,\n        CurrentTaskID: &sub.ID,\n        WorktreePath:  featureDir,\n        Provider:      \"sglang-direct\",\n        ModelID:       cfg.Model,\n        HeartbeatAt:   &now,\n    }\n    if err := o.db.Create(ag).Error; err != nil {\n        return fmt.Errorf(\"direct prep: create agent record: %w\", err)\n    }\n\n    sub.AssignedAgentID = &ag.ID\n    sub.Context[\"prep_in_progress\"] = true\n    if err := o.db.Save(sub).Error; err != nil {\n        return fmt.Errorf(\"direct prep: save subtask: %w\", err)\n    }\n\n    // Build prep opts.\n    opts := agent.PrepPromptOpts{\n        TaskTitle:       sub.Title,\n        TaskDescription: sub.Description,\n        EstimatedFiles:  files,\n        WorkDir:         featureDir,\n    }\n    if parent != nil {\n        opts.ParentTitle = parent.Title\n        opts.ParentDescription = parent.Description\n    }\n\n    outputPath := filepath.Join(featureDir, fmt.Sprintf(\"task-prep-%s.json\", sub.ID))\n\n    // Set WorkDir on the config copy.\n    prepCfg := *cfg\n    prepCfg.WorkDir = featureDir\n\n    result, err := agent.RunDirectPrep(prepCfg, opts, outputPath)\n    if err != nil {\n        // Graceful degradation — mark prep_failed and let coder proceed.\n        o.logger.Warn(\"direct prep agent failed\", \"task_id\", sub.ID, \"error\", err)\n        ag.Status = model.AgentDead\n        ag.CurrentTaskID = nil\n        _ = o.db.Save(ag).Error\n        sub.AssignedAgentID = nil\n        delete(sub.Context, \"prep_in_progress\")\n        sub.Context[\"prep_complete\"] = true\n        sub.Context[\"prep_failed\"] = true\n        return o.db.Save(sub).Error\n    }\n\n    // Record token usage.\n    if result != nil {\n        ag.TokensIn = result.TokensIn\n        ag.TokensOut = result.TokensOut\n    }\n    _ = o.db.Save(ag).Error\n\n    // Call existing completion handler to parse output and enrich context.\n    return o.onPrepCompleted(ag, sub)\n}\n```\n\nIMPORTANT: Need to add imports to task_prep.go: `\"github.com/godinj/drem-orchestrator/internal/agent\"`, `\"github.com/google/uuid\"`, `\"time\"`. Check which are already present.\n\n**Verify:** `go vet ./internal/orchestrator/ && go test ./internal/orchestrator/`",
       "agent_type": "coder",
       "phase": "implementation",
       "files": ["internal/orchestrator/task_prep.go", "internal/orchestrator/orchestrator.go"],
       "dependencies": [1],
       "priority": 2,
       "module_boundaries": [
-        {"package": "internal/orchestrator", "description": "Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch", "exports": 3}
+        {"package": "internal/orchestrator", "description": "Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch", "exports": 2}
       ],
       "interface_shapes": [
-        {"package": "internal/orchestrator", "functions": ["(*Orchestrator).SetDirectPrepConfig(cfg *agent.DirectPrepConfig)"], "types": []}
+        {"package": "internal/orchestrator", "functions": ["(*Orchestrator).SetDirectToolAgentConfig(cfg *agent.DirectToolAgentConfig)", "(*Orchestrator).spawnPrepAgentDirect(sub *model.Task, parent *model.Task) error"], "types": []}
       ]
     },
     {
-      "title": "Integration wiring and end-to-end verification",
-      "description": "Wire the direct prep config into the CLI startup path and verify end-to-end.\n\n**cmd/drem/config.go or cmd/drem/main.go**: Find where `SetDirectClassifierConfig` is called. Add a parallel call to `SetDirectPrepConfig` using the same SGLang endpoint/model config. The prep agent reuses the same SGLang server as the classifier — both are lightweight read-only operations.\n\nSearch for `SetDirectClassifierConfig` to find the exact wiring location. Follow the same pattern:\n- If SGLang endpoint is configured, create a DirectPrepConfig and call SetDirectPrepConfig.\n- The DirectPrepConfig should use the same endpoint but can use different max_tokens/temperature if needed (prep needs more tokens than classifier since it does tool loops).\n\n**Verification**:\n1. `go vet ./...` passes\n2. `go test ./internal/agent/... ./internal/orchestrator/...` passes\n3. Verify no import ceiling violations: `grep -r 'internal/' internal/orchestrator/*.go | grep -v _test.go | sort -u | wc -l` <= 11\n4. Verify file length ceilings: `wc -l internal/agent/direct_tool_agent.go` <= 800, `wc -l internal/orchestrator/orchestrator.go` <= current count\n\n**Documentation**: Update README or relevant docs if they describe agent types or the prep workflow. Check `docs/` directory for prep-related documentation.",
+      "title": "Integration: CLI wiring and end-to-end verification",
+      "description": "Wire the direct prep config into the CLI startup and verify everything works together.\n\n**1. Find and update CLI wiring:**\nSearch for where `SetDirectClassifierConfig` is called (likely in cmd/drem/config.go or cmd/drem/main.go). Add a parallel call to `SetDirectToolAgentConfig` using the same SGLang endpoint. Example:\n```go\nif sglangEndpoint != \"\" {\n    prepCfg := agent.DefaultDirectToolAgentConfig()\n    prepCfg.Endpoint = sglangEndpoint\n    prepCfg.Model = sglangModel\n    orch.SetDirectToolAgentConfig(&prepCfg)\n}\n```\n\n**2. Run full verification:**\n- `go vet ./...`\n- `go test ./internal/agent/ ./internal/orchestrator/`\n- `wc -l internal/agent/direct_tool_agent.go` must be <= 800\n- `wc -l internal/orchestrator/orchestrator.go` must not exceed current count (633)\n- `wc -l internal/orchestrator/task_prep.go` must be <= 800\n- `gofmt -l ./internal/agent/ ./internal/orchestrator/` returns no output\n- Verify agent package internal imports: count unique internal/ imports in non-test files, must be <= 6\n\n**3. Doc update (if applicable):**\nCheck if docs/ or README reference agent configuration. If SetDirectClassifierConfig is documented, add parallel documentation for SetDirectToolAgentConfig.\n\nThis subtask connects the already-tested components and ensures the system compiles and passes all checks as a whole.",
       "agent_type": "coder",
       "phase": "integration",
-      "files": ["cmd/drem/config.go", "internal/orchestrator/task_prep.go"],
+      "files": ["cmd/drem/config.go", "internal/orchestrator/task_prep.go", "internal/agent/direct_tool_agent.go"],
       "dependencies": [1, 3],
       "priority": 3,
       "module_boundaries": [],
@@ -77,7 +77,7 @@
   "tdd_exceptions": [
     {
       "subtask_index": 4,
-      "justification": "Integration wiring connecting already-tested components (RunDirectPrep and SetDirectPrepConfig). The CLI startup path is verified by go vet and existing integration tests."
+      "justification": "Integration wiring connecting already-tested RunDirectPrep and SetDirectToolAgentConfig. The CLI startup path is verified by go vet and the build succeeding. Individual components are tested by subtasks 0-3."
     }
   ],
   "coverage": [
@@ -86,60 +86,64 @@
       "subtask_indices": [0, 1]
     },
     {
-      "criterion": "Tool factory returns correct toolset for prep role",
+      "criterion": "Tool factory (ToolsForRole) returns correct read-only toolset for prep role",
       "subtask_indices": [0, 1]
     },
     {
-      "criterion": "Structured JSON system prompt for context gathering",
+      "criterion": "Structured JSON system prompt for context gathering defines PrepOutput schema",
       "subtask_indices": [0, 1]
     },
     {
-      "criterion": "Prep agent wired into orchestrator with provider-specific logic (opencode + sglang)",
+      "criterion": "Prep agent wired into orchestrator with provider-specific logic (opencode subprocess + sglang direct)",
       "subtask_indices": [2, 3]
     },
     {
-      "criterion": "Direct SGLang path bypasses subprocess spawning when configured",
+      "criterion": "Direct SGLang path bypasses subprocess spawning when DirectToolAgentConfig is set",
       "subtask_indices": [2, 3]
     },
     {
-      "criterion": "Graceful degradation when direct prep fails",
+      "criterion": "Graceful degradation when direct prep agent fails (prep_complete=true, prep_failed=true)",
       "subtask_indices": [2, 3]
     },
     {
-      "criterion": "CLI startup wires direct prep config alongside direct classifier",
+      "criterion": "CLI startup wires direct prep config alongside direct classifier config",
+      "subtask_indices": [4]
+    },
+    {
+      "criterion": "Documentation: SetDirectToolAgentConfig usage documented in code comments",
       "subtask_indices": [4]
     }
   ],
   "assumptions": [
     {
-      "decision": "Tools remain in direct_tool_agent.go rather than extracting to separate internal/tools/ package",
-      "alternatives": ["Create internal/tools/read_tool.go, grep_tool.go, glob_tool.go as separate files"],
-      "why_chosen": "Tools are already implemented as methods on toolExecutor in direct_tool_agent.go (771 lines). Extracting them would be a refactor beyond the task scope, would create a new package with shallow pass-through wrappers, and the existing ToolsForRole() factory already provides the filtering interface. The task's target_files list appears aspirational."
+      "decision": "Keep tool implementations in direct_tool_agent.go rather than extracting to internal/tools/ package",
+      "alternatives": ["Create internal/tools/read_tool.go, grep_tool.go, glob_tool.go as separate package"],
+      "why_chosen": "direct_tool_agent.go is at 771 lines, under the 800 ceiling. Adding 1 line for the prep role keeps it under. Extracting to a new package would be scope creep beyond the task requirements, add a new internal import to the agent package (bringing it to 6, at ceiling), and create shallow wrapper files. The target_files list mentioning internal/tools/ is treated as aspirational."
     },
     {
-      "decision": "RunDirectPrep returns (*DirectToolAgentResult, error) rather than (*DirectToolAgentResult, *PrepOutput, error)",
-      "alternatives": ["Return parsed PrepOutput directly from RunDirectPrep"],
-      "why_chosen": "PrepOutput is defined in internal/orchestrator package. Having internal/agent return it would create a circular import. Instead, RunDirectPrep writes the output file and returns the raw result; the orchestrator caller parses the JSON into PrepOutput."
+      "decision": "RunDirectPrep returns (*DirectToolAgentResult, error), caller parses PrepOutput from output file",
+      "alternatives": ["Return parsed PrepOutput directly from RunDirectPrep in agent package"],
+      "why_chosen": "PrepOutput is defined in internal/orchestrator. Having internal/agent import it would create a circular dependency (orchestrator already imports agent). Instead, RunDirectPrep writes the output file and the orchestrator reads/parses it via the existing onPrepCompleted handler."
     },
     {
-      "decision": "DirectPrepConfig embeds DirectToolAgentConfig with no additional fields",
-      "alternatives": ["Add prep-specific fields like EstimatedFiles, TaskID"],
-      "why_chosen": "Task-specific data flows through PrepPromptOpts (function parameter), not through config. Config holds connection/generation parameters that are static across prep runs."
+      "decision": "Use DirectToolAgentConfig directly (not a new DirectPrepConfig wrapper type)",
+      "alternatives": ["Create a DirectPrepConfig that embeds DirectToolAgentConfig"],
+      "why_chosen": "DirectToolAgentConfig already has all needed fields (endpoint, model, max_tokens, temperature, timeout, max_iterations, work_dir). A wrapper type adds no value — task-specific data flows through PrepPromptOpts. Fewer types = less for the coding agent (gemma4-26b) to get confused by."
     },
     {
-      "decision": "Prep reuses the same SGLang endpoint as the direct classifier",
-      "alternatives": ["Separate endpoint configuration for prep agent"],
-      "why_chosen": "Both are lightweight operations hitting the same SGLang server. The classifier pattern already establishes this convention. Prep may need different max_tokens (more tool iterations) but same endpoint."
+      "decision": "Direct prep agent runs synchronously, like the direct classifier",
+      "alternatives": ["Run asynchronously with goroutine and callback"],
+      "why_chosen": "The direct classifier established the synchronous pattern for SGLang API calls. Prep is read-only context gathering, typically fast (5-10 tool iterations). Synchronous execution simplifies the completion flow — onPrepCompleted is called immediately, no tick delay needed."
     },
     {
-      "decision": "SetDirectPrepConfig setter lives in task_prep.go, not orchestrator.go",
-      "alternatives": ["Add setter to orchestrator.go alongside SetDirectClassifierConfig"],
-      "why_chosen": "orchestrator.go is grandfathered and must not grow. The field declaration (1 line) goes in orchestrator.go, but the setter method goes in task_prep.go which already owns all prep logic."
+      "decision": "SetDirectToolAgentConfig setter lives in task_prep.go, not orchestrator.go",
+      "alternatives": ["Add setter alongside SetDirectClassifierConfig in orchestrator.go"],
+      "why_chosen": "orchestrator.go is grandfathered and must not grow. The 1-line field declaration goes in orchestrator.go (offset by removing a blank line). The 5-line setter method goes in task_prep.go which owns all prep logic and has ample line budget (currently 244 of 800)."
     },
     {
-      "decision": "No agent_factory.go file — dispatch logic stays in task_prep.go",
-      "alternatives": ["Create a dedicated agent_factory.go for agent construction"],
-      "why_chosen": "The codebase has no agent factory pattern. Agent dispatch is per-role in dedicated files (classifying.go, task_prep.go, session_spawning.go). Following the existing pattern is simpler and avoids creating a shallow abstraction."
+      "decision": "Prep agent reuses the same SGLang endpoint as the direct classifier",
+      "alternatives": ["Separate endpoint configuration", "Separate model configuration"],
+      "why_chosen": "Both hit the same SGLang server running gemma4-26b. The CLI wiring mirrors the classifier pattern. Prep may use different max_tokens (needs more for tool loops) but same endpoint/model."
     }
   ]
 }
