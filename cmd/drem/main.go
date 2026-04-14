@@ -66,6 +66,13 @@ func main() {
 		log.Fatal("--repo is required: path to bare git repo")
 	}
 
+	// Validate model capabilities before starting.
+	if result := cfg.ValidateModelCapabilities(); result.HasErrors() {
+		log.Fatalf("model capability validation failed:\n%s", result.Summary())
+	} else if len(result.Warnings) > 0 {
+		log.Printf("model capability warnings:\n%s", result.Summary())
+	}
+
 	// Derive session name.
 	projectName := filepath.Base(cfg.BareRepoPath)
 	projectName = strings.TrimSuffix(projectName, ".git")
