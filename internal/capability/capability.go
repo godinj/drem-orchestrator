@@ -13,16 +13,21 @@ import (
 type Capability string
 
 const (
-	ToolCalling      Capability = "tool_calling"
+	// ToolCalling indicates the model supports tool/function calling.
+	ToolCalling Capability = "tool_calling"
+	// ExtendedThinking indicates the model supports effort/thinking levels.
 	ExtendedThinking Capability = "extended_thinking"
-	CodeExecution    Capability = "code_execution"
+	// CodeExecution indicates the model supports the code execution tool.
+	CodeExecution Capability = "code_execution"
 )
 
 // CapabilitySet is a set of capabilities a model supports.
 type CapabilitySet map[Capability]bool
 
 // Has reports whether the set contains the given capability.
-func (s CapabilitySet) Has(c Capability) bool { return s[c] }
+func (cs CapabilitySet) Has(c Capability) bool {
+	return cs[c]
+}
 
 // modelEntry pairs a prefix with its capability set for sorted lookup.
 type modelEntry struct {
