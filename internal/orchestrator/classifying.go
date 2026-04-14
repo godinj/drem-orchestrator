@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
@@ -95,6 +97,109 @@ func (o *Orchestrator) processClassifyingTasks() {
 
 		o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(model.AgentClassifier), string(model.AgentWorking))
 		o.logger.Info("spawned classifier agent", "task_id", task.ID, "agent_id", ag.ID)
+	}
+}
+
+// maxDirectClassifiersPerTick limits how many direct classifier API calls are
+// made per tick to prevent tick starvation.
+const maxDirectClassifiersPerTick = 3
+
+// processClassifyingTasksDirect handles CLASSIFYING tasks by calling the
+// SGLang API directly instead of spawning OpenCode subprocesses. It creates
+// a lightweight agent DB record for audit trail and duplicate-dispatch
+// prevention, then calls RunDirectClassifier synchronously.
+func (o *Orchestrator) processClassifyingTasksDirect() {
+	cfg := o.directClassifierCfg
+	if cfg == nil {
+		return
+	}
+
+	// Resolve main worktree — classification output is written there.
+	mainWT, err := o.worktree.MainWorktreePath()
+	if err != nil {
+		o.logger.Error("direct classifier: resolve main worktree", "error", err)
+		return
+	}
+
+	var tasks []model.Task
+	if err := o.db.Where("project_id = ? AND status = ? AND assigned_agent_id IS NULL",
+		o.projectID, model.StatusClassifying).Find(&tasks).Error; err != nil {
+		o.logger.Error("direct classifier: query classifying tasks", "error", err)
+		return
+	}
+
+	dispatched := 0
+	for i := range tasks {
+		if dispatched >= maxDirectClassifiersPerTick {
+			break
+		}
+
+		task := &tasks[i]
+
+		// Skip tasks parked for human triage.
+		if task.Context != nil {
+			if ht, ok := task.Context["human_triage"]; ok && ht == true {
+				continue
+			}
+		}
+
+		// Create a lightweight agent DB record for audit trail and to
+		// prevent duplicate dispatch on subsequent ticks.
+		agentID := uuid.New()
+		now := time.Now()
+		ag := &model.Agent{
+			ID:            agentID,
+			ProjectID:     task.ProjectID,
+			AgentType:     model.AgentClassifier,
+			Name:          fmt.Sprintf("direct-classifier-%s", task.ID.String()[:4]),
+			Status:        model.AgentWorking,
+			CurrentTaskID: &task.ID,
+			WorktreePath:  mainWT,
+			Provider:      "sglang-direct",
+			ModelID:       cfg.Model,
+			HeartbeatAt:   &now,
+		}
+		if err := o.db.Create(ag).Error; err != nil {
+			o.logger.Error("direct classifier: create agent record", "task_id", task.ID, "error", err)
+			continue
+		}
+
+		task.AssignedAgentID = &ag.ID
+		if err := o.db.Save(task).Error; err != nil {
+			o.logger.Error("direct classifier: assign agent to task", "task_id", task.ID, "error", err)
+			continue
+		}
+
+		o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(model.AgentClassifier), string(model.AgentWorking))
+		o.logger.Info("direct classifier: classifying task", "task_id", task.ID, "agent_id", ag.ID)
+
+		// Call the SGLang API synchronously.
+		var taskCtx map[string]any
+		if task.Context != nil {
+			taskCtx = task.Context
+		}
+		result, err := agent.RunDirectClassifier(*cfg, task.ID, task.Title, task.Description, taskCtx, mainWT)
+		if err != nil {
+			o.logger.Error("direct classifier: API call failed", "task_id", task.ID, "error", err)
+			if failErr := o.onClassifierFailed(ag, task); failErr != nil {
+				o.logger.Error("direct classifier: on failed handler", "task_id", task.ID, "error", failErr)
+			}
+			dispatched++
+			continue
+		}
+
+		// Record token usage on the agent for observability.
+		ag.TokensIn = result.TokensIn
+		ag.TokensOut = result.TokensOut
+		_ = o.db.Save(ag).Error
+
+		// Reuse the existing completion handler which reads the classification
+		// JSON file and transitions the task.
+		if err := o.onClassifierCompleted(ag, task); err != nil {
+			o.logger.Error("direct classifier: on completed handler", "task_id", task.ID, "error", err)
+		}
+
+		dispatched++
 	}
 }
 

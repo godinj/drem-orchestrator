@@ -218,6 +218,18 @@ func main() {
 	orch := orchestrator.NewWithExperimentScheduling(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.MaxConcurrentAgents, cfg.ContextFixerPercent)
 	orch.SetInteractiveSupervisorConfig(cfg.Agents.InteractiveSupervisorCLIConfig())
 
+	// Enable direct SGLang classifier when configured or auto-detected.
+	// Auto-enable when the classifier provider is "opencode" and model contains "sglang",
+	// or when the direct flag is explicitly set.
+	if cfg.Agents.Classifier.Direct || (cfg.Agents.Classifier.Provider == "opencode" && strings.Contains(cfg.Agents.Classifier.Model, "sglang")) {
+		dcfg := agent.DefaultDirectClassifierConfig()
+		// If the classifier has a model override, use it for the direct path too.
+		if cfg.Agents.Classifier.Model != "" && !strings.Contains(cfg.Agents.Classifier.Model, "sglang") {
+			dcfg.Model = cfg.Agents.Classifier.Model
+		}
+		orch.SetDirectClassifierConfig(&dcfg)
+	}
+
 	// Wire test gate config from drem.toml so test_command is respected.
 	scopedTests := true
 	if cfg.ScopedTests != nil {

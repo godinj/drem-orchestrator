@@ -124,10 +124,11 @@ type Orchestrator struct {
 	contextFixerPct             int // percentage: spawn fixer instead of failing
 	subtaskRecovery             SubtaskRecoveryPolicy
 	skipConstraintGate          bool                 // bypass constraint gate evaluation
-	interactiveSupervisorConfig model.AgentCLIConfig // model/effort for interactive supervisor sessions
-	metrics                     *metrics.Store       // nil-safe: callers nil-check before use
-	experimentScheduler         *ExperimentScheduler // experiment-aware scheduling
-	logger                      *slog.Logger
+	interactiveSupervisorConfig model.AgentCLIConfig        // model/effort for interactive supervisor sessions
+	directClassifierCfg        *agent.DirectClassifierConfig // nil means use OpenCode subprocess path
+	metrics                    *metrics.Store                // nil-safe: callers nil-check before use
+	experimentScheduler        *ExperimentScheduler          // experiment-aware scheduling
+	logger                     *slog.Logger
 }
 
 // New creates an Orchestrator. The supervisor parameter is optional — pass nil
@@ -203,6 +204,16 @@ func (o *Orchestrator) SetSkipConstraintGate(skip bool) {
 	}
 }
 
+// SetDirectClassifierConfig enables the direct SGLang API classifier path.
+// When set, CLASSIFYING tasks are handled by calling the SGLang API directly
+// instead of spawning an OpenCode subprocess. Pass nil to disable.
+func (o *Orchestrator) SetDirectClassifierConfig(cfg *agent.DirectClassifierConfig) {
+	o.directClassifierCfg = cfg
+	if cfg != nil {
+		o.logger.Info("direct classifier enabled", "endpoint", cfg.Endpoint, "model", cfg.Model)
+	}
+}
+
 // SetEventBus connects the orchestrator to the C-Suite event bus. When set,
 // every task status transition and agent status change is published as an event
 // with delivery records for all known C-Suite agents. Pass nil to disable.
@@ -267,8 +278,12 @@ func (o *Orchestrator) doTick(ctx context.Context) {
 	_ = ctx
 	// 0. Ingest any pending bug reports from the drop directory.
 	o.ingestBugReports()
-	// 0b. Process CLASSIFYING tasks -> spawn classifier agents.
-	o.processClassifyingTasks()
+	// 0b. Process CLASSIFYING tasks -> spawn classifier agents or call API directly.
+	if o.directClassifierCfg != nil {
+		o.processClassifyingTasksDirect()
+	} else {
+		o.processClassifyingTasks()
+	}
 	// 1. Process BACKLOG tasks -> transition to PLANNING.
 	// Root tasks with unmet dependencies remain in BACKLOG (pending).
 	var backlogTasks []model.Task
