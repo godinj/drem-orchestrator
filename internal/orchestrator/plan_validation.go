@@ -737,6 +737,79 @@ func warnSamePackageTestOverlap(subtasks []planEntry, result *PlanValidationResu
 	}
 }
 
+// ValidatePlanFileExistence checks that estimated_files reference paths that
+// actually exist in the worktree. New files (test files being created) get a
+// weaker check: only the parent directory must exist. Existing source files
+// must match real paths — a hallucinated file like "experiment_scheduling.go"
+// when the real file is "scheduler_experiments.go" wastes agent iterations.
+//
+// Returns errors for source files that don't exist (blocks plan), warnings
+// for test files whose parent directory doesn't exist.
+func ValidatePlanFileExistence(subtasks []planEntry, worktreeRoot string) PlanValidationResult {
+	var result PlanValidationResult
+
+	if worktreeRoot == "" {
+		result.Valid = true
+		return result
+	}
+
+	for i, sub := range subtasks {
+		files := allFiles(sub)
+		if len(files) == 0 {
+			continue
+		}
+
+		var missing []string
+		for _, f := range files {
+			absPath := filepath.Join(worktreeRoot, f)
+
+			if isNewFileCandidate(f, sub) {
+				// For files that will be created, just check parent dir exists.
+				dir := filepath.Dir(absPath)
+				if _, err := os.Stat(dir); os.IsNotExist(err) {
+					result.Warnings = append(result.Warnings,
+						fmt.Sprintf("Subtask %d (%q): parent directory for new file %s does not exist",
+							i, sub.Title, f))
+				}
+			} else {
+				// Source file that should already exist.
+				if _, err := os.Stat(absPath); os.IsNotExist(err) {
+					missing = append(missing, f)
+				}
+			}
+		}
+
+		if len(missing) > 0 {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("Subtask %d (%q): estimated_files reference non-existent paths: [%s] — planner may have hallucinated filenames",
+					i, sub.Title, strings.Join(missing, ", ")))
+		}
+	}
+
+	result.Valid = len(result.Errors) == 0
+	return result
+}
+
+// isNewFileCandidate returns true if the file is likely being created rather
+// than modified. Test files in test-phase subtasks are always new. Files
+// ending in _test.go are usually new. Files in subtasks with titles that
+// suggest creation ("add", "create", "implement", "write") are likely new.
+func isNewFileCandidate(path string, sub planEntry) bool {
+	if sub.Phase == "test" {
+		return true
+	}
+	if strings.HasSuffix(path, "_test.go") {
+		return true
+	}
+	lower := strings.ToLower(sub.Title)
+	for _, verb := range []string{"add ", "create ", "implement ", "write ", "scaffold "} {
+		if strings.HasPrefix(lower, verb) {
+			return true
+		}
+	}
+	return false
+}
+
 // countFileLines counts the number of newline characters in a file.
 func countFileLines(path string) (int, error) {
 	data, err := os.ReadFile(path)

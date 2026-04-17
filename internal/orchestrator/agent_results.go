@@ -389,6 +389,24 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 			}
 		}
 
+		// Check estimated_files reference real paths in the worktree.
+		{
+			checkDir := ""
+			if task.WorktreeBranch != "" {
+				fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+				checkDir = o.worktree.FeatureWorktreePath(fn)
+			}
+			if checkDir == "" {
+				checkDir = ag.WorktreePath
+			}
+			fileResult := ValidatePlanFileExistence(planResult.Subtasks, checkDir)
+			validation.Warnings = append(validation.Warnings, fileResult.Warnings...)
+			validation.Errors = append(validation.Errors, fileResult.Errors...)
+			if len(fileResult.Errors) > 0 {
+				validation.Valid = false
+			}
+		}
+
 		// Store validation result in task context for TUI display.
 		if task.Context == nil {
 			task.Context = make(model.JSONField)
