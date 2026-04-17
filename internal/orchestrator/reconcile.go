@@ -512,6 +512,16 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 			continue
 		}
 
+		// Direct-tool agents (sglang-direct) run as goroutines, not subprocess
+		// sessions, so they never appear in the runner's running map. Use
+		// heartbeat freshness instead — if heartbeat was updated within the
+		// grace period, the goroutine is still alive and making API calls.
+		if ag.Provider == string(model.ProviderSGLangDirect) && ag.HeartbeatAt != nil {
+			if ag.HeartbeatAt.After(time.Now().Add(-agentSpawnGracePeriod)) {
+				continue
+			}
+		}
+
 		// Agent is NOT in the runner's running map AND DB status is working.
 		o.logger.Warn("detected dead agent session without completion",
 			"agent_id", ag.ID, "task", task.Title, "session", ag.TmuxSession)

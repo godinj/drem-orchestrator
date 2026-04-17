@@ -22,6 +22,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
+	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -77,6 +78,14 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 
 	agentID := uuid.New()
 
+	// Trace logging: write tool-call history to the feature worktree so we
+	// can post-mortem diagnose agent behavior in production.
+	tracePath := fmt.Sprintf("%s/agent-trace-%s.jsonl", featureDir, agentID.String()[:8])
+	traceFile, traceErr := os.OpenFile(tracePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if traceErr == nil {
+		toolCfg.TraceWriter = traceFile
+	}
+
 	// Wire heartbeat callback so the stale-agent reaper doesn't kill us.
 	db := o.db
 	toolCfg.OnIteration = func(iteration int, tokensIn, tokensOut int) {
@@ -102,6 +111,26 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 	}
 	if err := o.db.Create(ag).Error; err != nil {
 		return fmt.Errorf("direct coder: create agent record: %w", err)
+	}
+
+	// Fast-track subtask: BACKLOG -> PLANNING -> PLAN_REVIEW -> IN_PROGRESS.
+	// Without this, the subtask stays in BACKLOG and scheduleSubtasks re-selects
+	// it on the next tick, spawning duplicate agents for the same work.
+	fastTrack := []model.TaskStatus{
+		model.StatusPlanning,
+		model.StatusPlanReview,
+		model.StatusInProgress,
+	}
+	for _, target := range fastTrack {
+		evt, tErr := state.TransitionTask(sub, target, "orchestrator",
+			map[string]any{"reason": "direct-coder-dispatch"})
+		if tErr != nil {
+			continue
+		}
+		if err := o.db.Create(evt).Error; err != nil {
+			o.logger.Error("direct coder: save transition event", "subtask_id", sub.ID, "error", err)
+			break
+		}
 	}
 
 	sub.AssignedAgentID = &ag.ID
@@ -164,6 +193,10 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 	o.logger.Info("direct coder: launching async tool agent", "subtask_id", sub.ID, "agent_id", ag.ID)
 
 	runAndComplete := func() {
+		// Close trace file when agent completes.
+		if traceFile != nil {
+			defer traceFile.Close()
+		}
 		// Panic recovery: this goroutine runs outside any caller's defer
 		// chain. An unhandled panic in RunDirectToolAgent (nil deref, index
 		// out of range on malformed model responses, etc.) would crash the
