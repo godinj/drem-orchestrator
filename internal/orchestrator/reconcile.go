@@ -515,9 +515,11 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 		// Direct-tool agents (sglang-direct) run as goroutines, not subprocess
 		// sessions, so they never appear in the runner's running map. Use
 		// heartbeat freshness instead — if heartbeat was updated within the
-		// grace period, the goroutine is still alive and making API calls.
+		// timeout window, the goroutine is still alive and making API calls.
+		// Use 5 minutes (not agentSpawnGracePeriod=60s) because a single
+		// API round-trip to a 26B local model can take 1-3 minutes.
 		if ag.Provider == string(model.ProviderSGLangDirect) && ag.HeartbeatAt != nil {
-			if ag.HeartbeatAt.After(time.Now().Add(-agentSpawnGracePeriod)) {
+			if ag.HeartbeatAt.After(time.Now().Add(-5 * time.Minute)) {
 				continue
 			}
 		}
