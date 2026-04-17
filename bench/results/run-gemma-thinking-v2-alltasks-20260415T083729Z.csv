@@ -1,0 +1,4 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+real-constraint-gate-exhaustion,1,30,747820,7286,205313,max_iter,true,exceeded max iterations (30)
+real-csuite-inbox-cli,1,30,357727,13956,194750,max_iter,false,exceeded max iterations (30)
+real-retry-suppression,1,30,831254,23917,404307,max_iter,false,exceeded max iterations (30)
