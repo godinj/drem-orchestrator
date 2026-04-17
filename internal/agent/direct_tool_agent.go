@@ -73,6 +73,11 @@ type DirectToolAgentConfig struct {
 	ContextLimit   int
 	ContextWarnPct int
 	ContextStopPct int
+
+	// OnIteration is called after each successful API round-trip. Use it to
+	// update heartbeat timestamps so the stale-agent reaper doesn't kill
+	// long-running direct-tool agents. Nil ⇒ no callback.
+	OnIteration func(iteration int, tokensIn, tokensOut int)
 }
 
 // DefaultDirectToolAgentConfig returns a config targeting the local SGLang
@@ -839,6 +844,13 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 
 		totalTokensIn += resp.Usage.PromptTokens
 		totalTokensOut += resp.Usage.CompletionTokens
+
+		// Heartbeat callback: keeps the stale-agent reaper from killing
+		// long-running direct-tool agents that aren't in the runner's
+		// running map. Also lets callers persist incremental token counts.
+		if cfg.OnIteration != nil {
+			cfg.OnIteration(iteration, totalTokensIn, totalTokensOut)
+		}
 
 		// Context monitor: derive current usage from the most recent
 		// prompt_tokens. PromptTokens reflects the size of the inbound

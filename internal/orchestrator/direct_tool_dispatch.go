@@ -13,6 +13,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -103,9 +104,44 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 		WorktreePath: featureDir,
 		ParentCtx:    parentCtx,
 	})
+
+	// Frontload file content: read estimated_files and include their content
+	// in the user message so G4 doesn't waste iterations exploring the codebase.
+	// This is the #1 reason agents fail — they spend all 20 iterations reading
+	// files and never get to writing code.
 	userMessage := sub.Description
 	if userMessage == "" {
 		userMessage = sub.Title
+	}
+	if sub.Context != nil {
+		if files := extractFileList(sub.Context["estimated_files"]); len(files) > 0 {
+			var fileBuf strings.Builder
+			fileBuf.WriteString("\n\n## Source files (already read for you — do NOT re-read these)\n\n")
+			totalSize := 0
+			for _, f := range files {
+				fullPath := f
+				if !strings.HasPrefix(f, "/") {
+					fullPath = featureDir + "/" + f
+				}
+				content, err := os.ReadFile(fullPath)
+				if err != nil {
+					continue
+				}
+				// Cap per-file at 4K and total at 16K to stay within context budget
+				snippet := string(content)
+				if len(snippet) > 4096 {
+					snippet = snippet[:4096] + "\n...[truncated]"
+				}
+				if totalSize+len(snippet) > 16384 {
+					break
+				}
+				totalSize += len(snippet)
+				fmt.Fprintf(&fileBuf, "### %s\n```go\n%s\n```\n\n", f, snippet)
+			}
+			if totalSize > 0 {
+				userMessage += fileBuf.String()
+			}
+		}
 	}
 
 	o.publishAgentStatus(sub.ID.String(), ag.ID.String(), string(model.AgentCoder), string(model.AgentWorking))
@@ -475,4 +511,25 @@ func persistDirectAgentContext(ag *model.Agent, result *agent.DirectToolAgentRes
 	if result.StopReason == "context_limit" {
 		ag.ExitReason = model.ExitReasonContextLimit
 	}
+}
+
+// extractFileList converts a task.Context["estimated_files"] value into a
+// string slice. Accepts []any (JSON round-trip) or []string.
+func extractFileList(v any) []string {
+	if v == nil {
+		return nil
+	}
+	switch files := v.(type) {
+	case []any:
+		out := make([]string, 0, len(files))
+		for _, f := range files {
+			if s, ok := f.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		return files
+	}
+	return nil
 }

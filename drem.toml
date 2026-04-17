@@ -47,7 +47,7 @@ skip_constraint_gate  = false
   max_tokens     = 8192
   temperature    = 0.1
   timeout        = "180s"
-  max_iterations = 30
+  max_iterations = 20
   bash_timeout   = "60s"
 
 [watcher]
