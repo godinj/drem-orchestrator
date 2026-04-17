@@ -42,7 +42,7 @@ skip_constraint_gate  = false
 
 [direct_tool_agent]
   enabled        = true
-  endpoint       = "http://localhost:8081/v1/chat/completions"
+  endpoint       = "http://localhost:8090/v1/chat/completions"
   model          = "gemma4-26b"
   max_tokens     = 16384
   temperature    = 0.1
