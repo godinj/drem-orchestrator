@@ -151,12 +151,21 @@ func (m *Manager) CreateFeature(name string) (*WorktreeInfo, error) {
 		return nil, fmt.Errorf("create feature %q: mkdir group: %w", name, err)
 	}
 
-	// Create the worktree with a new branch inside the group dir
+	// Create the worktree with a new branch inside the group dir.
+	// If the branch already exists (from a previous agent run whose worktree
+	// was cleaned up), retry without -b to reuse the existing branch.
 	_, err := RunGit([]string{
 		"worktree", "add", "-b", branch, integrationDir,
 	}, m.BareRepoPath)
 	if err != nil {
-		return nil, fmt.Errorf("create feature %q: %w", name, err)
+		if strings.Contains(err.Error(), "already exists") {
+			_, err = RunGit([]string{
+				"worktree", "add", integrationDir, branch,
+			}, m.BareRepoPath)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("create feature %q: %w", name, err)
+		}
 	}
 
 	// Get the HEAD commit of the new worktree
