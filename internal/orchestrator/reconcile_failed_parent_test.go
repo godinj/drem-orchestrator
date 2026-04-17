@@ -203,6 +203,49 @@ func TestReconcileFailedParents_SubtaskWithFailedStatus(t *testing.T) {
 	}
 }
 
+func TestReconcileFailedParents_NonConstraintFailure_StillRecovers(t *testing.T) {
+	orch, db, _ := setupReconcileTest(t)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   orch.projectID,
+		Title:       "failed-parent-non-constraint",
+		Description: "parent failed due to merge conflict, but all subtasks eventually completed",
+		Status:      model.StatusFailed,
+		Context:     model.JSONField{"failure_reason": "merge conflict"},
+	}
+	db.Create(&parent)
+
+	// Three DONE subtasks
+	for i := 0; i < 3; i++ {
+		sub := model.Task{
+			ID:           uuid.New(),
+			ProjectID:    orch.projectID,
+			ParentTaskID: &parentID,
+			Title:        "done-sub",
+			Description:  "completed subtask",
+			Status:       model.StatusDone,
+		}
+		db.Create(&sub)
+	}
+
+	n, err := orch.reconcileFailedParents()
+	if err != nil {
+		t.Fatalf("reconcileFailedParents() error: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("expected 1 parent recovered, got %d", n)
+	}
+
+	// Parent should no longer be failed
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status == model.StatusFailed {
+		t.Errorf("parent should have been recovered from failed, still %s", updated.Status)
+	}
+}
+
 func TestReconcileFailedParents_MultipleParentsMixedEligibility(t *testing.T) {
 	orch, db, _ := setupReconcileTest(t)
 

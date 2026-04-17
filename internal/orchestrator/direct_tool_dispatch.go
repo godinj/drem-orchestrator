@@ -71,6 +71,17 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 	o.applyContextThresholds(&toolCfg)
 
 	agentID := uuid.New()
+
+	// Wire heartbeat callback so the stale-agent reaper doesn't kill us.
+	db := o.db
+	toolCfg.OnIteration = func(iteration int, tokensIn, tokensOut int) {
+		now := time.Now()
+		db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(map[string]any{
+			"heartbeat_at": &now,
+			"tokens_in":    tokensIn,
+			"tokens_out":   tokensOut,
+		})
+	}
 	now := time.Now()
 	ag := &model.Agent{
 		ID:            agentID,
@@ -226,6 +237,18 @@ func (o *Orchestrator) processReviewerDirect(task *model.Task) error {
 	o.applyContextThresholds(&toolCfg)
 
 	agentID := uuid.New()
+
+	// Wire heartbeat callback so the stale-agent reaper doesn't kill us.
+	db := o.db
+	toolCfg.OnIteration = func(iteration int, tokensIn, tokensOut int) {
+		now := time.Now()
+		db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(map[string]any{
+			"heartbeat_at": &now,
+			"tokens_in":    tokensIn,
+			"tokens_out":   tokensOut,
+		})
+	}
+
 	now := time.Now()
 	ag := &model.Agent{
 		ID:            agentID,
@@ -296,6 +319,18 @@ func (o *Orchestrator) processFixerDirect(task *model.Task) error {
 	o.applyContextThresholds(&toolCfg)
 
 	agentID := uuid.New()
+
+	// Wire heartbeat callback so the stale-agent reaper doesn't kill us.
+	db := o.db
+	toolCfg.OnIteration = func(iteration int, tokensIn, tokensOut int) {
+		now := time.Now()
+		db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(map[string]any{
+			"heartbeat_at": &now,
+			"tokens_in":    tokensIn,
+			"tokens_out":   tokensOut,
+		})
+	}
+
 	now := time.Now()
 	ag := &model.Agent{
 		ID:            agentID,
@@ -356,12 +391,23 @@ func (o *Orchestrator) processFixerDirect(task *model.Task) error {
 }
 
 // resolveCoderWorkDir returns the feature integration worktree for a coder
-// subtask, falling back to the main worktree if the parent has no branch.
+// subtask, creating it if it doesn't exist. Falls back to the main worktree
+// if the parent has no branch.
 func (o *Orchestrator) resolveCoderWorkDir(parent *model.Task) string {
 	if parent != nil && parent.WorktreeBranch != "" {
 		fn := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
 		if o.worktree != nil {
-			return o.worktree.FeatureWorktreePath(fn)
+			// Ensure the integration worktree actually exists on disk.
+			// FeatureWorktreePath only computes the path — if the worktree
+			// was never created or was cleaned up, agents dispatch into a
+			// non-existent directory and every tool call fails silently.
+			wt, err := o.worktree.CreateFeature(fn)
+			if err != nil {
+				o.logger.Warn("direct coder: failed to ensure feature worktree, falling back to main",
+					"feature", fn, "error", err)
+			} else {
+				return wt.Path
+			}
 		}
 	}
 	if o.worktree == nil {
@@ -375,8 +421,9 @@ func (o *Orchestrator) resolveCoderWorkDir(parent *model.Task) string {
 }
 
 // resolveReviewerWorkDir returns the integration worktree path for a reviewer
-// or fixer task. Falls back to the main worktree when no feature branch is
-// set yet (e.g. plan review on a task before its integration worktree exists).
+// or fixer task, creating it if it doesn't exist. Falls back to the main
+// worktree when no feature branch is set yet (e.g. plan review on a task
+// before its integration worktree exists).
 func (o *Orchestrator) resolveReviewerWorkDir(task *model.Task) string {
 	if o.worktree == nil {
 		return ""
@@ -390,7 +437,16 @@ func (o *Orchestrator) resolveReviewerWorkDir(task *model.Task) string {
 	}
 	if branch != "" {
 		fn := strings.TrimPrefix(branch, "feature/")
-		return o.worktree.FeatureWorktreePath(fn)
+		// Ensure the integration worktree exists on disk (same fix as
+		// resolveCoderWorkDir — FeatureWorktreePath only computes the
+		// path string without creating anything).
+		wt, err := o.worktree.CreateFeature(fn)
+		if err != nil {
+			o.logger.Warn("direct reviewer: failed to ensure feature worktree, falling back to main",
+				"feature", fn, "error", err)
+		} else {
+			return wt.Path
+		}
 	}
 	mainWT, err := o.worktree.MainWorktreePath()
 	if err != nil {
