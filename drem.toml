@@ -1,6 +1,6 @@
 bare_repo_path        = "/home/godinj/git/drem-orchestrator.git"
 default_branch        = "master"
-max_concurrent_agents = 6
+max_concurrent_agents = 10
 opencode_bin              = "opencode"
 opencode_context_window   = 98304
 llama_server_endpoint     = "http://localhost:8081"
