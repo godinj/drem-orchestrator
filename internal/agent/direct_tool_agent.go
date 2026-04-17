@@ -2,8 +2,8 @@
 // SGLang's OpenAI-compatible API directly. It extends the direct_classifier.go
 // pattern to support agentic tool loops for coder, reviewer, and fixer roles.
 //
-// SGLang must be running with --tool-call-parser gemma4 to handle bidirectional
-// conversion between OpenAI tool format and Gemma 4's native tool call tokens.
+// SGLang must be running with --tool-call-parser qwen25 to handle bidirectional
+// conversion between OpenAI tool format and Qwen3-Coder's native tool call tokens.
 package agent
 
 import (
@@ -56,6 +56,10 @@ type DirectToolAgentConfig struct {
 	WorkDir       string        // Working directory; tools restricted to paths under this
 	BashTimeout   time.Duration // Timeout for bash commands (default 30s)
 	TraceWriter   io.Writer     // Optional: JSON-lines trace, one TraceEvent per iteration
+	// ChatTemplateKwargs is forwarded to SGLang as `chat_template_kwargs` in the
+	// request body. Use for model-specific template flags (e.g. Gemma-4's
+	// `enable_thinking: true`). Nil/empty ⇒ field omitted.
+	ChatTemplateKwargs map[string]any
 }
 
 // DefaultDirectToolAgentConfig returns a config targeting the local SGLang
@@ -63,8 +67,8 @@ type DirectToolAgentConfig struct {
 func DefaultDirectToolAgentConfig() DirectToolAgentConfig {
 	return DirectToolAgentConfig{
 		Endpoint:      "http://localhost:8081/v1/chat/completions",
-		Model:         "gemma4-26b",
-		MaxTokens:     2048,
+		Model:         "qwen3-coder-30b",
+		MaxTokens:     8192,
 		Temperature:   0.1,
 		Timeout:       120 * time.Second,
 		MaxIterations: 20,
@@ -105,11 +109,12 @@ type toolFunction struct {
 
 // toolChatRequest extends chatRequest with tool definitions.
 type toolChatRequest struct {
-	Model       string           `json:"model"`
-	Messages    []toolChatMsg    `json:"messages"`
-	MaxTokens   int              `json:"max_tokens"`
-	Temperature float64          `json:"temperature"`
-	Tools       []toolDefinition `json:"tools,omitempty"`
+	Model              string           `json:"model"`
+	Messages           []toolChatMsg    `json:"messages"`
+	MaxTokens          int              `json:"max_tokens"`
+	Temperature        float64          `json:"temperature"`
+	Tools              []toolDefinition `json:"tools,omitempty"`
+	ChatTemplateKwargs map[string]any   `json:"chat_template_kwargs,omitempty"`
 }
 
 // toolChatMsg is a chat message that supports all roles including tool
@@ -130,9 +135,77 @@ type toolCall struct {
 }
 
 // toolCallFunction holds the function name and JSON-encoded arguments.
+//
+// Arguments is stored as a string to match the OpenAI tool-call protocol
+// (servers return it that way). For outbound serialization, MarshalJSON
+// re-emits Arguments as a JSON object when it parses as one. This is
+// required for Gemma-family chat templates: the template branches on
+// `function.arguments is mapping` vs `is string`. The mapping branch
+// renders native `{key:<|"|>val<|"|>}` syntax (what Gemma was trained on);
+// the string branch does a literal insert producing malformed
+// `{{"key":"val"}}` double-brace output. Feeding a Gemma model its own
+// prior tool calls in the string form causes it to fail to recognize
+// them as tool calls in conversation history, which manifests as
+// edit-loops and no-progress patterns. Templates that expect a string
+// (e.g. OpenAI's own schema) still receive valid JSON — either a string
+// or an object containing the same data.
 type toolCallFunction struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+// UnmarshalJSON accepts `arguments` as either a JSON string (OpenAI
+// spec) or a JSON object (some servers — and our own test fixtures —
+// emit it that way). Both are normalized into the string field so the
+// rest of the agent can treat Arguments uniformly.
+func (tcf *toolCallFunction) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Name      string          `json:"name"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	tcf.Name = raw.Name
+	if len(raw.Arguments) == 0 {
+		tcf.Arguments = ""
+		return nil
+	}
+	// If arguments is a JSON string, unquote it into the field.
+	var asString string
+	if err := json.Unmarshal(raw.Arguments, &asString); err == nil {
+		tcf.Arguments = asString
+		return nil
+	}
+	// Otherwise treat as object/array/other — store the raw JSON text.
+	tcf.Arguments = string(raw.Arguments)
+	return nil
+}
+
+// MarshalJSON emits Arguments as a JSON object when it parses as one,
+// and as a string otherwise. See type-level doc for rationale.
+func (tcf toolCallFunction) MarshalJSON() ([]byte, error) {
+	if tcf.Arguments != "" {
+		var argsObj map[string]any
+		if err := json.Unmarshal([]byte(tcf.Arguments), &argsObj); err == nil {
+			return json.Marshal(struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			}{
+				Name:      tcf.Name,
+				Arguments: argsObj,
+			})
+		}
+	}
+	// Fallback: arguments did not parse as a JSON object. Emit as string
+	// so the request remains schema-valid on the server side.
+	return json.Marshal(struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	}{
+		Name:      tcf.Name,
+		Arguments: tcf.Arguments,
+	})
 }
 
 // toolChatResponse is the API response that includes tool call information.
@@ -156,53 +229,56 @@ type toolChatChoice struct {
 // ---------------------------------------------------------------------------
 
 // builtinTools defines the complete set of available tool definitions.
+// Descriptions are deliberately detailed to steer models (especially smaller
+// ones like Gemma-4 26B) toward the structured tools instead of routing
+// everything through bash. Bash is restricted to build/test/run commands.
 var builtinTools = map[string]toolDefinition{
 	"read": {
 		Type: "function",
 		Function: toolFunction{
 			Name:        "read",
-			Description: "Read file contents",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path to read"},"offset":{"type":"integer","description":"Line number to start from (0-based)"},"limit":{"type":"integer","description":"Max lines to return"}},"required":["path"]}`),
+			Description: "Read file contents with line numbers. ALWAYS use this instead of cat/head/tail/sed -n. Returns formatted output with line numbers for precise editing. Supports offset and limit for large files.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path to read"},"offset":{"type":"integer","description":"Line number to start from (0-based)"},"limit":{"type":"integer","description":"Max lines to return (default 200)"}},"required":["path"]}`),
 		},
 	},
 	"edit": {
 		Type: "function",
 		Function: toolFunction{
 			Name:        "edit",
-			Description: "Replace exact text in a file",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path"},"old":{"type":"string","description":"Exact text to find"},"new":{"type":"string","description":"Replacement text"}},"required":["path","old","new"]}`),
+			Description: "Replace exact text in a file. Use for surgical changes — provide the exact existing text and its replacement. The old text must appear exactly once in the file. Safer than write for modifications to existing files.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path"},"old":{"type":"string","description":"Exact existing text to find (must be unique in file)"},"new":{"type":"string","description":"Replacement text"}},"required":["path","old","new"]}`),
 		},
 	},
 	"write": {
 		Type: "function",
 		Function: toolFunction{
 			Name:        "write",
-			Description: "Write content to a file (creates or overwrites)",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"File content"}},"required":["path","content"]}`),
+			Description: "Write content to a file (creates or overwrites). ALWAYS use this instead of bash heredocs (cat <<EOF), echo >, or tee. Handles all special characters safely — no shell escaping issues with backticks, quotes, or dollar signs. Creates parent directories automatically.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Complete file content to write"}},"required":["path","content"]}`),
 		},
 	},
 	"bash": {
 		Type: "function",
 		Function: toolFunction{
 			Name:        "bash",
-			Description: "Run a shell command",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"cmd":{"type":"string","description":"Command to execute"}},"required":["cmd"]}`),
+			Description: "Run a shell command for building, testing, and running programs (go test, go vet, make, etc.). Do NOT use bash for file operations — use the dedicated tools instead: read (not cat/head/tail), write (not cat <<EOF or echo >), edit (not sed -i), grep (not grep/rg), glob (not find/ls).",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"cmd":{"type":"string","description":"Shell command to execute. Must not be used for file reading (use read), file writing (use write), file editing (use edit), or searching (use grep/glob)."}},"required":["cmd"]}`),
 		},
 	},
 	"grep": {
 		Type: "function",
 		Function: toolFunction{
 			Name:        "grep",
-			Description: "Search file contents with regex (uses ripgrep)",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern"},"path":{"type":"string","description":"Directory or file to search"},"glob":{"type":"string","description":"File glob filter (e.g. *.go)"}},"required":["pattern"]}`),
+			Description: "Search file contents with regex. ALWAYS use this instead of bash grep/rg. Returns matched lines with file paths and line numbers. Supports glob filtering to narrow search scope.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern to search for"},"path":{"type":"string","description":"Directory or file to search (default: working directory)"},"glob":{"type":"string","description":"File glob filter (e.g. *.go)"}},"required":["pattern"]}`),
 		},
 	},
 	"glob": {
 		Type: "function",
 		Function: toolFunction{
 			Name:        "glob",
-			Description: "Find files by glob pattern",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern (e.g. **/*.go)"},"path":{"type":"string","description":"Base directory"}},"required":["pattern"]}`),
+			Description: "Find files by glob pattern. ALWAYS use this instead of find or ls for locating files. Returns matching file paths.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern (e.g. **/*.go)"},"path":{"type":"string","description":"Base directory (default: working directory)"}},"required":["pattern"]}`),
 		},
 	},
 }
@@ -236,10 +312,12 @@ func ToolsForRole(role string) []toolDefinition {
 // ---------------------------------------------------------------------------
 
 const (
-	maxReadLines   = 200
-	maxBashOutput  = 2000 // characters
-	maxGrepMatches = 50
-	maxGlobResults = 100
+	maxReadLines      = 200
+	maxBashOutput     = 2000 // characters
+	maxGrepMatches    = 50
+	maxGlobResults    = 100
+	maxToolCallsPerTurn = 8   // cap parallel tool calls; prevents degenerate generation explosions
+	maxFileReads      = 3     // warn after N reads of the same file path
 )
 
 // ---------------------------------------------------------------------------
@@ -405,6 +483,45 @@ func (te *toolExecutor) execWrite(argsJSON string) (string, error) {
 	return fmt.Sprintf("wrote %d bytes to %s", len(args.Content), args.Path), nil
 }
 
+// bashFileOpPatterns detects bash commands that should use structured tools.
+// Returns a non-empty redirect message if the command matches a file-op pattern.
+func bashFileOpRedirect(cmd string) string {
+	trimmed := strings.TrimSpace(cmd)
+	lower := strings.ToLower(trimmed)
+
+	// Detect heredoc writes: cat <<EOF > file, cat <<'EOF' > file
+	if strings.Contains(trimmed, "<<") && strings.Contains(trimmed, ">") {
+		return "[HARNESS] bash heredocs are not supported for writing files — they break on backticks, quotes, and special characters. Use the write tool instead:\n" +
+			"  write({\"path\": \"<file>\", \"content\": \"<content>\"})\n" +
+			"The write tool handles all escaping safely. Do NOT retry this command with bash."
+	}
+	// Detect echo/printf redirects to files: echo "..." > file, printf > file
+	// Allow echo ... >&2 (stderr redirect) and echo with no redirect.
+	if (strings.HasPrefix(lower, "echo ") || strings.HasPrefix(lower, "printf ")) &&
+		strings.Contains(trimmed, "> ") && !strings.Contains(trimmed, ">&") {
+		return "[HARNESS] Do not use echo/printf to write files. Use the write tool instead:\n" +
+			"  write({\"path\": \"<file>\", \"content\": \"<content>\"})"
+	}
+	// Detect tee writes: ... | tee file
+	if strings.Contains(lower, "| tee ") {
+		return "[HARNESS] Do not use tee to write files. Use the write tool instead."
+	}
+	// Detect sed -i (in-place edit)
+	if strings.Contains(lower, "sed -i") || strings.Contains(lower, "sed -e") {
+		return "[HARNESS] Do not use sed for file editing. Use the edit tool instead:\n" +
+			"  edit({\"path\": \"<file>\", \"old\": \"<exact text>\", \"new\": \"<replacement>\"})"
+	}
+	// Detect cat/head/tail for reading (but allow cat in pipelines for other purposes)
+	if (strings.HasPrefix(lower, "cat ") || strings.HasPrefix(lower, "head ") || strings.HasPrefix(lower, "tail ")) &&
+		!strings.Contains(trimmed, "|") && !strings.Contains(trimmed, ">") {
+		return "[HARNESS] Do not use cat/head/tail to read files. Use the read tool instead:\n" +
+			"  read({\"path\": \"<file>\", \"offset\": N, \"limit\": M})\n" +
+			"The read tool returns formatted output with line numbers for precise editing."
+	}
+
+	return "" // Not a file-op pattern, allow execution
+}
+
 func (te *toolExecutor) execBash(argsJSON string) (string, error) {
 	var args struct {
 		Cmd string `json:"cmd"`
@@ -412,6 +529,15 @@ func (te *toolExecutor) execBash(argsJSON string) (string, error) {
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse bash args: %w", err)
 	}
+
+	// Intercept file-op patterns that should use structured tools.
+	if redirect := bashFileOpRedirect(args.Cmd); redirect != "" {
+		slog.Warn("direct tool agent: bash file-op intercepted",
+			"cmd_prefix", truncateForStub(args.Cmd, 80),
+		)
+		return redirect, nil
+	}
+
 	timeout := te.bashTimeout
 	if timeout == 0 {
 		timeout = 30 * time.Second
@@ -449,6 +575,9 @@ func (te *toolExecutor) execBash(argsJSON string) (string, error) {
 			return output + "\n[timeout after " + timeout.String() + "]", nil
 		}
 		return output + "\n[exit error: " + err.Error() + "]", nil
+	}
+	if output == "" {
+		return "(exit 0, no output)", nil
 	}
 	return output, nil
 }
@@ -642,6 +771,12 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 	// successful-but-useless grep/ls loops (result is the same empty or
 	// same-match text each time).
 	var prevToolKey, prevToolOut string
+	var consecutiveRepeats int
+
+	// File re-read tracker: counts how many times each resolved file path
+	// has been read via the read tool. After maxFileReads, the tool result
+	// includes a warning nudging the model to stop re-reading and act.
+	fileReadCounts := map[string]int{}
 
 	maxIter := cfg.MaxIterations
 	if maxIter <= 0 {
@@ -722,8 +857,44 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 
 		// If the model wants to call tools, execute them.
 		if choice.FinishReason == "tool_calls" || len(choice.Message.ToolCalls) > 0 {
-			// Append the assistant message with tool calls.
-			messages = append(messages, choice.Message)
+			// Per-turn cap: if the model emits more than maxToolCallsPerTurn
+			// calls, only keep the first N and stub the rest. This prevents
+			// degenerate generation (observed: model starts paginating a file
+			// with 28 valid reads, then generation breaks down into 159
+			// malformed calls, consuming 58k context tokens on garbage).
+			callsToProcess := choice.Message.ToolCalls
+			var cappedCalls []toolCall
+			if len(callsToProcess) > maxToolCallsPerTurn {
+				slog.Warn("direct tool agent: capping tool calls per turn",
+					"iteration", iteration,
+					"total", len(callsToProcess),
+					"cap", maxToolCallsPerTurn,
+				)
+				cappedCalls = callsToProcess[maxToolCallsPerTurn:]
+				callsToProcess = callsToProcess[:maxToolCallsPerTurn]
+				// Rewrite the assistant message to only contain the kept calls,
+				// so capped calls don't pollute conversation history.
+				cappedMsg := choice.Message
+				cappedMsg.ToolCalls = callsToProcess
+				messages = append(messages, cappedMsg)
+			} else {
+				// Append the assistant message with tool calls.
+				messages = append(messages, choice.Message)
+			}
+
+			// Stub the capped calls with a redirect message. Each tool_call_id
+			// still gets a response so the OpenAI protocol is satisfied.
+			for _, tc := range cappedCalls {
+				stub := fmt.Sprintf("[HARNESS: Too many tool calls in one turn (%d). Only the first %d were executed. "+
+					"Break your work across multiple turns — call a few tools, review the results, then continue.]",
+					len(choice.Message.ToolCalls), maxToolCallsPerTurn)
+				messages = append(messages, toolChatMsg{
+					Role:       "tool",
+					Content:    stub,
+					ToolCallID: tc.ID,
+					Name:       tc.Function.Name,
+				})
+			}
 
 			// Intra-iteration dedup: if the model emits multiple tool calls
 			// with identical name+args in a single turn, execute only the first
@@ -732,7 +903,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			// so the OpenAI protocol (one result per call) is satisfied.
 			seenThisIter := map[string]string{}
 
-			for _, tc := range choice.Message.ToolCalls {
+			for _, tc := range callsToProcess {
 				slog.Info("direct tool agent: executing tool",
 					"iteration", iteration,
 					"tool", tc.Function.Name,
@@ -773,24 +944,51 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					traceCall.Error = toolErr.Error()
 					result = "ERROR: " + toolErr.Error()
 				}
+
+				// File re-read tracker: warn when the same file is read
+				// too many times, nudging the model to use what it has.
+				if tc.Function.Name == "read" {
+					var readArgs struct{ Path string `json:"path"` }
+					if json.Unmarshal([]byte(tc.Function.Arguments), &readArgs) == nil && readArgs.Path != "" {
+						resolved, _ := filepath.Abs(filepath.Join(cfg.WorkDir, readArgs.Path))
+						fileReadCounts[resolved]++
+						if fileReadCounts[resolved] > maxFileReads {
+							result += fmt.Sprintf("\n\n[HARNESS NOTE: You have read this file %d times. "+
+								"Its contents have not changed. Stop re-reading and take action — "+
+								"call write or edit to make your changes.]", fileReadCounts[resolved])
+						}
+					}
+				}
+
 				// Loop detector: if this call has identical name+args AND
 				// produces identical output to the immediately preceding call,
-				// the model is making no forward progress. Inject a nudge
-				// suggesting a different approach. This catches both failing
-				// edits (same error each time) and no-match search loops
-				// (same empty grep output repeated).
+				// the model is making no forward progress. Inject a nudge.
+				// We store the pre-note result in prevToolOut so the comparison
+				// fires every consecutive repeat, not just every other one.
+				preNoteResult := result
 				if curKey == prevToolKey && result == prevToolOut {
+					consecutiveRepeats++
 					slog.Warn("direct tool agent: loop detector triggered",
 						"iteration", iteration,
 						"tool", tc.Function.Name,
+						"repeats", consecutiveRepeats,
 					)
-					result += "\n\n[HARNESS NOTE: This is the 2nd consecutive identical call producing identical output. You are making no forward progress. Try a different approach:\n" +
-						" - if searching, broaden or narrow the query, or try a different tool (e.g. glob vs grep, or read a known file directly);\n" +
-						" - if editing and the tool reports an error, re-read the file to confirm its current contents and check whitespace/indentation in your 'old' string, or use 'write' for a full-file replace;\n" +
-						" - if the information you need is not findable, proceed with a reasonable assumption, document it in a code comment, and continue.]"
+					if consecutiveRepeats >= 3 {
+						result += "\n\n[HARNESS NOTE: You have repeated this EXACT call " +
+							fmt.Sprintf("%d", consecutiveRepeats+1) + " times with identical results. " +
+							"The task may already be complete. If so, respond with DONE. " +
+							"Otherwise you MUST try a completely different approach NOW.]"
+					} else {
+						result += "\n\n[HARNESS NOTE: This is the 2nd consecutive identical call producing identical output. You are making no forward progress. Try a different approach:\n" +
+							" - if searching, broaden or narrow the query, or try a different tool (e.g. glob vs grep, or read a known file directly);\n" +
+							" - if editing and the tool reports an error, re-read the file to confirm its current contents and check whitespace/indentation in your 'old' string, or use 'write' for a full-file replace;\n" +
+							" - if the information you need is not findable, proceed with a reasonable assumption, document it in a code comment, and continue.]"
+					}
+				} else {
+					consecutiveRepeats = 0
 				}
 				prevToolKey = curKey
-				prevToolOut = result
+				prevToolOut = preNoteResult
 				seenThisIter[curKey] = result
 				traceCall.Result = result
 				traceEvent.ToolCalls = append(traceEvent.ToolCalls, traceCall)
@@ -805,6 +1003,31 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			}
 			writeTrace(cfg.TraceWriter, traceEvent)
 			continue
+		}
+
+		// Length-truncated response: the model hit max_tokens before completing
+		// its turn. SGLang in this case may return an empty message (no content,
+		// no tool_calls) because a partial tool-call cannot be returned as
+		// structured JSON. Do NOT silently treat this as a successful stop —
+		// surface as an error so callers (drembench, orchestrator) can retry or
+		// classify distinctly.
+		if choice.FinishReason == "length" {
+			slog.Warn("direct tool agent: response truncated at max_tokens",
+				"iteration", iteration,
+				"max_tokens", cfg.MaxTokens,
+				"tokens_out", resp.Usage.CompletionTokens,
+				"had_content", choice.Message.Content != "",
+				"had_tool_calls", len(choice.Message.ToolCalls) > 0,
+			)
+			writeTrace(cfg.TraceWriter, traceEvent)
+			return &DirectToolAgentResult{
+					Output:     choice.Message.Content,
+					TokensIn:   totalTokensIn,
+					TokensOut:  totalTokensOut,
+					Iterations: iteration + 1,
+					Duration:   time.Since(start),
+				}, fmt.Errorf("response truncated at max_tokens=%d (iteration %d); increase MaxTokens or reduce tool-call payload size",
+					cfg.MaxTokens, iteration)
 		}
 
 		// Unexpected finish reason — treat any content as final output.
@@ -860,11 +1083,12 @@ func writeTrace(w io.Writer, ev TraceEvent) {
 // callToolAPI makes a single chat completions request with tool definitions.
 func callToolAPI(cfg DirectToolAgentConfig, messages []toolChatMsg, tools []toolDefinition) (*toolChatResponse, error) {
 	reqBody := toolChatRequest{
-		Model:       cfg.Model,
-		Messages:    messages,
-		MaxTokens:   cfg.MaxTokens,
-		Temperature: cfg.Temperature,
-		Tools:       tools,
+		Model:              cfg.Model,
+		Messages:           messages,
+		MaxTokens:          cfg.MaxTokens,
+		Temperature:        cfg.Temperature,
+		Tools:              tools,
+		ChatTemplateKwargs: cfg.ChatTemplateKwargs,
 	}
 
 	reqJSON, err := json.Marshal(reqBody)

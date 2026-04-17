@@ -2,7 +2,7 @@ bare_repo_path        = "/home/godinj/git/drem-orchestrator.git"
 default_branch        = "master"
 max_concurrent_agents = 6
 opencode_bin              = "opencode"
-opencode_context_window   = 43182
+opencode_context_window   = 98304
 llama_server_endpoint     = "http://localhost:8081"
 test_command              = "go test ./..."
 compile_command       = "go vet ./..."
@@ -10,7 +10,7 @@ skip_constraint_gate  = false
 
 [agents.classifier]
   provider = "opencode"
-  model    = "sglang/gemma4-26b"
+  model    = "sglang/qwen3-coder-30b"
   effort   = "medium"
   direct   = true  # bypass OpenCode, call SGLang API directly
 
@@ -20,19 +20,19 @@ skip_constraint_gate  = false
 
 [agents.prep]
   provider = "sglang-direct"
-  model    = "gemma4-26b"
+  model    = "qwen3-coder-30b"
 
 [agents.coder]
   provider = "sglang-direct"
-  model    = "gemma4-26b"
+  model    = "qwen3-coder-30b"
 
 [agents.reviewer]
   provider = "sglang-direct"
-  model    = "gemma4-26b"
+  model    = "qwen3-coder-30b"
 
 [agents.fixer]
   provider = "sglang-direct"
-  model    = "gemma4-26b"
+  model    = "qwen3-coder-30b"
 
 [agents.supervisor]
   effort = "low"
@@ -43,7 +43,7 @@ skip_constraint_gate  = false
 [direct_tool_agent]
   enabled        = true
   endpoint       = "http://localhost:8081/v1/chat/completions"
-  model          = "gemma4-26b"
+  model          = "qwen3-coder-30b"
   max_tokens     = 2048
   temperature    = 0.1
   timeout        = "180s"

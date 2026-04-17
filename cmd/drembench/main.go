@@ -49,7 +49,7 @@ type TrialResult struct {
 	TokensIn     int
 	TokensOut    int
 	DurationMs   int64
-	FinishReason string // "stop" | "max_iter" | "api_error" | "other_error"
+	FinishReason string // "stop" | "max_iter" | "length" | "api_error" | "other_error"
 	ErrorMsg     string
 	VerifierPass bool
 	VerifierOut  string
@@ -68,6 +68,9 @@ func main() {
 		repoRoot = flag.String("repo", ".", "repo root (for fixture paths)")
 		scratch  = flag.String("scratch", "bench/scratch", "scratch dir for runs")
 		traceDir = flag.String("trace-dir", "", "if set, write per-trial JSON-lines trace files here")
+		thinking = flag.Bool("thinking", false, "forward chat_template_kwargs.enable_thinking=true (for Gemma-4 thinking channel)")
+		taskOnly = flag.String("task", "", "if set, only run tasks whose name contains this substring (for targeted experiments)")
+		temp     = flag.Float64("temp", 0.1, "sampling temperature")
 	)
 	flag.Parse()
 
@@ -82,6 +85,18 @@ func main() {
 	}
 	if len(specs) == 0 {
 		log.Fatalf("no task specs found in %s", *tasksDir)
+	}
+	if *taskOnly != "" {
+		filtered := specs[:0]
+		for _, s := range specs {
+			if strings.Contains(s.Name, *taskOnly) {
+				filtered = append(filtered, s)
+			}
+		}
+		specs = filtered
+		if len(specs) == 0 {
+			log.Fatalf("no task specs matched filter %q", *taskOnly)
+		}
 	}
 	fmt.Printf("Loaded %d task specs. Running %d trials each = %d total runs.\n", len(specs), *runs, len(specs)*(*runs))
 
@@ -107,12 +122,26 @@ func main() {
 			cfg := agent.DirectToolAgentConfig{
 				Endpoint:      *endpoint,
 				Model:         *model,
-				MaxTokens:     2048,
-				Temperature:   0.1,
+				MaxTokens:     8192,
+				Temperature:   *temp,
 				Timeout:       *timeout,
 				MaxIterations: *maxIter,
 				WorkDir:       scratchDir,
 				BashTimeout:   *bashTO,
+			}
+			sysPrompt := spec.SystemPrompt
+			if *thinking {
+				cfg.ChatTemplateKwargs = map[string]any{"enable_thinking": true}
+				// Rider: explicitly instruct model to fill the thought block.
+				// Without this, Gemma-4 emits empty <|channel>thought<channel|>
+				// markers ~75% of turns (observed: 22/30 empty in baseline run).
+				sysPrompt += "\n\n" +
+					"## Thinking Discipline\n" +
+					"Before EVERY tool call, fill the thought block with:\n" +
+					"1. What you already learned from prior tool results (list the key facts).\n" +
+					"2. The single next step that advances the task (edit X, run test Y, etc.).\n" +
+					"3. Whether you have already seen the information you are about to request. If yes, DO NOT re-read — use what you have and take an action.\n" +
+					"An empty thought block wastes a turn. Re-reading a file you have already read wastes a turn. Plan concretely, then act."
 			}
 
 			var traceFile *os.File
@@ -135,7 +164,7 @@ func main() {
 			tools := agent.ToolsForRole(spec.Role)
 
 			start := time.Now()
-			res, runErr := agent.RunDirectToolAgent(cfg, spec.SystemPrompt, spec.UserMessage, tools, "")
+			res, runErr := agent.RunDirectToolAgent(cfg, sysPrompt, spec.UserMessage, tools, "")
 			runDur := time.Since(start)
 			if traceFile != nil {
 				traceFile.Close()
@@ -229,6 +258,8 @@ func classifyFinish(err error, iter, maxIter int) string {
 	switch {
 	case strings.Contains(msg, "exceeded max iterations"):
 		return "max_iter"
+	case strings.Contains(msg, "response truncated at max_tokens"):
+		return "length"
 	case strings.Contains(msg, "API call failed"), strings.Contains(msg, "API returned status"):
 		return "api_error"
 	default:

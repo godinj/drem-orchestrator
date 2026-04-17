@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -185,6 +186,69 @@ func TestExecBash(t *testing.T) {
 		result, err := te.execBash(`{"cmd":"pwd"}`)
 		require.NoError(t, err)
 		assert.Contains(t, result, dir)
+	})
+}
+
+func TestBashFileOpRedirect(t *testing.T) {
+	tests := []struct {
+		name     string
+		cmd      string
+		blocked  bool
+		contains string // substring expected in redirect message
+	}{
+		{"heredoc write", `cat <<'EOF' > file.go\npackage main\nEOF`, true, "write tool"},
+		{"heredoc unquoted", `cat <<EOF > file.go\nstuff\nEOF`, true, "write tool"},
+		{"echo redirect", `echo "hello" > output.txt`, true, "write tool"},
+		{"printf redirect", `printf '%s' data > out.txt`, true, "write tool"},
+		{"echo to stderr", `echo out && echo err >&2`, false, ""},
+		{"echo no redirect", `echo hello`, false, ""},
+		{"tee pipe", `go test | tee results.txt`, true, "write tool"},
+		{"sed in-place", `sed -i 's/old/new/' file.go`, true, "edit tool"},
+		{"cat read", `cat internal/foo.go`, true, "read tool"},
+		{"head read", `head -n 50 internal/foo.go`, true, "read tool"},
+		{"tail read", `tail -n 20 internal/foo.go`, true, "read tool"},
+		{"cat in pipeline", `cat file.go | wc -l`, false, ""}, // piped cat is allowed
+		{"go test", `go test ./...`, false, ""},
+		{"go vet", `go vet ./...`, false, ""},
+		{"ls", `ls -la`, false, ""},
+		{"make", `make build`, false, ""},
+		{"grep via bash", `grep -rn pattern dir/`, false, ""}, // not intercepted (grep is a structured tool but bash grep isn't blocked, just discouraged via description)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			redirect := bashFileOpRedirect(tt.cmd)
+			if tt.blocked {
+				assert.NotEmpty(t, redirect, "expected command to be blocked: %s", tt.cmd)
+				assert.Contains(t, redirect, tt.contains)
+			} else {
+				assert.Empty(t, redirect, "expected command to be allowed: %s", tt.cmd)
+			}
+		})
+	}
+}
+
+func TestBashFileOpRedirect_ActualExecution(t *testing.T) {
+	// Verify that intercepted commands return the redirect message
+	// instead of executing the bash command.
+	dir := t.TempDir()
+	te := &toolExecutor{workDir: dir, bashTimeout: 5 * time.Second}
+
+	t.Run("heredoc intercepted", func(t *testing.T) {
+		result, err := te.execBash(`{"cmd":"cat <<'EOF' > test.go\npackage main\nEOF"}`)
+		require.NoError(t, err)
+		assert.Contains(t, result, "[HARNESS]")
+		assert.Contains(t, result, "write tool")
+		// File should NOT have been created
+		_, statErr := os.Stat(filepath.Join(dir, "test.go"))
+		assert.True(t, os.IsNotExist(statErr), "heredoc should not have executed")
+	})
+
+	t.Run("go test allowed", func(t *testing.T) {
+		result, err := te.execBash(`{"cmd":"echo build_ok"}`)
+		require.NoError(t, err)
+		assert.Contains(t, result, "build_ok")
+		assert.NotContains(t, result, "[HARNESS]")
 	})
 }
 
@@ -579,8 +643,8 @@ func TestToolChatMsgSerialization(t *testing.T) {
 func TestDefaultDirectToolAgentConfig(t *testing.T) {
 	cfg := DefaultDirectToolAgentConfig()
 	assert.Equal(t, "http://localhost:8081/v1/chat/completions", cfg.Endpoint)
-	assert.Equal(t, "gemma4-26b", cfg.Model)
-	assert.Equal(t, 2048, cfg.MaxTokens)
+	assert.Equal(t, "qwen3-coder-30b", cfg.Model)
+	assert.Equal(t, 8192, cfg.MaxTokens)
 	assert.Equal(t, 20, cfg.MaxIterations)
 	assert.Equal(t, 30*1e9, float64(cfg.BashTimeout)) // 30s in nanoseconds
 }

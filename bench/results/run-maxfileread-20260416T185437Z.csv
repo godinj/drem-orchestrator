@@ -1,0 +1,10 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+hard-refactor,1,7,10209,288,5461,stop,true,
+hard-refactor,2,7,10996,680,8537,stop,true,
+hard-refactor,3,7,10992,678,8156,stop,true,
+medium-test,1,8,11256,327,6418,stop,true,
+medium-test,2,9,12849,347,5692,stop,true,
+medium-test,3,8,11256,408,5156,stop,true,
+trivial-doc,1,22,41819,708,12033,stop,true,
+trivial-doc,2,14,20554,410,6282,stop,true,
+trivial-doc,3,17,27582,479,6307,stop,true,

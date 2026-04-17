@@ -22,7 +22,7 @@ import (
 func TestDefaultDirectPlanReviewerConfig(t *testing.T) {
 	cfg := DefaultDirectPlanReviewerConfig()
 	assert.Equal(t, "http://localhost:8081/v1/chat/completions", cfg.Endpoint)
-	assert.Equal(t, "gemma4-26b", cfg.Model)
+	assert.Equal(t, "qwen3-coder-30b", cfg.Model)
 	assert.Equal(t, 2048, cfg.MaxTokens)
 	assert.InDelta(t, 0.1, cfg.Temperature, 1e-9)
 	assert.Equal(t, 120*time.Second, cfg.Timeout)

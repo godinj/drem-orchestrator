@@ -1,0 +1,4 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+real-constraint-gate-exhaustion,1,30,958248,1400,61958,max_iter,false,exceeded max iterations (30)
+real-constraint-gate-exhaustion,2,30,988971,19475,361481,max_iter,false,exceeded max iterations (30)
+real-constraint-gate-exhaustion,3,30,738476,3578,77598,max_iter,false,exceeded max iterations (30)

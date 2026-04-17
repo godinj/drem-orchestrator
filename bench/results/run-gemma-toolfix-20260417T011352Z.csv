@@ -1,0 +1,3 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+real-constraint-gate-exhaustion,1,29,1120555,17336,565648,api_error,false,"API call failed at iteration 29: API call: Post ""http://localhost:8081/v1/chat/completions"": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
+real-constraint-gate-exhaustion,2,30,1039896,1011,61445,max_iter,false,exceeded max iterations (30)

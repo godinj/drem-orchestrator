@@ -38,7 +38,7 @@ type DirectClassifierConfig struct {
 func DefaultDirectClassifierConfig() DirectClassifierConfig {
 	return DirectClassifierConfig{
 		Endpoint:    "http://localhost:8081/v1/chat/completions",
-		Model:       "gemma4-26b",
+		Model:       "qwen3-coder-30b",
 		MaxTokens:   1024,
 		Temperature: 0.1,
 		Timeout:     60 * time.Second,
