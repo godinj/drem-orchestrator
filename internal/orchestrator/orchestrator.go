@@ -561,7 +561,7 @@ func (o *Orchestrator) recoverStuckAgents() {
 // isTerminal returns true if a task status is a terminal state (no further
 // automated processing will occur).
 func isTerminal(status model.TaskStatus) bool {
-	return status == model.StatusDone || status == model.StatusFailed || status == model.StatusRejected
+	return status == model.StatusDone || status == model.StatusFailed || status == model.StatusRejected || status == model.StatusCancelled
 }
 
 // ---------------------------------------------------------------------------

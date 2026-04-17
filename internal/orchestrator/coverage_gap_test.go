@@ -2126,6 +2126,51 @@ func TestProcessTestWriting_AllTerminalSomeFailed(t *testing.T) {
 	}
 }
 
+func TestProcessTestWriting_CancelledSubtasksDontBlockCompletion(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "tw-cancelled-mixed",
+		Description: "parent with done + cancelled test subtasks",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	// One done, one cancelled — should still transition to test_review.
+	db.Create(&model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-done",
+		Description:  "done test subtask",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	})
+	db.Create(&model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-cancelled",
+		Description:  "cancelled test subtask",
+		Status:       model.StatusCancelled,
+		Phase:        "test",
+	})
+
+	err := o.processTestWriting(&parent)
+	if err != nil {
+		t.Fatalf("processTestWriting error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusTestReview {
+		t.Errorf("expected test_review when done+cancelled (no in-progress), got %s", updated.Status)
+	}
+}
+
 func TestProcessTestWriting_StillInProgress(t *testing.T) {
 	orch, db, _ := setupReconcileTest(t)
 

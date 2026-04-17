@@ -161,11 +161,6 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 			continue
 		}
 
-		// Check capacity.
-		if o.runner == nil || !o.runner.CanSpawn() {
-			break
-		}
-
 		// Determine agent type from subtask context.
 		agentType := model.AgentCoder
 		if sub.Context != nil {
@@ -179,7 +174,9 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 		// Direct tool agent intercept: when the SGLang direct path is
 		// configured and this is a coder subtask, bypass the OpenCode/Claude
 		// subprocess and drive the role via RunDirectToolAgent. Saves ~20K
-		// tokens of tool-definition overhead per agent.
+		// tokens of tool-definition overhead per agent. This check runs
+		// BEFORE the runner capacity gate because direct agents manage their
+		// own concurrency independently of the subprocess runner.
 		if agentType == model.AgentCoder && o.shouldUseDirectToolAgent(sub, agentType) {
 			if err := o.processCoderDirect(sub, parent); err != nil {
 				o.logger.Error("direct coder dispatch failed", "subtask_id", sub.ID, "error", err)
@@ -192,7 +189,8 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 		// instead of spawning a coder directly. The prep agent reads the
 		// codebase and produces a tactical brief; when it completes,
 		// onPrepCompleted marks the subtask prep_complete and it gets
-		// dispatched to a coder on the next tick.
+		// dispatched to a coder on the next tick. This also runs before
+		// the runner capacity gate since prep agents use the direct path.
 		if agentType == model.AgentCoder && o.needsPrep(sub) {
 			if err := o.spawnPrepAgent(sub, parent); err != nil {
 				o.logger.Error("spawn prep agent failed, proceeding without prep",
@@ -211,6 +209,13 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 				// Prep agent spawned successfully — skip coder spawn this tick.
 				continue
 			}
+		}
+
+		// Check subprocess runner capacity. Only applies to non-direct
+		// agents (OpenCode/Claude subprocess path). Direct agents already
+		// dispatched above bypass this gate.
+		if o.runner == nil || !o.runner.CanSpawn() {
+			break
 		}
 
 		// Skip subtasks that are currently being prepped (waiting for prep agent).

@@ -131,6 +131,10 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		switch sub.Status {
 		case model.StatusDone:
 			// good
+		case model.StatusCancelled:
+			// Cancelled subtasks are terminal but don't count as failures.
+			// They were intentionally removed (e.g. during replan) and should
+			// not block completion of remaining test subtasks.
 		case model.StatusFailed, model.StatusRejected:
 			anyFailed = true
 			allDone = false

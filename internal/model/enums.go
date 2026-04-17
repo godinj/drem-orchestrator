@@ -22,6 +22,7 @@ const (
 	StatusDone               TaskStatus = "done"
 	StatusFailed             TaskStatus = "failed"
 	StatusRejected           TaskStatus = "rejected"
+	StatusCancelled          TaskStatus = "cancelled"
 )
 
 // allTaskStatuses lists every valid TaskStatus value for parsing.
@@ -40,6 +41,7 @@ var allTaskStatuses = []TaskStatus{
 	StatusDone,
 	StatusFailed,
 	StatusRejected,
+	StatusCancelled,
 }
 
 // String returns the string representation of a TaskStatus.

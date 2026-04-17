@@ -364,6 +364,7 @@ func TestIsTerminal(t *testing.T) {
 		{model.StatusDone, true},
 		{model.StatusFailed, true},
 		{model.StatusRejected, true},
+		{model.StatusCancelled, true},
 		{model.StatusBacklog, false},
 		{model.StatusInProgress, false},
 		{model.StatusPlanning, false},
