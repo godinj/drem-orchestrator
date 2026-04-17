@@ -10,7 +10,7 @@ skip_constraint_gate  = false
 
 [agents.classifier]
   provider = "opencode"
-  model    = "sglang/qwen3-coder-30b"
+  model    = "sglang/gemma4-26b"
   effort   = "medium"
   direct   = true  # bypass OpenCode, call SGLang API directly
 
@@ -20,19 +20,19 @@ skip_constraint_gate  = false
 
 [agents.prep]
   provider = "sglang-direct"
-  model    = "qwen3-coder-30b"
+  model    = "gemma4-26b"
 
 [agents.coder]
   provider = "sglang-direct"
-  model    = "qwen3-coder-30b"
+  model    = "gemma4-26b"
 
 [agents.reviewer]
   provider = "sglang-direct"
-  model    = "qwen3-coder-30b"
+  model    = "gemma4-26b"
 
 [agents.fixer]
   provider = "sglang-direct"
-  model    = "qwen3-coder-30b"
+  model    = "gemma4-26b"
 
 [agents.supervisor]
   effort = "low"
@@ -44,7 +44,7 @@ skip_constraint_gate  = false
   enabled        = true
   endpoint       = "http://localhost:8081/v1/chat/completions"
   model          = "qwen3-coder-30b"
-  max_tokens     = 2048
+  max_tokens     = 8192
   temperature    = 0.1
   timeout        = "180s"
   max_iterations = 30
@@ -61,5 +61,5 @@ skip_constraint_gate  = false
 
 [serve]
   listen_addr  = ":8080"
-  bearer_token = ""
+  bearer_token = "drem-local-dev"
   db_path      = "~/.drem-csuite/csuite.db"
