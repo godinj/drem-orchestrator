@@ -46,11 +46,11 @@ func (o *Orchestrator) shouldUseDirectToolAgent(sub *model.Task, agentType model
 	return true
 }
 
-// processCoderDirect runs a coder agent via the direct SGLang tool-call loop
-// for a single subtask. It creates an agent DB record, builds a compact
-// system prompt, invokes RunDirectToolAgent with coder tools, records token
-// usage, and funnels success through synthesizeCompletion so the existing
-// merge / fast-track flow runs.
+// processCoderDirect launches a coder agent via the direct SGLang tool-call
+// loop for a single subtask. The agent runs in a background goroutine so that
+// scheduleSubtasks can dispatch multiple coders per tick instead of blocking
+// on each one serially. On completion (success or failure), the result is
+// sent to the runner's completion channel for the next tick to drain.
 func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) error {
 	if o.directToolAgentCfg == nil {
 		// Fall through — caller (subtask_scheduling) will use subprocess path.
@@ -101,30 +101,43 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 	}
 
 	o.publishAgentStatus(sub.ID.String(), ag.ID.String(), string(model.AgentCoder), string(model.AgentWorking))
-	o.logger.Info("direct coder: running tool agent", "subtask_id", sub.ID, "agent_id", ag.ID)
+	o.logger.Info("direct coder: launching async tool agent", "subtask_id", sub.ID, "agent_id", ag.ID)
 
-	result, runErr := agent.RunDirectToolAgent(toolCfg, systemPrompt, userMessage, agent.ToolsForRole("coder"), "")
-	if result != nil {
-		ag.TokensIn = result.TokensIn
-		ag.TokensOut = result.TokensOut
-		if saveErr := o.db.Save(ag).Error; saveErr != nil {
-			o.logger.Warn("direct coder: save tokens", "agent_id", ag.ID, "error", saveErr)
+	runAndComplete := func() {
+		result, runErr := agent.RunDirectToolAgent(toolCfg, systemPrompt, userMessage, agent.ToolsForRole("coder"), "")
+		if result != nil {
+			ag.TokensIn = result.TokensIn
+			ag.TokensOut = result.TokensOut
+			if saveErr := o.db.Save(ag).Error; saveErr != nil {
+				o.logger.Warn("direct coder: save tokens", "agent_id", ag.ID, "error", saveErr)
+			}
+		}
+
+		comp := agent.Completion{AgentID: agentID, ReturnCode: 0}
+		if runErr != nil {
+			o.logger.Error("direct coder: tool agent failed", "subtask_id", sub.ID, "agent_id", ag.ID, "error", runErr)
+			comp.ReturnCode = 1
+		}
+		// Funnel through runner's completion channel so the next tick
+		// processes the result via the standard processAgentResult path.
+		if o.runner != nil {
+			o.runner.SendCompletion(comp)
+		} else {
+			// No runner (test environment) — process inline.
+			if err := o.processAgentResult(comp); err != nil {
+				o.logger.Error("direct coder: inline processAgentResult", "agent_id", agentID, "error", err)
+			}
 		}
 	}
-	if runErr != nil {
-		o.logger.Error("direct coder: tool agent failed", "subtask_id", sub.ID, "agent_id", ag.ID, "error", runErr)
-		if failErr := o.onAgentFailed(ag, sub); failErr != nil {
-			o.logger.Error("direct coder: onAgentFailed", "agent_id", ag.ID, "error", failErr)
-		}
-		return nil
+
+	if o.runner != nil {
+		// Run in background goroutine — unblocks the tick loop for more dispatches.
+		go runAndComplete()
+	} else {
+		// No runner (test environment) — run synchronously to avoid races.
+		runAndComplete()
 	}
 
-	// Success: feed into processAgentResult -> onAgentCompleted to reuse the
-	// existing merge/fast-track/empty-work flow.
-	if err := o.synthesizeCompletion(agentID); err != nil {
-		o.logger.Error("direct coder: synthesize completion", "agent_id", ag.ID, "error", err)
-		return err
-	}
 	return nil
 }
 

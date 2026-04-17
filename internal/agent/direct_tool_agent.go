@@ -312,12 +312,12 @@ func ToolsForRole(role string) []toolDefinition {
 // ---------------------------------------------------------------------------
 
 const (
-	maxReadLines      = 200
-	maxBashOutput     = 2000 // characters
-	maxGrepMatches    = 50
-	maxGlobResults    = 100
-	maxToolCallsPerTurn = 8   // cap parallel tool calls; prevents degenerate generation explosions
-	maxFileReads      = 3     // warn after N reads of the same file path
+	maxReadLines        = 200
+	maxBashOutput       = 2000 // characters
+	maxGrepMatches      = 50
+	maxGlobResults      = 100
+	maxToolCallsPerTurn = 8 // cap parallel tool calls; prevents degenerate generation explosions
+	maxFileReads        = 3 // warn after N reads of the same file path
 )
 
 // ---------------------------------------------------------------------------
@@ -948,7 +948,9 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				// File re-read tracker: warn when the same file is read
 				// too many times, nudging the model to use what it has.
 				if tc.Function.Name == "read" {
-					var readArgs struct{ Path string `json:"path"` }
+					var readArgs struct {
+						Path string `json:"path"`
+					}
 					if json.Unmarshal([]byte(tc.Function.Arguments), &readArgs) == nil && readArgs.Path != "" {
 						resolved, _ := filepath.Abs(filepath.Join(cfg.WorkDir, readArgs.Path))
 						fileReadCounts[resolved]++

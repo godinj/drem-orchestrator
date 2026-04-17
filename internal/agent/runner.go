@@ -780,6 +780,13 @@ func (r *Runner) GetRunningAgents() []RunningAgent {
 	return agents
 }
 
+// SendCompletion enqueues a completion for the next tick's drain pass.
+// Used by the orchestrator's async direct-tool-agent goroutines to funnel
+// results back through the standard processAgentResult flow.
+func (r *Runner) SendCompletion(c Completion) {
+	r.completions <- c
+}
+
 // DrainCompletions performs a non-blocking drain of all pending completions
 // from the completions channel.
 func (r *Runner) DrainCompletions() []Completion {

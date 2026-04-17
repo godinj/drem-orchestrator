@@ -29,9 +29,15 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	}
 
 	// Read agent output for error details.
-	output, err := o.runner.GetAgentOutput(ag.ID)
-	if err != nil {
-		o.logger.Warn("failed to read failed agent output", "agent_id", ag.ID, "error", err)
+	var output string
+	if o.runner != nil {
+		var err error
+		output, err = o.runner.GetAgentOutput(ag.ID)
+		if err != nil {
+			o.logger.Warn("failed to read failed agent output", "agent_id", ag.ID, "error", err)
+			output = "unknown error"
+		}
+	} else {
 		output = "unknown error"
 	}
 

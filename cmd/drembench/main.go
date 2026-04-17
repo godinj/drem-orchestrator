@@ -368,8 +368,8 @@ func writeSummary(path string, rows []TrialResult, model string) error {
 	fmt.Fprintf(&b, "| task | trials | pass | stop | max_iter | api_err | avg_iter | avg_tok_in | avg_tok_out | avg_dur_ms |\n")
 	fmt.Fprintf(&b, "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|\n")
 	type agg struct {
-		trials, stop, maxIter, apiErr, pass     int
-		sumIter, sumTokIn, sumTokOut, sumDurMs  int64
+		trials, stop, maxIter, apiErr, pass    int
+		sumIter, sumTokIn, sumTokOut, sumDurMs int64
 	}
 	byTask := map[string]*agg{}
 	for _, r := range rows {
