@@ -54,10 +54,12 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 		}
 	}
 
-	// Query in-progress sibling tasks for conflict detection.
+	// Query in-progress sibling tasks for conflict detection. Exclude tasks
+	// that are candidates for dispatch (in_progress with no assigned agent) —
+	// otherwise they conflict with themselves and can never be re-dispatched.
 	var inProgress []model.Task
 	if err := o.db.Where(
-		"parent_task_id = ? AND status IN ?",
+		"parent_task_id = ? AND status IN ? AND assigned_agent_id IS NOT NULL",
 		parent.ID, []model.TaskStatus{model.StatusInProgress, model.StatusMerging},
 	).Find(&inProgress).Error; err != nil {
 		return fmt.Errorf("schedule subtasks: query in-progress: %w", err)
