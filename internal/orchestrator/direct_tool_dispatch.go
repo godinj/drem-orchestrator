@@ -66,6 +66,11 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 	}
 
 	featureDir := o.resolveCoderWorkDir(parent)
+	if featureDir == "" {
+		o.logger.Debug("direct coder: no workdir resolved, deferring dispatch",
+			"subtask_id", sub.ID)
+		return nil
+	}
 	toolCfg := *o.directToolAgentCfg
 	toolCfg.WorkDir = featureDir
 	o.applyContextThresholds(&toolCfg)
@@ -410,14 +415,13 @@ func (o *Orchestrator) resolveCoderWorkDir(parent *model.Task) string {
 			}
 		}
 	}
+	// No feature branch on parent — do NOT fall back to master.
+	// Multiple concurrent agents writing to master clobber each other's files.
 	if o.worktree == nil {
 		return ""
 	}
-	mainWT, err := o.worktree.MainWorktreePath()
-	if err != nil {
-		return ""
-	}
-	return mainWT
+	o.logger.Warn("direct coder: no feature branch on parent, skipping (would fall back to master)")
+	return ""
 }
 
 // resolveReviewerWorkDir returns the integration worktree path for a reviewer
