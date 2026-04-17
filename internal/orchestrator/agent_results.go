@@ -190,38 +190,64 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 					"agent_id", ag.ID, "error", chErr)
 			} else if len(changedFiles) > 0 {
 				implChangedFiles = changedFiles
-				report, evalErr := constraints.EvaluateFiles(constraintCfg, featureDir, changedFiles)
-				if evalErr != nil {
-					o.logger.Warn("constraint evaluation failed", "agent_id", ag.ID, "error", evalErr)
+				// Use delta evaluation: compare feature branch against master
+				// baseline so pre-existing violations don't block agents whose
+				// work is clean. Only NEW or WORSENED violations fail the gate.
+				mainDir, mainErr := o.worktree.MainWorktreePath()
+				if mainErr != nil {
+					o.logger.Warn("failed to resolve main worktree for delta eval",
+						"agent_id", ag.ID, "error", mainErr)
 				} else {
-					implScorePassed = report.Passed
-					implScoreFailed = report.Failed
-					if report.Failed > 0 {
-						o.logger.Warn("constraint violations after agent merge",
-							"agent_id", ag.ID, "task_id", task.ID, "failed", report.Failed)
-						if task.Context == nil {
-							task.Context = make(model.JSONField)
+					delta, evalErr := constraints.EvaluateDelta(constraintCfg, featureDir, mainDir)
+					if evalErr != nil {
+						o.logger.Warn("constraint evaluation failed", "agent_id", ag.ID, "error", evalErr)
+					} else if delta.Skipped {
+						o.logger.Info("constraint delta skipped (baseline unavailable)",
+							"agent_id", ag.ID, "reason", delta.SkipReason)
+						if delta.FeatureReport != nil {
+							implScorePassed = delta.FeatureReport.Passed
+							implScoreFailed = 0 // don't penalize when baseline is unavailable
 						}
-						task.Context["constraint_violations"] = constraints.FormatReport(report)
-						ag.Status = model.AgentIdle
-						ag.CurrentTaskID = nil
-						if err := o.db.Save(ag).Error; err != nil {
-							return fmt.Errorf("on agent completed: save agent after constraint fail: %w", err)
-						}
-						evt, err := state.TransitionTask(task, model.StatusFailed, "orchestrator",
-							map[string]any{"reason": "constraint violations after merge", "violations": constraints.FormatReport(report)})
-						if err != nil {
-							o.logger.Warn("failed to transition task after constraint violation", "task_id", task.ID, "error", err)
+					} else {
+						implScorePassed = delta.FeatureReport.Passed
+						// Only count NEW violations (not pre-existing ones)
+						implScoreFailed = len(delta.Comparison.NewViolations) + len(delta.Comparison.Worsened)
+						if delta.Comparison.Dominated {
+							violations := append(delta.Comparison.NewViolations, delta.Comparison.Worsened...)
+							o.logger.Warn("new constraint violations after agent merge",
+								"agent_id", ag.ID, "task_id", task.ID,
+								"new", len(delta.Comparison.NewViolations),
+								"worsened", len(delta.Comparison.Worsened),
+								"violations", violations)
+							if task.Context == nil {
+								task.Context = make(model.JSONField)
+							}
+							task.Context["constraint_violations"] = violations
+							ag.Status = model.AgentIdle
+							ag.CurrentTaskID = nil
+							if err := o.db.Save(ag).Error; err != nil {
+								return fmt.Errorf("on agent completed: save agent after constraint fail: %w", err)
+							}
+							evt, err := state.TransitionTask(task, model.StatusFailed, "orchestrator",
+								map[string]any{"reason": "new constraint violations after merge", "violations": violations})
+							if err != nil {
+								o.logger.Warn("failed to transition task after constraint violation", "task_id", task.ID, "error", err)
+								return nil
+							}
+							if err := o.db.Save(task).Error; err != nil {
+								return fmt.Errorf("on agent completed: save task after constraint fail: %w", err)
+							}
+							if err := o.db.Create(evt).Error; err != nil {
+								return fmt.Errorf("on agent completed: save constraint-fail event: %w", err)
+							}
+							o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "new constraint violations after merge")
 							return nil
 						}
-						if err := o.db.Save(task).Error; err != nil {
-							return fmt.Errorf("on agent completed: save task after constraint fail: %w", err)
+						if len(delta.Comparison.NewViolations) == 0 && len(delta.Comparison.Worsened) == 0 {
+							o.logger.Info("constraint check passed (pre-existing violations only, no regressions)",
+								"agent_id", ag.ID, "task_id", task.ID,
+								"feature_failed", delta.FeatureReport.Failed)
 						}
-						if err := o.db.Create(evt).Error; err != nil {
-							return fmt.Errorf("on agent completed: save constraint-fail event: %w", err)
-						}
-						o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "constraint violations after merge")
-						return nil
 					}
 				}
 			}
