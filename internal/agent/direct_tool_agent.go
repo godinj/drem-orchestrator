@@ -80,6 +80,12 @@ type DirectToolAgentConfig struct {
 	// window usage percentage (0 when ContextLimit is not configured).
 	// Nil ⇒ no callback.
 	OnIteration func(iteration, tokensIn, tokensOut, contextPct int)
+
+	// OnToolCall is called after each tool execution with the tool name,
+	// parsed arguments, and result length in bytes. Use it to persist
+	// activity metrics (last tool, target file, phase) so the TUI can
+	// display live agent activity. Nil ⇒ no callback.
+	OnToolCall func(toolName string, args map[string]any, resultLen int)
 }
 
 // DefaultDirectToolAgentConfig returns a config targeting the local SGLang
@@ -1085,6 +1091,13 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				seenThisIter[curKey] = result
 				traceCall.Result = result
 				traceEvent.ToolCalls = append(traceEvent.ToolCalls, traceCall)
+
+				// Fire OnToolCall callback for activity tracking.
+				if cfg.OnToolCall != nil {
+					var parsedArgs map[string]any
+					_ = json.Unmarshal([]byte(tc.Function.Arguments), &parsedArgs)
+					cfg.OnToolCall(tc.Function.Name, parsedArgs, len(result))
+				}
 
 				// Append the tool result message.
 				messages = append(messages, toolChatMsg{

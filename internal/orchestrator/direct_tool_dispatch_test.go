@@ -267,7 +267,7 @@ func TestPersistDirectAgentContext_WritesContextPctToConfig(t *testing.T) {
 	ag := &model.Agent{ID: uuid.New()}
 	result := &agent.DirectToolAgentResult{FinalContextPct: 72}
 
-	persistDirectAgentContext(ag, result)
+	persistDirectAgentContext(ag, result, 20)
 
 	if ag.Config == nil {
 		t.Fatal("expected ag.Config to be initialized")
@@ -295,7 +295,7 @@ func TestPersistDirectAgentContext_StopReasonContextLimit(t *testing.T) {
 		StopReason:      "context_limit",
 	}
 
-	persistDirectAgentContext(ag, result)
+	persistDirectAgentContext(ag, result, 20)
 
 	if ag.ExitReason != model.ExitReasonContextLimit {
 		t.Errorf("ExitReason = %q, want %q", ag.ExitReason, model.ExitReasonContextLimit)
@@ -309,16 +309,28 @@ func TestPersistDirectAgentContext_StopReasonContextLimit(t *testing.T) {
 // ContextLimit is unset (FinalContextPct stays 0 with no stop reason), the
 // helper does NOT write a misleading 0 into Config — downstream readers
 // distinguish "no monitor data" from "0% used".
-func TestPersistDirectAgentContext_NoOpWhenMonitorDisabled(t *testing.T) {
+func TestPersistDirectAgentContext_NoContextPctWhenMonitorDisabled(t *testing.T) {
 	ag := &model.Agent{ID: uuid.New()}
-	result := &agent.DirectToolAgentResult{FinalContextPct: 0, StopReason: ""}
+	result := &agent.DirectToolAgentResult{FinalContextPct: 0, StopReason: "", Output: "done"}
 
-	persistDirectAgentContext(ag, result)
+	persistDirectAgentContext(ag, result, 20)
 
+	// Config is initialized (for cost/exit fields) but context_used_pct
+	// should not be present when monitor was disabled.
 	if ag.Config != nil {
 		if _, exists := ag.Config["context_used_pct"]; exists {
 			t.Errorf("expected no context_used_pct write when monitor is disabled, got %v", ag.Config["context_used_pct"])
 		}
+	}
+	// Cost and exit reason should still be set.
+	if ag.Config == nil {
+		t.Fatal("expected Config to be initialized for cost/exit fields")
+	}
+	if ag.Config["cost_label"] != "local" {
+		t.Errorf("cost_label = %v, want %q", ag.Config["cost_label"], "local")
+	}
+	if ag.ExitReason != model.ExitReasonSuccess {
+		t.Errorf("ExitReason = %q, want %q", ag.ExitReason, model.ExitReasonSuccess)
 	}
 }
 
