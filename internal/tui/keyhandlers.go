@@ -60,12 +60,13 @@ func (m Model) handleBoardKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		prevCursor := m.board.cursor
 		var cmd tea.Cmd
 		m.board, cmd = m.board.Update(msg)
-		// Only refresh when the cursor actually moved; pressing j at the
-		// bottom (or k at the top) should be a no-op to avoid redundant
-		// async refreshes that can re-sort the board mid-view.
+		// Only update the detail panel when the cursor actually moved.
+		// Do NOT call refreshData() here — the async DB reload re-sorts
+		// the task list and causes the cursor to jump when task statuses
+		// change between keypress and response. Task list updates are
+		// handled by the periodic tick and event-driven refreshes.
 		if m.board.cursor != prevCursor {
 			m.updateDetail()
-			return m, tea.Batch(cmd, m.refreshData())
 		}
 		return m, cmd
 

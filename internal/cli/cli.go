@@ -25,7 +25,7 @@ import (
 // answer, pass, fail) are also available.
 func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, orch tui.TUIOrchestrator) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, file-task, comment, experiment, approve, reject, answer, pass, fail")
+		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, create-task, comment, experiment, approve, reject, answer, pass, fail")
 	}
 
 	sub := args[0]
@@ -49,8 +49,8 @@ func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, orch tui.TUIOrc
 		return handleFailures(db, rest, w, jsonMode)
 	case "stats":
 		return handleStats(db, rest, w, jsonMode)
-	case "file-task":
-		return handleFileTask(db, rest, w, jsonMode)
+	case "create-task", "file-task":
+		return handleCreateTask(db, rest, w, jsonMode)
 	case "comment":
 		return handleComment(db, rest, w, jsonMode)
 	case "experiment":
@@ -506,9 +506,9 @@ func handleStats(db *gorm.DB, _ []string, w io.Writer, jsonMode bool) error {
 	return nil
 }
 
-// ── file-task ────────────────────────────────────────────────────────
+// ── create-task (formerly file-task) ─────────────────────────────────
 
-func handleFileTask(db *gorm.DB, args []string, w io.Writer, jsonMode bool) error {
+func handleCreateTask(db *gorm.DB, args []string, w io.Writer, jsonMode bool) error {
 	title, args := parseFlag(args, "title")
 	desc, args := parseFlag(args, "description")
 	projectIDStr, _ := parseFlag(args, "project-id")

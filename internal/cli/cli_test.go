@@ -183,14 +183,14 @@ func TestStats(t *testing.T) {
 	}
 }
 
-func TestFileTask(t *testing.T) {
+func TestCreateTask(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
 	_ = proj
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"file-task", "--title=New Feature", "--description=Build it"}, &buf, false, nil); err != nil {
-		t.Fatalf("file-task: %v", err)
+	if err := Run(db, []string{"create-task", "--title=New Feature", "--description=Build it"}, &buf, false, nil); err != nil {
+		t.Fatalf("create-task: %v", err)
 	}
 
 	// Verify task in DB
@@ -298,11 +298,11 @@ func TestCommentRequiresBody(t *testing.T) {
 	}
 }
 
-func TestFileTaskRequiresTitle(t *testing.T) {
+func TestCreateTaskRequiresTitle(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	_ = testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
 
-	err := Run(db, []string{"file-task", "--description=Desc"}, &bytes.Buffer{}, false, nil)
+	err := Run(db, []string{"create-task", "--description=Desc"}, &bytes.Buffer{}, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "--title is required") {
 		t.Errorf("expected --title required error, got: %v", err)
 	}
@@ -331,14 +331,14 @@ func TestStatsJSONOutput(t *testing.T) {
 	}
 }
 
-func TestFileTaskWithProjectID(t *testing.T) {
+func TestCreateTaskWithProjectID(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"file-task", "--title=ProjTask", "--description=D",
+	if err := Run(db, []string{"create-task", "--title=ProjTask", "--description=D",
 		"--project-id=" + proj.ID.String()}, &buf, false, nil); err != nil {
-		t.Fatalf("file-task with project-id: %v", err)
+		t.Fatalf("create-task with project-id: %v", err)
 	}
 
 	var task model.Task
