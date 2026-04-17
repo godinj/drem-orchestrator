@@ -221,6 +221,33 @@ struggle with the full Claude Code prompt surface. Leaving
 `[direct_tool_agent].enabled = false` (the default) preserves the
 existing subprocess behavior for every role.
 
+### Context window monitoring
+
+Direct tool agents do not run inside the OpenCode subprocess, so they
+bypass the `ctxmon` context monitor that watches Claude Code agents.
+`RunDirectToolAgent` instead does its own per-iteration check by reading
+the `prompt_tokens` field returned by the SGLang API and comparing it
+against `DirectToolAgentConfig.ContextLimit` (the model's input window
+in tokens — e.g. 131072 for `gemma4-26b`). When `ContextLimit` is `0`
+the monitor is disabled.
+
+| Threshold | Default | Behavior |
+|-----------|---------|----------|
+| `ContextWarnPct` | 85 | Append a one-shot system message asking the model to wrap up. Fires once per run. |
+| `ContextStopPct` | 95 | Halt the loop and return `StopReason="context_limit"`. Prevents runaway token spend on stuck agents. |
+
+A natural `finish_reason="stop"` always wins over the stop threshold —
+if the model produced a final answer on its own, the run is treated as
+a successful completion regardless of context usage.
+
+The orchestrator forwards its repo-wide `context_warn_pct` /
+`context_stop_pct` settings onto each direct-tool dispatch, so the
+direct path uses the same thresholds as the subprocess monitor. After
+each run the result's `FinalContextPct` is persisted onto the agent
+record's `Config["context_used_pct"]` field, making the value visible
+to the TUI agent panel and the C-Suite dashboards alongside Claude Code
+agents.
+
 ## Dispatch Throttling
 
 To prevent API quota exhaustion when many tasks advance simultaneously, the orchestrator rate-limits agent dispatch using a sliding window algorithm.

@@ -53,9 +53,9 @@ func (h *EndpointHealthChecker) IsHealthy() bool {
 
 	now := time.Now()
 
-	// Circuit closed — probe to confirm.
+	// Circuit closed — trust RecordSuccess; no probe needed.
 	if h.state == 0 {
-		return h.probe(now)
+		return true
 	}
 
 	// Circuit open — check if cooldown expired.

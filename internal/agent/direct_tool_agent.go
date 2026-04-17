@@ -60,6 +60,19 @@ type DirectToolAgentConfig struct {
 	// request body. Use for model-specific template flags (e.g. Gemma-4's
 	// `enable_thinking: true`). Nil/empty ⇒ field omitted.
 	ChatTemplateKwargs map[string]any
+
+	// Context-window monitoring. ContextLimit is the model's input context
+	// window size in tokens (e.g. 131072 for gemma4-26b). When > 0, the loop
+	// inspects each response's prompt_tokens against ContextLimit and:
+	//   - injects a one-shot system "wrap up" nudge once usage crosses
+	//     ContextWarnPct (default 85);
+	//   - hard-stops the loop with StopReason="context_limit" once usage
+	//     crosses ContextStopPct (default 95) on any non-stop turn.
+	// When ContextLimit is 0 the monitor is disabled and the result's
+	// FinalContextPct stays 0.
+	ContextLimit   int
+	ContextWarnPct int
+	ContextStopPct int
 }
 
 // DefaultDirectToolAgentConfig returns a config targeting the local SGLang
@@ -88,6 +101,13 @@ type DirectToolAgentResult struct {
 	TokensOut  int           // Total completion tokens across all iterations
 	Iterations int           // Number of loop iterations used
 	Duration   time.Duration // Wall-clock time for the entire run
+	// FinalContextPct is the most recent prompt_tokens / ContextLimit
+	// expressed in 0..100. Stays 0 when ContextLimit is unset.
+	FinalContextPct int
+	// StopReason is "context_limit" when the loop was halted by the context
+	// monitor's stop threshold; empty otherwise (natural stop, max iters,
+	// length truncation, etc.).
+	StopReason string
 }
 
 // ---------------------------------------------------------------------------
@@ -762,6 +782,21 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 
 	var totalTokensIn, totalTokensOut int
 
+	// Context-window monitor state. finalPct mirrors the most recent
+	// prompt_tokens / ContextLimit and is propagated into every result return.
+	// warnInjected is set the first time the warn nudge is appended so that
+	// later iterations don't re-inject (avoids spamming the conversation).
+	var finalPct int
+	var warnInjected bool
+	warnPct := cfg.ContextWarnPct
+	if warnPct <= 0 {
+		warnPct = 85
+	}
+	stopPct := cfg.ContextStopPct
+	if stopPct <= 0 {
+		stopPct = 95
+	}
+
 	// Loop detector state: remember the signature of the last tool call
 	// (name+args) AND its result so we can recognise "no forward progress"
 	// patterns and nudge the model toward a different approach. We consider
@@ -794,22 +829,35 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		resp, err := callToolAPI(cfg, messages, tools)
 		if err != nil {
 			return &DirectToolAgentResult{
-				TokensIn:   totalTokensIn,
-				TokensOut:  totalTokensOut,
-				Iterations: iteration,
-				Duration:   time.Since(start),
+				TokensIn:        totalTokensIn,
+				TokensOut:       totalTokensOut,
+				Iterations:      iteration,
+				Duration:        time.Since(start),
+				FinalContextPct: finalPct,
 			}, fmt.Errorf("API call failed at iteration %d: %w", iteration, err)
 		}
 
 		totalTokensIn += resp.Usage.PromptTokens
 		totalTokensOut += resp.Usage.CompletionTokens
 
+		// Context monitor: derive current usage from the most recent
+		// prompt_tokens. PromptTokens reflects the size of the inbound
+		// message stack, which is what matters for "approaching the model's
+		// context limit" — totalTokensIn (cumulative across iterations) is
+		// for cost accounting, not context.
+		var currentPct int
+		if cfg.ContextLimit > 0 && resp.Usage.PromptTokens > 0 {
+			currentPct = (resp.Usage.PromptTokens * 100) / cfg.ContextLimit
+			finalPct = currentPct
+		}
+
 		if len(resp.Choices) == 0 {
 			return &DirectToolAgentResult{
-				TokensIn:   totalTokensIn,
-				TokensOut:  totalTokensOut,
-				Iterations: iteration + 1,
-				Duration:   time.Since(start),
+				TokensIn:        totalTokensIn,
+				TokensOut:       totalTokensOut,
+				Iterations:      iteration + 1,
+				Duration:        time.Since(start),
+				FinalContextPct: finalPct,
 			}, fmt.Errorf("no choices in response at iteration %d", iteration)
 		}
 
@@ -823,16 +871,20 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			Assistant:    choice.Message.Content,
 		}
 
-		// If the model is done, return the final content.
+		// If the model is done, return the final content. A natural stop
+		// always wins over the context monitor — if the model produced a
+		// final answer on its own, there is no point in flagging
+		// context_limit even if usage already crossed the stop threshold.
 		if choice.FinishReason == "stop" || choice.FinishReason == "end_of_turn" {
 			writeTrace(cfg.TraceWriter, traceEvent)
 			finalOutput := choice.Message.Content
 			result := &DirectToolAgentResult{
-				Output:     finalOutput,
-				TokensIn:   totalTokensIn,
-				TokensOut:  totalTokensOut,
-				Iterations: iteration + 1,
-				Duration:   time.Since(start),
+				Output:          finalOutput,
+				TokensIn:        totalTokensIn,
+				TokensOut:       totalTokensOut,
+				Iterations:      iteration + 1,
+				Duration:        time.Since(start),
+				FinalContextPct: finalPct,
 			}
 
 			// Write output file if requested.
@@ -853,6 +905,30 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				"duration", time.Since(start).Round(time.Millisecond),
 			)
 			return result, nil
+		}
+
+		// Context monitor: hard stop. The natural-stop branch above already
+		// returned, so reaching this point means the model wants to keep
+		// going (tool calls, length truncation, etc.). If usage has crossed
+		// the stop threshold, halt now to prevent runaway token spend.
+		// Returns nil error (this is a planned safety stop, not a failure).
+		if cfg.ContextLimit > 0 && currentPct >= stopPct {
+			writeTrace(cfg.TraceWriter, traceEvent)
+			slog.Warn("direct tool agent: context stop threshold reached",
+				"iteration", iteration,
+				"pct", currentPct,
+				"limit", cfg.ContextLimit,
+				"prompt_tokens", resp.Usage.PromptTokens,
+			)
+			return &DirectToolAgentResult{
+				Output:          choice.Message.Content,
+				TokensIn:        totalTokensIn,
+				TokensOut:       totalTokensOut,
+				Iterations:      iteration + 1,
+				Duration:        time.Since(start),
+				FinalContextPct: finalPct,
+				StopReason:      "context_limit",
+			}, nil
 		}
 
 		// If the model wants to call tools, execute them.
@@ -1004,6 +1080,28 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				})
 			}
 			writeTrace(cfg.TraceWriter, traceEvent)
+
+			// Context monitor: warn nudge. Inject a one-shot system message
+			// asking the model to wrap up. Only fires once per run so the
+			// conversation doesn't accumulate redundant nudges.
+			if cfg.ContextLimit > 0 && currentPct >= warnPct && !warnInjected {
+				slog.Warn("direct tool agent: context warn threshold crossed",
+					"iteration", iteration,
+					"pct", currentPct,
+					"limit", cfg.ContextLimit,
+					"prompt_tokens", resp.Usage.PromptTokens,
+				)
+				messages = append(messages, toolChatMsg{
+					Role: "system",
+					Content: fmt.Sprintf(
+						"[HARNESS] Context window at %d%% (%d/%d tokens). Wrap up: "+
+							"finish the current step, do not start any new investigations, "+
+							"and respond with your final answer on the next turn.",
+						currentPct, resp.Usage.PromptTokens, cfg.ContextLimit,
+					),
+				})
+				warnInjected = true
+			}
 			continue
 		}
 
@@ -1023,11 +1121,12 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			)
 			writeTrace(cfg.TraceWriter, traceEvent)
 			return &DirectToolAgentResult{
-					Output:     choice.Message.Content,
-					TokensIn:   totalTokensIn,
-					TokensOut:  totalTokensOut,
-					Iterations: iteration + 1,
-					Duration:   time.Since(start),
+					Output:          choice.Message.Content,
+					TokensIn:        totalTokensIn,
+					TokensOut:       totalTokensOut,
+					Iterations:      iteration + 1,
+					Duration:        time.Since(start),
+					FinalContextPct: finalPct,
 				}, fmt.Errorf("response truncated at max_tokens=%d (iteration %d); increase MaxTokens or reduce tool-call payload size",
 					cfg.MaxTokens, iteration)
 		}
@@ -1039,19 +1138,21 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		)
 		writeTrace(cfg.TraceWriter, traceEvent)
 		return &DirectToolAgentResult{
-			Output:     choice.Message.Content,
-			TokensIn:   totalTokensIn,
-			TokensOut:  totalTokensOut,
-			Iterations: iteration + 1,
-			Duration:   time.Since(start),
+			Output:          choice.Message.Content,
+			TokensIn:        totalTokensIn,
+			TokensOut:       totalTokensOut,
+			Iterations:      iteration + 1,
+			Duration:        time.Since(start),
+			FinalContextPct: finalPct,
 		}, nil
 	}
 
 	return &DirectToolAgentResult{
-		TokensIn:   totalTokensIn,
-		TokensOut:  totalTokensOut,
-		Iterations: maxIter,
-		Duration:   time.Since(start),
+		TokensIn:        totalTokensIn,
+		TokensOut:       totalTokensOut,
+		Iterations:      maxIter,
+		Duration:        time.Since(start),
+		FinalContextPct: finalPct,
 	}, fmt.Errorf("exceeded max iterations (%d)", maxIter)
 }
 

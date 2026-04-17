@@ -699,6 +699,257 @@ func TestExecToolDispatchUnknown(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown tool")
 }
 
+// ---------------------------------------------------------------------------
+// Context-window monitoring tests
+// ---------------------------------------------------------------------------
+
+// TestRunDirectToolAgent_ContextMonitor_Disabled verifies that when
+// ContextLimit is zero, no monitoring runs and the loop terminates normally
+// even when prompt_tokens would otherwise blow past the warn/stop thresholds.
+func TestRunDirectToolAgent_ContextMonitor_Disabled(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := toolChatResponse{
+			Choices: []toolChatChoice{
+				{
+					Message:      toolChatMsg{Role: "assistant", Content: "all done"},
+					FinishReason: "stop",
+				},
+			},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			}{PromptTokens: 999_999, CompletionTokens: 5, TotalTokens: 1_000_004},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	// ContextLimit unset → monitoring disabled.
+
+	result, err := RunDirectToolAgent(cfg, "sys", "user", nil, "")
+	require.NoError(t, err)
+	assert.Equal(t, "all done", result.Output)
+	assert.Equal(t, 0, result.FinalContextPct, "FinalContextPct should be 0 when monitoring disabled")
+	assert.Empty(t, result.StopReason)
+}
+
+// TestRunDirectToolAgent_ContextMonitor_FinalPctReported verifies that
+// FinalContextPct reflects the most recent prompt_tokens / ContextLimit
+// when the loop terminates via natural stop.
+func TestRunDirectToolAgent_ContextMonitor_FinalPctReported(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := toolChatResponse{
+			Choices: []toolChatChoice{
+				{
+					Message:      toolChatMsg{Role: "assistant", Content: "ok"},
+					FinishReason: "stop",
+				},
+			},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			}{PromptTokens: 500, CompletionTokens: 5, TotalTokens: 505},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.ContextLimit = 1000
+
+	result, err := RunDirectToolAgent(cfg, "sys", "user", nil, "")
+	require.NoError(t, err)
+	assert.Equal(t, 50, result.FinalContextPct, "500/1000 = 50%%")
+	assert.Empty(t, result.StopReason)
+}
+
+// TestRunDirectToolAgent_ContextMonitor_StopThreshold verifies the loop
+// halts with StopReason="context_limit" when prompt_tokens exceeds the stop
+// threshold during a tool-calls turn.
+func TestRunDirectToolAgent_ContextMonitor_StopThreshold(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Always request another tool call (would loop forever without monitor).
+		resp := toolChatResponse{
+			Choices: []toolChatChoice{
+				{
+					Message: toolChatMsg{
+						Role: "assistant",
+						ToolCalls: []toolCall{
+							{
+								ID:   "c1",
+								Type: "function",
+								Function: toolCallFunction{
+									Name:      "bash",
+									Arguments: `{"cmd":"echo hi"}`,
+								},
+							},
+						},
+					},
+					FinishReason: "tool_calls",
+				},
+			},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			}{PromptTokens: 960, CompletionTokens: 10, TotalTokens: 970},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.MaxIterations = 50
+	cfg.ContextLimit = 1000
+	cfg.ContextWarnPct = 80
+	cfg.ContextStopPct = 95
+
+	result, err := RunDirectToolAgent(cfg, "sys", "user", ToolsForRole("coder"), "")
+	require.NoError(t, err, "context-stop should not return an error (it is a safety halt)")
+	assert.Equal(t, "context_limit", result.StopReason)
+	assert.Equal(t, 96, result.FinalContextPct, "960/1000 = 96%%")
+	assert.LessOrEqual(t, result.Iterations, 2, "loop should halt within first iteration after stop threshold crossed")
+}
+
+// TestRunDirectToolAgent_ContextMonitor_WarnInjectsSystemMessage verifies that
+// when prompt_tokens crosses the warn threshold (but not stop), a system
+// message nudging wrap-up is appended exactly once for subsequent iterations.
+func TestRunDirectToolAgent_ContextMonitor_WarnInjectsSystemMessage(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "f.txt"), []byte("data"), 0o644))
+
+	callCount := 0
+	var sawWarnMsg bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+
+		// Inspect the inbound messages for an injected warn system message.
+		if callCount >= 2 {
+			var reqBody toolChatRequest
+			_ = json.NewDecoder(r.Body).Decode(&reqBody)
+			for _, m := range reqBody.Messages {
+				if m.Role == "system" && strings.Contains(m.Content, "[HARNESS]") &&
+					strings.Contains(strings.ToLower(m.Content), "wrap up") {
+					sawWarnMsg = true
+				}
+			}
+		}
+
+		var resp toolChatResponse
+		switch callCount {
+		case 1:
+			// Tool call — push prompt usage above warn (85) but below stop (95).
+			resp = toolChatResponse{
+				Choices: []toolChatChoice{
+					{
+						Message: toolChatMsg{
+							Role: "assistant",
+							ToolCalls: []toolCall{
+								{
+									ID:   "c1",
+									Type: "function",
+									Function: toolCallFunction{
+										Name:      "read",
+										Arguments: `{"path":"f.txt"}`,
+									},
+								},
+							},
+						},
+						FinishReason: "tool_calls",
+					},
+				},
+				Usage: struct {
+					PromptTokens     int `json:"prompt_tokens"`
+					CompletionTokens int `json:"completion_tokens"`
+					TotalTokens      int `json:"total_tokens"`
+				}{PromptTokens: 880, CompletionTokens: 10, TotalTokens: 890},
+			}
+		default:
+			// Wrap up.
+			resp = toolChatResponse{
+				Choices: []toolChatChoice{
+					{
+						Message:      toolChatMsg{Role: "assistant", Content: "wrapping up"},
+						FinishReason: "stop",
+					},
+				},
+				Usage: struct {
+					PromptTokens     int `json:"prompt_tokens"`
+					CompletionTokens int `json:"completion_tokens"`
+					TotalTokens      int `json:"total_tokens"`
+				}{PromptTokens: 890, CompletionTokens: 5, TotalTokens: 895},
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.MaxIterations = 5
+	cfg.ContextLimit = 1000
+	cfg.ContextWarnPct = 85
+	cfg.ContextStopPct = 95
+
+	result, err := RunDirectToolAgent(cfg, "sys", "do work", ToolsForRole("coder"), "")
+	require.NoError(t, err)
+	assert.Equal(t, "wrapping up", result.Output)
+	assert.True(t, sawWarnMsg, "expected a system warn message to be injected for iteration 2")
+	assert.Equal(t, 89, result.FinalContextPct, "890/1000 = 89%%")
+	assert.Empty(t, result.StopReason, "natural stop should leave StopReason empty")
+}
+
+// TestRunDirectToolAgent_ContextMonitor_NaturalStopWinsOverStopPct verifies
+// that a natural finish_reason="stop" returns successfully even if the prompt
+// usage already crossed the stop threshold — no point in marking
+// context_limit when the model produced a final answer on its own.
+func TestRunDirectToolAgent_ContextMonitor_NaturalStopWinsOverStopPct(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := toolChatResponse{
+			Choices: []toolChatChoice{
+				{
+					Message:      toolChatMsg{Role: "assistant", Content: "final answer"},
+					FinishReason: "stop",
+				},
+			},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			}{PromptTokens: 990, CompletionTokens: 5, TotalTokens: 995},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.ContextLimit = 1000
+	cfg.ContextStopPct = 95
+
+	result, err := RunDirectToolAgent(cfg, "sys", "user", nil, "")
+	require.NoError(t, err)
+	assert.Equal(t, "final answer", result.Output)
+	assert.Equal(t, 99, result.FinalContextPct)
+	assert.Empty(t, result.StopReason, "natural stop should not flag context_limit")
+}
+
 // TestExecGrep_NoRipgrep handles the case where rg might not be available.
 func TestExecGrep_BasicSearch(t *testing.T) {
 	// Skip if ripgrep is not installed.

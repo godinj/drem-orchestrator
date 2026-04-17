@@ -67,6 +67,7 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 	featureDir := o.resolveCoderWorkDir(parent)
 	toolCfg := *o.directToolAgentCfg
 	toolCfg.WorkDir = featureDir
+	o.applyContextThresholds(&toolCfg)
 
 	agentID := uuid.New()
 	now := time.Now()
@@ -111,10 +112,31 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 	o.logger.Info("direct coder: launching async tool agent", "subtask_id", sub.ID, "agent_id", ag.ID)
 
 	runAndComplete := func() {
+		// Panic recovery: this goroutine runs outside any caller's defer
+		// chain. An unhandled panic in RunDirectToolAgent (nil deref, index
+		// out of range on malformed model responses, etc.) would crash the
+		// entire orchestrator process. Convert panics into synthetic failure
+		// completions so the agent record is properly closed out and dispatch
+		// continues for the remaining subtasks.
+		defer func() {
+			if r := recover(); r != nil {
+				o.logger.Error("direct coder: goroutine panic recovered",
+					"subtask_id", sub.ID, "agent_id", ag.ID, "panic", r)
+				if o.endpointHealth != nil {
+					o.endpointHealth.RecordFailure()
+				}
+				comp := agent.Completion{AgentID: agentID, ReturnCode: 1}
+				if o.runner != nil {
+					o.runner.SendCompletion(comp)
+				}
+			}
+		}()
+
 		result, runErr := agent.RunDirectToolAgent(toolCfg, systemPrompt, userMessage, agent.ToolsForRole("coder"), "")
 		if result != nil {
 			ag.TokensIn = result.TokensIn
 			ag.TokensOut = result.TokensOut
+			persistDirectAgentContext(ag, result)
 			if saveErr := o.db.Save(ag).Error; saveErr != nil {
 				o.logger.Warn("direct coder: save tokens", "agent_id", ag.ID, "error", saveErr)
 			}
@@ -165,6 +187,7 @@ func (o *Orchestrator) processReviewerDirect(task *model.Task) error {
 	worktreePath := o.resolveReviewerWorkDir(task)
 	toolCfg := *o.directToolAgentCfg
 	toolCfg.WorkDir = worktreePath
+	o.applyContextThresholds(&toolCfg)
 
 	agentID := uuid.New()
 	now := time.Now()
@@ -202,6 +225,7 @@ func (o *Orchestrator) processReviewerDirect(task *model.Task) error {
 	if result != nil {
 		ag.TokensIn = result.TokensIn
 		ag.TokensOut = result.TokensOut
+		persistDirectAgentContext(ag, result)
 		if saveErr := o.db.Save(ag).Error; saveErr != nil {
 			o.logger.Warn("direct reviewer: save tokens", "agent_id", ag.ID, "error", saveErr)
 		}
@@ -233,6 +257,7 @@ func (o *Orchestrator) processFixerDirect(task *model.Task) error {
 	worktreePath := o.resolveReviewerWorkDir(task)
 	toolCfg := *o.directToolAgentCfg
 	toolCfg.WorkDir = worktreePath
+	o.applyContextThresholds(&toolCfg)
 
 	agentID := uuid.New()
 	now := time.Now()
@@ -274,6 +299,7 @@ func (o *Orchestrator) processFixerDirect(task *model.Task) error {
 	if result != nil {
 		ag.TokensIn = result.TokensIn
 		ag.TokensOut = result.TokensOut
+		persistDirectAgentContext(ag, result)
 		if saveErr := o.db.Save(ag).Error; saveErr != nil {
 			o.logger.Warn("direct fixer: save tokens", "agent_id", ag.ID, "error", saveErr)
 		}
@@ -405,4 +431,48 @@ func extractFixerContext(task *model.Task) (diagnosis, suggestedFix string, affe
 		affectedFiles = append(affectedFiles, af...)
 	}
 	return
+}
+
+// applyContextThresholds copies the orchestrator's contextWarnPct/contextStopPct
+// onto the per-run tool config so the in-loop monitor in RunDirectToolAgent
+// uses the same thresholds as the subprocess-agent monitor in context_monitor.go.
+// The model's context window size (ContextLimit) is left to the cfg author —
+// it's a model attribute, not an orchestrator policy. When ContextLimit is 0
+// these thresholds have no effect (monitor is disabled).
+func (o *Orchestrator) applyContextThresholds(toolCfg *agent.DirectToolAgentConfig) {
+	if toolCfg == nil {
+		return
+	}
+	if o.contextWarnPct > 0 {
+		toolCfg.ContextWarnPct = o.contextWarnPct
+	}
+	if o.contextStopPct > 0 {
+		toolCfg.ContextStopPct = o.contextStopPct
+	}
+}
+
+// persistDirectAgentContext writes context-monitor results onto the agent
+// record's Config so downstream consumers (TUI, monitoring, escalation
+// logic in context_monitor.go) can see the direct-tool agent's final
+// context usage just like they do for subprocess agents. Skips writing
+// when monitoring was disabled (FinalContextPct == 0 with no StopReason)
+// to avoid populating the field with a misleading zero.
+func persistDirectAgentContext(ag *model.Agent, result *agent.DirectToolAgentResult) {
+	if ag == nil || result == nil {
+		return
+	}
+	if result.FinalContextPct == 0 && result.StopReason == "" {
+		return
+	}
+	if ag.Config == nil {
+		ag.Config = make(model.JSONField)
+	}
+	ag.Config["context_used_pct"] = float64(result.FinalContextPct)
+	if result.StopReason != "" {
+		ag.Config["stop_reason"] = result.StopReason
+	}
+	ag.FinalContextPct = result.FinalContextPct
+	if result.StopReason == "context_limit" {
+		ag.ExitReason = model.ExitReasonContextLimit
+	}
 }

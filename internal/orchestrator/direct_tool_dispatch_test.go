@@ -240,6 +240,88 @@ func TestProcessCoderDirect_SetsTokensOnAgent(t *testing.T) {
 	}
 }
 
+// TestProcessCoderDirect_AppliesContextThresholds verifies that the
+// orchestrator's contextWarnPct/contextStopPct are forwarded onto the
+// per-run DirectToolAgentConfig. The helper is called for every direct
+// dispatch (coder/reviewer/fixer); we assert the contract on a fresh
+// config copy.
+func TestProcessCoderDirect_AppliesContextThresholds(t *testing.T) {
+	orch, _, _ := setupDirectToolDispatchTest(t)
+
+	toolCfg := *orch.directToolAgentCfg
+	orch.applyContextThresholds(&toolCfg)
+
+	if toolCfg.ContextWarnPct != orch.contextWarnPct {
+		t.Errorf("ContextWarnPct = %d, want %d", toolCfg.ContextWarnPct, orch.contextWarnPct)
+	}
+	if toolCfg.ContextStopPct != orch.contextStopPct {
+		t.Errorf("ContextStopPct = %d, want %d", toolCfg.ContextStopPct, orch.contextStopPct)
+	}
+}
+
+// TestPersistDirectAgentContext_WritesContextPctToConfig verifies that the
+// helper that runs after each direct-tool agent run propagates the result's
+// FinalContextPct onto the agent's Config so context_monitor.go and the TUI
+// see the same shape they expect from subprocess agents.
+func TestPersistDirectAgentContext_WritesContextPctToConfig(t *testing.T) {
+	ag := &model.Agent{ID: uuid.New()}
+	result := &agent.DirectToolAgentResult{FinalContextPct: 72}
+
+	persistDirectAgentContext(ag, result)
+
+	if ag.Config == nil {
+		t.Fatal("expected ag.Config to be initialized")
+	}
+	got, ok := ag.Config["context_used_pct"].(float64)
+	if !ok {
+		t.Fatalf("expected context_used_pct to be float64, got %T (%v)", ag.Config["context_used_pct"], ag.Config["context_used_pct"])
+	}
+	if got != 72 {
+		t.Errorf("context_used_pct = %v, want 72", got)
+	}
+	if ag.FinalContextPct != 72 {
+		t.Errorf("FinalContextPct column = %d, want 72", ag.FinalContextPct)
+	}
+}
+
+// TestPersistDirectAgentContext_StopReasonContextLimit verifies that a
+// context_limit stop reason maps onto the agent's ExitReason column so the
+// TUI/CSV reports show "context_limit" without waiting for the subprocess
+// completion path.
+func TestPersistDirectAgentContext_StopReasonContextLimit(t *testing.T) {
+	ag := &model.Agent{ID: uuid.New()}
+	result := &agent.DirectToolAgentResult{
+		FinalContextPct: 96,
+		StopReason:      "context_limit",
+	}
+
+	persistDirectAgentContext(ag, result)
+
+	if ag.ExitReason != model.ExitReasonContextLimit {
+		t.Errorf("ExitReason = %q, want %q", ag.ExitReason, model.ExitReasonContextLimit)
+	}
+	if ag.Config["stop_reason"] != "context_limit" {
+		t.Errorf("stop_reason = %v, want %q", ag.Config["stop_reason"], "context_limit")
+	}
+}
+
+// TestPersistDirectAgentContext_NoOpWhenMonitorDisabled verifies that when
+// ContextLimit is unset (FinalContextPct stays 0 with no stop reason), the
+// helper does NOT write a misleading 0 into Config — downstream readers
+// distinguish "no monitor data" from "0% used".
+func TestPersistDirectAgentContext_NoOpWhenMonitorDisabled(t *testing.T) {
+	ag := &model.Agent{ID: uuid.New()}
+	result := &agent.DirectToolAgentResult{FinalContextPct: 0, StopReason: ""}
+
+	persistDirectAgentContext(ag, result)
+
+	if ag.Config != nil {
+		if _, exists := ag.Config["context_used_pct"]; exists {
+			t.Errorf("expected no context_used_pct write when monitor is disabled, got %v", ag.Config["context_used_pct"])
+		}
+	}
+}
+
 func TestProviderAutoDetection_SGLangDirect_RoutesToDirectPath(t *testing.T) {
 	orch, projectID, _ := setupDirectToolDispatchTest(t)
 

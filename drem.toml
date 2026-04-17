@@ -1,6 +1,6 @@
 bare_repo_path        = "/home/godinj/git/drem-orchestrator.git"
 default_branch        = "master"
-max_concurrent_agents = 10
+max_concurrent_agents = 4
 opencode_bin              = "opencode"
 opencode_context_window   = 98304
 llama_server_endpoint     = "http://localhost:8081"
@@ -43,7 +43,7 @@ skip_constraint_gate  = false
 [direct_tool_agent]
   enabled        = true
   endpoint       = "http://localhost:8081/v1/chat/completions"
-  model          = "qwen3-coder-30b"
+  model          = "gemma4-26b"
   max_tokens     = 8192
   temperature    = 0.1
   timeout        = "180s"

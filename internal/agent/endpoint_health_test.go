@@ -32,23 +32,20 @@ func TestEndpointHealthChecker_HealthyEndpoint(t *testing.T) {
 	}
 }
 
-func TestEndpointHealthChecker_UnhealthyEndpoint(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	defer srv.Close()
-
-	h := newTestChecker(srv.URL)
-	if h.IsHealthy() {
-		t.Error("503 endpoint should return false")
+func TestEndpointHealthChecker_ClosedCircuitTrustsRecordSuccess(t *testing.T) {
+	// A fresh (closed) checker returns true without probing — health is
+	// discovered via actual API calls and RecordFailure/RecordSuccess.
+	h := NewEndpointHealthChecker("http://localhost:1/v1/chat/completions", testLogger())
+	if !h.IsHealthy() {
+		t.Error("closed circuit should return true without probing")
 	}
 }
 
-func TestEndpointHealthChecker_ConnectionRefused(t *testing.T) {
+func TestEndpointHealthChecker_RecordFailureOpensCircuit(t *testing.T) {
 	h := NewEndpointHealthChecker("http://localhost:1/v1/chat/completions", testLogger())
-	h.httpClient = &http.Client{Timeout: 1 * time.Second}
+	h.RecordFailure()
 	if h.IsHealthy() {
-		t.Error("unreachable endpoint should return false")
+		t.Error("after RecordFailure, IsHealthy should return false")
 	}
 }
 
