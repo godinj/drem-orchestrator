@@ -129,6 +129,7 @@ type Orchestrator struct {
 	directPlanReviewerCfg       *agent.DirectPlanReviewerConfig // nil means use subprocess path for plan review
 	directPrepCfg               *agent.DirectPrepConfig         // nil means use OpenCode subprocess path
 	directToolAgentCfg          *agent.DirectToolAgentConfig    // nil means use subprocess path for coder/reviewer/fixer
+	endpointHealth              *agent.EndpointHealthChecker    // nil means no health checking
 	metrics                     *metrics.Store                  // nil-safe: callers nil-check before use
 	experimentScheduler         *ExperimentScheduler            // experiment-aware scheduling
 	logger                      *slog.Logger
@@ -234,6 +235,9 @@ func (o *Orchestrator) SetDirectToolAgentConfig(cfg *agent.DirectToolAgentConfig
 	o.directToolAgentCfg = cfg
 	if cfg != nil {
 		o.logger.Info("direct tool agent enabled", "endpoint", cfg.Endpoint, "model", cfg.Model)
+		// Initialize the endpoint health checker from the tool agent endpoint.
+		o.endpointHealth = agent.NewEndpointHealthChecker(cfg.Endpoint, o.logger)
+		o.logger.Info("endpoint health checker enabled", "probe_url", cfg.Endpoint)
 	}
 }
 

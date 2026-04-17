@@ -57,6 +57,13 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 		return nil
 	}
 
+	// Circuit breaker: skip dispatch when LLM endpoint is unreachable.
+	if o.endpointHealth != nil && !o.endpointHealth.IsHealthy() {
+		o.logger.Warn("direct coder: LLM endpoint unhealthy, skipping dispatch",
+			"subtask_id", sub.ID, "status", o.endpointHealth.Status())
+		return nil
+	}
+
 	featureDir := o.resolveCoderWorkDir(parent)
 	toolCfg := *o.directToolAgentCfg
 	toolCfg.WorkDir = featureDir
@@ -117,6 +124,11 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 		if runErr != nil {
 			o.logger.Error("direct coder: tool agent failed", "subtask_id", sub.ID, "agent_id", ag.ID, "error", runErr)
 			comp.ReturnCode = 1
+			if o.endpointHealth != nil {
+				o.endpointHealth.RecordFailure()
+			}
+		} else if o.endpointHealth != nil {
+			o.endpointHealth.RecordSuccess()
 		}
 		// Funnel through runner's completion channel so the next tick
 		// processes the result via the standard processAgentResult path.

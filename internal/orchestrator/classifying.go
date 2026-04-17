@@ -114,6 +114,12 @@ func (o *Orchestrator) processClassifyingTasksDirect() {
 		return
 	}
 
+	// Circuit breaker: skip dispatch when LLM endpoint is unreachable.
+	if o.endpointHealth != nil && !o.endpointHealth.IsHealthy() {
+		o.logger.Warn("direct classifier: LLM endpoint unhealthy, skipping dispatch")
+		return
+	}
+
 	// Resolve main worktree — classification output is written there.
 	mainWT, err := o.worktree.MainWorktreePath()
 	if err != nil {
