@@ -441,5 +441,8 @@ func buildDirectToolAgentConfig(cfg Config) *agent.DirectToolAgentConfig {
 	if cfg.DirectToolAgent.BashTimeout > 0 {
 		resolved.BashTimeout = cfg.DirectToolAgent.BashTimeout
 	}
+	if cfg.DirectToolAgent.ContextLimit > 0 {
+		resolved.ContextLimit = cfg.DirectToolAgent.ContextLimit
+	}
 	return &resolved
 }

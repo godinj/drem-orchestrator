@@ -81,6 +81,7 @@ type DirectToolAgentTOMLConfig struct {
 	Timeout       time.Duration `toml:"timeout"`
 	MaxIterations int           `toml:"max_iterations"`
 	BashTimeout   time.Duration `toml:"bash_timeout"`
+	ContextLimit  int           `toml:"context_limit"`
 }
 
 // Config holds all runtime configuration for the Drem Orchestrator.

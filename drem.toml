@@ -49,6 +49,7 @@ skip_constraint_gate  = false
   timeout        = "180s"
   max_iterations = 20
   bash_timeout   = "60s"
+  context_limit  = 131072
 
 [watcher]
   db_path             = "~/.drem-csuite/watcher.db"
