@@ -70,7 +70,7 @@ func runCLI() {
 		orch = orchestrator.NewForCLI(database, wt)
 	}
 
-	if err := cli.Run(database, cliArgs, os.Stdout, jsonMode, orch); err != nil {
+	if err := cli.Run(database, cliArgs, os.Stdout, jsonMode, orch, cli.WithDBPath(cfg.DatabasePath)); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}

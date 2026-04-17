@@ -303,6 +303,8 @@ func (o *Orchestrator) Run(ctx context.Context) {
 // doTick is a single iteration of the orchestrator loop.
 func (o *Orchestrator) doTick(ctx context.Context) {
 	_ = ctx
+	// -1. Check for operator signal files (e.g. reset-circuit).
+	o.checkSignalFiles()
 	// 0. Ingest any pending bug reports from the drop directory.
 	o.ingestBugReports()
 	// 0b. Process CLASSIFYING tasks -> spawn classifier agents or call API directly.

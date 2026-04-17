@@ -94,6 +94,19 @@ func (h *EndpointHealthChecker) RecordSuccess() {
 	h.cooldown = h.baseCooldown
 }
 
+// ResetCircuit forcibly closes the circuit breaker, regardless of current state.
+// Used by the CLI signal mechanism to allow operators to manually resume dispatch.
+func (h *EndpointHealthChecker) ResetCircuit() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.logger.Info("endpoint health: circuit RESET by operator signal",
+		"probe_url", h.probeURL, "was_open", h.state == 1,
+		"consecutive_failures", h.consecutives)
+	h.state = 0
+	h.consecutives = 0
+	h.cooldown = h.baseCooldown
+}
+
 // RecordFailure signals a failed LLM API call. Opens the circuit and applies
 // exponential backoff to the cooldown period.
 func (h *EndpointHealthChecker) RecordFailure() {

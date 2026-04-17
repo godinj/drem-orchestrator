@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/experiment"
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	"github.com/godinj/drem-orchestrator/internal/tui"
 )
 
@@ -23,9 +25,14 @@ import (
 // appropriate handler. Returns an error for unknown subcommands or
 // handler failures. If orch is provided, gate commands (approve, reject,
 // answer, pass, fail) are also available.
-func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, orch tui.TUIOrchestrator) error {
+func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, orch tui.TUIOrchestrator, opts ...RunOption) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, create-task, comment, experiment, approve, reject, answer, pass, fail")
+		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, create-task, comment, experiment, approve, reject, answer, pass, fail, reset-circuit")
+	}
+
+	var ro runOptions
+	for _, o := range opts {
+		o(&ro)
 	}
 
 	sub := args[0]
@@ -55,9 +62,39 @@ func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, orch tui.TUIOrc
 		return handleComment(db, rest, w, jsonMode)
 	case "experiment":
 		return handleExperiment(db, rest, w, jsonMode)
+	case "reset-circuit":
+		return handleResetCircuit(ro.dbPath, w)
 	default:
 		return fmt.Errorf("unknown subcommand: %q", sub)
 	}
+}
+
+// runOptions holds optional parameters for Run.
+type runOptions struct {
+	dbPath string
+}
+
+// RunOption configures optional Run behavior.
+type RunOption func(*runOptions)
+
+// WithDBPath passes the database file path so signal-file commands can
+// derive the signal directory.
+func WithDBPath(path string) RunOption {
+	return func(o *runOptions) { o.dbPath = path }
+}
+
+// handleResetCircuit writes the reset-circuit signal file so the running
+// orchestrator will close its circuit breaker on the next tick.
+func handleResetCircuit(dbPath string, w io.Writer) error {
+	if dbPath == "" {
+		return fmt.Errorf("reset-circuit requires --config to resolve signal directory")
+	}
+	signalPath := orchestrator.SignalFilePath(dbPath, orchestrator.SignalResetCircuit)
+	if err := os.WriteFile(signalPath, []byte("reset"), 0644); err != nil {
+		return fmt.Errorf("write signal file: %w", err)
+	}
+	fmt.Fprintf(w, "Signal written: %s\nOrchestrator will reset circuit breaker on next tick.\n", signalPath)
+	return nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────
