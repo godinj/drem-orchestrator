@@ -322,6 +322,46 @@ func TestPersistDirectAgentContext_NoOpWhenMonitorDisabled(t *testing.T) {
 	}
 }
 
+// TestProcessReviewerDirect_PersistsLiveContextPct verifies that when
+// ContextLimit is configured, the OnIteration callback persists
+// context_used_pct to the agent's Config in the DB on each iteration,
+// making it visible to the TUI while the agent is still running.
+func TestProcessReviewerDirect_PersistsLiveContextPct(t *testing.T) {
+	orch, projectID, _ := setupDirectToolDispatchTest(t)
+
+	// Enable context monitoring: the fake server returns prompt_tokens=42,
+	// so with ContextLimit=100 we expect context_used_pct = 42.
+	orch.directToolAgentCfg.ContextLimit = 100
+
+	task := testutil.CreateTask(t, orch.db, projectID, "Review implementation", model.StatusPlanReview)
+
+	if err := orch.processReviewerDirect(&task); err != nil {
+		t.Fatalf("processReviewerDirect: %v", err)
+	}
+
+	var agents []model.Agent
+	if err := orch.db.Where("project_id = ?", projectID).Find(&agents).Error; err != nil {
+		t.Fatalf("query agents: %v", err)
+	}
+	if len(agents) == 0 {
+		t.Fatal("expected agent record to exist")
+	}
+
+	ag := agents[0]
+	if ag.Config == nil {
+		t.Fatal("expected agent Config to be non-nil after run with ContextLimit set")
+	}
+	pct, ok := ag.Config["context_used_pct"].(float64)
+	if !ok {
+		t.Fatalf("expected context_used_pct in agent Config, got keys: %v", ag.Config)
+	}
+	// The fake server returns prompt_tokens=42 and ContextLimit=100,
+	// so we expect (42*100)/100 = 42.
+	if pct != 42 {
+		t.Errorf("context_used_pct = %v, want 42", pct)
+	}
+}
+
 func TestProviderAutoDetection_SGLangDirect_RoutesToDirectPath(t *testing.T) {
 	orch, projectID, _ := setupDirectToolDispatchTest(t)
 

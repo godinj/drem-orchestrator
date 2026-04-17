@@ -88,13 +88,24 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 
 	// Wire heartbeat callback so the stale-agent reaper doesn't kill us.
 	db := o.db
-	toolCfg.OnIteration = func(iteration int, tokensIn, tokensOut int) {
+	toolCfg.OnIteration = func(iteration, tokensIn, tokensOut, contextPct int) {
 		now := time.Now()
-		db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(map[string]any{
+		updates := map[string]any{
 			"heartbeat_at": &now,
 			"tokens_in":    tokensIn,
 			"tokens_out":   tokensOut,
-		})
+		}
+		if contextPct > 0 {
+			var ag model.Agent
+			if err := db.Select("config").Where("id = ?", agentID).First(&ag).Error; err == nil {
+				if ag.Config == nil {
+					ag.Config = make(model.JSONField)
+				}
+				ag.Config["context_used_pct"] = float64(contextPct)
+				updates["config"] = ag.Config
+			}
+		}
+		db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(updates)
 	}
 	now := time.Now()
 	ag := &model.Agent{
@@ -278,13 +289,24 @@ func (o *Orchestrator) processReviewerDirect(task *model.Task) error {
 
 	// Wire heartbeat callback so the stale-agent reaper doesn't kill us.
 	db := o.db
-	toolCfg.OnIteration = func(iteration int, tokensIn, tokensOut int) {
+	toolCfg.OnIteration = func(iteration, tokensIn, tokensOut, contextPct int) {
 		now := time.Now()
-		db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(map[string]any{
+		updates := map[string]any{
 			"heartbeat_at": &now,
 			"tokens_in":    tokensIn,
 			"tokens_out":   tokensOut,
-		})
+		}
+		if contextPct > 0 {
+			var ag model.Agent
+			if err := db.Select("config").Where("id = ?", agentID).First(&ag).Error; err == nil {
+				if ag.Config == nil {
+					ag.Config = make(model.JSONField)
+				}
+				ag.Config["context_used_pct"] = float64(contextPct)
+				updates["config"] = ag.Config
+			}
+		}
+		db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(updates)
 	}
 
 	now := time.Now()
@@ -360,13 +382,24 @@ func (o *Orchestrator) processFixerDirect(task *model.Task) error {
 
 	// Wire heartbeat callback so the stale-agent reaper doesn't kill us.
 	db := o.db
-	toolCfg.OnIteration = func(iteration int, tokensIn, tokensOut int) {
+	toolCfg.OnIteration = func(iteration, tokensIn, tokensOut, contextPct int) {
 		now := time.Now()
-		db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(map[string]any{
+		updates := map[string]any{
 			"heartbeat_at": &now,
 			"tokens_in":    tokensIn,
 			"tokens_out":   tokensOut,
-		})
+		}
+		if contextPct > 0 {
+			var ag model.Agent
+			if err := db.Select("config").Where("id = ?", agentID).First(&ag).Error; err == nil {
+				if ag.Config == nil {
+					ag.Config = make(model.JSONField)
+				}
+				ag.Config["context_used_pct"] = float64(contextPct)
+				updates["config"] = ag.Config
+			}
+		}
+		db.Model(&model.Agent{}).Where("id = ?", agentID).Updates(updates)
 	}
 
 	now := time.Now()
