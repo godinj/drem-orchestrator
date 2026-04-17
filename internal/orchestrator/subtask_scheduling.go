@@ -19,6 +19,13 @@ import (
 // considered (used by processTestWriting to limit scheduling to test-phase).
 // When experiments are active, variant tasks are preferred based on under-allocation.
 func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...string) error {
+	// Never dispatch subtasks for paused parents. Without this guard,
+	// the tick loop spawns agents that the pause handler immediately
+	// tries (and fails) to stop, creating an infinite dispatch loop.
+	if parent.Status == model.StatusPaused {
+		return nil
+	}
+
 	var subtasks []model.Task
 	if err := o.db.Where(
 		"parent_task_id = ? AND ((status = ?) OR (status = ? AND assigned_agent_id IS NULL))",
@@ -337,8 +344,8 @@ func (o *Orchestrator) dispatchPendingSubtasks() {
 			continue
 		}
 
-		// Skip terminal parents — their subtasks should not be dispatched.
-		if isTerminal(parent.Status) {
+		// Skip terminal or paused parents — their subtasks should not be dispatched.
+		if isTerminal(parent.Status) || parent.Status == model.StatusPaused {
 			continue
 		}
 
