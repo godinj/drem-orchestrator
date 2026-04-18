@@ -228,6 +228,10 @@ func main() {
 		if cfg.Agents.Classifier.Model != "" && !strings.Contains(cfg.Agents.Classifier.Model, "sglang") {
 			dcfg.Model = cfg.Agents.Classifier.Model
 		}
+		// Route through gq proxy when [direct_tool_agent].endpoint is set.
+		if cfg.DirectToolAgent.Endpoint != "" {
+			dcfg.Endpoint = cfg.DirectToolAgent.Endpoint
+		}
 		orch.SetDirectClassifierConfig(&dcfg)
 	}
 
@@ -254,6 +258,10 @@ func main() {
 			pcfg.Model = cfg.Agents.Prep.Model
 		case cfg.Agents.Classifier.Model != "" && !strings.Contains(cfg.Agents.Classifier.Model, "sglang"):
 			pcfg.Model = cfg.Agents.Classifier.Model
+		}
+		// Route through gq proxy when [direct_tool_agent].endpoint is set.
+		if cfg.DirectToolAgent.Endpoint != "" {
+			pcfg.Endpoint = cfg.DirectToolAgent.Endpoint
 		}
 		orch.SetDirectPrepConfig(&pcfg)
 	}

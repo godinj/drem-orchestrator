@@ -9,13 +9,13 @@ compile_command       = "go vet ./..."
 skip_constraint_gate  = false
 
 [agents.classifier]
-  provider = "opencode"
-  model    = "sglang/gemma4-26b"
+  provider = "sglang-direct"
+  model    = "gemma4-26b"
   effort   = "medium"
   direct   = true  # bypass OpenCode, call SGLang API directly
 
 [agents.planner]
-  model  = "claude-opus-4-6"
+  # model unset → claude CLI uses its configured default (currently Opus 4.7 1M)
   effort = "medium"
 
 [agents.prep]
