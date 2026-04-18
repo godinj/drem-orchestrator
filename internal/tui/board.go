@@ -700,22 +700,15 @@ func (a AgentsModel) View() string {
 			))
 		}
 
-		// Display model ID and cost.
+		// Display model ID and tokens (in/out).
 		modelID := extractModelID(&ag)
 		lines = append(lines, subtitleStyle.Render(
 			fmt.Sprintf("    model: %s", modelID),
 		))
 
-		cost := extractCost(&ag)
-		costStyle := subtitleStyle
-		switch {
-		case ag.TotalCostUSD > 1.00:
-			costStyle = lipgloss.NewStyle().Foreground(colorDanger)
-		case ag.TotalCostUSD > 0.50:
-			costStyle = lipgloss.NewStyle().Foreground(colorWarning)
-		}
-		lines = append(lines, costStyle.Render(
-			fmt.Sprintf("    cost: %s", cost),
+		tokens := extractTokens(&ag)
+		lines = append(lines, subtitleStyle.Render(
+			fmt.Sprintf("    tokens: %s", tokens),
 		))
 	}
 

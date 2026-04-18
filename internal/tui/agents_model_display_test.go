@@ -10,64 +10,67 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// AgentsModel.View() — ModelID and Cost Display Tests
+// AgentsModel.View() — ModelID and Tokens Display Tests
 // ---------------------------------------------------------------------------
 
-func TestAgentsViewDisplay_ModelIDAndCostColumns(t *testing.T) {
+func TestAgentsViewDisplay_ModelIDAndTokensColumns(t *testing.T) {
 	tests := []struct {
 		name        string
 		agents      []model.Agent
 		width       int
 		wantModelID string
-		wantCost    string
+		wantTokens  string
 	}{
 		{
-			name: "agent with valid ModelID and cost",
+			name: "agent with valid ModelID and tokens",
 			agents: []model.Agent{
 				{
-					ID:           uuid.New(),
-					Name:         "test-agent",
-					Status:       model.AgentWorking,
-					ModelID:      "claude-opus-4",
-					TotalCostUSD: 1.50,
+					ID:        uuid.New(),
+					Name:      "test-agent",
+					Status:    model.AgentWorking,
+					ModelID:   "claude-opus-4",
+					TokensIn:  12400,
+					TokensOut: 3100,
 				},
 			},
 			width:       120,
 			wantModelID: "claude-opus-4",
-			wantCost:    "$1.50",
+			wantTokens:  "12.4k↑ 3.1k↓",
 		},
 		{
 			name: "agent with empty ModelID shows dash",
 			agents: []model.Agent{
 				{
-					ID:           uuid.New(),
-					Name:         "test-agent",
-					Status:       model.AgentWorking,
-					ModelID:      "",
-					TotalCostUSD: 0.42,
+					ID:        uuid.New(),
+					Name:      "test-agent",
+					Status:    model.AgentWorking,
+					ModelID:   "",
+					TokensIn:  420,
+					TokensOut: 80,
 				},
 			},
 			width:       120,
 			wantModelID: "-",
-			wantCost:    "$0.42",
+			wantTokens:  "420↑ 80↓",
 		},
 		{
-			name: "agent with zero cost shows dollar zero",
+			name: "agent with zero tokens shows zero arrows",
 			agents: []model.Agent{
 				{
-					ID:           uuid.New(),
-					Name:         "test-agent",
-					Status:       model.AgentWorking,
-					ModelID:      "claude-haiku",
-					TotalCostUSD: 0.0,
+					ID:        uuid.New(),
+					Name:      "test-agent",
+					Status:    model.AgentWorking,
+					ModelID:   "claude-haiku",
+					TokensIn:  0,
+					TokensOut: 0,
 				},
 			},
 			width:       120,
 			wantModelID: "claude-haiku",
-			wantCost:    "$0.00",
+			wantTokens:  "0↑ 0↓",
 		},
 		{
-			name: "nil agent list renders without panic",
+			name: "empty fields render with dashes and zeros",
 			agents: []model.Agent{
 				{
 					ID:     uuid.New(),
@@ -77,52 +80,55 @@ func TestAgentsViewDisplay_ModelIDAndCostColumns(t *testing.T) {
 			},
 			width:       120,
 			wantModelID: "-",
-			wantCost:    "$0.00",
+			wantTokens:  "0↑ 0↓",
 		},
 		{
-			name: "cost with three decimal places rounds correctly",
+			name: "small token counts render as plain integers",
 			agents: []model.Agent{
 				{
-					ID:           uuid.New(),
-					Name:         "test-agent",
-					Status:       model.AgentWorking,
-					ModelID:      "claude-opus",
-					TotalCostUSD: 0.123456,
+					ID:        uuid.New(),
+					Name:      "test-agent",
+					Status:    model.AgentWorking,
+					ModelID:   "claude-opus",
+					TokensIn:  123,
+					TokensOut: 45,
 				},
 			},
 			width:       120,
 			wantModelID: "claude-opus",
-			wantCost:    "$0.12",
+			wantTokens:  "123↑ 45↓",
 		},
 		{
-			name: "large cost displays with proper formatting",
+			name: "large token counts keep k abbreviation",
 			agents: []model.Agent{
 				{
-					ID:           uuid.New(),
-					Name:         "test-agent",
-					Status:       model.AgentWorking,
-					ModelID:      "claude-opus-4",
-					TotalCostUSD: 123.45,
+					ID:        uuid.New(),
+					Name:      "test-agent",
+					Status:    model.AgentWorking,
+					ModelID:   "claude-opus-4",
+					TokensIn:  125000,
+					TokensOut: 4200,
 				},
 			},
 			width:       120,
 			wantModelID: "claude-opus-4",
-			wantCost:    "$123.45",
+			wantTokens:  "125.0k↑ 4.2k↓",
 		},
 		{
 			name: "long ModelID displayed at narrow width",
 			agents: []model.Agent{
 				{
-					ID:           uuid.New(),
-					Name:         "test-agent",
-					Status:       model.AgentWorking,
-					ModelID:      "claude-opus-4-20250101-very-long-version-string",
-					TotalCostUSD: 1.0,
+					ID:        uuid.New(),
+					Name:      "test-agent",
+					Status:    model.AgentWorking,
+					ModelID:   "claude-opus-4-20250101-very-long-version-string",
+					TokensIn:  1000,
+					TokensOut: 500,
 				},
 			},
 			width:       80,
 			wantModelID: "claude-opus-4-20250101-very-long-version-string",
-			wantCost:    "$1.00",
+			wantTokens:  "1.0k↑ 500↓",
 		},
 	}
 
@@ -146,43 +152,47 @@ func TestAgentsViewDisplay_ModelIDAndCostColumns(t *testing.T) {
 			if !strings.Contains(output, tt.wantModelID) {
 				t.Errorf("View output missing model ID %q in:\n%s", tt.wantModelID, view)
 			}
-			if !strings.Contains(output, tt.wantCost) {
-				t.Errorf("View output missing cost %q in:\n%s", tt.wantCost, view)
+			if !strings.Contains(output, tt.wantTokens) {
+				t.Errorf("View output missing tokens %q in:\n%s", tt.wantTokens, view)
 			}
 		})
 	}
 }
 
 func TestAgentsViewDisplay_MultipleAgentsWithDifferentValues(t *testing.T) {
-	t.Run("multiple agents with varied ModelID and TotalCostUSD values", func(t *testing.T) {
+	t.Run("multiple agents with varied ModelID and token values", func(t *testing.T) {
 		agents := []model.Agent{
 			{
-				ID:           uuid.New(),
-				Name:         "agent-1",
-				Status:       model.AgentWorking,
-				ModelID:      "claude-opus-4",
-				TotalCostUSD: 5.25,
+				ID:        uuid.New(),
+				Name:      "agent-1",
+				Status:    model.AgentWorking,
+				ModelID:   "claude-opus-4",
+				TokensIn:  52500,
+				TokensOut: 8200,
 			},
 			{
-				ID:           uuid.New(),
-				Name:         "agent-2",
-				Status:       model.AgentWorking,
-				ModelID:      "claude-haiku",
-				TotalCostUSD: 0.05,
+				ID:        uuid.New(),
+				Name:      "agent-2",
+				Status:    model.AgentWorking,
+				ModelID:   "claude-haiku",
+				TokensIn:  500,
+				TokensOut: 50,
 			},
 			{
-				ID:           uuid.New(),
-				Name:         "agent-3",
-				Status:       model.AgentWorking,
-				ModelID:      "",
-				TotalCostUSD: 1.11,
+				ID:        uuid.New(),
+				Name:      "agent-3",
+				Status:    model.AgentWorking,
+				ModelID:   "",
+				TokensIn:  11100,
+				TokensOut: 2200,
 			},
 			{
-				ID:           uuid.New(),
-				Name:         "agent-4",
-				Status:       model.AgentWorking,
-				ModelID:      "claude-sonnet",
-				TotalCostUSD: 0.0,
+				ID:        uuid.New(),
+				Name:      "agent-4",
+				Status:    model.AgentWorking,
+				ModelID:   "claude-sonnet",
+				TokensIn:  0,
+				TokensOut: 0,
 			},
 		}
 
@@ -202,8 +212,8 @@ func TestAgentsViewDisplay_MultipleAgentsWithDifferentValues(t *testing.T) {
 		if !strings.Contains(view, "claude-opus-4") {
 			t.Error("agent-1 ModelID not found")
 		}
-		if !strings.Contains(view, "$5.25") {
-			t.Error("agent-1 cost not found")
+		if !strings.Contains(view, "52.5k↑ 8.2k↓") {
+			t.Error("agent-1 tokens not found")
 		}
 
 		if !strings.Contains(view, "agent-2") {
@@ -212,15 +222,15 @@ func TestAgentsViewDisplay_MultipleAgentsWithDifferentValues(t *testing.T) {
 		if !strings.Contains(view, "claude-haiku") {
 			t.Error("agent-2 ModelID not found")
 		}
-		if !strings.Contains(view, "$0.05") {
-			t.Error("agent-2 cost not found")
+		if !strings.Contains(view, "500↑ 50↓") {
+			t.Error("agent-2 tokens not found")
 		}
 
 		if !strings.Contains(view, "agent-3") {
 			t.Error("agent-3 not found in output")
 		}
-		if !strings.Contains(view, "$1.11") {
-			t.Error("agent-3 cost not found")
+		if !strings.Contains(view, "11.1k↑ 2.2k↓") {
+			t.Error("agent-3 tokens not found")
 		}
 
 		if !strings.Contains(view, "agent-4") {
@@ -232,16 +242,17 @@ func TestAgentsViewDisplay_MultipleAgentsWithDifferentValues(t *testing.T) {
 	})
 }
 
-func TestAgentsViewDisplay_ModelIDAndCostForArchivedAgents(t *testing.T) {
+func TestAgentsViewDisplay_ModelIDAndTokensForArchivedAgents(t *testing.T) {
 	t.Run("dead agent values visible when showArchived true", func(t *testing.T) {
 		a := AgentsModel{
 			agents: []model.Agent{
 				{
-					ID:           uuid.New(),
-					Name:         "dead-agent",
-					Status:       model.AgentDead,
-					ModelID:      "claude-opus-4",
-					TotalCostUSD: 3.14,
+					ID:        uuid.New(),
+					Name:      "dead-agent",
+					Status:    model.AgentDead,
+					ModelID:   "claude-opus-4",
+					TokensIn:  31400,
+					TokensOut: 6200,
 				},
 			},
 			cursor:       0,
@@ -258,8 +269,8 @@ func TestAgentsViewDisplay_ModelIDAndCostForArchivedAgents(t *testing.T) {
 		if !strings.Contains(view, "claude-opus-4") {
 			t.Error("ModelID should be visible for dead agent")
 		}
-		if !strings.Contains(view, "$3.14") {
-			t.Error("cost should be visible for dead agent")
+		if !strings.Contains(view, "31.4k↑ 6.2k↓") {
+			t.Error("tokens should be visible for dead agent")
 		}
 	})
 
@@ -267,11 +278,12 @@ func TestAgentsViewDisplay_ModelIDAndCostForArchivedAgents(t *testing.T) {
 		a := AgentsModel{
 			agents: []model.Agent{
 				{
-					ID:           uuid.New(),
-					Name:         "dead-agent",
-					Status:       model.AgentDead,
-					ModelID:      "claude-opus-4",
-					TotalCostUSD: 3.14,
+					ID:        uuid.New(),
+					Name:      "dead-agent",
+					Status:    model.AgentDead,
+					ModelID:   "claude-opus-4",
+					TokensIn:  31400,
+					TokensOut: 6200,
 				},
 			},
 			cursor:       0,
@@ -289,22 +301,24 @@ func TestAgentsViewDisplay_ModelIDAndCostForArchivedAgents(t *testing.T) {
 }
 
 func TestAgentsViewDisplay_ColumnFormatting(t *testing.T) {
-	t.Run("model ID and cost appear for both agents", func(t *testing.T) {
+	t.Run("model ID and tokens appear for both agents", func(t *testing.T) {
 		a := AgentsModel{
 			agents: []model.Agent{
 				{
-					ID:           uuid.New(),
-					Name:         "short-name",
-					Status:       model.AgentWorking,
-					ModelID:      "claude-opus-4",
-					TotalCostUSD: 1.5,
+					ID:        uuid.New(),
+					Name:      "short-name",
+					Status:    model.AgentWorking,
+					ModelID:   "claude-opus-4",
+					TokensIn:  1500,
+					TokensOut: 300,
 				},
 				{
-					ID:           uuid.New(),
-					Name:         "very-long-agent-name-that-might-truncate",
-					Status:       model.AgentWorking,
-					ModelID:      "claude-haiku",
-					TotalCostUSD: 0.1,
+					ID:        uuid.New(),
+					Name:      "very-long-agent-name-that-might-truncate",
+					Status:    model.AgentWorking,
+					ModelID:   "claude-haiku",
+					TokensIn:  100,
+					TokensOut: 20,
 				},
 			},
 			cursor:     0,
@@ -318,14 +332,14 @@ func TestAgentsViewDisplay_ColumnFormatting(t *testing.T) {
 		if !strings.Contains(view, "claude-opus-4") {
 			t.Error("first agent ModelID not found")
 		}
-		if !strings.Contains(view, "$1.50") {
-			t.Error("first agent cost not found")
+		if !strings.Contains(view, "1.5k↑ 300↓") {
+			t.Error("first agent tokens not found")
 		}
 		if !strings.Contains(view, "claude-haiku") {
 			t.Error("second agent ModelID not found")
 		}
-		if !strings.Contains(view, "$0.10") {
-			t.Error("second agent cost not found")
+		if !strings.Contains(view, "100↑ 20↓") {
+			t.Error("second agent tokens not found")
 		}
 	})
 }

@@ -9,10 +9,10 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Helper Function Tests: extractModelID and extractCost
+// Helper Function Tests: extractModelID and extractTokens
 // ---------------------------------------------------------------------------
 // These functions extract directly from Agent struct fields (ModelID string,
-// TotalCostUSD float64), not from Config JSONField.
+// TokensIn / TokensOut int), not from Config JSONField.
 // ---------------------------------------------------------------------------
 
 func TestExtractModelID(t *testing.T) {
@@ -72,7 +72,7 @@ func TestExtractModelID(t *testing.T) {
 	}
 }
 
-func TestExtractCost(t *testing.T) {
+func TestExtractTokens(t *testing.T) {
 	tests := []struct {
 		name      string
 		agent     *model.Agent
@@ -84,61 +84,57 @@ func TestExtractCost(t *testing.T) {
 			wantValue: "-",
 		},
 		{
-			name:      "zero TotalCostUSD formats as $0.00",
-			agent:     &model.Agent{ID: uuid.New(), TotalCostUSD: 0.0},
-			wantValue: "$0.00",
+			name:      "zero tokens format as 0↑ 0↓",
+			agent:     &model.Agent{ID: uuid.New(), TokensIn: 0, TokensOut: 0},
+			wantValue: "0↑ 0↓",
 		},
 		{
-			name:      "cost with two decimal places",
-			agent:     &model.Agent{ID: uuid.New(), TotalCostUSD: 1.50},
-			wantValue: "$1.50",
+			name:      "small counts render as plain integers",
+			agent:     &model.Agent{ID: uuid.New(), TokensIn: 42, TokensOut: 7},
+			wantValue: "42↑ 7↓",
 		},
 		{
-			name:      "cost with one decimal place pads to two",
-			agent:     &model.Agent{ID: uuid.New(), TotalCostUSD: 5.5},
-			wantValue: "$5.50",
+			name:      "counts at 999 stay plain",
+			agent:     &model.Agent{ID: uuid.New(), TokensIn: 999, TokensOut: 500},
+			wantValue: "999↑ 500↓",
 		},
 		{
-			name:      "three decimals rounds down",
-			agent:     &model.Agent{ID: uuid.New(), TotalCostUSD: 1.234},
-			wantValue: "$1.23",
+			name:      "counts >= 1000 get k suffix",
+			agent:     &model.Agent{ID: uuid.New(), TokensIn: 1000, TokensOut: 1500},
+			wantValue: "1.0k↑ 1.5k↓",
 		},
 		{
-			name:      "three decimals rounds up",
-			agent:     &model.Agent{ID: uuid.New(), TotalCostUSD: 1.235},
-			wantValue: "$1.24",
+			name:      "typical agent counts abbreviate with one decimal",
+			agent:     &model.Agent{ID: uuid.New(), TokensIn: 12400, TokensOut: 3100},
+			wantValue: "12.4k↑ 3.1k↓",
 		},
 		{
-			name:      "large cost value formats correctly",
-			agent:     &model.Agent{ID: uuid.New(), TotalCostUSD: 123.45},
-			wantValue: "$123.45",
+			name:      "large counts keep k abbreviation",
+			agent:     &model.Agent{ID: uuid.New(), TokensIn: 250000, TokensOut: 42000},
+			wantValue: "250.0k↑ 42.0k↓",
 		},
 		{
-			name:      "very small positive cost",
-			agent:     &model.Agent{ID: uuid.New(), TotalCostUSD: 0.01},
-			wantValue: "$0.01",
+			name:      "mixed small and large counts",
+			agent:     &model.Agent{ID: uuid.New(), TokensIn: 5000, TokensOut: 250},
+			wantValue: "5.0k↑ 250↓",
 		},
 		{
-			name:      "many decimal places round to two",
-			agent:     &model.Agent{ID: uuid.New(), TotalCostUSD: 0.123456789},
-			wantValue: "$0.12",
-		},
-		{
-			name: "TotalCostUSD used even when Config has different total_cost_usd",
+			name: "struct fields used even when Config has different values",
 			agent: &model.Agent{
-				ID:           uuid.New(),
-				TotalCostUSD: 9.99,
-				Config:       model.JSONField{"total_cost_usd": 0.01},
+				ID:        uuid.New(),
+				TokensIn:  1234,
+				TokensOut: 567,
+				Config:    model.JSONField{"tokens_in": 99, "tokens_out": 99},
 			},
-			wantValue: "$9.99",
+			wantValue: "1.2k↑ 567↓",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := extractCost(tt.agent)
+			got := extractTokens(tt.agent)
 			if got != tt.wantValue {
-				t.Errorf("extractCost() = %q, want %q", got, tt.wantValue)
+				t.Errorf("extractTokens() = %q, want %q", got, tt.wantValue)
 			}
 		})
 	}
