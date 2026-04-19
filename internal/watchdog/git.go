@@ -58,7 +58,7 @@ func runGit(ctx context.Context, repo string, args ...string) (string, error) {
 // watchdog should capture. It uses `git status --porcelain` and treats any
 // non-empty output as dirty.
 //
-// Unlike internal/worktree.IsClean, this helper does not special-case
+// Unlike the host-side IsClean helper, this one does not special-case
 // .claude/ — the watchdog is running inside an ephemeral container image
 // that does not carry worktree-local agent settings, so every dirty file
 // is a legitimate candidate for commit-and-push.

@@ -1,7 +1,7 @@
 // Package gitref tracks feature and agent branch names referenced from the
 // orchestrator's SQLite database. It replaces the host-side worktree registry
-// from internal/worktree with a pure metadata surface: no filesystem writes,
-// no host-side checkout, no git worktree add.
+// from the legacy host-session packages with a pure metadata surface: no
+// filesystem writes, no host-side checkout, no git worktree add.
 //
 // Workers clone their branch into a container filesystem at startup and
 // discard the clone when the task completes (see docs/prd-containerization.md,
