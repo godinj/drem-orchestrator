@@ -131,7 +131,7 @@ func (o *Orchestrator) reconcileStaleSubtasks() (int, error) {
 
 		// Get the set of files changed on the feature branch. If empty,
 		// every DONE subtask is suspect.
-		changedFiles, err := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranch)
+		changedFiles, err := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranchName())
 		if err != nil {
 			continue
 		}
@@ -376,7 +376,7 @@ func (o *Orchestrator) reconcileEmptyFeatures() (int, error) {
 		fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
 
-		changed, err := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranch)
+		changed, err := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranchName())
 		if err != nil {
 			continue
 		}

@@ -15,7 +15,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 	"github.com/google/uuid"
 )
 
@@ -99,7 +98,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		}
 	}
 	merged := false
-	var mergeResult *worktree.MergeResult
+	var mergeResult *WorktreeMergeResult
 	if ag.WorktreeBranch != "" && featureBranch != "" {
 		fn := strings.TrimPrefix(featureBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
@@ -187,7 +186,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			o.logger.Warn("constraint config load failed after merge",
 				"agent_id", ag.ID, "error", cfgErr)
 		} else if constraintCfg != nil {
-			changedFiles, chErr := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranch)
+			changedFiles, chErr := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranchName())
 			if chErr != nil {
 				o.logger.Warn("failed to get changed files for constraint check",
 					"agent_id", ag.ID, "error", chErr)

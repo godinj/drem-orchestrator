@@ -66,13 +66,13 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 		// Get diff of integration branch vs default branch.
 		diff, err := gitexec.RunGit(
 			context.Background(), worktreePath,
-			"diff", o.worktree.DefaultBranch+"...HEAD", "--stat",
+			"diff", o.worktree.DefaultBranchName()+"...HEAD", "--stat",
 		)
 		if err == nil {
 			// Also get the full diff (limited size).
 			fullDiff, _ := gitexec.RunGit(
 				context.Background(), worktreePath,
-				"diff", o.worktree.DefaultBranch+"...HEAD",
+				"diff", o.worktree.DefaultBranchName()+"...HEAD",
 			)
 			if fullDiff != "" {
 				gitDiff = fullDiff
@@ -315,9 +315,9 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 
 	// Determine the working directory. Prefer the task's integration worktree;
 	// fall back to the default branch worktree.
-	cwd := filepath.Join(o.worktree.BareRepoPath, o.worktree.DefaultBranch)
+	cwd := filepath.Join(o.worktree.BareRepo(), o.worktree.DefaultBranchName())
 	if task.WorktreeBranch != "" {
-		candidate := filepath.Join(o.worktree.BareRepoPath, task.WorktreeBranch, "integration")
+		candidate := filepath.Join(o.worktree.BareRepo(), task.WorktreeBranch, "integration")
 		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
 			cwd = candidate
 		}
@@ -344,8 +344,8 @@ func (o *Orchestrator) SpawnSupervisorSession(taskID uuid.UUID) (string, error) 
 		Status:        string(task.Status),
 		Branch:        task.WorktreeBranch,
 		DBPath:        o.dbPath,
-		BareRepoPath:  o.worktree.BareRepoPath,
-		DefaultBranch: o.worktree.DefaultBranch,
+		BareRepoPath:  o.worktree.BareRepo(),
+		DefaultBranch: o.worktree.DefaultBranchName(),
 		Subtasks:      stInfos,
 	})
 

@@ -29,7 +29,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 const (
@@ -109,7 +108,7 @@ type Orchestrator struct {
 	db                          *gorm.DB
 	dbPath                      string
 	runner                      *agent.Runner
-	worktree                    *worktree.Manager
+	worktree                    WorktreeManager
 	merger                      mergerClient
 	memory                      *memory.Manager
 	bus                         *eventbus.Bus          // nil disables C-Suite event emission
@@ -164,7 +163,7 @@ func New(
 	db *gorm.DB,
 	dbPath string,
 	runner *agent.Runner,
-	wt *worktree.Manager,
+	wt WorktreeManager,
 	merger mergerClient,
 	mem *memory.Manager,
 	sup *supervisor.Supervisor,
@@ -297,7 +296,7 @@ func NewWithExperimentScheduling(
 	db *gorm.DB,
 	dbPath string,
 	runner *agent.Runner,
-	wt *worktree.Manager,
+	wt WorktreeManager,
 	merger mergerClient,
 	mem *memory.Manager,
 	sup *supervisor.Supervisor,

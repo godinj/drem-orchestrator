@@ -89,9 +89,9 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 		if estimatedFiles := getEstimatedFiles(sub.Context); len(estimatedFiles) > 0 {
 			featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
 			featureDir := o.worktree.FeatureWorktreePath(featureName)
-			changedFiles, diffErr := getChangedFiles(featureDir, o.worktree.DefaultBranch)
+			changedFiles, diffErr := getChangedFiles(featureDir, o.worktree.DefaultBranchName())
 			if diffErr == nil && len(changedFiles) > 0 {
-				commitMsgs, logErr := getCommitMessages(featureDir, o.worktree.DefaultBranch)
+				commitMsgs, logErr := getCommitMessages(featureDir, o.worktree.DefaultBranchName())
 				if logErr == nil && hasExistingWork(estimatedFiles, changedFiles, commitMsgs, sub.Title) {
 					o.logger.Info("schedule: dedup detected existing work, fast-tracking to done",
 						"subtask_id", sub.ID)

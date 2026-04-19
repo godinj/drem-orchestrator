@@ -69,6 +69,19 @@ type Manager struct {
 	DefaultBranch string
 }
 
+// BareRepo returns the bare repository path. This accessor exists so
+// *Manager can satisfy the orchestrator.WorktreeManager interface, which
+// uses methods instead of struct fields.
+func (m *Manager) BareRepo() string {
+	return m.BareRepoPath
+}
+
+// DefaultBranchName returns the default branch for the repo. This accessor
+// exists so *Manager can satisfy the orchestrator.WorktreeManager interface.
+func (m *Manager) DefaultBranchName() string {
+	return m.DefaultBranch
+}
+
 // FeatureGroupDir returns the parent directory that groups a feature's
 // integration worktree and its agent worktrees:
 // <bare>/feature/<name>/

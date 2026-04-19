@@ -10,7 +10,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // onAgentFailed handles a failed agent. Uses supervisor diagnosis for smart
@@ -348,7 +347,7 @@ func isWorkAlreadyCompleteCategory(category string) bool {
 // the feature branch fails. When a supervisor is available, it diagnoses the
 // conflict and may spawn a fixer agent. Without a supervisor, it falls back to
 // the current behavior: fail the task and preserve the agent branch.
-func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task, result *worktree.MergeResult, featureDir string) error {
+func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task, result *WorktreeMergeResult, featureDir string) error {
 	// Supervisor-powered merge conflict diagnosis.
 	if o.supervisor != nil && result != nil && len(result.Conflicts) > 0 {
 		var analysis supervisor.MergeConflictAnalysis

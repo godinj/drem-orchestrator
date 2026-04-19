@@ -150,7 +150,7 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) spa
 
 	bareRepo := ""
 	if o.worktree != nil {
-		bareRepo = o.worktree.BareRepoPath
+		bareRepo = o.worktree.BareRepo()
 	}
 
 	return spawnWorkerContext{
@@ -296,7 +296,7 @@ func (o *Orchestrator) destroyWorkerForTask(ctx context.Context, task *model.Tas
 	}
 
 	if o.GitrefRegistry != nil && o.worktree != nil && ag.WorktreeBranch != "" {
-		ref, err := o.GitrefRegistry.FindByBranch(ctx, o.worktree.BareRepoPath, ag.WorktreeBranch)
+		ref, err := o.GitrefRegistry.FindByBranch(ctx, o.worktree.BareRepo(), ag.WorktreeBranch)
 		if err == nil && ref != nil {
 			_ = o.GitrefRegistry.MarkDeleted(ctx, ref.ID)
 		}

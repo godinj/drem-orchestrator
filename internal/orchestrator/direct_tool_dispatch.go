@@ -643,7 +643,7 @@ func (o *Orchestrator) buildReviewerContext(task *model.Task, worktreePath strin
 	}
 	fullDiff, err := gitexec.RunGit(
 		context.Background(), worktreePath,
-		"diff", o.worktree.DefaultBranch+"...HEAD",
+		"diff", o.worktree.DefaultBranchName()+"...HEAD",
 	)
 	if err == nil && fullDiff != "" {
 		gitDiff = fullDiff
@@ -651,7 +651,7 @@ func (o *Orchestrator) buildReviewerContext(task *model.Task, worktreePath strin
 	}
 	statDiff, statErr := gitexec.RunGit(
 		context.Background(), worktreePath,
-		"diff", o.worktree.DefaultBranch+"...HEAD", "--stat",
+		"diff", o.worktree.DefaultBranchName()+"...HEAD", "--stat",
 	)
 	if statErr == nil {
 		gitDiff = statDiff

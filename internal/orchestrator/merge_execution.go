@@ -11,7 +11,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // dispatchMerges queries all MERGING tasks and calls executeMerge for each.
@@ -104,8 +103,8 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 			if isBuildFailure {
 				// Build failure diagnosis.
 				buildOutput := strings.TrimPrefix(result.Conflicts[0], "build verification failed: ")
-				mainWorktree := filepath.Join(o.worktree.BareRepoPath, o.worktree.DefaultBranch)
-				changedFiles, _ := gitexec.GetChangedFiles(context.Background(), mainWorktree, o.worktree.DefaultBranch)
+				mainWorktree := filepath.Join(o.worktree.BareRepo(), o.worktree.DefaultBranchName())
+				changedFiles, _ := gitexec.GetChangedFiles(context.Background(), mainWorktree, o.worktree.DefaultBranchName())
 
 				var diagnosis supervisor.BuildFailureDiagnosis
 				bfPrompt := supervisor.BuildFailurePrompt(mainWorktree, buildOutput, changedFiles)
@@ -121,13 +120,13 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 			} else {
 				// Merge conflict analysis.
 				var analysis supervisor.MergeConflictAnalysis
-				mainWorktree := filepath.Join(o.worktree.BareRepoPath, o.worktree.DefaultBranch)
+				mainWorktree := filepath.Join(o.worktree.BareRepo(), o.worktree.DefaultBranchName())
 				diffOutput, _ := gitexec.RunGit(context.Background(), mainWorktree,
-					"diff", o.worktree.DefaultBranch+"..."+task.WorktreeBranch,
+					"diff", o.worktree.DefaultBranchName()+"..."+task.WorktreeBranch,
 				)
 
 				mcPrompt := supervisor.MergeConflictPrompt(
-					task.WorktreeBranch, o.worktree.DefaultBranch,
+					task.WorktreeBranch, o.worktree.DefaultBranchName(),
 					result.Conflicts, diffOutput,
 				)
 				if mcErr := o.supervisor.EvaluateJSON(context.Background(), mcPrompt, &analysis); mcErr != nil {
@@ -267,8 +266,8 @@ func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
 // Defined at the consumption site (per architecture rule) so tests can
 // provide stubs without importing the merge package.
 type mergerClient interface {
-	MergeFeatureIntoMain(task *model.Task) (*worktree.MergeResult, error)
-	MergeAgentIntoFeature(agentBranch, featureWorktree string) (*worktree.MergeResult, error)
+	MergeFeatureIntoMain(task *model.Task) (*WorktreeMergeResult, error)
+	MergeAgentIntoFeature(agentBranch, featureWorktree string) (*WorktreeMergeResult, error)
 }
 
 // contextKeyMergeAttemptCount is the task.Context key for merge retry tracking.
@@ -344,7 +343,7 @@ func (o *Orchestrator) checkDepthConstraintFailures(task *model.Task, report *co
 	// Get the diff for context.
 	diff := ""
 	if o.worktree != nil {
-		diffOutput, err := getChangedFilesDiff(featureDir, o.worktree.DefaultBranch)
+		diffOutput, err := getChangedFilesDiff(featureDir, o.worktree.DefaultBranchName())
 		if err == nil {
 			diff = diffOutput
 		}

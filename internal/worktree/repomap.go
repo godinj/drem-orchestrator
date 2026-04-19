@@ -66,6 +66,14 @@ func GenerateRepoMapAsync(worktreePath string) {
 	go GenerateRepoMap(worktreePath)
 }
 
+// GenerateRepoMapAsync is a method-form wrapper over the package-level
+// GenerateRepoMapAsync. Exists so *Manager can satisfy the
+// orchestrator.WorktreeManager interface without exposing the whole
+// worktree package to callers.
+func (m *Manager) GenerateRepoMapAsync(worktreePath string) {
+	GenerateRepoMapAsync(worktreePath)
+}
+
 // GenerateRepoMapForMain generates the repo map for the default branch
 // worktree. It resolves the main worktree path from the Manager and runs
 // the generation script. Failures are logged as warnings.

@@ -57,14 +57,14 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 	}
 
 	defaultBranch := "main"
-	if o.worktree != nil && o.worktree.DefaultBranch != "" {
-		defaultBranch = o.worktree.DefaultBranch
+	if o.worktree != nil && o.worktree.DefaultBranchName() != "" {
+		defaultBranch = o.worktree.DefaultBranchName()
 	}
 
 	workerID := fmt.Sprintf("merger-%s-%s", task.ID.String()[:shortIDLen], uuid.New().String()[:shortIDLen])
 	bareRepo := ""
 	if o.worktree != nil {
-		bareRepo = o.worktree.BareRepoPath
+		bareRepo = o.worktree.BareRepo()
 	}
 	params := spawner.SpawnWorkerParams{
 		Project:   o.projectID.String(),

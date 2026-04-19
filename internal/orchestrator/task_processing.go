@@ -10,7 +10,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/state"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // processBacklog transitions a task from BACKLOG to PLANNING.
@@ -202,7 +201,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 		}
 
 		// Generate repo map in the new feature worktree (non-blocking on failure).
-		worktree.GenerateRepoMapAsync(wtInfo.Path)
+		o.worktree.GenerateRepoMapAsync(wtInfo.Path)
 
 		task.WorktreeBranch = wtInfo.Branch
 		if err := o.db.Save(task).Error; err != nil {
@@ -331,7 +330,7 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 			featureDir := o.worktree.FeatureWorktreePath(fn)
 			// Check if the feature branch has any file changes relative to
 			// the default branch.
-			changed, changeErr := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranch)
+			changed, changeErr := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranchName())
 			if changeErr != nil {
 				o.logger.Warn("failed to check feature branch changes", "task_id", parent.ID, "error", changeErr)
 			} else if len(changed) == 0 {

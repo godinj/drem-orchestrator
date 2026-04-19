@@ -109,7 +109,7 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 	var gitDiff string
 	diff, diffErr := gitexec.RunGit(
 		context.Background(), worktreePath,
-		"diff", o.worktree.DefaultBranch+"...HEAD",
+		"diff", o.worktree.DefaultBranchName()+"...HEAD",
 	)
 	if diffErr == nil {
 		gitDiff = truncate(diff, maxGitDiffLen)
@@ -126,7 +126,7 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 ## Task
 Title: %s
 Description: %s
-`, truncate(testOutput, maxTestOutputLen), o.worktree.DefaultBranch, gitDiff, parent.Title, parent.Description)
+`, truncate(testOutput, maxTestOutputLen), o.worktree.DefaultBranchName(), gitDiff, parent.Title, parent.Description)
 
 	if o.runner == nil {
 		o.logger.Error("processTestingReady: runner is nil, cannot spawn fixer", "task_id", parent.ID)
@@ -334,7 +334,7 @@ func (o *Orchestrator) scopeTestsForSubtask(baseCmd, worktreePath string) (strin
 	if err != nil {
 		// Also try against the default branch.
 		diffOutput, err = gitexec.RunGit(context.Background(), worktreePath,
-			"diff", "--name-only", o.worktree.DefaultBranch+"...HEAD",
+			"diff", "--name-only", o.worktree.DefaultBranchName()+"...HEAD",
 		)
 		if err != nil {
 			return baseCmd, false

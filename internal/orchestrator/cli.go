@@ -4,8 +4,6 @@ import (
 	"log/slog"
 
 	"gorm.io/gorm"
-
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // NewForCLI creates a minimal Orchestrator suitable for headless CLI gate
@@ -15,7 +13,7 @@ import (
 //
 // This avoids pulling in agent.Runner, merge queues, tmux, and the many other
 // dependencies required by the full New() constructor.
-func NewForCLI(db *gorm.DB, wt *worktree.Manager) *Orchestrator {
+func NewForCLI(db *gorm.DB, wt WorktreeManager) *Orchestrator {
 	// Buffered channel + background goroutine so emit() never blocks.
 	events := make(chan Event, 16)
 	go func() {

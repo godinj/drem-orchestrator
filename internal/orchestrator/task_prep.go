@@ -13,7 +13,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // PrepOutput is the structured output from a task preparation agent.
@@ -134,7 +133,7 @@ func (o *Orchestrator) spawnPrepAgent(sub *model.Task, parent *model.Task) error
 	})
 
 	// Generate repo map in the feature worktree for the prep agent.
-	worktree.GenerateRepoMapAsync(featureDir)
+	o.worktree.GenerateRepoMapAsync(featureDir)
 
 	ag, err := o.runner.SpawnAgent(sub, featureName, model.AgentPrep, prepPrompt)
 	if err != nil {
