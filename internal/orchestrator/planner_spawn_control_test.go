@@ -10,7 +10,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -559,7 +558,7 @@ func TestPlannerSpawnEvent_IncludesCounters(t *testing.T) {
 	}
 	db.Create(&project)
 
-	wt := worktree.NewManager(bareRepo, "main")
+	wt := NewHostWorktreeManager(bareRepo, "main")
 	events := make(chan Event, 100)
 	o := &Orchestrator{
 		db:              db,

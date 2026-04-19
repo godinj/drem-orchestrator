@@ -9,8 +9,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/tmux"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 	"github.com/google/uuid"
 )
 
@@ -33,10 +31,10 @@ func completionTestOrchestrator(t *testing.T) *Orchestrator {
 	}
 	db.Create(&project)
 
-	// Create a minimal runner backed by a fake tmux session name.
-	tm := tmux.NewManager("test-completion")
-	wtMgr := &worktree.Manager{DefaultBranch: "main"}
-	runner := agent.NewRunner(db, tm, wtMgr, "/usr/bin/false", "", 4, nil)
+	// Create a minimal runner. No tmux manager is needed — the tests in
+	// this file exercise completion processing, not supervisor sessions.
+	wtMgr := &FakeWorktreeManager{Default: "main"}
+	runner := agent.NewRunner(db, nil, nil, "/usr/bin/false", "", 4, nil)
 
 	o := &Orchestrator{
 		db:        db,

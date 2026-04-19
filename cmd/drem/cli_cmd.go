@@ -9,7 +9,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	"github.com/godinj/drem-orchestrator/internal/tui"
-	"github.com/godinj/drem-orchestrator/internal/wtbridge"
 )
 
 // gateCommands is the set of CLI subcommands that require a live orchestrator.
@@ -60,17 +59,14 @@ func runCLI() {
 
 	// If the subcommand is a gate command, create a minimal orchestrator
 	// so the handler methods (approve, reject, answer, pass, fail) can
-	// execute state transitions against the database. Worktree construction
-	// is routed through internal/wtbridge so this file holds no direct
-	// import of the soon-to-be-deleted internal/worktree package.
+	// execute state transitions against the database. The host-mode
+	// worktree manager is built via orchestrator.NewHostWorktreeManager,
+	// so this file does not need to know about the worktree implementation.
 	var orch tui.TUIOrchestrator
 	if len(cliArgs) > 0 && gateCommands[cliArgs[0]] {
-		var wt *wtbridge.Manager
+		var wt orchestrator.WorktreeManager
 		if cfg.BareRepoPath != "" {
-			wt = wtbridge.NewConcreteManager(wtbridge.Options{
-				BareRepoPath:  cfg.BareRepoPath,
-				DefaultBranch: cfg.DefaultBranch,
-			})
+			wt = orchestrator.NewHostWorktreeManager(cfg.BareRepoPath, cfg.DefaultBranch)
 		}
 		orch = orchestrator.NewForCLI(database, wt)
 	}

@@ -12,7 +12,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // setupQuickFixTest creates an orchestrator suitable for testing quickfix
@@ -34,9 +33,9 @@ func setupQuickFixTest(t *testing.T) (*Orchestrator, *gorm.DB, uuid.UUID) {
 		t.Fatalf("create project: %v", err)
 	}
 
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake-bare-repo", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake-bare-repo", Default: "main"}
 	// Runner with maxConcurrent=0 so CanSpawn returns false.
-	runner := agent.NewRunner(db, nil, wt, "/bin/false", "", 0, nil)
+	runner := agent.NewRunner(db, nil, nil, "/bin/false", "", 0, nil)
 
 	o := &Orchestrator{
 		db:        db,
@@ -191,8 +190,9 @@ func TestQuickFix_MergeFailure_FlagsForHumanReview(t *testing.T) {
 	db.Create(&project)
 
 	events := make(chan Event, 100)
-	wt := worktree.NewManager(bareRepo, defaultBranch)
-	runner := agent.NewRunner(db, nil, wt, "/bin/false", "", 0, nil)
+	host := NewHostManager(bareRepo, defaultBranch)
+	wt := host.AsInterface()
+	runner := agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), "/bin/false", "", 0, nil)
 
 	// Stub the mergeDispatcher so the quickfix path exercises the
 	// Success=false + Conflicts branch without spawning a real merger.
@@ -306,8 +306,9 @@ func TestTransitionQuickFixToMerging_ConstraintViolation_PausesTask(t *testing.T
 	db.Create(&project)
 
 	events := make(chan Event, 100)
-	wt := worktree.NewManager(bareRepo, defaultBranch)
-	runner := agent.NewRunner(db, nil, wt, "/bin/false", "", 0, nil)
+	host := NewHostManager(bareRepo, defaultBranch)
+	wt := host.AsInterface()
+	runner := agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), "/bin/false", "", 0, nil)
 
 	o := &Orchestrator{
 		db:        db,

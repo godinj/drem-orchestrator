@@ -11,7 +11,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // TestClassifierDispatchPicksUpNewlyFiledTasks verifies that the classifier
@@ -34,7 +33,8 @@ func TestClassifierDispatchPicksUpNewlyFiledTasks(t *testing.T) {
 	projectID := uuid.New()
 	events := make(chan Event, 100)
 
-	wt := worktree.NewManager(bareRepo, defaultBranch)
+	host := NewHostManager(bareRepo, defaultBranch)
+	wt := host.AsInterface()
 
 	project := model.Project{
 		ID:            projectID,
@@ -54,7 +54,7 @@ func TestClassifierDispatchPicksUpNewlyFiledTasks(t *testing.T) {
 		t.Fatalf("write fake claude binary: %v", err)
 	}
 
-	runner := agent.NewRunner(db, nil, wt, fakeBin, "", 4, nil)
+	runner := agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), fakeBin, "", 4, nil)
 
 	orch := &Orchestrator{
 		db:              db,

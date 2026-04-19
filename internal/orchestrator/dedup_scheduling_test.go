@@ -12,7 +12,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // setupDedupSchedulingTest creates a real bare git repo with an integration
@@ -42,15 +41,15 @@ func setupDedupSchedulingTest(t *testing.T) (*Orchestrator, *gorm.DB, uuid.UUID,
 	db.Create(&project)
 
 	events := make(chan Event, 100)
-	wtMgr := worktree.NewManager(bareRepo, defaultBranch)
+	host := NewHostManager(bareRepo, defaultBranch)
 
 	// Runner with maxConcurrent=0 so CanSpawn returns false without panicking.
-	runner := agent.NewRunner(db, nil, wtMgr, "/bin/false", "", 0, nil)
+	runner := agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), "/bin/false", "", 0, nil)
 
 	orch := &Orchestrator{
 		db:        db,
 		projectID: projectID,
-		worktree:  wtMgr,
+		worktree:  host.AsInterface(),
 		runner:    runner,
 		events:    events,
 		logger:    slog.Default().With("component", "dedup-scheduling-test"),

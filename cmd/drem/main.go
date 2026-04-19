@@ -1,14 +1,14 @@
 // Package main is the entry point for the Drem Orchestrator CLI. It wires
-// together the database, orchestrator, tmux manager, and Bubble Tea TUI.
+// together the database, orchestrator, and Bubble Tea TUI.
 //
-// The dashboard runs inside a tmux session to support interactive supervisor
-// and shell sessions (switch-client). Headless agents (planners, coders,
-// reviewers, fixers) run as direct subprocesses — no tmux overhead.
+// After the containerization migration (prompt 21) the CLI no longer hosts
+// agents or the dashboard in a tmux session — headless agents run as
+// subprocesses or inside containers, and the TUI runs in the user's own
+// terminal.
 package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -35,9 +35,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/ratelimit"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/taskimport"
-	"github.com/godinj/drem-orchestrator/internal/tmuxbridge"
 	"github.com/godinj/drem-orchestrator/internal/tui"
-	"github.com/godinj/drem-orchestrator/internal/wtbridge"
 )
 
 func main() {
@@ -118,52 +116,7 @@ func main() {
 		return
 	}
 
-	sessionName := "󱇯 dash " + projectName
-
-	// Resolve tmux config file path relative to bare repo.
-	tmuxConfPath := filepath.Join(cfg.BareRepoPath, cfg.TmuxConfigFile)
-
-	// Tmux options used by both outer and inner invocations. Constructed
-	// via internal/tmuxbridge so main.go does not import internal/tmux
-	// directly — the bridge is the last remaining caller ahead of the
-	// prompt-21 package deletion.
-	tmuxOpts := tmuxbridge.Options{
-		SessionName: sessionName,
-		Socket:      cfg.TmuxSocket,
-		ConfigFile:  tmuxConfPath,
-	}
-
-	// Self-respawn: if DREM_SESSION is not set, we are the outer invocation.
-	// Create the tmux session with ourselves as the dashboard command, then
-	// attach (replacing this process).
-	if os.Getenv("DREM_SESSION") != sessionName {
-		exe, err := os.Executable()
-		if err != nil {
-			log.Fatalf("resolve executable: %v", err)
-		}
-
-		// Build the command that tmux will run in the dashboard window.
-		// It re-invokes drem with the same flags, plus DREM_SESSION set.
-		dashCmd := fmt.Sprintf("DREM_SESSION='%s' %s --config %s --repo %s",
-			sessionName, exe, *configPath, cfg.BareRepoPath)
-
-		tmux := tmuxbridge.NewManager(tmuxOpts)
-		if err := tmux.EnsureSession(dashCmd); err != nil {
-			if !errors.Is(err, tmuxbridge.ErrDashboardRespawned) {
-				log.Fatalf("tmux: %v", err)
-			}
-			// Dashboard was respawned — fall through to attach/switch.
-		}
-
-		// Replace this process with tmux attach (or switch-client if
-		// already inside tmux).
-		if err := tmux.Attach(); err != nil {
-			log.Fatalf("tmux attach: %v", err)
-		}
-		return // unreachable after successful Exec
-	}
-
-	// Inner invocation: running inside the tmux session. Init DB/TUI normally.
+	_ = projectName // retained for future session-naming needs
 
 	// Redirect logging to file so it doesn't corrupt the TUI.
 	logFile, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -194,22 +147,23 @@ func main() {
 		}
 	}
 
-	// Init components. Construction is routed through internal/wtbridge
-	// and internal/tmuxbridge so main.go holds no direct import of the
-	// soon-to-be-deleted internal/worktree and internal/tmux packages.
-	tmux := tmuxbridge.NewManager(tmuxOpts)
-	wt := wtbridge.NewConcreteManager(wtbridge.Options{
-		BareRepoPath:  cfg.BareRepoPath,
-		DefaultBranch: cfg.DefaultBranch,
-	})
+	// Init components. The host-mode worktree manager is built behind
+	// orchestrator.NewHostManager so main.go holds no direct import of the
+	// host worktree package. The tmux dashboard session manager is retired;
+	// headless and interactive agents no longer share a tmux server with the
+	// dashboard. Pass a nil TmuxSessionManager to the runner — supervisor
+	// and shell sessions now live inside containerized workers and are
+	// surfaced through the orchestrator's HTTP API.
+	host := orchestrator.NewHostManager(cfg.BareRepoPath, cfg.DefaultBranch)
 
 	// Migrate old-layout worktrees to grouped layout.
-	if err := wt.MigrateToGroupedLayout(); err != nil {
+	if err := host.MigrateToGroupedLayout(); err != nil {
 		slog.Warn("worktree layout migration failed", "error", err)
 	}
-	wt.MigrateAgentPaths(database)
+	host.MigrateAgentPaths(database)
 
-	runner := agent.NewRunner(database, tmux, wt, cfg.ClaudeBin, cfg.OpenCodeBin, cfg.MaxConcurrentAgents, cfg.Agents.ForAgentType)
+	wt := host.AsInterface()
+	runner := agent.NewRunner(database, nil, host.AsAgentWorktreeManager(), cfg.ClaudeBin, cfg.OpenCodeBin, cfg.MaxConcurrentAgents, cfg.Agents.ForAgentType)
 	runner.SetDispatchLimiter(ratelimit.New(cfg.MaxDispatchRate, cfg.DispatchWindow))
 	runner.SetMetricsRecorder(metrics.NewStore(database))
 	runner.SetOpenCodeContextWindow(cfg.OpenCodeContextWindow)
@@ -385,7 +339,7 @@ func main() {
 	go func() {
 		for {
 			prog := tea.NewProgram(
-				tui.NewModel(database, dataSource, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
+				tui.NewModel(database, dataSource, orch, nil, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
 				tea.WithAltScreen(),
 				tea.WithoutSignalHandler(),
 			)

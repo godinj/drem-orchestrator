@@ -1,12 +1,9 @@
 // tmux_iface.go defines TmuxManager, the narrow session-management surface
 // the TUI uses for supervisor/shell jumps. Keeping the interface inside the
-// TUI package breaks the direct import of internal/tmux that previously
-// typed the Model.tmux field — one of the last call sites blocking the
-// prompt-21 package deletion.
-//
-// The concrete *tmux.Manager (and its tmuxbridge alias) satisfies this
-// interface verbatim; tests pass nil, and the production wiring in
-// cmd/drem/main.go passes the bridge-constructed manager directly.
+// TUI package leaves the door open for a future in-container tmux session
+// manager without the TUI caring which implementation it got. In the
+// current containerized wiring cmd/drem/main.go passes nil — the TUI
+// degrades gracefully when no tmux manager is configured.
 package tui
 
 // TmuxManager is the subset of tmux.Manager methods the TUI invokes for

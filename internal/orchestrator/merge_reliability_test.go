@@ -12,8 +12,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/tmux"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -54,15 +52,15 @@ func TestMergeFailedEvent_EmitsStructuredDiagnostics(t *testing.T) {
 
 	// Set up orchestrator with a real merger
 	db := testutil.NewTestDB(t)
-	wt := worktree.NewManager(bareRepoPath, "main")
+	host := NewHostManager(bareRepoPath, "main")
+	wt := host.AsInterface()
 	projectID := uuid.New()
 	events := make(chan Event, 100)
 
 	project := model.Project{ID: projectID, Name: "test", BareRepoPath: bareRepoPath}
 	db.Create(&project)
 
-	tm := tmux.NewManager("test-merge-diag")
-	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", "", 4, nil)
+	runner := agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), "/usr/bin/false", "", 4, nil)
 
 	o := &Orchestrator{
 		db:        db,
@@ -207,15 +205,15 @@ func TestOnAgentFailed_AlreadyMerged_FastTracksToDone(t *testing.T) {
 	agentBranch := createAgentBranch(t, bareRepoPath, featureName, "worktree-agent-merged", true)
 
 	db := testutil.NewTestDB(t)
-	wt := worktree.NewManager(bareRepoPath, "main")
+	host := NewHostManager(bareRepoPath, "main")
+	wt := host.AsInterface()
 	projectID := uuid.New()
 	events := make(chan Event, 100)
 
 	project := model.Project{ID: projectID, Name: "test", BareRepoPath: bareRepoPath}
 	db.Create(&project)
 
-	tm := tmux.NewManager("test-already-merged")
-	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", "", 4, nil)
+	runner := agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), "/usr/bin/false", "", 4, nil)
 
 	o := &Orchestrator{
 		db:        db,
@@ -301,15 +299,15 @@ func TestOnAgentFailed_NotMerged_FailsNormally(t *testing.T) {
 	runGitCmd(t, agentDir, "commit", "-m", "diverged commit")
 
 	db := testutil.NewTestDB(t)
-	wt := worktree.NewManager(bareRepoPath, "main")
+	host := NewHostManager(bareRepoPath, "main")
+	wt := host.AsInterface()
 	projectID := uuid.New()
 	events := make(chan Event, 100)
 
 	project := model.Project{ID: projectID, Name: "test", BareRepoPath: bareRepoPath}
 	db.Create(&project)
 
-	tm := tmux.NewManager("test-not-merged")
-	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", "", 4, nil)
+	runner := agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), "/usr/bin/false", "", 4, nil)
 
 	o := &Orchestrator{
 		db:        db,

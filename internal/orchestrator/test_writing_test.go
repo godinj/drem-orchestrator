@@ -15,30 +15,20 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // testOrchestratorWithRunner creates an Orchestrator with a test DB and a
 // Runner that has 0 capacity (CanSpawn returns false). Useful for tests
 // that call processTestWriting but don't need actual agent spawning.
 //
-// The Runner still requires a concrete *worktree.Manager (that dependency is
-// out of scope for this migration prompt), so when the caller passes a
-// WorktreeManager that is not already a *worktree.Manager — e.g. a
-// FakeWorktreeManager — we synthesise an empty real Manager for the runner.
-// The orchestrator itself uses the caller-supplied interface value, so
-// test assertions target the fake consistently.
+// The Runner accepts an agent.WorktreeManager interface. Tests that pass a
+// FakeWorktreeManager (which does not satisfy agent.WorktreeManager) can
+// leave the runner's worktree nil — the runner's SpawnAgent path is never
+// exercised at maxConcurrent=0.
 func testOrchestratorWithRunner(t *testing.T, db *gorm.DB, wtManager WorktreeManager) *Orchestrator {
 	t.Helper()
 	o := testOrchestrator(t, db, wtManager)
-	runnerMgr, ok := wtManager.(*worktree.Manager)
-	if !ok {
-		runnerMgr = &worktree.Manager{
-			BareRepoPath:  wtManager.BareRepo(),
-			DefaultBranch: wtManager.DefaultBranchName(),
-		}
-	}
-	o.runner = agent.NewRunner(db, nil, runnerMgr, "claude", "", 0, nil)
+	o.runner = agent.NewRunner(db, nil, nil, "claude", "", 0, nil)
 	return o
 }
 

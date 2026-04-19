@@ -30,7 +30,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agentmon"
 	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 const (
@@ -100,7 +99,7 @@ type Runner struct {
 	startProcess          ProcessStarter     // creates subprocess; overridable for tests
 	tmuxMgr               TmuxSessionManager // for supervisors/shells only
 	tmuxSessionName       string             // dashboard session name prefix
-	worktree              *worktree.Manager
+	worktree              WorktreeManager
 	claudeBin             string
 	openCodeBin           string
 	maxConcurrent         int
@@ -142,11 +141,14 @@ func (r *Runner) SetOpenCodeContextWindow(size int) {
 // agentConfigs maps agent types to CLI flags; pass nil for default behavior
 // (effort=medium, no model override).
 //
-// tm is a TmuxSessionManager: *tmux.Manager satisfies it but this file
-// imports the interface, not the concrete type. Pass nil in tests or in
-// containerized configurations where supervisor tmux sessions are not
-// required.
-func NewRunner(db *gorm.DB, tm TmuxSessionManager, wt *worktree.Manager, claudeBin, openCodeBin string, maxConcurrent int, agentConfigs func(model.AgentType) model.AgentCLIConfig) *Runner {
+// tm is a TmuxSessionManager: the host-mode tmux manager satisfies it, but
+// this file imports the interface, not any concrete type. Pass nil in tests
+// or in containerized configurations where supervisor tmux sessions are
+// not required.
+//
+// wt is a WorktreeManager: the host-mode worktree manager satisfies it.
+// Pass nil only in tests that never call SpawnAgent.
+func NewRunner(db *gorm.DB, tm TmuxSessionManager, wt WorktreeManager, claudeBin, openCodeBin string, maxConcurrent int, agentConfigs func(model.AgentType) model.AgentCLIConfig) *Runner {
 	if agentConfigs == nil {
 		agentConfigs = func(model.AgentType) model.AgentCLIConfig {
 			return model.AgentCLIConfig{Effort: "medium"}
@@ -297,7 +299,7 @@ func (r *Runner) SpawnAgent(task *model.Task, featureName string, agentType mode
 	}
 
 	// Generate repo map in the new worktree (non-blocking on failure).
-	worktree.GenerateRepoMapAsync(wtInfo.Path)
+	r.worktree.GenerateRepoMapAsync(wtInfo.Path)
 
 	return r.spawnNewAgent(task, wtInfo.Path, wtInfo.Branch, agentType, prompt)
 }

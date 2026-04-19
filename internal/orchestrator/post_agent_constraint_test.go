@@ -10,7 +10,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -47,7 +46,7 @@ func TestPostAgentConstraint_NoConfig(t *testing.T) {
 	}
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := worktree.NewManager(bareRepoPath, "main")
+	wt := NewHostWorktreeManager(bareRepoPath, "main")
 	o.worktree = wt
 
 	parentID := uuid.New()
@@ -159,7 +158,7 @@ limit = 1000
 	runGitCmd(t, agentDir, "commit", "-m", "add small go file")
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := worktree.NewManager(bareRepoPath, "main")
+	wt := NewHostWorktreeManager(bareRepoPath, "main")
 	o.worktree = wt
 
 	parentID := uuid.New()
@@ -269,7 +268,7 @@ limit = 5
 	runGitCmd(t, agentDir, "commit", "-m", "add big go file")
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := worktree.NewManager(bareRepoPath, "main")
+	wt := NewHostWorktreeManager(bareRepoPath, "main")
 	o.worktree = wt
 
 	parentID := uuid.New()

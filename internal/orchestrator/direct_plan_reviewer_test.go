@@ -15,7 +15,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // setupDirectPlanReviewerTest creates an orchestrator backed by a real DB,
@@ -37,18 +36,18 @@ func setupDirectPlanReviewerTest(t *testing.T) (*Orchestrator, string) {
 		t.Fatalf("create project: %v", err)
 	}
 
-	wt := worktree.NewManager(bareRepo, "main")
+	host := NewHostManager(bareRepo, "main")
 	events := make(chan Event, 100)
 	orch := &Orchestrator{
 		db:        db,
 		projectID: projectID,
-		worktree:  wt,
+		worktree:  host.AsInterface(),
 		events:    events,
 		logger:    slog.Default().With("component", "direct-plan-reviewer-test"),
 	}
 	// A runner is required so that the subprocess path fails cleanly instead
 	// of panicking when the fall-through test exercises it.
-	orch.runner = agent.NewRunner(db, nil, wt, "/nonexistent/claude", "", 0, nil)
+	orch.runner = agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), "/nonexistent/claude", "", 0, nil)
 	return orch, bareRepo
 }
 

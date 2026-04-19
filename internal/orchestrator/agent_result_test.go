@@ -13,8 +13,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/tmux"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -28,7 +26,8 @@ import (
 func agentResultOrchestrator(t *testing.T, bareRepoPath string) (*Orchestrator, *model.Project) {
 	t.Helper()
 	db := testutil.NewTestDB(t)
-	wt := worktree.NewManager(bareRepoPath, "main")
+	host := NewHostManager(bareRepoPath, "main")
+	wt := host.AsInterface()
 	projectID := uuid.New()
 	events := make(chan Event, 100)
 
@@ -39,11 +38,11 @@ func agentResultOrchestrator(t *testing.T, bareRepoPath string) (*Orchestrator, 
 	}
 	db.Create(&project)
 
-	// Create a minimal runner backed by a fake tmux session name. The runner
-	// is needed to avoid nil-pointer panics in onAgentCompleted; it will
-	// return errors from GetAgentOutput which the caller handles gracefully.
-	tm := tmux.NewManager("test-agent-result")
-	runner := agent.NewRunner(db, tm, wt, "/usr/bin/false", "", 4, nil)
+	// Create a minimal runner. No tmux manager — supervisor/shell sessions
+	// are the only callers of TmuxSessionManager and none of the tests in
+	// this file exercise them. GetAgentOutput panics are avoided because
+	// the runner has a real *gorm.DB.
+	runner := agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), "/usr/bin/false", "", 4, nil)
 
 	o := &Orchestrator{
 		db:        db,
@@ -124,7 +123,7 @@ func TestProcessAgentResult_SuccessRouting(t *testing.T) {
 
 	// The Orchestrator's own merge primitives (o.mergeAgentBranchIntoFeature)
 	// drive the agent-branch-into-feature merge via o.worktree, which
-	// agentResultOrchestrator already wires as a real *worktree.Manager.
+	// agentResultOrchestrator already wires a real host-mode worktree manager.
 	_ = bareRepoPath
 
 	// Process a success completion.
@@ -261,7 +260,7 @@ func TestOnPlannerCompleted_ValidPlan(t *testing.T) {
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := worktree.NewManager(bareRepoPath, "main")
+	wt := NewHostWorktreeManager(bareRepoPath, "main")
 	o.worktree = wt
 
 	// Create a planner agent worktree and write plan.json.
@@ -1525,7 +1524,7 @@ func TestProcessAgentResult_StoresExitInfo(t *testing.T) {
 	runGitCmd(t, agentDir, "commit", "-m", "exit info work")
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := worktree.NewManager(bareRepoPath, "main")
+	wt := NewHostWorktreeManager(bareRepoPath, "main")
 	o.worktree = wt
 
 	// Create parent task.
@@ -1620,7 +1619,7 @@ func TestProcessAgentResult_NilExitInfo(t *testing.T) {
 	runGitCmd(t, agentDir, "commit", "-m", "nil exit info work")
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := worktree.NewManager(bareRepoPath, "main")
+	wt := NewHostWorktreeManager(bareRepoPath, "main")
 	o.worktree = wt
 
 	// Create parent task.

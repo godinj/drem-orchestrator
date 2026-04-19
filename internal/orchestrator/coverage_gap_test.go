@@ -12,7 +12,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -2784,7 +2783,7 @@ func TestExtractTestFiles(t *testing.T) {
 	runGitCmd(t, featureDir, "commit", "-m", "add files")
 
 	db := testutil.NewTestDB(t)
-	wt := worktree.NewManager(bareRepo, "main")
+	wt := NewHostWorktreeManager(bareRepo, "main")
 	o := testOrchestrator(t, db, wt)
 
 	testFiles := o.extractTestFiles(featureDir, "main")
