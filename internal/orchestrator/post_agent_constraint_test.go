@@ -225,25 +225,34 @@ limit = 1000
 func TestPostAgentConstraint_Fail(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
 
-	featureName := "constraint-fail"
-	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
-
-	// Add a .drem/constraints.toml with a very small max_lines limit.
-	dremDir := filepath.Join(featureDir, ".drem")
-	if err := os.MkdirAll(dremDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
 	constraintsContent := `
 [[max_lines]]
 name = "Go file size"
 glob = "**/*.go"
 limit = 5
 `
-	if err := os.WriteFile(filepath.Join(dremDir, "constraints.toml"), []byte(constraintsContent), 0o644); err != nil {
+
+	// Create a main worktree with the constraints config committed so the
+	// constraint gate's delta evaluation has a valid baseline to compare
+	// against. Without this, EvaluateDelta is skipped and new violations
+	// are not detected.
+	mainDir := filepath.Join(bareRepoPath, "main")
+	runGitCmd(t, bareRepoPath, "worktree", "add", mainDir, "main")
+	runGitCmd(t, mainDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, mainDir, "config", "user.name", "Test")
+	mainDremDir := filepath.Join(mainDir, ".drem")
+	if err := os.MkdirAll(mainDremDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	runGitCmd(t, featureDir, "add", ".")
-	runGitCmd(t, featureDir, "commit", "-m", "add constraints config")
+	if err := os.WriteFile(filepath.Join(mainDremDir, "constraints.toml"), []byte(constraintsContent), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, mainDir, "add", ".")
+	runGitCmd(t, mainDir, "commit", "-m", "add constraints config to main")
+
+	featureName := "constraint-fail"
+	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
+	_ = featureDir
 
 	// Create an agent branch with a file that exceeds the limit.
 	agentBranch := "worktree-agent-fail"
@@ -330,15 +339,21 @@ limit = 5
 	if !ok {
 		t.Fatal("expected constraint_violations in task context")
 	}
-	violationsStr, ok := violations.(string)
+	violationNames, ok := violations.([]any)
 	if !ok {
-		t.Fatalf("expected constraint_violations to be a string, got %T", violations)
+		t.Fatalf("expected constraint_violations to be a slice, got %T", violations)
 	}
-	if !strings.Contains(violationsStr, "FAIL") {
-		t.Errorf("expected violations to contain 'FAIL', got: %s", violationsStr)
+	if len(violationNames) == 0 {
+		t.Fatal("expected at least one violation name in constraint_violations")
 	}
-	if !strings.Contains(violationsStr, "exceeds limit") {
-		t.Errorf("expected violations to mention 'exceeds limit', got: %s", violationsStr)
+	joined := ""
+	for _, v := range violationNames {
+		if s, ok := v.(string); ok {
+			joined += s + " "
+		}
+	}
+	if !strings.Contains(joined, "Go file size") {
+		t.Errorf("expected violations to reference the failing rule, got: %s", joined)
 	}
 
 	// Verify agent status is idle (not dead — work is preserved).

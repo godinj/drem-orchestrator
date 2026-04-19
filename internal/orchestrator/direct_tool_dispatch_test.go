@@ -92,6 +92,10 @@ func TestProcessCoderDirect_CreatesAgentRecord(t *testing.T) {
 	orch, projectID, _ := setupDirectToolDispatchTest(t)
 
 	parent := testutil.CreateTask(t, orch.db, projectID, "Parent feature", model.StatusInProgress)
+	parent.WorktreeBranch = "feature/widget"
+	if err := orch.db.Save(&parent).Error; err != nil {
+		t.Fatalf("save parent: %v", err)
+	}
 	sub := testutil.CreateTask(t, orch.db, projectID, "Implement widget", model.StatusInProgress)
 	sub.ParentTaskID = &parent.ID
 	if err := orch.db.Save(&sub).Error; err != nil {
@@ -215,6 +219,10 @@ func TestProcessCoderDirect_SetsTokensOnAgent(t *testing.T) {
 	orch, projectID, _ := setupDirectToolDispatchTest(t)
 
 	parent := testutil.CreateTask(t, orch.db, projectID, "Parent feature", model.StatusInProgress)
+	parent.WorktreeBranch = "feature/code-sub"
+	if err := orch.db.Save(&parent).Error; err != nil {
+		t.Fatalf("save parent: %v", err)
+	}
 	sub := testutil.CreateTask(t, orch.db, projectID, "Code subtask", model.StatusInProgress)
 	sub.ParentTaskID = &parent.ID
 	if err := orch.db.Save(&sub).Error; err != nil {
@@ -377,6 +385,10 @@ func TestProviderAutoDetection_SGLangDirect_RoutesToDirectPath(t *testing.T) {
 	orch, projectID, _ := setupDirectToolDispatchTest(t)
 
 	parent := testutil.CreateTask(t, orch.db, projectID, "Feature", model.StatusInProgress)
+	parent.WorktreeBranch = "feature/auto-detect"
+	if err := orch.db.Save(&parent).Error; err != nil {
+		t.Fatalf("save parent: %v", err)
+	}
 	sub := testutil.CreateTask(t, orch.db, projectID, "Implement", model.StatusInProgress)
 	sub.ParentTaskID = &parent.ID
 	if err := orch.db.Save(&sub).Error; err != nil {

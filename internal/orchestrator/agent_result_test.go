@@ -263,6 +263,14 @@ func TestOnPlannerCompleted_ValidPlan(t *testing.T) {
 	wt := NewHostWorktreeManager(bareRepoPath, "main")
 	o.worktree = wt
 
+	// Populate source files in the feature worktree so plan-file validation
+	// accepts the estimated_files references below.
+	for _, name := range []string{"a.go", "b.go"} {
+		if err := os.WriteFile(filepath.Join(featureDir, name), []byte("package p\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+
 	// Create a planner agent worktree and write plan.json.
 	plannerDir := filepath.Join(bareRepoPath, "feature", featureName, "planner-wt")
 	os.MkdirAll(plannerDir, 0o755)
