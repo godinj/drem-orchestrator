@@ -85,13 +85,30 @@ services:
         target: /models
         read_only: true
     # Launch command pulled out of the Dockerfile so operators can swap models
-    # without rebuilding. Matches the host-side invocation documented in
+    # without rebuilding. Host-varying bits (model dir, weights subdir, served
+    # name, per-host tuning) come from deploy/compose/.env — see
+    # deploy/compose/.env.example for the full knob list. Flags that are
+    # gemma4-specific tuning (KV dtype, SWA ratio, attention/sampling backend,
+    # tool-call parser) are hardcoded here because swapping them amounts to
+    # swapping model families, which warrants a code change, not a config flip.
+    # Mirrors the host-side launcher documented in
     # plans/host-state-inventory.md §1.1.
     command: >
       python -m sglang.launch_server
       --host 0.0.0.0 --port 8081
-      --model-path /models/gemma4-26b
-      --tp 1
+      --model-path /models/${SGLANG_MODEL_SUBDIR:-gemma4-26b}
+      --served-model-name ${SGLANG_SERVED_NAME:-gemma4-26b}
+      --context-length ${SGLANG_CONTEXT_LENGTH:-131072}
+      --mem-fraction-static ${SGLANG_MEM_FRACTION:-0.85}
+      --max-running-requests ${SGLANG_MAX_REQUESTS:-4}
+      --tp ${SGLANG_TP:-1}
+      --kv-cache-dtype fp8_e5m2
+      --swa-full-tokens-ratio 0.08
+      --attention-backend triton
+      --sampling-backend pytorch
+      --disable-piecewise-cuda-graph
+      --tool-call-parser gemma4
+      --trust-remote-code
     deploy:
       resources:
         reservations:

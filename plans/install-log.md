@@ -83,21 +83,33 @@ The install expects / creates the following paths under `$HOME`:
 | `~/.drem/` | Host-wide project registry root | `drem project register` |
 | `~/.drem/projects.toml` | Project-registry TOML | `drem project register` |
 | `~/.drem/projects/<name>/compose.yml` | Per-project compose | `drem project register` |
-| `~/models/` (or `~/sglang-models/`) | SGLang model weights directory, bind-mounted read-only | operator |
+| `~/models/<model-dir>/` | SGLang model weights (Hugging Face layout) | operator |
+| `deploy/compose/.env` | Operator-local compose overrides (gitignored) | operator, from `.env.example` |
 
-`SGLANG_MODEL_DIR` env var overrides the compose default; the default in
-`deploy/compose/global.yml` points at `$HOME/sglang-models`. On this host
-the existing host process reads `/home/godinj/models/gemma-4-26B-A4B-it-AWQ-4bit-textonly`,
-so the install script must either:
+Model-dir location and weight-subdir name both vary per host. Compose
+parameterizes both via `.env`:
 
-- set `SGLANG_MODEL_DIR=$HOME/models` and pass a matching
-  `--model-path` in the compose `command:` override, or
-- create a symlink `~/sglang-models -> ~/models`, or
-- relocate the weights to `~/sglang-models/gemma4-26b/` to match the
-  stock compose defaults.
+- `SGLANG_MODEL_DIR` — absolute host path bind-mounted read-only into the
+  container at `/models`. Default: `$HOME/sglang-models`.
+- `SGLANG_MODEL_SUBDIR` — subdirectory under `/models` passed as
+  `--model-path`. Default: `gemma4-26b`.
+- `SGLANG_SERVED_NAME` — OpenAI-API model name drem clients reference.
+  Default: `gemma4-26b`. Must match `[agents.classifier].model` and
+  `[direct_tool_agent].model` in `drem.toml`.
+- Plus tunables (`SGLANG_CONTEXT_LENGTH`, `SGLANG_MEM_FRACTION`,
+  `SGLANG_MAX_REQUESTS`, `SGLANG_TP`) documented in the template.
 
-Recommendation for a clean install: use a fresh `~/sglang-models/<model>/`
-layout and avoid the symlink.
+Bootstrap on a new host:
+
+```bash
+cp deploy/compose/.env.example deploy/compose/.env
+$EDITOR deploy/compose/.env          # match model dir + subdir on this host
+```
+
+Compose auto-loads `deploy/compose/.env` because it lives next to the
+compose file. Gemma4-specific flags (`--kv-cache-dtype fp8_e5m2`,
+`--tool-call-parser gemma4`, etc.) are hardcoded in the compose `command:`
+since swapping them means swapping model families.
 
 ---
 
@@ -390,20 +402,22 @@ A single-script install would sequence:
 1. Verify prerequisites (docker running, nvidia toolkit present, user in
    docker group, GPU visible). Fail closed on any miss.
 2. Ensure `~/.drem-csuite/` and model weight directory exist.
-3. `bash deploy/compose/network-setup.sh`.
-4. `docker compose -f deploy/compose/global.yml up -d registry`.
-5. `bash deploy/docker/build-workers.sh`.
-6. `bash deploy/docker/build-csuite.sh`.
-7. Build + push the single-image components (sglang, gq, spawner,
+3. `cp deploy/compose/.env.example deploy/compose/.env` and edit values
+   (model dir, subdir, served name) to match this host.
+4. `bash deploy/compose/network-setup.sh`.
+5. `docker compose -f deploy/compose/global.yml up -d registry`.
+6. `bash deploy/docker/build-workers.sh`.
+7. `bash deploy/docker/build-csuite.sh`.
+8. Build + push the single-image components (sglang, gq, spawner,
    agentmon, merger, kyle, docker-query-proxy) in a loop.
-8. Verify registry catalog (`curl /v2/_catalog` returns the expected
+9. Verify registry catalog (`curl /v2/_catalog` returns the expected
    18-entry list).
-9. `docker compose -f deploy/compose/global.yml up -d`.
-10. Poll all healthchecks green.
-11. Retire host SGLang (`pkill -f sglang.launch_server`) and GQ
+10. `docker compose -f deploy/compose/global.yml up -d`.
+11. Poll all healthchecks green.
+12. Retire host SGLang (`pkill -f sglang.launch_server`) and GQ
     (`systemctl --user stop gq && systemctl --user disable gq`).
-12. Re-verify endpoints on `:8081` and `:8091`.
-13. Print the "next step" command: `drem project register …`.
+13. Re-verify endpoints on `:8081` and `:8091`.
+14. Print the "next step" command: `drem project register …`.
 
 Phases 1–9 are idempotent. Phases 11–12 are one-shot; rerunning them on
 an already-migrated host is a no-op.
