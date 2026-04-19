@@ -137,20 +137,6 @@ func (r *Runner) SetOpenCodeContextWindow(size int) {
 	r.openCodeContextWindow = size
 }
 
-// dashboardSessionNamer is an optional extension implemented by tmux session
-// managers that expose a dashboard-session-name prefix for deriving nested
-// agent session names. *tmux.Manager satisfies this via a stable
-// SessionName() method, but custom managers can opt out by not implementing
-// it — in which case tmuxSessionName falls back to empty and callers that
-// need it (supervisor-session spawning) should detect empty and no-op.
-//
-// This is declared as a local interface rather than part of TmuxSessionManager
-// because ReapOrphanedSessions does not need it; keeping the surface split
-// lets a minimal test fake implement only what it exercises.
-type dashboardSessionNamer interface {
-	SessionName() string
-}
-
 // NewRunner creates an agent Runner. Headless agents are started via
 // StartAgentProcess; supervisors and shells use the tmux session manager.
 // agentConfigs maps agent types to CLI flags; pass nil for default behavior
@@ -180,35 +166,6 @@ func NewRunner(db *gorm.DB, tm TmuxSessionManager, wt *worktree.Manager, claudeB
 		completions:     make(chan Completion, maxConcurrent),
 		semaphore:       make(chan struct{}, maxConcurrent),
 	}
-}
-
-// dashboardSessionName returns the dashboard tmux session name prefix when
-// tm supports SessionName() (the shape *tmux.Manager exposes once a
-// package-level SessionName() shim is added in prompt 21). Until that shim
-// lands, *tmux.Manager exposes SessionName as a struct field — Go does not
-// let the interface assertion pick that up, so we also try a struct-field
-// reflect-free fallback via the sessionFieldGetter interface below.
-func dashboardSessionName(tm TmuxSessionManager) string {
-	if tm == nil {
-		return ""
-	}
-	if namer, ok := tm.(dashboardSessionNamer); ok {
-		return namer.SessionName()
-	}
-	if getter, ok := tm.(sessionFieldGetter); ok {
-		return getter.GetSessionName()
-	}
-	return ""
-}
-
-// sessionFieldGetter is a second extension point for tmux managers that
-// expose the dashboard session name through a differently-named method.
-// Kept separate from dashboardSessionNamer so *tmux.Manager (which already
-// exposes the name as a public field) can satisfy this interface via a
-// GetSessionName shim — without the compiler refusing a plain SessionName
-// method because it collides with the existing struct field.
-type sessionFieldGetter interface {
-	GetSessionName() string
 }
 
 // AgentTypeLabel returns a human-readable label for the given agent type.
