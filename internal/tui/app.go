@@ -39,6 +39,7 @@ const (
 // Model is the root Bubble Tea model that composes all TUI sub-models.
 type Model struct {
 	db          *gorm.DB
+	dataSource  DataSource // orchestrator HTTP API (tasks, workers, events, logs)
 	orch        TUIOrchestrator
 	tmux        *tmuxpkg.Manager
 	projectID   uuid.UUID
@@ -65,11 +66,29 @@ type Model struct {
 	width          int
 	height         int
 	err            error
+
+	// dataErr holds the most recent failure from DataSource so the root
+	// View can render a "connection lost — retrying" banner while keeping
+	// the last successful snapshot visible. It is cleared the next time
+	// a refresh succeeds.
+	dataErr error
+	// dataBackoff is the interval used for the next refresh attempt after
+	// a failure. It advances on each consecutive failure and caps at 10s,
+	// per the containerization prompt; a successful refresh resets it.
+	dataBackoff time.Duration
 }
 
 // NewModel creates the root TUI model.
+//
+// dataSource is the read-only HTTP-backed view of the orchestrator used
+// for tasks, workers, and events. The legacy db *gorm.DB parameter is
+// retained for feature surfaces that the HTTP API does not yet cover
+// (bug reports, experiments, task-detail enrichment such as comments and
+// dependency titles); those call sites are documented in
+// internal/tui/README.md as follow-ups.
 func NewModel(
 	db *gorm.DB,
+	dataSource DataSource,
 	orch TUIOrchestrator,
 	tmux *tmuxpkg.Manager,
 	projectID uuid.UUID,
@@ -85,6 +104,7 @@ func NewModel(
 	}
 	return Model{
 		db:           db,
+		dataSource:   dataSource,
 		orch:         orch,
 		tmux:         tmux,
 		projectID:    projectID,
@@ -136,17 +156,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.board.relocateCursor()
 		m.board.adjustScroll()
 		m.updateDetail()
+		m.dataErr = nil
+		m.dataBackoff = 0
 		return m, m.refreshData()
 
 	case agentsLoadedMsg:
 		m.agents.agents = msg.agents
+		m.dataErr = nil
+		m.dataBackoff = 0
 		return m, nil
+
+	case dataErrMsg:
+		// Remember the failure for the banner, bump backoff for the next
+		// retry, but keep the last-good snapshot visible. A retry tick is
+		// scheduled so the poll loop doesn't stall after a failure; the
+		// regular periodicRefreshMsg will also keep polling in parallel.
+		m.dataErr = msg.err
+		m.dataBackoff = nextDataBackoff(m.dataBackoff)
+		return m, tea.Tick(m.dataBackoff, func(time.Time) tea.Msg {
+			return periodicRefreshMsg{}
+		})
 
 	case dataRefreshedMsg:
 		m.board.tasks = msg.tasks
 		m.agents.agents = msg.agents
 		m.board.relocateCursor()
 		m.board.adjustScroll()
+		m.dataErr = nil
+		m.dataBackoff = 0
 		// Only apply detail data if the selection hasn't moved since the
 		// refresh was initiated; otherwise discard stale detail results.
 		selected := m.board.Selected()
@@ -380,6 +417,16 @@ func (m Model) View() string {
 		errLine = lipglossRender(colorDanger, fmt.Sprintf("Error: %v", m.err))
 	}
 
+	// Data-source connection banner. Shown as a distinct warning line so
+	// the last-good task/agent snapshot stays on screen while the TUI
+	// retries in the background.
+	connLine := ""
+	if m.dataErr != nil {
+		connLine = lipglossRender(colorDanger,
+			fmt.Sprintf("connection lost — retrying (next in %s): %v",
+				m.dataBackoff, m.dataErr))
+	}
+
 	// Compose.
 	parts := []string{
 		titleBar,
@@ -391,6 +438,9 @@ func (m Model) View() string {
 		parts = append(parts, confirmLine)
 	} else if errLine != "" {
 		parts = append(parts, errLine)
+	}
+	if connLine != "" {
+		parts = append(parts, connLine)
 	}
 	parts = append(parts, helpBar)
 

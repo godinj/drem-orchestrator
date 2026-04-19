@@ -56,6 +56,10 @@ func main() {
 	configPath := flag.String("config", "drem.toml", "config file path")
 	repoPath := flag.String("repo", "", "bare repo path (required)")
 	importPath := flag.String("import", "", "import tasks from a Markdown file")
+	// orchURL lets the dashboard point at a remote or alternate orchestrator
+	// HTTP API. Empty falls back to http://127.0.0.1:<cfg.OrchHTTPPort>.
+	// See docs/prd-containerization.md and internal/tui/datasource.go.
+	orchURL := flag.String("orch-url", "", "orchestrator HTTP API URL (default http://127.0.0.1:<orch_http_port>)")
 	flag.Parse()
 
 	// Load config.
@@ -329,6 +333,14 @@ func main() {
 	// Create C-Suite store for messaging operations (compose, list, detail).
 	csuiteStore := csuite.NewStore(database)
 
+	// Build the orchestrator HTTP data source used by the TUI for tasks,
+	// workers, events, and logs. The dashboard runs colocated with the
+	// orchestrator today, so the default points at local loopback; the
+	// --orch-url flag overrides for remote/test setups.
+	resolvedOrchURL := tui.ResolveOrchURL(*orchURL, cfg.OrchHTTPPort)
+	dataSource := tui.NewHTTPDataSource(resolvedOrchURL, project.Name)
+	slog.Info("TUI data source configured", "url", resolvedOrchURL, "project", project.Name)
+
 	// Register our own signal handler so we control shutdown — not
 	// Bubble Tea.  WithoutSignalHandler() prevents Bubble Tea from
 	// converting SIGTERM into a QuitMsg that silently exits the TUI.
@@ -361,7 +373,7 @@ func main() {
 	go func() {
 		for {
 			prog := tea.NewProgram(
-				tui.NewModel(database, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
+				tui.NewModel(database, dataSource, orch, tmux, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
 				tea.WithAltScreen(),
 				tea.WithoutSignalHandler(),
 			)

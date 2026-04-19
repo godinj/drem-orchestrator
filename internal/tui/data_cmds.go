@@ -1,11 +1,15 @@
 package tui
 
 import (
+	"context"
+	"time"
+
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/pkg/orchclient"
 )
 
 // tasksLoadedMsg is sent when the initial task load completes.
@@ -18,7 +22,10 @@ type agentsLoadedMsg struct {
 	agents []model.Agent
 }
 
-// dataRefreshedMsg is sent after a data refresh from DB completes.
+// dataRefreshedMsg is sent after a data refresh completes. The message
+// carries the rendering-oriented model.Task / model.Agent types that the
+// rest of the TUI already knows; the HTTP datasource adapter populates
+// them from pkg/orchdto DTOs.
 type dataRefreshedMsg struct {
 	tasks     []model.Task
 	agents    []model.Agent
@@ -27,6 +34,14 @@ type dataRefreshedMsg struct {
 	agent     *model.Agent
 	comments  []model.TaskComment
 	deps      []depInfo
+}
+
+// dataErrMsg carries a data-source failure so the root Model can render
+// the "connection lost — retrying" banner without clobbering the last
+// good snapshot. The banner is cleared on the next successful
+// dataRefreshedMsg.
+type dataErrMsg struct {
+	err error
 }
 
 // bugReportsLoadedMsg is sent when the bug report list load completes.
@@ -38,6 +53,33 @@ type bugReportsLoadedMsg struct {
 type bugReportDetailLoadedMsg struct {
 	report   *model.BugReport
 	comments []model.BugReportComment
+}
+
+// dataFetchTimeout caps how long a single DataSource call may run before
+// we treat it as a failure and show the retry banner. The orchestrator
+// runs on local loopback by default, so a generous 5s leaves room for
+// scheduler hiccups without stalling the UI when the server is truly down.
+const dataFetchTimeout = 5 * time.Second
+
+// dataBackoffCap is the ceiling for the retry interval used by
+// nextDataBackoff; it matches the cadence called out in the
+// containerization prompt ("1s -> 2s -> 5s -> 10s cap").
+const dataBackoffCap = 10 * time.Second
+
+// nextDataBackoff advances the backoff ladder one step. The ladder is
+// 1s -> 2s -> 5s -> 10s -> 10s...; it is exposed as a pure function so
+// backoff behaviour stays testable without exercising tea.Cmd plumbing.
+func nextDataBackoff(current time.Duration) time.Duration {
+	switch {
+	case current <= 0:
+		return 1 * time.Second
+	case current < 2*time.Second:
+		return 2 * time.Second
+	case current < 5*time.Second:
+		return 5 * time.Second
+	default:
+		return dataBackoffCap
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -56,32 +98,51 @@ func listenForEvents(events <-chan Event) tea.Cmd {
 	}
 }
 
-// loadTasks returns a Cmd that queries all tasks for the project from DB.
+// loadTasks returns a Cmd that fetches tasks via the orchestrator HTTP API.
+// The datasource may be nil in tests that construct Model literally; in
+// that case the Cmd emits an empty result instead of panicking.
 func (m Model) loadTasks() tea.Cmd {
-	db := m.db
-	projectID := m.projectID
+	ds := m.dataSource
 	return func() tea.Msg {
-		var tasks []model.Task
-		db.Where("project_id = ?", projectID).
-			Order("priority desc, created_at").
-			Find(&tasks)
-		return tasksLoadedMsg{tasks: tasks}
+		if ds == nil {
+			return tasksLoadedMsg{tasks: nil}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), dataFetchTimeout)
+		defer cancel()
+		dtos, err := ds.ListTasks(ctx, orchclient.TaskFilter{})
+		if err != nil {
+			return dataErrMsg{err: err}
+		}
+		return tasksLoadedMsg{tasks: TasksFromDTOs(dtos)}
 	}
 }
 
-// loadAgents returns a Cmd that queries all agents for the project from DB.
+// loadAgents returns a Cmd that fetches workers (rendered as agents) via
+// the orchestrator HTTP API.
 func (m Model) loadAgents() tea.Cmd {
-	db := m.db
-	projectID := m.projectID
+	ds := m.dataSource
 	return func() tea.Msg {
-		var agents []model.Agent
-		db.Where("project_id = ?", projectID).Find(&agents)
-		return agentsLoadedMsg{agents: agents}
+		if ds == nil {
+			return agentsLoadedMsg{agents: nil}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), dataFetchTimeout)
+		defer cancel()
+		dtos, err := ds.ListWorkers(ctx)
+		if err != nil {
+			return dataErrMsg{err: err}
+		}
+		return agentsLoadedMsg{agents: AgentsFromDTOs(dtos)}
 	}
 }
 
-// refreshData returns a Cmd that reloads tasks, agents, and detail context from DB.
+// refreshData returns a Cmd that reloads tasks, agents, and detail context.
+// Tasks and agents come from the HTTP API; detail enrichments (subtasks,
+// comments, dependency titles, and the assigned agent snapshot) still
+// come from the local GORM DB when one is available. Those surfaces are
+// out of scope of the public HTTP API in this release
+// (docs/prd-containerization.md scope section).
 func (m Model) refreshData() tea.Cmd {
+	ds := m.dataSource
 	db := m.db
 	projectID := m.projectID
 	selectedTask := m.board.Selected()
@@ -94,18 +155,29 @@ func (m Model) refreshData() tea.Cmd {
 	}
 
 	return func() tea.Msg {
-		var tasks []model.Task
-		db.Where("project_id = ?", projectID).
-			Order("priority desc, created_at").
-			Find(&tasks)
+		var (
+			tasks  []model.Task
+			agents []model.Agent
+		)
+		if ds != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), dataFetchTimeout)
+			defer cancel()
+			taskDTOs, err := ds.ListTasks(ctx, orchclient.TaskFilter{})
+			if err != nil {
+				return dataErrMsg{err: err}
+			}
+			workerDTOs, err := ds.ListWorkers(ctx)
+			if err != nil {
+				return dataErrMsg{err: err}
+			}
+			tasks = TasksFromDTOs(taskDTOs)
+			agents = AgentsFromDTOs(workerDTOs)
+		}
 
-		var agents []model.Agent
-		db.Where("project_id = ?", projectID).Find(&agents)
-
-		// Enrich working agents with context usage from transcript if
-		// the runner's contextMonitorLoop hasn't populated it (e.g.
-		// after a drem restart when pre-existing agents aren't in the
-		// runner's in-memory map).
+		// Enrich working agents with context usage from transcript if the
+		// runner's contextMonitorLoop hasn't populated it. Harmless when
+		// the HTTP-sourced WorktreePath is empty: the usage lookup is
+		// skipped and the loop is a no-op.
 		for i := range agents {
 			ag := &agents[i]
 			if ag.Status != model.AgentWorking || ag.WorktreePath == "" {
@@ -132,7 +204,10 @@ func (m Model) refreshData() tea.Cmd {
 		var comments []model.TaskComment
 		var deps []depInfo
 
-		if selectedTask != nil {
+		// Detail enrichment is still DB-backed; skip cleanly if no DB
+		// handle is available (e.g. tests, or a future TUI invoked
+		// against a remote orchestrator without local SQLite).
+		if db != nil && selectedTask != nil {
 			db.Where("parent_task_id = ?", selectedTask.ID).Find(&subtasks)
 			db.Where("task_id = ?", selectedTask.ID).Order("created_at asc").Find(&comments)
 			if selectedTask.AssignedAgentID != nil {
@@ -153,9 +228,9 @@ func (m Model) refreshData() tea.Cmd {
 				}
 			}
 
-			// Load dependency tasks for display.
-			// Cast to []string to avoid JSONArray's driver.Valuer
-			// serialising the slice as a JSON string in the IN clause.
+			// Load dependency tasks for display. Cast to []string to
+			// avoid JSONArray's driver.Valuer serialising the slice as
+			// a JSON string in the IN clause.
 			if len(selectedTask.DependencyIDs) > 0 {
 				var depTasks []model.Task
 				depIDs := []string(selectedTask.DependencyIDs)

@@ -322,7 +322,7 @@ func TestNewModel_AcceptsTUIOrchestrator(t *testing.T) {
 	events := make(chan Event)
 	defer close(events)
 
-	m := NewModel(nil, mock, nil, uuid.New(), events, "", nil, nil, nil)
+	m := NewModel(nil, nil, mock, nil, uuid.New(), events, "", nil, nil, nil)
 
 	// Verify the interface is stored.
 	if m.orch == nil {
