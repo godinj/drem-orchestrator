@@ -11,7 +11,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -158,7 +157,7 @@ func TestConstraintGateWiring_TestReview_FirstFailure(t *testing.T) {
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -234,7 +233,7 @@ func TestConstraintGateWiring_TestReview_BackoffRespected(t *testing.T) {
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -303,7 +302,7 @@ func TestConstraintGateWiring_TestReview_MaxRetriesExhausted(t *testing.T) {
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -400,7 +399,7 @@ func TestConstraintGateWiring_TestReview_EarlyTermination(t *testing.T) {
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -470,7 +469,7 @@ func TestConstraintGateWiring_TestReview_PassAfterFailure(t *testing.T) {
 	constraintPassWorktree(t, bareRepoPath, featureName)
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -545,7 +544,7 @@ func TestConstraintGateWiring_TestingReady_FirstFailure(t *testing.T) {
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -617,7 +616,7 @@ func TestConstraintGateWiring_TestingReady_MaxRetriesExhausted(t *testing.T) {
 	constraintFailWorktree(t, bareRepoPath, featureName, 5)
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -682,7 +681,7 @@ func TestConstraintGateWiring_TestingReady_PassAfterRetries(t *testing.T) {
 	constraintPassWorktree(t, bareRepoPath, featureName)
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}

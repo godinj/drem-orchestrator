@@ -12,7 +12,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -21,7 +20,7 @@ import (
 
 func TestVerifyTestsBeforeMerge_PassFirstTry(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
 		TestCommand: "true", // always exits 0
@@ -53,7 +52,7 @@ func TestVerifyTestsBeforeMerge_PassFirstTry(t *testing.T) {
 
 func TestVerifyTestsBeforeMerge_PassOnRetry(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	// Create a temp dir with a counter file to track attempts.
@@ -108,7 +107,7 @@ exit 0
 
 func TestVerifyTestsBeforeMerge_AllRetriesFail(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
 		TestCommand: "false", // always exits 1
@@ -140,7 +139,7 @@ func TestVerifyTestsBeforeMerge_AllRetriesFail(t *testing.T) {
 
 func TestVerifyTestsBeforeMerge_NoTestCommand(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
 		TestCommand: "", // no command configured
@@ -170,7 +169,7 @@ func TestVerifyTestsBeforeMerge_NoTestCommand(t *testing.T) {
 
 func TestVerifyCompilationBeforeMerge_Passes(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
 		CompileCommand: "true",
@@ -200,7 +199,7 @@ func TestVerifyCompilationBeforeMerge_Passes(t *testing.T) {
 
 func TestVerifyCompilationBeforeMerge_Fails(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
 		CompileCommand: "false",
@@ -227,7 +226,7 @@ func TestVerifyCompilationBeforeMerge_Fails(t *testing.T) {
 
 func TestVerifyCompilationBeforeMerge_NoCommand_UnknownLanguage(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
 		CompileCommand: "", // empty
@@ -257,7 +256,7 @@ func TestVerifyCompilationBeforeMerge_NoCommand_UnknownLanguage(t *testing.T) {
 
 func TestVerifyCompilationBeforeMerge_InfersGoVet(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate = TestGateConfig{
 		CompileCommand: "", // empty — should infer
@@ -371,7 +370,7 @@ func TestScopeTestCommand_RootLevelGoFile(t *testing.T) {
 
 func TestStoreTestResult_PopulatesAgentConfig(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	// Create project and agent.
@@ -428,7 +427,7 @@ func TestStoreTestResult_PopulatesAgentConfig(t *testing.T) {
 
 func TestRunCommandWithTimeout_TimesOut(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	// Run a command that sleeps longer than the timeout.
@@ -447,7 +446,7 @@ func TestRunCommandWithTimeout_TimesOut(t *testing.T) {
 
 func TestOutputTruncation(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	// Generate output longer than 5000 characters.

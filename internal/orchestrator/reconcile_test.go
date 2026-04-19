@@ -1324,27 +1324,27 @@ func createAgentWorktree(t *testing.T, bareRepoPath, featureName, agentSuffix, b
 	featureBranch := "feature/" + featureName
 
 	// Create branch from the feature branch.
-	if _, err := worktree.RunGit([]string{"branch", branchName, featureBranch}, bareRepoPath); err != nil {
+	if _, err := testutil.RunGit([]string{"branch", branchName, featureBranch}, bareRepoPath); err != nil {
 		t.Fatalf("create branch %s: %v", branchName, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(agentDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := worktree.RunGit([]string{"worktree", "add", agentDir, branchName}, bareRepoPath); err != nil {
+	if _, err := testutil.RunGit([]string{"worktree", "add", agentDir, branchName}, bareRepoPath); err != nil {
 		t.Fatalf("add worktree %s: %v", branchName, err)
 	}
-	worktree.RunGit([]string{"config", "user.email", "test@test.com"}, agentDir)
-	worktree.RunGit([]string{"config", "user.name", "Test"}, agentDir)
+	testutil.RunGit([]string{"config", "user.email", "test@test.com"}, agentDir)
+	testutil.RunGit([]string{"config", "user.name", "Test"}, agentDir)
 
 	if addCommit {
 		testFile := filepath.Join(agentDir, "agent-work.txt")
 		if err := os.WriteFile(testFile, []byte("agent work"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := worktree.RunGit([]string{"add", "."}, agentDir); err != nil {
+		if _, err := testutil.RunGit([]string{"add", "."}, agentDir); err != nil {
 			t.Fatalf("git add: %v", err)
 		}
-		if _, err := worktree.RunGit([]string{"commit", "-m", "agent work commit"}, agentDir); err != nil {
+		if _, err := testutil.RunGit([]string{"commit", "-m", "agent work commit"}, agentDir); err != nil {
 			t.Fatalf("commit: %v", err)
 		}
 	}
@@ -1381,7 +1381,7 @@ func TestReconcileOrphanWorktrees_RemovesEmptyAgentWorktree(t *testing.T) {
 	}
 
 	// Verify the agent branch was deleted.
-	_, branchErr := worktree.RunGit([]string{"rev-parse", "--verify", agentBranch}, bareRepo)
+	_, branchErr := testutil.RunGit([]string{"rev-parse", "--verify", agentBranch}, bareRepo)
 	if branchErr == nil {
 		t.Errorf("expected agent branch %q to be deleted, but it still exists", agentBranch)
 	}
@@ -1418,7 +1418,7 @@ func TestReconcileOrphanWorktrees_SkipsNonAgentBranch(t *testing.T) {
 	}
 
 	// Verify the non-agent branch still exists.
-	_, branchErr := worktree.RunGit([]string{"rev-parse", "--verify", nonAgentBranch}, bareRepo)
+	_, branchErr := testutil.RunGit([]string{"rev-parse", "--verify", nonAgentBranch}, bareRepo)
 	if branchErr != nil {
 		t.Errorf("non-agent branch %q was deleted — reconciler must not remove non-agent branches", nonAgentBranch)
 	}
@@ -1458,7 +1458,7 @@ func TestReconcileOrphanWorktrees_PreservesAgentWithCommits(t *testing.T) {
 	}
 
 	// Verify the agent branch still exists.
-	_, branchErr := worktree.RunGit([]string{"rev-parse", "--verify", agentBranch}, bareRepo)
+	_, branchErr := testutil.RunGit([]string{"rev-parse", "--verify", agentBranch}, bareRepo)
 	if branchErr != nil {
 		t.Errorf("agent branch %q was deleted — should be preserved (has commits)", agentBranch)
 	}
@@ -1537,7 +1537,7 @@ func TestReconcile_ProtectsMainWorktreeFromOrphanCleanup(t *testing.T) {
 	}
 
 	// Verify: main branch still exists.
-	_, branchErr := worktree.RunGit([]string{"rev-parse", "--verify", "refs/heads/main"}, bareRepo)
+	_, branchErr := testutil.RunGit([]string{"rev-parse", "--verify", "refs/heads/main"}, bareRepo)
 	if branchErr != nil {
 		t.Fatal("main branch was deleted from bare repo — this is the critical bug")
 	}

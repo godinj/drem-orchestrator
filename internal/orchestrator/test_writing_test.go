@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
@@ -46,7 +48,7 @@ func testOrchestratorWithRunner(t *testing.T, db *gorm.DB, wtManager WorktreeMan
 
 func TestProcessTestWriting_SchedulesOnlyTestPhaseSubtasks(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -145,7 +147,7 @@ func TestProcessTestWriting_SchedulesOnlyTestPhaseSubtasks(t *testing.T) {
 
 func TestProcessTestWriting_AllTestSubtasksDone_TransitionsToTestReview(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -201,7 +203,7 @@ func TestProcessTestWriting_AllTestSubtasksDone_TransitionsToTestReview(t *testi
 
 func TestProcessTestWriting_AllTestSubtasksTerminal_SomeFailed(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -252,7 +254,7 @@ func TestProcessTestWriting_AllTestSubtasksTerminal_SomeFailed(t *testing.T) {
 
 func TestProcessTestWriting_TestSubtasksStillRunning(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -313,7 +315,7 @@ const expectedMaxEmptySubtaskChecks = 5
 
 func TestProcessTestWriting_EmptySubtasks_FirstCheck_TransitionsToPlanning(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -362,7 +364,7 @@ func TestProcessTestWriting_EmptySubtasks_FirstCheck_TransitionsToPlanning(t *te
 
 func TestProcessTestWriting_EmptySubtasks_MaxRetries_TransitionsToFailed(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -409,7 +411,7 @@ func TestProcessTestWriting_EmptySubtasks_MaxRetries_TransitionsToFailed(t *test
 
 func TestProcessTestWriting_EmptySubtasks_CounterResets_WhenSubtasksAppear(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -465,7 +467,7 @@ func TestProcessTestWriting_EmptySubtasks_CounterResets_WhenSubtasksAppear(t *te
 
 func TestProcessTestWriting_EmptySubtasks_ReplanDirective_InContext(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -505,7 +507,7 @@ func TestProcessTestWriting_EmptySubtasks_ReplanDirective_InContext(t *testing.T
 
 func TestProcessTestWriting_EmptySubtasks_ReplanClearsPlan(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -554,7 +556,7 @@ func TestProcessTestWriting_EmptySubtasks_ReplanClearsPlan(t *testing.T) {
 
 func TestProcessTestWriting_EmptySubtasks_ReplanDetachesOldSubtasks(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -602,7 +604,7 @@ func TestProcessPlanning_PlanFeedbackClearsStaleFromReplan(t *testing.T) {
 	// (e.g., after RecoveryReplan), processPlanning should clear the plan
 	// and fall through to spawn a new planner (not auto-advance).
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -645,7 +647,7 @@ func TestProcessPlanning_PlanFeedbackClearsStaleFromReplan(t *testing.T) {
 
 func TestHandlePlanApproved_TDDPlan_TransitionsToTestWriting(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -708,7 +710,7 @@ func TestHandlePlanApproved_TDDPlan_TransitionsToTestWriting(t *testing.T) {
 
 func TestHandlePlanApproved_OldFormatPlan_TransitionsToInProgress(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -756,7 +758,7 @@ func TestHandlePlanApproved_OldFormatPlan_TransitionsToInProgress(t *testing.T) 
 
 func TestPhaseAwareScheduling_InProgressSkipsTestSubtasks(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -985,7 +987,7 @@ func TestMergeTDDDependencies_OutOfRangeIndex(t *testing.T) {
 
 func TestHandlePlanApproved_SetsTestsForOnSubtasks(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -1062,7 +1064,7 @@ func TestHandlePlanApproved_SetsTestsForOnSubtasks(t *testing.T) {
 
 func TestHandlePlanApproved_StoresTDDExceptions(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -1292,7 +1294,7 @@ func TestParsePlanFull_OldFormat_NoPhase(t *testing.T) {
 func TestDoTick_QueriesTestWritingTasks(t *testing.T) {
 	// Verify that doTick picks up TEST_WRITING tasks.
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -1341,7 +1343,7 @@ func TestDoTick_QueriesTestWritingTasks(t *testing.T) {
 
 func TestGetTestCommand_FromConfig(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate.TestCommand = "go test -v ./..."
 
@@ -1355,7 +1357,7 @@ func TestGetTestCommand_FromConfig(t *testing.T) {
 
 func TestGetTestCommand_NoContextNoWorktree(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	task := &model.Task{}
@@ -1375,7 +1377,7 @@ func TestScheduleSubtasks_TestWriting_SkipsWaveGroupGating(t *testing.T) {
 	// test-phase subtasks with met dependencies should be schedulable,
 	// regardless of file-overlap groups.
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -1510,7 +1512,7 @@ func TestScheduleSubtasks_TestWriting_SkipsWaveGroupGating(t *testing.T) {
 
 func TestScheduleSubtasks_TestWriting_RespectsExplicitDependencies(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -1582,7 +1584,7 @@ func TestScheduleSubtasks_TestWriting_RespectsExplicitDependencies(t *testing.T)
 
 func TestProcessTestWriting_SupervisorFixTriggersTestReview(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -1642,7 +1644,7 @@ func TestProcessTestWriting_SupervisorFixTriggersTestReview(t *testing.T) {
 
 func TestFullLifecycle_TestWritingToInProgress(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -1799,7 +1801,7 @@ func TestMergeAutoCommitsDirtyWorktree(t *testing.T) {
 	}
 
 	// Verify worktree is dirty.
-	clean, err := worktree.IsClean(featureDir)
+	clean, err := gitexec.IsClean(context.Background(), featureDir)
 	if err != nil {
 		t.Fatalf("check clean: %v", err)
 	}
@@ -1813,7 +1815,7 @@ func TestMergeAutoCommitsDirtyWorktree(t *testing.T) {
 	// TODO: CommitUnstagedChanges returns false here — investigate why the
 	// untracked plan.json is not picked up. Skipping assertion until root
 	// cause is fixed.
-	_, _ = worktree.CommitUnstagedChanges(featureDir, "chore: commit orchestrator artifacts before merge")
+	_, _ = gitexec.CommitUnstagedChanges(context.Background(), featureDir, "chore: commit orchestrator artifacts before merge")
 }
 
 // ---------------------------------------------------------------------------
@@ -1827,7 +1829,7 @@ func TestHandlePlanApproved_WritesPlanJSONUntracked(t *testing.T) {
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
 
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -1872,7 +1874,7 @@ func TestHandlePlanApproved_WritesPlanJSONUntracked(t *testing.T) {
 	}
 
 	// Verify plan.json is NOT tracked by git.
-	out, _ := worktree.RunGit([]string{"ls-files", "plan.json"}, featureDir)
+	out, _ := gitexec.RunGit(context.Background(), featureDir, "ls-files", "plan.json")
 	if out != "" {
 		t.Error("expected plan.json to NOT be tracked by git")
 	}
@@ -1903,13 +1905,13 @@ func TestHandlePlanApproved_UntracksLegacyPlanJSON(t *testing.T) {
 
 	// Simulate a legacy state: plan.json is tracked (committed).
 	testutil.CommitFile(t, featureDir, "plan.json", `{"subtasks":[]}`, "legacy plan commit")
-	out, _ := worktree.RunGit([]string{"ls-files", "plan.json"}, featureDir)
+	out, _ := gitexec.RunGit(context.Background(), featureDir, "ls-files", "plan.json")
 	if out == "" {
 		t.Fatal("precondition: plan.json should be tracked before test")
 	}
 
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -1954,7 +1956,7 @@ func TestHandlePlanApproved_UntracksLegacyPlanJSON(t *testing.T) {
 	}
 
 	// Verify plan.json is no longer tracked.
-	out, _ = worktree.RunGit([]string{"ls-files", "plan.json"}, featureDir)
+	out, _ = gitexec.RunGit(context.Background(), featureDir, "ls-files", "plan.json")
 	if out != "" {
 		t.Error("expected plan.json to be untracked after HandlePlanApproved")
 	}
@@ -1970,7 +1972,7 @@ func TestHandlePlanApproved_UntracksLegacyPlanJSON(t *testing.T) {
 // from test_writing to test_review.
 func TestOnAgentCompleted_TestWritingParent_AllTestSubtasksDone(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -2062,7 +2064,7 @@ func TestOnAgentCompleted_TestWritingParent_AllTestSubtasksDone(t *testing.T) {
 // still in_progress, the parent stays in test_writing.
 func TestOnAgentCompleted_TestWritingParent_SomeTestSubtasksRunning(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -2154,7 +2156,7 @@ func TestOnAgentCompleted_TestWritingParent_SomeTestSubtasksRunning(t *testing.T
 // are done and the parent is in_progress, it should transition to testing_ready.
 func TestOnAgentCompleted_TestWritingParent_InProgressParentUnchanged(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -2235,7 +2237,7 @@ func TestOnAgentCompleted_TestWritingParent_InProgressParentUnchanged(t *testing
 
 func TestProcessTestWriting_DefensiveMaterializeSubtasks(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -2304,7 +2306,7 @@ func TestProcessTestWriting_DefensiveMaterializeSubtasks(t *testing.T) {
 
 func TestProcessTestWriting_SkipsMaterializeWhenSubtasksExist(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}

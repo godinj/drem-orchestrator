@@ -21,7 +21,7 @@ import (
 
 func TestFindCurrentGroup_AllComplete_ReturnsNil(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -74,7 +74,7 @@ func TestFindCurrentGroup_AllComplete_ReturnsNil(t *testing.T) {
 
 func TestFindCurrentGroup_FirstGroupIncomplete(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -131,7 +131,7 @@ func TestFindCurrentGroup_FirstGroupIncomplete(t *testing.T) {
 
 func TestFindCurrentGroup_MissingSubtask_SkipsToNext(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -180,7 +180,7 @@ func TestFindCurrentGroup_MissingSubtask_SkipsToNext(t *testing.T) {
 
 func TestFindCurrentGroup_FailedSubtaskTreatedAsTerminal(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -1044,7 +1044,7 @@ func TestResolveIntegrationWorktree_SubtaskLooksUpParent(t *testing.T) {
 
 func TestSetTestGateConfig(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	// Default config.
@@ -1952,7 +1952,7 @@ func TestInferCompileCommand_NoProjectFile(t *testing.T) {
 
 func TestGetTestCommand_ConfiguredCommand(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 	o.testGate.TestCommand = "make test"
 
@@ -1970,7 +1970,7 @@ func TestGetTestCommand_ConfiguredCommand(t *testing.T) {
 
 func TestGetTestCommand_NoCommandNoAgent(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	task := &model.Task{
@@ -1987,7 +1987,7 @@ func TestGetTestCommand_NoCommandNoAgent(t *testing.T) {
 
 func TestGetTestCommand_InfersFromAgentWorktree(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	dir := t.TempDir()
@@ -2675,7 +2675,7 @@ func TestTaskPhase_Variants(t *testing.T) {
 
 func TestCheckForCompilableTests_NonexistentDir(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	result := o.checkForCompilableTests("/tmp/nonexistent-path-xyz")
@@ -2735,7 +2735,7 @@ func TestProcessTestingReady_FixerAlreadyAttempted(t *testing.T) {
 
 func TestStoreTestResult(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	agentID := uuid.New()
@@ -2806,7 +2806,7 @@ func TestExtractTestFiles(t *testing.T) {
 func TestNew(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	events := make(chan Event, 100)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	projectID := uuid.New()
 
 	o := New(db, "/tmp/test.db", nil, wt, nil, nil, nil, projectID, events,
@@ -2845,7 +2845,7 @@ func TestIntegrationWorktreePath_NotFound(t *testing.T) {
 
 func TestRunCommandWithTimeout_Success(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	dir := t.TempDir()
@@ -2860,7 +2860,7 @@ func TestRunCommandWithTimeout_Success(t *testing.T) {
 
 func TestRunCommandWithTimeout_Failure(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	dir := t.TempDir()
@@ -2872,7 +2872,7 @@ func TestRunCommandWithTimeout_Failure(t *testing.T) {
 
 func TestRunCommandWithTimeout_Timeout(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	dir := t.TempDir()
@@ -2888,7 +2888,7 @@ func TestRunCommandWithTimeout_Timeout(t *testing.T) {
 
 func TestRunTestSuite_NoGoProject(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	dir := t.TempDir()

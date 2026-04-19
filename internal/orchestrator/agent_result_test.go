@@ -29,7 +29,7 @@ import (
 func agentResultOrchestrator(t *testing.T, bareRepoPath string) (*Orchestrator, *model.Project) {
 	t.Helper()
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := worktree.NewManager(bareRepoPath, "main")
 	projectID := uuid.New()
 	events := make(chan Event, 100)
 
@@ -124,7 +124,7 @@ func TestProcessAgentResult_SuccessRouting(t *testing.T) {
 	o.db.Create(&task)
 
 	// Set up a merge.Orchestrator so onAgentCompleted can merge.
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := worktree.NewManager(bareRepoPath, "main")
 	o.merger = merge.NewOrchestrator(wt, o.db)
 
 	// Process a success completion.
@@ -261,7 +261,7 @@ func TestOnPlannerCompleted_ValidPlan(t *testing.T) {
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
 
 	// Create a planner agent worktree and write plan.json.
@@ -850,7 +850,7 @@ func TestExecuteMerge_Success(t *testing.T) {
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
 
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
 	o.merger = merge.NewOrchestrator(wt, o.db)
 
@@ -1349,7 +1349,7 @@ func TestHandleAgentMergeFailure_NilSupervisorWithConflicts(t *testing.T) {
 	}
 	o.db.Create(&task)
 
-	mergeResult := &worktree.MergeResult{
+	mergeResult := &WorktreeMergeResult{
 		Success:      false,
 		SourceBranch: agentBranch,
 		TargetBranch: "feature/test",
@@ -1527,7 +1527,7 @@ func TestProcessAgentResult_StoresExitInfo(t *testing.T) {
 	runGitCmd(t, agentDir, "commit", "-m", "exit info work")
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
 	o.merger = merge.NewOrchestrator(wt, o.db)
 
@@ -1623,7 +1623,7 @@ func TestProcessAgentResult_NilExitInfo(t *testing.T) {
 	runGitCmd(t, agentDir, "commit", "-m", "nil exit info work")
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
 	o.merger = merge.NewOrchestrator(wt, o.db)
 

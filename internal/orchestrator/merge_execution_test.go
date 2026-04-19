@@ -11,7 +11,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -26,11 +25,11 @@ type stubMerger struct {
 }
 
 type stubMergeResult struct {
-	result *worktree.MergeResult
+	result *WorktreeMergeResult
 	err    error
 }
 
-func (s *stubMerger) MergeFeatureIntoMain(_ *model.Task) (*worktree.MergeResult, error) {
+func (s *stubMerger) MergeFeatureIntoMain(_ *model.Task) (*WorktreeMergeResult, error) {
 	idx := s.calls
 	if idx >= len(s.results) {
 		idx = len(s.results) - 1
@@ -39,8 +38,8 @@ func (s *stubMerger) MergeFeatureIntoMain(_ *model.Task) (*worktree.MergeResult,
 	return s.results[idx].result, s.results[idx].err
 }
 
-func (s *stubMerger) MergeAgentIntoFeature(_, _ string) (*worktree.MergeResult, error) {
-	return &worktree.MergeResult{Success: true}, nil
+func (s *stubMerger) MergeAgentIntoFeature(_, _ string) (*WorktreeMergeResult, error) {
+	return &WorktreeMergeResult{Success: true}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -66,7 +65,7 @@ func setupMergeTest(t *testing.T, merger *stubMerger) (*Orchestrator, *gorm.DB, 
 		db:        db,
 		projectID: projectID,
 		merger:    merger,
-		worktree:  &worktree.Manager{BareRepoPath: "/tmp/fake-bare-repo", DefaultBranch: "main"},
+		worktree:  &FakeWorktreeManager{BarePath: "/tmp/fake-bare-repo", Default: "main"},
 		events:    events,
 		logger:    slog.Default().With("component", "merge-test"),
 	}
@@ -220,7 +219,7 @@ func TestMergeAttemptState_Save(t *testing.T) {
 
 func TestExecuteMerge_SuccessOnFirstAttempt(t *testing.T) {
 	merger := &stubMerger{results: []stubMergeResult{
-		{result: &worktree.MergeResult{Success: true, MergeCommit: "abc123"}, err: nil},
+		{result: &WorktreeMergeResult{Success: true, MergeCommit: "abc123"}, err: nil},
 	}}
 	o, db, projectID := setupMergeTest(t, merger)
 	task := createMergingTask(t, db, projectID, model.CategoryStandard)
@@ -240,7 +239,7 @@ func TestExecuteMerge_TransientFailure_StaysInMerging(t *testing.T) {
 	// A transient failure (Success=false, no Conflicts) should NOT immediately
 	// fail the task. It should stay in MERGING and increment the attempt count.
 	merger := &stubMerger{results: []stubMergeResult{
-		{result: &worktree.MergeResult{Success: false, Conflicts: nil}, err: nil},
+		{result: &WorktreeMergeResult{Success: false, Conflicts: nil}, err: nil},
 	}}
 	o, db, projectID := setupMergeTest(t, merger)
 	task := createMergingTask(t, db, projectID, model.CategoryStandard)
@@ -267,7 +266,7 @@ func TestExecuteMerge_RetriesUpToMaxThenFails(t *testing.T) {
 	// Simulate MaxMergeRetries transient failures via the tick loop calling
 	// executeMerge repeatedly on a task stuck in MERGING.
 	merger := &stubMerger{results: []stubMergeResult{
-		{result: &worktree.MergeResult{Success: false, Conflicts: nil}, err: nil},
+		{result: &WorktreeMergeResult{Success: false, Conflicts: nil}, err: nil},
 	}}
 	o, db, projectID := setupMergeTest(t, merger)
 	task := createMergingTask(t, db, projectID, model.CategoryStandard)
@@ -307,7 +306,7 @@ func TestExecuteMerge_ExponentialBackoff_TrackedViaAttemptCount(t *testing.T) {
 	policy := DefaultMergeRetryPolicy()
 
 	merger := &stubMerger{results: []stubMergeResult{
-		{result: &worktree.MergeResult{Success: false, Conflicts: nil}, err: nil},
+		{result: &WorktreeMergeResult{Success: false, Conflicts: nil}, err: nil},
 	}}
 	o, db, projectID := setupMergeTest(t, merger)
 	task := createMergingTask(t, db, projectID, model.CategoryStandard)
@@ -334,7 +333,7 @@ func TestExecuteMerge_ConflictFailsImmediately(t *testing.T) {
 	// Real merge conflicts (non-empty Conflicts) should fail immediately,
 	// bypassing retry logic entirely.
 	merger := &stubMerger{results: []stubMergeResult{
-		{result: &worktree.MergeResult{
+		{result: &WorktreeMergeResult{
 			Success:   false,
 			Conflicts: []string{".gitignore", "main.go"},
 		}, err: nil},
@@ -364,9 +363,9 @@ func TestExecuteMerge_ConflictFailsImmediately(t *testing.T) {
 func TestExecuteMerge_SuccessOnRetry(t *testing.T) {
 	// Merge fails transiently twice, then succeeds on the third attempt.
 	merger := &stubMerger{results: []stubMergeResult{
-		{result: &worktree.MergeResult{Success: false, Conflicts: nil}, err: nil},
-		{result: &worktree.MergeResult{Success: false, Conflicts: nil}, err: nil},
-		{result: &worktree.MergeResult{Success: true, MergeCommit: "def456"}, err: nil},
+		{result: &WorktreeMergeResult{Success: false, Conflicts: nil}, err: nil},
+		{result: &WorktreeMergeResult{Success: false, Conflicts: nil}, err: nil},
+		{result: &WorktreeMergeResult{Success: true, MergeCommit: "def456"}, err: nil},
 	}}
 	o, db, projectID := setupMergeTest(t, merger)
 	task := createMergingTask(t, db, projectID, model.CategoryStandard)
@@ -392,7 +391,7 @@ func TestExecuteMerge_SuccessOnRetry(t *testing.T) {
 func TestExecuteMerge_QuickFixFailsImmediately(t *testing.T) {
 	// Quick fix tasks should fail immediately on merge failure without retry.
 	merger := &stubMerger{results: []stubMergeResult{
-		{result: &worktree.MergeResult{Success: false, Conflicts: nil}, err: nil},
+		{result: &WorktreeMergeResult{Success: false, Conflicts: nil}, err: nil},
 	}}
 	o, db, projectID := setupMergeTest(t, merger)
 	task := createMergingTask(t, db, projectID, model.CategoryQuickFix)
@@ -419,7 +418,7 @@ func TestExecuteMerge_AttemptCountIncrementedEachTick(t *testing.T) {
 	// Verify that merge_attempt_count in task.Context is incremented on each
 	// tick-based retry attempt, providing visibility into retry progress.
 	merger := &stubMerger{results: []stubMergeResult{
-		{result: &worktree.MergeResult{Success: false, Conflicts: nil}, err: nil},
+		{result: &WorktreeMergeResult{Success: false, Conflicts: nil}, err: nil},
 	}}
 	o, db, projectID := setupMergeTest(t, merger)
 	task := createMergingTask(t, db, projectID, model.CategoryStandard)
@@ -441,7 +440,7 @@ func TestExecuteMerge_FailureReasonIncludesAttemptCount(t *testing.T) {
 	// After max retries, the failure reason should be descriptive and include
 	// the number of attempts made.
 	merger := &stubMerger{results: []stubMergeResult{
-		{result: &worktree.MergeResult{Success: false, Conflicts: nil}, err: nil},
+		{result: &WorktreeMergeResult{Success: false, Conflicts: nil}, err: nil},
 	}}
 	o, db, projectID := setupMergeTest(t, merger)
 	task := createMergingTask(t, db, projectID, model.CategoryStandard)

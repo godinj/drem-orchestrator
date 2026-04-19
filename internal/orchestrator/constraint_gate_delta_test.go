@@ -11,7 +11,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -131,7 +130,7 @@ func removeAndCommit(t *testing.T, wtDir, filename, msg string) {
 func runDeltaGate(t *testing.T, bareRepo, featureName string) model.TaskStatus {
 	t.Helper()
 	db := testutil.NewTestDB(t)
-	wm := &worktree.Manager{BareRepoPath: bareRepo, DefaultBranch: "main"}
+	wm := &FakeWorktreeManager{BarePath: bareRepo, Default: "main"}
 	o := testOrchestrator(t, db, wm)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepo}
@@ -350,7 +349,7 @@ func TestConstraintGateDelta_BackoffContext_Respected(t *testing.T) {
 	writeAndCommit(t, featureDir, "big.go", bigGoContent(), "new violation in feature")
 
 	db := testutil.NewTestDB(t)
-	wm := &worktree.Manager{BareRepoPath: bareRepo, DefaultBranch: "main"}
+	wm := &FakeWorktreeManager{BarePath: bareRepo, Default: "main"}
 	o := testOrchestrator(t, db, wm)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepo}
