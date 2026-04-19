@@ -17,6 +17,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -122,13 +123,46 @@ type Manager struct {
 	spawner  Spawner
 	resolver *ImageResolver
 
+	// probe is the optional AttachProbe used by Attach and
+	// RespawnIfDashboardExited to verify container liveness. When nil,
+	// those operations treat the probe as unavailable and fall back to
+	// the behaviour documented on each method.
+	probe AttachProbe
+
 	// promptRoot is the host directory under which per-project prompt
 	// files live. Manager bind-mounts <promptRoot>/<project>/prompts/
 	// into the container when a SpawnRequest.PromptPath is inside it.
 	promptRoot string
 
+	// log is the logger used by lifecycle-extension methods (Attach,
+	// RespawnIfDashboardExited). Defaults to slog.Default when nil.
+	log *slog.Logger
+
 	// now returns the current time. Overridable for deterministic tests.
 	now func() time.Time
+}
+
+// SetAttachProbe configures the AttachProbe used by Manager.Attach and
+// RespawnIfDashboardExited. When a probe is not set, Attach returns the
+// handle without liveness verification and RespawnIfDashboardExited is a
+// no-op. The probe is separated from the Spawner interface so tests can
+// supply one without implementing the full Spawner surface.
+func (m *Manager) SetAttachProbe(p AttachProbe) {
+	m.probe = p
+}
+
+// SetLogger configures the slog.Logger used for diagnostic messages from
+// Attach / RespawnIfDashboardExited. When unset, slog.Default is used.
+func (m *Manager) SetLogger(l *slog.Logger) {
+	m.log = l
+}
+
+// logger returns the configured logger or slog.Default.
+func (m *Manager) logger() *slog.Logger {
+	if m.log != nil {
+		return m.log
+	}
+	return slog.Default()
 }
 
 // NewManager constructs a Manager. When resolver is nil the Manager uses
