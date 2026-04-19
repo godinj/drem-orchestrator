@@ -24,6 +24,7 @@ type WorktreeManager interface {
 
 	CreateFeature(name string) (*WorktreeInfo, error)
 	RemoveFeature(name string) error
+	CreateAgentWorktree(featureName string) (*AgentWorktreeInfo, error)
 	RemoveAgentWorktree(branch string) error
 	ListAgentWorktrees(featureName string) ([]AgentWorktreeInfo, error)
 

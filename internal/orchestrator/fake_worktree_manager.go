@@ -55,6 +55,7 @@ type FakeWorktreeManager struct {
 	OnFeatureWorktreePath func(name string) string
 	OnCreateFeature       func(name string) (*WorktreeInfo, error)
 	OnRemoveFeature       func(name string) error
+	OnCreateAgentWorktree func(featureName string) (*AgentWorktreeInfo, error)
 	OnRemoveAgentWorktree func(branch string) error
 	OnListAgentWorktrees  func(featureName string) ([]AgentWorktreeInfo, error)
 }
@@ -139,6 +140,27 @@ func (f *FakeWorktreeManager) RemoveFeature(name string) error {
 	f.RemovedFeatures = append(f.RemovedFeatures, name)
 	delete(f.Features, name)
 	return nil
+}
+
+// CreateAgentWorktree appends a synthetic AgentWorktreeInfo into the map
+// for the feature and returns it. Uses OnCreateAgentWorktree if set.
+func (f *FakeWorktreeManager) CreateAgentWorktree(featureName string) (*AgentWorktreeInfo, error) {
+	if f.OnCreateAgentWorktree != nil {
+		return f.OnCreateAgentWorktree(featureName)
+	}
+	if f.AgentWorktrees == nil {
+		f.AgentWorktrees = make(map[string][]AgentWorktreeInfo)
+	}
+	idx := len(f.AgentWorktrees[featureName])
+	branch := fmt.Sprintf("worktree-agent-fake-%d", idx)
+	info := AgentWorktreeInfo{
+		Path:          filepath.Join(f.BarePath, "feature", featureName, fmt.Sprintf("agent-fake-%d", idx)),
+		Branch:        branch,
+		Head:          "fake-head",
+		ParentFeature: "feature/" + featureName,
+	}
+	f.AgentWorktrees[featureName] = append(f.AgentWorktrees[featureName], info)
+	return &info, nil
 }
 
 // RemoveAgentWorktree records the branch in RemovedAgents. Uses
