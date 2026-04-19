@@ -1,13 +1,13 @@
 // Package gitexec runs git against an arbitrary working directory.
 //
 // It has no knowledge of Drem's worktree layout or branch conventions;
-// that lives in internal/worktree. Use this package for leaf-level git
+// that lives in internal/worktreehost. Use this package for leaf-level git
 // operations that only need a directory and a handful of command args.
 //
-// The functions here match the signatures of the legacy package-level
-// helpers in internal/worktree (RunGit, GetChangedFiles, IsClean, etc.)
-// with a context.Context added as the first argument. Callers that do
-// not yet plumb a context can pass context.Background().
+// The functions here match the signatures of the host worktree package's
+// package-level helpers (RunGit, GetChangedFiles, IsClean, etc.) with a
+// context.Context added as the first argument. Callers that do not yet
+// plumb a context can pass context.Background().
 package gitexec
 
 import (

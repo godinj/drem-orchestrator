@@ -53,10 +53,10 @@ func TestOrchestratorImportBaseline(t *testing.T) {
 		t.Fatal("no exception for internal/orchestrator/ in Internal import ceiling constraint")
 	}
 
-	// Baseline was ratcheted during the gitexec extraction (prompt 18 of the
-	// containerization follow-up). Once internal/worktree is deleted (prompts
-	// 20/21) the baseline will drop back below the ceiling of 6. Until then
-	// the number must remain shrink-only — never increase it from 17.
+	// Baseline was ratcheted during the gitexec extraction. The host worktree
+	// package deletion has landed; the baseline may drop back below the
+	// ceiling of 6 in a follow-up ratchet. Until then the number must remain
+	// shrink-only — never increase it from 17.
 	const expectedBaseline = 17
 	if orchException.BaselineCount != expectedBaseline {
 		t.Errorf("internal/orchestrator/ import baseline_count = %d, want %d",

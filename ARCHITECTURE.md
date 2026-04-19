@@ -27,13 +27,20 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
 
 - `agent/` — Agent lifecycle management: spawning, heartbeat, status tracking, and teardown of Claude Code agents (planner, coder, researcher, reviewer, fixer, classifier)
 - `agentmon/` — Agent transcript monitoring: tails Claude conversation JSONL, extracts test results, build errors, git operations, and context usage signals
+- `container/` — Container runtime abstraction: Runtime, FakeRuntime, and DockerRuntime for spawning worker containers
 - `constraints/` — Constitution constraint engine: loads `.drem/constraints.toml`, evaluates `command`, `max_lines`, `max_matches`, `no_match`, and `depth` rules
 - `ctxmon/` — Context window monitoring: tracks agent token usage, triggers compaction and fixer escalation
 - `csuite/` — C-Suite agent monitoring models: CsuiteAgent (status, heartbeat, context usage), CsuiteInboxMessage (inter-agent messaging), and enums (AgentMonStatus, InboxPriority, InboxMessageType)
 - `db/` — Database initialization and migration helpers for the Drem Orchestrator
+- `extract/` — Conversation log parser: ParseLine + typed events for Claude and OpenCode JSONL
+- `gitexec/` — Leaf-level git execution helpers against an arbitrary working directory (RunGit, GetChangedFiles, IsClean, CommitUnstagedChanges, CommitInfo, BranchHasNewCommits, UntrackEphemeralFiles)
+- `gitref/` — Database-backed branch reference tracker (BranchRef + Registry) used by the spawner and merger to manage worker-branch lifecycles
+- `kyle/` — Kyle (C-Suite ops) binary support: container orchestration coordination
 - `memory/` — Agent memory persistence, retrieval, compaction, and extraction from agent output
-- `merge/` — Worktree merge logic: merges agent worktree branches back into the integration branch
+- `merger/` — Feature-into-main merge service: runs as a container and exposes an RPC API consumed by the orchestrator's dispatch path
 - `model/` — GORM models, enums (task statuses, agent types), and custom JSON types
+- `orchhttp/` — Orchestrator HTTP API: read-only endpoints + agentmon ingestion, consumed by Kyle and the TUI
+- `projects/` — Project registry CLI backend: add / remove / list project definitions consumed by the `drem project` CLI
 - `orchestrator/` — Core orchestrator loop: tick-based scheduling, state transitions, agent dispatch
   - `orchestrator.go` — Main orchestrator struct, configuration, tick loop, and agent lifecycle coordination
   - `agent_results.go` — Agent result processing: routes completed agent success/failure, manages retries
@@ -56,13 +63,19 @@ removed when hook enforcement makes them redundant (see Graduation Path below).
   - `test_execution.go` — Test suite execution, compilation verification, and test scoping logic
 - `prompt/` — Prompt builder: constructs markdown prompt strings piped to Claude Code agent sessions
 - `score/` — Quality scoring: computes TDD, Constitution, Documentation, and Depth scores for plans and implementations
+- `spawner/` — Spawner service client/server: owns the Docker socket and exposes container spawn/destroy RPCs to the orchestrator
 - `state/` — Task status state machine: defines valid transitions between task lifecycle states
 - `supervisor/` — Agent supervisor: monitors running agents, detects stalls, triggers recovery
 - `taskimport/` — Markdown task file parser: bulk-creates tasks from structured Markdown
 - `testutil/` — Shared test infrastructure: database factories, git repo setup, mock supervisor
-- `tmux/` — Go wrapper around the tmux CLI for managing sessions and windows used to host agents
 - `tui/` — Bubble Tea TUI dashboard: real-time view of projects, tasks, agents, and logs
-- `worktree/` — Git worktree management: creation, cleanup, and branch tracking for agent workspaces
+- `watchdog/` — Health-check binary support: runs alongside containerised workers to detect stalled pipelines
+- `worktreehost/` — Host-mode git worktree management: creation, cleanup, and branch tracking for feature and agent worktrees on the host filesystem
+
+### `pkg/` — Public packages
+
+- `orchclient/` — Thin HTTP client for the orchestrator's read-only API (projects, tasks, workers, events, logs)
+- `orchdto/` — Plain-old-data transport types shared between orchestrator HTTP handlers and client consumers
 
 ---
 
@@ -130,8 +143,6 @@ use the defaults shown below.
 | Compile command         | `compile_command`       | string     | `""`           | Compile command for the project                    |
 | Scoped tests            | `scoped_tests`          | bool       | `true`         | Whether to run tests scoped to subtask file changes|
 | Test timeout            | `test_timeout`          | duration   | `5m`           | Timeout for test command execution                 |
-| Tmux socket             | `tmux_socket`           | string     | `drem`         | Dedicated tmux server socket name (-L flag)        |
-| Tmux config file        | `tmux_config_file`      | string     | `master/.tmux.conf` | Repo-local tmux config file path (relative to bare repo) |
 | Max dispatch rate       | `max_dispatch_rate`     | int        | `3`            | Max agent dispatches allowed within the dispatch window   |
 | Dispatch window         | `dispatch_window`       | duration   | `60s`          | Sliding window duration for dispatch rate limiting        |
 | Model profiles          | `[profiles.<name>.*]`   | map        | `{}`           | Named per-role model/effort overrides; see docs/prd-metrics-and-experiments.md#profiles |
