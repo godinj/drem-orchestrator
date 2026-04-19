@@ -11,7 +11,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // setupLifecycleTest creates an orchestrator with mock dependencies suitable
@@ -37,7 +36,7 @@ func setupLifecycleTest(t *testing.T) (*Orchestrator, *gorm.DB) {
 	o := &Orchestrator{
 		db:        db,
 		projectID: projectID,
-		worktree:  &worktree.Manager{BareRepoPath: "/tmp/fake-bare-repo", DefaultBranch: "main"},
+		worktree:  &FakeWorktreeManager{BarePath: "/tmp/fake-bare-repo", Default: "main"},
 		events:    events,
 		logger:    slog.Default().With("component", "lifecycle-test"),
 	}

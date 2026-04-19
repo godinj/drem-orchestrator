@@ -14,7 +14,6 @@ import (
 	dbpkg "github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // fakeSGLangServer returns an httptest server that mimics SGLang's OpenAI
@@ -68,7 +67,7 @@ func setupDirectToolDispatchTest(t *testing.T) (*Orchestrator, uuid.UUID, *httpt
 	orch := &Orchestrator{
 		db:              gormDB,
 		projectID:       projectID,
-		worktree:        &worktree.Manager{BareRepoPath: tmp, DefaultBranch: "main"},
+		worktree:        &FakeWorktreeManager{BarePath: tmp, Default: "main"},
 		events:          events,
 		contextWarnPct:  75,
 		contextStopPct:  90,

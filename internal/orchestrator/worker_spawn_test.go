@@ -14,7 +14,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // fakeWorkerSpawner captures every call made against the WorkerSpawner
@@ -90,7 +89,7 @@ func workerSpawnTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner) {
 		db:             db,
 		projectID:      projectID,
 		events:         make(chan Event, 32),
-		worktree:       &worktree.Manager{BareRepoPath: "/tmp/fake-bare", DefaultBranch: "main"},
+		worktree:       &FakeWorktreeManager{BarePath: "/tmp/fake-bare", Default: "main"},
 		logger:         slog.Default().With("component", "worker_spawn_test"),
 		Spawner:        fake,
 		GitrefRegistry: gitref.NewRegistry(db),

@@ -12,7 +12,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 func reconcileTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner) {
@@ -31,7 +30,7 @@ func reconcileTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner) {
 		db:             db,
 		projectID:      projectID,
 		events:         make(chan Event, 32),
-		worktree:       &worktree.Manager{BareRepoPath: "/tmp/fake-bare", DefaultBranch: "main"},
+		worktree:       &FakeWorktreeManager{BarePath: "/tmp/fake-bare", Default: "main"},
 		logger:         slog.Default().With("component", "reconcile_test"),
 		Spawner:        fake,
 		GitrefRegistry: gitref.NewRegistry(db),

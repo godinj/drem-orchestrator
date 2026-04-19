@@ -9,7 +9,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // setupDispatchStallTest creates an Orchestrator with a test DB, project, and
@@ -31,7 +30,7 @@ func setupDispatchStallTest(t *testing.T) (*Orchestrator, *gorm.DB, uuid.UUID) {
 	orch := &Orchestrator{
 		db:        db,
 		projectID: projectID,
-		worktree:  &worktree.Manager{BareRepoPath: "/tmp/test.git", DefaultBranch: "main"},
+		worktree:  &FakeWorktreeManager{BarePath: "/tmp/test.git", Default: "main"},
 		events:    events,
 		logger:    slog.Default().With("component", "dispatch-stall-test"),
 	}

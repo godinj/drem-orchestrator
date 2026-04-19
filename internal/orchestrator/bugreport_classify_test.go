@@ -13,7 +13,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	dbpkg "github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // setupClassifyIntegrationTest creates an Orchestrator wired to a real
@@ -41,7 +40,7 @@ func setupClassifyIntegrationTest(t *testing.T, _ interface{}) (*Orchestrator, *
 	bugSvc := bugreport.New(gormDB)
 	dropDir := t.TempDir()
 
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	events := make(chan Event, 100)
 	orch := &Orchestrator{
 		db:              gormDB,
