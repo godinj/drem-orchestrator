@@ -22,7 +22,10 @@ Agent prompts generated from `docs/prd-containerization.md`. Each prompt is a se
 | 14 | kyle-binary | 3 | 05, 08 | `cmd/drem-kyle/main.go`, `internal/kyle/{service,cache,poll,docker_query,summary,mcp}.go` + tests, `deploy/docker/{kyle,docker-query-proxy}.Dockerfile` | `deploy/compose/global.yml` |
 | 15 | tui-http-migration | 3 | 08 | `internal/tui/datasource_test.go` | `internal/tui/*.go` data source swap, model tests |
 | 16 | csuite-images-and-compose | 3 | 05, 06, 07, 09, 10 | `deploy/docker/{csuite-base,csuite-{mike,alex,ross,seth},csuite-watcher,orch,orch-dev}.Dockerfile`, `deploy/docker/build-csuite.sh` | `internal/projects/templates/project-compose.yml.tmpl`, `internal/projects/template.go` |
-| 17 | delete-tmux-worktree | 4 | 12, 13, 15 | — | delete `internal/tmux/`, delete `internal/worktree/`, drop tmux from `drem.toml`, update `ARCHITECTURE.md` |
+| 18 | gitexec-and-worktree-interface | 4 | 12 | `internal/gitexec/` + tests, `internal/orchestrator/worktree_manager.go`, `internal/orchestrator/fake_worktree_manager.go` | `internal/orchestrator/*.go` (prod + ~30 tests) |
+| 19 | runner-and-merger-migration | 4 | 13, 18 | `internal/agent/{attach,respawn}.go` (new) | `internal/agent/runner.go`, `internal/orchestrator/merge_execution.go`, delete `internal/merge/` |
+| 20 | cmd-and-tui-decouple | 4 | 15, 18, 19 | `internal/wtbridge/` (temporary shim) | `cmd/drem/{main,cli_cmd}.go`, `internal/tui/app.go`, tmux bootstrap scripts |
+| 21 | delete-tmux-worktree | 5 | 18, 19, 20 | — | delete `internal/tmux/`, `internal/worktree/`, `internal/wtbridge/`; drop tmux from `drem.toml`; update `ARCHITECTURE.md` |
 
 ## Execution Order
 
@@ -57,10 +60,20 @@ claude --agent docs/containerization/prompts/15-tui-http-migration.md       # ne
 claude --agent docs/containerization/prompts/16-csuite-images-and-compose.md # needs 05, 06, 07, 09, 10
 ```
 
-### Tier 4 — Cleanup (after 12, 13, 15 merge)
+### Tier 4 — Consumer migration (sequential; prompts 19 and 20 can fan out after 18)
+
+Tier 3 landed the new container-backed surface additively — existing tmux/worktree code paths stayed intact so the build stayed green. Tier 4 actually strips those imports.
 
 ```bash
-claude --agent docs/containerization/prompts/17-delete-tmux-worktree.md
+claude --agent docs/containerization/prompts/18-gitexec-and-worktree-interface.md  # must land first
+claude --agent docs/containerization/prompts/19-runner-and-merger-migration.md     # needs 18
+claude --agent docs/containerization/prompts/20-cmd-and-tui-decouple.md            # needs 18, 19
+```
+
+### Tier 5 — Final deletion (after 18, 19, 20 merge)
+
+```bash
+claude --agent docs/containerization/prompts/21-delete-tmux-worktree.md
 ```
 
 ## Dependency Graph
@@ -72,7 +85,9 @@ Tier 2:   07←01  08   09←03  10←04
              \    \    \       \
 Tier 3:  11←01,02,08   12←01,03,07   13←07   14←05,08   15←08   16←05,06,07,09,10
                          \               \              \
-Tier 4:                   \_______________17←12,13,15___/
+Tier 4:                   18←12           19←13,18       20←15,18,19
+                                                          \
+Tier 5:                                                    21←18,19,20
 ```
 
 ## Cross-Cutting Notes
@@ -97,7 +112,7 @@ PRD section "Phased rollout" maps to prompt tiers as follows:
 | 4 | Kyle + per-project compose + project registration | 05, 14, 16 |
 | 5 | Second project (`drem-canvas`) — operational milestone, no new code | — |
 | 6 | Warm merger pool + watchdog-enabled crash recovery | 09 (+ 04/12 already delivered) |
-| 7 | Retire tmux and worktree | 17 |
+| 7 | Retire tmux and worktree | 18, 19, 20, 21 |
 
 ## Validation Checklist
 
