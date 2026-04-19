@@ -38,6 +38,7 @@ feature/
 journals/
 bin/
 watcher.log
+watcher.log.*
 .opencode/
 classification-*.json
 
@@ -51,8 +52,14 @@ bench/scratch/
 bench/fixtures/real-repo/
 bench/results/*.log
 
-# Docker build context artifacts produced by deploy/docker/build-workers.sh.
-# The drem-watchdog binary is compiled on the fly into the shared build
-# context so worker-base can COPY it; it is regenerable and must not be
-# committed.
+# Docker build context artifacts produced by deploy/docker/build-workers.sh
+# and deploy/docker/build-csuite.sh. These are regenerable staging copies of
+# already-checked-in sources and must not be committed.
 deploy/docker/context/drem-watchdog
+deploy/docker/context/csuite-prompts/
+
+# Stray repo-root Go binaries left by `go build` without `-o`. Both are
+# regenerable: drem-watchdog via deploy/docker/build-workers.sh,
+# drem-docker-query-proxy via its Dockerfile multi-stage build.
+/drem-watchdog
+/drem-docker-query-proxy
