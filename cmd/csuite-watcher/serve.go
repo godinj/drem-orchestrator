@@ -51,6 +51,27 @@ func loadServeConfig(path string) (serveTomlConfig, error) {
 	return cfg.Serve, nil
 }
 
+// applyServeEnvOverrides mutates cfg, replacing any field whose corresponding
+// env var is set. Empty env vars are ignored so the toml value (or zero-value
+// default) survives.
+//
+// Mapping:
+//
+//	DREM_BEARER_TOKEN → cfg.BearerToken
+//	DREM_LISTEN_ADDR  → cfg.ListenAddr
+//	DREM_DB_PATH      → cfg.DBPath
+func applyServeEnvOverrides(cfg *serveTomlConfig) {
+	if v := os.Getenv("DREM_BEARER_TOKEN"); v != "" {
+		cfg.BearerToken = v
+	}
+	if v := os.Getenv("DREM_LISTEN_ADDR"); v != "" {
+		cfg.ListenAddr = v
+	}
+	if v := os.Getenv("DREM_DB_PATH"); v != "" {
+		cfg.DBPath = v
+	}
+}
+
 // runServe handles the serve subcommand: loads config, opens the csuite DB,
 // creates a Store, starts the bridge HTTP server, and blocks until SIGTERM or SIGINT.
 func runServe(args []string, stderr io.Writer) int {
@@ -68,8 +89,13 @@ func runServe(args []string, stderr io.Writer) int {
 		return 1
 	}
 
+	// 12-factor env-var overrides. Precedence: env > toml > default.
+	// The container compose service passes these instead of mounting drem.toml,
+	// so the binary must work without a config file when env is populated.
+	applyServeEnvOverrides(&cfg)
+
 	if cfg.BearerToken == "" {
-		fmt.Fprintln(stderr, "error: bearer_token must be set in [serve] config")
+		fmt.Fprintln(stderr, "error: bearer_token must be set in [serve] config or DREM_BEARER_TOKEN env var")
 		return 1
 	}
 

@@ -58,6 +58,20 @@ COPY --from=build /out/drem-csuite-watcher /usr/local/bin/drem-csuite-watcher
 # The watcher binds its HTTP bridge on :8090 by default (see
 # cmd/csuite-watcher/serve.go). The per-project compose does not need
 # to publish it — other services on drem-net reach it by service name.
+#
+# Runtime configuration (12-factor env-var overrides — see
+# cmd/csuite-watcher/serve.go applyServeEnvOverrides). Required so this
+# image works without a drem.toml mount in the per-project compose stack:
+#
+#   DREM_BEARER_TOKEN  required; auth token for the bridge HTTP API.
+#                      No default. Container exits 1 if unset and no toml.
+#   DREM_LISTEN_ADDR   defaults to :8080 in the binary; the per-project
+#                      compose overrides to :8090 to match the historical
+#                      bridge port.
+#   DREM_DB_PATH       defaults to ~/.drem-csuite/csuite.db; compose
+#                      overrides to /var/lib/drem/csuite.db.
+#
+# Precedence: env > drem.toml [serve] > built-in default.
 
 ENTRYPOINT ["/usr/local/bin/drem-csuite-watcher"]
 CMD ["serve"]

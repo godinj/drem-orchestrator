@@ -112,6 +112,83 @@ func TestLoadServeConfig_PartialSection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// applyServeEnvOverrides — 12-factor env-var precedence tests
+// ---------------------------------------------------------------------------
+
+// TestApplyServeEnvOverrides_EnvOnly verifies that env vars populate an
+// otherwise empty config (the no-toml path the per-project compose service
+// uses).
+func TestApplyServeEnvOverrides_EnvOnly(t *testing.T) {
+	t.Setenv("DREM_BEARER_TOKEN", "env-token")
+	t.Setenv("DREM_LISTEN_ADDR", ":8090")
+	t.Setenv("DREM_DB_PATH", "/var/lib/drem/csuite.db")
+
+	cfg := serveTomlConfig{}
+	applyServeEnvOverrides(&cfg)
+
+	if cfg.BearerToken != "env-token" {
+		t.Errorf("BearerToken: got %q, want %q", cfg.BearerToken, "env-token")
+	}
+	if cfg.ListenAddr != ":8090" {
+		t.Errorf("ListenAddr: got %q, want %q", cfg.ListenAddr, ":8090")
+	}
+	if cfg.DBPath != "/var/lib/drem/csuite.db" {
+		t.Errorf("DBPath: got %q, want %q", cfg.DBPath, "/var/lib/drem/csuite.db")
+	}
+}
+
+// TestApplyServeEnvOverrides_TomlOnly verifies that an unset env var leaves
+// the toml-loaded value untouched (the legacy host-mode path).
+func TestApplyServeEnvOverrides_TomlOnly(t *testing.T) {
+	// Clear any inherited env so this test is hermetic.
+	t.Setenv("DREM_BEARER_TOKEN", "")
+	t.Setenv("DREM_LISTEN_ADDR", "")
+	t.Setenv("DREM_DB_PATH", "")
+
+	cfg := serveTomlConfig{
+		BearerToken: "toml-token",
+		ListenAddr:  "127.0.0.1:9090",
+		DBPath:      "/tmp/toml.db",
+	}
+	applyServeEnvOverrides(&cfg)
+
+	if cfg.BearerToken != "toml-token" {
+		t.Errorf("BearerToken: got %q, want %q", cfg.BearerToken, "toml-token")
+	}
+	if cfg.ListenAddr != "127.0.0.1:9090" {
+		t.Errorf("ListenAddr: got %q, want %q", cfg.ListenAddr, "127.0.0.1:9090")
+	}
+	if cfg.DBPath != "/tmp/toml.db" {
+		t.Errorf("DBPath: got %q, want %q", cfg.DBPath, "/tmp/toml.db")
+	}
+}
+
+// TestApplyServeEnvOverrides_EnvOverridesToml verifies that when both sources
+// supply a value, env wins — the documented precedence.
+func TestApplyServeEnvOverrides_EnvOverridesToml(t *testing.T) {
+	t.Setenv("DREM_BEARER_TOKEN", "env-token")
+	t.Setenv("DREM_LISTEN_ADDR", ":8090")
+	t.Setenv("DREM_DB_PATH", "/var/lib/drem/csuite.db")
+
+	cfg := serveTomlConfig{
+		BearerToken: "toml-token",
+		ListenAddr:  "127.0.0.1:9090",
+		DBPath:      "/tmp/toml.db",
+	}
+	applyServeEnvOverrides(&cfg)
+
+	if cfg.BearerToken != "env-token" {
+		t.Errorf("BearerToken: env should win, got %q", cfg.BearerToken)
+	}
+	if cfg.ListenAddr != ":8090" {
+		t.Errorf("ListenAddr: env should win, got %q", cfg.ListenAddr)
+	}
+	if cfg.DBPath != "/var/lib/drem/csuite.db" {
+		t.Errorf("DBPath: env should win, got %q", cfg.DBPath)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // run() subcommand dispatch — serve recognition tests
 // ---------------------------------------------------------------------------
 

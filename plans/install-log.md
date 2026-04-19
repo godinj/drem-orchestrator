@@ -398,6 +398,16 @@ inboxes. On re-verification, the watcher fires turns on `.md` drops as
 designed; the diagnosis was stale. No patch needed. The install does
 not need to work around this.
 
+### 9.9 csuite-watcher container needs env-var config
+
+The container has no `drem.toml` mounted, so `cmd/csuite-watcher serve`
+reads `DREM_BEARER_TOKEN`, `DREM_LISTEN_ADDR`, and `DREM_DB_PATH` from
+the env. Precedence is env > toml > built-in default. The per-project
+compose template populates all three (token reuses
+`Project.SharedToken`, listen `:8090`, db `/var/lib/drem/csuite.db`).
+Without these the container restart-loops on `bearer_token must be
+set`.
+
 ---
 
 ## 10. Install-script outline (for future derivation)

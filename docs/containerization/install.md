@@ -261,6 +261,12 @@ so `docker compose pull` primes the image, but no merger container
 runs until spawn-on-demand wiring lands. See
 `plans/merger-spawn-on-demand.md`.
 
+> The `csuite-watcher` service reads its bridge auth + listen + DB path from
+> `DREM_BEARER_TOKEN` / `DREM_LISTEN_ADDR` / `DREM_DB_PATH` env vars (see the
+> per-project compose template). Precedence is env > `drem.toml [serve]` >
+> built-in default; the container has no `drem.toml` mounted and relies on
+> the env block populated from `Project.SharedToken`.
+
 ## Step 8 — Verify
 
 ```bash

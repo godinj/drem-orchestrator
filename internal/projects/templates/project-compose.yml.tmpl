@@ -59,6 +59,12 @@ services:
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
       DREM_ORCH_URL: "http://orch:8080"
+      # 12-factor overrides for cmd/csuite-watcher serve. The container has
+      # no drem.toml mounted; the binary reads these instead of [serve] keys.
+      # Reuses the agentmon shared token so both can authenticate against orch.
+      DREM_BEARER_TOKEN: "{{.SharedToken}}"
+      DREM_LISTEN_ADDR: ":8090"
+      DREM_DB_PATH: "/var/lib/drem/csuite.db"
     networks: [drem-net]
     labels:
       drem.project: "{{.ProjectName}}"
