@@ -368,7 +368,7 @@ func (m Model) handleShell() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	sessionName := fmt.Sprintf("%s/shell %s", m.tmux.SessionName, selected.ID.String()[:4])
+	sessionName := fmt.Sprintf("%s/shell %s", m.tmux.GetSessionName(), selected.ID.String()[:4])
 	if err := m.tmux.CreateShellSession(sessionName, path); err != nil {
 		m.err = fmt.Errorf("open shell: %w", err)
 		return m, nil

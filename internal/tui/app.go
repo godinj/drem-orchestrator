@@ -11,7 +11,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
-	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
 )
 
 // Focus tracks which panel has keyboard focus.
@@ -41,7 +40,7 @@ type Model struct {
 	db          *gorm.DB
 	dataSource  DataSource // orchestrator HTTP API (tasks, workers, events, logs)
 	orch        TUIOrchestrator
-	tmux        *tmuxpkg.Manager
+	tmux        TmuxManager
 	projectID   uuid.UUID
 	events      <-chan Event
 	csuiteSnaps <-chan csuiteStateSnapshot
@@ -90,7 +89,7 @@ func NewModel(
 	db *gorm.DB,
 	dataSource DataSource,
 	orch TUIOrchestrator,
-	tmux *tmuxpkg.Manager,
+	tmux TmuxManager,
 	projectID uuid.UUID,
 	events <-chan Event,
 	logPath string,
