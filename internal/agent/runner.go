@@ -2,8 +2,8 @@
 //
 // Headless agents (planners, coders, reviewers, fixers) run as direct
 // subprocesses. Interactive sessions (supervisors, shells) still use the
-// TmuxSessionManager adapter (see tmux_adapter.go) so this package stays
-// unimported from internal/tmux/ while the containerization migration in
+// TmuxSessionManager adapter (see tmux_adapter.go) — the host-mode tmux
+// package is not imported here while the containerization migration in
 // docs/containerization/remaining-work.md is in flight.
 //
 // Container-based agents route through Manager.Spawn/Teardown (spawn.go,
@@ -156,9 +156,10 @@ type dashboardSessionNamer interface {
 // agentConfigs maps agent types to CLI flags; pass nil for default behavior
 // (effort=medium, no model override).
 //
-// tm is a TmuxSessionManager: *tmux.Manager satisfies it but the runner does
-// not import internal/tmux/ directly. Pass nil in tests or in containerized
-// configurations where supervisor tmux sessions are not required.
+// tm is a TmuxSessionManager: *tmux.Manager satisfies it but this file
+// imports the interface, not the concrete type. Pass nil in tests or in
+// containerized configurations where supervisor tmux sessions are not
+// required.
 func NewRunner(db *gorm.DB, tm TmuxSessionManager, wt *worktree.Manager, claudeBin, openCodeBin string, maxConcurrent int, agentConfigs func(model.AgentType) model.AgentCLIConfig) *Runner {
 	if agentConfigs == nil {
 		agentConfigs = func(model.AgentType) model.AgentCLIConfig {
@@ -202,11 +203,10 @@ func dashboardSessionName(tm TmuxSessionManager) string {
 
 // sessionFieldGetter is a second extension point for tmux managers that
 // expose the dashboard session name through a differently-named method.
-// Kept separate from dashboardSessionNamer so *tmux.Manager (which currently
-// exposes the name as a public field) can satisfy this interface once we
-// add a GetSessionName method in internal/tmux/ — without the compiler
-// refusing the method because it collides with the existing SessionName
-// struct field.
+// Kept separate from dashboardSessionNamer so *tmux.Manager (which already
+// exposes the name as a public field) can satisfy this interface via a
+// GetSessionName shim — without the compiler refusing a plain SessionName
+// method because it collides with the existing struct field.
 type sessionFieldGetter interface {
 	GetSessionName() string
 }
@@ -292,7 +292,7 @@ func (r *Runner) TmuxSessionName() string {
 // TmuxManager returns the underlying tmux session manager for supervisor/shell
 // operations. Returns nil if no tmux manager is configured (test code).
 // The returned value is the TmuxSessionManager interface rather than a
-// concrete *tmux.Manager so this file does not import internal/tmux/.
+// concrete type, letting callers stay off the host-mode tmux package.
 func (r *Runner) TmuxManager() TmuxSessionManager {
 	return r.tmuxMgr
 }

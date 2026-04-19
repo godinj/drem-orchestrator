@@ -32,9 +32,8 @@ type WorktreeManager interface {
 	GenerateRepoMapAsync(worktreePath string)
 
 	// Agent-into-feature merge primitives. Added in the prompt-19 migration
-	// so merge_agent.go can drive a rebase + merge sequence without importing
-	// internal/worktree directly. *worktree.Manager implements these
-	// verbatim; tests substitute a FakeWorktreeManager.
+	// so merge_agent.go can drive a rebase + merge sequence. *worktree.Manager
+	// implements these verbatim; tests substitute a FakeWorktreeManager.
 	FindWorktreeByBranch(branch string) (string, error)
 	MergeBranch(sourceBranch, targetWorktree string) (*WorktreeMergeResult, error)
 	RebaseBranchOnto(sourceWorktree, targetWorktree string) (*WorktreeRebaseResult, error)

@@ -8,7 +8,7 @@ import (
 
 // fakeTmuxSessionManager is an in-memory stand-in for *tmux.Manager used by
 // tests that exercise ReapOrphanedSessions and NewRunner's session-name
-// fallback paths without importing internal/tmux.
+// fallback paths, keeping the test off the host-mode tmux package.
 type fakeTmuxSessionManager struct {
 	sessions         []string
 	alive            map[string]bool
@@ -37,7 +37,7 @@ func (f *fakeTmuxSessionManager) CreateAgentSession(sessionName, _, _ string) er
 }
 
 // Implements the optional dashboardSessionNamer extension so NewRunner
-// can seed tmuxSessionName without touching internal/tmux.
+// can seed tmuxSessionName without a concrete tmux.Manager.
 func (f *fakeTmuxSessionManager) SessionName() string {
 	return f.dashboardSession
 }

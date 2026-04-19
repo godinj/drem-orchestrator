@@ -1,11 +1,11 @@
 // tmux_adapter.go defines TmuxSessionManager, the narrow surface the Runner
-// uses to manage long-lived supervisor/shell tmux sessions. Keeping this
-// interface inside internal/agent/ (rather than importing internal/tmux)
-// lets the runner compile without a direct internal/tmux dependency — a
-// required invariant on the path to prompt 21's tmux package deletion.
+// uses to manage long-lived supervisor/shell tmux sessions. Keeping the
+// interface inside this package lets the runner compile without a direct
+// dependency on the host-mode tmux wrapper — a required invariant on the
+// path to prompt 21's tmux package deletion.
 //
 // *tmux.Manager satisfies this interface verbatim; orchestrator tests can
-// substitute a fake without importing internal/tmux.
+// substitute a fake.
 package agent
 
 // TmuxSessionManager is the subset of *tmux.Manager methods the agent Runner
