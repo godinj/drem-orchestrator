@@ -54,6 +54,19 @@ func NewManager(sessionName string, opts ...Option) *Manager {
 	return m
 }
 
+// GetSessionName returns the dashboard session name prefix. Exposed as a
+// method (in addition to the existing public field) so the agent package's
+// TmuxSessionManager interface can read the dashboard session name without
+// importing internal/tmux — a required step on the path to prompt 21's tmux
+// package deletion. Go forbids a method and a field sharing a name on the
+// same type, so this shim uses the Get-prefix convention.
+func (m *Manager) GetSessionName() string {
+	if m == nil {
+		return ""
+	}
+	return m.SessionName
+}
+
 // exactTarget returns the session name prefixed with "=" so that tmux -t
 // performs an exact match instead of prefix matching. Without this, a session
 // named "foo" would also match "foo-bar". The "=" prefix is only valid for

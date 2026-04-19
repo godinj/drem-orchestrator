@@ -1,7 +1,14 @@
 // Package agent manages Claude Code agent lifecycles.
 //
 // Headless agents (planners, coders, reviewers, fixers) run as direct
-// subprocesses. Interactive sessions (supervisors, shells) still use tmux.
+// subprocesses. Interactive sessions (supervisors, shells) still use the
+// TmuxSessionManager adapter (see tmux_adapter.go) so this package stays
+// unimported from internal/tmux/ while the containerization migration in
+// docs/containerization/remaining-work.md is in flight.
+//
+// Container-based agents route through Manager.Spawn/Teardown (spawn.go,
+// teardown.go) and Manager.Attach/RespawnIfDashboardExited (attach.go).
+//
 // Each agent runs in its own git worktree with full visibility and persistence
 // independent of the dashboard lifecycle.
 package agent
@@ -23,7 +30,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agentmon"
 	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/tmux"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
@@ -87,12 +93,13 @@ type MetricsRecorder interface {
 }
 
 // Runner manages Claude Code agent lifecycles. Headless agents run as
-// subprocesses; supervisors and shells still use tmux.
+// subprocesses; supervisors and shells still use tmux via the
+// TmuxSessionManager adapter (see tmux_adapter.go).
 type Runner struct {
 	db                    *gorm.DB
-	startProcess          ProcessStarter // creates subprocess; overridable for tests
-	tmuxMgr               *tmux.Manager  // for supervisors/shells only
-	tmuxSessionName       string         // dashboard session name prefix
+	startProcess          ProcessStarter     // creates subprocess; overridable for tests
+	tmuxMgr               TmuxSessionManager // for supervisors/shells only
+	tmuxSessionName       string             // dashboard session name prefix
 	worktree              *worktree.Manager
 	claudeBin             string
 	openCodeBin           string
@@ -130,25 +137,39 @@ func (r *Runner) SetOpenCodeContextWindow(size int) {
 	r.openCodeContextWindow = size
 }
 
+// dashboardSessionNamer is an optional extension implemented by tmux session
+// managers that expose a dashboard-session-name prefix for deriving nested
+// agent session names. *tmux.Manager satisfies this via a stable
+// SessionName() method, but custom managers can opt out by not implementing
+// it — in which case tmuxSessionName falls back to empty and callers that
+// need it (supervisor-session spawning) should detect empty and no-op.
+//
+// This is declared as a local interface rather than part of TmuxSessionManager
+// because ReapOrphanedSessions does not need it; keeping the surface split
+// lets a minimal test fake implement only what it exercises.
+type dashboardSessionNamer interface {
+	SessionName() string
+}
+
 // NewRunner creates an agent Runner. Headless agents are started via
-// StartAgentProcess; supervisors and shells use the tmux Manager.
+// StartAgentProcess; supervisors and shells use the tmux session manager.
 // agentConfigs maps agent types to CLI flags; pass nil for default behavior
 // (effort=medium, no model override).
-func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin, openCodeBin string, maxConcurrent int, agentConfigs func(model.AgentType) model.AgentCLIConfig) *Runner {
+//
+// tm is a TmuxSessionManager: *tmux.Manager satisfies it but the runner does
+// not import internal/tmux/ directly. Pass nil in tests or in containerized
+// configurations where supervisor tmux sessions are not required.
+func NewRunner(db *gorm.DB, tm TmuxSessionManager, wt *worktree.Manager, claudeBin, openCodeBin string, maxConcurrent int, agentConfigs func(model.AgentType) model.AgentCLIConfig) *Runner {
 	if agentConfigs == nil {
 		agentConfigs = func(model.AgentType) model.AgentCLIConfig {
 			return model.AgentCLIConfig{Effort: "medium"}
 		}
 	}
-	var sessionName string
-	if tm != nil {
-		sessionName = tm.SessionName
-	}
 	return &Runner{
 		db:              db,
 		startProcess:    StartAgentProcess,
 		tmuxMgr:         tm,
-		tmuxSessionName: sessionName,
+		tmuxSessionName: dashboardSessionName(tm),
 		worktree:        wt,
 		claudeBin:       claudeBin,
 		openCodeBin:     openCodeBin,
@@ -158,6 +179,36 @@ func NewRunner(db *gorm.DB, tm *tmux.Manager, wt *worktree.Manager, claudeBin, o
 		completions:     make(chan Completion, maxConcurrent),
 		semaphore:       make(chan struct{}, maxConcurrent),
 	}
+}
+
+// dashboardSessionName returns the dashboard tmux session name prefix when
+// tm supports SessionName() (the shape *tmux.Manager exposes once a
+// package-level SessionName() shim is added in prompt 21). Until that shim
+// lands, *tmux.Manager exposes SessionName as a struct field — Go does not
+// let the interface assertion pick that up, so we also try a struct-field
+// reflect-free fallback via the sessionFieldGetter interface below.
+func dashboardSessionName(tm TmuxSessionManager) string {
+	if tm == nil {
+		return ""
+	}
+	if namer, ok := tm.(dashboardSessionNamer); ok {
+		return namer.SessionName()
+	}
+	if getter, ok := tm.(sessionFieldGetter); ok {
+		return getter.GetSessionName()
+	}
+	return ""
+}
+
+// sessionFieldGetter is a second extension point for tmux managers that
+// expose the dashboard session name through a differently-named method.
+// Kept separate from dashboardSessionNamer so *tmux.Manager (which currently
+// exposes the name as a public field) can satisfy this interface once we
+// add a GetSessionName method in internal/tmux/ — without the compiler
+// refusing the method because it collides with the existing SessionName
+// struct field.
+type sessionFieldGetter interface {
+	GetSessionName() string
 }
 
 // AgentTypeLabel returns a human-readable label for the given agent type.
@@ -238,9 +289,11 @@ func (r *Runner) TmuxSessionName() string {
 	return r.tmuxSessionName
 }
 
-// TmuxManager returns the underlying tmux Manager for supervisor/shell
+// TmuxManager returns the underlying tmux session manager for supervisor/shell
 // operations. Returns nil if no tmux manager is configured (test code).
-func (r *Runner) TmuxManager() *tmux.Manager {
+// The returned value is the TmuxSessionManager interface rather than a
+// concrete *tmux.Manager so this file does not import internal/tmux/.
+func (r *Runner) TmuxManager() TmuxSessionManager {
 	return r.tmuxMgr
 }
 
