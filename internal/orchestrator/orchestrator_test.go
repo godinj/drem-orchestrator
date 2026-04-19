@@ -14,12 +14,11 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // testOrchestrator creates an Orchestrator with a test DB and minimal
 // dependencies. The worktree manager and runner are set up with dummy paths.
-func testOrchestrator(t *testing.T, db *gorm.DB, wtManager *worktree.Manager) *Orchestrator {
+func testOrchestrator(t *testing.T, db *gorm.DB, wtManager WorktreeManager) *Orchestrator {
 	t.Helper()
 	projectID := uuid.New()
 	events := make(chan Event, 100)
@@ -75,14 +74,14 @@ func createFeatureWorktree(t *testing.T, bareRepoPath, featureName string) strin
 	if err := os.MkdirAll(filepath.Dir(featureDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := worktree.RunGit([]string{"branch", branchName, "main"}, bareRepoPath); err != nil {
+	if _, err := testutil.RunGit([]string{"branch", branchName, "main"}, bareRepoPath); err != nil {
 		t.Fatalf("create branch %s: %v", branchName, err)
 	}
-	if _, err := worktree.RunGit([]string{"worktree", "add", featureDir, branchName}, bareRepoPath); err != nil {
+	if _, err := testutil.RunGit([]string{"worktree", "add", featureDir, branchName}, bareRepoPath); err != nil {
 		t.Fatalf("add worktree %s: %v", branchName, err)
 	}
-	worktree.RunGit([]string{"config", "user.email", "test@test.com"}, featureDir)
-	worktree.RunGit([]string{"config", "user.name", "Test"}, featureDir)
+	testutil.RunGit([]string{"config", "user.email", "test@test.com"}, featureDir)
+	testutil.RunGit([]string{"config", "user.name", "Test"}, featureDir)
 	return featureDir
 }
 
@@ -95,33 +94,33 @@ func createAgentBranch(t *testing.T, bareRepoPath, featureName, branchName strin
 	featureBranch := "feature/" + featureName
 
 	// Create agent branch from feature branch.
-	if _, err := worktree.RunGit([]string{"branch", branchName, featureBranch}, bareRepoPath); err != nil {
+	if _, err := testutil.RunGit([]string{"branch", branchName, featureBranch}, bareRepoPath); err != nil {
 		t.Fatalf("create branch %s: %v", branchName, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(agentDir), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := worktree.RunGit([]string{"worktree", "add", agentDir, branchName}, bareRepoPath); err != nil {
+	if _, err := testutil.RunGit([]string{"worktree", "add", agentDir, branchName}, bareRepoPath); err != nil {
 		t.Fatalf("add worktree %s: %v", branchName, err)
 	}
-	worktree.RunGit([]string{"config", "user.email", "test@test.com"}, agentDir)
-	worktree.RunGit([]string{"config", "user.name", "Test"}, agentDir)
+	testutil.RunGit([]string{"config", "user.email", "test@test.com"}, agentDir)
+	testutil.RunGit([]string{"config", "user.name", "Test"}, agentDir)
 
 	if addCommit {
 		testFile := filepath.Join(agentDir, "agent-work.txt")
 		if err := os.WriteFile(testFile, []byte("agent work"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := worktree.RunGit([]string{"add", "."}, agentDir); err != nil {
+		if _, err := testutil.RunGit([]string{"add", "."}, agentDir); err != nil {
 			t.Fatalf("git add: %v", err)
 		}
-		if _, err := worktree.RunGit([]string{"commit", "-m", "agent work commit"}, agentDir); err != nil {
+		if _, err := testutil.RunGit([]string{"commit", "-m", "agent work commit"}, agentDir); err != nil {
 			t.Fatalf("commit: %v", err)
 		}
 	}
 
 	// Merge agent branch into feature to simulate already-merged.
-	if _, err := worktree.RunGit([]string{"merge", "--no-ff", branchName, "-m", "merge agent"}, featureDir); err != nil {
+	if _, err := testutil.RunGit([]string{"merge", "--no-ff", branchName, "-m", "merge agent"}, featureDir); err != nil {
 		t.Fatalf("merge %s into feature: %v", branchName, err)
 	}
 
@@ -134,7 +133,7 @@ func createAgentBranch(t *testing.T, bareRepoPath, featureName, branchName strin
 
 func TestIsWorkAlreadyMerged_NoAgent(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	subtask := &model.Task{
@@ -148,7 +147,7 @@ func TestIsWorkAlreadyMerged_NoAgent(t *testing.T) {
 
 func TestIsWorkAlreadyMerged_AgentNoBranch(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	agentID := uuid.New()
@@ -181,7 +180,7 @@ func TestIsWorkAlreadyMerged_BranchIsAncestor(t *testing.T) {
 	featureDir := filepath.Join(bareRepoPath, "feature", featureName, "integration")
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	agentID := uuid.New()
@@ -215,28 +214,28 @@ func TestIsWorkAlreadyMerged_BranchDiverged(t *testing.T) {
 	// Create agent branch without merging it into the feature.
 	branchName := "worktree-agent-diverged"
 	featureBranch := "feature/" + featureName
-	if _, err := worktree.RunGit([]string{"branch", branchName, featureBranch}, bareRepoPath); err != nil {
+	if _, err := testutil.RunGit([]string{"branch", branchName, featureBranch}, bareRepoPath); err != nil {
 		t.Fatalf("create branch %s: %v", branchName, err)
 	}
 	agentDir := filepath.Join(bareRepoPath, "feature", featureName, "agent-diverged")
-	if _, err := worktree.RunGit([]string{"worktree", "add", agentDir, branchName}, bareRepoPath); err != nil {
+	if _, err := testutil.RunGit([]string{"worktree", "add", agentDir, branchName}, bareRepoPath); err != nil {
 		t.Fatalf("add worktree %s: %v", branchName, err)
 	}
-	worktree.RunGit([]string{"config", "user.email", "test@test.com"}, agentDir)
-	worktree.RunGit([]string{"config", "user.name", "Test"}, agentDir)
+	testutil.RunGit([]string{"config", "user.email", "test@test.com"}, agentDir)
+	testutil.RunGit([]string{"config", "user.name", "Test"}, agentDir)
 	testFile := filepath.Join(agentDir, "diverged.txt")
 	if err := os.WriteFile(testFile, []byte("diverged work"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := worktree.RunGit([]string{"add", "."}, agentDir); err != nil {
+	if _, err := testutil.RunGit([]string{"add", "."}, agentDir); err != nil {
 		t.Fatalf("git add: %v", err)
 	}
-	if _, err := worktree.RunGit([]string{"commit", "-m", "diverged commit"}, agentDir); err != nil {
+	if _, err := testutil.RunGit([]string{"commit", "-m", "diverged commit"}, agentDir); err != nil {
 		t.Fatalf("commit: %v", err)
 	}
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	agentID := uuid.New()
@@ -266,7 +265,7 @@ func TestIsWorkAlreadyMerged_BranchDiverged(t *testing.T) {
 
 func TestCheckFeatureCompletion_AllDone(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	// Create project.
@@ -311,7 +310,7 @@ func TestCheckFeatureCompletion_AllDone(t *testing.T) {
 
 func TestCheckFeatureCompletion_MixedFailedAndInProgress(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -362,7 +361,7 @@ func TestCheckFeatureCompletion_MixedFailedAndInProgress(t *testing.T) {
 
 func TestCheckFeatureCompletion_AllTerminalSomeFailed(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -423,7 +422,7 @@ func TestCheckFeatureCompletion_AllTerminalSomeFailed(t *testing.T) {
 
 func TestCheckFeatureCompletion_NoSubtasks(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -457,7 +456,7 @@ func TestCheckFeatureCompletion_NoSubtasks(t *testing.T) {
 
 func TestReconcileStuckAgents_AgentInRunnerMap(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	// We can't easily mock the runner, so we test the DB-level logic.
@@ -520,7 +519,7 @@ func TestReconcileStuckAgents_AgentInRunnerMap(t *testing.T) {
 
 func TestResolveFeatureWorktree(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/bare-repo.git", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/bare-repo.git", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	parentID := uuid.New()
@@ -553,7 +552,7 @@ func TestResolveFeatureWorktree(t *testing.T) {
 
 func TestResolveFeatureWorktree_NoParent(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/bare-repo.git", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/bare-repo.git", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	subtask := &model.Task{

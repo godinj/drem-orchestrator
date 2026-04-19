@@ -10,13 +10,12 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // orchForTest creates an Orchestrator with a test DB and minimal dependencies.
 func orchForTest(t *testing.T, database *gorm.DB) *Orchestrator {
 	t.Helper()
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake-bare.git", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake-bare.git", Default: "main"}
 	return testOrchestrator(t, database, wt)
 }
 
@@ -557,7 +556,7 @@ func TestProcessTestingReady_TestsPass(t *testing.T) {
 	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	events := make(chan Event, 100)
 	o := &Orchestrator{
 		db:              db,

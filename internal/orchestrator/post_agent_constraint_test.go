@@ -48,7 +48,7 @@ func TestPostAgentConstraint_NoConfig(t *testing.T) {
 	}
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
 	o.merger = merge.NewOrchestrator(wt, o.db)
 
@@ -161,7 +161,7 @@ limit = 1000
 	runGitCmd(t, agentDir, "commit", "-m", "add small go file")
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
 	o.merger = merge.NewOrchestrator(wt, o.db)
 
@@ -272,7 +272,7 @@ limit = 5
 	runGitCmd(t, agentDir, "commit", "-m", "add big go file")
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
 	o.merger = merge.NewOrchestrator(wt, o.db)
 

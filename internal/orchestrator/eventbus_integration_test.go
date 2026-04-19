@@ -9,7 +9,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/eventbus"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // testOrchestratorWithBus creates an Orchestrator with event bus wired up.
@@ -18,7 +17,7 @@ func testOrchestratorWithBus(t *testing.T, bus *eventbus.Bus) (*Orchestrator, uu
 	db := testutil.NewTestDB(t)
 	projectID := uuid.New()
 	events := make(chan Event, 100)
-	wt := &worktree.Manager{BareRepoPath: t.TempDir(), DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: t.TempDir(), Default: "main"}
 	o := &Orchestrator{
 		db:              db,
 		projectID:       projectID,
@@ -40,7 +39,7 @@ func testOrchestratorWithBus(t *testing.T, bus *eventbus.Bus) (*Orchestrator, uu
 func TestSetEventBus_NilIsNoOp(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	events := make(chan Event, 100)
-	wt := &worktree.Manager{BareRepoPath: t.TempDir(), DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: t.TempDir(), Default: "main"}
 	o := &Orchestrator{
 		db:        db,
 		projectID: uuid.New(),
@@ -58,7 +57,7 @@ func TestSetEventBus_SetsField(t *testing.T) {
 	bus := testutil.NewTestBus(t)
 	db := testutil.NewTestDB(t)
 	events := make(chan Event, 100)
-	wt := &worktree.Manager{BareRepoPath: t.TempDir(), DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: t.TempDir(), Default: "main"}
 	o := &Orchestrator{
 		db:        db,
 		projectID: uuid.New(),
@@ -329,7 +328,7 @@ func TestNilBus_FailTask_Succeeds(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	projectID := uuid.New()
 	events := make(chan Event, 100)
-	wt := &worktree.Manager{BareRepoPath: t.TempDir(), DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: t.TempDir(), Default: "main"}
 	o := &Orchestrator{
 		db:              db,
 		projectID:       projectID,

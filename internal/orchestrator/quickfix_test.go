@@ -192,7 +192,7 @@ func TestQuickFix_MergeFailure_FlagsForHumanReview(t *testing.T) {
 	db.Create(&project)
 
 	events := make(chan Event, 100)
-	wt := &worktree.Manager{BareRepoPath: bareRepo, DefaultBranch: defaultBranch}
+	wt := worktree.NewManager(bareRepo, defaultBranch)
 	runner := agent.NewRunner(db, nil, wt, "/bin/false", "", 0, nil)
 
 	o := &Orchestrator{
@@ -313,7 +313,7 @@ func TestTransitionQuickFixToMerging_ConstraintViolation_PausesTask(t *testing.T
 	db.Create(&project)
 
 	events := make(chan Event, 100)
-	wt := &worktree.Manager{BareRepoPath: bareRepo, DefaultBranch: defaultBranch}
+	wt := worktree.NewManager(bareRepo, defaultBranch)
 	runner := agent.NewRunner(db, nil, wt, "/bin/false", "", 0, nil)
 
 	o := &Orchestrator{

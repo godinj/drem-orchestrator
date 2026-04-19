@@ -17,7 +17,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	dbpkg "github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 func setupPrepTest(t *testing.T) (*Orchestrator, uuid.UUID) {
@@ -41,7 +40,7 @@ func setupPrepTest(t *testing.T) (*Orchestrator, uuid.UUID) {
 	orch := &Orchestrator{
 		db:              gormDB,
 		projectID:       projectID,
-		worktree:        &worktree.Manager{BareRepoPath: project.BareRepoPath, DefaultBranch: "main"},
+		worktree:        &FakeWorktreeManager{BarePath: project.BareRepoPath, Default: "main"},
 		events:          events,
 		contextWarnPct:  75,
 		contextStopPct:  90,

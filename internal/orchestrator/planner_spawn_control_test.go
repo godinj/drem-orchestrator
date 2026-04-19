@@ -21,7 +21,7 @@ func TestMaxTotalPlannerSpawns_BlocksAtCap(t *testing.T) {
 	// A task that has reached MaxTotalPlannerSpawns must NOT spawn another
 	// planner; processPlanning should fail the task instead.
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -56,7 +56,7 @@ func TestMaxTotalPlannerSpawns_BlocksAboveCap(t *testing.T) {
 	// Edge case: total_planner_spawns above the cap (e.g. from manual edit)
 	// should also block.
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -90,7 +90,7 @@ func TestTotalPlannerSpawns_NeverResetOnReplan(t *testing.T) {
 	// After replan (TEST_WRITING -> PLANNING), total_planner_spawns must
 	// be preserved. Verify the counter survives the replan transition.
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -132,7 +132,7 @@ func TestTotalPlannerSpawns_NeverResetOnReplan(t *testing.T) {
 func TestRetryCount_NotResetOnReplan(t *testing.T) {
 	// retry_count must NOT be reset to 0 in the RecoveryReplan path.
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -454,7 +454,7 @@ func TestTestWritingReplan_CappedAt1(t *testing.T) {
 	// Second empty-subtask replan should flag for human review instead of
 	// replanning again.
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -502,7 +502,7 @@ func TestTestWritingReplan_CappedAt1(t *testing.T) {
 func TestTestWritingReplan_FirstReplanAllowed(t *testing.T) {
 	// The first empty-subtask replan should still be allowed.
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -611,7 +611,7 @@ func TestSpawnCap_SurvivesMultipleReplanCycles(t *testing.T) {
 	// Simulate a task going through multiple replan cycles and verify
 	// that total_planner_spawns is never reset.
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}

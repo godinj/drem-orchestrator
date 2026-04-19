@@ -380,7 +380,7 @@ func TestOnAgentFailed_NotMerged_FailsNormally(t *testing.T) {
 // the parent stays in_progress when some subtasks are still in backlog.
 func TestCheckFeatureCompletion_BacklogSubtask_StaysInProgress(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -428,7 +428,7 @@ func TestCheckFeatureCompletion_BacklogSubtask_StaysInProgress(t *testing.T) {
 // the parent stays in_progress when a subtask is still in planning.
 func TestCheckFeatureCompletion_PlanningSubtask_StaysInProgress(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}

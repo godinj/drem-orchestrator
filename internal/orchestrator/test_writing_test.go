@@ -19,10 +19,24 @@ import (
 // testOrchestratorWithRunner creates an Orchestrator with a test DB and a
 // Runner that has 0 capacity (CanSpawn returns false). Useful for tests
 // that call processTestWriting but don't need actual agent spawning.
-func testOrchestratorWithRunner(t *testing.T, db *gorm.DB, wtManager *worktree.Manager) *Orchestrator {
+//
+// The Runner still requires a concrete *worktree.Manager (that dependency is
+// out of scope for this migration prompt), so when the caller passes a
+// WorktreeManager that is not already a *worktree.Manager — e.g. a
+// FakeWorktreeManager — we synthesise an empty real Manager for the runner.
+// The orchestrator itself uses the caller-supplied interface value, so
+// test assertions target the fake consistently.
+func testOrchestratorWithRunner(t *testing.T, db *gorm.DB, wtManager WorktreeManager) *Orchestrator {
 	t.Helper()
 	o := testOrchestrator(t, db, wtManager)
-	o.runner = agent.NewRunner(db, nil, wtManager, "claude", "", 0, nil)
+	runnerMgr, ok := wtManager.(*worktree.Manager)
+	if !ok {
+		runnerMgr = &worktree.Manager{
+			BareRepoPath:  wtManager.BareRepo(),
+			DefaultBranch: wtManager.DefaultBranchName(),
+		}
+	}
+	o.runner = agent.NewRunner(db, nil, runnerMgr, "claude", "", 0, nil)
 	return o
 }
 
