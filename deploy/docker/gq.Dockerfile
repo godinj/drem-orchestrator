@@ -17,7 +17,7 @@
 # Built-in defaults apply if absent (internal/gq/config.go:124-166).
 
 # ---------- build stage ----------
-FROM golang:1.24.4-alpine AS build
+FROM golang:1.25-alpine AS build
 
 RUN apk add --no-cache git ca-certificates
 

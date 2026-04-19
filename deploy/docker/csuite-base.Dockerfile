@@ -71,8 +71,8 @@ RUN set -eux; \
     npm cache clean --force
 
 # ---- non-root user ---------------------------------------------------------
-RUN groupadd --gid "${DREM_GID}" drem \
- && useradd  --uid "${DREM_UID}" --gid "${DREM_GID}" \
+RUN /usr/sbin/groupadd --gid "${DREM_GID}" drem \
+ && /usr/sbin/useradd  --uid "${DREM_UID}" --gid "${DREM_GID}" \
              --create-home --shell /bin/bash drem
 
 # ---- persona prompts -------------------------------------------------------

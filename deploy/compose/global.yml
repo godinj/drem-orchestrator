@@ -21,8 +21,6 @@
 #
 # See deploy/compose/README.md for the full operational runbook.
 
-version: "3.9"
-
 name: drem-global
 
 networks:

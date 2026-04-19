@@ -90,8 +90,8 @@ RUN set -eux; \
 # UID 1000 mirrors the typical interactive host account so files written into
 # a bind-mounted bare repo have host-friendly ownership. Passwordless sudo is
 # intentional: the worker container is ephemeral and single-tenant.
-RUN groupadd --gid "${DREM_GID}" drem \
- && useradd  --uid "${DREM_UID}" --gid "${DREM_GID}" \
+RUN /usr/sbin/groupadd --gid "${DREM_GID}" drem \
+ && /usr/sbin/useradd  --uid "${DREM_UID}" --gid "${DREM_GID}" \
              --create-home --shell /bin/bash drem \
  && echo 'drem ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/drem \
  && chmod 0440 /etc/sudoers.d/drem \
