@@ -35,9 +35,9 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/ratelimit"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/taskimport"
-	tmuxpkg "github.com/godinj/drem-orchestrator/internal/tmux"
+	"github.com/godinj/drem-orchestrator/internal/tmuxbridge"
 	"github.com/godinj/drem-orchestrator/internal/tui"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
+	"github.com/godinj/drem-orchestrator/internal/wtbridge"
 )
 
 func main() {
@@ -123,10 +123,14 @@ func main() {
 	// Resolve tmux config file path relative to bare repo.
 	tmuxConfPath := filepath.Join(cfg.BareRepoPath, cfg.TmuxConfigFile)
 
-	// Tmux options used by both outer and inner invocations.
-	tmuxOpts := []tmuxpkg.Option{
-		tmuxpkg.WithSocket(cfg.TmuxSocket),
-		tmuxpkg.WithConfigFile(tmuxConfPath),
+	// Tmux options used by both outer and inner invocations. Constructed
+	// via internal/tmuxbridge so main.go does not import internal/tmux
+	// directly — the bridge is the last remaining caller ahead of the
+	// prompt-21 package deletion.
+	tmuxOpts := tmuxbridge.Options{
+		SessionName: sessionName,
+		Socket:      cfg.TmuxSocket,
+		ConfigFile:  tmuxConfPath,
 	}
 
 	// Self-respawn: if DREM_SESSION is not set, we are the outer invocation.
@@ -143,9 +147,9 @@ func main() {
 		dashCmd := fmt.Sprintf("DREM_SESSION='%s' %s --config %s --repo %s",
 			sessionName, exe, *configPath, cfg.BareRepoPath)
 
-		tmux := tmuxpkg.NewManager(sessionName, tmuxOpts...)
+		tmux := tmuxbridge.NewManager(tmuxOpts)
 		if err := tmux.EnsureSession(dashCmd); err != nil {
-			if !errors.Is(err, tmuxpkg.ErrDashboardRespawned) {
+			if !errors.Is(err, tmuxbridge.ErrDashboardRespawned) {
 				log.Fatalf("tmux: %v", err)
 			}
 			// Dashboard was respawned — fall through to attach/switch.
@@ -190,9 +194,14 @@ func main() {
 		}
 	}
 
-	// Init components.
-	tmux := tmuxpkg.NewManager(sessionName, tmuxOpts...)
-	wt := worktree.NewManager(cfg.BareRepoPath, cfg.DefaultBranch)
+	// Init components. Construction is routed through internal/wtbridge
+	// and internal/tmuxbridge so main.go holds no direct import of the
+	// soon-to-be-deleted internal/worktree and internal/tmux packages.
+	tmux := tmuxbridge.NewManager(tmuxOpts)
+	wt := wtbridge.NewConcreteManager(wtbridge.Options{
+		BareRepoPath:  cfg.BareRepoPath,
+		DefaultBranch: cfg.DefaultBranch,
+	})
 
 	// Migrate old-layout worktrees to grouped layout.
 	if err := wt.MigrateToGroupedLayout(); err != nil {
