@@ -33,6 +33,8 @@ networks:
 volumes:
   drem-registry-data:
     name: drem-registry-data
+  drem-spawner-sock:
+    name: drem-spawner-sock
 
 services:
   # ---------- Local Docker registry ----------
@@ -152,3 +154,20 @@ services:
       timeout: 5s
       retries: 3
       start_period: 10s
+
+  # ---------- Spawner: JSON-RPC Docker-socket gateway ----------
+  # The only process in the stack mounted with the host Docker socket.
+  # Every other service (orchestrator, agentmon) talks to it over a Unix
+  # socket in the shared drem-spawner-sock volume. Per PRD §"Spawner
+  # service owns the Docker socket" this is an intentionally narrow
+  # privilege boundary.
+  spawner:
+    image: localhost:5000/drem-spawner:latest
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - drem-spawner-sock:/var/run/drem
+    networks: [drem-net]
+    restart: unless-stopped
+    labels:
+      drem.scope: global
+      drem.service: spawner
