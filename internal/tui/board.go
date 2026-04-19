@@ -609,12 +609,17 @@ func (a AgentsModel) View() string {
 
 		lines = append(lines, header)
 
-		// Indented details.
-		if ag.TmuxSession != "" {
-			lines = append(lines, subtitleStyle.Render(
-				fmt.Sprintf("    session: %s", ag.TmuxSession),
-			))
-		}
+		// Container-centric details. The agent Name field carries the
+		// full container ID (populated by AgentFromDTO); we render the
+		// 12-char short form for the operator and pair it with the
+		// resolved image tag so one row communicates "which container,
+		// running what image" at a glance.
+		lines = append(lines, subtitleStyle.Render(
+			fmt.Sprintf("    container: %s", shortContainerID(ag.Name)),
+		))
+		lines = append(lines, subtitleStyle.Render(
+			fmt.Sprintf("    image: %s", imageForAgentType(ag.AgentType)),
+		))
 		if ag.WorktreeBranch != "" {
 			lines = append(lines, subtitleStyle.Render(
 				fmt.Sprintf("    branch: %s", ag.WorktreeBranch),
@@ -720,9 +725,9 @@ func (a AgentsModel) View() string {
 		lineIdx := 0
 		for i, ag := range visible {
 			blockLen := 1 // header line
-			if ag.TmuxSession != "" {
-				blockLen++
-			}
+			// Container ID + image lines are always rendered — see the
+			// container-centric detail block above.
+			blockLen += 2
 			if ag.WorktreeBranch != "" {
 				blockLen++
 			}

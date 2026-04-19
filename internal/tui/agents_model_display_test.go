@@ -300,6 +300,48 @@ func TestAgentsViewDisplay_ModelIDAndTokensForArchivedAgents(t *testing.T) {
 	})
 }
 
+// TestAgentsViewDisplay_ContainerAndImageRendering pins the new
+// container-centric rendering introduced alongside the tmux/worktree
+// decouple: the agent row must show the 12-char short container ID and
+// the image tag resolved from the agent type. The tmux-pane-ID column
+// that previously rendered here is gone for good.
+func TestAgentsViewDisplay_ContainerAndImageRendering(t *testing.T) {
+	agents := []model.Agent{
+		{
+			ID:             uuid.New(),
+			Name:           "0123456789abcdef0123456789abcdef",
+			AgentType:      model.AgentCoder,
+			Status:         model.AgentWorking,
+			WorktreeBranch: "feature/login",
+			ModelID:        "claude-opus-4",
+		},
+	}
+
+	a := AgentsModel{
+		agents:     agents,
+		cursor:     0,
+		width:      120,
+		height:     40,
+		autoFilter: true,
+	}
+
+	view := a.View()
+
+	if !strings.Contains(view, "container: 0123456789ab") {
+		t.Errorf("expected container short-id line, got:\n%s", view)
+	}
+	if !strings.Contains(view, "image: localhost:5000/drem-worker:latest") {
+		t.Errorf("expected image tag line, got:\n%s", view)
+	}
+	if !strings.Contains(view, "branch: feature/login") {
+		t.Errorf("expected branch line, got:\n%s", view)
+	}
+	// Ensure the legacy tmux-session column is truly gone.
+	if strings.Contains(view, "session:") {
+		t.Errorf("legacy 'session:' column should be removed, got:\n%s", view)
+	}
+}
+
 func TestAgentsViewDisplay_ColumnFormatting(t *testing.T) {
 	t.Run("model ID and tokens appear for both agents", func(t *testing.T) {
 		a := AgentsModel{

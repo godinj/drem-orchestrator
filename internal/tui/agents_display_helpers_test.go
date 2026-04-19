@@ -139,3 +139,52 @@ func TestExtractTokens(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Container-rendering helpers
+// ---------------------------------------------------------------------------
+
+func TestShortContainerID(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty yields dash", "", "-"},
+		{"short id returned as-is", "abc123", "abc123"},
+		{"12-char id returned as-is", "0123456789ab", "0123456789ab"},
+		{"longer id truncated to 12", "0123456789abcdef0123", "0123456789ab"},
+		{"typical 64-char docker id truncated", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "0123456789ab"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shortContainerID(tt.in); got != tt.want {
+				t.Errorf("shortContainerID(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestImageForAgentType(t *testing.T) {
+	tests := []struct {
+		name string
+		in   model.AgentType
+		want string
+	}{
+		{"coder shows generic worker image", model.AgentCoder, "localhost:5000/drem-worker:latest"},
+		{"merger resolves to merger image", "merger", "localhost:5000/drem-merger:latest"},
+		{"csuite-mike resolves to csuite-mike image", "csuite-mike", "localhost:5000/drem-csuite-mike:latest"},
+		{"csuite-alex resolves to csuite-alex image", "csuite-alex", "localhost:5000/drem-csuite-alex:latest"},
+		{"csuite-ross resolves to csuite-ross image", "csuite-ross", "localhost:5000/drem-csuite-ross:latest"},
+		{"csuite-seth resolves to csuite-seth image", "csuite-seth", "localhost:5000/drem-csuite-seth:latest"},
+		{"empty type yields dash", "", "-"},
+		{"unknown type falls back to drem-worker-<type>", "planner", "localhost:5000/drem-worker-planner:latest"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := imageForAgentType(tt.in); got != tt.want {
+				t.Errorf("imageForAgentType(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
