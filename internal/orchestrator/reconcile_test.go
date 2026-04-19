@@ -10,7 +10,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
-	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
@@ -33,10 +32,10 @@ func setupReconcileTest(t *testing.T) (*Orchestrator, *gorm.DB, string) {
 	db.Create(&project)
 
 	wt := worktree.NewManager(bareRepo, "main")
-	merger := merge.NewOrchestrator(wt, db)
 	orch := testOrchestrator(t, db, wt)
 	orch.projectID = project.ID
-	orch.merger = merger
+	// Agent-branch-into-feature merges run via orch.mergeAgentBranchIntoFeature
+	// against orch.worktree (the real *worktree.Manager wired above).
 	// Always provide a runner so reconcileStuckAgents doesn't panic.
 	// The runner's running map is empty, simulating no active agents.
 	orch.runner = agent.NewRunner(db, nil, wt, "/nonexistent/claude", "", 0, nil)

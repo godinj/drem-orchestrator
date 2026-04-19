@@ -280,7 +280,7 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 				// Branch likely already cleaned up — assume merge happened.
 				merged = true
 			} else if hasCommits {
-				result, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir)
+				result, mergeErr := o.mergeAgentBranchIntoFeature(context.Background(), ag.WorktreeBranch, featureDir)
 				if mergeErr != nil {
 					o.logger.Error("reconcile: merge agent into feature failed",
 						"subtask_id", sub.ID, "agent_id", ag.ID, "error", mergeErr)

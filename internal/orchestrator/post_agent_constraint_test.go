@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
-	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
@@ -50,7 +49,6 @@ func TestPostAgentConstraint_NoConfig(t *testing.T) {
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
 	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
-	o.merger = merge.NewOrchestrator(wt, o.db)
 
 	parentID := uuid.New()
 	parent := model.Task{
@@ -163,7 +161,6 @@ limit = 1000
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
 	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
-	o.merger = merge.NewOrchestrator(wt, o.db)
 
 	parentID := uuid.New()
 	parent := model.Task{
@@ -274,7 +271,6 @@ limit = 5
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
 	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
-	o.merger = merge.NewOrchestrator(wt, o.db)
 
 	parentID := uuid.New()
 	parent := model.Task{

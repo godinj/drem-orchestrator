@@ -58,6 +58,15 @@ type FakeWorktreeManager struct {
 	OnCreateAgentWorktree func(featureName string) (*AgentWorktreeInfo, error)
 	OnRemoveAgentWorktree func(branch string) error
 	OnListAgentWorktrees  func(featureName string) ([]AgentWorktreeInfo, error)
+
+	// Agent-into-feature merge hooks. The default implementations return
+	// a zero-value successful merge / rebase / "not found" for the branch
+	// lookup, matching the shape tests expect when the fake is only used
+	// for structural assertions (paths, counts). Tests exercising merge
+	// decision-making wire these explicitly.
+	OnFindWorktreeByBranch func(branch string) (string, error)
+	OnMergeBranch          func(sourceBranch, targetWorktree string) (*WorktreeMergeResult, error)
+	OnRebaseBranchOnto     func(sourceWorktree, targetWorktree string) (*WorktreeRebaseResult, error)
 }
 
 // compile-time assertion.
@@ -201,4 +210,40 @@ func (f *FakeWorktreeManager) GenerateRepoMapForMain() {
 // call.
 func (f *FakeWorktreeManager) GenerateRepoMapAsync(worktreePath string) {
 	f.RepoMapsGenerated = append(f.RepoMapsGenerated, worktreePath)
+}
+
+// FindWorktreeByBranch returns a synthetic agent worktree path by default
+// so tests that don't care about rebase behaviour still get through the
+// rebase step. Tests asserting "worktree missing" should wire
+// OnFindWorktreeByBranch to return an error.
+func (f *FakeWorktreeManager) FindWorktreeByBranch(branch string) (string, error) {
+	if f.OnFindWorktreeByBranch != nil {
+		return f.OnFindWorktreeByBranch(branch)
+	}
+	if f.BarePath == "" {
+		return "", fmt.Errorf("fake worktree manager: no bare path configured")
+	}
+	return filepath.Join(f.BarePath, "worktree-by-branch", branch), nil
+}
+
+// MergeBranch returns a successful WorktreeMergeResult by default. Tests
+// that want to exercise conflict handling should wire OnMergeBranch to
+// return a result with Success=false and a non-empty Conflicts slice.
+func (f *FakeWorktreeManager) MergeBranch(sourceBranch, targetWorktree string) (*WorktreeMergeResult, error) {
+	if f.OnMergeBranch != nil {
+		return f.OnMergeBranch(sourceBranch, targetWorktree)
+	}
+	return &WorktreeMergeResult{
+		Success:      true,
+		SourceBranch: sourceBranch,
+		MergeCommit:  "fake-merge-commit",
+	}, nil
+}
+
+// RebaseBranchOnto returns a successful WorktreeRebaseResult by default.
+func (f *FakeWorktreeManager) RebaseBranchOnto(sourceWorktree, targetWorktree string) (*WorktreeRebaseResult, error) {
+	if f.OnRebaseBranchOnto != nil {
+		return f.OnRebaseBranchOnto(sourceWorktree, targetWorktree)
+	}
+	return &WorktreeRebaseResult{Success: true}, nil
 }

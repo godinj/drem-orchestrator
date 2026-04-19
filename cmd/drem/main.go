@@ -29,7 +29,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/eventbus"
 	"github.com/godinj/drem-orchestrator/internal/memory"
-	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/metrics"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
@@ -205,9 +204,13 @@ func main() {
 	runner.SetDispatchLimiter(ratelimit.New(cfg.MaxDispatchRate, cfg.DispatchWindow))
 	runner.SetMetricsRecorder(metrics.NewStore(database))
 	runner.SetOpenCodeContextWindow(cfg.OpenCodeContextWindow)
-	mergeOrch := merge.NewOrchestrator(wt, database)
-	mergeOrch.TestCommand = cfg.TestCommand
-	merger := merge.NewMergeQueue(mergeOrch, wt)
+	// The feature-into-main merge runs in a merger container (see
+	// internal/orchestrator/merge_dispatch.go). The agent-into-feature merge
+	// runs in-process via Orchestrator.mergeAgentBranchIntoFeature, which
+	// uses the worktree.Manager's MergeBranch/RebaseBranchOnto primitives.
+	// The TestCommand previously set on internal/merge now belongs on the
+	// merger container; tracked separately in the merger deployment config.
+	_ = cfg.TestCommand
 	mem := memory.NewManager(database)
 
 	var sup *supervisor.Supervisor
@@ -223,7 +226,7 @@ func main() {
 	bugReportSvc := bugreport.New(database)
 
 	orchEvents := make(chan orchestrator.Event, 100)
-	orch := orchestrator.NewWithExperimentScheduling(database, cfg.DatabasePath, runner, wt, merger, mem, sup, project.ID, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.MaxConcurrentAgents, cfg.ContextFixerPercent)
+	orch := orchestrator.NewWithExperimentScheduling(database, cfg.DatabasePath, runner, wt, mem, sup, project.ID, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.MaxConcurrentAgents, cfg.ContextFixerPercent)
 	orch.SetInteractiveSupervisorConfig(cfg.Agents.InteractiveSupervisorCLIConfig())
 
 	// Enable direct SGLang classifier when configured or auto-detected.

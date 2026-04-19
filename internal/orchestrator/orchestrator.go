@@ -109,7 +109,7 @@ type Orchestrator struct {
 	dbPath                      string
 	runner                      *agent.Runner
 	worktree                    WorktreeManager
-	merger                      mergerClient
+	mergeDispatcher             MergeDispatcher // optional override for tests; nil → dispatchMerge
 	memory                      *memory.Manager
 	bus                         *eventbus.Bus          // nil disables C-Suite event emission
 	supervisor                  *supervisor.Supervisor // nil disables LLM-powered decisions
@@ -159,12 +159,16 @@ type Orchestrator struct {
 // to disable LLM-powered decision points and fall back to existing behavior.
 // The bugSvc parameter is optional — pass nil to disable bug report ingestion.
 // maxConcurrent is used for experiment-aware scheduling.
+//
+// The merger parameter that previously preceded mem is retired: the
+// feature-into-main merge path now runs via dispatchMerge against the
+// merger container (see merge_dispatch.go). Callers that need to override
+// the dispatch for tests use SetMergeDispatcher.
 func New(
 	db *gorm.DB,
 	dbPath string,
 	runner *agent.Runner,
 	wt WorktreeManager,
-	merger mergerClient,
 	mem *memory.Manager,
 	sup *supervisor.Supervisor,
 	projectID uuid.UUID,
@@ -186,7 +190,6 @@ func New(
 		dbPath:          dbPath,
 		runner:          runner,
 		worktree:        wt,
-		merger:          merger,
 		memory:          mem,
 		supervisor:      sup,
 		bugreport:       bugSvc,
@@ -292,12 +295,13 @@ func (o *Orchestrator) SetEventBus(bus *eventbus.Bus) {
 // NewWithExperimentScheduling creates an Orchestrator with experiment-aware
 // scheduling enabled. When experiments are active, normal tasks are paused
 // and the agent pool is partitioned across experiment variants.
+//
+// See New for the rationale behind dropping the merger parameter.
 func NewWithExperimentScheduling(
 	db *gorm.DB,
 	dbPath string,
 	runner *agent.Runner,
 	wt WorktreeManager,
-	merger mergerClient,
 	mem *memory.Manager,
 	sup *supervisor.Supervisor,
 	projectID uuid.UUID,
@@ -311,7 +315,7 @@ func NewWithExperimentScheduling(
 	maxConcurrent int,
 	contextFixerPct ...int,
 ) *Orchestrator {
-	orch := New(db, dbPath, runner, wt, merger, mem, sup, projectID, events, tickInterval, staleTimeout, contextWarnPct, contextStopPct, bugSvc, bugDir, contextFixerPct...)
+	orch := New(db, dbPath, runner, wt, mem, sup, projectID, events, tickInterval, staleTimeout, contextWarnPct, contextStopPct, bugSvc, bugDir, contextFixerPct...)
 	orch.experimentScheduler = NewExperimentScheduler(db, maxConcurrent)
 	return orch
 }

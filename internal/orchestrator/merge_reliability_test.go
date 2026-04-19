@@ -10,7 +10,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/memory"
-	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/tmux"
@@ -70,7 +69,6 @@ func TestMergeFailedEvent_EmitsStructuredDiagnostics(t *testing.T) {
 		projectID: projectID,
 		worktree:  wt,
 		runner:    runner,
-		merger:    merge.NewOrchestrator(wt, db),
 		memory:    memory.NewManager(db),
 		events:    events,
 		logger:    slog.Default().With("component", "test-merge-diag"),

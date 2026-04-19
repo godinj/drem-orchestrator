@@ -132,7 +132,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		featureHEAD, _ := gitexec.RunGit(context.Background(), featureDir, "rev-parse", "HEAD")
 		agentHEAD, _ := gitexec.RunGit(context.Background(), featureDir, "rev-parse", ag.WorktreeBranch)
 
-		result, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir)
+		result, mergeErr := o.mergeAgentBranchIntoFeature(context.Background(), ag.WorktreeBranch, featureDir)
 		if mergeErr != nil {
 			o.logger.Error("merge agent into feature failed", "agent_id", ag.ID, "error", mergeErr)
 		} else if !result.Success {

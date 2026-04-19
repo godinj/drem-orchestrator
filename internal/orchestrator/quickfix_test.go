@@ -10,7 +10,6 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
-	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
@@ -195,18 +194,23 @@ func TestQuickFix_MergeFailure_FlagsForHumanReview(t *testing.T) {
 	wt := worktree.NewManager(bareRepo, defaultBranch)
 	runner := agent.NewRunner(db, nil, wt, "/bin/false", "", 0, nil)
 
+	// Stub the mergeDispatcher so the quickfix path exercises the
+	// Success=false + Conflicts branch without spawning a real merger.
 	o := &Orchestrator{
 		db:        db,
 		projectID: projectID,
 		worktree:  wt,
 		runner:    runner,
-		merger:    merge.NewOrchestrator(wt, db),
-		events:    events,
-		logger:    slog.Default().With("component", "quickfix-merge-test"),
+		mergeDispatcher: &stubMerger{results: []stubMergeResult{
+			{result: &MergeResult{Success: false, Conflicts: []string{"conflict.go"}}, err: nil},
+		}},
+		events: events,
+		logger: slog.Default().With("component", "quickfix-merge-test"),
 	}
 
-	// Create a quickfix task in MERGING state with a non-existent worktree
-	// branch, which will cause the merge to fail.
+	// Create a quickfix task in MERGING state with a feature branch that has
+	// merge conflicts (per the stub above), which triggers the quickfix
+	// failure path.
 	task := model.Task{
 		ID:             uuid.New(),
 		ProjectID:      projectID,
@@ -220,23 +224,12 @@ func TestQuickFix_MergeFailure_FlagsForHumanReview(t *testing.T) {
 		t.Fatalf("create task: %v", err)
 	}
 
-	// executeMerge should fail the merge and flag for human review.
-	err := o.executeMerge(&task)
-	// The merge will return an error because the branch doesn't exist.
-	// This is expected — the merger.MergeFeatureIntoMain returns an error,
-	// which executeMerge wraps and returns.
-	if err != nil {
-		// The merge infrastructure error is expected here since the branch
-		// doesn't exist. The quickfix merge failure handling kicks in only
-		// when the merger returns a result with Success=false (not an error).
-		// For this test, we verify the quickfix-specific handling path by
-		// checking that the task was NOT modified to NeedsHumanReview=true
-		// (since the error path returns before the quickfix check).
-		t.Logf("merge returned error (expected for nonexistent branch): %v", err)
-		return
+	// executeMerge should route conflict failures on quickfix tasks into
+	// the NeedsHumanReview + StatusFailed branch.
+	if err := o.executeMerge(&task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
 	}
 
-	// If we get here (no error), the merge result had Success=false.
 	var updated model.Task
 	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
 		t.Fatalf("reload task: %v", err)

@@ -2809,7 +2809,7 @@ func TestNew(t *testing.T) {
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	projectID := uuid.New()
 
-	o := New(db, "/tmp/test.db", nil, wt, nil, nil, nil, projectID, events,
+	o := New(db, "/tmp/test.db", nil, wt, nil, nil, projectID, events,
 		time.Second, 30*time.Minute, 75, 90, nil, "")
 	if o == nil {
 		t.Fatal("expected non-nil orchestrator")
@@ -2819,7 +2819,7 @@ func TestNew(t *testing.T) {
 	}
 
 	// With custom fixer pct.
-	o2 := New(db, "/tmp/test.db", nil, wt, nil, nil, nil, projectID, events,
+	o2 := New(db, "/tmp/test.db", nil, wt, nil, nil, projectID, events,
 		time.Second, 30*time.Minute, 75, 90, nil, "", 95)
 	if o2.contextFixerPct != 95 {
 		t.Errorf("expected fixer pct 95, got %d", o2.contextFixerPct)

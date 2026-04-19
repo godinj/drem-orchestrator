@@ -11,6 +11,45 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 )
 
+// MergeDispatcher is the orchestrator-internal contract for dispatching a
+// feature-into-main merge. In production it is satisfied by Orchestrator's
+// own dispatchMerge method (via a method-value bound at construction time);
+// tests substitute a stub so merge-state-machine behaviour can be exercised
+// without a real merger container.
+type MergeDispatcher interface {
+	Dispatch(ctx context.Context, task *model.Task) (*MergeResult, error)
+}
+
+// mergeDispatcherFunc is a function adapter that lets Orchestrator.dispatchMerge
+// satisfy MergeDispatcher without wrapping it in a struct.
+type mergeDispatcherFunc func(ctx context.Context, task *model.Task) (*MergeResult, error)
+
+// Dispatch delegates to the underlying function.
+func (f mergeDispatcherFunc) Dispatch(ctx context.Context, task *model.Task) (*MergeResult, error) {
+	return f(ctx, task)
+}
+
+// mergeDispatch runs the active MergeDispatcher for the orchestrator. When
+// tests have injected an override via SetMergeDispatcher, that override is
+// used; otherwise the default production path (dispatchMerge) runs. This
+// indirection is the replacement for the retired mergerClient interface:
+// tests can now stub the feature-into-main merge without needing to re-host
+// an in-process merger.
+func (o *Orchestrator) mergeDispatch(ctx context.Context, task *model.Task) (*MergeResult, error) {
+	if o.mergeDispatcher != nil {
+		return o.mergeDispatcher.Dispatch(ctx, task)
+	}
+	return o.dispatchMerge(ctx, task)
+}
+
+// SetMergeDispatcher overrides the MergeDispatcher used for
+// feature-into-main merges. Passing nil restores the default (dispatchMerge).
+// Tests use this to substitute a stub that returns canned MergeResults
+// without spawning a real merger container.
+func (o *Orchestrator) SetMergeDispatcher(d MergeDispatcher) {
+	o.mergeDispatcher = d
+}
+
 // mergeDispatchTimeout bounds how long the orchestrator waits for a merger
 // container to finish before giving up. The merger is expected to finish
 // quickly (seconds) for a successful fast-forward and up to ~5 minutes for
@@ -30,6 +69,13 @@ type MergeResult struct {
 	Success     bool
 	MergeCommit string
 	Conflicts   []string
+	// TrivialCount / NonTrivialCount / ClassifiedDetails echo the classified
+	// conflict summary produced by the pre-containerization merge queue. They
+	// are optional: the merger container does not yet populate them, but
+	// executeMerge reads them defensively for conflict-path reporting.
+	TrivialCount      int
+	NonTrivialCount   int
+	ClassifiedDetails string
 	// ContainerID is the merger container that produced the result, recorded
 	// so the audit trail in user story 49 can correlate merge outcomes with
 	// the specific worker that produced them.

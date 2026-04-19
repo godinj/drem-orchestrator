@@ -29,9 +29,11 @@ func (o *Orchestrator) dispatchMerges() {
 }
 
 // executeMerge handles tasks in the MERGING state by merging the feature
-// branch into main.
+// branch into main. The merge itself is now always routed through
+// dispatchMerge (the merger-container path); the legacy in-process
+// mergerClient has been retired.
 func (o *Orchestrator) executeMerge(task *model.Task) error {
-	result, err := o.merger.MergeFeatureIntoMain(task)
+	result, err := o.mergeDispatch(context.Background(), task)
 	if err != nil {
 		return fmt.Errorf("execute merge: %w", err)
 	}
@@ -260,14 +262,6 @@ func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
 	o.publishTaskTransition(task.ID.String(), evt1.OldValue, string(task.Status), "quickfix fast-tracked to merging")
 	o.logger.Info("quickfix transitioning to merging", "task_id", task.ID)
 	return nil
-}
-
-// mergerClient abstracts the merge operations used by the orchestrator.
-// Defined at the consumption site (per architecture rule) so tests can
-// provide stubs without importing the merge package.
-type mergerClient interface {
-	MergeFeatureIntoMain(task *model.Task) (*WorktreeMergeResult, error)
-	MergeAgentIntoFeature(agentBranch, featureWorktree string) (*WorktreeMergeResult, error)
 }
 
 // contextKeyMergeAttemptCount is the task.Context key for merge retry tracking.

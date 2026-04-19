@@ -11,7 +11,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/memory"
-	"github.com/godinj/drem-orchestrator/internal/merge"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/internal/tmux"
@@ -123,9 +122,10 @@ func TestProcessAgentResult_SuccessRouting(t *testing.T) {
 	}
 	o.db.Create(&task)
 
-	// Set up a merge.Orchestrator so onAgentCompleted can merge.
-	wt := worktree.NewManager(bareRepoPath, "main")
-	o.merger = merge.NewOrchestrator(wt, o.db)
+	// The Orchestrator's own merge primitives (o.mergeAgentBranchIntoFeature)
+	// drive the agent-branch-into-feature merge via o.worktree, which
+	// agentResultOrchestrator already wires as a real *worktree.Manager.
+	_ = bareRepoPath
 
 	// Process a success completion.
 	err := o.processAgentResult(agent.Completion{
@@ -850,9 +850,11 @@ func TestExecuteMerge_Success(t *testing.T) {
 
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
 
-	wt := worktree.NewManager(bareRepoPath, "main")
-	o.worktree = wt
-	o.merger = merge.NewOrchestrator(wt, o.db)
+	// Stub the MergeDispatcher to return a successful merge without
+	// spawning a real merger container.
+	o.mergeDispatcher = &stubMerger{results: []stubMergeResult{
+		{result: &MergeResult{Success: true, MergeCommit: "fake-merge-commit"}, err: nil},
+	}}
 
 	taskID := uuid.New()
 	task := model.Task{
@@ -894,7 +896,9 @@ func TestExecuteMerge_Success(t *testing.T) {
 
 func TestExecuteMerge_NoMerger(t *testing.T) {
 	o, _ := agentResultOrchestrator(t, "/tmp/fake")
-	// merger is nil by default.
+	// mergeDispatcher is nil → dispatchMerge runs, which returns an error
+	// because o.Spawner is also nil. The error is surfaced through
+	// executeMerge and must not panic.
 
 	taskID := uuid.New()
 	task := model.Task{
@@ -907,16 +911,10 @@ func TestExecuteMerge_NoMerger(t *testing.T) {
 	}
 	o.db.Create(&task)
 
-	// This should panic or return error because merger is nil.
-	// We test that it panics by recovering.
-	func() {
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("expected panic when merger is nil, got none")
-			}
-		}()
-		_ = o.executeMerge(&task)
-	}()
+	err := o.executeMerge(&task)
+	if err == nil {
+		t.Fatal("expected error when neither mergeDispatcher nor Spawner is configured")
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -1529,7 +1527,6 @@ func TestProcessAgentResult_StoresExitInfo(t *testing.T) {
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
 	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
-	o.merger = merge.NewOrchestrator(wt, o.db)
 
 	// Create parent task.
 	parentID := uuid.New()
@@ -1625,7 +1622,6 @@ func TestProcessAgentResult_NilExitInfo(t *testing.T) {
 	o, _ := agentResultOrchestrator(t, bareRepoPath)
 	wt := worktree.NewManager(bareRepoPath, "main")
 	o.worktree = wt
-	o.merger = merge.NewOrchestrator(wt, o.db)
 
 	// Create parent task.
 	parentID := uuid.New()
