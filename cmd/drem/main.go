@@ -47,6 +47,10 @@ func main() {
 		runCLI()
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "project" {
+		runProject(os.Args[2:])
+		return
+	}
 
 	// Parse flags.
 	configPath := flag.String("config", "drem.toml", "config file path")
