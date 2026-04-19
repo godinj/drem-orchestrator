@@ -20,6 +20,20 @@ type AgentConfig struct {
 	Effort   string `toml:"effort"`
 	Provider string `toml:"provider"`
 	Direct   bool   `toml:"direct"` // classifier only: bypass OpenCode, call SGLang API directly
+	// ContainerImage, when non-empty, overrides the language-derived
+	// default container image used by the spawner-routed agent path in
+	// internal/agent/image_resolver.go. Ignored by the legacy subprocess
+	// path.
+	ContainerImage string `toml:"container_image"`
+}
+
+// ProjectTOMLConfig mirrors the [project] section of drem.toml. Today it
+// only carries the project language, which steers the per-language
+// worker image picked for coder agents. Other project-scoped settings
+// live at the top level of drem.toml for historical reasons; new ones
+// should land here so the schema groups related fields.
+type ProjectTOMLConfig struct {
+	Language string `toml:"language"`
 }
 
 // AgentsConfig holds per-agent-type configuration keyed by role.
@@ -123,9 +137,47 @@ type Config struct {
 	// ProjectLanguage is returned verbatim by GET /projects. Kyle uses
 	// it to pick the correct worker image (drem-worker-go vs -cpp).
 	ProjectLanguage string                    `toml:"project_language"`
+	Project         ProjectTOMLConfig         `toml:"project"`
 	Agents          AgentsConfig              `toml:"agents"`
 	DirectToolAgent DirectToolAgentTOMLConfig `toml:"direct_tool_agent"`
 	Profiles        map[string]ProfileConfig  `toml:"profiles"`
+	// Tmux is accepted but ignored for one release so existing drem.toml
+	// files that still carry a [tmux] table keep loading. Prompt 17
+	// removes the tolerance once the subprocess+tmux path is deleted.
+	Tmux map[string]any `toml:"tmux,omitempty"`
+}
+
+// EffectiveProjectLanguage returns the project language, preferring the
+// structured [project].language field and falling back to the legacy
+// top-level project_language key. Keeping this in one helper lets every
+// caller (spawner routing, project registry sync, TUI) read the same
+// value.
+func (c Config) EffectiveProjectLanguage() string {
+	if c.Project.Language != "" {
+		return c.Project.Language
+	}
+	return c.ProjectLanguage
+}
+
+// ContainerImageOverrides collapses the per-agent ContainerImage fields
+// into the flat map form consumed by agent.ImageResolver.Overrides.
+// Agent types whose override is empty are omitted.
+func (a AgentsConfig) ContainerImageOverrides() map[string]string {
+	out := map[string]string{}
+	add := func(k, v string) {
+		if v != "" {
+			out[k] = v
+		}
+	}
+	add("classifier", a.Classifier.ContainerImage)
+	add("planner", a.Planner.ContainerImage)
+	add("coder", a.Coder.ContainerImage)
+	add("reviewer", a.Reviewer.ContainerImage)
+	add("fixer", a.Fixer.ContainerImage)
+	add("researcher", a.Researcher.ContainerImage)
+	add("prep", a.Prep.ContainerImage)
+	add("supervisor", a.Supervisor.ContainerImage)
+	return out
 }
 
 // DefaultConfig returns a Config populated with sensible default values.
