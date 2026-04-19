@@ -176,7 +176,7 @@ func (r *Runner) readOpenCodeUsage(worktreePath string, agentID uuid.UUID) *ctxm
 	}
 	r.mu.Unlock()
 	if logPath == "" {
-		logPath = ctxmon.OpenCodeLogPath(worktreePath)
+		logPath = filepath.Join(worktreePath, ".opencode", "agent-output.jsonl")
 	}
 	usage, err := ctxmon.ReadOpenCodeJSONLUsage(logPath, ctxWindow)
 	if err != nil {

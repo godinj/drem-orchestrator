@@ -31,12 +31,6 @@ func DefaultOpenCodeDBPath() string {
 	return filepath.Join(home, ".local", "share", "opencode", "opencode.db")
 }
 
-// OpenCodeLogPath returns the path for the OpenCode JSONL output log
-// in the given worktree.
-func OpenCodeLogPath(worktreePath string) string {
-	return filepath.Join(worktreePath, ".opencode", "agent-output.jsonl")
-}
-
 // openCodeStepEvent is the minimal JSON structure needed from an OpenCode
 // JSONL step_finish event for context usage tracking.
 type openCodeStepEvent struct {

@@ -414,14 +414,6 @@ func TestBuildOpenCodeUsage(t *testing.T) {
 	}
 }
 
-func TestOpenCodeLogPath(t *testing.T) {
-	got := OpenCodeLogPath("/tmp/worktree")
-	want := "/tmp/worktree/.opencode/agent-output.jsonl"
-	if got != want {
-		t.Errorf("OpenCodeLogPath = %q, want %q", got, want)
-	}
-}
-
 func TestDefaultOpenCodeDBPath(t *testing.T) {
 	path := DefaultOpenCodeDBPath()
 	if path == "" {
