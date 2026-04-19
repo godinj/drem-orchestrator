@@ -20,7 +20,9 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
+	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/eventbus"
+	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/metrics"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -133,6 +135,24 @@ type Orchestrator struct {
 	metrics                     *metrics.Store                  // nil-safe: callers nil-check before use
 	experimentScheduler         *ExperimentScheduler            // experiment-aware scheduling
 	logger                      *slog.Logger
+
+	// Spawner is the RPC client for the spawner service that owns the Docker
+	// socket. When set, task dispatch uses container-based workers via
+	// spawner.Client instead of host-side worktree processes. When nil, the
+	// orchestrator falls back to the legacy worktree/tmux dispatch path.
+	Spawner WorkerSpawner
+
+	// Runtime is the container runtime used for Docker event subscription.
+	// Orchestrator subscribes once on Run, filtering events by
+	// drem.project=<project>, and dispatches die/OOM events to handleWorkerDeath.
+	// When nil, no Docker event subscription is set up.
+	Runtime container.Runtime
+
+	// GitrefRegistry is the database-backed branch reference tracker.
+	// Every spawnCoder/Reviewer/Fixer/Supervisor call registers the worker's
+	// branch here so merge and destroy paths can transition it to merged/
+	// deleted without touching the host filesystem.
+	GitrefRegistry *gitref.Registry
 }
 
 // New creates an Orchestrator. The supervisor parameter is optional — pass nil
@@ -241,6 +261,27 @@ func (o *Orchestrator) SetDirectToolAgentConfig(cfg *agent.DirectToolAgentConfig
 	}
 }
 
+// SetSpawner configures the WorkerSpawner used by container-based task
+// dispatch. When set, the orchestrator routes coder/reviewer/fixer/supervisor
+// spawns through the spawner RPC in addition to (not replacing) the legacy
+// worktree dispatch, and subscribes to Docker events via Runtime. Pass nil
+// to disable.
+func (o *Orchestrator) SetSpawner(s WorkerSpawner) {
+	o.Spawner = s
+}
+
+// SetRuntime configures the container.Runtime used for Docker event
+// subscription. Must be set alongside SetSpawner for the full container path.
+func (o *Orchestrator) SetRuntime(rt container.Runtime) {
+	o.Runtime = rt
+}
+
+// SetGitrefRegistry configures the gitref branch registry. Must be set
+// alongside SetSpawner for the container path's branch lifecycle tracking.
+func (o *Orchestrator) SetGitrefRegistry(reg *gitref.Registry) {
+	o.GitrefRegistry = reg
+}
+
 // SetEventBus connects the orchestrator to the C-Suite event bus. When set,
 // every task status transition and agent status change is published as an event
 // with delivery records for all known C-Suite agents. Pass nil to disable.
@@ -283,13 +324,33 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	// Generate repo map for the default branch worktree at startup.
 	go o.worktree.GenerateRepoMapForMain()
 
+	// Container-mode startup: reconcile in-flight workers against the
+	// spawner's live list, then launch the Docker event watcher in parallel
+	// with the tick loop. Shutdown waits on both to unwind cleanly.
+	eventsDone := make(chan struct{})
+	if o.Spawner != nil && o.Runtime != nil {
+		if err := o.reconcileOnStartup(ctx); err != nil {
+			o.logger.Error("reconcile on startup", "error", err)
+		}
+		go func() {
+			defer close(eventsDone)
+			if err := o.watchDockerEvents(ctx); err != nil {
+				o.logger.Error("watch docker events", "error", err)
+			}
+		}()
+	} else {
+		close(eventsDone)
+	}
+
 	ticker := time.NewTicker(o.tick)
 	defer ticker.Stop()
 	o.logger.Info("orchestrator started", "project_id", o.projectID)
 	for {
 		select {
 		case <-ctx.Done():
-			o.logger.Info("orchestrator stopping")
+			o.logger.Info("orchestrator stopping, waiting for event watcher")
+			<-eventsDone
+			o.logger.Info("orchestrator stopped")
 			return
 		case <-ticker.C:
 			o.doTick(ctx)
