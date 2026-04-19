@@ -44,7 +44,7 @@ func setupClassifyingTest(t *testing.T) (*Orchestrator, uuid.UUID) {
 	orch := &Orchestrator{
 		db:              gormDB,
 		projectID:       projectID,
-		worktree:        &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"},
+		worktree:        &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"},
 		events:          events,
 		contextWarnPct:  75,
 		contextStopPct:  90,

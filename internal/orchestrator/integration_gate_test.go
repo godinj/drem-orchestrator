@@ -10,7 +10,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -35,7 +34,7 @@ func TestIntegrationGate_NoConstraintsConfig(t *testing.T) {
 	runGitCmd(t, featureDir, "commit", "-m", "add code")
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -108,7 +107,7 @@ limit = 1000
 	runGitCmd(t, featureDir, "commit", "-m", "add code and constraints")
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -179,7 +178,7 @@ pattern = "TODO: remove this debug"
 	runGitCmd(t, featureDir, "commit", "-m", "add code with debug TODO")
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -267,7 +266,7 @@ limit = 1000
 	runGitCmd(t, featureDir, "commit", "-m", "add clean code")
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
@@ -348,7 +347,7 @@ run = "false"
 	runGitCmd(t, featureDir, "commit", "-m", "add code and failing command constraint")
 
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: bareRepoPath, DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}

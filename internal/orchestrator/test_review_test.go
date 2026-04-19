@@ -7,7 +7,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -16,7 +15,7 @@ import (
 
 func TestHandleTestReviewApproved_HappyPath(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -52,7 +51,7 @@ func TestHandleTestReviewApproved_HappyPath(t *testing.T) {
 
 func TestHandleTestReviewApproved_WrongStatus(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -80,7 +79,7 @@ func TestHandleTestReviewApproved_WrongStatus(t *testing.T) {
 
 func TestHandleTestReviewRejected_FirstRejection(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -176,7 +175,7 @@ func TestHandleTestReviewRejected_FirstRejection(t *testing.T) {
 
 func TestHandleTestReviewRejected_RejectionCountIncrements(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -224,7 +223,7 @@ func TestHandleTestReviewRejected_RejectionCountIncrements(t *testing.T) {
 
 func TestHandleTestReviewRejected_ThirdRejectionPauses(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -277,7 +276,7 @@ func TestHandleTestReviewRejected_ThirdRejectionPauses(t *testing.T) {
 
 func TestHandleTestReviewRejected_WrongStatus(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -301,7 +300,7 @@ func TestHandleTestReviewRejected_WrongStatus(t *testing.T) {
 
 func TestHandleTestReviewRejected_ReplacementPreservesPhaseAndTestsFor(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
@@ -392,7 +391,7 @@ func TestIsTerminal(t *testing.T) {
 
 func TestCheckFeatureCompletion_RejectedSubtasksAreTerminal(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}

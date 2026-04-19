@@ -13,7 +13,6 @@ import (
 	dbpkg "github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // setupOrchestratorWithBugReports creates an Orchestrator wired to a real
@@ -42,7 +41,7 @@ func setupOrchestratorWithBugReports(t *testing.T) (*Orchestrator, *bugreport.Se
 	bugSvc := bugreport.New(gormDB)
 	dropDir := t.TempDir()
 
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	events := make(chan Event, 100)
 	orch := &Orchestrator{
 		db:              gormDB,
@@ -184,7 +183,7 @@ func TestIngestBugReports_EmptyDirectory(t *testing.T) {
 
 func TestIngestBugReports_NilService(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	wt := &worktree.Manager{BareRepoPath: "/tmp/fake", DefaultBranch: "main"}
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	events := make(chan Event, 100)
 
 	// Create an orchestrator without a bugreport service (backward compat).
