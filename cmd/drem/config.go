@@ -86,34 +86,46 @@ type DirectToolAgentTOMLConfig struct {
 
 // Config holds all runtime configuration for the Drem Orchestrator.
 type Config struct {
-	DatabasePath          string                    `toml:"database_path"`
-	BareRepoPath          string                    `toml:"bare_repo_path"`
-	DefaultBranch         string                    `toml:"default_branch"`
-	ClaudeBin             string                    `toml:"claude_bin"`
-	OpenCodeBin           string                    `toml:"opencode_bin"`
-	MaxConcurrentAgents   int                       `toml:"max_concurrent_agents"`
-	TickInterval          time.Duration             `toml:"tick_interval"`
-	HeartbeatInterval     time.Duration             `toml:"heartbeat_interval"`
-	StaleTimeout          time.Duration             `toml:"stale_timeout"`
-	SupervisorEnabled     bool                      `toml:"supervisor_enabled"`
-	SupervisorTimeout     time.Duration             `toml:"supervisor_timeout"`
-	ContextWarnPercent    int                       `toml:"context_warn_percent"`
-	ContextStopPercent    int                       `toml:"context_stop_percent"`
-	LogPath               string                    `toml:"log_path"`
-	TestCommand           string                    `toml:"test_command"`
-	CompileCommand        string                    `toml:"compile_command"`
-	ScopedTests           *bool                     `toml:"scoped_tests"` // pointer for default-true detection
-	TestTimeout           time.Duration             `toml:"test_timeout"`
-	ContextFixerPercent   int                       `toml:"context_fixer_percent"`
-	TmuxSocket            string                    `toml:"tmux_socket"`
-	TmuxConfigFile        string                    `toml:"tmux_config_file"`
-	MaxDispatchRate       int                       `toml:"max_dispatch_rate"`
-	DispatchWindow        time.Duration             `toml:"dispatch_window"`
-	OpenCodeContextWindow int                       `toml:"opencode_context_window"`
-	SkipConstraintGate    bool                      `toml:"skip_constraint_gate"`
-	Agents                AgentsConfig              `toml:"agents"`
-	DirectToolAgent       DirectToolAgentTOMLConfig `toml:"direct_tool_agent"`
-	Profiles              map[string]ProfileConfig  `toml:"profiles"`
+	DatabasePath          string        `toml:"database_path"`
+	BareRepoPath          string        `toml:"bare_repo_path"`
+	DefaultBranch         string        `toml:"default_branch"`
+	ClaudeBin             string        `toml:"claude_bin"`
+	OpenCodeBin           string        `toml:"opencode_bin"`
+	MaxConcurrentAgents   int           `toml:"max_concurrent_agents"`
+	TickInterval          time.Duration `toml:"tick_interval"`
+	HeartbeatInterval     time.Duration `toml:"heartbeat_interval"`
+	StaleTimeout          time.Duration `toml:"stale_timeout"`
+	SupervisorEnabled     bool          `toml:"supervisor_enabled"`
+	SupervisorTimeout     time.Duration `toml:"supervisor_timeout"`
+	ContextWarnPercent    int           `toml:"context_warn_percent"`
+	ContextStopPercent    int           `toml:"context_stop_percent"`
+	LogPath               string        `toml:"log_path"`
+	TestCommand           string        `toml:"test_command"`
+	CompileCommand        string        `toml:"compile_command"`
+	ScopedTests           *bool         `toml:"scoped_tests"` // pointer for default-true detection
+	TestTimeout           time.Duration `toml:"test_timeout"`
+	ContextFixerPercent   int           `toml:"context_fixer_percent"`
+	TmuxSocket            string        `toml:"tmux_socket"`
+	TmuxConfigFile        string        `toml:"tmux_config_file"`
+	MaxDispatchRate       int           `toml:"max_dispatch_rate"`
+	DispatchWindow        time.Duration `toml:"dispatch_window"`
+	OpenCodeContextWindow int           `toml:"opencode_context_window"`
+	SkipConstraintGate    bool          `toml:"skip_constraint_gate"`
+	// OrchHTTPPort is the port the orchestrator's read-only HTTP API
+	// listens on. Kyle and the TUI both read from it (see
+	// docs/prd-containerization.md). Default: 8080. An empty string or
+	// zero value disables the listener entirely.
+	OrchHTTPPort string `toml:"orch_http_port"`
+	// AgentmonToken is the per-project shared secret used by agentmon
+	// to authenticate POST /internal/logs. Stays empty on dev hosts that
+	// have not yet been containerized; ingestion then fails closed.
+	AgentmonToken string `toml:"agentmon_token"`
+	// ProjectLanguage is returned verbatim by GET /projects. Kyle uses
+	// it to pick the correct worker image (drem-worker-go vs -cpp).
+	ProjectLanguage string                    `toml:"project_language"`
+	Agents          AgentsConfig              `toml:"agents"`
+	DirectToolAgent DirectToolAgentTOMLConfig `toml:"direct_tool_agent"`
+	Profiles        map[string]ProfileConfig  `toml:"profiles"`
 }
 
 // DefaultConfig returns a Config populated with sensible default values.
@@ -141,6 +153,8 @@ func DefaultConfig() Config {
 		TmuxConfigFile:      "master/.tmux.conf",
 		MaxDispatchRate:     ratelimit.DefaultMaxDispatches,
 		DispatchWindow:      ratelimit.DefaultDispatchWindow,
+		OrchHTTPPort:        "8080",
+		ProjectLanguage:     "go",
 		Agents: AgentsConfig{
 			Classifier:            AgentConfig{Effort: "medium"},
 			Planner:               AgentConfig{Effort: "medium"},

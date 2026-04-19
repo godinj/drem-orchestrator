@@ -315,6 +315,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	go orch.Run(ctx)
 
+	// Start orchestrator HTTP API (read-only public endpoints + agentmon
+	// ingestion). See docs/prd-containerization.md — Kyle and the TUI both
+	// call this API. A nil log streamer means GET /logs returns 503 until
+	// agentmon is containerized and wired through.
+	startOrchHTTP(ctx, cfg, database, project.Name)
+
 	// Start C-Suite dashboard poller backed by disk state files.
 	csuiteSource := csuite.NewDiskSnapshotSource("")
 	csuitePoller := csuite.NewPoller(csuiteSource, csuite.DefaultPollInterval, log.Default())

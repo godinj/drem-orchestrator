@@ -1,6 +1,11 @@
 bare_repo_path        = "/home/godinj/git/drem-orchestrator.git"
 default_branch        = "master"
 max_concurrent_agents = 4
+
+# Orchestrator HTTP API port. Kyle and the TUI read from this endpoint
+# (see docs/prd-containerization.md). Leave empty to disable the listener.
+orch_http_port        = "8080"
+project_language      = "go"
 opencode_bin              = "opencode"
 opencode_context_window   = 98304
 llama_server_endpoint     = "http://localhost:8081"
