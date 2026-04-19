@@ -171,3 +171,47 @@ services:
     labels:
       drem.scope: global
       drem.service: spawner
+
+  # ---------- Kyle: C-Suite reporting agent ----------
+  # Polls every registered project's orchestrator HTTP API and serves a
+  # unified read-only view. Read-only by construction: Kyle never writes
+  # to any orchestrator's SQLite database. See internal/kyle/service.go
+  # and docs/prd-containerization.md for the rationale.
+  #
+  # The host-wide registry (~/.drem/projects.toml) is bind-mounted read
+  # only; Kyle reads it at startup to discover the set of orchestrators
+  # to poll.
+  #
+  # Host port note: gq already occupies 127.0.0.1:8090 on the loopback,
+  # so Kyle's internal :8090 is published as :8095 on the host. Inside
+  # drem-net callers still resolve by service name (kyle:8090).
+  kyle:
+    image: localhost:5000/drem-kyle:latest
+    container_name: drem-kyle
+    restart: unless-stopped
+    networks: [drem-net]
+    volumes:
+      - ${HOME}/.drem/projects.toml:/etc/drem/projects.toml:ro
+    ports:
+      - "127.0.0.1:8095:8090"
+    depends_on:
+      - docker-query-proxy
+    labels:
+      drem.scope: global
+      drem.service: kyle
+
+  # ---------- docker-query-proxy: narrow Docker-socket gateway for Kyle ----------
+  # Exposes an allowlisted HTTP API (GET /containers, GET /containers/:id,
+  # GET /containers/:id/logs) over the host Docker socket. Kyle calls this
+  # proxy — never the socket directly — so the privilege boundary shows
+  # up in the topology: one container owns the socket; Kyle owns reporting.
+  docker-query-proxy:
+    image: localhost:5000/drem-docker-query-proxy:latest
+    container_name: drem-docker-query-proxy
+    restart: unless-stopped
+    networks: [drem-net]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      drem.scope: global
+      drem.service: docker-query-proxy

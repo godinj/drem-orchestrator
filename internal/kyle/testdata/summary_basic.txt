@@ -1,0 +1,14 @@
+== Drem World State @ 2026-04-19T15:22:00Z ==
+
+drem-orchestrator:
+  workers:    3 running (2 coder-go, 1 merger), 0 failed
+  tasks:      12 in-flight (5 in_progress, 3 merging, 4 planning)
+  recent:     2 commits, 1 merge-success, 0 crashes
+  health:     OK
+
+drem-other:
+  workers:    0 running, 1 failed
+  tasks:      0 in-flight
+  recent:     0 commits, 0 merge-success, 1 crashes
+  health:     OK
+
