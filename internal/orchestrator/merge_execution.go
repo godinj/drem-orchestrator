@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/godinj/drem-orchestrator/internal/constraints"
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
@@ -104,7 +105,7 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 				// Build failure diagnosis.
 				buildOutput := strings.TrimPrefix(result.Conflicts[0], "build verification failed: ")
 				mainWorktree := filepath.Join(o.worktree.BareRepoPath, o.worktree.DefaultBranch)
-				changedFiles, _ := worktree.GetChangedFiles(mainWorktree, o.worktree.DefaultBranch)
+				changedFiles, _ := gitexec.GetChangedFiles(context.Background(), mainWorktree, o.worktree.DefaultBranch)
 
 				var diagnosis supervisor.BuildFailureDiagnosis
 				bfPrompt := supervisor.BuildFailurePrompt(mainWorktree, buildOutput, changedFiles)
@@ -121,9 +122,9 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 				// Merge conflict analysis.
 				var analysis supervisor.MergeConflictAnalysis
 				mainWorktree := filepath.Join(o.worktree.BareRepoPath, o.worktree.DefaultBranch)
-				diffOutput, _ := worktree.RunGit([]string{
-					"diff", o.worktree.DefaultBranch + "..." + task.WorktreeBranch,
-				}, mainWorktree)
+				diffOutput, _ := gitexec.RunGit(context.Background(), mainWorktree,
+					"diff", o.worktree.DefaultBranch+"..."+task.WorktreeBranch,
+				)
 
 				mcPrompt := supervisor.MergeConflictPrompt(
 					task.WorktreeBranch, o.worktree.DefaultBranch,

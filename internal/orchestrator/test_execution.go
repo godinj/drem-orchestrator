@@ -13,10 +13,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // processTestingReady runs the automated test gate at TESTING_READY.
@@ -107,9 +107,9 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 
 	// Get the diff between feature branch and default branch.
 	var gitDiff string
-	diff, diffErr := worktree.RunGit(
-		[]string{"diff", o.worktree.DefaultBranch + "...HEAD"},
-		worktreePath,
+	diff, diffErr := gitexec.RunGit(
+		context.Background(), worktreePath,
+		"diff", o.worktree.DefaultBranch+"...HEAD",
 	)
 	if diffErr == nil {
 		gitDiff = truncate(diff, maxGitDiffLen)
@@ -330,12 +330,12 @@ func (o *Orchestrator) verifyCompilationBeforeMerge(subtask *model.Task, worktre
 // was applied.
 func (o *Orchestrator) scopeTestsForSubtask(baseCmd, worktreePath string) (string, bool) {
 	// Get changed files via git diff.
-	diffOutput, err := worktree.RunGit([]string{"diff", "--name-only", "HEAD~1"}, worktreePath)
+	diffOutput, err := gitexec.RunGit(context.Background(), worktreePath, "diff", "--name-only", "HEAD~1")
 	if err != nil {
 		// Also try against the default branch.
-		diffOutput, err = worktree.RunGit([]string{
-			"diff", "--name-only", o.worktree.DefaultBranch + "...HEAD",
-		}, worktreePath)
+		diffOutput, err = gitexec.RunGit(context.Background(), worktreePath,
+			"diff", "--name-only", o.worktree.DefaultBranch+"...HEAD",
+		)
 		if err != nil {
 			return baseCmd, false
 		}

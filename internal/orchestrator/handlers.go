@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,9 +12,9 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/clarification"
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 const maxPlanRejections = 3
@@ -180,7 +181,7 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 				o.logger.Warn("handle plan approved: failed to write plan.json to worktree", "error", writeErr)
 			}
 			// If plan.json was previously tracked, untrack it.
-			if removed, rmErr := worktree.UntrackEphemeralFiles(featureDir); rmErr != nil {
+			if removed, rmErr := gitexec.UntrackEphemeralFiles(context.Background(), featureDir); rmErr != nil {
 				o.logger.Warn("handle plan approved: failed to untrack plan.json", "error", rmErr)
 			} else if removed {
 				o.logger.Info("handle plan approved: untracked plan.json in integration worktree",

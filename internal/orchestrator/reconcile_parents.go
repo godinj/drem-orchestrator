@@ -1,15 +1,16 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // reconcileAlreadyMergedFeatures finds FAILED parent tasks whose feature
@@ -36,9 +37,9 @@ func (o *Orchestrator) reconcileAlreadyMergedFeatures() (int, error) {
 		task := &tasks[i]
 
 		// Check if the feature branch tip is an ancestor of the default branch HEAD.
-		_, err := worktree.RunGit(
-			[]string{"merge-base", "--is-ancestor", task.WorktreeBranch, "HEAD"},
-			mainWorktree,
+		_, err := gitexec.RunGit(
+			context.Background(), mainWorktree,
+			"merge-base", "--is-ancestor", task.WorktreeBranch, "HEAD",
 		)
 		if err != nil {
 			continue // not merged yet
@@ -197,7 +198,7 @@ func recoverFailedParent(o *Orchestrator, parent *model.Task) error {
 // getChangedFilesDiff returns the diff of changed files between the worktree
 // HEAD and the given base branch. Returns empty string on error.
 func getChangedFilesDiff(worktreeDir, baseBranch string) (string, error) {
-	output, err := worktree.RunGit([]string{"diff", baseBranch + "...HEAD"}, worktreeDir)
+	output, err := gitexec.RunGit(context.Background(), worktreeDir, "diff", baseBranch+"...HEAD")
 	if err != nil {
 		return "", fmt.Errorf("get changed files diff: %w", err)
 	}

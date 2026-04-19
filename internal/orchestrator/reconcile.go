@@ -1,15 +1,16 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ReconcileResult describes the fixes applied by a single Reconcile run.
@@ -130,7 +131,7 @@ func (o *Orchestrator) reconcileStaleSubtasks() (int, error) {
 
 		// Get the set of files changed on the feature branch. If empty,
 		// every DONE subtask is suspect.
-		changedFiles, err := worktree.GetChangedFiles(featureDir, o.worktree.DefaultBranch)
+		changedFiles, err := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranch)
 		if err != nil {
 			continue
 		}
@@ -266,15 +267,15 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 
 			// Ensure the feature worktree is clean before merge attempts.
 			// Leftover changes (e.g. plan.json) block MergeAgentIntoFeature.
-			if committed, cErr := worktree.CommitUnstagedChanges(
-				featureDir, "Auto-commit uncommitted feature worktree changes (reconcile)",
+			if committed, cErr := gitexec.CommitUnstagedChanges(
+				context.Background(), featureDir, "Auto-commit uncommitted feature worktree changes (reconcile)",
 			); cErr != nil {
 				o.logger.Warn("reconcile: failed to clean feature worktree", "feature", featureBranch, "error", cErr)
 			} else if committed {
 				o.logger.Info("reconcile: committed leftover changes in feature worktree", "feature", featureBranch)
 			}
 
-			hasCommits, err := worktree.BranchHasNewCommits(featureDir, ag.WorktreeBranch)
+			hasCommits, err := gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch)
 			if err != nil {
 				// Branch likely already cleaned up — assume merge happened.
 				merged = true
@@ -375,7 +376,7 @@ func (o *Orchestrator) reconcileEmptyFeatures() (int, error) {
 		fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
 
-		changed, err := worktree.GetChangedFiles(featureDir, o.worktree.DefaultBranch)
+		changed, err := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranch)
 		if err != nil {
 			continue
 		}
@@ -445,7 +446,7 @@ func (o *Orchestrator) reconcileOrphanWorktrees() (int, error) {
 			}
 
 			// Check if the worktree has commits.
-			hasCommits, err := worktree.BranchHasNewCommits(featureDir, awt.Branch)
+			hasCommits, err := gitexec.BranchHasNewCommits(context.Background(), featureDir, awt.Branch)
 			if err != nil {
 				continue
 			}
@@ -533,7 +534,7 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 		hasCommits := false
 		if featureDir != "" && ag.WorktreeBranch != "" {
 			var err error
-			hasCommits, err = worktree.BranchHasNewCommits(featureDir, ag.WorktreeBranch)
+			hasCommits, err = gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch)
 			if err != nil {
 				o.logger.Warn("reconcile stuck: failed to check commits",
 					"agent_id", ag.ID, "error", err)

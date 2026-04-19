@@ -1,15 +1,16 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // SetExperimentScheduling enables experiment-aware scheduling on the
@@ -276,9 +277,9 @@ func (o *Orchestrator) spawnDiagnosticAgent(parent *model.Task) error {
 // extractTestFiles runs git diff --name-only on the agent's worktree and
 // returns files matching test patterns.
 func (o *Orchestrator) extractTestFiles(worktreePath, baseBranch string) []string {
-	output, err := worktree.RunGit([]string{
-		"diff", "--name-only", baseBranch + "...HEAD",
-	}, worktreePath)
+	output, err := gitexec.RunGit(context.Background(), worktreePath,
+		"diff", "--name-only", baseBranch+"...HEAD",
+	)
 	if err != nil {
 		o.logger.Warn("extract test files: git diff failed", "path", worktreePath, "error", err)
 		return nil

@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/experiment"
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/worktree"
@@ -103,14 +105,15 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		featureDir := o.worktree.FeatureWorktreePath(fn)
 
 		// Check if agent actually committed changes before attempting merge.
-		hasCommits, commitErr := worktree.BranchHasNewCommits(featureDir, ag.WorktreeBranch)
+		hasCommits, commitErr := gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch)
 		if commitErr != nil {
 			o.logger.Warn("failed to check agent commits, proceeding with merge", "agent_id", ag.ID, "error", commitErr)
 			hasCommits = true // assume there are commits on error
 		}
 		if !hasCommits {
 			// Agent may have made changes but failed to commit. Rescue them.
-			committed, rescueErr := worktree.CommitUnstagedChanges(
+			committed, rescueErr := gitexec.CommitUnstagedChanges(
+				context.Background(),
 				ag.WorktreePath,
 				fmt.Sprintf("Auto-commit uncommitted agent work for task: %s", task.Title),
 			)
@@ -126,9 +129,9 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		}
 
 		// Resolve diagnostic refs before merge for structured failure events.
-		mergeBase, _ := worktree.RunGit([]string{"merge-base", "HEAD", ag.WorktreeBranch}, featureDir)
-		featureHEAD, _ := worktree.RunGit([]string{"rev-parse", "HEAD"}, featureDir)
-		agentHEAD, _ := worktree.RunGit([]string{"rev-parse", ag.WorktreeBranch}, featureDir)
+		mergeBase, _ := gitexec.RunGit(context.Background(), featureDir, "merge-base", "HEAD", ag.WorktreeBranch)
+		featureHEAD, _ := gitexec.RunGit(context.Background(), featureDir, "rev-parse", "HEAD")
+		agentHEAD, _ := gitexec.RunGit(context.Background(), featureDir, "rev-parse", ag.WorktreeBranch)
 
 		result, mergeErr := o.merger.MergeAgentIntoFeature(ag.WorktreeBranch, featureDir)
 		if mergeErr != nil {
@@ -184,7 +187,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			o.logger.Warn("constraint config load failed after merge",
 				"agent_id", ag.ID, "error", cfgErr)
 		} else if constraintCfg != nil {
-			changedFiles, chErr := worktree.GetChangedFiles(featureDir, o.worktree.DefaultBranch)
+			changedFiles, chErr := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranch)
 			if chErr != nil {
 				o.logger.Warn("failed to get changed files for constraint check",
 					"agent_id", ag.ID, "error", chErr)

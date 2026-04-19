@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -11,10 +12,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // SpawnReviewerSession spawns a reviewer agent for the given task.
@@ -63,15 +64,15 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 	} else {
 		reviewMode = "feature"
 		// Get diff of integration branch vs default branch.
-		diff, err := worktree.RunGit(
-			[]string{"diff", o.worktree.DefaultBranch + "...HEAD", "--stat"},
-			worktreePath,
+		diff, err := gitexec.RunGit(
+			context.Background(), worktreePath,
+			"diff", o.worktree.DefaultBranch+"...HEAD", "--stat",
 		)
 		if err == nil {
 			// Also get the full diff (limited size).
-			fullDiff, _ := worktree.RunGit(
-				[]string{"diff", o.worktree.DefaultBranch + "...HEAD"},
-				worktreePath,
+			fullDiff, _ := gitexec.RunGit(
+				context.Background(), worktreePath,
+				"diff", o.worktree.DefaultBranch+"...HEAD",
 			)
 			if fullDiff != "" {
 				gitDiff = fullDiff

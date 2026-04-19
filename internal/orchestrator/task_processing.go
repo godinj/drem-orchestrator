@@ -1,10 +1,12 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
 
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/state"
@@ -329,7 +331,7 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 			featureDir := o.worktree.FeatureWorktreePath(fn)
 			// Check if the feature branch has any file changes relative to
 			// the default branch.
-			changed, changeErr := worktree.GetChangedFiles(featureDir, o.worktree.DefaultBranch)
+			changed, changeErr := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranch)
 			if changeErr != nil {
 				o.logger.Warn("failed to check feature branch changes", "task_id", parent.ID, "error", changeErr)
 			} else if len(changed) == 0 {

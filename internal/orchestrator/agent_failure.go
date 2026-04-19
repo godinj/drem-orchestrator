@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/godinj/drem-orchestrator/internal/experiment"
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
@@ -65,7 +66,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 		featureDir := o.resolveFeatureWorktree(task)
 		hasWork := false
 		if featureDir != "" {
-			if hasCommits, err := worktree.BranchHasNewCommits(featureDir, ag.WorktreeBranch); err == nil && hasCommits {
+			if hasCommits, err := gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch); err == nil && hasCommits {
 				hasWork = true
 			}
 		}
@@ -351,9 +352,9 @@ func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task
 	// Supervisor-powered merge conflict diagnosis.
 	if o.supervisor != nil && result != nil && len(result.Conflicts) > 0 {
 		var analysis supervisor.MergeConflictAnalysis
-		diffOutput, _ := worktree.RunGit([]string{
-			"diff", result.TargetBranch + "..." + ag.WorktreeBranch,
-		}, featureDir)
+		diffOutput, _ := gitexec.RunGit(context.Background(), featureDir,
+			"diff", result.TargetBranch+"..."+ag.WorktreeBranch,
+		)
 
 		mcPrompt := supervisor.MergeConflictPrompt(
 			ag.WorktreeBranch, result.TargetBranch,

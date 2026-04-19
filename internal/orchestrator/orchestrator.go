@@ -22,6 +22,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/eventbus"
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/metrics"
@@ -550,9 +551,9 @@ func (o *Orchestrator) isWorkAlreadyMerged(subtask *model.Task, featureWorktree 
 	}
 
 	// Check if agent branch tip is an ancestor of feature HEAD.
-	_, err := worktree.RunGit(
-		[]string{"merge-base", "--is-ancestor", ag.WorktreeBranch, "HEAD"},
-		featureWorktree,
+	_, err := gitexec.RunGit(
+		context.Background(), featureWorktree,
+		"merge-base", "--is-ancestor", ag.WorktreeBranch, "HEAD",
 	)
 	return err == nil // exit code 0 means it IS an ancestor
 }

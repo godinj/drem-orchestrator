@@ -1,14 +1,15 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // ---------------------------------------------------------------------------
@@ -185,17 +186,17 @@ func (o *Orchestrator) spawnFixerForTestFailure(subtask *model.Task, ag *model.A
 	// Get the agent's diff from its worktree.
 	var gitDiff string
 	if ag.WorktreePath != "" {
-		diff, err := worktree.RunGit(
-			[]string{"diff", "HEAD~5..HEAD", "--stat"},
-			ag.WorktreePath,
+		diff, err := gitexec.RunGit(
+			context.Background(), ag.WorktreePath,
+			"diff", "HEAD~5..HEAD", "--stat",
 		)
 		if err == nil {
 			gitDiff = diff
 		}
 		// Also get full diff (limited).
-		fullDiff, fullErr := worktree.RunGit(
-			[]string{"diff", "HEAD~5..HEAD"},
-			ag.WorktreePath,
+		fullDiff, fullErr := gitexec.RunGit(
+			context.Background(), ag.WorktreePath,
+			"diff", "HEAD~5..HEAD",
 		)
 		if fullErr == nil && fullDiff != "" {
 			gitDiff = truncate(fullDiff, maxGitDiffLen)
@@ -420,18 +421,18 @@ func (o *Orchestrator) handleTestWritingFailure(subtask *model.Task, ag *model.A
 // that compile successfully.
 func (o *Orchestrator) checkForCompilableTests(worktreePath string) bool {
 	// Look for *_test.go files.
-	output, err := worktree.RunGit(
-		[]string{"ls-files", "--", "*_test.go"},
-		worktreePath,
+	output, err := gitexec.RunGit(
+		context.Background(), worktreePath,
+		"ls-files", "--", "*_test.go",
 	)
 	if err != nil || strings.TrimSpace(output) == "" {
 		return false
 	}
 
 	// Try to compile the test files.
-	_, compileErr := worktree.RunGit(
-		[]string{"--no-pager", "stash", "list"},
-		worktreePath,
+	_, compileErr := gitexec.RunGit(
+		context.Background(), worktreePath,
+		"--no-pager", "stash", "list",
 	)
 	_ = compileErr
 

@@ -11,6 +11,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,10 +23,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/state"
-	"github.com/godinj/drem-orchestrator/internal/worktree"
 )
 
 // directAgentActivity tracks live activity metrics for a direct tool agent.
@@ -640,17 +641,17 @@ func (o *Orchestrator) buildReviewerContext(task *model.Task, worktreePath strin
 	if worktreePath == "" || o.worktree == nil {
 		return
 	}
-	fullDiff, err := worktree.RunGit(
-		[]string{"diff", o.worktree.DefaultBranch + "...HEAD"},
-		worktreePath,
+	fullDiff, err := gitexec.RunGit(
+		context.Background(), worktreePath,
+		"diff", o.worktree.DefaultBranch+"...HEAD",
 	)
 	if err == nil && fullDiff != "" {
 		gitDiff = fullDiff
 		return
 	}
-	statDiff, statErr := worktree.RunGit(
-		[]string{"diff", o.worktree.DefaultBranch + "...HEAD", "--stat"},
-		worktreePath,
+	statDiff, statErr := gitexec.RunGit(
+		context.Background(), worktreePath,
+		"diff", o.worktree.DefaultBranch+"...HEAD", "--stat",
 	)
 	if statErr == nil {
 		gitDiff = statDiff
