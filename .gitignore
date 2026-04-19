@@ -50,3 +50,9 @@ repo-map.md
 bench/scratch/
 bench/fixtures/real-repo/
 bench/results/*.log
+
+# Docker build context artifacts produced by deploy/docker/build-workers.sh.
+# The drem-watchdog binary is compiled on the fly into the shared build
+# context so worker-base can COPY it; it is regenerable and must not be
+# committed.
+deploy/docker/context/drem-watchdog
