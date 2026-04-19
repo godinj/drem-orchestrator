@@ -7,12 +7,137 @@ networks:
   drem-net:
     external: true
 
+volumes:
+  drem-{{.ProjectName}}-db:
+  drem-{{.ProjectName}}-prompts:
+  drem-spawner-sock:
+    external: true
+    name: drem-spawner-sock
+
 services:
   orch:
-    image: drem-orch:latest
-    # TODO(prompt-16): env, volumes, labels
+    image: {{.OrchImage}}
+    environment:
+      DREM_PROJECT: "{{.ProjectName}}"
+      DREM_BARE_REPO: "{{.BareRepoPath}}"
+      DREM_DB_PATH: "/var/lib/drem/drem.db"
+      DREM_ORCH_LISTEN: ":8080"
+      DREM_SPAWNER_SOCKET: "/var/run/drem/spawner.sock"
+      DREM_AGENTMON_TOKEN: "{{.SharedToken}}"
+    volumes:
+      - drem-{{.ProjectName}}-db:/var/lib/drem
+      - drem-{{.ProjectName}}-prompts:/var/lib/drem/prompts
+      - {{.BareRepoPath}}:/bare:rw
+      - drem-spawner-sock:/var/run/drem:ro{{if .DevMode}}
+      - {{.RepoSourcePath}}:/src:ro{{end}}
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.service: orch
+    ports:
+      - "127.0.0.1:{{.OrchHostPort}}:8080"
+    restart: unless-stopped
+
+  agentmon:
+    image: localhost:5000/drem-agentmon:latest
+    environment:
+      DREM_PROJECT: "{{.ProjectName}}"
+      DREM_ORCH_URL: "http://orch:8080"
+      DREM_AGENTMON_TOKEN: "{{.SharedToken}}"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.service: agentmon
+    depends_on: [orch]
+    restart: unless-stopped
+
   csuite-watcher:
-    image: drem-csuite-watcher:latest
-    # TODO(prompt-16)
-  # TODO(prompt-16): csuite-mike, csuite-alex, csuite-ross, csuite-seth
-  # TODO(prompt-16): merger-pool (2-3 replicas)
+    image: localhost:5000/drem-csuite-watcher:latest
+    environment:
+      DREM_PROJECT: "{{.ProjectName}}"
+      DREM_ORCH_URL: "http://orch:8080"
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.service: csuite-watcher
+    depends_on: [orch]
+    restart: unless-stopped
+
+  csuite-mike:
+    image: {{index .CsuiteImages "mike"}}
+    environment:
+      DREM_PROJECT: "{{.ProjectName}}"
+      DREM_ORCH_URL: "http://orch:8080"
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.agent_type: csuite-mike
+    depends_on: [orch]
+    restart: unless-stopped
+
+  csuite-alex:
+    image: {{index .CsuiteImages "alex"}}
+    environment:
+      DREM_PROJECT: "{{.ProjectName}}"
+      DREM_ORCH_URL: "http://orch:8080"
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.agent_type: csuite-alex
+    depends_on: [orch]
+    restart: unless-stopped
+
+  csuite-ross:
+    image: {{index .CsuiteImages "ross"}}
+    environment:
+      DREM_PROJECT: "{{.ProjectName}}"
+      DREM_ORCH_URL: "http://orch:8080"
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.agent_type: csuite-ross
+    depends_on: [orch]
+    restart: unless-stopped
+
+  csuite-seth:
+    image: {{index .CsuiteImages "seth"}}
+    environment:
+      DREM_PROJECT: "{{.ProjectName}}"
+      DREM_ORCH_URL: "http://orch:8080"
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.agent_type: csuite-seth
+    depends_on: [orch]
+    restart: unless-stopped
+
+  worker-template:
+    image: {{.WorkerImage}}
+    # Worker containers are spawned on demand by drem-spawner; this entry
+    # exists so `docker compose pull` primes the image on first up. The
+    # service does not run by default.
+    profiles: ["never"]
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.agent_type: worker
+      drem.language: "{{.Language}}"
+
+  merger-pool:
+    image: {{.MergerImage}}
+    environment:
+      DREM_PROJECT: "{{.ProjectName}}"
+      DREM_ORCH_URL: "http://orch:8080"
+      DREM_AGENTMON_TOKEN: "{{.SharedToken}}"
+    volumes:
+      - {{.BareRepoPath}}:/bare:rw
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.agent_type: merger
+    deploy:
+      replicas: 2
+    depends_on: [orch]
+    restart: unless-stopped

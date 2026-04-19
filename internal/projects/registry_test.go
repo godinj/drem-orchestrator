@@ -152,6 +152,42 @@ func TestRemove_Success(t *testing.T) {
 	require.False(t, ok)
 }
 
+// TestAllocateOrchHostPort_ReturnsDefaultWhenEmpty asserts the first
+// registered project claims DefaultOrchHostPort (8080).
+func TestAllocateOrchHostPort_ReturnsDefaultWhenEmpty(t *testing.T) {
+	r := &projects.Registry{Path: filepath.Join(t.TempDir(), "projects.toml")}
+	require.Equal(t, projects.DefaultOrchHostPort, r.AllocateOrchHostPort())
+}
+
+// TestAllocateOrchHostPort_SkipsUsed asserts that two projects registered
+// back-to-back land on distinct ports starting at 8080.
+func TestAllocateOrchHostPort_SkipsUsed(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	r := &projects.Registry{Path: filepath.Join(t.TempDir(), "projects.toml")}
+
+	first := projects.Project{
+		Name:         "project-a",
+		BareRepoPath: bareRepo,
+		Language:     projects.LanguageGo,
+		OrchURL:      "http://localhost:8080",
+		OrchHostPort: r.AllocateOrchHostPort(),
+	}
+	require.NoError(t, r.Add(first))
+
+	second := projects.Project{
+		Name:         "project-b",
+		BareRepoPath: bareRepo,
+		Language:     projects.LanguageGo,
+		OrchURL:      "http://localhost:8081",
+		OrchHostPort: r.AllocateOrchHostPort(),
+	}
+	require.NoError(t, r.Add(second))
+
+	require.Equal(t, 8080, first.OrchHostPort)
+	require.Equal(t, 8081, second.OrchHostPort)
+	require.NotEqual(t, first.OrchHostPort, second.OrchHostPort)
+}
+
 // TestDefaultPath smoke-tests the helper.
 func TestDefaultPath(t *testing.T) {
 	got := projects.DefaultPath()

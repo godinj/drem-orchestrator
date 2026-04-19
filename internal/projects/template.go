@@ -2,7 +2,9 @@ package projects
 
 import (
 	"bytes"
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +34,10 @@ type TemplateData struct {
 	WorkerImage string
 	// MergerImage is the merger container image tag.
 	MergerImage string
+	// OrchImage is the orchestrator container image tag. Defaults to
+	// DefaultOrchImage (production distroless build); when DevMode is
+	// true the caller should swap in DefaultOrchDevImage.
+	OrchImage string
 	// CsuiteImages maps C-Suite persona ("mike", "alex", "ross", "seth")
 	// to its container image tag.
 	CsuiteImages map[string]string
@@ -39,13 +45,50 @@ type TemplateData struct {
 	// on the host, mounted into the orchestrator container.
 	BareRepoPath string
 	// SharedToken authenticates agentmon POST /internal/logs requests for
-	// this project. Generated once per registration.
+	// this project. Generated once per registration via NewSharedToken.
 	SharedToken string
+	// OrchHostPort is the host-side loopback port bound to the
+	// orchestrator container's :8080. Kept unique across projects by
+	// registry.AllocateOrchHostPort.
+	OrchHostPort int
+	// DevMode toggles the development-mode orchestrator image and a
+	// read-only bind-mount of the repo source at /src, driven by
+	// `drem project register --dev`.
+	DevMode bool
+	// RepoSourcePath is the absolute path to the orchestrator's own
+	// source tree (go.mod root). Only used when DevMode is true.
+	RepoSourcePath string
+}
+
+// Default image tags for the orchestrator.
+const (
+	// DefaultOrchImage is the production distroless orchestrator image.
+	DefaultOrchImage = "localhost:5000/drem-orch:latest"
+	// DefaultOrchDevImage is the development orchestrator image that
+	// compiles /src on start.
+	DefaultOrchDevImage = "localhost:5000/drem-orch-dev:latest"
+	// DefaultOrchHostPort is the first host port allocated to a project's
+	// orchestrator container. Subsequent projects use DefaultOrchHostPort+N.
+	DefaultOrchHostPort = 8080
+)
+
+// NewSharedToken returns a freshly generated 32-byte hex-encoded token
+// suitable for Project.SharedToken. It reads from crypto/rand and returns
+// an error only if the underlying entropy source is unavailable.
+func NewSharedToken() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("read random bytes: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // Render executes the compose template with data and returns the rendered
-// bytes.
+// bytes. Zero-valued fields on data are filled in with sensible defaults
+// (OrchImage, OrchHostPort) so that callers from older code paths do not
+// produce broken compose files.
 func Render(data TemplateData) ([]byte, error) {
+	applyDefaults(&data)
 	tmpl, err := template.ParseFS(composeTemplateFS, composeTemplateName)
 	if err != nil {
 		return nil, fmt.Errorf("parse compose template: %w", err)
@@ -55,6 +98,22 @@ func Render(data TemplateData) ([]byte, error) {
 		return nil, fmt.Errorf("execute compose template: %w", err)
 	}
 	return buf.Bytes(), nil
+}
+
+// applyDefaults fills in unset fields on data. It is called by Render so
+// every rendered compose file has a usable image and port even when the
+// caller only populated the minimum set.
+func applyDefaults(data *TemplateData) {
+	if data.OrchImage == "" {
+		if data.DevMode {
+			data.OrchImage = DefaultOrchDevImage
+		} else {
+			data.OrchImage = DefaultOrchImage
+		}
+	}
+	if data.OrchHostPort == 0 {
+		data.OrchHostPort = DefaultOrchHostPort
+	}
 }
 
 // WriteProjectCompose renders the template and writes it to

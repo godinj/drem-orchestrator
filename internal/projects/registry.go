@@ -44,6 +44,18 @@ type Project struct {
 	// "csuite-mike", ...) to a specific image tag. Agent types without an
 	// override use the language-derived default.
 	ContainerImageOverrides map[string]string `toml:"container_image_overrides,omitempty"`
+	// OrchHostPort is the host-side loopback port bound to the
+	// orchestrator container's :8080. Allocated at registration time via
+	// Registry.AllocateOrchHostPort so that concurrent projects do not
+	// collide on 127.0.0.1:8080.
+	OrchHostPort int `toml:"orch_host_port,omitempty"`
+	// SharedToken authenticates agentmon POST /internal/logs requests
+	// for this project. Generated once per registration via
+	// projects.NewSharedToken. Only orch and agentmon ever learn it.
+	SharedToken string `toml:"shared_token,omitempty"`
+	// DevMode records that the project was registered with --dev so
+	// regeneration keeps the dev orchestrator image and /src bind-mount.
+	DevMode bool `toml:"dev_mode,omitempty"`
 }
 
 // Registry is the in-memory view of ~/.drem/projects.toml.
@@ -135,6 +147,25 @@ func (r *Registry) Add(p Project) error {
 	}
 	r.Projects = append(r.Projects, p)
 	return nil
+}
+
+// AllocateOrchHostPort returns the next free loopback port for a newly
+// registering project, starting at DefaultOrchHostPort (8080) and
+// incrementing past any ports already taken. It does not mutate the
+// registry — callers must copy the returned value onto Project.OrchHostPort
+// before Add/Save.
+func (r *Registry) AllocateOrchHostPort() int {
+	used := make(map[int]bool, len(r.Projects))
+	for _, p := range r.Projects {
+		if p.OrchHostPort > 0 {
+			used[p.OrchHostPort] = true
+		}
+	}
+	for port := DefaultOrchHostPort; ; port++ {
+		if !used[port] {
+			return port
+		}
+	}
 }
 
 // Remove deletes the project with the given name. Returns an error if no
