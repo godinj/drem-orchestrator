@@ -37,17 +37,57 @@ manually:
 3. `deploy/compose/global.yml` had an obsolete top-level `version: "3.9"`
    key that Compose V2 warns on. Removed.
 
+4. Kyle's bind-mount of `${HOME}/.drem/projects.toml` is silently
+   autocreated as a directory when the source doesn't exist or when
+   `${HOME}` resolves to `/root` under `sudo`. Step 1 and Step 1b below
+   document the workaround. A more durable fix (require-file semantics
+   via Compose `configs:`, or a `DREM_HOME`-style explicit env var
+   validated by an entrypoint guard) is open follow-up work — see
+   `remaining-work.md`.
+
 ## Step 1 — Docker group membership
 
 ```bash
 sudo usermod -aG docker "$USER"
 # Log out and back in (or `newgrp docker`) for the group to take effect.
-# Without this, `docker` and `docker compose` only work under `sudo`,
-# and any `${HOME}` expansion inside compose will resolve to /root.
 ```
 
-If you must proceed before re-login, use `sudo -E docker …` so the
-bind-mount sources under `${HOME}` resolve to your real home directory.
+Without docker-group membership, every `docker` / `docker compose` call
+needs `sudo`, and **`sudo` resets `$HOME` to `/root`**. The global compose
+file bind-mounts `${HOME}/.drem/projects.toml` into Kyle, so under plain
+`sudo` that path expands to `/root/.drem/projects.toml` — which doesn't
+exist, so Docker silently auto-creates it as a *directory* owned by
+`root`. Kyle then crash-loops on "is a directory", and the directory
+persists across `compose up --force-recreate` because the mount source
+resolves the same way on every restart.
+
+If you must proceed before re-login, use `sudo -E docker …` so `$HOME`
+propagates. If you have already hit the directory-autocreate trap, clean
+up both locations before the next bring-up:
+
+```bash
+sudo rm -rf /root/.drem ~/.drem    # remove any auto-created junk
+```
+
+## Step 1b — Pre-create the host-side registry
+
+The registry file must exist as a *regular file* before the first Kyle
+bring-up. Create it empty (Kyle accepts an empty registry — it just logs
+`projects=0` and serves `/healthz` 200):
+
+```bash
+mkdir -p ~/.drem
+[ -e ~/.drem/projects.toml ] || cat > ~/.drem/projects.toml <<'EOF'
+# Drem host-wide project registry. Managed by:
+#   drem project {register,list,remove}
+# Kyle reads this at startup to discover orchestrators to poll.
+EOF
+ls -la ~/.drem/projects.toml   # must be -rw-…, not drwx-…
+```
+
+If this file is a directory at the moment `docker compose up kyle` runs,
+Kyle will crash-loop until you `docker rm -f drem-kyle`, fix the source,
+and recreate the container (a restart alone will not rebind the mount).
 
 ## Step 2 — External network
 
