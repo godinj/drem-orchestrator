@@ -1,0 +1,21 @@
+# Root-level docker-compose.yml — services have moved.
+#
+# The global infrastructure stack (registry + sglang + gq) now lives at:
+#   deploy/compose/global.yml
+#
+# Operators:
+#   bash deploy/compose/network-setup.sh            # one-time network setup
+#   docker compose -f deploy/compose/global.yml up -d
+#
+# See deploy/compose/README.md for the full runbook. This file is retained only
+# because tooling and muscle memory sometimes reach for `docker-compose.yml` at
+# the repo root; it intentionally defines no services.
+#
+# The Grafana overlay is unaffected and still lives at docker-compose.grafana.yml.
+
+version: "3.9"
+
+# sglang:   moved to deploy/compose/global.yml
+# gq:       moved to deploy/compose/global.yml
+# registry: moved to deploy/compose/global.yml
+services: {}

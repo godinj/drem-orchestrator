@@ -1,0 +1,154 @@
+# Global infrastructure compose for drem-orchestrator — Phase 1.
+#
+# Brings up the shared services every per-project compose depends on:
+#   - registry: host-local Docker image registry (localhost:5000)
+#   - sglang:   GPU-backed LLM server
+#   - gq:       admission-control proxy in front of SGLang
+#
+# Per docs/prd-containerization.md §Compose topology (Global compose) and
+# §Phased rollout step 1. Downstream per-project composes (owned by prompt 05)
+# attach to the external `drem-net` network created by network-setup.sh and
+# pull images from localhost:5000.
+#
+# Operator prerequisites:
+#   1. Docker + nvidia-container-toolkit installed on host.
+#   2. External network created once:  bash deploy/compose/network-setup.sh
+#   3. Host-side SGLang model dir exists (default $HOME/sglang-models).
+#   4. Optional gq config at ~/.drem-csuite/gq.toml (defaults apply if absent).
+#
+# Bring up:   docker compose -f deploy/compose/global.yml up -d
+# Tear down:  docker compose -f deploy/compose/global.yml down
+#
+# See deploy/compose/README.md for the full operational runbook.
+
+version: "3.9"
+
+name: drem-global
+
+networks:
+  drem-net:
+    external: true
+    name: drem-net
+
+volumes:
+  drem-registry-data:
+    name: drem-registry-data
+
+services:
+  # ---------- Local Docker registry ----------
+  # Unauthenticated, bound to 127.0.0.1 only. Every drem-* image is pushed
+  # here manually today: `docker push localhost:5000/drem-<component>:<tag>`.
+  # Do NOT expose to the external drem-net; only the loopback port mapping
+  # is needed since clients push from the host.
+  registry:
+    image: registry:2
+    container_name: drem-registry
+    restart: unless-stopped
+    networks:
+      - drem-net
+    ports:
+      - "127.0.0.1:5000:5000"
+    volumes:
+      - drem-registry-data:/var/lib/registry
+    environment:
+      REGISTRY_STORAGE_DELETE_ENABLED: "true"
+    labels:
+      drem.scope: "global"
+      drem.service: "registry"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5000/v2/ >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # ---------- SGLang: GPU-backed LLM server ----------
+  # Listens on :8081 inside the drem-net network; also published on
+  # 127.0.0.1:8081 during the transition so host callers still resolve.
+  # Model weights are bind-mounted from the host (50+ GB; must not enter
+  # an image layer). GPU access is mandatory — requires nvidia-container-toolkit.
+  sglang:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/sglang.Dockerfile
+      args:
+        SGLANG_TAG: latest  # TODO: pin to a concrete :v<x>.<y>.<z> before GA
+    image: localhost:5000/drem-sglang:latest
+    container_name: drem-sglang
+    restart: unless-stopped
+    networks:
+      - drem-net
+    ports:
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - type: bind
+        source: ${SGLANG_MODEL_DIR:-${HOME}/sglang-models}
+        target: /models
+        read_only: true
+    # Launch command pulled out of the Dockerfile so operators can swap models
+    # without rebuilding. Matches the host-side invocation documented in
+    # plans/host-state-inventory.md §1.1.
+    command: >
+      python -m sglang.launch_server
+      --host 0.0.0.0 --port 8081
+      --model-path /models/gemma4-26b
+      --tp 1
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    labels:
+      drem.scope: "global"
+      drem.service: "sglang"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/v1/models || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s  # cold model load can take a while
+
+  # ---------- GQ: admission-control proxy in front of SGLang ----------
+  # Resolves upstream by compose service name (sglang:8081). Proxy + metrics
+  # ports are published to loopback so host-side callers (during the Phase 1
+  # transition) can still reach them. See internal/gq/config.go for defaults.
+  gq:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/gq.Dockerfile
+    image: localhost:5000/drem-gq:latest
+    container_name: drem-gq
+    restart: unless-stopped
+    networks:
+      - drem-net
+    ports:
+      - "127.0.0.1:8090:8090"
+      - "127.0.0.1:8091:8091"
+    environment:
+      GQ_BIND_ADDR: 0.0.0.0:8090
+      GQ_METRICS_ADDR: 0.0.0.0:8091
+      GQ_UPSTREAM: http://sglang:8081
+      # Additional overrides — defaults from internal/gq/config.go:124-166.
+      # GQ_MAX_SLOTS: "4"
+      # GQ_QUEUE_MAX_DEPTH: "128"
+    volumes:
+      - type: bind
+        source: ${HOME}/.drem-csuite/gq.toml
+        target: /etc/gq/gq.toml
+        read_only: true
+        bind:
+          # gq has working defaults; don't fail the stack if the file is absent.
+          create_host_path: false
+    depends_on:
+      sglang:
+        condition: service_healthy
+    labels:
+      drem.scope: "global"
+      drem.service: "gq"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8091/metrics >/dev/null || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
