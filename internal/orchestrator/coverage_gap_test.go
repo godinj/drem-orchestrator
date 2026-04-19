@@ -1236,11 +1236,11 @@ func TestEmit_NilChannel(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DefaultTestGateConfig test
+// defaultTestGateConfig test
 // ---------------------------------------------------------------------------
 
 func TestDefaultTestGateConfig_Values(t *testing.T) {
-	cfg := DefaultTestGateConfig()
+	cfg := defaultTestGateConfig()
 	if !cfg.ScopedTests {
 		t.Error("expected ScopedTests to be true by default")
 	}

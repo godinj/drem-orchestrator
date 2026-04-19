@@ -558,12 +558,12 @@ func TestPlannerSpawnEvent_IncludesCounters(t *testing.T) {
 	}
 	db.Create(&project)
 
-	wt := NewHostWorktreeManager(bareRepo, "main")
+	host := NewHostManager(bareRepo, "main")
 	events := make(chan Event, 100)
 	o := &Orchestrator{
 		db:              db,
 		projectID:       projectID,
-		worktree:        wt,
+		worktree:        host.AsInterface(),
 		events:          events,
 		contextWarnPct:  75,
 		contextStopPct:  90,
@@ -571,7 +571,7 @@ func TestPlannerSpawnEvent_IncludesCounters(t *testing.T) {
 		logger:          testLogger(),
 	}
 	// Create a runner with 1 capacity slot so CanSpawn() returns true.
-	o.runner = agent.NewRunner(db, nil, wt, "claude", "", 1, nil)
+	o.runner = agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), "claude", "", 1, nil)
 
 	task := model.Task{
 		ID:          uuid.New(),

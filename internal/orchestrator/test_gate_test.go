@@ -575,11 +575,11 @@ func TestInferCompileCommand_Unknown(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// DefaultTestGateConfig
+// defaultTestGateConfig
 // ---------------------------------------------------------------------------
 
 func TestDefaultTestGateConfig(t *testing.T) {
-	cfg := DefaultTestGateConfig()
+	cfg := defaultTestGateConfig()
 	if !cfg.ScopedTests {
 		t.Error("expected ScopedTests to be true by default")
 	}

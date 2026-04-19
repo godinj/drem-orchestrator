@@ -75,8 +75,8 @@ type TestGateConfig struct {
 	TestTimeout    time.Duration `toml:"test_timeout"`    // default 5m
 }
 
-// DefaultTestGateConfig returns a TestGateConfig with sensible defaults.
-func DefaultTestGateConfig() TestGateConfig {
+// defaultTestGateConfig returns a TestGateConfig with sensible defaults.
+func defaultTestGateConfig() TestGateConfig {
 	return TestGateConfig{
 		ScopedTests: true,
 		TestTimeout: 5 * time.Minute,
@@ -194,7 +194,7 @@ func New(
 		supervisor:      sup,
 		bugreport:       bugSvc,
 		bugreportDir:    bugDir,
-		testGate:        DefaultTestGateConfig(),
+		testGate:        defaultTestGateConfig(),
 		projectID:       projectID,
 		events:          events,
 		tick:            tickInterval,
