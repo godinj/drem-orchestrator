@@ -59,9 +59,7 @@ VOLUME ["/var/lib/drem"]
 WORKDIR /var/lib/drem
 
 # tini forwards SIGTERM to the orchestrator for graceful shutdown.
+# No CMD: the per-project compose sets DREM_HEADLESS=1 + DREM_BARE_REPO
+# and the binary runs the orchestrator + HTTP API. Callers that need
+# a subcommand (e.g. `drem project list`) override via `command:`.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/drem"]
-
-# Placeholder argv; the actual orchestrator subcommand is selected by
-# the per-project compose's command: override or by the environment
-# contract documented in docs/prd-containerization.md.
-CMD ["--help"]

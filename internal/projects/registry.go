@@ -129,6 +129,12 @@ func (r *Registry) Save() error {
 		return fmt.Errorf("close temp file: %w", err)
 	}
 
+	// os.CreateTemp defaults to 0600; widen to 0644 so the file is readable
+	// by non-root users inside Kyle's container when bind-mounted.
+	if err := os.Chmod(tmpName, 0o644); err != nil {
+		return fmt.Errorf("chmod temp file: %w", err)
+	}
+
 	if err := os.Rename(tmpName, r.Path); err != nil {
 		return fmt.Errorf("rename temp to %q: %w", r.Path, err)
 	}

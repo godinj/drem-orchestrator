@@ -173,15 +173,15 @@ func templateDataFor(p projects.Project) projects.TemplateData {
 	if ov, ok := p.ContainerImageOverrides["coder"]; ok && ov != "" {
 		workerImage = ov
 	}
-	mergerImage := "drem-merger:latest"
+	mergerImage := "localhost:5000/drem-merger:latest"
 	if ov, ok := p.ContainerImageOverrides["merger"]; ok && ov != "" {
 		mergerImage = ov
 	}
 	csuiteImages := map[string]string{
-		"mike": "drem-csuite-mike:latest",
-		"alex": "drem-csuite-alex:latest",
-		"ross": "drem-csuite-ross:latest",
-		"seth": "drem-csuite-seth:latest",
+		"mike": "localhost:5000/drem-csuite-mike:latest",
+		"alex": "localhost:5000/drem-csuite-alex:latest",
+		"ross": "localhost:5000/drem-csuite-ross:latest",
+		"seth": "localhost:5000/drem-csuite-seth:latest",
 	}
 	for persona := range csuiteImages {
 		if ov, ok := p.ContainerImageOverrides["csuite-"+persona]; ok && ov != "" {
@@ -204,9 +204,9 @@ func templateDataFor(p projects.Project) projects.TemplateData {
 func defaultWorkerImage(language string) string {
 	switch language {
 	case projects.LanguageCpp:
-		return "drem-worker-cpp:latest"
+		return "localhost:5000/drem-worker-cpp:latest"
 	default:
-		return "drem-worker-go:latest"
+		return "localhost:5000/drem-worker-go:latest"
 	}
 }
 

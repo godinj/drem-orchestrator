@@ -18,6 +18,7 @@ services:
   orch:
     image: {{.OrchImage}}
     environment:
+      DREM_HEADLESS: "1"
       DREM_PROJECT: "{{.ProjectName}}"
       DREM_BARE_REPO: "{{.BareRepoPath}}"
       DREM_DB_PATH: "/var/lib/drem/drem.db"

@@ -49,15 +49,26 @@ func main() {
 		return
 	}
 
-	// Parse flags.
-	configPath := flag.String("config", "drem.toml", "config file path")
-	repoPath := flag.String("repo", "", "bare repo path (required)")
+	// Parse flags. Env var fallbacks let the containerized orch image run
+	// without a baked drem.toml; the per-project compose template sets
+	// DREM_BARE_REPO / DREM_CONFIG / DREM_ORCH_URL / DREM_HEADLESS.
+	configPath := flag.String("config", envOr("DREM_CONFIG", "drem.toml"), "config file path")
+	repoPath := flag.String("repo", os.Getenv("DREM_BARE_REPO"), "bare repo path (required)")
 	importPath := flag.String("import", "", "import tasks from a Markdown file")
 	// orchURL lets the dashboard point at a remote or alternate orchestrator
 	// HTTP API. Empty falls back to http://127.0.0.1:<cfg.OrchHTTPPort>.
 	// See docs/prd-containerization.md and internal/tui/datasource.go.
-	orchURL := flag.String("orch-url", "", "orchestrator HTTP API URL (default http://127.0.0.1:<orch_http_port>)")
+	orchURL := flag.String("orch-url", os.Getenv("DREM_ORCH_URL"), "orchestrator HTTP API URL (default http://127.0.0.1:<orch_http_port>)")
+	headless := flag.Bool("headless", os.Getenv("DREM_HEADLESS") != "", "run orchestrator + HTTP API without the TUI (container mode)")
+	tuiOnly := flag.Bool("tui-only", os.Getenv("DREM_TUI_ONLY") != "", "launch the TUI as a pure HTTP client against --orch-url; does not spawn a local orchestrator or HTTP API")
 	flag.Parse()
+
+	if *headless && *tuiOnly {
+		log.Fatal("--headless and --tui-only are mutually exclusive")
+	}
+	if *tuiOnly && *orchURL == "" {
+		log.Fatal("--tui-only requires --orch-url (or DREM_ORCH_URL) pointing at a running orchestrator")
+	}
 
 	// Load config.
 	cfg, err := LoadConfig(*configPath)
@@ -281,15 +292,19 @@ func main() {
 		close(tuiEvents)
 	}()
 
-	// Start orchestrator in background.
+	// Start orchestrator in background. Skipped in --tui-only mode so the
+	// TUI runs as a pure client against the remote orchestrator HTTP API
+	// (e.g. the containerized drem-orch in the per-project compose).
 	ctx, cancel := context.WithCancel(context.Background())
-	go orch.Run(ctx)
+	if !*tuiOnly {
+		go orch.Run(ctx)
 
-	// Start orchestrator HTTP API (read-only public endpoints + agentmon
-	// ingestion). See docs/prd-containerization.md — Kyle and the TUI both
-	// call this API. A nil log streamer means GET /logs returns 503 until
-	// agentmon is containerized and wired through.
-	startOrchHTTP(ctx, cfg, database, project.Name)
+		// Start orchestrator HTTP API (read-only public endpoints + agentmon
+		// ingestion). See docs/prd-containerization.md — Kyle and the TUI both
+		// call this API. A nil log streamer means GET /logs returns 503 until
+		// agentmon is containerized and wired through.
+		startOrchHTTP(ctx, cfg, database, project.Name)
+	}
 
 	// Start C-Suite dashboard poller backed by disk state files.
 	csuiteSource := csuite.NewDiskSnapshotSource("")
@@ -328,6 +343,18 @@ func main() {
 	// shutdownRequested is closed when a real shutdown signal (SIGINT/SIGTERM)
 	// arrives, signalling the TUI restart loop to stop.
 	shutdownRequested := make(chan struct{})
+
+	// Headless mode: orchestrator + HTTP API only, no TUI. Used by the
+	// containerized drem-orch image (DREM_HEADLESS=1 in the per-project
+	// compose). Block on shutdown signal and let deferred cancel() tear
+	// everything down.
+	if *headless {
+		slog.Info("headless mode: TUI disabled, orchestrator + HTTP API running", "project", project.Name)
+		<-sigShutdown
+		slog.Info("received shutdown signal, stopping orchestrator")
+		cancel()
+		return
+	}
 
 	// TUI restart loop: if p.Run() returns unexpectedly (no shutdown signal),
 	// create a fresh Program and restart. This makes the TUI resilient to
@@ -394,6 +421,14 @@ func main() {
 
 	// Cleanup.
 	cancel()
+}
+
+// envOr returns the value of env var key, or def when the var is unset or empty.
+func envOr(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
 }
 
 // buildDirectToolAgentConfig resolves the runtime configuration for the
