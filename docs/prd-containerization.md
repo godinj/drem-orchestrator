@@ -85,14 +85,14 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 - **Orchestrator is the single state surface per project.** Kyle and the TUI read exclusively from each project's orchestrator HTTP API. Direct database access from agents is forbidden.
 - **Kyle is a global singleton.** One Kyle container runs per host and calls each registered project's orchestrator API using static configuration from `~/.drem/projects.toml`.
 - **Agentmon absorbs log shipping.** The existing transcript-extraction logic is extended to subscribe to Docker container stdout for every labeled container. Agentmon POSTs structured state records (commits, pushes, test results, crashes, heartbeat, tool-call counts, build errors) to the correct project's orchestrator over an internal HTTP endpoint. Raw logs remain inside Docker's log driver; the orchestrator proxies `docker logs` on demand.
-- **Warm containers.** Orchestrator, spawner, agentmon, SGLang, GQ, Kyle, each project's C-Suite (Mike, Alex, Ross, Seth), and each project's merger pool (2–3 containers) are warm.
-- **Ephemeral containers.** Workers (Opus coders, G4 workers), merger invocations, one-shot C-Suite prompts.
+- **Warm containers.** Orchestrator, spawner, agentmon, SGLang, GQ, Kyle, and each project's C-Suite (Mike, Alex, Ross, Seth) are warm. (Originally a per-project merger pool of 2–3 containers was also planned; see the merger note under "Ephemeral containers".)
+- **Ephemeral containers.** Workers (Opus coders, G4 workers), merger invocations, one-shot C-Suite prompts. NOTE: the original PRD called for a warm merger pool, but `drem-merger` is implemented as a per-task one-shot binary that crash-loops when run with no argv. The merger-pool service was removed from the per-project compose template; merger now runs only as on-demand spawns. Spawn-on-demand wiring is tracked in `plans/merger-spawn-on-demand.md`.
 - **Recovery strategy.** A watchdog process baked into worker images commits and pushes to the bare repository every minute and after every passing test. On worker container death, the orchestrator detects the exit via a Docker event, spawns a replacement container, and resumes from the most recent pushed commit. Volume-based full-filesystem restore is explicitly out of scope for the first cut.
 
 ### Compose topology
 
 - **Global compose (lives in the drem-orchestrator repository).** Services: Kyle, SGLang, GQ, local image registry, spawner, agentmon.
-- **Per-project compose (generated into `~/.drem/projects/<name>/compose.yml`).** Services: orchestrator, csuite-watcher, four warm C-Suite containers (Mike, Alex, Ross, Seth), warm merger pool.
+- **Per-project compose (generated into `~/.drem/projects/<name>/compose.yml`).** Services: orchestrator, csuite-watcher, four warm C-Suite containers (Mike, Alex, Ross, Seth). The merger image is referenced by an image-prime stub (`merger-template`, `profiles: ["never"]`) so `docker compose pull` primes the tag; the warm merger pool was removed pending spawn-on-demand wiring (`plans/merger-spawn-on-demand.md`).
 - **Ephemeral containers** (workers, merger invocations, one-shot C-Suite prompts) are spawned on demand by the spawner service and are not listed in any compose file.
 
 ### Project registry

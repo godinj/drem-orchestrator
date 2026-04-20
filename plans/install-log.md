@@ -325,7 +325,12 @@ This step:
   project.
 - Generates `~/.drem/projects/drem-orchestrator/compose.yml` from the
   embedded per-project template (orchestrator, csuite-watcher, four
-  C-Suite containers, merger warm pool).
+  C-Suite containers). The merger image is referenced by an
+  image-prime stub (`merger-template`, `profiles: ["never"]`) that
+  does not run; the previous `merger-pool` warm replicas were removed
+  because `drem-merger` is a per-task one-shot binary that crash-loops
+  when run with no argv. Spawn-on-demand wiring is tracked in
+  `plans/merger-spawn-on-demand.md`.
 - Optionally runs `docker compose -f <path> up -d` against that file.
 
 Register additional projects (e.g. `drem-canvas --lang cpp`) via the

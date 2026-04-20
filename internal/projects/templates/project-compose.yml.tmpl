@@ -126,19 +126,17 @@ services:
       drem.agent_type: worker
       drem.language: "{{.Language}}"
 
-  merger-pool:
+  merger-template:
     image: {{.MergerImage}}
-    environment:
-      DREM_PROJECT: "{{.ProjectName}}"
-      DREM_ORCH_URL: "http://orch:8080"
-      DREM_AGENTMON_TOKEN: "{{.SharedToken}}"
-    volumes:
-      - {{.BareRepoPath}}:/bare:rw
+    # drem-merger is a per-task one-shot binary that requires --feature-branch,
+    # --task-id, --test-cmd, --orch-url, and --agentmon-token at startup. It
+    # cannot run as a long-lived warm pool — flag validation would reject the
+    # empty argv and crash-loop. Spawn-on-demand wiring (orch -> spawner ->
+    # short-lived merger container) is tracked in
+    # plans/merger-spawn-on-demand.md. This entry exists only so
+    # `docker compose pull` primes the image; the service does not run.
+    profiles: ["never"]
     networks: [drem-net]
     labels:
       drem.project: "{{.ProjectName}}"
       drem.agent_type: merger
-    deploy:
-      replicas: 2
-    depends_on: [orch]
-    restart: unless-stopped

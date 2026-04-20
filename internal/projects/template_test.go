@@ -97,8 +97,11 @@ func TestWriteProjectComposeAt_RejectsEmptyName(t *testing.T) {
 
 // TestRender_GoTemplateFull verifies that a Go-language project renders
 // every expected service (orch, agentmon, csuite-watcher, four C-Suite
-// personas, merger-pool) with the shared token plumbed to orch + agentmon
-// and the worker image tagged for Go.
+// personas) with the shared token plumbed to orch + agentmon and the
+// worker image tagged for Go. The merger image is referenced by an
+// image-prime stub (merger-template, profiles: ["never"]) rather than a
+// running pool — drem-merger is a per-task one-shot binary; long-lived
+// replicas crash-loop on missing flags. See plans/merger-spawn-on-demand.md.
 func TestRender_GoTemplateFull(t *testing.T) {
 	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
 	out, err := projects.Render(data)
@@ -108,15 +111,16 @@ func TestRender_GoTemplateFull(t *testing.T) {
 	for _, service := range []string{
 		"orch:", "agentmon:", "csuite-watcher:",
 		"csuite-mike:", "csuite-alex:", "csuite-ross:", "csuite-seth:",
-		"merger-pool:",
 	} {
 		require.Contains(t, s, service, "missing service %q", service)
 	}
 	require.Contains(t, s, "drem-worker-go")
 	require.NotContains(t, s, "drem-worker-cpp")
+	// The merger pool must NOT be present as a running service.
+	require.NotContains(t, s, "merger-pool:",
+		"merger-pool service must not be present; drem-merger is one-shot, see plans/merger-spawn-on-demand.md")
 
-	// SharedToken must reach orch and agentmon, but never a C-Suite
-	// container or the merger pool.
+	// SharedToken must reach orch and agentmon, but never a C-Suite container.
 	var parsed struct {
 		Services map[string]struct {
 			Image       string            `yaml:"image"`
@@ -128,6 +132,12 @@ func TestRender_GoTemplateFull(t *testing.T) {
 	require.Equal(t, data.SharedToken, parsed.Services["agentmon"].Environment["DREM_AGENTMON_TOKEN"])
 	require.Empty(t, parsed.Services["csuite-mike"].Environment["DREM_AGENTMON_TOKEN"])
 	require.Empty(t, parsed.Services["csuite-watcher"].Environment["DREM_AGENTMON_TOKEN"])
+	// merger-pool must not exist; the merger-template stub exists only
+	// so `docker compose pull` primes the image and is gated behind
+	// profiles: ["never"].
+	require.NotContains(t, parsed.Services, "merger-pool")
+	require.Contains(t, parsed.Services, "merger-template")
+	require.Equal(t, data.MergerImage, parsed.Services["merger-template"].Image)
 }
 
 // TestRender_CppTemplateSwapsWorkerImage verifies that a C++ project
@@ -189,10 +199,13 @@ func TestRender_ParsesAsYAML(t *testing.T) {
 	services, ok := parsed["services"].(map[string]any)
 	require.True(t, ok, "services must be a map")
 	for _, name := range []string{"orch", "agentmon", "csuite-watcher",
-		"csuite-mike", "csuite-alex", "csuite-ross", "csuite-seth",
-		"merger-pool"} {
+		"csuite-mike", "csuite-alex", "csuite-ross", "csuite-seth"} {
 		require.Contains(t, services, name)
 	}
+	// merger-pool was removed because drem-merger is a per-task one-shot
+	// binary; long-lived replicas crash-loop on missing required flags.
+	// See plans/merger-spawn-on-demand.md.
+	require.NotContains(t, services, "merger-pool")
 }
 
 // TestNewSharedToken asserts that NewSharedToken produces a 64-character

@@ -251,8 +251,15 @@ docker compose -f ~/.drem/projects/drem-orchestrator/compose.yml up -d
 docker compose -f ~/.drem/projects/drem-orchestrator/compose.yml ps
 ```
 
-Expect: `orch`, `agentmon`, `csuite-watcher`, `csuite-{mike,alex,ross,seth}`,
-plus the warm merger pool.
+Expect: `orch`, `agentmon`, `csuite-watcher`, `csuite-{mike,alex,ross,seth}`.
+
+The merger image is *not* listed; the previous `merger-pool` warm
+replicas were removed because `drem-merger` is a per-task one-shot
+binary that crash-loops when run with no argv. The template still
+declares a `merger-template` stub gated behind `profiles: ["never"]`
+so `docker compose pull` primes the image, but no merger container
+runs until spawn-on-demand wiring lands. See
+`plans/merger-spawn-on-demand.md`.
 
 ## Step 8 — Verify
 
