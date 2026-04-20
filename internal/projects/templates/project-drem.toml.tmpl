@@ -34,3 +34,15 @@ log_path       = "/var/lib/drem/drem.log"
 [direct_tool_agent]
   endpoint = "http://gq:8090/v1/chat/completions"
   model    = "gemma4-26b"
+
+# Planner runs as a per-task drem-planner container (spawn-on-demand)
+# against Anthropic's Opus via the claude CLI. See
+# plans/warm-direct-planner.md. Provider=claude enables the container
+# path in processPlanning; any other value falls back to the legacy
+# runner.SpawnAgent path for rollback safety. ANTHROPIC_API_KEY must be
+# set in the orch container's env (plumbed from the host shell through
+# deploy/compose/global.yml and the per-project compose template).
+[agents.planner]
+  provider = "claude"
+  model    = "claude-opus-4-6"
+  effort   = "high"

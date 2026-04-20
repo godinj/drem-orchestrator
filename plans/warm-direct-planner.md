@@ -2,8 +2,8 @@
 
 Status: **implementation in progress on worktree-agent-af401951, 2026-04-19.**
 Commits 1 (Dockerfile + entrypoint), 2 (spawner image mapping), 3
-(dispatchPlan + plan.json parse + validation), and 4 (processPlanning
-provider-based routing) landed.
+(dispatchPlan + plan.json parse + validation), 4 (processPlanning
+provider-based routing), and 5 (drem.toml planner defaults) landed.
 
 **Revised from the earlier warm/direct-LLM draft after operator
 direction 2026-04-20: "planner should always be opus for now."**
