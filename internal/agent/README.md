@@ -44,7 +44,7 @@ func (a *adapter) SpawnWorker(ctx context.Context, p agent.WorkerSpawnParams) (a
     res, err := a.c.SpawnWorker(ctx, spawner.SpawnWorkerParams{
         Project: p.Project, AgentType: p.AgentType, WorkerID: p.WorkerID,
         Branch: p.Branch, Labels: p.Labels, Image: p.Image,
-        Env: p.Env, BareRepoMount: p.BareRepoMount,
+        Env: p.Env, BareRepoMount: p.BareRepoMount, CredsMount: p.CredsMount,
     })
     if err != nil {
         return agent.WorkerSpawnResult{}, err

@@ -33,6 +33,10 @@ import (
 // adapted by the caller without dragging the spawner package into every
 // file in this one. A tiny adapter (three method calls) converts
 // between the two shapes; see internal/agent/README.md for an example.
+// CredsMount mirrors spawner.SpawnWorkerParams.CredsMount: when
+// non-empty, it is a host path the spawner bind-mounts read-only at
+// /home/drem/.claude/.credentials.json so a claude-harness worker can
+// read the operator's subscription credentials.
 type WorkerSpawnParams struct {
 	Project       string
 	AgentType     string
@@ -42,6 +46,7 @@ type WorkerSpawnParams struct {
 	Image         string
 	Env           map[string]string
 	BareRepoMount string
+	CredsMount    string
 }
 
 // WorkerSpawnResult mirrors spawner.SpawnWorkerResult. Keeping the mirror
@@ -98,6 +103,13 @@ type SpawnRequest struct {
 	// into the worker at /bare. When empty, no bare repo mount is
 	// requested.
 	BareRepoMount string
+	// CredsMount is the host path of the Claude subscription credentials
+	// file bind-mounted read-only into the worker at
+	// /home/drem/.claude/.credentials.json. When empty, no creds mount
+	// is requested — appropriate for workers that do not run the claude
+	// CLI (merger). When populated, the spawner pre-checks the path
+	// exists and fails the spawn fast if it does not.
+	CredsMount string
 }
 
 // Handle is returned by Manager.Spawn. It carries the container ID (so
@@ -240,6 +252,7 @@ func (m *Manager) Spawn(ctx context.Context, req SpawnRequest) (*Handle, error) 
 		Image:         image,
 		Env:           req.Env,
 		BareRepoMount: req.BareRepoMount,
+		CredsMount:    req.CredsMount,
 	}
 
 	res, err := m.spawner.SpawnWorker(ctx, params)

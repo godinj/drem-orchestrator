@@ -62,12 +62,13 @@ func TestManager_Spawn_PopulatesParamsAndHandle(t *testing.T) {
 	m := NewManager(db, fs, &ImageResolver{Language: "go"}, "/tmp/prompts")
 
 	h, err := m.Spawn(context.Background(), SpawnRequest{
-		Project:   "demo",
-		AgentType: "coder",
-		AgentID:   agentID.String(),
-		TaskID:    "task-42",
-		Branch:    "feature/x",
-		Env:       map[string]string{"FOO": "bar"},
+		Project:    "demo",
+		AgentType:  "coder",
+		AgentID:    agentID.String(),
+		TaskID:     "task-42",
+		Branch:     "feature/x",
+		Env:        map[string]string{"FOO": "bar"},
+		CredsMount: "/host/home/.claude/.credentials.json",
 	})
 	if err != nil {
 		t.Fatalf("Spawn: unexpected error: %v", err)
@@ -115,6 +116,12 @@ func TestManager_Spawn_PopulatesParamsAndHandle(t *testing.T) {
 	}
 	if p.Env["FOO"] != "bar" {
 		t.Errorf("params.Env[FOO] = %q, want bar", p.Env["FOO"])
+	}
+	// CredsMount from the SpawnRequest propagates through Manager.Spawn
+	// into WorkerSpawnParams so the spawner can translate it into a
+	// read-only bind mount at /home/drem/.claude/.credentials.json.
+	if p.CredsMount != "/host/home/.claude/.credentials.json" {
+		t.Errorf("params.CredsMount = %q, want /host/home/.claude/.credentials.json", p.CredsMount)
 	}
 
 	// DB row got container id + image in Config.
