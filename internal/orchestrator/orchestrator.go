@@ -130,6 +130,8 @@ type Orchestrator struct {
 	directClassifierCfg         *agent.DirectClassifierConfig   // nil means use OpenCode subprocess path
 	classifierContainerURL      string                          // empty means use inline direct path (rollback-safe)
 	classifierContainerToken    string                          // Bearer token for POST /classify
+	plannerContainerURL         string                          // POST /plan URL on drem-planner; empty falls back to legacy runner path
+	plannerContainerToken       string                          // Bearer token for POST /plan
 	directPlanReviewerCfg       *agent.DirectPlanReviewerConfig // nil means use subprocess path for plan review
 	directPrepCfg               *agent.DirectPrepConfig         // nil means use OpenCode subprocess path
 	directToolAgentCfg          *agent.DirectToolAgentConfig    // nil means use subprocess path for coder/reviewer/fixer
@@ -269,6 +271,20 @@ func (o *Orchestrator) SetClassifierContainerEndpoint(url, token string) {
 	o.classifierContainerToken = token
 	if url != "" {
 		o.logger.Info("classifier container enabled", "endpoint", url, "auth", token != "")
+	}
+}
+
+// SetPlannerContainerEndpoint enables the warm drem-planner container path.
+// When url is non-empty the orchestrator POSTs plan jobs to it instead of
+// spawning per-task planner containers; see plans/warm-planner-pivot.md.
+// token is forwarded as "Authorization: Bearer <token>" and must match the
+// planner container's DREM_AGENTMON_TOKEN. Passing empty URL falls back to
+// the legacy runner.SpawnAgent path for rollback safety.
+func (o *Orchestrator) SetPlannerContainerEndpoint(url, token string) {
+	o.plannerContainerURL = url
+	o.plannerContainerToken = token
+	if url != "" {
+		o.logger.Info("planner container enabled", "endpoint", url, "auth", token != "")
 	}
 }
 

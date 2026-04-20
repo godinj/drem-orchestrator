@@ -209,17 +209,17 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 		}
 	}
 
-	// Container path: when the planner provider resolves to claude AND a
-	// spawner is configured, run planner as a per-task drem-planner
-	// container (plans/warm-direct-planner.md). Otherwise fall through to
-	// the legacy runner.SpawnAgent path so operator overrides and
-	// sandboxes without a spawner still work.
-	if o.shouldSpawnPlannerContainer() {
+	// HTTP path: when the planner provider resolves to claude AND a warm
+	// drem-planner endpoint is configured, POST the plan request to the
+	// long-lived planner container (plans/warm-planner-pivot.md).
+	// Otherwise fall through to the legacy runner.SpawnAgent path so
+	// operator overrides and sandboxes without a warm planner still work.
+	if o.shouldDispatchPlanHTTP() {
 		plannerPrompt := o.plannerPromptFor(task, &project)
-		if err := o.spawnPlannerContainer(task, plannerPrompt); err != nil {
-			return fmt.Errorf("process planning: spawn planner container: %w", err)
+		if err := o.spawnPlannerHTTP(task, &project, plannerPrompt); err != nil {
+			return fmt.Errorf("process planning: dispatch plan http: %w", err)
 		}
-		o.logger.Info("planner container dispatched", "task_id", task.ID)
+		o.logger.Info("planner http: dispatched", "task_id", task.ID)
 		return nil
 	}
 
