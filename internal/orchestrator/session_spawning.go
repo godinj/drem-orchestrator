@@ -266,6 +266,49 @@ func (o *Orchestrator) SpawnFixerSession(taskID uuid.UUID) (string, error) {
 		}
 	}
 
+	// Container-mode dispatch: when o.Spawner is wired, route the
+	// fixer through spawnFixer. Diagnosis / AffectedFiles /
+	// SuggestedFix plumbing into the container-path prompt is
+	// tracked as plans/phase-3.5-subtask-dispatch-migration.md
+	// §"Open questions" Q2 — ship the dispatch-migration first,
+	// plumb the context fields second. The T3 canary's fixer spawn
+	// scenario only needs the subtask title/description in the
+	// rendered prompt, which buildSpawnContext provides by default.
+	// See plans/phase-3.5-subtask-dispatch-migration.md Commit 4.
+	if o.Spawner != nil {
+		if err := o.spawnFixer(context.Background(), &task); err != nil {
+			return "", fmt.Errorf("spawn fixer via spawner: %w", err)
+		}
+		if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+			return "", fmt.Errorf("spawn fixer: reload task: %w", err)
+		}
+		if task.AssignedAgentID == nil {
+			return "", fmt.Errorf("spawn fixer: no agent assignment after container spawn")
+		}
+		var ag model.Agent
+		if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err != nil {
+			return "", fmt.Errorf("spawn fixer: load agent after spawn: %w", err)
+		}
+		// Record fixer spawn metric. The legacy path reads the parent
+		// agent (the originating agent whose work triggered the fixer)
+		// to tag the metric with parent_model. In container mode the
+		// AssignedAgentID was overwritten by recordContainerOnAgent to
+		// point at the new fixer agent — the parent-model label here
+		// records the fixer's image rather than the originator's
+		// model. An accurate parent_model label requires reading the
+		// previous AssignedAgentID before spawnFixer overrides it;
+		// tracked as a follow-up on §Open questions Q2.
+		if o.metrics != nil {
+			o.metrics.Record(ag.ID, "fixer_spawn", 1.0, map[string]string{
+				"parent_model": ag.ModelID,
+			})
+		}
+		o.emit("fixer_spawned", map[string]any{"task_id": taskID, "agent_id": ag.ID})
+		o.logger.Info("fixer spawned via spawner",
+			"task_id", taskID, "agent_id", ag.ID)
+		return ag.TmuxSession, nil
+	}
+
 	// Generate prompt.
 	comments, _ := o.GetComments(task.ID)
 	fixerPrompt := prompt.Generate(prompt.Opts{
