@@ -180,6 +180,21 @@ permanent again.
   are tightly bound to upstream code that moves often.
 - **CI smoke build** would catch lock drift earlier, but requires a
   GPU runner. Out of scope until the project has GPU CI.
+- **`gq healthz` subcommand.** gq's Docker image is distroless/static
+  (`gcr.io/distroless/static-debian12:nonroot`) — no shell, no wget, no
+  curl — so compose-level healthchecks (`CMD-SHELL ...`) always fail.
+  Current state: gq has no healthcheck; liveness relies on
+  `restart: unless-stopped` and external `/metrics` polling. Clean fix
+  is to add a `gq healthz` subcommand to `cmd/gq` that dials
+  `GQ_METRICS_ADDR/metrics` over loopback, exits 0 on 200, 1 otherwise,
+  then wire compose healthcheck as `["CMD", "/usr/local/bin/gq", "healthz"]`.
+  A plain `CMD` (not `CMD-SHELL`) runs directly in the distroless image.
+- **sglang healthcheck: use curl, not wget.** The `:devel` base ships
+  curl, not wget. A wget-based healthcheck flips the container to
+  `(unhealthy)` even when sglang serves 200s, which then blocks any
+  downstream service with `depends_on: service_healthy` (e.g. gq).
+  Current compose uses `curl -fsS http://localhost:8081/v1/models`.
+  Do not revert to wget without first installing it in the Dockerfile.
 
 ## Build attempt history
 
@@ -191,8 +206,23 @@ permanent again.
 | 4 | `f43a11c` | BUILD OK; container boot FAIL | Compose `command:` duplicated the image's ENTRYPOINT tokens → `sglang serve: error: unrecognized arguments: python -m sglang.launch_server` | Trim compose `command:` to args only (commit `16b2503`) |
 | 5 | `16b2503` | BUILD cached; container boot FAIL | `ImportError: libnuma.so.1: cannot open shared object file` — sglang-kernel dlopens libnuma at import time | Add `libnuma1` to apt layer (commit `4d93ed8`) |
 | 6 | `4d93ed8` | BUILD OK; container boot FAIL | `ValueError: Couldn't instantiate the backend tokenizer` — model dir `gemma-4-26B-A4B-it-AWQ-4bit-textonly/` had absolute symlinks to `/home/godinj/models/gemma-4-26B-A4B-it-AWQ-4bit/*`; inside container `/models` mount made those dangle | Host-side fix: rewrite symlinks as relative (`../gemma-4-26B-A4B-it-AWQ-4bit/*`). No image change. |
-| 7 | `4d93ed8` | BUILD cached; container boot FAIL | `RuntimeError: ninja exited with status 127` — sglang JIT-compiles `gptq_marlin_repack` CUDA kernel at first AWQ load; `:runtime` base image ships CUDA libs but not `nvcc` | Switch base from `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04` to `:devel` variant (this commit) |
-| 8 | pending | — | — | — |
+| 7 | `4d93ed8` | BUILD cached; container boot FAIL | `RuntimeError: ninja exited with status 127` — sglang JIT-compiles `gptq_marlin_repack` CUDA kernel at first AWQ load; `:runtime` base image ships CUDA libs but not `nvcc` | Switch base from `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04` to `:devel` variant (commit `1c16a8d`) |
+| 8 | `1c16a8d` | BUILD OK (11.4 GB); container boot OK; **server LIVE**. Healthcheck marks container `(unhealthy)` — false positive | `:devel` base has curl but not wget; compose healthcheck used `wget -qO-` | Swap compose healthcheck to `curl -fsS` (this commit). No rebuild needed. |
+
+### End-to-end validation (2026-04-20 02:33Z)
+
+After fix #8, gq was brought up with `--no-deps` (so it wouldn't block
+on the still-in-flight sglang healthcheck flip). Probe:
+
+```bash
+curl -sS http://127.0.0.1:8090/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"gemma4-26b","messages":[{"role":"user","content":"Say OK."}],"max_tokens":10,"temperature":0}'
+```
+
+Returned a valid OpenAI-shaped chat completion with `"content":"OK."`,
+`finish_reason:"stop"`, 3 completion tokens, round-trip < 1.5s.
+**Full stack containerized: gq → sglang → gemma4-26b end-to-end.**
 
 ## Model directory symlink gotcha (single-machine install-time fix)
 

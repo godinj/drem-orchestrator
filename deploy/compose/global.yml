@@ -130,7 +130,10 @@ services:
       drem.scope: "global"
       drem.service: "sglang"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8081/v1/models || exit 1"]
+      # Image base is sglang:devel (CUDA toolchain incl. curl). wget is NOT
+      # installed in :devel — using wget here flips the container to
+      # (unhealthy) even when the server is serving 200s. Use curl instead.
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8081/v1/models >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -173,12 +176,14 @@ services:
     labels:
       drem.scope: "global"
       drem.service: "gq"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8091/metrics >/dev/null || exit 1"]
-      interval: 15s
-      timeout: 5s
-      retries: 3
-      start_period: 10s
+    # NOTE: no healthcheck. The gq runtime image is distroless/static
+    # (gcr.io/distroless/static-debian12:nonroot) — no shell, no wget, no curl.
+    # A CMD-SHELL healthcheck would fail immediately; a plain CMD needs an
+    # executable in the image, which means either (a) switching off distroless
+    # or (b) adding a `gq healthz` subcommand to the Go binary and running
+    # `CMD ["/usr/local/bin/gq", "healthz"]`. (b) is the clean fix — tracked in
+    # plans/sglang-gemma4-followup.md "Open follow-ups". Until then we rely on
+    # `restart: unless-stopped` + the proxy's own /metrics surface for liveness.
 
   # ---------- Spawner: JSON-RPC Docker-socket gateway ----------
   # The only process in the stack mounted with the host Docker socket.
