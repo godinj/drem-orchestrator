@@ -230,6 +230,48 @@ services:
       drem.scope: global
       drem.service: kyle
 
+  # ---------- drem-classifier: warm direct-classifier ----------
+  # Serves POST /classify for orch when [agents.classifier].endpoint is set
+  # in a project's drem.toml. Single replica, stateless — the binary just
+  # wraps agent.Classify behind an HTTP surface and forwards upstream to gq.
+  # See plans/warm-direct-classifier.md for the design.
+  #
+  # Resolves upstream by compose service name (gq:8090). Not published to
+  # any host port: orch reaches it via drem-net as http://drem-classifier:8090.
+  # Healthcheck probes /healthz, which in turn probes gq — so an unhealthy
+  # classifier container means either the binary is down or gq can't be
+  # reached.
+  drem-classifier:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/classifier.Dockerfile
+    image: localhost:5000/drem-classifier:latest
+    container_name: drem-classifier
+    restart: unless-stopped
+    networks:
+      - drem-net
+    environment:
+      DREM_CLASSIFIER_LISTEN: ":8090"
+      DREM_CLASSIFIER_UPSTREAM: "http://gq:8090/v1/chat/completions"
+      DREM_CLASSIFIER_MODEL: "${DREM_CLASSIFIER_MODEL:-gemma4-26b}"
+      DREM_CLASSIFIER_TIMEOUT: "${DREM_CLASSIFIER_TIMEOUT:-60s}"
+      # Bearer token shared with orch — same convention as merger and
+      # csuite-watcher. Empty on dev hosts without agentmon; the binary
+      # falls open on missing-token when the env is unset.
+      DREM_AGENTMON_TOKEN: "${DREM_AGENTMON_TOKEN:-}"
+    depends_on:
+      sglang:
+        condition: service_healthy
+    labels:
+      drem.scope: "global"
+      drem.service: "drem-classifier"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8090/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # ---------- docker-query-proxy: narrow Docker-socket gateway for Kyle ----------
   # Exposes an allowlisted HTTP API (GET /containers, GET /containers/:id,
   # GET /containers/:id/logs) over the host Docker socket. Kyle calls this
