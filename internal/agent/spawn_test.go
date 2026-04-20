@@ -69,6 +69,7 @@ func TestManager_Spawn_PopulatesParamsAndHandle(t *testing.T) {
 		Branch:     "feature/x",
 		Env:        map[string]string{"FOO": "bar"},
 		CredsMount: "/host/home/.claude/.credentials.json",
+		PromptPath: "/host/home/.drem/projects/demo/prompts/task-42.md",
 	})
 	if err != nil {
 		t.Fatalf("Spawn: unexpected error: %v", err)
@@ -122,6 +123,12 @@ func TestManager_Spawn_PopulatesParamsAndHandle(t *testing.T) {
 	// read-only bind mount at /home/drem/.claude/.credentials.json.
 	if p.CredsMount != "/host/home/.claude/.credentials.json" {
 		t.Errorf("params.CredsMount = %q, want /host/home/.claude/.credentials.json", p.CredsMount)
+	}
+	// PromptPath on the request becomes PromptMount on the spawner
+	// params so the spawner can bind-mount it read-only at
+	// /home/drem/.drem/prompt.md. See plans/worker-prompt-delivery.md §3.
+	if p.PromptMount != "/host/home/.drem/projects/demo/prompts/task-42.md" {
+		t.Errorf("params.PromptMount = %q, want /host/home/.drem/projects/demo/prompts/task-42.md", p.PromptMount)
 	}
 
 	// DB row got container id + image in Config.

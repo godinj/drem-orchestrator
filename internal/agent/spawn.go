@@ -36,7 +36,12 @@ import (
 // CredsMount mirrors spawner.SpawnWorkerParams.CredsMount: when
 // non-empty, it is a host path the spawner bind-mounts read-only at
 // /home/drem/.claude/.credentials.json so a claude-harness worker can
-// read the operator's subscription credentials.
+// read the operator's subscription credentials. PromptMount mirrors
+// spawner.SpawnWorkerParams.PromptMount: when non-empty, it is a host
+// file path the spawner bind-mounts read-only at
+// /home/drem/.drem/prompt.md and wires into the worker's env as
+// DREM_PROMPT_PATH so worker-entrypoint.sh exec's claude against it.
+// See plans/worker-prompt-delivery.md §3.
 type WorkerSpawnParams struct {
 	Project       string
 	AgentType     string
@@ -47,6 +52,7 @@ type WorkerSpawnParams struct {
 	Env           map[string]string
 	BareRepoMount string
 	CredsMount    string
+	PromptMount   string
 }
 
 // WorkerSpawnResult mirrors spawner.SpawnWorkerResult. Keeping the mirror
@@ -253,6 +259,15 @@ func (m *Manager) Spawn(ctx context.Context, req SpawnRequest) (*Handle, error) 
 		Env:           req.Env,
 		BareRepoMount: req.BareRepoMount,
 		CredsMount:    req.CredsMount,
+		// PromptPath is the host path orch wrote; it becomes
+		// WorkerSpawnParams.PromptMount which the spawner bind-mounts
+		// read-only at /home/drem/.drem/prompt.md. The field is
+		// separately named on SpawnRequest (PromptPath) because callers
+		// of Manager.Spawn reason about "the file they wrote on host",
+		// whereas the spawner's end reasons about "the bind-mount
+		// source". Same path, two vocabularies. See
+		// plans/worker-prompt-delivery.md §3.
+		PromptMount: req.PromptPath,
 	}
 
 	res, err := m.spawner.SpawnWorker(ctx, params)

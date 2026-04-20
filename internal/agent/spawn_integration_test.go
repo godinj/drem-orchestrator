@@ -33,6 +33,7 @@ func (a *rpcAdapter) SpawnWorker(ctx context.Context, p WorkerSpawnParams) (Work
 		Env:           p.Env,
 		BareRepoMount: p.BareRepoMount,
 		CredsMount:    p.CredsMount,
+		PromptMount:   p.PromptMount,
 	})
 	if err != nil {
 		return WorkerSpawnResult{}, err
