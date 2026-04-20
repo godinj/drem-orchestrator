@@ -50,6 +50,11 @@ RUN apt-get update \
          ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+# The merger clones / pushes against a bare repo bind-mounted from the host
+# (operator UID) into this root-owned container. Git 2.35+ blocks cross-UID
+# repository access unless safe.directory lists it. See orch.Dockerfile.
+RUN git config --system --add safe.directory '*'
+
 COPY --from=build /out/drem-merger /usr/local/bin/drem-merger
 
 # /work is the ephemeral clone workspace; /bare is the bind-mounted bare

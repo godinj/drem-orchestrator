@@ -50,6 +50,13 @@ RUN apt-get update \
          tini \
     && rm -rf /var/lib/apt/lists/*
 
+# The bare repo is bind-mounted from the host (owned by the operator's UID,
+# typically 1000) into this root-owned container. Git 2.35+ refuses cross-UID
+# repository access unless safe.directory lists it; setting it system-wide to
+# "*" bypasses the check for every mount. This is safe because the container
+# is operator-scoped — nothing inside it belongs to another principal.
+RUN git config --system --add safe.directory '*'
+
 COPY --from=build /out/drem /usr/local/bin/drem
 
 # The orchestrator expects /var/lib/drem (volume-mounted by the per-project

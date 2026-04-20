@@ -28,7 +28,11 @@ services:
     volumes:
       - drem-{{.ProjectName}}-db:/var/lib/drem
       - drem-{{.ProjectName}}-prompts:/var/lib/drem/prompts
-      - {{.BareRepoPath}}:/bare:rw
+      # Bind-mount the bare repo at its HOST-identical path so DREM_BARE_REPO
+      # (which is a host path) resolves inside the container. Mounting at a
+      # different target ("/bare") broke `git worktree list` because the repo
+      # env var and the mount target disagreed.
+      - {{.BareRepoPath}}:{{.BareRepoPath}}:rw
       - drem-spawner-sock:/var/run/drem:ro{{if .DevMode}}
       - {{.RepoSourcePath}}:/src:ro{{end}}
     networks: [drem-net]

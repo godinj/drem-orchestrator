@@ -151,6 +151,26 @@ func TestRender_CppTemplateSwapsWorkerImage(t *testing.T) {
 	require.NotContains(t, s, "drem-worker-go")
 }
 
+// TestRender_BareRepoMountIsPathIdentical asserts that the bare repo is
+// bind-mounted at its HOST-identical path (host:/home/op/foo.git →
+// container:/home/op/foo.git) rather than at a fixed target like /bare.
+// The orchestrator passes DREM_BARE_REPO as a host path; mounting it at a
+// different target inside the container used to break `git worktree list`
+// because the env var and the mount target disagreed.
+func TestRender_BareRepoMountIsPathIdentical(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.BareRepoPath = "/home/dev/git/drem-orchestrator.git"
+
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	s := string(out)
+
+	require.Contains(t, s, "/home/dev/git/drem-orchestrator.git:/home/dev/git/drem-orchestrator.git:rw",
+		"bare repo must bind-mount at the host-identical path")
+	require.NotContains(t, s, ":/bare:rw",
+		"the legacy /bare target must not regress — it breaks git inside orch")
+}
+
 // TestRender_DevModeBindsSource asserts that DevMode=true emits a
 // /src bind-mount under the orchestrator service.
 func TestRender_DevModeBindsSource(t *testing.T) {

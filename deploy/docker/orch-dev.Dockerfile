@@ -24,6 +24,11 @@ RUN apt-get update \
          libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Bind-mounted bare repos come in as the operator's UID; the container runs
+# as root. Git 2.35+ blocks cross-UID repository access unless safe.directory
+# lists it. Match orch.Dockerfile.
+RUN git config --system --add safe.directory '*'
+
 # Preload module cache so the first `go build` after bind-mount is fast.
 WORKDIR /src
 COPY go.mod go.sum ./
