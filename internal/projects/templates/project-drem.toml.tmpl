@@ -45,6 +45,14 @@ log_path       = "/var/lib/drem/drem.log"
 # ~/.claude/.credentials.json from the host read-only. Operator must
 # have run `claude login` on host before `docker compose up`. NO
 # ANTHROPIC_API_KEY passthrough — see plan §1.
+#
+# The same subscription-only policy covers every claude-backed worker
+# (coder/reviewer/fixer/tester/supervisor). Each claude worker gets
+# the creds file bind-mounted into its ephemeral container at
+# /home/drem/.claude/.credentials.json via the DREM_WORKER_CREDS_PATH
+# env var on orch (defined in the compose sibling of this file). One
+# `claude login` on host covers the entire agent fleet. See
+# plans/worker-subscription-auth.md.
 [agents.planner]
   provider = "claude"
   model    = "claude-opus-4-6"

@@ -40,6 +40,13 @@ services:
       # plans/warm-planner-pivot.md §§2-4. Subscription-only auth (no
       # API-key env passthrough anywhere in this generated compose).
       DREM_PLANNER_URL: "http://drem-planner:8090/plan"
+      # Host path of the operator's Claude subscription credentials
+      # file. Orch forwards this into every claude-backed worker spawn
+      # as SpawnWorkerParams.CredsMount; the spawner bind-mounts it
+      # read-only at /home/drem/.claude/.credentials.json inside the
+      # worker. Subscription-only auth — no API-key fallback. See
+      # plans/worker-subscription-auth.md §§1, 6.
+      DREM_WORKER_CREDS_PATH: "{{.WorkerCredsPath}}"
     volumes:
       - drem-{{.ProjectName}}-db:/var/lib/drem
       - drem-{{.ProjectName}}-prompts:/var/lib/drem/prompts

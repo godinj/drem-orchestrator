@@ -65,6 +65,20 @@ type TemplateData struct {
 	// defaults to <homeDir>/.drem/projects/<name>/drem.toml when the
 	// caller goes through projectPaths.
 	ConfigFilePath string
+	// HostHome is the host operator's home directory ($HOME on host).
+	// Used to derive the default WorkerCredsPath when the caller does
+	// not set it explicitly. Populated by applyDefaults from
+	// os.UserHomeDir() when empty so Render callers don't have to know
+	// about it. See plans/worker-subscription-auth.md §6 commit 6.
+	HostHome string
+	// WorkerCredsPath is the host path of the operator's Claude
+	// subscription credentials file, passed to orch via the
+	// DREM_WORKER_CREDS_PATH env var. Orch forwards it into every
+	// claude-backed worker spawn as SpawnWorkerParams.CredsMount. The
+	// spawner pre-checks the path exists before creating the container
+	// so a missing file fails closed with a clear error. Defaults to
+	// HostHome/.claude/.credentials.json when empty.
+	WorkerCredsPath string
 }
 
 // Default image tags for the orchestrator.
@@ -120,6 +134,20 @@ func applyDefaults(data *TemplateData) {
 	}
 	if data.OrchHostPort == 0 {
 		data.OrchHostPort = DefaultOrchHostPort
+	}
+	// HostHome + WorkerCredsPath: derive from os.UserHomeDir on the
+	// operator's host at render time. `drem project register` runs on
+	// host, so $HOME here is the operator's home — not the orch
+	// container's /root. This is the whole reason HostHome is a
+	// template field rather than something orch introspects at
+	// runtime. See plans/worker-subscription-auth.md §6 commit 6.
+	if data.HostHome == "" {
+		if h, err := os.UserHomeDir(); err == nil {
+			data.HostHome = h
+		}
+	}
+	if data.WorkerCredsPath == "" && data.HostHome != "" {
+		data.WorkerCredsPath = filepath.Join(data.HostHome, ".claude", ".credentials.json")
 	}
 }
 

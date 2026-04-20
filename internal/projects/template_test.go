@@ -163,6 +163,64 @@ func TestRender_OrchDoesNotForwardAnthropicAPIKey(t *testing.T) {
 		"compose must NOT forward ANTHROPIC_API_KEY (subscription-only auth per plan §1)")
 }
 
+// TestRender_WorkerCredsPathIsWired asserts the orch env declares
+// DREM_WORKER_CREDS_PATH with a non-empty value. Orch forwards this
+// into every claude-backed worker spawn as SpawnWorkerParams.CredsMount.
+// See plans/worker-subscription-auth.md §6 commit 6.
+func TestRender_WorkerCredsPathIsWired(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	s := string(out)
+	require.Contains(t, s, "DREM_WORKER_CREDS_PATH",
+		"orch env must declare DREM_WORKER_CREDS_PATH so it can CredsMount claude workers")
+	require.Contains(t, s, "/home/operator/.claude/.credentials.json",
+		"the rendered path must derive from HostHome")
+
+	// Parse the YAML and assert the value shape explicitly, independent
+	// of the legacy-regression ANTHROPIC_API_KEY check.
+	var parsed struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+	got := parsed.Services["orch"].Environment["DREM_WORKER_CREDS_PATH"]
+	require.Equal(t, "/home/operator/.claude/.credentials.json", got)
+	// The negative check from TestRender_OrchDoesNotForwardAnthropicAPIKey
+	// still holds under the new key.
+	require.NotContains(t, s, "ANTHROPIC_API_KEY")
+}
+
+// TestRender_WorkerCredsPathDefaultsFromHostHome asserts applyDefaults
+// fills in WorkerCredsPath from HostHome when both are zero-value.
+// HostHome itself is populated from os.UserHomeDir — we set it
+// explicitly here to avoid a dependency on $HOME in test.
+func TestRender_WorkerCredsPathDefaultsFromHostHome(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/root"
+	// Caller leaves WorkerCredsPath zero; applyDefaults fills it.
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "/root/.claude/.credentials.json")
+}
+
+// TestRender_WorkerCredsPathExplicitOverride asserts a caller-supplied
+// WorkerCredsPath wins over the HostHome-derived default.
+func TestRender_WorkerCredsPathExplicitOverride(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	data.WorkerCredsPath = "/etc/drem/shared-creds/.credentials.json"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	s := string(out)
+	require.Contains(t, s, "/etc/drem/shared-creds/.credentials.json")
+	require.NotContains(t, s, "/home/operator/.claude/.credentials.json",
+		"explicit WorkerCredsPath must override the HostHome default")
+}
+
 // TestRender_PlannerURLIsWired asserts the orch env declares
 // DREM_PLANNER_URL pointing at the warm drem-planner container. This is
 // the replacement for the deleted planner-template stub: orch now POSTs
