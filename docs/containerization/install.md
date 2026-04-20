@@ -547,6 +547,83 @@ the read-only flag set. The worker's `worker-base` image pre-creates
 auto-create the parent as root and block the claude CLI's own writes
 to `~/.claude/` (session state, project caches).
 
+##### Worker prompt delivery — how the coder sees its task
+
+Subscription auth gets a worker container into a state where the
+claude CLI can authenticate. It still needs something to DO. Prompt
+delivery is the companion mechanism: orch renders a per-task markdown
+prompt, writes it atomically to a host dir, and the spawner
+bind-mounts that one file into the worker.
+
+1. **Host prompt dir**, per project:
+
+   ```
+   ~/.drem/projects/<project>/prompts/
+       └── <task-uuid>.md      # one per task, written at spawn time
+   ```
+
+   `drem project register` pre-creates the directory. The per-project
+   compose renders `DREM_PROMPT_ROOT_HOST` on the `orch` service AND
+   bind-mounts the same host-identical path read-write so orch can
+   `os.WriteFile` into it.
+
+2. **Orch renders the prompt** inside `buildSpawnContext` via
+   `internal/prompt.Generate`, the same function the legacy host
+   runner uses. Content is task-specific: title, description, repo
+   map (if present), agent-type-specific instructions, per-phase TDD
+   guidance, prior comments, etc.
+
+3. **Atomic write:** orch writes `<task-uuid>.md.tmp` then
+   `rename(2)`s to `<task-uuid>.md`. The worker's spawn call cannot
+   race a partial file — rename is atomic within a filesystem, so
+   the file either does not exist or is complete.
+
+4. **Spawner bind-mounts read-only** at
+   `/home/drem/.drem/prompt.md` inside the worker and injects
+   `DREM_PROMPT_PATH=/home/drem/.drem/prompt.md` deterministically —
+   callers cannot regress the target by setting a conflicting env
+   key. `worker-base.Dockerfile` pre-creates `/home/drem/.drem` with
+   `drem:drem` ownership so the bind target's parent isn't
+   auto-created as root.
+
+5. **Worker entrypoint** reads the env var, execs claude:
+
+   ```bash
+   exec claude --dangerously-skip-permissions "$(cat /home/drem/.drem/prompt.md)"
+   ```
+
+   See `deploy/docker/context/worker-entrypoint.sh:132-160`.
+
+6. **Spawn-time validation** (workers only): orch passes the host
+   prompt path to drem-spawner on every SpawnWorker RPC; the spawner
+   `stat(2)`s the path before creating the container. A missing file
+   fails the spawn fast with a `worker_spawn_failed` event whose
+   `reason=prompt_render_failed` — no silent interactive-claude
+   fallback.
+
+7. **Artifact retention:** prompt files are NOT deleted on task
+   completion. They remain on host as post-mortem evidence
+   (`ls ~/.drem/projects/<project>/prompts/` shows every task that
+   spawned a worker). Operator may `rm -rf` between canary runs for a
+   clean slate; a future GC plan can wire this to task-terminal
+   transitions if size pressure emerges.
+
+Debug runbook — "the worker spawned but claude never got started":
+
+```bash
+# Is the prompt file actually on host?
+ls -la ~/.drem/projects/drem-orchestrator/prompts/
+
+# Is orch's view of the host root correct?
+docker exec drem-orchestrator-orch-1 env | grep DREM_PROMPT_ROOT_HOST
+
+# Is the file mounted inside the worker?
+docker inspect <worker-container-id> | jq '.[0].Mounts[]'
+
+# What did the entrypoint log say?
+docker logs <worker-container-id> | grep -E 'execing claude|interactive mode'
+```
+
 ##### Rotation and the already-running-worker caveat
 
 `claude login` on host refreshes the file in place. New worker spawns
