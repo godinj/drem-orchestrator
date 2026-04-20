@@ -352,6 +352,15 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		"DREM_AGENT":     agentType,
 		"DREM_BRANCH":    branch,
 		"DREM_WORKER_ID": workerID,
+		// worker-entrypoint.sh's "Environment contract" (see
+		// deploy/docker/context/worker-entrypoint.sh) requires
+		// DREM_AGENT_ID for watchdog heartbeats (--agent-id). Before
+		// this wiring the entrypoint died at startup with
+		// "required env var DREM_AGENT_ID is unset", preventing any
+		// container-mode worker from reaching the claude exec.
+		// Using workerID gives the watchdog a stable per-spawn
+		// identity that also matches orch's per-spawn accounting.
+		"DREM_AGENT_ID": workerID,
 	}
 
 	labels := map[string]string{
