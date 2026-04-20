@@ -3,8 +3,10 @@
 Status: **implementation in progress on worktree-agent-af401951, 2026-04-19.**
 Commits 1 (Dockerfile + entrypoint), 2 (spawner image mapping), 3
 (dispatchPlan + plan.json parse + validation), 4 (processPlanning
-provider-based routing), 5 (drem.toml planner defaults), and 6
-(planner-template compose image-prime stub) landed.
+provider-based routing), 5 (drem.toml planner defaults), 6
+(planner-template compose image-prime stub), and 7 (install.md
+spawn-on-demand agents section + ANTHROPIC_API_KEY compose
+passthrough) landed.
 
 **Revised from the earlier warm/direct-LLM draft after operator
 direction 2026-04-20: "planner should always be opus for now."**

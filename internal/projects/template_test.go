@@ -147,6 +147,23 @@ func TestRender_GoTemplateFull(t *testing.T) {
 	require.Equal(t, data.MergerImage, parsed.Services["merger-template"].Image)
 }
 
+// TestRender_OrchForwardsAnthropicAPIKey asserts the compose template
+// declares an ANTHROPIC_API_KEY env passthrough from the host shell
+// under the orch service. dispatchPlan's container path reads it from
+// os.Getenv at spawn time; without the passthrough the planner fails
+// closed on every invocation.
+func TestRender_OrchForwardsAnthropicAPIKey(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	s := string(out)
+	require.Contains(t, s, "ANTHROPIC_API_KEY",
+		"orch env block must declare ANTHROPIC_API_KEY")
+	require.Contains(t, s, `"${ANTHROPIC_API_KEY:-}"`,
+		"orch env must passthrough ANTHROPIC_API_KEY from host shell")
+}
+
 // TestRender_PlannerTemplatePrimesImage asserts the compose template
 // declares a planner-template service stub gated behind
 // profiles: ["never"], so `docker compose pull` primes the planner

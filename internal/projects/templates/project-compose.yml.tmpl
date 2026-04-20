@@ -33,6 +33,12 @@ services:
       # endpoint also declared in drem.toml [agents.classifier]; this env
       # var wins when both are set. See plans/warm-direct-classifier.md.
       DREM_CLASSIFIER_URL: "http://drem-classifier:8090/classify"
+      # Anthropic API key forwarded from the host shell. Required by
+      # dispatchPlan when it spawns per-task drem-planner containers
+      # against Anthropic Opus; orch fails closed (leaves task in
+      # PLANNING) when unset. Operator must `export ANTHROPIC_API_KEY=…`
+      # before `docker compose up`. See plans/warm-direct-planner.md §4.
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
     volumes:
       - drem-{{.ProjectName}}-db:/var/lib/drem
       - drem-{{.ProjectName}}-prompts:/var/lib/drem/prompts

@@ -126,7 +126,7 @@ curl -s 127.0.0.1:5000/v2/_catalog
 ### 4b — Remaining Go infra images
 
 ```bash
-for img in spawner agentmon kyle merger; do
+for img in spawner agentmon kyle merger planner; do
   docker build -f "deploy/docker/${img}.Dockerfile" \
       -t "localhost:5000/drem-${img}:latest" . \
     && docker push "localhost:5000/drem-${img}:latest" \
@@ -134,6 +134,12 @@ for img in spawner agentmon kyle merger; do
 done
 curl -s 127.0.0.1:5000/v2/_catalog
 ```
+
+Note: `drem-planner` is a non-Go image (it layers node + the
+`@anthropic-ai/claude-code` npm package on debian:bookworm-slim), but
+the build step is the same shape as the Go ones. See
+`deploy/docker/planner.Dockerfile` and
+`plans/warm-direct-planner.md` for the rationale.
 
 ### 4c — C-Suite personas + orchestrator images
 
@@ -224,7 +230,7 @@ compose-level `/healthz` check. Binary reads `DREM_CLASSIFIER_UPSTREAM`
 (defaulting to `http://gq:8090/v1/chat/completions`) and
 `DREM_AGENTMON_TOKEN` from its container env.
 
-After 4a–4f the registry catalog should list 19 repositories:
+After 4a–4f the registry catalog should list 20 repositories:
 
 ```
 drem-agentmon
@@ -237,6 +243,7 @@ drem-kyle
 drem-merger
 drem-orch
 drem-orch-dev
+drem-planner
 drem-sglang
 drem-spawner
 drem-worker-{base,cpp,go}
@@ -314,29 +321,96 @@ docker compose -f ~/.drem/projects/drem-orchestrator/compose.yml ps
 
 Expect: `orch`, `agentmon`, `csuite-watcher`, `csuite-{mike,alex,ross,seth}`.
 
-The merger image is *not* listed; the previous `merger-pool` warm
-replicas were removed because `drem-merger` is a per-task one-shot
-binary that crash-loops when run with no argv. The template still
-declares a `merger-template` stub gated behind `profiles: ["never"]`
-so `docker compose pull` primes the image.
+The merger AND planner images are *not* listed as running services;
+they both spawn on-demand per task. The template declares
+`merger-template` and `planner-template` stubs gated behind
+`profiles: ["never"]` so `docker compose pull` primes those images
+without running them.
 
-Spawn-on-demand wiring is now live (see
-`plans/merger-spawn-on-demand-impl.md`): when a task reaches
-`StatusMerging`, the orchestrator's `dispatchMerge` asks the spawner
-for a short-lived merger container with `/bare` mounted read-write
-and all six required flags (`--feature-branch`, `--project`,
-`--task-id`, `--test-cmd`, `--orch-url`, `--agentmon-token`) passed
-as argv. The container runs one merge, POSTs a `merge_result`
-record to `/internal/logs`, exits with a typed code (0=success,
-2=conflict, 3=tests-failed, 4=push-failed, 1=misc), and the spawner
-removes it on the Docker-event path. Watch for it with:
+### Spawn-on-demand agents
+
+Two agent roles run as short-lived per-task containers rather than
+warm pools: `merger` (one-shot Go binary that merges feature → main
+and pushes) and `planner` (one-shot claude-CLI container that writes
+`plan.json`). Both share the same spawner RPC path; the design and
+rationale are captured in `plans/merger-spawn-on-demand-impl.md` and
+`plans/warm-direct-planner.md`.
+
+**Merger.** When a task reaches `StatusMerging`, the orchestrator's
+`dispatchMerge` asks the spawner for a short-lived `drem-merger`
+container with `/bare` mounted read-write and all six required
+flags (`--feature-branch`, `--project`, `--task-id`, `--test-cmd`,
+`--orch-url`, `--agentmon-token`) passed as argv. The container
+runs one merge, POSTs a `merge_result` record to `/internal/logs`,
+exits with a typed code (0=success, 2=conflict, 3=tests-failed,
+4=push-failed, 1=misc), and the spawner removes it on the
+Docker-event path.
+
+**Planner.** When a task reaches `StatusPlanning` and the planner
+provider resolves to `claude` (the default in the generated
+drem.toml), the orchestrator's `dispatchPlan` asks the spawner for
+a short-lived `drem-planner` container with `/bare` mounted
+read-only, argv `--task-id / --branch / --prompt-file / --model /
+--effort`, and `ANTHROPIC_API_KEY` forwarded via env. The container
+clones the feature branch, runs the claude CLI in headless mode
+against the clone, writes `plan.json` to the worktree root, and
+exits. `dispatchPlan` reads plan.json back, validates it (subtasks
+non-empty, every `tests_for` / `dependencies` index valid, TDD
+pairing), and stores the result on the task so the next tick
+advances to `plan_review`.
+
+Exit codes per `plans/warm-direct-planner.md §7`: 0=success,
+1=cli_error, 2=precondition_failed, 124/137=timeout, other=unknown.
+Validation failures and `0 + missing plan.json` are surfaced via
+`PlanResult.FailureReason` so processPlanning can retry with
+feedback appended up to `MaxTotalPlannerSpawns`.
+
+Watch either role with:
 
 ```bash
 docker ps -a --filter label=drem.agent_type=merger
+docker ps -a --filter label=drem.agent_type=planner
 ```
 
-You should see exactly one entry per merged task, all in `Exited`
-state within seconds of completion.
+You should see exactly one entry per merged/planned task, all in
+`Exited` state within seconds (merger) or 60-180s (planner) of
+completion.
+
+#### ANTHROPIC_API_KEY plumbing
+
+The planner container calls out to `api.anthropic.com`, so the
+`ANTHROPIC_API_KEY` must reach the orch container's env. The chain is:
+
+1. Host operator exports `ANTHROPIC_API_KEY` in their shell (or sources
+   it from a secrets file). The key is *not* checked into any repo or
+   compose file.
+2. `deploy/compose/global.yml` does NOT hold a long-lived reference to
+   the key; every project's compose file (generated by `drem project
+   register`) forwards the host env into `orch` via a standard
+   docker-compose env passthrough.
+3. The orch process reads `os.Getenv("ANTHROPIC_API_KEY")` at
+   `dispatchPlan` time and populates `SpawnWorkerParams.Env` for the
+   planner container.
+4. Missing key → orch logs `planner_missing_api_key` and leaves the
+   task in `StatusPlanning` for the next tick. No planner container is
+   spawned (fail-closed).
+
+Operators bringing up the per-project stack must ensure the variable
+is in their shell environment before `docker compose up`:
+
+```bash
+# Before the per-project compose up:
+export ANTHROPIC_API_KEY="sk-ant-…"
+docker compose -f ~/.drem/projects/drem-orchestrator/compose.yml up -d
+```
+
+Verifying the key reached the orch container:
+
+```bash
+docker exec drem-orchestrator_orch_1 \
+    sh -c 'echo ${ANTHROPIC_API_KEY:+set} ${ANTHROPIC_API_KEY:-unset}'
+# expected: set
+```
 
 > The `csuite-watcher` service reads its bridge auth + listen + DB path from
 > `DREM_BEARER_TOKEN` / `DREM_LISTEN_ADDR` / `DREM_DB_PATH` env vars (see the
