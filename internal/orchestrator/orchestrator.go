@@ -653,6 +653,17 @@ func (o *Orchestrator) recoverStuckAgents() {
 			continue
 		}
 
+		// Container-mode agents don't share a host-visible worktree, so the
+		// idle-signal-file heuristic is moot for them. A container agent
+		// carries its container ID in TmuxSession (not a tmux session name)
+		// and typically has no WorktreePath set. Skip to avoid accidentally
+		// matching a stale .claude/agent-idle file if a host path was ever
+		// recorded. Container-mode stuck detection is handled by
+		// reconcileStuckAgents via the spawner's ListWorkers result.
+		if ag.TmuxSession != "" && !isLegacyTmuxSession(ag.TmuxSession) {
+			continue
+		}
+
 		// Grace period: skip agents that were recently spawned. This prevents
 		// a race where a stale idle signal file (from a previous agent in the
 		// same worktree) causes a freshly-spawned agent to be immediately
