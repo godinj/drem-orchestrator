@@ -1,12 +1,31 @@
 # Spawn-on-Demand Planner Container — Implementation Plan
 
-Status: **implementation in progress on worktree-agent-af401951, 2026-04-19.**
-Commits 1 (Dockerfile + entrypoint), 2 (spawner image mapping), 3
-(dispatchPlan + plan.json parse + validation), 4 (processPlanning
-provider-based routing), 5 (drem.toml planner defaults), 6
-(planner-template compose image-prime stub), and 7 (install.md
-spawn-on-demand agents section + ANTHROPIC_API_KEY compose
-passthrough) landed.
+Status: **implemented on worktree-agent-af401951, 2026-04-19.** All
+eight commits from §5 landed. Tests added:
+
+- `internal/spawner/images_test.go` — 3 (planner mapping,
+  merger-unchanged regression guard, unknown-type fallthrough).
+- `internal/orchestrator/plan_dispatch_test.go` — 10 (argv
+  composition, API key env forwarding, fail-closed on missing key,
+  read-only /bare mount, happy path, missing-plan-file,
+  plan_parse_error, empty-subtasks validation, out-of-range
+  tests_for, exit-code table).
+- `internal/orchestrator/plan_routing_test.go` — 7 (provider=claude
+  → container, empty-default → container, nil-spawner → legacy,
+  non-claude → legacy, spawn-plan + store, fail-closed on missing
+  key, validation-failure counter increment).
+- `internal/projects/config_template_test.go` — 1
+  (TestRenderConfig_PlannerPinsOpus).
+- `internal/projects/template_test.go` — 2
+  (TestRender_PlannerTemplatePrimesImage,
+  TestRender_OrchForwardsAnthropicAPIKey).
+
+23 new tests total; all pass under `go test -count=1 ./...`. Full repo
+build and vet clean. Awaiting review before master merge. Live build
+of `drem-planner:latest` deferred — Jon's sandbox lacked Docker; the
+Dockerfile and entrypoint script are committed and the recipe matches
+the verified shape of `merger.Dockerfile` plus the known-good
+`worker-base.Dockerfile` claude-CLI install.
 
 **Revised from the earlier warm/direct-LLM draft after operator
 direction 2026-04-20: "planner should always be opus for now."**

@@ -275,6 +275,7 @@ unexpected exit, resuming from the most recent pushed commit.
 - [ ] A worker can crash mid-task and be respawned; the respawned worker's first commit includes work up to the last watchdog push from the crashed container.
 - [x] A merge failure due to test failure is recorded as a structured event in the orchestrator DB and visible via the API. _(2026-04-19: exit-code routing in `executeMerge` maps tests_failed to `failTask` + `merge_tests_failed` event; the merger container POSTs the full `merge_result` record to `/internal/logs`. See `plans/merger-spawn-on-demand-impl.md`.)_
 - [x] A merge success deletes the feature branch in the bare repo. _(2026-04-19: merger binary already does this via `internal/merger/merger.go`; spawn-on-demand wiring in `dispatchMerge` makes the path reachable.)_
+- [x] Planner runs as a per-task container rather than a host-side OpenCode subprocess. _(2026-04-19: `dispatchPlan` spawns `drem-planner` via the spawner RPC when `[agents.planner].provider` resolves to `claude`; the container runs the claude CLI in headless mode against the feature worktree and writes `plan.json`. See `plans/warm-direct-planner.md` — same spawn-on-demand shape as merger, but read-only `/bare` and `ANTHROPIC_API_KEY` forwarded via env.)_
 - [ ] No host-side git worktree exists anywhere after this phase.
 
 ---
