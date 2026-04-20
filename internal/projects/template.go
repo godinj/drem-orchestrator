@@ -58,6 +58,13 @@ type TemplateData struct {
 	// RepoSourcePath is the absolute path to the orchestrator's own
 	// source tree (go.mod root). Only used when DevMode is true.
 	RepoSourcePath string
+	// ConfigFilePath is the absolute host-side path to the per-project
+	// drem.toml written by WriteProjectConfig. The compose template
+	// bind-mounts it read-only into the orch container at
+	// /var/lib/drem/drem.toml. Required for the direct-classifier path —
+	// defaults to <homeDir>/.drem/projects/<name>/drem.toml when the
+	// caller goes through projectPaths.
+	ConfigFilePath string
 }
 
 // Default image tags for the orchestrator.
@@ -120,51 +127,37 @@ func applyDefaults(data *TemplateData) {
 // $HOME/.drem/projects/<projectName>/compose.yml. Returns the absolute
 // path of the written file. projectName must match data.ProjectName.
 func WriteProjectCompose(projectName string, data TemplateData) (string, error) {
-	if projectName == "" {
-		return "", errors.New("projectName is required")
-	}
-	if data.ProjectName == "" {
-		data.ProjectName = projectName
-	}
-
-	rendered, err := Render(data)
-	if err != nil {
-		return "", err
-	}
-
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve home dir: %w", err)
-	}
-	dir := filepath.Join(home, ".drem", "projects", projectName)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create project dir %q: %w", dir, err)
-	}
-	path := filepath.Join(dir, "compose.yml")
-	if err := os.WriteFile(path, rendered, 0o644); err != nil {
-		return "", fmt.Errorf("write compose file %q: %w", path, err)
-	}
-	return path, nil
+	return WriteProjectComposeAt("", projectName, data)
 }
 
-// WriteProjectComposeAt is WriteProjectCompose but with an explicit home
-// directory override for tests and for the --home-dir CLI flag.
+// WriteProjectComposeAt is WriteProjectCompose with an explicit home
+// directory override for tests and for the --home-dir CLI flag. An empty
+// homeDir falls back to os.UserHomeDir.
 func WriteProjectComposeAt(homeDir, projectName string, data TemplateData) (string, error) {
 	if projectName == "" {
 		return "", errors.New("projectName is required")
 	}
-	if homeDir == "" {
-		return WriteProjectCompose(projectName, data)
-	}
 	if data.ProjectName == "" {
 		data.ProjectName = projectName
 	}
-
+	if homeDir == "" {
+		h, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("resolve home dir: %w", err)
+		}
+		homeDir = h
+	}
+	dir := filepath.Join(homeDir, ".drem", "projects", projectName)
+	// Fill in the drem.toml mount path before rendering so the compose
+	// template can bind-mount it. The toml file itself is produced by
+	// WriteProjectConfigAt; the paths must agree.
+	if data.ConfigFilePath == "" {
+		data.ConfigFilePath = filepath.Join(dir, configFilename)
+	}
 	rendered, err := Render(data)
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(homeDir, ".drem", "projects", projectName)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create project dir %q: %w", dir, err)
 	}

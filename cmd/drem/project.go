@@ -156,12 +156,20 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 	}
 
 	data := templateDataFor(p)
+	configPath, err := projects.WriteProjectConfigAt(*homeDir, p.Name, data)
+	if err != nil {
+		return fmt.Errorf("write drem.toml: %w", err)
+	}
+	// Plumb the config path into the compose render so the bind-mount
+	// target matches the file we just wrote.
+	data.ConfigFilePath = configPath
 	composePath, err := projects.WriteProjectComposeAt(*homeDir, p.Name, data)
 	if err != nil {
 		return fmt.Errorf("write compose file: %w", err)
 	}
 
 	fmt.Fprintf(stdout, "registered %q (language=%s)\n", p.Name, p.Language)
+	fmt.Fprintf(stdout, "drem.toml:    %s\n", configPath)
 	fmt.Fprintf(stdout, "compose file: %s\n", composePath)
 	return nil
 }

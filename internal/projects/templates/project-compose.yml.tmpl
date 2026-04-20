@@ -33,6 +33,11 @@ services:
       # different target ("/bare") broke `git worktree list` because the repo
       # env var and the mount target disagreed.
       - {{.BareRepoPath}}:{{.BareRepoPath}}:rw
+      # drem.toml is generated alongside this compose file and mounted into
+      # the orch CWD so LoadConfig finds it. Enables direct-classifier and
+      # points the direct-tool endpoint at gq on drem-net. Path is absolute
+      # because docker compose does not expand ~.
+      - {{.ConfigFilePath}}:/var/lib/drem/drem.toml:ro
       - drem-spawner-sock:/var/run/drem:ro{{if .DevMode}}
       - {{.RepoSourcePath}}:/src:ro{{end}}
     networks: [drem-net]
