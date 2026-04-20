@@ -25,7 +25,13 @@ import "time"
 // the container's argv — empty leaves the image's ENTRYPOINT/CMD
 // unchanged; populated it replaces CMD exactly, letting orchestrator
 // callers pass per-invocation flags (for example the merger's
-// --feature-branch / --task-id / --orch-url pairs).
+// --feature-branch / --task-id / --orch-url pairs). CredsMount, when
+// non-empty, is a host path bind-mounted read-only at
+// /home/drem/.claude/.credentials.json so the worker's claude CLI can
+// read the host operator's subscription credentials; the spawner
+// pre-checks the host path exists before creating the container and
+// fails SpawnWorker fast if it does not. Leave empty for agent types
+// that do not run claude (notably merger, which is a Go binary).
 type SpawnWorkerParams struct {
 	Project           string            `json:"project"`
 	AgentType         string            `json:"agent_type"`
@@ -37,6 +43,7 @@ type SpawnWorkerParams struct {
 	BareRepoMount     string            `json:"bare_repo_mount,omitempty"`
 	BareRepoReadWrite bool              `json:"bare_repo_read_write,omitempty"`
 	Cmd               []string          `json:"cmd,omitempty"`
+	CredsMount        string            `json:"creds_mount,omitempty"`
 }
 
 // SpawnWorkerResult is the return value of SpawnWorker. ContainerID is

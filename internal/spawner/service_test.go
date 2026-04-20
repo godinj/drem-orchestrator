@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -180,6 +181,81 @@ func TestService_SpawnWorker_BareRepoReadWriteFlipsMount(t *testing.T) {
 	require.Len(t, spawns[1].Spec.Mounts, 1)
 	require.False(t, spawns[1].Spec.Mounts[0].ReadOnly,
 		"second spawn with BareRepoReadWrite=true must be read-write")
+}
+
+// TestService_SpawnWorker_CredsMountProducesReadOnlyFileMount verifies
+// that a populated CredsMount translates into a read-only bind mount at
+// /home/drem/.claude/.credentials.json with the caller-supplied host
+// path as the source. See plans/worker-subscription-auth.md §3.
+func TestService_SpawnWorker_CredsMountProducesReadOnlyFileMount(t *testing.T) {
+	fake, client, cleanup := startHarness(t)
+	defer cleanup()
+
+	// Pre-create the creds file on disk; SpawnWorker stats it fail-closed.
+	credsPath := filepath.Join(t.TempDir(), ".credentials.json")
+	require.NoError(t, os.WriteFile(credsPath, []byte("{}"), 0o600))
+
+	_, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
+		Project:       "drem-orch",
+		AgentType:     "coder",
+		WorkerID:      "w-1",
+		Branch:        "feature/x",
+		Labels:        map[string]string{"drem.language": "go"},
+		BareRepoMount: "/host/bare",
+		CredsMount:    credsPath,
+	})
+	require.NoError(t, err)
+
+	var spawn *container.Call
+	for _, c := range fake.Calls() {
+		if c.Op == "Spawn" {
+			call := c
+			spawn = &call
+			break
+		}
+	}
+	require.NotNil(t, spawn, "expected a Spawn call")
+
+	// Both mounts in the expected order: /bare first, creds second.
+	require.Len(t, spawn.Spec.Mounts, 2)
+	require.Equal(t, container.Mount{
+		Source:   "/host/bare",
+		Target:   "/bare",
+		ReadOnly: true,
+	}, spawn.Spec.Mounts[0])
+	require.Equal(t, container.Mount{
+		Source:   credsPath,
+		Target:   "/home/drem/.claude/.credentials.json",
+		ReadOnly: true,
+	}, spawn.Spec.Mounts[1])
+}
+
+// TestService_SpawnWorker_CredsMountMissingFileFails verifies the
+// fail-closed pre-flight check: when the caller passes a CredsMount
+// that does not exist on host, SpawnWorker returns an error without
+// creating the container.
+func TestService_SpawnWorker_CredsMountMissingFileFails(t *testing.T) {
+	fake, client, cleanup := startHarness(t)
+	defer cleanup()
+
+	missing := filepath.Join(t.TempDir(), "does-not-exist", ".credentials.json")
+
+	_, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
+		Project:    "drem-orch",
+		AgentType:  "coder",
+		WorkerID:   "w-1",
+		Branch:     "feature/x",
+		Labels:     map[string]string{"drem.language": "go"},
+		CredsMount: missing,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "creds file not found")
+	require.Contains(t, err.Error(), "claude login")
+
+	// No Spawn call reached the runtime — pre-flight rejected.
+	for _, c := range fake.Calls() {
+		require.NotEqual(t, "Spawn", c.Op, "runtime must not be called when creds file is missing")
+	}
 }
 
 func TestService_SpawnWorker_ExplicitImageOverride(t *testing.T) {

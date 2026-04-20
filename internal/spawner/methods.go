@@ -3,6 +3,7 @@ package spawner
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/container"
@@ -17,6 +18,12 @@ const defaultNetwork = "drem-net"
 // each worker. Workers clone from /bare into container-local storage;
 // nothing ever writes back to the mount.
 const bareRepoMountPath = "/bare"
+
+// credsMountPath is where the host operator's Claude subscription
+// credentials file is bind-mounted inside a claude-harness worker.
+// Chosen to match the default $HOME/.claude/.credentials.json path so
+// the claude CLI resolves it without CLAUDE_CONFIG_DIR gymnastics.
+const credsMountPath = "/home/drem/.claude/.credentials.json"
 
 // SpawnWorker builds a Spec, creates the container, and records it in the
 // in-memory registry. The three identifying labels (project, agent_type,
@@ -50,6 +57,24 @@ func (s *Service) SpawnWorker(ctx context.Context, p SpawnWorkerParams) (SpawnWo
 			Source:   p.BareRepoMount,
 			Target:   bareRepoMountPath,
 			ReadOnly: !p.BareRepoReadWrite,
+		})
+	}
+	if p.CredsMount != "" {
+		// Fail-closed: subscription auth requires the credentials file
+		// to exist on host. A missing file surfaces here as a clear
+		// SpawnWorker error rather than an opaque claude CLI prompt
+		// inside the container.
+		if _, err := os.Stat(p.CredsMount); err != nil {
+			return SpawnWorkerResult{}, fmt.Errorf(
+				"creds file not found at %s: run `claude login` on host: %w",
+				p.CredsMount, err)
+		}
+		// Read-only: workers must not overwrite the host operator's
+		// creds. OAuth refresh happens on host via `claude login`.
+		mounts = append(mounts, container.Mount{
+			Source:   p.CredsMount,
+			Target:   credsMountPath,
+			ReadOnly: true,
 		})
 	}
 
