@@ -49,12 +49,13 @@ func (s *Service) SpawnWorker(ctx context.Context, p SpawnWorkerParams) (SpawnWo
 		mounts = append(mounts, container.Mount{
 			Source:   p.BareRepoMount,
 			Target:   bareRepoMountPath,
-			ReadOnly: true,
+			ReadOnly: !p.BareRepoReadWrite,
 		})
 	}
 
 	spec := container.Spec{
 		Image:   image,
+		Cmd:     p.Cmd,
 		Env:     p.Env,
 		Labels:  labels,
 		Mounts:  mounts,

@@ -19,17 +19,24 @@ import "time"
 // "drem.language", which steers coder image selection). Image is an
 // explicit override; when empty the spawner resolves the image from the
 // agent-type → image table in images.go. Env passes through to the
-// container. BareRepoMount, when non-empty, is bind-mounted read-only at
-// /bare so the worker can clone from it without network access.
+// container. BareRepoMount, when non-empty, is bind-mounted at /bare so
+// the worker can clone from it. By default the mount is read-only; set
+// BareRepoReadWrite to true for per-task mergers that must push. Cmd is
+// the container's argv — empty leaves the image's ENTRYPOINT/CMD
+// unchanged; populated it replaces CMD exactly, letting orchestrator
+// callers pass per-invocation flags (for example the merger's
+// --feature-branch / --task-id / --orch-url pairs).
 type SpawnWorkerParams struct {
-	Project       string            `json:"project"`
-	AgentType     string            `json:"agent_type"`
-	WorkerID      string            `json:"worker_id"`
-	Branch        string            `json:"branch"`
-	Labels        map[string]string `json:"labels,omitempty"`
-	Image         string            `json:"image,omitempty"`
-	Env           map[string]string `json:"env,omitempty"`
-	BareRepoMount string            `json:"bare_repo_mount,omitempty"`
+	Project           string            `json:"project"`
+	AgentType         string            `json:"agent_type"`
+	WorkerID          string            `json:"worker_id"`
+	Branch            string            `json:"branch"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	Image             string            `json:"image,omitempty"`
+	Env               map[string]string `json:"env,omitempty"`
+	BareRepoMount     string            `json:"bare_repo_mount,omitempty"`
+	BareRepoReadWrite bool              `json:"bare_repo_read_write,omitempty"`
+	Cmd               []string          `json:"cmd,omitempty"`
 }
 
 // SpawnWorkerResult is the return value of SpawnWorker. ContainerID is

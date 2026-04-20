@@ -106,6 +106,82 @@ func TestService_SpawnWorker_MissingLanguageForCoderIsInvalidParams(t *testing.T
 	require.Contains(t, err.Error(), "code=-32000")
 }
 
+// TestService_SpawnWorker_CmdForwardedToSpec verifies that a non-empty Cmd
+// on SpawnWorkerParams propagates to container.Spec.Cmd. This is the
+// mechanism the merger uses to pass its per-task flags (--feature-branch,
+// --task-id, --test-cmd, --orch-url, --agentmon-token). See
+// plans/merger-spawn-on-demand-impl.md.
+func TestService_SpawnWorker_CmdForwardedToSpec(t *testing.T) {
+	fake, client, cleanup := startHarness(t)
+	defer cleanup()
+
+	argv := []string{
+		"--feature-branch", "feature/x",
+		"--task-id", "abc-123",
+		"--orch-url", "http://orch:8080",
+	}
+	_, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
+		Project:   "drem-orch",
+		AgentType: "merger",
+		WorkerID:  "m-1",
+		Branch:    "feature/x",
+		Cmd:       argv,
+	})
+	require.NoError(t, err)
+
+	var spawn *container.Call
+	for _, c := range fake.Calls() {
+		if c.Op == "Spawn" {
+			call := c
+			spawn = &call
+			break
+		}
+	}
+	require.NotNil(t, spawn, "expected Spawn call")
+	require.Equal(t, argv, spawn.Spec.Cmd, "Cmd must be forwarded to container.Spec")
+}
+
+// TestService_SpawnWorker_BareRepoReadWriteFlipsMount verifies the
+// read-only default and the read-write flip. The merger uses the flip to
+// push the integration branch; workers rely on the default being read-only.
+func TestService_SpawnWorker_BareRepoReadWriteFlipsMount(t *testing.T) {
+	fake, client, cleanup := startHarness(t)
+	defer cleanup()
+
+	// Default (zero value) stays read-only.
+	_, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
+		Project:       "p", AgentType: "merger", WorkerID: "w1", Branch: "b",
+		BareRepoMount: "/host/bare",
+	})
+	require.NoError(t, err)
+
+	// Explicit BareRepoReadWrite: true flips the flag.
+	_, err = client.SpawnWorker(context.Background(), SpawnWorkerParams{
+		Project:           "p",
+		AgentType:         "merger",
+		WorkerID:          "w2",
+		Branch:            "b",
+		BareRepoMount:     "/host/bare",
+		BareRepoReadWrite: true,
+	})
+	require.NoError(t, err)
+
+	var spawns []*container.Call
+	for _, c := range fake.Calls() {
+		if c.Op == "Spawn" {
+			call := c
+			spawns = append(spawns, &call)
+		}
+	}
+	require.Len(t, spawns, 2)
+	require.Len(t, spawns[0].Spec.Mounts, 1)
+	require.True(t, spawns[0].Spec.Mounts[0].ReadOnly,
+		"first spawn without BareRepoReadWrite must be read-only")
+	require.Len(t, spawns[1].Spec.Mounts, 1)
+	require.False(t, spawns[1].Spec.Mounts[0].ReadOnly,
+		"second spawn with BareRepoReadWrite=true must be read-write")
+}
+
 func TestService_SpawnWorker_ExplicitImageOverride(t *testing.T) {
 	fake, client, cleanup := startHarness(t)
 	defer cleanup()
