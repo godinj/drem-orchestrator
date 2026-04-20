@@ -1,0 +1,32 @@
+--- a/srt/layers/quantization/compressed_tensors/compressed_tensors.py
++++ b/srt/layers/quantization/compressed_tensors/compressed_tensors.py
+@@ -60,6 +60,9 @@
+     is_activation_quantization_format,
+     should_ignore_layer,
+ )
++from sglang.srt.layers.quantization.marlin_utils import (
++    check_moe_marlin_supports_layer,
++)
+ from sglang.srt.layers.quantization.fp8 import Fp8LinearMethod
+ from sglang.srt.layers.quantization.unquant import (
+     UnquantizedFusedMoEMethod,
+@@ -689,6 +692,19 @@
+                             "(moe_runner_backend=triton)"
+                         )
+                         return CompressedTensorsWNA16TritonMoE(self)
++                    group_size = (
++                        weight_quant.group_size
++                        if weight_quant.group_size is not None
++                        else -1
++                    )
++                    if not check_moe_marlin_supports_layer(layer, group_size):
++                        logger.warning_once(
++                            "Layer dimensions are not compatible with "
++                            "Marlin kernels (require n%%128==0 and "
++                            "intermediate%%max(64,group_size)==0). "
++                            "Falling back to CompressedTensorsWNA16TritonMoE."
++                        )
++                        return CompressedTensorsWNA16TritonMoE(self)
+                     logger.info_once("Using CompressedTensorsWNA16MarlinMoEMethod")
+                     return CompressedTensorsWNA16MoE(self)
+             else:

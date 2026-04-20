@@ -70,8 +70,11 @@ services:
     build:
       context: ../..
       dockerfile: deploy/docker/sglang.Dockerfile
-      args:
-        SGLANG_TAG: latest  # TODO: pin to a concrete :v<x>.<y>.<z> before GA
+      # No build args: the image is fully pinned via
+      # deploy/docker/context/sglang-requirements.txt (a frozen pip
+      # lock from the host venv) and the six patches under
+      # deploy/docker/context/sglang-patches/. See the Dockerfile
+      # preamble for the reproduction strategy.
     image: localhost:5000/drem-sglang:latest
     container_name: drem-sglang
     restart: unless-stopped
@@ -88,13 +91,12 @@ services:
     # without rebuilding. Host-varying bits (model dir, weights subdir, served
     # name, per-host tuning) come from deploy/compose/.env — see
     # deploy/compose/.env.example for the full knob list. Flags that are
-    # gemma4-specific tuning (KV dtype, SWA ratio, attention/sampling backend)
-    # are hardcoded here because swapping them amounts to swapping model
-    # families, which warrants a code change, not a config flip. The tool-call
-    # parser is parameterized via SGLANG_TOOL_CALL_PARSER because the stable
-    # lmsysorg/sglang image's parser list does not include `gemma4`; operators
-    # need to pick a stopgap parser at .env time. See
-    # plans/sglang-gemma4-followup.md for the real fix.
+    # gemma4-specific tuning (KV dtype, SWA ratio, attention/sampling backend,
+    # tool-call parser) are hardcoded here because swapping them amounts to
+    # swapping model families, which warrants a code change, not a config flip.
+    # The image now ships a customized SGLang built from upstream git +
+    # gemma4 patches (see plans/sglang-gemma4-followup.md), so the gemma4
+    # parser is natively supported.
     # Mirrors the host-side launcher documented in
     # plans/host-state-inventory.md §1.1.
     command: >
@@ -111,7 +113,7 @@ services:
       --attention-backend triton
       --sampling-backend pytorch
       --disable-piecewise-cuda-graph
-      --tool-call-parser ${SGLANG_TOOL_CALL_PARSER:-hermes}
+      --tool-call-parser gemma4
       --trust-remote-code
     deploy:
       resources:

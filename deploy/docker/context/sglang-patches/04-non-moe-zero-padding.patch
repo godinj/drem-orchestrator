@@ -1,0 +1,152 @@
+--- a/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16.py
++++ b/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16.py
+@@ -22,6 +22,8 @@
+     CompressedTensorsLinearScheme,
+ )
+ from sglang.srt.layers.quantization.marlin_utils import (
++    GPTQ_MARLIN_MIN_THREAD_K,
++    GPTQ_MARLIN_MIN_THREAD_N,
+     MarlinLinearLayerConfig,
+     apply_gptq_marlin_linear,
+     check_marlin_supports_shape,
+@@ -204,6 +206,11 @@
+                                             weight_loader=weight_loader)
+             layer.register_parameter("weight_g_idx", weight_g_idx)
+ 
++    @staticmethod
++    def _align_up(value: int, alignment: int) -> int:
++        """Round up to the nearest multiple of alignment."""
++        return ((value + alignment - 1) // alignment) * alignment
++
+     # Checkpoints are serialized in compressed-tensors format, which is
+     # different from the format the kernel may want. Handle repacking here.
+     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+@@ -217,13 +224,99 @@
+         device = getattr(layer, self.w_q_name).device
+         c = self.kernel_config
+ 
+-        check_marlin_supports_shape(
+-            c.partition_weight_shape[1],  # out_features
+-            c.partition_weight_shape[0],  # in_features
++        # Check if Marlin supports the layer's dimensions.
++        # If not (e.g. vision encoder MLP with intermediate_size=4304,
++        # merged gate+up=8608 which is not divisible by 64), we zero-pad
++        # weights to aligned dimensions and truncate output at inference.
++        is_valid, reason = check_marlin_supports_shape(
++            c.partition_weight_shape[1],  # out_features (N)
++            c.partition_weight_shape[0],  # in_features (K)
+             c.full_weight_shape[0],  # in_features
+             c.group_size,
+         )
+ 
++        self._needs_output_truncation = False
++        self._original_output_size = c.partition_weight_shape[1]
++        self._original_input_size = c.partition_weight_shape[0]
++
++        if not is_valid:
++            orig_n = c.partition_weight_shape[1]
++            orig_k = c.partition_weight_shape[0]
++            aligned_n = self._align_up(orig_n, GPTQ_MARLIN_MIN_THREAD_N)
++            aligned_k = self._align_up(orig_k, GPTQ_MARLIN_MIN_THREAD_K)
++
++            logger.warning_once(
++                "Layer dimensions (N=%d, K=%d) are not compatible with "
++                "Marlin kernels (%s). Zero-padding to (N=%d, K=%d) and "
++                "truncating output at inference.",
++                orig_n, orig_k, reason, aligned_n, aligned_k,
++            )
++
++            pad_n = aligned_n - orig_n
++            pad_k = aligned_k - orig_k
++            pack_factor = self.pack_factor
++
++            # Pad weight_packed: shape is [N, K // pack_factor] (int32)
++            if pad_n > 0 or pad_k > 0:
++                w_q = getattr(layer, self.w_q_name)
++                w_q_data = w_q.data  # [N, K // pack_factor]
++                # Pad K dimension (packed): pad_k must be divisible by
++                # pack_factor since pack_factor=8 and GPTQ_MARLIN_MIN_THREAD_K=128
++                pad_k_packed = pad_k // pack_factor
++                w_q_padded = torch.zeros(
++                    orig_n + pad_n,
++                    w_q_data.shape[1] + pad_k_packed,
++                    dtype=w_q_data.dtype,
++                    device=device,
++                )
++                w_q_padded[:orig_n, :w_q_data.shape[1]] = w_q_data
++                w_q.data = w_q_padded
++
++            # Pad weight_scale: shape is [N, num_groups]
++            w_s = getattr(layer, self.w_s_name)
++            w_s_data = w_s.data
++            orig_groups = w_s_data.shape[1]
++            # If K is padded and group quantization is used, we may need
++            # more scale groups
++            if c.group_size > 0 and pad_k > 0:
++                new_groups = aligned_k // c.group_size
++            else:
++                new_groups = orig_groups
++            pad_groups = new_groups - orig_groups
++            if pad_n > 0 or pad_groups > 0:
++                w_s_padded = torch.ones(
++                    orig_n + pad_n,
++                    orig_groups + pad_groups,
++                    dtype=w_s_data.dtype,
++                    device=device,
++                )
++                w_s_padded[:orig_n, :orig_groups] = w_s_data
++                w_s.data = w_s_padded
++
++            # Pad zero points if present
++            if c.zero_points:
++                w_zp = getattr(layer, self.w_zp_name, None)
++                if w_zp is not None:
++                    w_zp_data = w_zp.data  # [N // pack_factor, num_groups]
++                    pad_n_packed = pad_n // pack_factor
++                    w_zp_padded = torch.zeros(
++                        w_zp_data.shape[0] + pad_n_packed,
++                        orig_groups + pad_groups,
++                        dtype=w_zp_data.dtype,
++                        device=device,
++                    )
++                    w_zp_padded[:w_zp_data.shape[0], :orig_groups] = w_zp_data
++                    w_zp.data = w_zp_padded
++
++            # Update kernel_config with padded dimensions
++            c.partition_weight_shape = (aligned_k, aligned_n)
++            if pad_k > 0:
++                c.full_weight_shape = (
++                    c.full_weight_shape[0] + pad_k,
++                    c.full_weight_shape[1],
++                )
++            self._needs_output_truncation = (pad_n > 0)
++
+         row_parallel = c.partition_weight_shape[0] != c.full_weight_shape[0]
+         self.is_k_full = marlin_is_k_full(c.has_g_idx, row_parallel)
+ 
+@@ -321,9 +414,14 @@
+ 
+         w_q, w_s, w_zp, w_gidx = _get_weight_params(layer)
+ 
++        # If the input dimension was padded, zero-pad the input to match
++        if self._needs_output_truncation and x.shape[-1] < c.partition_weight_shape[0]:
++            pad_k = c.partition_weight_shape[0] - x.shape[-1]
++            x = torch.nn.functional.pad(x, (0, pad_k))
++
+         # `process_weights_after_loading` will ensure w_zp and w_gidx are not
+         #  None for marlin
+-        return apply_gptq_marlin_linear(
++        output = apply_gptq_marlin_linear(
+             input=x,
+             weight=w_q,
+             weight_scale=w_s,
+@@ -337,3 +435,9 @@
+             is_k_full=self.is_k_full,
+             bias=bias,
+         )
++
++        # Truncate padded output columns back to original dimension
++        if self._needs_output_truncation:
++            output = output[..., :self._original_output_size]
++
++        return output

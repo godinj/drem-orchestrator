@@ -5,6 +5,12 @@
 # Kept in place as a Phase 1 cutover fallback; delete once deploy/ is validated
 # in production (tracked as a separate operational retirement, not prompt 17).
 #
+# Note: this DRAFT shipped a "re-tag lmsysorg/sglang:latest" approach. That
+# strategy was abandoned — the published image lacks the gemma4 tool-call
+# parser and a new-enough transformers for `gemma4_text`. The current
+# canonical Dockerfile (deploy/docker/sglang.Dockerfile) reproduces the
+# operator's host venv via a frozen pip lock + six in-tree patches.
+#
 # sglang — LLM server. Phase 1 seed. DRAFT. Do not build until Alex's plan
 # lands and Kyle reviews.
 #

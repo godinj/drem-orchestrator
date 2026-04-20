@@ -213,9 +213,17 @@ for img in sglang gq spawner agentmon merger kyle docker-query-proxy; do
 done
 ```
 
-The `sglang` Dockerfile is the heaviest (~55 GB after the model layer if
-weights are baked; today the weights are bind-mounted, so the image
-itself is ~1 GB).
+The `sglang` Dockerfile is by far the heaviest of the single-image
+components — budget **30+ min** for a cold build and ~15 GB on disk.
+It reproduces the operator's host SGLang install (CUDA 12.8 + Python
+3.13.5 from deadsnakes + a 207-package frozen pip lock that includes a
+git-built SGLang at commit `g90ef8ce54` plus prebuilt flash-attn-4 and
+flashinfer wheels), then applies six in-tree patches against
+site-packages so AWQ-quantized Gemma-4 weights work with the Marlin /
+Triton MoE kernels. The model weights themselves are still bind-
+mounted from `${SGLANG_MODEL_DIR}` and never enter an image layer. See
+`plans/sglang-gemma4-followup.md` for the full reproduction strategy
+and rollback path.
 
 ### 5.5 Verify the catalog
 

@@ -1,128 +1,182 @@
-# SGLang `gemma4` Tool-Call Parser — Followup
+# SGLang Gemma-4 Container Follow-Up
 
-Stopgap landed: `deploy/compose/.env(.example)` now ships
-`SGLANG_TOOL_CALL_PARSER=hermes` and `deploy/compose/global.yml` reads it
-into `--tool-call-parser`. This unblocks the `drem-sglang` container,
-which was crash-looping on
-`--tool-call-parser: invalid choice: 'gemma4'`. This document tracks the
-real fix.
+Status: **Dockerfile drafted, awaiting operator (Kyle) build verification.**
+Last updated: 2026-04-19.
 
-## 1. Why `gemma4` is the desired parser
+## Background
 
-The model we serve (`gemma-4-26B-A4B-it-AWQ-4bit-textonly`, advertised
-as `gemma4-26b`) emits tool calls in the gemma4-native format. The host
-SGLang launcher we are migrating from has been running with
-`--tool-call-parser gemma4` for two days and the drem clients
-(`internal/agent/direct_tool_agent.go`, the classifier, the C-Suite
-agents in `docs/csuite-agents/prompts/`) all build prompts assuming that
-parser is on the wire. With the wrong parser, every tool call from the
-model decodes as plain text and silently drops to the user, breaking
-every agent that depends on tool use (which is all of them).
+The first cut of `deploy/docker/sglang.Dockerfile` re-tagged
+`lmsysorg/sglang:latest` and treated SGLang as a black box. That worked
+for any model the upstream image had been built against, but the host
+serves a Gemma-4 26B AWQ-quantized text-only model that requires:
 
-The host launcher and the matching launcher block in
-`plans/host-state-inventory.md §1.1` are the canonical reference; the
-container command in `deploy/compose/global.yml` mirrors them.
+1. The `gemma4` tool-call parser. The published image rejects it:
+   `--tool-call-parser: invalid choice: 'gemma4'`.
+2. A new enough `transformers` (5.5.4) to recognize the
+   `gemma4_text` model architecture. The published image is older.
 
-## 2. Why the stable image lacks `gemma4`
+A brief stopgap was considered (parameterize `--tool-call-parser` via a
+`SGLANG_TOOL_CALL_PARSER` env var so the container could fall back to
+`hermes` and at least run). That direction was rejected: it papered
+over the architectural mismatch instead of fixing it, and the model
+would still fail to load because of the transformers gap. The right
+answer is to reproduce the host stack inside the container image.
 
-`deploy/docker/sglang.Dockerfile` builds `FROM lmsysorg/sglang:latest`
-(see the `SGLANG_TAG: latest` build-arg in `global.yml`). The stable
-image's `--tool-call-parser` registry as of 2026-04-19 enumerates:
+## Host investigation (canonical spec)
+
+The host SGLang install is bespoke. Documented inventory:
+
+| Component | Version |
+|---|---|
+| Python | 3.13.5 |
+| SGLang | `0.5.10.post2.dev306+g90ef8ce54` (git build, commit `90ef8ce54` from `https://github.com/sgl-project/sglang`; 306 commits past upstream `0.5.10.post2`) |
+| transformers | 5.5.4 (PyPI) |
+| torch | 2.9.1 + CUDA 12 wheels (`nvidia-*-cu12==12.8.x`) |
+| Total Python deps | 207 packages, frozen in the lock |
+
+In addition, six in-tree patches sit on top of the installed sglang to
+keep Gemma-4 AWQ weights working with the Marlin / Triton MoE kernels:
+
+| # | File | Effect |
+|---|---|---|
+| 01 | `srt/layers/quantization/compressed_tensors/compressed_tensors.py` | MoE Triton fallback when Marlin can't handle the layer dims |
+| 02 | `srt/layers/quantization/marlin_utils.py` | Add `group_size=16` to the Python whitelist |
+| 03 | `jit_kernel/csrc/gemm/marlin/gptq_marlin.cuh` | Add `group_blocks=1` (group_size=16) entries to the CUDA dispatch macros |
+| 04 | `srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16.py` | Non-MoE zero-padding fallback for misaligned vision encoder layers |
+| 05 | `srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py` | Allow GELU activation in Triton MoE (was silu-only) |
+| 06 | `srt/layers/quantization/compressed_tensors/utils.py` | Match `.linear` suffix in `should_ignore_layer()` (AWQ ignore-entry shape) |
+
+Patches were authored against and apply cleanly to the
+`0.5.10.post2.dev306+g90ef8ce54` site-packages tree. Host-side
+application script:
+`/home/godinj/git/model-tuning/patch-sglang-gemma4.sh`. Its
+version-pinning, .bak-backup, and idempotent re-apply pattern carries
+into the in-container script.
+
+The host launch flags (the spec the compose `command:` mirrors):
 
 ```
-deepseekv3, deepseekv31, deepseekv32, glm, glm45, glm47, gpt-oss,
-kimi_k2, lfm2, llama3, mimo, mistral, pythonic, qwen, qwen25,
-qwen3_coder, step3, step3p5, minimax-m2, trinity, interns1, hermes,
-gigachat3
+--model-path /home/godinj/models/gemma-4-26B-A4B-it-AWQ-4bit-textonly
+--served-model-name gemma4-26b
+--host 0.0.0.0 --port 8081
+--context-length 131072
+--mem-fraction-static 0.85
+--kv-cache-dtype fp8_e5m2
+--swa-full-tokens-ratio 0.08
+--attention-backend triton
+--sampling-backend pytorch
+--disable-piecewise-cuda-graph
+--tool-call-parser gemma4
+--max-running-requests 4
+--trust-remote-code
 ```
 
-`gemma4` is not on that list. The parser exists upstream on
-`main`/`HEAD` of the SGLang git repository but has not yet rolled into
-a tagged release that the `latest` mutable tag points at. The host
-launcher works because the host-side install was a `pip install -e .`
-of an SGLang git checkout that includes the parser; the containerized
-image's `latest` tag does not.
+Plus `PYTORCH_ALLOC_CONF="expandable_segments:True"` in the env.
 
-`hermes` is the closest in-tree parser to the gemma4 tool-call format
-(both emit `<tool_call>…</tool_call>` envelope tags around JSON). It is
-not byte-compatible with gemma4 output, so tool-call extraction will be
-lossy under load. Acceptable as a stopgap to keep the container off
-crash-loop while we land a real fix.
+## New container image
 
-## 3. Three real-fix options
+The replacement Dockerfile (`deploy/docker/sglang.Dockerfile`) builds
+the image as follows:
 
-### Option A — Roll back to host SGLang via systemd
+1. **GPU base:** `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04`.
+   Concrete tag, not `:latest`. Matches torch 2.9.1's CUDA 12 wheels.
+2. **Python 3.13.5:** installed via the `deadsnakes` PPA. Ubuntu 24.04
+   ships 3.12; deadsnakes is the standard third-party PPA for newer
+   CPython versions and adds ~30s to the build vs. ~20min if we
+   compiled CPython from source. Trade-off: external apt repo, but it
+   is pinned and reproducible. Alternative considered (pyenv) was
+   rejected as overkill — we don't need multiple Python versions in
+   the image.
+3. **Venv at `/opt/venv`,** `PATH` prefixed so `python` / `pip`
+   resolve to it without an explicit `source bin/activate`. Mirrors
+   the host pattern (`/home/godinj/venvs/sglang`).
+4. **Frozen pip install** from
+   `deploy/docker/context/sglang-requirements.txt` (verbatim copy of
+   the host venv's `pip freeze`, including the `git+https://…@90ef8ce54`
+   sglang URL). Single layer to maximize cache reuse.
+5. **Apply six patches** against the installed site-packages tree via
+   `deploy/docker/context/apply-sglang-patches.sh` (adapted from the
+   host script — same version check, same .bak backup, same
+   `--forward` idempotent re-apply, same six-grep verification step,
+   same import test). Patches are vendored under
+   `deploy/docker/context/sglang-patches/` so the model-tuning host
+   repo is no longer the source of truth for the container.
+6. **`PYTORCH_ALLOC_CONF=expandable_segments:True`** baked into the
+   image env. Documentation-only `SGLANG_HOST` / `SGLANG_PORT` /
+   `SGLANG_MODEL_DIR` envs as well.
+7. **ENTRYPOINT:** `python -m sglang.launch_server`. The full flag
+   set (tool-call parser, KV dtype, SWA tuning, etc.) is supplied by
+   the compose `command:` block in `deploy/compose/global.yml`, so
+   flag tuning does not require a rebuild. Host-only pre-launch steps
+   (`nvidia-smi -lgc`, the SIGKILL-and-VRAM-drain loop) are
+   intentionally omitted — they fight a problem that doesn't exist
+   inside the container model.
 
-Re-enable the host-side SGLang launcher (the same `pip install -e .`
-checkout that's been working for two days) under a `systemd --user`
-unit, retire the `drem-sglang` container, and let the rest of the
-containerized stack point at `127.0.0.1:8081` on the host loopback as
-they already do. GQ stays containerized; SGLang regresses to host.
+## Trade-offs
 
-Pros: zero new build work; immediately restores the gemma4 parser
-without waiting on a CUDA image rebuild; `plans/install-log.md §7.1`
-already documents the exact `pkill` we'd be inverting.
+| | Host launcher | New container |
+|---|---|---|
+| Build time | 0 (already installed) | **30+ min cold**, ~5 min warm cache |
+| Image size | n/a | ~15 GB (CUDA runtime + cuDNN + 207 wheels incl. flash-attn-4 + flashinfer prebuilts) |
+| GPU at build | not needed | **not needed** (no CUDA kernels compiled — wheels are prebuilt) |
+| GPU at runtime | required | required (via `nvidia-container-toolkit`) |
+| Python version control | manually pinned in venv | locked to Python 3.13.5 from deadsnakes |
+| Reproducibility | "this one host" | `requirements.txt` + 6 patches in git |
+| Update path | `pip install -U` + re-run `patch-sglang-gemma4.sh` | refresh `sglang-requirements.txt` from a new `pip freeze`, refresh patches if SGLang upstream moved, rebuild |
 
-Cons: re-introduces the host-side process the containerization PRD
-(`docs/prd-containerization.md` §"Phased rollout step 1") explicitly
-set out to retire. Splits the bring-up story: half containers, half
-systemd.
+The image is heavy. That's accepted. It is the price of vendoring an
+entire CUDA + Python + sglang + flashinfer stack into a single
+reproducible artifact.
 
-### Option B — Build SGLang from upstream git inside the image
+## Acceptance / verification
 
-Replace the `FROM lmsysorg/sglang:latest` base in
-`deploy/docker/sglang.Dockerfile` with a multi-stage build that clones
-the SGLang git repo at a commit known to include the gemma4 parser,
-runs the upstream install (CUDA toolkit + Python + `pip install -e .`),
-and bakes the result into a new `localhost:5000/drem-sglang:gemma4`
-tag.
+The Dockerfile is **not** built by this change. It needs a GPU host
+and 30+ minutes — too risky for an unsupervised CI build. Operator
+(Kyle) runs the build manually:
 
-Pros: closes the gap with a single image rebuild; keeps the full
-containerization story intact; the resulting image is reproducible at
-a pinned commit.
+```bash
+cd /home/godinj/git/drem-orchestrator.git/master
+docker build -f deploy/docker/sglang.Dockerfile \
+    -t localhost:5000/drem-sglang:latest .
+docker push localhost:5000/drem-sglang:latest
+```
 
-Cons: long build (CUDA base layers + a `pip install` that compiles
-custom CUDA kernels). The first build on this host will be in the 30–60
-minute range and will produce a 15–20 GB image. Pinning the upstream
-commit also means owning a private image branch until upstream cuts a
-release that includes the parser.
+Then bring up the global compose stack (the model dir is bind-mounted
+per `deploy/compose/.env`):
 
-### Option C — Find a newer image tag that ships the parser
+```bash
+docker compose -f deploy/compose/global.yml up -d sglang
+docker compose -f deploy/compose/global.yml logs -f sglang
+curl -sf http://127.0.0.1:8081/v1/models
+```
 
-Check `lmsysorg/sglang` on Docker Hub for a tag (date-stamped nightly,
-release candidate, or future stable) whose parser registry includes
-`gemma4`, and bump `SGLANG_TAG` in `deploy/compose/global.yml` (and
-the equivalent build-arg in `deploy/docker/sglang.Dockerfile`) to that
-tag.
+The container is healthy when `/v1/models` returns the served model
+name (default `gemma4-26b`). Cold model load takes a couple of
+minutes; the compose healthcheck has a 120s `start_period` to
+accommodate.
 
-Pros: cheapest fix if a viable tag exists; no Dockerfile rewrite;
-still a single mutable artifact to track.
+## Rollback
 
-Cons: requires manual tag spelunking (Docker Hub search + reading the
-upstream release notes / parser registry source for each candidate);
-the right tag may not exist yet and we'd be back to A or B if so. Tag
-churn on `lmsysorg/sglang` has been frequent — pinning to a date-stamp
-is fine, pinning to `latest` reintroduces the same drift that bit us
-this time.
+If the container build or bring-up fails, the host-side launcher
+(`start-sglang-gemma4-production.sh` in the operator's model-tuning
+repo) remains the canonical fallback. Stop the container, restart the
+host launcher; drem clients see the same OpenAI-compatible endpoint on
+`127.0.0.1:8081` either way. Document the failure in this file and
+file a follow-up rather than letting the host launcher quietly become
+permanent again.
 
-## 4. Acceptance criteria for the future fix
+## Open follow-ups
 
-The followup is done when:
-
-1. `deploy/compose/global.yml`'s `--tool-call-parser` resolves to
-   `gemma4` again — either by changing the default in the substitution
-   (`${SGLANG_TOOL_CALL_PARSER:-gemma4}`) or by setting the value to
-   `gemma4` in `.env` / `.env.example`.
-2. The `drem-sglang` container starts and stays in `Up (healthy)` for
-   30+ minutes under steady load with the new parser, with no
-   `invalid choice` errors in `docker logs drem-sglang`.
-3. A representative end-to-end tool call from drem (any agent that
-   exercises the `Read`/`Write`/`Bash` tool path through the
-   classifier) succeeds and shows up as a parsed tool call in the
-   orchestrator event stream — not as plain text.
-4. The stopgap notes are removed from `deploy/compose/.env`,
-   `deploy/compose/.env.example`, `deploy/compose/global.yml`,
-   `plans/install-log.md`, and `docs/containerization/install.md`.
-5. This document is either deleted or updated with a final entry
-   recording which option was taken and the commit / image tag that
-   landed it.
+- **Tag the image** with a concrete version once a build is validated.
+  `:latest` is fine for the bring-up but not for promotion. A
+  `localhost:5000/drem-sglang:0.5.10.post2.dev306-g90ef8ce54-gemma4.1`
+  tag would encode both the upstream commit and the patch revision.
+- **Refresh strategy** when SGLang upstream moves past `g90ef8ce54`:
+  re-run `pip freeze` on the host after upgrading, replace
+  `deploy/docker/context/sglang-requirements.txt`, attempt the
+  patches against the new tree (the script will fail loudly if a
+  patch no longer applies), and re-rev the image tag. Coupling the
+  refresh to a deliberate operator step is intentional — the patches
+  are tightly bound to upstream code that moves often.
+- **CI smoke build** would catch lock drift earlier, but requires a
+  GPU runner. Out of scope until the project has GPU CI.

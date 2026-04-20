@@ -180,14 +180,13 @@ loop (`read`, `edit`, `write`, `bash`, `grep`, `glob` — reviewers are
 restricted to read-only tools). On success the completion is funneled
 through the existing `onAgentCompleted` / `onReviewerCompleted` /
 `onFixerCompleted` handlers so merge, review.json parsing, and fixer
-bookkeeping stay unchanged. SGLang must be started with
-`--tool-call-parser <name>` matching your model so that OpenAI tool
-calls are converted to and from the model's native tool tokens. The
-containerized stack reads this from `SGLANG_TOOL_CALL_PARSER` in
-`deploy/compose/.env`; the default is `hermes` because the stable
-`lmsysorg/sglang` image's parser registry does not yet include
-`gemma4`. See `plans/sglang-gemma4-followup.md` for the real-fix
-options.
+bookkeeping stay unchanged. SGLang is started with
+`--tool-call-parser gemma4` (hardcoded in `deploy/compose/global.yml`)
+so OpenAI tool calls are converted to and from the model's native
+tool tokens. The containerized image reproduces the host's
+customized SGLang build (upstream git + 6 gemma4 patches) so the
+`gemma4` parser is natively supported — see
+`plans/sglang-gemma4-followup.md` for the build approach.
 
 **Enable the direct path** in `drem.toml`:
 

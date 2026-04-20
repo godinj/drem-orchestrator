@@ -170,9 +170,21 @@ docker build -f deploy/docker/gq.Dockerfile \
 curl -s 127.0.0.1:5000/v2/_catalog
 ```
 
-`drem-sglang` is a thin re-tag of `lmsysorg/sglang:latest`; the first
-build pulls 15–20 GB of CUDA runtime layers. `drem-gq` is a small Go
-binary.
+`drem-sglang` reproduces the operator's host SGLang install: a
+CUDA 12.8 + cuDNN base on Ubuntu 24.04, Python 3.13.5 via the
+deadsnakes PPA, a frozen pip lock from the host venv (207 packages
+including a git-built SGLang at commit `g90ef8ce54`, `transformers
+5.5.4`, and `torch 2.9.1`), then six in-tree patches applied against
+site-packages to make AWQ-quantized Gemma-4 weights work with the
+Marlin / Triton MoE kernels. Budget **30+ min** for a cold build and
+expect a ~15 GB image (prebuilt flash-attn-4 + flashinfer wheels
+dominate). The build itself does not need a GPU; the runtime does.
+`drem-gq` is a small Go binary.
+
+Rollback: the host-side launcher (operator's model-tuning
+`start-sglang-gemma4-production.sh`) remains the canonical fallback if
+the container build or bring-up fails. Same OpenAI-compatible endpoint
+on `127.0.0.1:8081`, so drem clients don't notice.
 
 After 4a–4e the registry catalog should list 18 repositories:
 

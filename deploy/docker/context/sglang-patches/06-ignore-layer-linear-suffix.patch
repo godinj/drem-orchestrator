@@ -1,0 +1,16 @@
+--- a/srt/layers/quantization/compressed_tensors/utils.py
++++ b/srt/layers/quantization/compressed_tensors/utils.py
+@@ -50,6 +50,13 @@
+             should_ignore_shard = check_equal_or_regex_match(
+                 layer_name=shard_name, targets=ignore
+             )
++            # AWQ models use ignore entries like "gate_proj.linear" which
++            # are longer than the expanded shard name "gate_proj", causing
++            # the substring match to fail. Try appending ".linear" suffix.
++            if not should_ignore_shard:
++                should_ignore_shard = check_equal_or_regex_match(
++                    layer_name=shard_name + ".linear", targets=ignore
++                )
+ 
+             # If shard_idx=0, set layer ignore to match shard.
+             if should_ignore_layer is None:
