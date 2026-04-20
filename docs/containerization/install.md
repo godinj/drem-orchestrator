@@ -452,50 +452,112 @@ routes plan jobs through the HTTP path.
 
 #### Claude subscription auth (prerequisite)
 
-**The planner uses subscription auth only. No `ANTHROPIC_API_KEY`
-fallback.** Per operator direction 2026-04-20, every Claude-backed
-role shares the operator's Claude Max rate-limit pool so API-key
-spending stays reserved for work that truly needs it. Implications
-for the operator:
+**Every Claude-backed role in the drem stack uses subscription auth
+only. No `ANTHROPIC_API_KEY` fallback anywhere in the default path.**
+Per operator direction 2026-04-20, the whole agent fleet shares the
+operator's Claude Max rate-limit pool so API-key spending stays
+reserved for work that truly needs it.
 
-1. **Run `claude login` on the host before the first bring-up.** This
-   writes `~/.claude/.credentials.json` with the refreshable OAuth
-   token the planner container consumes.
+This one prerequisite covers three consumers in the stack:
+
+- **csuite agents** (mike / alex / ross / seth) — long-lived warm
+  containers that run the claude CLI inside their entrypoint.
+- **drem-planner** — the warm planner service documented above.
+- **drem-worker-{go,cpp} coder / reviewer / fixer / tester /
+  supervisor** — ephemeral per-task workers spawned by orch through
+  `drem-spawner`. See plans/worker-subscription-auth.md for the
+  end-to-end design.
+
+The merger role (`drem-merger`) is a Go binary, does NOT run the
+claude CLI, and deliberately skips this mount.
+
+Implications for the operator:
+
+1. **Run `claude login` on the host once.** This writes
+   `~/.claude/.credentials.json` with the refreshable OAuth token that
+   every consumer above reads.
 
    ```bash
    claude login
    ls -l ~/.claude/.credentials.json   # must exist, must be readable
    ```
 
-2. **The credentials file is bind-mounted read-only** into the planner
-   at `/home/drem/.claude/.credentials.json`. The container runs as
-   UID 1000 (matches the operator) so the path resolves without
-   `CLAUDE_CONFIG_DIR` overrides. Same pattern csuite agents already
-   use (see `~/.drem/projects/drem-orchestrator/compose.override.yml`).
+2. **The credentials file is bind-mounted read-only** into each
+   consumer at `/home/drem/.claude/.credentials.json`. Every container
+   runs as UID 1000 `drem` (matches the operator's typical host UID) so
+   the path resolves without `CLAUDE_CONFIG_DIR` overrides. csuite
+   agents declare the mount in
+   `~/.drem/projects/drem-orchestrator/compose.override.yml`; the
+   planner mounts the file from `deploy/compose/global.yml`; worker
+   containers get it via orch — see the "Worker mount path" note below.
 
 3. **The bind-mount is read-only on purpose.** Host `claude` CLI
-   interactive sessions own OAuth refresh; the container only reads
-   the file fresh on each request. Making the mount read-write would
-   let the container write refresh tokens the host then has to
-   reconcile, creating drift between host and container state.
+   interactive sessions own OAuth refresh; each container only reads
+   the file fresh on invocation. Making the mount read-write would let
+   a container overwrite refresh tokens the host then has to reconcile,
+   creating drift between host and container state.
 
-4. **Boot-time validation:** the planner binary validates the
-   credentials file at startup and exits 1 with a loud error if the
-   file is missing. `restart: unless-stopped` then crash-loops the
-   container visibly in `docker ps` until the operator runs
-   `claude login`. Never silent.
+4. **Boot-time validation** (planner only): the planner binary
+   validates the credentials file at startup and exits 1 with a loud
+   error if the file is missing. `restart: unless-stopped` then
+   crash-loops the container visibly in `docker ps` until the operator
+   runs `claude login`. Never silent.
 
-5. **Dispatch-time validation:** orch's `dispatchPlanHTTP` probes the
-   planner's `/healthz` before POSTing. `/healthz` returns 503 when
-   either the credentials file is unreadable OR `claude --version`
-   fails in <2s, so orch fails fast on missing auth instead of
-   waiting 5 minutes for an Anthropic 401.
+5. **Dispatch-time validation** (planner only): orch's
+   `dispatchPlanHTTP` probes the planner's `/healthz` before POSTing.
+   `/healthz` returns 503 when either the credentials file is
+   unreadable OR `claude --version` fails in <2s, so orch fails fast
+   on missing auth instead of waiting 5 minutes for an Anthropic 401.
 
-6. **No API-key env var anywhere.** The generated compose file does
-   NOT set `ANTHROPIC_API_KEY` on orch or on the planner. If you
-   really want API-key access for an ad-hoc test, set the env manually
-   on the planner container — the CLI picks it up — but the default
-   path never touches it.
+6. **Spawn-time validation** (workers only): workers are ephemeral —
+   no `/healthz` to poll. Instead, orch passes the host creds path to
+   drem-spawner on every SpawnWorker RPC, and the spawner `stat(2)`'s
+   the path before creating the container. A missing file surfaces as
+   a `worker_spawn_failed` event with the exact path that was not
+   found, plus the hint to run `claude login`.
+
+7. **No API-key env var anywhere.** The generated compose files do
+   NOT set `ANTHROPIC_API_KEY` on orch, on the planner, or on any
+   worker spawn params. `internal/orchestrator/worker_spawn.go`
+   additionally rejects an `ANTHROPIC_API_KEY` key if one ever lands
+   in the spawn env — fail-closed with
+   `reason=policy_violation_api_key` in the audit trail. If you really
+   want API-key access for an ad-hoc test, set the env manually on the
+   target container via `docker run`; the default path never touches
+   it.
+
+##### Worker mount path — how orch knows the host path
+
+The per-project compose file renders `DREM_WORKER_CREDS_PATH` on orch,
+populated at `drem project register` time from `os.UserHomeDir()` on
+host:
+
+```yaml
+services:
+  orch:
+    environment:
+      DREM_WORKER_CREDS_PATH: "/home/<operator>/.claude/.credentials.json"
+```
+
+At spawn time, `buildSpawnContext` reads that env var and copies it
+into `spawner.SpawnWorkerParams.CredsMount`. The spawner bind-mounts
+it at `/home/drem/.claude/.credentials.json` inside the worker with
+the read-only flag set. The worker's `worker-base` image pre-creates
+`/home/drem/.claude` with `drem:drem` ownership so docker does not
+auto-create the parent as root and block the claude CLI's own writes
+to `~/.claude/` (session state, project caches).
+
+##### Rotation and the already-running-worker caveat
+
+`claude login` on host refreshes the file in place. New worker spawns
+pick up the refreshed file naturally. An already-running worker has
+the old file open; if the CLI re-opens on each invocation (its
+default), rotation is transparent. If the refresh uses `rename(2)`
+atomic replacement, a long-lived worker could retain an old inode and
+eventually hit a 401 on token expiry. Current worker lifecycle is per-
+task (minutes to low-hours), so this is unlikely to bite — but worth
+noting: if a worker 401s mid-task, `docker restart <container>` picks
+up the fresh file.
 
 #### Container lifecycle
 
