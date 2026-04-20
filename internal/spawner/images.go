@@ -16,7 +16,10 @@ var defaultImages = map[string]string{
 	"coder-cpp":   "localhost:5000/drem-worker-cpp:latest",
 	"g4":          "localhost:5000/drem-worker-go:latest",
 	"merger":      "localhost:5000/drem-merger:latest",
-	"planner":     "localhost:5000/drem-planner:latest",
+	// "planner" is NOT mapped here anymore. The warm drem-planner is a
+	// long-lived container in deploy/compose/global.yml, not a spawn-
+	// on-demand role. Orch reaches it over HTTP via dispatchPlanHTTP.
+	// See plans/warm-planner-pivot.md §7.
 	"csuite-mike": "localhost:5000/drem-csuite-mike:latest",
 	"csuite-alex": "localhost:5000/drem-csuite-alex:latest",
 	"csuite-ross": "localhost:5000/drem-csuite-ross:latest",

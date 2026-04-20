@@ -1,6 +1,6 @@
 # Warm Planner Pivot — Implementation Plan
 
-Status: **design proposed, not yet implemented.** 2026-04-20.
+Status: **in progress.** 2026-04-20. Commits 1-4 landed (httpserver + drem-planner HTTP + real claude subprocess + orch plan_client).
 
 Supersedes the spawn-on-demand planner that landed earlier today
 (commits `c279f32`..`b2024ee`). The shipped design polled

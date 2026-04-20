@@ -2,19 +2,14 @@ package spawner
 
 import "testing"
 
-// TestResolveImage_PlannerMapsToDremPlanner asserts that AgentType "planner"
-// resolves to the canonical drem-planner:latest image tag. The tag must
-// match deploy/docker/planner.Dockerfile's push target so a fresh spawn
-// reaches the image primed by `docker compose pull` on the per-project
-// planner-template stub.
-func TestResolveImage_PlannerMapsToDremPlanner(t *testing.T) {
-	got, ok := resolveImage("planner", nil)
-	if !ok {
-		t.Fatalf("resolveImage(planner): expected mapping, got ok=false")
-	}
-	const want = "localhost:5000/drem-planner:latest"
-	if got != want {
-		t.Fatalf("resolveImage(planner): got %q, want %q", got, want)
+// TestResolveImage_PlannerNotMapped asserts that AgentType "planner" has
+// no mapping in the spawner image table. The warm drem-planner is a
+// long-lived service in deploy/compose/global.yml, not a spawn-on-demand
+// role — so the spawner must refuse a planner spawn rather than silently
+// succeeding against a stale image tag. See plans/warm-planner-pivot.md §7.
+func TestResolveImage_PlannerNotMapped(t *testing.T) {
+	if _, ok := resolveImage("planner", nil); ok {
+		t.Fatalf("resolveImage(planner): expected ok=false (warm planner only); got mapped image")
 	}
 }
 
