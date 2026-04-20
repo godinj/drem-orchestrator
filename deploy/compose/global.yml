@@ -196,6 +196,36 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - drem-spawner-sock:/var/run/drem
+      # Host-identical bind-mount of the operator's ~/.claude so the
+      # spawner's pre-flight os.Stat on p.CredsMount (see
+      # internal/spawner/methods.go:80) can resolve the host path that
+      # gets passed through to the worker's docker bind-mount. Without
+      # this, every SpawnWorker for a claude-backed role fails with
+      # "creds file not found" even when the host file exists — because
+      # the spawner runs in its own mount namespace and can't see host
+      # /home paths. Read-only: the spawner never needs to write creds;
+      # OAuth refresh happens on host via `claude login`.
+      #
+      # Same pattern the per-project compose template uses for
+      # prompts/ (host-identical path so orch's writes and spawner's
+      # bind-mount-target agree bit-for-bit). $HOME resolves to the
+      # operator's home via docker compose variable substitution; the
+      # path must match cmd/drem's workerCredsPathEnv default resolved
+      # from $HOME/.claude/.credentials.json so orch's forwarded
+      # CredsMount and spawner's stat hit the same inode.
+      - ${HOME}/.claude:${HOME}/.claude:ro
+      # Same host-identical pattern for per-project prompts. Orch writes
+      # the rendered worker prompt to
+      # $HOME/.drem/projects/<project>/prompts/<task-uuid>.md and passes
+      # that path as SpawnWorkerParams.PromptMount. Spawner os.Stat's the
+      # path (fail-closed pre-flight) before handing it to the docker
+      # bind-mount; without a corresponding mount in the spawner's
+      # namespace the stat returns ENOENT even when the file exists on
+      # host. Mounting the whole ~/.drem/projects parent lets every
+      # registered project's prompts dir be visible without a per-project
+      # compose edit. Read-only: the spawner never writes prompts (orch
+      # owns that path).
+      - ${HOME}/.drem/projects:${HOME}/.drem/projects:ro
     networks: [drem-net]
     restart: unless-stopped
     labels:
