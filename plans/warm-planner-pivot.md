@@ -1,6 +1,48 @@
 # Warm Planner Pivot — Implementation Plan
 
-Status: **in progress.** 2026-04-20. Commits 1-4 landed (httpserver + drem-planner HTTP + real claude subprocess + orch plan_client).
+Status: **implemented, 2026-04-20.** All 10 commits from §7 landed on
+worktree-agent-afa4d1c4. Tests added:
+
+- `internal/agent/httpserver/server_test.go` — 10 (New panics on empty
+  MetricsNS, no-auth-when-token-empty, 401 missing/wrong token, 200
+  with correct token, /healthz no-probe/OK/fail, /metrics exposes
+  expvar, HandleNoAuth bypasses auth, WriteError bumps 4xx/5xx
+  counters).
+- `cmd/drem-classifier/server_test.go` — existing suite unchanged and
+  passing against the refactored httpserver-backed Server.
+- `cmd/drem-planner/server_test.go` — 11 (happy path, bad JSON,
+  missing fields matrix, 401 matrix, 409 invalid plan shape, 502
+  upstream, 504 timeout, 500 generator bug, /healthz creds present +
+  missing, validatePlan matrix, stub generator validity).
+- `cmd/drem-planner/claude_test.go` — 9 (subprocess happy path, non-
+  zero exit, ctx timeout → DeadlineExceeded, is_error envelope,
+  malformed envelope, markdown fence stripping, inner-object extract,
+  prompt rendering, server wiring through claude generator).
+- `internal/orchestrator/plan_client_test.go` — 15 (happy path,
+  /healthz short-circuit, 409/502/504/401/503 mappings, malformed
+  response, client-side validation failure, should-dispatch matrix,
+  spawn-planner-http storage, bookkeeping, validatePlanJSON matrix,
+  derive-health-URL cases).
+- `internal/spawner/images_test.go` — flipped: "planner" must NOT be
+  mapped.
+- `internal/projects/template_test.go` — flipped: no API-key
+  passthrough, DREM_PLANNER_URL wired, no planner-template stub.
+- `deploy/compose/compose_test.go` — +1 (drem-planner service shape,
+  healthcheck path, creds bind-mount read-only, no ANTHROPIC_API_KEY
+  env).
+
+Full repo `go test -count=1 ./...` + `go vet ./...` clean.
+
+Deliberately NOT done in this worktree (operator-side):
+
+- Live `docker build` of the new `drem-planner:latest` image. Sandbox
+  has no Docker. Dockerfile + compose entry are committed; the shape
+  matches `deploy/docker/classifier.Dockerfile` which is proven to
+  build clean.
+- Live T2 canary through classify → plan → plan_review (parks there
+  per the frozen gate). Operator runs this post-merge.
+
+See plan §§7-8 for the commit sequence and rollout steps.
 
 Supersedes the spawn-on-demand planner that landed earlier today
 (commits `c279f32`..`b2024ee`). The shipped design polled
