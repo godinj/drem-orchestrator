@@ -1,6 +1,7 @@
 # Spawn-on-Demand Planner Container — Implementation Plan
 
-Status: **design proposed, not yet implemented.** 2026-04-20.
+Status: **implementation in progress on worktree-agent-af401951, 2026-04-19.**
+Commit 1 (Dockerfile + entrypoint) landed.
 
 **Revised from the earlier warm/direct-LLM draft after operator
 direction 2026-04-20: "planner should always be opus for now."**
