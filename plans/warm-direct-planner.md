@@ -1,243 +1,265 @@
-# Warm Direct-Planner Container — Implementation Plan
+# Spawn-on-Demand Planner Container — Implementation Plan
 
 Status: **design proposed, not yet implemented.** 2026-04-20.
 
-Sibling to `plans/warm-direct-classifier.md` and
-`plans/warm-direct-prep.md`. Shares their auth/HTTP/healthcheck
-shape.
+**Revised from the earlier warm/direct-LLM draft after operator
+direction 2026-04-20: "planner should always be opus for now."**
 
-## 0. Scope and motivation
+Opus = Anthropic Claude API. The `claude` CLI (`@anthropic-ai/claude-
+code` npm) is the canonical client; it already ships inside
+`drem-worker-base.Dockerfile` (line ~83). Running planner via the
+existing direct-tool-agent sglang path does NOT apply here. Instead,
+planner becomes a **per-task spawn-on-demand container** exactly like
+merger (plan `plans/merger-spawn-on-demand-impl.md`, landed commits
+`89d6ed7`..`f7a48aa`).
 
-**Planner has no direct-LLM path yet.** Unlike classifier and prep,
-there is no `RunDirectPlanner` function and no `[agents.planner].direct`
-config key. `internal/orchestrator/task_processing.go:234` calls
-`o.runner.SpawnAgent(task, featureName, model.AgentPlanner, prompt)`,
-which routes through `agent.NewRunner(..., cfg.ClaudeBin,
-cfg.OpenCodeBin, ...)` — the legacy claude/opencode subprocess path.
-Neither binary is in the orch container.
+This supersedes the earlier draft of this file (warm container +
+DirectToolAgent + gemma4-26b). The sibling prep plan
+(`plans/warm-direct-prep.md`) is unaffected and still uses the
+sglang direct path.
 
-This plan is therefore **two phases**:
+## 0. Scope
 
-1. **Phase 1 — Add direct-planner in-orch.** Lands a
-   `RunDirectPlanner` function, wires `[agents.planner].direct=true`,
-   and routes `processPlanning` through it. Analogous to the
-   pre-session state of direct-classifier. **Unblocks T2 canary
-   immediately.**
-2. **Phase 2 — Warm-containerize it.** Same shape as classifier /
-   prep plans.
+Replace the legacy `o.runner.SpawnAgent(... AgentPlanner ...)` call
+site in `internal/orchestrator/task_processing.go:234` with a
+`o.Spawner.SpawnWorker(... AgentType: "planner" ...)` spawn, matching
+how the merger call site works. The merger spawner plumbing landed
+this session — `SpawnWorkerParams.Cmd []string` and
+`BareRepoReadWrite bool` are already there (commit `89d6ed7`). We
+reuse them.
 
-Operator can stop after phase 1 to land T2 canary, then resume
-phase 2.
+Key constraints from operator direction:
+- **Always Opus.** `[agents.planner].model` defaults to
+  `claude-opus-4-6` (or whatever the current Opus tag is — confirm
+  against `internal/capability/capability.go`).
+- **Always Anthropic.** `[agents.planner].provider` defaults to
+  `claude`. No sglang routing for planner.
+- **Per-task lifecycle.** Planner runs once per task, ~60-180s,
+  produces `plan.json`, exits. Warm pool is overkill for this
+  frequency.
 
-## 1. Key differences from classifier + prep
+## 1. Why spawn-on-demand instead of warm
 
-| Dimension | Classifier | Prep | **Planner** |
-|---|---|---|---|
-| Input | title+desc+ctx | task+project+worktree | task+project+worktree+comments+repo-map+target-coder-model |
-| Output | JSON `{category, complexity}` | markdown file | JSON `plan.json` with subtasks, coverage, assumptions, tdd_exceptions, module_boundaries, interface_shapes |
-| Tool use | none (one-shot chat) | read/grep/glob | **needs read/grep/glob** — planner must explore the codebase to decompose sensibly |
-| Prompt length | ~800 tokens | ~2K tokens | ~4-8K tokens (richer instructions in `internal/prompt/prompt_planner.go`) |
-| Output size | ~200 tokens | ~3K tokens | ~4-8K tokens (full plan) |
-| Loop turns | 1 | 5-12 | 10-20 |
-| Per-run duration | 1-2s | 30-90s | 60-180s |
+| Consideration | Warm | **Spawn-on-demand (chosen)** |
+|---|---|---|
+| Planner frequency | rare (once per backlog task) | rare — cold-start cost amortized |
+| LLM behind it | Anthropic HTTPS | Anthropic HTTPS |
+| Tool-loop substrate | would need new code | existing claude CLI does tool loops natively |
+| Idle resource cost | ~100MB RAM sitting idle | 0 between runs |
+| Failure isolation | container-level | container-level (same) |
+| Pattern with merger | divergent | identical |
+| State between runs | none needed | none needed |
 
-Planner therefore uses the **`DirectToolAgent` substrate**, same as
-prep, but with a different system prompt and output schema. The
-substrate already exists — we add planner to the `roleTools` map
-with read-only tools:
+Warm wins on cold-start latency; claude CLI starts in <1s, tiny cost
+relative to a 60-180s plan run. Not worth the design complexity.
+
+## 2. Interface decision
+
+`SpawnWorkerParams` already has `Cmd []string` — planner's argv goes
+there. The planner container runs claude in headless JSON mode against
+the worktree, writes `plan.json` to the worktree root, exits.
+
+Orch detects completion by polling `InspectWorker` (same pattern as
+`dispatchMerge`). Exit code 0 with a valid `plan.json` on disk = success.
+
+No callback, no HTTP server on the planner side. Keep it identical to
+merger's shape.
+
+## 3. Files touched
+
+### New files
+- `deploy/docker/planner.Dockerfile` — based on `debian:bookworm-slim`,
+  layers node + `@anthropic-ai/claude-code`, a small entrypoint
+  script, and `git config --system --add safe.directory '*'`. Same
+  shape as merger's Dockerfile minus the Go build stage. ~200-300MB
+  image.
+- `deploy/docker/context/planner-entrypoint.sh` — 30-line shell
+  entrypoint: parses flags (`--task-id`, `--worktree`, `--prompt-file`,
+  `--model`, `--effort`), invokes claude in headless mode, waits for
+  `plan.json` to land, exits with the CLI's exit code.
+- `internal/orchestrator/plan_dispatch.go` — planner-side analogue of
+  `merge_dispatch.go`. Exposes `dispatchPlan(ctx, task) (*PlanResult,
+  error)`, builds `SpawnWorkerParams.Cmd`, polls `InspectWorker`,
+  reads `plan.json` from the worktree, validates + returns.
+- `internal/orchestrator/plan_dispatch_test.go` — argv composition,
+  exit-code routing, JSON parse errors, validation failure modes.
+- `plans/warm-direct-planner.md` — this file.
+
+### Modified files
+- `internal/spawner/images.go` — add
+  `"planner": "localhost:5000/drem-planner:latest"` to
+  `defaultImages`.
+- `internal/orchestrator/task_processing.go::processPlanning` —
+  `if cfg.Planner.Provider == "claude" || cfg.Planner.Provider == ""`
+  branch calls `dispatchPlan` via the spawner; else falls through to
+  the legacy runner path for rollback safety.
+- `internal/projects/templates/project-drem.toml.tmpl` — add
+  `[agents.planner]\n  provider = "claude"\n  model = "claude-opus-4-6"\n  effort = "high"`.
+- `deploy/compose/global.yml` — the planner image just needs to be
+  pushed to the registry (like drem-merger); no long-lived service
+  entry. A `profiles: ["never"]` image-prime stub can be added to
+  the per-project compose template mirroring `merger-template`.
+- `internal/projects/templates/project-compose.yml.tmpl` — add a
+  `planner-template` service entry with `profiles: ["never"]` so
+  `docker compose pull` primes the image on first up. Matches the
+  existing `merger-template` convention.
+- `docs/containerization/install.md` — new "Spawn-on-demand agents"
+  subsection covering merger AND planner, since they share the
+  pattern. Document the `ANTHROPIC_API_KEY` plumbing.
+- `plans/containerization.md` — tick the planner row in Phase 6.
+
+## 4. ANTHROPIC_API_KEY plumbing
+
+The planner container needs Anthropic credentials. Unlike merger
+(which calls internal orch HTTP) planner calls out to
+`api.anthropic.com`. Options:
+
+1. **Env var through compose.** Host operator sets
+   `ANTHROPIC_API_KEY` in their shell; `deploy/compose/global.yml`
+   passes it to the spawner; spawner forwards it to planner-container
+   env on spawn. Fail closed if unset.
+2. **Anthropic Bedrock-equivalent / credentials file.** Overkill for
+   a single-operator stack.
+
+Recommend (1). Add `SpawnWorkerParams.Env` already exists as a
+passthrough map — populate it in `dispatchPlan` from the orch's own
+env:
 
 ```go
-// internal/agent/direct_tool_agent.go
-var roleTools = map[string][]string{
-    "coder":    {"read", "edit", "write", "bash", "grep", "glob"},
-    "fixer":    {"read", "edit", "write", "bash", "grep", "glob"},
-    "reviewer": {"read", "bash", "grep", "glob"},
-    "prep":     {"read", "grep", "glob"},
-    "planner":  {"read", "grep", "glob"},   // NEW
+params.Env = map[string]string{
+    "ANTHROPIC_API_KEY": os.Getenv("ANTHROPIC_API_KEY"),
 }
 ```
 
-Planner does NOT need edit/write/bash — it writes `plan.json` as its
-final assistant message, which the caller parses and persists to the
-DB. No filesystem side-effects during tool loops.
+Orch's env gets `ANTHROPIC_API_KEY` from `deploy/compose/global.yml`
+(passed through from host) and the per-project compose template.
 
-## 2. Phase 1 — direct-planner in-orch
+Fail closed: if the orch env doesn't have the key at
+`SetInternalEndpoints` time, `processPlanning` logs a loud error,
+leaves the task in PLANNING (orch retries next tick), and emits a
+`planner_missing_api_key` event. Do NOT advance to plan_review on a
+blank result.
 
-### 2.1 Files
+## 5. Commit sequence
 
-- **NEW** `internal/agent/direct_planner.go` (~260 LOC). Mirrors
-  `direct_prep.go`. Exposes `DirectPlannerConfig` (embedding
-  `DirectToolAgentConfig`) and `RunDirectPlanner(cfg, opts,
-  outputPath) (*DirectToolAgentResult, error)`.
-- **NEW** `internal/agent/direct_planner_test.go` — table tests
-  against a mock sglang that returns a canned plan JSON.
-- **MODIFIED** `internal/agent/direct_tool_agent.go` — add
-  `"planner"` to `roleTools`.
-- **MODIFIED** `cmd/drem/main.go` — add `plannerDirect` gate in
-  the same style as `classifierDirect` (see lines 209-221); plumb a
-  `*agent.DirectPlannerConfig` onto the orchestrator via a new
-  `SetDirectPlannerConfig` method.
-- **MODIFIED** `internal/orchestrator/orchestrator.go` — add
-  `directPlannerCfg *agent.DirectPlannerConfig` field + setter.
-- **MODIFIED** `internal/orchestrator/task_processing.go` —
-  `processPlanning` branches on `o.directPlannerCfg`:
+1. **`feat(deploy): add drem-planner image (claude CLI + entrypoint)`** —
+   new Dockerfile + entrypoint script. `docker build` + registry
+   push. Image inventory test confirms the tag lands. No orch wiring.
+2. **`feat(spawner): map "planner" to drem-planner image`** —
+   one-line addition to `defaultImages`, plus an image-resolver test.
+3. **`feat(orch): dispatchPlan via spawner, parse plan.json`** —
+   `plan_dispatch.go` + tests. Uses mock spawner in tests (same
+   pattern as `merge_dispatch_test.go`). Covers argv, JSON parse,
+   validation (subtasks non-empty, tests_for valid, etc.).
+4. **`feat(orch): processPlanning routes to dispatchPlan when provider=claude`** —
+   wire `processPlanning` to pick the spawner path. Fall-through to
+   legacy runner stays. Unit tests for the branch decision.
+5. **`feat(projects): default planner to opus in drem.toml template`** —
+   template update + test asserting the generated toml pins provider
+   and model.
+6. **`feat(projects): add planner-template image prime to compose`** —
+   mirrors merger-template, profiles: ["never"].
+7. **`docs: containerization install.md — spawn-on-demand agents section`** —
+   covers merger + planner. Document ANTHROPIC_API_KEY requirement.
+8. **`docs: plans/containerization.md — tick planner row`**.
 
-  ```go
-  if o.directPlannerCfg != nil {
-      return o.processPlanningDirect(task)   // NEW
-  }
-  // fall through to existing SpawnAgent path
-  ```
+~8 commits, ~900 LOC, ~2 days focused work.
 
-  `processPlanningDirect` creates a lightweight agent record
-  (provider=`sglang-direct`, model from cfg), runs
-  `RunDirectPlanner` synchronously in a goroutine (same pattern as
-  `processClassifyingTasksDirect`), parses the resulting `plan.json`,
-  writes it to `task.Plan`, and lets the existing tick advance to
-  `PLAN_REVIEW`.
-- **MODIFIED** `internal/prompt/prompt_planner.go` — extract a
-  `plannerSystemPrompt` constant for `RunDirectPlanner` to use
-  directly. The existing `plannerInstructions()` (used by
-  `prompt.Generate`) keeps its subprocess shape for rollback safety.
+**T2 canary becomes feasible at commit 4 assuming
+`ANTHROPIC_API_KEY` is set in the orch env.**
 
-### 2.2 Commits
+## 6. Plan validation
 
-1. **`feat(agent): add direct planner path with tool loop`** —
-   `direct_planner.go` + `roleTools["planner"]` + tests. No orch
-   wiring yet.
-2. **`feat(orch): wire direct planner in processPlanning`** —
-   `SetDirectPlannerConfig`, `processPlanningDirect`, fall-through to
-   legacy. Tests: direct path returns valid plan, falls through when
-   cfg is nil, JSON parse errors surface as planner-failed with
-   retry.
-3. **`feat(config): plumb [agents.planner].direct through config`** —
-   main.go gate, drem.toml template adds
-   `[agents.planner]\n  direct = true\n  model = "gemma4-26b"`.
-4. **`docs: update install.md with direct planner section`**.
-
-~4 commits, ~600 LOC, ~1.5 days focused work. **T2 canary becomes
-feasible at commit 3.**
-
-### 2.3 T2 canary after phase 1
-
-```
-insert task → classifying → backlog → planning → plan_review
-                                          ↑
-                          direct planner completes, writes plan.json
-```
-
-The `plan_review` gate is still FROZEN per standing directive, so
-the canary task would park there. That's the intended T2 stopping
-point: prove classify+plan roundtrip, then cancel.
-
-## 3. Phase 2 — warm container
-
-Directly analogous to classifier plan §§3-8. Adds:
-
-- `cmd/drem-planner/{main,server,server_test}.go`
-- `deploy/docker/planner.Dockerfile`
-- `drem-planner` service in `deploy/compose/global.yml`
-- `[agents.planner].endpoint` TOML key
-- `DREM_PLANNER_URL` env in orch compose
-- HTTP `POST /plan` / `GET /healthz` / `GET /metrics`
-
-Refactor step: phase 1 wrote `RunDirectPlanner` with the full
-DirectToolAgent dependency. For phase 2, extract the LLM + tool-loop
-core into `agent.Plan(ctx, cfg, opts) (Result, error)` so both the
-in-orch fallback and the new binary can import it. Same refactor
-pattern as classifier plan commit 1.
-
-4 commits for phase 2, ~500 LOC, ~1 day.
-
-**Total planner effort: 8 commits, ~1100 LOC, 2.5 days.**
-
-## 4. HTTP surface (phase 2)
-
-### POST /plan
-
-Request:
-```json
-{
-  "task_id": "...",
-  "plan_opts": {
-    "task": {...},
-    "project": {...},
-    "worktree_path": "/home/.../feature/task-xxx",
-    "comments": [...],
-    "target_coder_provider": "sglang-direct",
-    "target_coder_model": "gemma4-26b"
-  }
-}
-```
-
-Response 200 mirrors prep's shape: `{task_id, output_path,
-tokens_in, tokens_out, duration_ms, tool_calls}` where `output_path`
-is `<worktree_path>/plan.json`.
-
-Errors: 400 (bad request), 401 (bad token), 409 (JSON parsed but
-failed schema validation — plan has zero subtasks, for example), 502
-(sglang unreachable), 504 (timeout), 500 (internal).
-
-## 5. Plan validation
-
-Planner output is high-risk — a malformed plan poisons every downstream
-agent. The binary must validate before returning 200:
+Move from the prior draft: the planner container writes `plan.json`,
+orch reads it. Validation runs in `dispatchPlan` after the container
+exits with code 0:
 
 - `plan.json` parses.
 - `subtasks` non-empty.
 - Every `tests_for` index points to a real `subtasks` entry.
 - Every `dependencies` index is valid.
-- TDD pairing rule (`internal/prompt/prompt_planner.go:63-66`):
-  each implementation subtask has exactly one test subtask whose
-  `tests_for` contains only its index.
+- TDD pairing rule: each implementation subtask has exactly one test
+  subtask whose `tests_for` contains only its index
+  (`internal/prompt/prompt_planner.go:63-66`).
 
-On validation failure, the binary retries up to `MaxValidationRetries`
-(default 2) with the validation errors appended to the prompt as
-feedback. Only after retries exhaust does it 409.
+On validation failure, `dispatchPlan` returns an error that surfaces
+as a planner retry in `processPlanning`. Budget = `MaxPlannerRetries`
+(already defined). Beyond budget, fail task with a
+`planner_validation_exhausted` reason.
 
-This is a material improvement over the legacy subprocess path,
-which had no validation.
+Material improvement over legacy which had no validation.
 
-## 6. Test surface
+## 7. Exit-code table
 
-Phase 1:
-- `internal/agent/direct_planner_test.go` — canned plans, tool-loop
-  behavior against mock sglang, JSON parse failures.
+| Exit | Meaning | Orch action |
+|---|---|---|
+| 0 + valid plan.json | success | advance task to plan_review (after clarification check) |
+| 0 + missing plan.json | silent failure from CLI | retry (MaxPlannerRetries) |
+| 0 + plan.json validation fail | malformed output | retry with feedback appended |
+| 1 | claude CLI error (auth, network, etc.) | retry; escalate if persistent |
+| 2+ | unknown | fail task immediately |
+| 124 / 137 | timeout (SIGTERM from tini) | retry once; else fail |
+
+Same shape as merger's exit-code table (§5 of merger plan) —
+consistent routing across spawn-on-demand roles.
+
+## 8. Test surface
+
+- `internal/orchestrator/plan_dispatch_test.go` — argv composition,
+  mock spawner, exit-code routing, plan.json parse, validation
+  failure, missing-plan-file, timeout.
 - `internal/orchestrator/task_processing_test.go` — add cases for
-  the direct path, fall-through, validation errors.
-- `cmd/drem/main_test.go` — `plannerDirect` gate tests.
+  spawner-path vs runner-path selection on provider value.
+- `internal/spawner/images_test.go` — planner image mapping.
+- `internal/projects/template_test.go` — drem.toml has
+  `provider = "claude"` and `model = "claude-opus-4-6"` under
+  `[agents.planner]`; compose template has planner-template stub.
+- Dockerfile: lint clean (no `hadolint` in tree today — skip).
 
-Phase 2:
-- `cmd/drem-planner/server_test.go` — same categories as classifier
-  + validation-failure retry test.
-- Compose/YAML smoke test.
+## 9. Open questions
 
-## 7. Open questions
+1. **Model string — exact tag.** `claude-opus-4-6` mirrors existing
+   references in `internal/capability/capability_test.go:26` and
+   `bench/scratch/...`. Verify against the Anthropic docs at
+   implementation time; pick the current stable Opus tag.
+2. **Claude CLI flags.** The entrypoint script needs the right flag
+   set: `--headless`, `--model`, `--effort`, output routing. Cross-
+   reference `agent.NewRunner` for how the legacy path invoked it so
+   we match behavior.
+3. **Prompt file mount.** The planner prompt (generated by
+   `prompt.Generate` with `AgentType=Planner`) must reach the
+   container. Two options: (a) write to the worktree before spawn
+   and pass the path; (b) pass inline via env var. Option (a) is
+   cleaner and already matches how merger receives config.
+4. **Context window.** Opus has a 1M context; planner prompts +
+   repo exploration easily exceed the 200K default. Pass
+   `--context-window` explicitly in the entrypoint to avoid the
+   CLI's auto-switch.
+5. **Thinking budget for reasoning.** Plan quality likely benefits
+   from extended thinking. Expose via config:
+   `[agents.planner].thinking_tokens = 32768`. Defer unless planner
+   quality is bad.
 
-1. **Which model?** `gemma4-26b` for parity with classifier/prep is
-   the default. Real-world planner quality may demand a larger
-   reasoning model (operator has opinions). Parameterize via
-   `[agents.planner].model` and make it easy to override per project.
-2. **Validation retry budget.** 2 retries doubles planner latency
-   on bad outputs. Worth metric+alert before dialing down.
-3. **Does planner need the orchestrator API** (via `--orch-url`) like
-   merger does? Merger POSTs merge_results back; planner writes
-   `plan.json` which orch reads from the worktree. No orch call-back
-   needed — planner is request/response only. **Confirm during
-   phase 2 commit 2.**
-4. **Integration with existing `clarification_session` path** — the
-   legacy planner occasionally decides it needs clarification
-   (`internal/orchestrator/clarification_handling.go`). Does the
-   direct planner follow the same clarification decision protocol?
-   Phase 1 commit 2 must replicate this or document the divergence.
-
-## 8. What this doesn't solve
+## 10. What this doesn't solve
 
 - Gate freeze still parks tasks at `plan_review`. T2 canary stops
-  at that gate — by design.
-- Planner quality — fidelity vs. cost / latency trade-offs live
-  outside this plan.
-- `researcher` agent type — covered by neither this plan nor the
-  prep plan. Planner may emit subtasks with `agent_type: "researcher"`
-  that nothing picks up. File a separate plan if researcher becomes
-  a blocking role.
+  there by design.
+- Cost: every planner run is billable Anthropic tokens. Track via
+  `drem_planner_anthropic_tokens_total` metric (exported from
+  dispatchPlan based on entrypoint output parsing).
+- `researcher` agent type — orthogonal.
+- If Anthropic rate-limits, the retry budget in §7 chews through
+  them. Worth adding a circuit-breaker on 429 in a follow-up.
+
+## 11. Relationship to the classifier + prep plans
+
+- Classifier + prep run on sglang (`gemma4-26b`), managed by gq.
+  They warm-containerize because they're frequent and LLM-local.
+- Planner runs on Opus (Anthropic). It spawn-on-demands because it's
+  rare and LLM-remote.
+- All three share the HTTP/auth pattern where applicable
+  (classifier+prep) and the spawner pattern where applicable (merger
+  + planner).
+- A future role may want both a warm container AND spawn-on-demand
+  behavior (e.g. coder — warm for quick fixes, spawn for heavy work).
+  Defer that design until we see the need.
