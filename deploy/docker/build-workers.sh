@@ -55,16 +55,31 @@ echo ">> building localhost:5000/drem-worker-base:latest"
 docker build -t localhost:5000/drem-worker-base:latest \
     -f worker-base.Dockerfile context/
 
+# Push the base BEFORE building derived images so `--pull` on the
+# derived builds can fetch the freshly-pushed base from the registry.
+# Without this sequence, derived-image FROM layer cache is not
+# invalidated when only the base changes: docker keyed the cached
+# `FROM localhost:5000/drem-worker-base:latest` layer against the
+# OLD base image ID, and a rebuild of base alone leaves the cache
+# entry intact. This bit the 2026-04-20 worker-subscription-auth
+# rollout when the `/home/drem/.claude` mkdir added to worker-base
+# did not propagate to worker-go until a manual `--no-cache` rebuild.
+echo ">> pushing base so derived --pull builds see fresh digest"
+docker push localhost:5000/drem-worker-base:latest
+
+# --pull forces docker to re-fetch the base image from the registry at
+# build time, invalidating any stale FROM layer cache. Combined with
+# the push above, this guarantees derived images build against the
+# newly-pushed base digest.
 echo ">> building localhost:5000/drem-worker-go:latest"
-docker build -t localhost:5000/drem-worker-go:latest \
+docker build --pull -t localhost:5000/drem-worker-go:latest \
     -f worker-go.Dockerfile context/
 
 echo ">> building localhost:5000/drem-worker-cpp:latest"
-docker build -t localhost:5000/drem-worker-cpp:latest \
+docker build --pull -t localhost:5000/drem-worker-cpp:latest \
     -f worker-cpp.Dockerfile context/
 
-echo ">> pushing images to localhost:5000"
-docker push localhost:5000/drem-worker-base:latest
+echo ">> pushing derived images to localhost:5000"
 docker push localhost:5000/drem-worker-go:latest
 docker push localhost:5000/drem-worker-cpp:latest
 
