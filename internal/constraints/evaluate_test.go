@@ -792,7 +792,7 @@ func TestFormatReport(t *testing.T) {
 	if !strings.Contains(output, "big.go has 900 lines") {
 		t.Errorf("expected violation detail in output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "1 checks passed, 1 failed") {
+	if !strings.Contains(output, "1 checks passed, 0 skipped, 1 failed") {
 		t.Errorf("expected summary in output, got:\n%s", output)
 	}
 }

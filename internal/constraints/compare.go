@@ -52,9 +52,17 @@ func (r ComparisonResult) Summary() string {
 //   - FAIL→PASS: improvement, allowed
 //   - FAIL→FAIL (not worse): pre-existing, allowed
 //   - FAIL→FAIL (worse): worsened violation, blocked (added to Worsened)
+//   - SKIP on either side: no signal, treated as "no regression"
 //
 // Magnitude is measured by violation message count: more messages means worse.
 // Dominated is true when any constraint is blocked.
+//
+// A SKIP result (tool unavailable at evaluation time) carries no information
+// about whether the constraint holds. Rather than propagating "I don't know"
+// into the comparison — which could either introduce false blockers or mask
+// real regressions — we treat SKIP as a no-op for that constraint. The orch
+// container emits INFO log entries for every SKIP so operators retain
+// visibility into reduced coverage.
 func CompareReports(baseline, current *Report) ComparisonResult {
 	// Build a lookup of baseline results by name.
 	baselineByName := make(map[string]Result, len(baseline.Results))
@@ -64,11 +72,21 @@ func CompareReports(baseline, current *Report) ComparisonResult {
 
 	var result ComparisonResult
 	for _, cur := range current.Results {
+		// Current side was skipped: no signal, no comparison possible.
+		if cur.Skipped {
+			continue
+		}
+
 		base, found := baselineByName[cur.Name]
 		if !found {
 			if !cur.Passed {
 				result.Additions = append(result.Additions, cur.Name)
 			}
+			continue
+		}
+
+		// Baseline side was skipped: no baseline signal to compare against.
+		if base.Skipped {
 			continue
 		}
 

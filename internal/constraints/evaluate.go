@@ -114,16 +114,62 @@ func EvaluateFiles(cfg *Config, worktreeRoot string, files []string) (*Report, e
 func buildReport(results []Result) *Report {
 	report := &Report{Results: results}
 	for _, r := range results {
-		if r.Passed {
+		switch {
+		case r.Skipped:
+			report.Skipped++
+		case r.Passed:
 			report.Passed++
-		} else {
+		default:
 			report.Failed++
 		}
 	}
 	return report
 }
 
+// commandTool returns the probable command binary name from a shell
+// invocation string — the first bare token after any leading `KEY=value`
+// environment assignments. Returns "" when the run string is empty or
+// when no bare token can be identified. Callers use the result with
+// exec.LookPath to detect missing toolchains and surface SKIP rather
+// than falling through to `bash: command not found`.
+//
+// Examples:
+//
+//	"go vet ./..."                         → "go"
+//	"gofmt -l ./internal/ ./cmd/"          → "gofmt"
+//	"GOFLAGS=-mod=vendor go vet ./..."     → "go"
+//	"bash -c 'echo hi'"                    → "bash"
+//	""                                     → ""
+func commandTool(run string) string {
+	for _, tok := range strings.Fields(run) {
+		if strings.Contains(tok, "=") {
+			// env assignment prefix (FOO=bar, KEY=value)
+			continue
+		}
+		return tok
+	}
+	return ""
+}
+
 func evalCommand(c commandConstraint, worktreeRoot string) (Result, error) {
+	result := Result{
+		Name: c.Name,
+		Type: "command",
+	}
+
+	// When the constraint shells out to a tool that isn't on PATH
+	// (e.g. `go vet` inside the orch container, which intentionally
+	// ships without the Go toolchain), report SKIP instead of FAIL.
+	// Otherwise bash surfaces a literal "command not found" error
+	// that looks indistinguishable from a real constraint violation.
+	if tool := commandTool(c.Run); tool != "" {
+		if _, err := exec.LookPath(tool); err != nil {
+			result.Skipped = true
+			result.SkipReason = fmt.Sprintf("tool unavailable: %s", tool)
+			return result, nil
+		}
+	}
+
 	cmd := exec.Command("bash", "-c", c.Run)
 	cmd.Dir = worktreeRoot
 
@@ -132,11 +178,6 @@ func evalCommand(c commandConstraint, worktreeRoot string) (Result, error) {
 	cmd.Stderr = &stderr
 
 	err := cmd.Run()
-
-	result := Result{
-		Name: c.Name,
-		Type: "command",
-	}
 
 	switch c.Expect {
 	case "empty_output":
