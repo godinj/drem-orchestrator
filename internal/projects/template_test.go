@@ -133,6 +133,9 @@ func TestRender_GoTemplateFull(t *testing.T) {
 	// self-URL to pass to spawned merger containers. See
 	// plans/merger-spawn-on-demand-impl.md.
 	require.Equal(t, "http://orch:8080", parsed.Services["orch"].Environment["DREM_ORCH_URL"])
+	// DREM_CLASSIFIER_URL must route orch to the warm drem-classifier
+	// container on drem-net; see plans/warm-direct-classifier.md §3.
+	require.Equal(t, "http://drem-classifier:8090/classify", parsed.Services["orch"].Environment["DREM_CLASSIFIER_URL"])
 	require.Equal(t, data.SharedToken, parsed.Services["agentmon"].Environment["DREM_AGENTMON_TOKEN"])
 	require.Empty(t, parsed.Services["csuite-mike"].Environment["DREM_AGENTMON_TOKEN"])
 	require.Empty(t, parsed.Services["csuite-watcher"].Environment["DREM_AGENTMON_TOKEN"])

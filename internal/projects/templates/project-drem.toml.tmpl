@@ -13,13 +13,19 @@ log_path       = "/var/lib/drem/drem.log"
 [project]
   language = "{{.Language}}"
 
-# Classifier routes through the gq slot-managed proxy to sglang. The
-# `direct=true` flag bypasses the legacy OpenCode subprocess path, which
-# is unavailable inside the headless orch container. The endpoint lives
-# on drem-net and resolves by service name.
+# Classifier routes through the warm drem-classifier container on drem-net.
+# - `direct=true` bypasses the legacy OpenCode subprocess path (unavailable
+#   inside the headless orch container; kept here so the inline-fallback
+#   DirectClassifierConfig still gets built).
+# - `endpoint` points orch at the warm drem-classifier service. When set,
+#   orch POSTs classify jobs to this URL instead of running the LLM call
+#   inline — see plans/warm-direct-classifier.md. Unset falls back to the
+#   inline direct-SGLang path, which is the rollback-safe default.
+# - DREM_CLASSIFIER_URL in the compose env overrides this key.
 [agents.classifier]
-  direct = true
-  model  = "gemma4-26b"
+  direct   = true
+  endpoint = "http://drem-classifier:8090/classify"
+  model    = "gemma4-26b"
 
 # Endpoint override shared by direct-classifier, direct-prep, and
 # direct-tool-agent. The default of http://localhost:8081 resolves to

@@ -28,6 +28,11 @@ services:
       # containers. Mergers POST merge_result records back to this URL.
       DREM_ORCH_URL: "http://orch:8080"
       DREM_AGENTMON_TOKEN: "{{.SharedToken}}"
+      # Warm drem-classifier endpoint — orch POSTs classify jobs here
+      # instead of running the direct-SGLang call inline. Matches the
+      # endpoint also declared in drem.toml [agents.classifier]; this env
+      # var wins when both are set. See plans/warm-direct-classifier.md.
+      DREM_CLASSIFIER_URL: "http://drem-classifier:8090/classify"
     volumes:
       - drem-{{.ProjectName}}-db:/var/lib/drem
       - drem-{{.ProjectName}}-prompts:/var/lib/drem/prompts

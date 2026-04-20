@@ -221,9 +221,14 @@ func main() {
 	}
 
 	// Route classify jobs to the warm drem-classifier container when
-	// DREM_CLASSIFIER_URL is set. Empty env keeps the inline direct path
+	// DREM_CLASSIFIER_URL is set or the [agents.classifier].endpoint key
+	// is populated in drem.toml. Empty value keeps the inline direct path
 	// as a rollback-safe default. See plans/warm-direct-classifier.md.
-	if classifierURL := os.Getenv("DREM_CLASSIFIER_URL"); classifierURL != "" {
+	classifierURL := os.Getenv("DREM_CLASSIFIER_URL")
+	if classifierURL == "" {
+		classifierURL = cfg.Agents.Classifier.Endpoint
+	}
+	if classifierURL != "" {
 		orch.SetClassifierContainerEndpoint(classifierURL, os.Getenv("DREM_AGENTMON_TOKEN"))
 	}
 

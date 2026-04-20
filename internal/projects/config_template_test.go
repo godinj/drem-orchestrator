@@ -3,7 +3,6 @@ package projects_test
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -29,7 +28,7 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 
 	require.Contains(t, s, "bare_repo_path = \"/home/dev/git/drem-orchestrator.git\"")
 	require.Contains(t, s, "[agents.classifier]")
-	require.Contains(t, s, "direct = true")
+	require.Regexp(t, `direct\s*=\s*true`, s)
 	require.Contains(t, s, "[direct_tool_agent]")
 	require.Contains(t, s, "endpoint = \"http://gq:8090/v1/chat/completions\"")
 
@@ -42,8 +41,9 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 		} `toml:"project"`
 		Agents struct {
 			Classifier struct {
-				Direct bool   `toml:"direct"`
-				Model  string `toml:"model"`
+				Direct   bool   `toml:"direct"`
+				Endpoint string `toml:"endpoint"`
+				Model    string `toml:"model"`
 			} `toml:"classifier"`
 		} `toml:"agents"`
 		DirectToolAgent struct {
@@ -56,6 +56,23 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 	require.Equal(t, "go", parsed.Project.Language)
 	require.True(t, parsed.Agents.Classifier.Direct)
 	require.Equal(t, "http://gq:8090/v1/chat/completions", parsed.DirectToolAgent.Endpoint)
+	// The warm-classifier endpoint must round-trip so orch picks it up on
+	// startup without needing DREM_CLASSIFIER_URL also set. See
+	// plans/warm-direct-classifier.md §3 (Modified files).
+	require.Equal(t, "http://drem-classifier:8090/classify", parsed.Agents.Classifier.Endpoint)
+}
+
+// TestRenderConfig_ContainsWarmClassifierEndpoint is a tighter substring
+// check that protects the exact key/value pair against typo regressions.
+// The round-trip above catches TOML-level breakage; this catches someone
+// renaming the key in-flight.
+func TestRenderConfig_ContainsWarmClassifierEndpoint(t *testing.T) {
+	out, err := projects.RenderConfig(projects.TemplateData{
+		BareRepoPath: "/tmp/x",
+		Language:     projects.LanguageGo,
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(out), `endpoint = "http://drem-classifier:8090/classify"`)
 }
 
 // TestRenderConfig_RequiresBareRepoPath asserts the nil-guard on the
@@ -92,7 +109,7 @@ func TestWriteProjectConfigAt_WritesAndResolvesPath(t *testing.T) {
 
 	contents, err := os.ReadFile(path)
 	require.NoError(t, err)
-	require.True(t, strings.Contains(string(contents), "direct = true"),
+	require.Regexp(t, `direct\s*=\s*true`, string(contents),
 		"written drem.toml must enable the direct classifier")
 }
 

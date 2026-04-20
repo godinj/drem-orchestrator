@@ -25,6 +25,13 @@ type AgentConfig struct {
 	// internal/agent/image_resolver.go. Ignored by the legacy subprocess
 	// path.
 	ContainerImage string `toml:"container_image"`
+	// Endpoint routes classify jobs to a warm drem-classifier container
+	// instead of running the direct SGLang call inline in orch. Only the
+	// classifier role honors this today (see plans/warm-direct-classifier.md);
+	// planner + prep follow the same pattern in their own plans. Empty
+	// keeps the inline direct path as the rollback-safe default.
+	// DREM_CLASSIFIER_URL takes precedence over this key.
+	Endpoint string `toml:"endpoint"`
 }
 
 // ProjectTOMLConfig mirrors the [project] section of drem.toml. Today it

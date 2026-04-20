@@ -128,6 +128,37 @@ func TestLoadConfigAgentOverrides(t *testing.T) {
 	}
 }
 
+// TestLoadConfigClassifierEndpoint verifies the [agents.classifier].endpoint
+// TOML key is round-tripped so cmd/drem can wire it into
+// SetClassifierContainerEndpoint on startup. See
+// plans/warm-direct-classifier.md §3.
+func TestLoadConfigClassifierEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "drem.toml")
+	data := []byte(`
+[agents.classifier]
+  endpoint = "http://drem-classifier:8090/classify"
+  direct   = true
+  model    = "gemma4-26b"
+`)
+	if err := os.WriteFile(cfgPath, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if got, want := cfg.Agents.Classifier.Endpoint, "http://drem-classifier:8090/classify"; got != want {
+		t.Errorf("Classifier.Endpoint: got %q, want %q", got, want)
+	}
+	if !cfg.Agents.Classifier.Direct {
+		t.Error("Classifier.Direct: expected true")
+	}
+	if got, want := cfg.Agents.Classifier.Model, "gemma4-26b"; got != want {
+		t.Errorf("Classifier.Model: got %q, want %q", got, want)
+	}
+}
+
 func TestAgentsConfigForAgentType(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Agents.Planner = AgentConfig{Model: "claude-opus-4-6", Effort: "high"}
