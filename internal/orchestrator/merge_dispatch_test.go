@@ -121,6 +121,33 @@ func TestDispatchMerge_SetsBareRepoReadWrite(t *testing.T) {
 	require.Equal(t, "/tmp/fake-bare", fake.spawnCalls[0].BareRepoMount)
 }
 
+// TestDispatchMerge_OmitsPromptAndCredsMounts documents that merger,
+// a Go binary, receives neither a prompt nor a creds mount — the
+// promptRequired and credsMountRequired tables both return false for
+// "merger" and dispatchMerge does not populate either field. A
+// regression here would accidentally charge the operator's claude
+// subscription pool or render a prompt the merger has no way to use.
+// See plans/worker-prompt-delivery.md §§5, 8.
+func TestDispatchMerge_OmitsPromptAndCredsMounts(t *testing.T) {
+	o, fake := dispatchMergeTestRig(t)
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "merger mount omissions",
+		Status:         model.StatusMerging,
+		WorktreeBranch: "feature/merger-mounts",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	_, err := o.dispatchMerge(context.Background(), task)
+	require.NoError(t, err)
+
+	require.Len(t, fake.spawnCalls, 1)
+	p := fake.spawnCalls[0]
+	require.Empty(t, p.CredsMount, "merger must not carry a creds mount (Go binary, no claude CLI)")
+	require.Empty(t, p.PromptMount, "merger must not carry a prompt mount (Go binary, takes argv flags)")
+}
+
 // TestDispatchMerge_DefaultIntegrationBranch_OmitsFlag asserts that a
 // plain "main" (or "master") default branch produces an argv without a
 // --integration-branch pair — drem-merger's own default is "master" so

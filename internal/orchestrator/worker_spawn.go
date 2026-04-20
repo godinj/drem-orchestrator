@@ -12,6 +12,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 )
 
@@ -20,6 +21,20 @@ import (
 // claude subscription credentials file. Set by `drem project register`;
 // consumed by buildSpawnContext for every claude-backed worker.
 const workerCredsPathEnv = "DREM_WORKER_CREDS_PATH"
+
+// workerPromptRootEnv is the environment variable the per-project
+// compose template passes to orch carrying the host directory under
+// which per-task prompt files are written. The spawner later bind-mounts
+// the individual prompt file from that dir into the worker. See
+// plans/worker-prompt-delivery.md §§2, 4.
+const workerPromptRootEnv = "DREM_PROMPT_ROOT_HOST"
+
+// spawnPolicyReasonPromptMissing classifies worker_spawn_failed
+// events emitted when orch cannot resolve a host prompt root OR the
+// prompt render/write step fails. Lets audit queries filter by reason
+// without parsing the free-form error string. Companion to
+// spawnPolicyReasonAPIKey defined below.
+const spawnPolicyReasonPromptMissing = "prompt_render_failed"
 
 // credsMountRequired reports whether the given agent_type runs the
 // claude CLI harness inside the container and therefore needs the
@@ -67,6 +82,121 @@ func resolveWorkerCredsPath() string {
 	return filepath.Join(home, ".claude", ".credentials.json")
 }
 
+// promptRequired reports whether the agent_type runs the claude CLI
+// in a mode that needs a prompt file on disk. Mirrors
+// credsMountRequired — every claude-backed role gets a prompt; merger
+// (a Go binary that takes argv flags) does not. The two tables are
+// kept separate so a future role can need auth without a prompt (or
+// vice versa) without dragging one policy along with the other. See
+// plans/worker-prompt-delivery.md §5.
+func promptRequired(agentType string) bool {
+	switch agentType {
+	case string(model.AgentCoder),
+		string(model.AgentReviewer),
+		string(model.AgentFixer),
+		"tester",
+		"supervisor":
+		return true
+	case "merger":
+		return false
+	}
+	// Unknown agent types default to false: a new role must add an
+	// explicit entry + test here before it can get a prompt, same
+	// deny-by-default discipline as credsMountRequired.
+	return false
+}
+
+// resolveWorkerPromptRoot returns the host directory under which orch
+// writes per-task prompt files. Reads DREM_PROMPT_ROOT_HOST first
+// (set by `drem project register` on host), falls back to
+// $HOME/.drem/projects/<project>/prompts — the same layout
+// Manager.PromptDir already uses for the legacy host path (see
+// internal/agent/spawn.go:207). Returns empty when neither source
+// resolves; caller fail-closes on empty.
+func resolveWorkerPromptRoot(project string) string {
+	if p := os.Getenv(workerPromptRootEnv); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".drem", "projects", project, "prompts")
+}
+
+// renderAndWritePrompt renders the agent prompt via internal/prompt
+// and writes it to <promptRoot>/<task-id>.md atomically (tmp file +
+// rename). Returns the absolute host path of the written file.
+//
+// The rename pattern is load-bearing: SpawnWorker stats the file on
+// the same goroutine immediately after this returns; any window where
+// the file is half-written would race into a fail-closed spawn error.
+// rename(2) within a single filesystem is atomic, so the file either
+// does not exist or has the complete rendered content — never partial.
+//
+// Errors are returned as-is; buildSpawnContext turns them into a
+// worker_spawn_failed event with reason=prompt_render_failed.
+func (o *Orchestrator) renderAndWritePrompt(
+	task *model.Task,
+	project *model.Project,
+	agentType string,
+	promptRoot string,
+) (string, error) {
+	if task == nil {
+		return "", fmt.Errorf("nil task")
+	}
+	if promptRoot == "" {
+		return "", fmt.Errorf("prompt root is empty")
+	}
+
+	// WorktreePath: for container workers the worktree lives inside
+	// the worker at /home/drem/work, but the prompt renderer reads it
+	// as a logical handle (the generator doesn't actually open the
+	// directory for most branches). Pass the host-identical bare repo
+	// path when available so prompt.Generate has something truthful to
+	// display in the rendered markdown. The legacy host path had
+	// worktreePath point at a per-feature checkout on host; the
+	// container path doesn't create one, so we use the bare repo path
+	// here as a stable handle.
+	var worktreePath string
+	if o.worktree != nil {
+		worktreePath = o.worktree.BareRepo()
+	}
+
+	rendered := prompt.Generate(prompt.Opts{
+		Task:         task,
+		Project:      project,
+		AgentType:    model.AgentType(agentType),
+		WorktreePath: worktreePath,
+	})
+	if strings.TrimSpace(rendered) == "" {
+		return "", fmt.Errorf("prompt.Generate produced empty output for agent_type=%q task_id=%s",
+			agentType, task.ID)
+	}
+
+	// Ensure the destination exists before writing. The per-project
+	// compose template creates the dir at `drem project register`
+	// time, but a fresh worktree or CI checkout may have raced ahead.
+	if err := os.MkdirAll(promptRoot, 0o755); err != nil {
+		return "", fmt.Errorf("mkdir prompt root %s: %w", promptRoot, err)
+	}
+
+	finalPath := filepath.Join(promptRoot, task.ID.String()+".md")
+	// Write to a sibling tmp file first so the rename is atomic and
+	// the worker's pre-stat never sees a partial write.
+	tmpPath := finalPath + ".tmp"
+	if err := os.WriteFile(tmpPath, []byte(rendered), 0o644); err != nil {
+		return "", fmt.Errorf("write prompt tmp %s: %w", tmpPath, err)
+	}
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		// Best-effort cleanup of the tmp file; ignore errors because
+		// the caller is about to fail the spawn anyway.
+		_ = os.Remove(tmpPath)
+		return "", fmt.Errorf("rename prompt %s -> %s: %w", tmpPath, finalPath, err)
+	}
+	return finalPath, nil
+}
+
 // WorkerSpawner is the narrow surface the orchestrator consumes from the
 // spawner package. Defined at the consumption site (per architecture rule)
 // so tests can provide a fake without importing the spawner RPC wiring.
@@ -82,16 +212,17 @@ type WorkerSpawner interface {
 // It is populated from the task + project and returned so the orchestrator
 // can record the resulting container ID on the right DB row.
 type spawnWorkerContext struct {
-	project    string
-	agentType  string
-	workerID   string
-	branch     string
-	image      string
-	language   string
-	bareRepo   string
-	credsMount string
-	envVars    map[string]string
-	extraLabel map[string]string
+	project     string
+	agentType   string
+	workerID    string
+	branch      string
+	image       string
+	language    string
+	bareRepo    string
+	credsMount  string
+	promptMount string
+	envVars     map[string]string
+	extraLabel  map[string]string
 }
 
 // spawnCoder dispatches a coder worker for a task via the configured
@@ -131,7 +262,17 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 
 	swc, err := o.buildSpawnContext(task, agentType)
 	if err != nil {
-		o.recordSpawnFailureEvent(task, agentType, err)
+		// Prompt render/write failures are distinguishable from other
+		// spawn-context errors by the "render prompt" / "prompt
+		// delivery required" prefix; classify them so audit queries
+		// can isolate prompt-pipeline problems without string parsing.
+		// See plans/worker-prompt-delivery.md §7.
+		msg := err.Error()
+		if strings.Contains(msg, "render prompt") || strings.Contains(msg, "prompt delivery required") {
+			o.recordSpawnFailureEventWithReason(task, agentType, spawnPolicyReasonPromptMissing, err)
+		} else {
+			o.recordSpawnFailureEvent(task, agentType, err)
+		}
 		return fmt.Errorf("spawn %s worker: %w", agentType, err)
 	}
 	// Policy check: reject an ANTHROPIC_API_KEY smuggled into the env
@@ -153,6 +294,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		Labels:        swc.extraLabel,
 		BareRepoMount: swc.bareRepo,
 		CredsMount:    swc.credsMount,
+		PromptMount:   swc.promptMount,
 	}
 
 	res, spawnErr := o.Spawner.SpawnWorker(ctx, params)
@@ -237,15 +379,50 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		}
 	}
 
+	// PromptMount is populated only for claude-backed roles (same
+	// membership as credsMountRequired today; the tables are kept
+	// separate so a future role can opt in/out of each independently).
+	// The rendered prompt is written atomically to host; the spawner
+	// bind-mounts the file read-only into the worker at
+	// /home/drem/.drem/prompt.md and sets DREM_PROMPT_PATH there.
+	// See plans/worker-prompt-delivery.md §§2, 4.
+	promptMount := ""
+	if promptRequired(agentType) {
+		promptRoot := resolveWorkerPromptRoot(project)
+		if promptRoot == "" {
+			return spawnWorkerContext{}, fmt.Errorf(
+				"prompt delivery required for agent_type=%q but %s is unset and $HOME is unresolvable",
+				agentType, workerPromptRootEnv)
+		}
+		// Load the project row so prompt.Generate has a populated
+		// Opts.Project (name, description, bare repo path all flow
+		// into the rendered markdown). A failure to load is
+		// non-fatal — we render with a nil project; prompt.Generate
+		// guards every Project read.
+		var proj *model.Project
+		var row model.Project
+		if err := o.db.First(&row, "id = ?", o.projectID).Error; err == nil {
+			proj = &row
+		}
+		written, err := o.renderAndWritePrompt(task, proj, agentType, promptRoot)
+		if err != nil {
+			return spawnWorkerContext{}, fmt.Errorf(
+				"render prompt for agent_type=%q task_id=%s: %w",
+				agentType, task.ID, err)
+		}
+		promptMount = written
+	}
+
 	return spawnWorkerContext{
-		project:    project,
-		agentType:  agentType,
-		workerID:   workerID,
-		branch:     branch,
-		bareRepo:   bareRepo,
-		credsMount: credsMount,
-		envVars:    env,
-		extraLabel: labels,
+		project:     project,
+		agentType:   agentType,
+		workerID:    workerID,
+		branch:      branch,
+		bareRepo:    bareRepo,
+		credsMount:  credsMount,
+		promptMount: promptMount,
+		envVars:     env,
+		extraLabel:  labels,
 	}, nil
 }
 

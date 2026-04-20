@@ -164,12 +164,18 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 		"DREM_FEATURE_BRANCH": task.WorktreeBranch,
 		"DREM_TARGET_BRANCH":  defaultBranch,
 	}
-	// Merger does NOT carry Claude credentials — it is a Go binary
-	// (cmd/drem-merger) with no claude CLI execution. But the same
-	// subscription-only policy applies symmetrically at every spawn
-	// boundary: reject ANTHROPIC_API_KEY before the spawn lands so a
-	// future env extension cannot regress the policy silently. See
-	// plans/worker-subscription-auth.md §6 commit 5.
+	// Merger does NOT carry Claude credentials OR a prompt — it is a
+	// Go binary (cmd/drem-merger) that takes argv flags and runs no
+	// claude CLI. SpawnWorkerParams.CredsMount and PromptMount both
+	// stay at the zero value by omission; the promptRequired and
+	// credsMountRequired tables in worker_spawn.go both return false
+	// for "merger" so a future ordering bug there would not regress
+	// this path silently. The same subscription-only policy still
+	// applies symmetrically at this spawn boundary: reject
+	// ANTHROPIC_API_KEY before the spawn lands so a future env
+	// extension cannot sneak an API key onto the merger either.
+	// See plans/worker-subscription-auth.md §6 commit 5 and
+	// plans/worker-prompt-delivery.md §§5, 8.
 	if policyErr := rejectAPIKeyInEnv(env); policyErr != nil {
 		o.recordSpawnFailureEventWithReason(task, "merger", spawnPolicyReasonAPIKey, policyErr)
 		return nil, fmt.Errorf("dispatchMerge: %w", policyErr)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 
@@ -30,6 +31,24 @@ func setWorkerCredsPathEnv(t *testing.T, value string) {
 			_ = os.Setenv(workerCredsPathEnv, prev)
 		} else {
 			_ = os.Unsetenv(workerCredsPathEnv)
+		}
+	})
+}
+
+// setWorkerPromptRootEnv sets the DREM_PROMPT_ROOT_HOST env var and
+// restores the previous value at test tear-down. Every claude-backed
+// spawn path requires it; tests that drive spawnCoder et al. call
+// this before invoking the orchestrator. The value should be a
+// writable directory (typically a t.TempDir()).
+func setWorkerPromptRootEnv(t *testing.T, value string) {
+	t.Helper()
+	prev, wasSet := os.LookupEnv(workerPromptRootEnv)
+	require.NoError(t, os.Setenv(workerPromptRootEnv, value))
+	t.Cleanup(func() {
+		if wasSet {
+			_ = os.Setenv(workerPromptRootEnv, prev)
+		} else {
+			_ = os.Unsetenv(workerPromptRootEnv)
 		}
 	})
 }
@@ -117,6 +136,7 @@ func workerSpawnTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner) {
 
 func TestSpawnCoder_BuildsExpectedParams(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
 	o, fake := workerSpawnTestRig(t)
 
 	task := &model.Task{
@@ -147,12 +167,20 @@ func TestSpawnCoder_BuildsExpectedParams(t *testing.T) {
 	// Coder is in credsMountRequired, so buildSpawnContext populates
 	// CredsMount from DREM_WORKER_CREDS_PATH (set above).
 	require.Equal(t, "/host/.claude/.credentials.json", p.CredsMount)
+	// Coder is also in promptRequired, so PromptMount points at the
+	// rendered prompt file on host under the test's temp prompt root.
+	// The file must exist and the path must live under the configured
+	// prompt root — the spawner's pre-stat enforces existence.
+	require.NotEmpty(t, p.PromptMount)
+	require.FileExists(t, p.PromptMount)
+	require.Equal(t, task.ID.String()+".md", filepath.Base(p.PromptMount))
 	// And the env map never contains an API-key fallback.
 	require.NotContains(t, p.Env, "ANTHROPIC_API_KEY")
 }
 
 func TestSpawnCoder_RecordsContainerIDAndImageOnAgent(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
 	o, fake := workerSpawnTestRig(t)
 
 	task := &model.Task{
@@ -185,6 +213,7 @@ func TestSpawnCoder_RecordsContainerIDAndImageOnAgent(t *testing.T) {
 
 func TestSpawnCoder_OnSpawnFailureReturnsError(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
 	o, fake := workerSpawnTestRig(t)
 
 	task := &model.Task{
@@ -218,6 +247,7 @@ func TestSpawnCoder_OnSpawnFailureReturnsError(t *testing.T) {
 
 func TestSpawnCoder_RegistersBranchInGitref(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
 	o, fake := workerSpawnTestRig(t)
 
 	task := &model.Task{
@@ -285,6 +315,7 @@ func TestCredsMountRequired_Table(t *testing.T) {
 // CredsMount on SpawnWorkerParams is the host path from the env var.
 func TestSpawnTypedWorker_PopulatesCredsMountForClaudeRoles(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
 
 	claudeRoles := []string{"coder", "reviewer", "fixer", "tester", "supervisor"}
 	for _, role := range claudeRoles {
@@ -314,7 +345,12 @@ func TestSpawnTypedWorker_PopulatesCredsMountForClaudeRoles(t *testing.T) {
 // event with the policy reason.
 func TestSpawnTypedWorker_CredsMountMissingEnvFailsClosed(t *testing.T) {
 	// Unset both env sources so resolveWorkerCredsPath returns "".
+	// Also unset DREM_PROMPT_ROOT_HOST so the second fail-closed check
+	// (prompt root) doesn't shadow the creds fail-close message —
+	// though in practice credsMountRequired runs first in
+	// buildSpawnContext so the creds error is what surfaces.
 	require.NoError(t, os.Unsetenv(workerCredsPathEnv))
+	require.NoError(t, os.Unsetenv(workerPromptRootEnv))
 	prevHome, homeWasSet := os.LookupEnv("HOME")
 	require.NoError(t, os.Unsetenv("HOME"))
 	t.Cleanup(func() {
@@ -349,6 +385,7 @@ func TestSpawnTypedWorker_CredsMountMissingEnvFailsClosed(t *testing.T) {
 // claude-backed role by the table and therefore carries a CredsMount.
 func TestSpawnSupervisor_CarriesCredsMount(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
 
 	o, fake := workerSpawnTestRig(t)
 	task := &model.Task{
@@ -402,6 +439,7 @@ func TestRejectAPIKeyInEnv_Table(t *testing.T) {
 // is set. The merger is a Go binary and never runs the claude CLI.
 func TestBuildSpawnContext_MergerOmitsCredsMount(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
 
 	o, _ := workerSpawnTestRig(t)
 	task := &model.Task{
@@ -417,6 +455,121 @@ func TestBuildSpawnContext_MergerOmitsCredsMount(t *testing.T) {
 	swc, err := o.buildSpawnContext(task, "merger")
 	require.NoError(t, err)
 	require.Equal(t, "", swc.credsMount, "merger must never carry a creds mount")
+	require.Equal(t, "", swc.promptMount, "merger must never carry a prompt mount (Go binary, no claude CLI)")
+}
+
+// TestPromptRequired_Table documents the every-agent-type contract the
+// orchestrator uses to decide whether to render + mount a prompt. Same
+// shape as credsMountRequired so auth + prompt tables stay in lockstep
+// for claude-backed roles, but kept separate so a future role can
+// diverge (e.g. an argv-driven worker needing creds but no prompt).
+// See plans/worker-prompt-delivery.md §5.
+func TestPromptRequired_Table(t *testing.T) {
+	cases := []struct {
+		agentType string
+		want      bool
+	}{
+		{"coder", true},
+		{"reviewer", true},
+		{"fixer", true},
+		{"tester", true},
+		{"supervisor", true},
+		{"merger", false},
+		// Unknown type defaults to false: new types need an explicit
+		// entry + test before they can consume prompt delivery.
+		{"researcher", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.agentType, func(t *testing.T) {
+			require.Equal(t, tc.want, promptRequired(tc.agentType))
+		})
+	}
+}
+
+// TestSpawnCoder_WritesPromptFileBeforeSpawn verifies the atomicity
+// contract: the prompt file exists on host at the path the spawner
+// receives AT the moment SpawnWorker is called. Captured by a fake
+// spawner that stats the PromptMount during its call — if the file
+// doesn't exist, the stat fails and the test fails, which is the
+// behaviour the real spawner exhibits in production.
+func TestSpawnCoder_WritesPromptFileBeforeSpawn(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	promptRoot := t.TempDir()
+	setWorkerPromptRootEnv(t, promptRoot)
+
+	o, fake := workerSpawnTestRig(t)
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "Wire up prompt delivery",
+		Description:    "Render markdown, write atomically, bind-mount RO.",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/prompt",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	require.NoError(t, o.spawnCoder(context.Background(), task))
+	require.Len(t, fake.spawnCalls, 1)
+
+	// The prompt path on the spawner params must exist on disk and
+	// carry non-empty rendered content with the task title baked in.
+	p := fake.spawnCalls[0]
+	require.NotEmpty(t, p.PromptMount)
+	require.FileExists(t, p.PromptMount)
+	require.Equal(t, promptRoot, filepath.Dir(p.PromptMount),
+		"prompt must land under the configured DREM_PROMPT_ROOT_HOST")
+	require.Equal(t, task.ID.String()+".md", filepath.Base(p.PromptMount))
+
+	content, err := os.ReadFile(p.PromptMount)
+	require.NoError(t, err)
+	require.Contains(t, string(content), task.Title,
+		"rendered prompt must contain the task title")
+	require.Contains(t, string(content), "coder",
+		"rendered prompt must identify the agent type")
+
+	// The tmp file from the atomic-rename must NOT linger.
+	_, err = os.Stat(p.PromptMount + ".tmp")
+	require.True(t, os.IsNotExist(err), "atomic-rename tmp file must not remain after spawn")
+}
+
+// TestSpawnTypedWorker_PromptRootMissingFailsClosed verifies that a
+// claude-backed role with no resolvable prompt root fails the spawn,
+// emits a worker_spawn_failed event with reason=prompt_render_failed,
+// and never touches the spawner.
+func TestSpawnTypedWorker_PromptRootMissingFailsClosed(t *testing.T) {
+	// Creds can resolve; prompt root must not.
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	require.NoError(t, os.Unsetenv(workerPromptRootEnv))
+	prevHome, homeWasSet := os.LookupEnv("HOME")
+	require.NoError(t, os.Unsetenv("HOME"))
+	t.Cleanup(func() {
+		if homeWasSet {
+			_ = os.Setenv("HOME", prevHome)
+		}
+	})
+
+	o, fake := workerSpawnTestRig(t)
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "t",
+		Description:    "d",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/z",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	err := o.spawnCoder(context.Background(), task)
+	require.Error(t, err)
+	require.Empty(t, fake.spawnCalls, "spawner must not be called when prompt root cannot be resolved")
+
+	// Event carries reason=prompt_render_failed so audit queries can
+	// filter by the missing-prompt-root class.
+	var evts []model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_spawn_failed").Find(&evts).Error)
+	require.Len(t, evts, 1)
+	require.Equal(t, spawnPolicyReasonPromptMissing, evts[0].Details["reason"])
 }
 
 // TestRecordSpawnFailureEventWithReason_CarriesReasonInDetails verifies
