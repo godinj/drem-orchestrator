@@ -108,16 +108,21 @@ func (f *fakeWorkerSpawner) InspectWorker(_ context.Context, _ spawner.InspectWo
 }
 
 // workerSpawnTestRig builds an Orchestrator wired to a fresh in-memory DB
-// and a fakeWorkerSpawner. It returns both so tests can drive spawnCoder
-// directly and assert on DB state.
-func workerSpawnTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner) {
+// and a fakeWorkerSpawner. It returns the orchestrator, the fake, and the
+// bare repo path — tests that seed parent branches use the bare path to
+// call pushTestFeatureBranch before dispatch. The bare repo is real (not
+// a /tmp/fake-bare literal) because spawnTypedWorker pre-creates the
+// subtask branch via gitref.EnsureBranch, which requires a real git
+// object database.
+func workerSpawnTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner, string) {
 	t.Helper()
 	db := testutil.NewTestDBWithModels(t, &gitref.BranchRef{})
 	projectID := uuid.New()
+	bareRepo := testutil.SetupBareRepo(t)
 	require.NoError(t, db.Create(&model.Project{
 		ID:            projectID,
 		Name:          "worker-spawn-test",
-		BareRepoPath:  "/tmp/fake-bare",
+		BareRepoPath:  bareRepo,
 		DefaultBranch: "main",
 	}).Error)
 
@@ -126,18 +131,30 @@ func workerSpawnTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner) {
 		db:             db,
 		projectID:      projectID,
 		events:         make(chan Event, 32),
-		worktree:       &FakeWorktreeManager{BarePath: "/tmp/fake-bare", Default: "main"},
+		worktree:       &FakeWorktreeManager{BarePath: bareRepo, Default: "main"},
 		logger:         slog.Default().With("component", "worker_spawn_test"),
 		Spawner:        fake,
 		GitrefRegistry: gitref.NewRegistry(db),
 	}
-	return o, fake
+	return o, fake, bareRepo
+}
+
+// pushTestFeatureBranch creates a new branch in a bare repo with a seed
+// commit so tests that seed a parent task with a non-default
+// WorktreeBranch have that branch actually present in the ref database.
+// Mirrors internal/gitref/git_test.go::pushBranch but lives here so
+// orchestrator tests can reuse it without crossing the package boundary.
+func pushTestFeatureBranch(t *testing.T, bareRepo, branch string) {
+	t.Helper()
+	work := t.TempDir()
+	testutil.AddWorktree(t, bareRepo, branch, work)
+	testutil.CommitFile(t, work, "seed.txt", "seed\n", "seed "+branch)
 }
 
 func TestSpawnCoder_BuildsExpectedParams(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
 	setWorkerPromptRootEnv(t, t.TempDir())
-	o, fake := workerSpawnTestRig(t)
+	o, fake, bareRepo := workerSpawnTestRig(t)
 
 	task := &model.Task{
 		ID:             uuid.New(),
@@ -163,7 +180,7 @@ func TestSpawnCoder_BuildsExpectedParams(t *testing.T) {
 	require.Equal(t, task.ID.String(), p.Env["DREM_TASK_ID"])
 	require.Equal(t, task.ID.String(), p.Labels["drem.task_id"])
 	require.Equal(t, "go", p.Labels["drem.language"])
-	require.Equal(t, "/tmp/fake-bare", p.BareRepoMount)
+	require.Equal(t, bareRepo, p.BareRepoMount)
 	// Coder is in credsMountRequired, so buildSpawnContext populates
 	// CredsMount from DREM_WORKER_CREDS_PATH (set above).
 	require.Equal(t, "/host/.claude/.credentials.json", p.CredsMount)
@@ -181,7 +198,7 @@ func TestSpawnCoder_BuildsExpectedParams(t *testing.T) {
 func TestSpawnCoder_RecordsContainerIDAndImageOnAgent(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
 	setWorkerPromptRootEnv(t, t.TempDir())
-	o, fake := workerSpawnTestRig(t)
+	o, fake, _ := workerSpawnTestRig(t)
 
 	task := &model.Task{
 		ID:             uuid.New(),
@@ -214,7 +231,7 @@ func TestSpawnCoder_RecordsContainerIDAndImageOnAgent(t *testing.T) {
 func TestSpawnCoder_OnSpawnFailureReturnsError(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
 	setWorkerPromptRootEnv(t, t.TempDir())
-	o, fake := workerSpawnTestRig(t)
+	o, fake, _ := workerSpawnTestRig(t)
 
 	task := &model.Task{
 		ID:             uuid.New(),
@@ -248,7 +265,7 @@ func TestSpawnCoder_OnSpawnFailureReturnsError(t *testing.T) {
 func TestSpawnCoder_RegistersBranchInGitref(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
 	setWorkerPromptRootEnv(t, t.TempDir())
-	o, fake := workerSpawnTestRig(t)
+	o, fake, bareRepo := workerSpawnTestRig(t)
 
 	task := &model.Task{
 		ID:             uuid.New(),
@@ -264,7 +281,7 @@ func TestSpawnCoder_RegistersBranchInGitref(t *testing.T) {
 
 	require.NoError(t, o.spawnCoder(context.Background(), task))
 
-	ref, err := o.GitrefRegistry.FindByBranch(context.Background(), "/tmp/fake-bare", "feature/register-branch")
+	ref, err := o.GitrefRegistry.FindByBranch(context.Background(), bareRepo, "feature/register-branch")
 	require.NoError(t, err)
 	require.Equal(t, gitref.StatusActive, ref.Status)
 	require.Equal(t, task.ID.String(), ref.TaskID)
@@ -320,7 +337,7 @@ func TestSpawnTypedWorker_PopulatesCredsMountForClaudeRoles(t *testing.T) {
 	claudeRoles := []string{"coder", "reviewer", "fixer", "tester", "supervisor"}
 	for _, role := range claudeRoles {
 		t.Run(role, func(t *testing.T) {
-			o, fake := workerSpawnTestRig(t)
+			o, fake, _ := workerSpawnTestRig(t)
 			task := &model.Task{
 				ID:             uuid.New(),
 				ProjectID:      o.projectID,
@@ -359,7 +376,7 @@ func TestSpawnTypedWorker_CredsMountMissingEnvFailsClosed(t *testing.T) {
 		}
 	})
 
-	o, fake := workerSpawnTestRig(t)
+	o, fake, _ := workerSpawnTestRig(t)
 	task := &model.Task{
 		ID:             uuid.New(),
 		ProjectID:      o.projectID,
@@ -387,7 +404,7 @@ func TestSpawnSupervisor_CarriesCredsMount(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
 	setWorkerPromptRootEnv(t, t.TempDir())
 
-	o, fake := workerSpawnTestRig(t)
+	o, fake, _ := workerSpawnTestRig(t)
 	task := &model.Task{
 		ID:             uuid.New(),
 		ProjectID:      o.projectID,
@@ -441,7 +458,7 @@ func TestBuildSpawnContext_MergerOmitsCredsMount(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
 	setWorkerPromptRootEnv(t, t.TempDir())
 
-	o, _ := workerSpawnTestRig(t)
+	o, _, _ := workerSpawnTestRig(t)
 	task := &model.Task{
 		ID:             uuid.New(),
 		ProjectID:      o.projectID,
@@ -498,7 +515,7 @@ func TestSpawnCoder_WritesPromptFileBeforeSpawn(t *testing.T) {
 	promptRoot := t.TempDir()
 	setWorkerPromptRootEnv(t, promptRoot)
 
-	o, fake := workerSpawnTestRig(t)
+	o, fake, _ := workerSpawnTestRig(t)
 	task := &model.Task{
 		ID:             uuid.New(),
 		ProjectID:      o.projectID,
@@ -549,7 +566,7 @@ func TestSpawnTypedWorker_PromptRootMissingFailsClosed(t *testing.T) {
 		}
 	})
 
-	o, fake := workerSpawnTestRig(t)
+	o, fake, _ := workerSpawnTestRig(t)
 	task := &model.Task{
 		ID:             uuid.New(),
 		ProjectID:      o.projectID,
@@ -577,7 +594,7 @@ func TestSpawnTypedWorker_PromptRootMissingFailsClosed(t *testing.T) {
 // audit queries can filter by reason (e.g. policy_violation_api_key)
 // without parsing the free-form error string.
 func TestRecordSpawnFailureEventWithReason_CarriesReasonInDetails(t *testing.T) {
-	o, _ := workerSpawnTestRig(t)
+	o, _, _ := workerSpawnTestRig(t)
 	task := &model.Task{
 		ID:             uuid.New(),
 		ProjectID:      o.projectID,
@@ -597,4 +614,143 @@ func TestRecordSpawnFailureEventWithReason_CarriesReasonInDetails(t *testing.T) 
 	require.Equal(t, "coder", evts[0].NewValue)
 	require.Equal(t, "policy_violation_api_key", evts[0].Details["reason"])
 	require.Contains(t, evts[0].Details["error"], "ANTHROPIC_API_KEY")
+}
+
+// TestSpawnTypedWorker_SubtaskBranchesOffParent verifies the branch
+// derivation contract for container-dispatched subtasks: when a task
+// has a ParentTaskID, spawnTypedWorker pre-creates the subtask's
+// feature branch in the bare repo off of the parent's WorktreeBranch.
+// Regression coverage for the T3 canary v5 failure where the worker's
+// `git clone --branch` hit a missing ref because nothing created the
+// branch between planning and spawn.
+func TestSpawnTypedWorker_SubtaskBranchesOffParent(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	o, fake, bareRepo := workerSpawnTestRig(t)
+
+	// Seed the parent's integration branch with one real commit so
+	// gitref.EnsureBranch can fork the subtask off it.
+	parentBranch := "feature/parent-x"
+	pushTestFeatureBranch(t, bareRepo, parentBranch)
+
+	parentID := uuid.New()
+	parent := &model.Task{
+		ID:             parentID,
+		ProjectID:      o.projectID,
+		Title:          "Parent feature",
+		Description:    "parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: parentBranch,
+	}
+	require.NoError(t, o.db.Create(parent).Error)
+
+	subtask := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		ParentTaskID:   &parentID,
+		Title:          "Sub",
+		Description:    "d",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/sub-x",
+	}
+	require.NoError(t, o.db.Create(subtask).Error)
+
+	require.NoError(t, o.spawnCoder(context.Background(), subtask))
+
+	require.Len(t, fake.spawnCalls, 1)
+	require.Equal(t, "feature/sub-x", fake.spawnCalls[0].Branch)
+
+	// Post-conditions on the bare repo: subtask branch exists and its
+	// tip matches the parent branch's tip (forked cleanly).
+	ctx := context.Background()
+	subExists, err := gitref.BranchExists(ctx, bareRepo, "feature/sub-x")
+	require.NoError(t, err)
+	require.True(t, subExists, "subtask branch must be created in the bare repo before the worker clone")
+
+	parentTip, err := gitref.HeadCommit(ctx, bareRepo, parentBranch)
+	require.NoError(t, err)
+	subTip, err := gitref.HeadCommit(ctx, bareRepo, "feature/sub-x")
+	require.NoError(t, err)
+	require.Equal(t, parentTip, subTip,
+		"freshly-created subtask branch must point at the parent's tip")
+}
+
+// TestSpawnTypedWorker_IdempotentPreservesInFlightCommits is the
+// anti-clobber guarantee wired at the orchestrator level: a respawn
+// against a feature branch that has already advanced (because a prior
+// worker pushed commits before dying) must NOT rewind the branch to
+// its source tip. Without this, the event-driven respawn loop would
+// destroy work every time a worker container exited non-zero.
+func TestSpawnTypedWorker_IdempotentPreservesInFlightCommits(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	o, fake, bareRepo := workerSpawnTestRig(t)
+
+	// Pre-create the feature branch with an in-flight commit on top of
+	// the default branch, mirroring "worker pushed then died".
+	pushTestFeatureBranch(t, bareRepo, "feature/live")
+
+	ctx := context.Background()
+	tipBefore, err := gitref.HeadCommit(ctx, bareRepo, "feature/live")
+	require.NoError(t, err)
+
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "Respawn after crash",
+		Description:    "d",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/live",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	require.NoError(t, o.spawnCoder(ctx, task))
+	require.Len(t, fake.spawnCalls, 1)
+
+	tipAfter, err := gitref.HeadCommit(ctx, bareRepo, "feature/live")
+	require.NoError(t, err)
+	require.Equal(t, tipBefore, tipAfter,
+		"respawn must not rewind an in-flight worker's pushed commits")
+}
+
+// TestSpawnTypedWorker_SubtaskWithMissingParentBranchFailsClosed
+// verifies the fail-closed posture for a subtask whose parent carries
+// no WorktreeBranch. Silently falling back to main would mask an
+// upstream planning gap; instead, the spawner is NOT called and a
+// worker_spawn_failed event lands with reason=branch_missing so the
+// operator can surface the planning miss.
+func TestSpawnTypedWorker_SubtaskWithMissingParentBranchFailsClosed(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	o, fake, _ := workerSpawnTestRig(t)
+
+	parentID := uuid.New()
+	parent := &model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "Parent with no branch",
+		Description: "d",
+		Status:      model.StatusInProgress,
+		// WorktreeBranch deliberately empty.
+	}
+	require.NoError(t, o.db.Create(parent).Error)
+
+	subtask := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		ParentTaskID:   &parentID,
+		Title:          "Orphaned sub",
+		Description:    "d",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/sub-orphan",
+	}
+	require.NoError(t, o.db.Create(subtask).Error)
+
+	err := o.spawnCoder(context.Background(), subtask)
+	require.Error(t, err)
+	require.Empty(t, fake.spawnCalls, "spawner must not be called when parent branch is missing")
+
+	var evts []model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?",
+		subtask.ID, "worker_spawn_failed").Find(&evts).Error)
+	require.Len(t, evts, 1)
+	require.Equal(t, spawnPolicyReasonBranchMissing, evts[0].Details["reason"],
+		"audit event must carry the branch_missing classifier so operators can filter")
 }

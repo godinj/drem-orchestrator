@@ -106,3 +106,97 @@ func TestDefaultBranch_RejectsEmptyRepo(t *testing.T) {
 	_, err := gitref.DefaultBranch(ctx, "")
 	require.Error(t, err)
 }
+
+// TestEnsureBranch_CreatesWhenMissing is the happy-path primitive: a
+// branch that does not exist gets created at the tip of the source
+// branch, and its HeadCommit matches the source's HeadCommit.
+func TestEnsureBranch_CreatesWhenMissing(t *testing.T) {
+	ctx := context.Background()
+	bare := testutil.SetupBareRepo(t)
+
+	defaultBranch, err := gitref.DefaultBranch(ctx, bare)
+	require.NoError(t, err)
+
+	// Precondition: target branch does not yet exist.
+	exists, err := gitref.BranchExists(ctx, bare, "feature/ensured")
+	require.NoError(t, err)
+	require.False(t, exists)
+
+	require.NoError(t, gitref.EnsureBranch(ctx, bare, "feature/ensured", defaultBranch))
+
+	// Branch exists and points at the same commit as the source.
+	exists, err = gitref.BranchExists(ctx, bare, "feature/ensured")
+	require.NoError(t, err)
+	require.True(t, exists)
+
+	srcSHA, err := gitref.HeadCommit(ctx, bare, defaultBranch)
+	require.NoError(t, err)
+	dstSHA, err := gitref.HeadCommit(ctx, bare, "feature/ensured")
+	require.NoError(t, err)
+	require.Equal(t, srcSHA, dstSHA,
+		"freshly-ensured branch must point at the source tip")
+}
+
+// TestEnsureBranch_IdempotentWhenPresent is the anti-clobber guarantee:
+// an EnsureBranch call against a branch that already exists (and has
+// advanced beyond the source) must NOT move the tip back. This is the
+// exact guarantee that makes the primitive safe to call from the
+// container respawn loop, where a worker may already have pushed work.
+func TestEnsureBranch_IdempotentWhenPresent(t *testing.T) {
+	ctx := context.Background()
+	bare := testutil.SetupBareRepo(t)
+
+	defaultBranch, err := gitref.DefaultBranch(ctx, bare)
+	require.NoError(t, err)
+
+	// Create feature/live with an extra commit on top of the default
+	// branch, simulating in-flight worker work.
+	pushBranch(t, bare, "feature/live", "worker-commit.txt", "worker was here\n")
+
+	// Capture the tip before calling EnsureBranch.
+	tipBefore, err := gitref.HeadCommit(ctx, bare, "feature/live")
+	require.NoError(t, err)
+
+	// Sanity check: the tip should be AHEAD of the default branch.
+	defaultSHA, err := gitref.HeadCommit(ctx, bare, defaultBranch)
+	require.NoError(t, err)
+	require.NotEqual(t, defaultSHA, tipBefore,
+		"test setup invariant: feature/live must be ahead of default")
+
+	// EnsureBranch is expected to no-op.
+	require.NoError(t, gitref.EnsureBranch(ctx, bare, "feature/live", defaultBranch))
+
+	tipAfter, err := gitref.HeadCommit(ctx, bare, "feature/live")
+	require.NoError(t, err)
+	require.Equal(t, tipBefore, tipAfter,
+		"EnsureBranch must NOT rewind an existing branch to its source tip")
+}
+
+// TestEnsureBranch_ErrorsOnMissingSource asserts fork-from-ghost is
+// rejected. Without this, a typo in fromBranch would create an empty
+// branch or produce a less-specific git error.
+func TestEnsureBranch_ErrorsOnMissingSource(t *testing.T) {
+	ctx := context.Background()
+	bare := testutil.SetupBareRepo(t)
+
+	err := gitref.EnsureBranch(ctx, bare, "feature/orphan", "no-such-source")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no-such-source",
+		"error message must identify the missing source branch")
+
+	// Target branch must NOT have been created as a side effect.
+	exists, existsErr := gitref.BranchExists(ctx, bare, "feature/orphan")
+	require.NoError(t, existsErr)
+	require.False(t, exists, "failed EnsureBranch must not leave a partial branch")
+}
+
+// TestEnsureBranch_RejectsEmptyArgs documents the input-validation
+// boundary: every arg is mandatory and every zero value is an error.
+func TestEnsureBranch_RejectsEmptyArgs(t *testing.T) {
+	ctx := context.Background()
+	bare := testutil.SetupBareRepo(t)
+
+	require.Error(t, gitref.EnsureBranch(ctx, "", "feature/x", "main"))
+	require.Error(t, gitref.EnsureBranch(ctx, bare, "", "main"))
+	require.Error(t, gitref.EnsureBranch(ctx, bare, "feature/x", ""))
+}

@@ -75,6 +75,61 @@ func DefaultBranch(ctx context.Context, bareRepo string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// EnsureBranch creates refs/heads/<branch> in the bare repository pointing
+// at refs/heads/<fromBranch>, if <branch> does not already exist. It is a
+// no-op when the branch is already present — the tip is NOT force-reset.
+// Idempotence matters here because the container respawn loop can invoke
+// this for a task whose worker has already pushed commits, and silently
+// rewinding the branch to the source tip would clobber that work.
+//
+// Returns an error when fromBranch is missing in the bare repo (callers
+// must not fork off a ghost ref), when any argument is empty, or when
+// the underlying git invocation fails for any reason outside the two
+// sentinel "exists" / "doesn't exist" outcomes.
+func EnsureBranch(ctx context.Context, bareRepo, branch, fromBranch string) error {
+	if bareRepo == "" {
+		return errors.New("gitref: EnsureBranch: bareRepo is empty")
+	}
+	if branch == "" {
+		return errors.New("gitref: EnsureBranch: branch is empty")
+	}
+	if fromBranch == "" {
+		return errors.New("gitref: EnsureBranch: fromBranch is empty")
+	}
+
+	// Idempotent path: the branch already exists, so we must not touch
+	// it. A worker may have pushed commits; moving the tip back to
+	// fromBranch would discard that work.
+	exists, err := BranchExists(ctx, bareRepo, branch)
+	if err != nil {
+		return fmt.Errorf("gitref: EnsureBranch: check %s: %w", branch, err)
+	}
+	if exists {
+		return nil
+	}
+
+	// Validate the source branch before asking git to create. Without
+	// this check a typo in fromBranch would fail on the git branch call
+	// with a less specific error; callers that pass bad refs get a clear
+	// signal at the boundary.
+	fromExists, err := BranchExists(ctx, bareRepo, fromBranch)
+	if err != nil {
+		return fmt.Errorf("gitref: EnsureBranch: check source %s: %w", fromBranch, err)
+	}
+	if !fromExists {
+		return fmt.Errorf("gitref: EnsureBranch: source branch %s does not exist in %s", fromBranch, bareRepo)
+	}
+
+	// `git branch <new> <start-point>` refuses to overwrite an existing
+	// ref and is the narrow verb we want. It has no working-tree side
+	// effect in a bare repo — just a ref write against the object DB.
+	if _, err := runGit(ctx, bareRepo, "branch", branch, fromBranch); err != nil {
+		return fmt.Errorf("gitref: EnsureBranch: create %s from %s in %s: %w",
+			branch, fromBranch, bareRepo, err)
+	}
+	return nil
+}
+
 // runGit executes `git --git-dir=<bareRepo> <args...>` with the configured
 // timeout budget. It returns stdout on success; on failure it returns the
 // *exec.ExitError wrapped with stderr so callers can type-assert for exit

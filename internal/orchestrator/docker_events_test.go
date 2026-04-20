@@ -18,15 +18,19 @@ import (
 
 // dockerEventsTestRig builds an Orchestrator wired to both a fake runtime
 // and a fake spawner. Tests use the runtime to emit synthetic events and
-// assert on spawner calls that would respawn the dead worker.
+// assert on spawner calls that would respawn the dead worker. The bare
+// repo is real because the respawn path (handleWorkerDeath →
+// spawnCoder → spawnTypedWorker) now pre-creates the feature branch via
+// gitref.EnsureBranch, which needs an actual git object database.
 func dockerEventsTestRig(t *testing.T) (*Orchestrator, *container.FakeRuntime, *fakeWorkerSpawner) {
 	t.Helper()
 	db := testutil.NewTestDBWithModels(t, &gitref.BranchRef{})
 	projectID := uuid.New()
+	bareRepo := testutil.SetupBareRepo(t)
 	require.NoError(t, db.Create(&model.Project{
 		ID:            projectID,
 		Name:          "docker-events-test",
-		BareRepoPath:  "/tmp/fake-bare",
+		BareRepoPath:  bareRepo,
 		DefaultBranch: "main",
 	}).Error)
 
@@ -36,7 +40,7 @@ func dockerEventsTestRig(t *testing.T) (*Orchestrator, *container.FakeRuntime, *
 		db:             db,
 		projectID:      projectID,
 		events:         make(chan Event, 32),
-		worktree:       &FakeWorktreeManager{BarePath: "/tmp/fake-bare", Default: "main"},
+		worktree:       &FakeWorktreeManager{BarePath: bareRepo, Default: "main"},
 		logger:         slog.Default().With("component", "docker_events_test"),
 		Spawner:        fake,
 		Runtime:        rt,

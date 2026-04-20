@@ -19,16 +19,31 @@ import (
 // newContainerSessionRig builds an Orchestrator wired with a
 // fakeWorkerSpawner and a FakeWorktreeManager whose Features map
 // points the requested feature name at a real tempdir (so
-// resolveIntegrationWorktree's os.Stat check succeeds).
+// resolveIntegrationWorktree's os.Stat check succeeds). The bare repo
+// is a real `git init --bare` output so spawnTypedWorker's
+// gitref.EnsureBranch step can write refs into an actual object
+// database — the reviewer/fixer session tests used to pass with a
+// plain tempdir because the container path wasn't yet wired through
+// EnsureBranch.
 //
 // See plans/phase-3.5-subtask-dispatch-migration.md §"Test strategy"
-// test (4).
+// test (4) and plans/orch-container-subtask-branch-provisioning.md.
 func newContainerSessionRig(t *testing.T, featureName string) (*Orchestrator, *fakeWorkerSpawner, model.Project, string) {
 	t.Helper()
 	db := testutil.NewTestDBWithModels(t, &gitref.BranchRef{})
-	project := testutil.CreateProject(t, db, "phase35-session-test", "/tmp/fake-bare", "main")
+	bare := testutil.SetupBareRepo(t)
+	project := testutil.CreateProject(t, db, "phase35-session-test", bare, "main")
 
-	bare := t.TempDir()
+	// Seed the feature branch that the reviewer/fixer session tests use
+	// as the task's WorktreeBranch so spawnTypedWorker's EnsureBranch
+	// no-ops instead of trying to fork from a ghost ref. pushBranchForSession
+	// creates "feature/<featureName>" with one seed commit; tests that
+	// need a different branch name can call testutil.AddWorktree
+	// directly.
+	work := t.TempDir()
+	testutil.AddWorktree(t, bare, "feature/"+featureName, work)
+	testutil.CommitFile(t, work, "seed.txt", "seed\n", "seed feature/"+featureName)
+
 	// resolveIntegrationWorktree returns the path via
 	// FakeWorktreeManager.FeatureWorktreePath which, given a populated
 	// Features map, returns the tempdir directly. Using a real dir so

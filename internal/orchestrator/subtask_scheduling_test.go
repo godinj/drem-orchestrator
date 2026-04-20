@@ -103,11 +103,21 @@ func TestOrderCandidatesByExperimentPriority_NilScheduler(t *testing.T) {
 // (includes FakeWorktreeManager for feature-dir lookup and a large
 // events-channel buffer so subtask_scheduled emits do not block).
 //
-// See plans/phase-3.5-subtask-dispatch-migration.md §"Test strategy".
-func newContainerSubtaskRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner, model.Project, chan Event) {
+// The bare repo is a real `git init --bare` output because
+// spawnTypedWorker now pre-creates the subtask branch via
+// gitref.EnsureBranch — a /tmp/fake-bare literal would fail the
+// branch-ensure step on every dispatch. Callers that seed a parent
+// task with a non-default WorktreeBranch should call
+// pushTestFeatureBranch(t, bareRepo, parentBranch) so EnsureBranch can
+// fork off it.
+//
+// See plans/phase-3.5-subtask-dispatch-migration.md §"Test strategy"
+// and plans/orch-container-subtask-branch-provisioning.md.
+func newContainerSubtaskRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner, model.Project, chan Event, string) {
 	t.Helper()
 	db := testutil.NewTestDBWithModels(t, &gitref.BranchRef{})
-	project := testutil.CreateProject(t, db, "phase35-test-project", "/tmp/fake-bare", "main")
+	bareRepo := testutil.SetupBareRepo(t)
+	project := testutil.CreateProject(t, db, "phase35-test-project", bareRepo, "main")
 
 	fake := &fakeWorkerSpawner{}
 	events := make(chan Event, 100)
@@ -115,12 +125,12 @@ func newContainerSubtaskRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner, mo
 		db:             db,
 		projectID:      project.ID,
 		events:         events,
-		worktree:       &FakeWorktreeManager{BarePath: "/tmp/fake-bare", Default: "main"},
+		worktree:       &FakeWorktreeManager{BarePath: bareRepo, Default: "main"},
 		logger:         slog.Default().With("component", "subtask_scheduling_test"),
 		Spawner:        fake,
 		GitrefRegistry: gitref.NewRegistry(db),
 	}
-	return o, fake, project, events
+	return o, fake, project, events, bareRepo
 }
 
 // TestScheduleSubtasks_DispatchesCoderViaSpawner is the primary
@@ -135,7 +145,11 @@ func newContainerSubtaskRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner, mo
 // test (1).
 func TestScheduleSubtasks_DispatchesCoderViaSpawner(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
-	o, fake, project, events := newContainerSubtaskRig(t)
+	o, fake, project, events, bareRepo := newContainerSubtaskRig(t)
+
+	// Seed the parent's feature branch so spawnTypedWorker's
+	// EnsureBranch step can fork the subtask off it.
+	pushTestFeatureBranch(t, bareRepo, "feature/phase35-coder")
 
 	parent := model.Task{
 		ID:             uuid.New(),
@@ -213,7 +227,12 @@ func TestScheduleSubtasks_DispatchesCoderViaSpawner(t *testing.T) {
 // test (2).
 func TestScheduleSubtasks_SpawnerFailureFailsFast(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
-	o, fake, project, _ := newContainerSubtaskRig(t)
+	o, fake, project, _, bareRepo := newContainerSubtaskRig(t)
+
+	// Seed the parent's feature branch so spawnTypedWorker's
+	// EnsureBranch step succeeds and the test actually reaches the
+	// spawner call it wants to assert on.
+	pushTestFeatureBranch(t, bareRepo, "feature/phase35-refused")
 
 	parent := model.Task{
 		ID:             uuid.New(),

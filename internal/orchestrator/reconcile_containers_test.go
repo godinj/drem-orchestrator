@@ -18,10 +18,15 @@ func reconcileTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner) {
 	t.Helper()
 	db := testutil.NewTestDBWithModels(t, &gitref.BranchRef{})
 	projectID := uuid.New()
+	// Real bare repo: reconcileOnStartup's respawn path reaches
+	// spawnTypedWorker which pre-creates the feature branch via
+	// gitref.EnsureBranch. A literal /tmp/fake-bare would fail the
+	// branch-ensure step on every respawn test.
+	bareRepo := testutil.SetupBareRepo(t)
 	require.NoError(t, db.Create(&model.Project{
 		ID:            projectID,
 		Name:          "reconcile-test",
-		BareRepoPath:  "/tmp/fake-bare",
+		BareRepoPath:  bareRepo,
 		DefaultBranch: "main",
 	}).Error)
 
@@ -30,7 +35,7 @@ func reconcileTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner) {
 		db:             db,
 		projectID:      projectID,
 		events:         make(chan Event, 32),
-		worktree:       &FakeWorktreeManager{BarePath: "/tmp/fake-bare", Default: "main"},
+		worktree:       &FakeWorktreeManager{BarePath: bareRepo, Default: "main"},
 		logger:         slog.Default().With("component", "reconcile_test"),
 		Spawner:        fake,
 		GitrefRegistry: gitref.NewRegistry(db),

@@ -140,6 +140,11 @@ records the exit code.
 - [ ] Container runtime abstraction's fake is used in ≥5 existing test files without real Docker.
 - [ ] Spawner RPC has unit tests for all four methods + error paths.
 - [ ] Exit code, OOM flag, started_at, finished_at recorded in orchestrator DB for each worker run.
+- [x] Subtask feature branches pre-created in the bare repo before
+      `SpawnWorker`, so the worker's `git clone --branch` succeeds on
+      the first try. Implemented via `gitref.EnsureBranch` +
+      `spawnTypedWorker` wiring. See
+      `plans/orch-container-subtask-branch-provisioning.md`.
 
 ---
 

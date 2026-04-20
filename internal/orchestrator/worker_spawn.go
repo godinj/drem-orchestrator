@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -274,6 +275,21 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 			o.recordSpawnFailureEvent(task, agentType, err)
 		}
 		return fmt.Errorf("spawn %s worker: %w", agentType, err)
+	}
+	// Branch pre-provision: the worker's entrypoint runs
+	// `git clone --branch <DREM_BRANCH> /bare /home/drem/work`, which
+	// requires refs/heads/<branch> to exist in the bare repo. The
+	// pre-container runner.SpawnAgent path created branches as a side
+	// effect of `git worktree add -b`; the container path has no such
+	// side effect, so we create the branch here. See
+	// plans/orch-container-subtask-branch-provisioning.md.
+	if branchErr := o.ensureWorkerBranch(ctx, task, swc); branchErr != nil {
+		reason := ""
+		if errors.Is(branchErr, errSubtaskParentBranchMissing) {
+			reason = spawnPolicyReasonBranchMissing
+		}
+		o.recordSpawnFailureEventWithReason(task, agentType, reason, branchErr)
+		return fmt.Errorf("spawn %s worker: %w", agentType, branchErr)
 	}
 	// Policy check: reject an ANTHROPIC_API_KEY smuggled into the env
 	// map (currently impossible via buildSpawnContext, but the boundary
@@ -564,6 +580,23 @@ func (o *Orchestrator) recordSpawnFailureEventWithReason(task *model.Task, agent
 // policy forbids shipping API-key auth through the default spawn path.
 const spawnPolicyReasonAPIKey = "policy_violation_api_key"
 
+// spawnPolicyReasonBranchMissing is the classifier attached to
+// worker_spawn_failed events emitted when a subtask is dispatched but
+// its parent task carries no WorktreeBranch. The fix path is upstream
+// (parent planning produced a gap); surfacing this as a distinct audit
+// reason keeps the symptom out of the generic git-error bucket so the
+// operator can find the planning miss. See
+// plans/orch-container-subtask-branch-provisioning.md §2.2.
+const spawnPolicyReasonBranchMissing = "branch_missing"
+
+// errSubtaskParentBranchMissing is the sentinel returned by
+// resolveBranchSource when a subtask's parent has no WorktreeBranch.
+// Kept as a package-private sentinel (rather than matched on message
+// substrings) so the spawnTypedWorker hook can classify the failure
+// reason with errors.Is and the audit row picks up the
+// spawnPolicyReasonBranchMissing classifier.
+var errSubtaskParentBranchMissing = errors.New("subtask parent has empty WorktreeBranch")
+
 // rejectAPIKeyInEnv returns a non-nil error when env carries an
 // ANTHROPIC_API_KEY key. The check codifies the subscription-only auth
 // policy at the orchestrator boundary — if a future change accidentally
@@ -573,6 +606,60 @@ func rejectAPIKeyInEnv(env map[string]string) error {
 	if _, found := env["ANTHROPIC_API_KEY"]; found {
 		return fmt.Errorf(
 			"policy violation: ANTHROPIC_API_KEY must not be set on a worker spawn; subscription auth is the only supported path")
+	}
+	return nil
+}
+
+// resolveBranchSource returns the branch that spawnTypedWorker should
+// fork the worker's feature branch off of. The contract is explicit:
+//
+//   - For subtasks (task.ParentTaskID != nil), the source is the parent
+//     task's WorktreeBranch. A subtask always branches off its parent's
+//     integration branch so merges chain cleanly. An empty parent
+//     WorktreeBranch is treated as a planning gap (not a condition to
+//     paper over by silently using main) and surfaces via the sentinel
+//     errSubtaskParentBranchMissing.
+//   - For parent tasks (no ParentTaskID), the source is the bare repo's
+//     default branch, read via gitref.DefaultBranch so the "main vs
+//     master" ambiguity is resolved at the ref database rather than via
+//     a string compare on the Project row.
+func (o *Orchestrator) resolveBranchSource(ctx context.Context, task *model.Task, bareRepo string) (string, error) {
+	if task.ParentTaskID == nil {
+		return gitref.DefaultBranch(ctx, bareRepo)
+	}
+
+	var parent model.Task
+	if err := o.db.First(&parent, "id = ?", task.ParentTaskID).Error; err != nil {
+		return "", fmt.Errorf("resolveBranchSource: load parent %s: %w", task.ParentTaskID, err)
+	}
+	if strings.TrimSpace(parent.WorktreeBranch) == "" {
+		return "", errSubtaskParentBranchMissing
+	}
+	return parent.WorktreeBranch, nil
+}
+
+// ensureWorkerBranch pre-creates the feature branch in the bare repo
+// so the worker container's `git clone --branch <DREM_BRANCH>` step
+// succeeds. Idempotent: a branch that already exists (e.g. because a
+// previous worker pushed commits before dying) is left untouched —
+// EnsureBranch refuses to force-reset the tip. Callers that encounter
+// a branch_missing sentinel should surface spawnPolicyReasonBranchMissing
+// on the audit row.
+func (o *Orchestrator) ensureWorkerBranch(ctx context.Context, task *model.Task, swc spawnWorkerContext) error {
+	if swc.bareRepo == "" || swc.branch == "" {
+		// Nothing to ensure — tests and future agent types that spawn
+		// without a branch/bare-repo fall through without a git call.
+		// Downstream SpawnWorker will reject a container that actually
+		// needs a clone; this helper's job is specifically branch-provision.
+		return nil
+	}
+
+	source, err := o.resolveBranchSource(ctx, task, swc.bareRepo)
+	if err != nil {
+		return err
+	}
+	if err := gitref.EnsureBranch(ctx, swc.bareRepo, swc.branch, source); err != nil {
+		return fmt.Errorf("ensureWorkerBranch: create %s from %s: %w", swc.branch, source, err)
 	}
 	return nil
 }
