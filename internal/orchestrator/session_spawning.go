@@ -90,6 +90,41 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 		return o.spawnDirectPlanReviewer(&task, worktreePath, planJSON)
 	}
 
+	// Container-mode dispatch: when o.Spawner is wired, route the
+	// reviewer through spawnReviewer so the worker runs inside a
+	// drem-worker-<lang> container. The prompt is rendered and
+	// bind-mounted by buildSpawnContext; ReviewMode / PlanJSON /
+	// GitDiff plumbing into the container-path prompt is tracked as
+	// plans/phase-3.5-subtask-dispatch-migration.md §"Open questions"
+	// Q2 — ship the dispatch-migration first, plumb the review-mode
+	// fields second so the T3 canary is unblocked without a risky
+	// signature change to spawnTypedWorker. Legacy
+	// o.runner.SpawnAgentInWorktree path below runs only when
+	// o.Spawner is nil (development on host with claude installed).
+	// See plans/phase-3.5-subtask-dispatch-migration.md Commit 3.
+	if o.Spawner != nil {
+		if err := o.spawnReviewer(context.Background(), &task); err != nil {
+			return "", fmt.Errorf("spawn reviewer via spawner: %w", err)
+		}
+		// Reload so AssignedAgentID (written by recordContainerOnAgent)
+		// is visible, then look up the Agent row to return the
+		// container ID as the "session name" the TUI displays.
+		if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+			return "", fmt.Errorf("spawn reviewer: reload task: %w", err)
+		}
+		if task.AssignedAgentID == nil {
+			return "", fmt.Errorf("spawn reviewer: no agent assignment after container spawn")
+		}
+		var ag model.Agent
+		if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err != nil {
+			return "", fmt.Errorf("spawn reviewer: load agent after spawn: %w", err)
+		}
+		o.emit("reviewer_spawned", map[string]any{"task_id": taskID, "agent_id": ag.ID, "mode": reviewMode})
+		o.logger.Info("reviewer spawned via spawner",
+			"task_id", taskID, "agent_id", ag.ID, "mode", reviewMode)
+		return ag.TmuxSession, nil
+	}
+
 	// Generate prompt.
 	comments, _ := o.GetComments(task.ID)
 	reviewerPrompt := prompt.Generate(prompt.Opts{
