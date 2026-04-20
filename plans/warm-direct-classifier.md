@@ -1,6 +1,6 @@
 # Warm Direct-Classifier Container — Implementation Plan
 
-Status: **in progress.** 2026-04-20. Commits 1-5/6 landed: classifier core extracted, warm container binary + image + compose entry, orch routing toggle, and per-project templates now render `endpoint = "http://drem-classifier:8090/classify"` plus `DREM_CLASSIFIER_URL` for fresh stacks.
+Status: **done.** 2026-04-20. All 6 commits landed on `worktree-agent-a1f5b183`: classifier core extracted (`agent.Classify`), `cmd/drem-classifier` HTTP server wired, Docker image + global-compose entry added, orch routing toggle lives behind `DREM_CLASSIFIER_URL` / `[agents.classifier].endpoint`, per-project templates preconfigure the endpoint, and install walkthrough + Phase 8 row in `plans/containerization.md` are documented. Next step is the T1-equivalent canary against the container path.
 
 Follow-up to T1 canary (commit `aca8bf3`) which proved the direct
 classifier roundtrip works inline in the orch process. The next move

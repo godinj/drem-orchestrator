@@ -207,10 +207,28 @@ for f in chat_template.jinja generation_config.json \
 done
 ```
 
-After 4a–4e the registry catalog should list 18 repositories:
+### 4f — Warm classifier
+
+```bash
+docker build -f deploy/docker/classifier.Dockerfile \
+  -t localhost:5000/drem-classifier:latest . \
+  && docker push localhost:5000/drem-classifier:latest
+
+curl -s 127.0.0.1:5000/v2/_catalog
+```
+
+`drem-classifier` is the warm direct-classifier container described in
+`plans/warm-direct-classifier.md`. A two-stage Go build (~1 min cold);
+the runtime image is `debian:bookworm-slim` + `tini` + `wget` for the
+compose-level `/healthz` check. Binary reads `DREM_CLASSIFIER_UPSTREAM`
+(defaulting to `http://gq:8090/v1/chat/completions`) and
+`DREM_AGENTMON_TOKEN` from its container env.
+
+After 4a–4f the registry catalog should list 19 repositories:
 
 ```
 drem-agentmon
+drem-classifier
 drem-csuite-{alex,base,mike,ross,seth}
 drem-csuite-watcher
 drem-docker-query-proxy
@@ -260,9 +278,11 @@ docker compose -f deploy/compose/global.yml up -d
 docker compose -f deploy/compose/global.yml ps
 ```
 
-Expect six containers: `registry`, `sglang`, `gq`, `spawner`, `kyle`,
-`docker-query-proxy`. `sglang`'s `start_period` is 120 s for cold model
-load; `gq` waits on `sglang: service_healthy` before starting.
+Expect seven containers: `registry`, `sglang`, `gq`, `spawner`, `kyle`,
+`docker-query-proxy`, and `drem-classifier` (see Step 4f below).
+`sglang`'s `start_period` is 120 s for cold model load; `gq` waits on
+`sglang: service_healthy` before starting, and `drem-classifier` in
+turn waits on `sglang: service_healthy` before serving /classify.
 
 ## Step 6 — Register the first project
 
@@ -323,6 +343,76 @@ state within seconds of completion.
 > per-project compose template). Precedence is env > `drem.toml [serve]` >
 > built-in default; the container has no `drem.toml` mounted and relies on
 > the env block populated from `Project.SharedToken`.
+
+## Warm direct agents
+
+The direct classifier runs as a long-lived `drem-classifier` service on
+`drem-net` (see `plans/warm-direct-classifier.md`). Every
+newly-registered project's `drem.toml` ships with the classify endpoint
+pre-set:
+
+```toml
+[agents.classifier]
+  direct   = true
+  endpoint = "http://drem-classifier:8090/classify"
+  model    = "gemma4-26b"
+```
+
+…and the per-project `compose.yml` passes
+`DREM_CLASSIFIER_URL=http://drem-classifier:8090/classify` to the
+`orch` service so the env var wins over the toml key during a rolling
+upgrade.
+
+When orch sees a classify endpoint (via env or toml), it POSTs each
+`CLASSIFYING` task to `drem-classifier` instead of running the SGLang
+call inline in its own process. Benefits:
+
+- Classifier LLM work can't starve orch's tick loop.
+- Thread-exhaustion failure modes have a container-level restart policy
+  plus `/healthz` as their boundary, not the orch process.
+- Classifier can be scaled, paused, or swapped model-by-model without
+  restarting orch.
+
+### Container lifecycle
+
+```bash
+# Status + health.
+docker compose -f deploy/compose/global.yml ps drem-classifier
+docker inspect --format '{{.State.Health.Status}}' drem-classifier
+
+# Tail structured JSON logs.
+docker compose -f deploy/compose/global.yml logs -f drem-classifier
+
+# Health endpoint directly — returns 200 ok / 503 unreachable.
+docker exec drem-classifier wget -qO- http://localhost:8090/healthz
+
+# Metrics (expvar JSON — request counters, duration sum, upstream_up).
+docker exec drem-classifier wget -qO- http://localhost:8090/metrics | head -40
+```
+
+### Scaling
+
+Single replica is enough for a typical classify rate. When you see
+queue buildup (orch logs `direct classifier: API call failed: context
+deadline exceeded` or observed `/classify` latency > 10 s at p95),
+raise `deploy: replicas: N` under the `drem-classifier` service in
+`deploy/compose/global.yml` and let compose load-balance across
+replicas on `drem-net`. The binary is stateless — no coordination
+needed.
+
+### Rolling back to inline
+
+Unset the endpoint (either clear `DREM_CLASSIFIER_URL` in
+`~/.drem/projects/<name>/compose.yml` or drop `endpoint` from the
+project's drem.toml), `docker compose up -d orch`, and orch reverts
+to the inline `agent.RunDirectClassifier` path. The classifier
+container can stay up; orch just ignores it.
+
+### Same pattern coming for planner + prep
+
+Planner and prep will land as their own warm services (see plan §9,
+open questions). Each gets its own binary, Dockerfile, and
+`[agents.<role>].endpoint` key following the classifier template.
 
 ## Step 8 — Verify
 

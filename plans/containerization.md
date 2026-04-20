@@ -309,6 +309,37 @@ in this phase — it's the graduation.
 
 ---
 
+## Phase 8: Warm direct-agent containers (classifier first; planner + prep later)
+
+**User stories**: 40 (classifier runs outside orch), 52 (state machine unchanged), 53 (supervisor loop continues).
+
+### What to build
+
+Lift the direct agents (classifier, planner, prep) out of the orch
+process and into long-lived containers on drem-net. Each role gets its
+own binary (`cmd/drem-classifier`, `cmd/drem-planner`, `cmd/drem-prep`)
+and its own image; orch POSTs classify/plan/prep jobs over HTTP.
+Isolates failure modes, bounds orch thread count, and lets each role
+be scaled / replaced independently.
+
+### Slices
+
+| # | Slice | Tag | Scope |
+|---|---|---|---|
+| 8.1 | Warm **drem-classifier** (done, see `plans/warm-direct-classifier.md`). `agent.Classify` refactor + HTTP server + Dockerfile + compose entry + orch routing toggle + template updates + walkthrough. | [Opus] | Done |
+| 8.2 | Warm **drem-planner** — same shape: extract `agent.Plan`, wrap in `cmd/drem-planner`, add Dockerfile + compose entry, wire orch. Tracked in follow-up `plans/warm-direct-planner.md`. | [Opus] | Parallel role |
+| 8.3 | Warm **drem-prep** — same shape as planner; tracked in `plans/warm-direct-prep.md`. | [Opus] | Parallel role |
+| 8.4 | Drop the orch-side endpoint-health circuit breaker once each role's container has its own /healthz probe wired to gq (see plans/warm-direct-classifier.md §9 Q3). | [G4] | Cleanup |
+
+### Acceptance criteria
+
+- [x] `drem-classifier` container is the default classify path for freshly-registered projects.
+- [ ] `drem-planner` and `drem-prep` containers land with companion plans.
+- [ ] Orch's `endpointHealth.IsHealthy()` gate is either removed or repurposed for a container-reachability check.
+- [ ] Every warm agent image has /healthz, /metrics, and Bearer auth via `DREM_AGENTMON_TOKEN`.
+
+---
+
 ## Sequencing and gating
 
 1. **Phase 1 is green-lit** per pivot msg §3. Start immediately, coordinate
@@ -323,7 +354,10 @@ in this phase — it's the graduation.
 5. Phase 6 can start alongside Phase 4 because merger/gitref/watchdog are
    independent of Kyle. Gate the final respawn wiring (6.7) behind Phase 3.4
    (so Docker events can be ingested by agentmon).
-6. Phase 7 is the last phase; gated by zero in-flight drem tasks.
+6. Phase 7 is the last phase before Phase 8; gated by zero in-flight drem tasks.
+7. Phase 8 runs after Phase 7; each warm-agent slice (8.1 classifier, 8.2
+   planner, 8.3 prep) is independent and can be tackled in any order.
+   8.4 (drop the orch-side circuit breaker) gates on 8.1–8.3 all landing.
 
 ## Tag distribution
 
