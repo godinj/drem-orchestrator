@@ -48,6 +48,52 @@ func dispatchProject(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
+// splitPositional separates the first non-flag argument from the flag
+// arguments in args. It understands the multi-value flags used by the
+// register subcommand so a value like `--home-dir /tmp` does not get
+// mistaken for two separate tokens. Unlike extractPositional, it
+// returns an empty positional rather than an error when args contains
+// only flags — register has flag-only invocations (fresh register
+// without a positional), so missing-positional is not a usage error
+// here.
+func splitPositional(args []string) (string, []string) {
+	flagsWithValue := map[string]bool{
+		"--home-dir": true, "-home-dir": true,
+		"--name": true, "-name": true,
+		"--bare": true, "-bare": true,
+		"--language": true, "-language": true,
+		"--orch-url": true, "-orch-url": true,
+	}
+	var positional string
+	var remaining []string
+	found := false
+	i := 0
+	for i < len(args) {
+		a := args[i]
+		if strings.HasPrefix(a, "-") {
+			remaining = append(remaining, a)
+			// --flag=value is a single token; flags-with-value
+			// (--flag value) consume the next token too.
+			if !strings.Contains(a, "=") && flagsWithValue[a] && i+1 < len(args) {
+				remaining = append(remaining, args[i+1])
+				i += 2
+				continue
+			}
+			i++
+			continue
+		}
+		if !found {
+			positional = a
+			found = true
+			i++
+			continue
+		}
+		remaining = append(remaining, a)
+		i++
+	}
+	return positional, remaining
+}
+
 // extractPositional pulls the single non-flag argument out of args. It
 // understands the flags used by project subcommands (--home-dir takes a
 // value). Returns the positional value and the remaining flag arguments.
@@ -121,17 +167,49 @@ func projectDir(homeDir, name string) string {
 	return filepath.Join(homeDir, ".drem", "projects", name)
 }
 
-// cmdProjectRegister handles `drem project register`.
+// cmdProjectRegister handles `drem project register`. A --update flag
+// routes to cmdProjectRegisterUpdate, which re-renders the per-project
+// compose.yml + drem.toml from current master templates while
+// preserving on-disk state (SharedToken above all). See
+// plans/drem-project-register-update.md.
 func cmdProjectRegister(args []string, stdout io.Writer) error {
+	// Extract any positional argument (project name) from args FIRST so
+	// Go's flag parser doesn't stop at it. This supports the documented
+	// invocation `drem project register --update drem-orchestrator
+	// --force --home-dir ...` where the positional sits in the middle.
+	positional, flagArgs := splitPositional(args)
+
 	fs := flag.NewFlagSet("project register", flag.ContinueOnError)
-	name := fs.String("name", "", "project name (required)")
-	bare := fs.String("bare", "", "bare repo path (required)")
-	language := fs.String("language", "", "project language: go or cpp (required)")
-	orchURL := fs.String("orch-url", "", "orchestrator HTTP URL (required)")
+	name := fs.String("name", "", "project name (required for fresh register; identifier for --update)")
+	bare := fs.String("bare", "", "bare repo path (required for fresh register)")
+	language := fs.String("language", "", "project language: go or cpp (required for fresh register)")
+	orchURL := fs.String("orch-url", "", "orchestrator HTTP URL (required for fresh register)")
 	homeDir := fs.String("home-dir", "", "override $HOME (testing)")
-	if err := fs.Parse(args); err != nil {
+	update := fs.Bool("update", false, "regenerate per-project compose.yml + drem.toml from current templates (preserves SharedToken)")
+	dryRun := fs.Bool("dry-run", false, "print what would change without writing (implies --update)")
+	force := fs.Bool("force", false, "overwrite hand-patched drift without prompting (only valid with --update)")
+	failOnDrift := fs.Bool("fail-on-drift", false, "exit non-zero if drift is detected (only valid with --update; for CI)")
+	regenerateToken := fs.Bool("regenerate-token", false, "deliberately rotate SharedToken; restart orch + agentmon after (only valid with --update)")
+	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
+
+	// Route to the update handler when --update (or an update-only flag) is set.
+	if *update || *dryRun || *force || *failOnDrift || *regenerateToken {
+		resolvedName := *name
+		if resolvedName == "" {
+			resolvedName = positional
+		}
+		return cmdProjectRegisterUpdate(registerUpdateOpts{
+			Name:            resolvedName,
+			HomeDir:         *homeDir,
+			DryRun:          *dryRun,
+			Force:           *force,
+			FailOnDrift:     *failOnDrift,
+			RegenerateToken: *regenerateToken,
+		}, stdout)
+	}
+
 	if *name == "" || *bare == "" || *language == "" || *orchURL == "" {
 		return fmt.Errorf("--name, --bare, --language, and --orch-url are required")
 	}
@@ -172,6 +250,179 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 	fmt.Fprintf(stdout, "drem.toml:    %s\n", configPath)
 	fmt.Fprintf(stdout, "compose file: %s\n", composePath)
 	return nil
+}
+
+// registerUpdateOpts bundles the --update flags so cmdProjectRegister's
+// flag parsing and cmdProjectRegisterUpdate's consumption agree on
+// field names without shipping a stringly-typed map.
+type registerUpdateOpts struct {
+	Name            string
+	HomeDir         string
+	DryRun          bool
+	Force           bool
+	FailOnDrift     bool
+	RegenerateToken bool
+}
+
+// cmdProjectRegisterUpdate regenerates the per-project compose.yml +
+// drem.toml from current templates. Preserves SharedToken (extracted
+// from the on-disk compose) and OrchHostPort (registry, with on-disk
+// fallback when registry is zero). Refuses silently-new-token
+// regeneration unless --regenerate-token is passed. Surfaces hand-
+// patched drift via Diff; default is warn-then-stop, --force overrides,
+// --fail-on-drift turns warnings into errors.
+func cmdProjectRegisterUpdate(opts registerUpdateOpts, stdout io.Writer) error {
+	if opts.Name == "" {
+		return fmt.Errorf("project name is required (either as positional argument or --name)")
+	}
+
+	// 1. Load the registry entry.
+	registryPath := resolveRegistryPath(opts.HomeDir)
+	reg, err := projects.Load(registryPath)
+	if err != nil {
+		return err
+	}
+	p, ok := reg.Get(opts.Name)
+	if !ok {
+		return fmt.Errorf("project %q not found in registry (run `drem project register` to create it first)", opts.Name)
+	}
+
+	// 2. Extract on-disk state (SharedToken + observed host port).
+	snap, err := projects.ReadStateFromDisk(opts.HomeDir, opts.Name)
+	if err != nil {
+		return fmt.Errorf("read on-disk state: %w", err)
+	}
+
+	// 3. Decide the SharedToken source.
+	//    a. --regenerate-token forces a fresh uuid regardless of state.
+	//    b. On-disk SharedToken wins when present.
+	//    c. Empty on-disk + no --regenerate-token is fail-closed: the
+	//       operator either hand-deleted compose.yml or the env key,
+	//       and silent-regen would break orch/agentmon auth.
+	token := snap.SharedToken
+	switch {
+	case opts.RegenerateToken:
+		token = uuid.NewString()
+	case token == "":
+		return fmt.Errorf(
+			"on-disk compose.yml has no DREM_AGENTMON_TOKEN (or compose.yml is missing); " +
+				"pass --regenerate-token to rotate intentionally (will require restarting orch + agentmon)")
+	}
+
+	// 4. Build TemplateData from (registry entry + state snapshot).
+	data := templateDataFor(*p)
+	data.SharedToken = token
+	// Prefer the registry's OrchHostPort when set; fall back to what
+	// the on-disk compose observed; fall back to zero (applyDefaults
+	// substitutes DefaultOrchHostPort).
+	switch {
+	case p.OrchHostPort > 0:
+		data.OrchHostPort = p.OrchHostPort
+	case snap.ObservedOrchHostPort > 0:
+		data.OrchHostPort = snap.ObservedOrchHostPort
+	}
+	// DevMode carried on registry Project struct.
+	data.DevMode = p.DevMode
+
+	// 5. Render expected compose.yml + drem.toml.
+	// ConfigFilePath must match the on-disk drem.toml path so the
+	// bind-mount lands correctly (WriteProjectConfigAt will write to
+	// this path).
+	projectRoot := projectDir(opts.HomeDir, opts.Name)
+	data.ConfigFilePath = filepath.Join(projectRoot, "drem.toml")
+	renderedCompose, err := projects.Render(data)
+	if err != nil {
+		return fmt.Errorf("render compose: %w", err)
+	}
+	renderedConfig, err := projects.RenderConfig(data)
+	if err != nil {
+		return fmt.Errorf("render drem.toml: %w", err)
+	}
+
+	// 6. Diff against on-disk.
+	composePath := filepath.Join(projectRoot, "compose.yml")
+	tomlPath := filepath.Join(projectRoot, "drem.toml")
+	onDiskCompose, _ := os.ReadFile(composePath) // zero-bytes on missing, which Diff treats as all-added
+	onDiskToml, _ := os.ReadFile(tomlPath)
+	composeDrift := projects.Diff(renderedCompose, onDiskCompose, projects.FileKindCompose)
+	tomlDrift := projects.Diff(renderedConfig, onDiskToml, projects.FileKindDremToml)
+	totalDrift := len(composeDrift) + len(tomlDrift)
+
+	// 7. Print summary.
+	if totalDrift > 0 {
+		fmt.Fprintf(stdout, "drift detected for %q:\n", opts.Name)
+		printDriftGroup(stdout, composePath, composeDrift)
+		printDriftGroup(stdout, tomlPath, tomlDrift)
+	}
+
+	// 8. Dry-run: report and exit without writing.
+	if opts.DryRun {
+		if totalDrift == 0 {
+			fmt.Fprintf(stdout, "%q is up to date (no drift)\n", opts.Name)
+		}
+		fmt.Fprintln(stdout, "--dry-run: no files written")
+		return nil
+	}
+
+	// 9. Drift gating.
+	if totalDrift > 0 && opts.FailOnDrift {
+		return fmt.Errorf("drift detected with --fail-on-drift set: %d entries", totalDrift)
+	}
+	if totalDrift > 0 && !opts.Force {
+		fmt.Fprintln(stdout, "")
+		fmt.Fprintln(stdout, "no changes written. pass --force to proceed, or --regenerate-token to rotate auth.")
+		return nil
+	}
+
+	// 10. Write both files atomically.
+	if err := os.MkdirAll(projectRoot, 0o755); err != nil {
+		return fmt.Errorf("create project dir %q: %w", projectRoot, err)
+	}
+	if _, err := projects.WriteProjectConfigAt(opts.HomeDir, opts.Name, data); err != nil {
+		return fmt.Errorf("write drem.toml: %w", err)
+	}
+	if _, err := projects.WriteProjectComposeAt(opts.HomeDir, opts.Name, data); err != nil {
+		return fmt.Errorf("write compose: %w", err)
+	}
+
+	// 11. Summary.
+	if totalDrift == 0 {
+		fmt.Fprintf(stdout, "%q is up to date (no drift; files rewritten byte-identical)\n", opts.Name)
+	} else {
+		verb := "regenerated"
+		if opts.Force {
+			verb = "force-regenerated"
+		}
+		fmt.Fprintf(stdout, "%s %q: %d drift entries overwritten\n", verb, opts.Name, totalDrift)
+	}
+	if opts.RegenerateToken {
+		fmt.Fprintln(stdout, "SharedToken rotated; restart orch + agentmon + csuite-watcher to pick up the new token")
+	} else {
+		fmt.Fprintln(stdout, "SharedToken preserved; running services keep their auth")
+	}
+	fmt.Fprintf(stdout, "compose file: %s\n", composePath)
+	fmt.Fprintf(stdout, "drem.toml:    %s\n", tomlPath)
+	return nil
+}
+
+// printDriftGroup emits a human-readable subsection of drift entries
+// under a file label. Stable ordering (Diff returns entries sorted by
+// Path) so operators can diff the output across runs.
+func printDriftGroup(w io.Writer, path string, entries []projects.DriftEntry) {
+	if len(entries) == 0 {
+		return
+	}
+	fmt.Fprintf(w, "  %s:\n", path)
+	for _, e := range entries {
+		switch e.Kind {
+		case "added":
+			fmt.Fprintf(w, "    + %s = %q\n", e.Path, e.NewValue)
+		case "removed":
+			fmt.Fprintf(w, "    - %s = %q\n", e.Path, e.WasValue)
+		case "changed":
+			fmt.Fprintf(w, "    ~ %s: %q -> %q\n", e.Path, e.WasValue, e.NewValue)
+		}
+	}
 }
 
 // templateDataFor populates a TemplateData from a Project using the
