@@ -24,6 +24,9 @@ services:
       DREM_DB_PATH: "/var/lib/drem/drem.db"
       DREM_ORCH_LISTEN: ":8080"
       DREM_SPAWNER_SOCKET: "/var/run/drem/spawner.sock"
+      # Self-URL so dispatchMerge can pass --orch-url to spawned merger
+      # containers. Mergers POST merge_result records back to this URL.
+      DREM_ORCH_URL: "http://orch:8080"
       DREM_AGENTMON_TOKEN: "{{.SharedToken}}"
     volumes:
       - drem-{{.ProjectName}}-db:/var/lib/drem

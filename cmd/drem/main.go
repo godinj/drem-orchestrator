@@ -272,6 +272,18 @@ func main() {
 	})
 	orch.SetSkipConstraintGate(cfg.SkipConstraintGate)
 
+	// Plumb the in-cluster orchestrator URL and agentmon shared token
+	// through so dispatchMerge can pass --orch-url and --agentmon-token
+	// to every spawned merger container. These env vars are set by the
+	// per-project compose template (see
+	// internal/projects/templates/project-compose.yml.tmpl). Outside the
+	// container (TUI-only, local dev) both are empty and the merger is
+	// not used.
+	orch.SetInternalEndpoints(
+		os.Getenv("DREM_ORCH_URL"),
+		os.Getenv("DREM_AGENTMON_TOKEN"),
+	)
+
 	// Wire event bus so task transitions produce events for C-Suite agents.
 	if bus, err := eventbus.New(filepath.Join(os.Getenv("HOME"), ".drem-csuite", "csuite.db")); err != nil {
 		log.Printf("warning: event bus unavailable: %v", err)

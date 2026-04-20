@@ -153,6 +153,20 @@ type Orchestrator struct {
 	// branch here so merge and destroy paths can transition it to merged/
 	// deleted without touching the host filesystem.
 	GitrefRegistry *gitref.Registry
+
+	// orchURL is the in-cluster base URL that spawned worker containers
+	// (most notably the per-task merger) use to POST results back to this
+	// orchestrator's /internal/logs endpoint. Populated from the
+	// DREM_ORCH_URL env var at startup via SetInternalEndpoints. Empty
+	// means "no in-cluster URL" — workers can still run, but merge result
+	// ingestion via HTTP will not happen.
+	orchURL string
+
+	// agentmonToken is the shared bearer token that agentmon (and any
+	// merger container POSTing merge_result records) must present on
+	// /internal/logs. Mirrors DREM_AGENTMON_TOKEN from the per-project
+	// compose file. Populated via SetInternalEndpoints.
+	agentmonToken string
 }
 
 // New creates an Orchestrator. The supervisor parameter is optional — pass nil
@@ -290,6 +304,18 @@ func (o *Orchestrator) SetGitrefRegistry(reg *gitref.Registry) {
 // with delivery records for all known C-Suite agents. Pass nil to disable.
 func (o *Orchestrator) SetEventBus(bus *eventbus.Bus) {
 	o.bus = bus
+}
+
+// SetInternalEndpoints configures the in-cluster URL and shared bearer
+// token that spawned worker containers (the per-task merger in
+// particular) need in order to POST merge_result records back to
+// /internal/logs. Both values are typically plumbed in from the
+// DREM_ORCH_URL and DREM_AGENTMON_TOKEN env vars on the orchestrator
+// container. Safe to call multiple times; empty strings reset the
+// corresponding field.
+func (o *Orchestrator) SetInternalEndpoints(orchURL, agentmonToken string) {
+	o.orchURL = orchURL
+	o.agentmonToken = agentmonToken
 }
 
 // NewWithExperimentScheduling creates an Orchestrator with experiment-aware

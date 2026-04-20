@@ -129,6 +129,10 @@ func TestRender_GoTemplateFull(t *testing.T) {
 	}
 	require.NoError(t, yaml.Unmarshal(out, &parsed))
 	require.Equal(t, data.SharedToken, parsed.Services["orch"].Environment["DREM_AGENTMON_TOKEN"])
+	// DREM_ORCH_URL must be present on orch so dispatchMerge has a
+	// self-URL to pass to spawned merger containers. See
+	// plans/merger-spawn-on-demand-impl.md.
+	require.Equal(t, "http://orch:8080", parsed.Services["orch"].Environment["DREM_ORCH_URL"])
 	require.Equal(t, data.SharedToken, parsed.Services["agentmon"].Environment["DREM_AGENTMON_TOKEN"])
 	require.Empty(t, parsed.Services["csuite-mike"].Environment["DREM_AGENTMON_TOKEN"])
 	require.Empty(t, parsed.Services["csuite-watcher"].Environment["DREM_AGENTMON_TOKEN"])
