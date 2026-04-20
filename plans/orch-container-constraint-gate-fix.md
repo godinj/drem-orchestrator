@@ -1,9 +1,30 @@
 # Orch Container Constraint-Gate Fix — Implementation Plan
 
-Status: **proposed**, 2026-04-20. Fix for T3 canary false-positive
-constraint-gate failure discovered this morning. Sibling of
-`plans/worker-prompt-delivery.md` (landed earlier today) and
-`plans/drem-project-register-update.md`.
+Status: **implemented, 2026-04-20.** All four implementation commits
+(plan doc + feat + test + feat-orch + this docs-tick) landed on
+worktree-agent-a0f359c8. Sibling of `plans/worker-prompt-delivery.md`
+(landed earlier today) and `plans/drem-project-register-update.md`.
+Unblocks the T3 canary on quickfix-categorized tasks — the constraint
+gate inside the orch container no longer auto-pauses on
+`bash: line 1: go: command not found`.
+
+Tests added:
+
+- `internal/constraints/evaluate_test.go` — 5 new
+  (missing tool yields SKIP and does NOT execute the command;
+  present tool exits zero is PASS; present tool fails is FAIL;
+  `commandTool` first-token heuristic with env-assignment and
+  absolute-path cases; `FormatReport` SKIP row + three-count
+  summary; `buildReport` partitions Passed/Failed/Skipped).
+- `internal/constraints/compare_test.go` — 1 new block with 6
+  sub-cases (PASS↔SKIP, FAIL↔SKIP, SKIP↔SKIP, and SKIP not
+  masking unrelated PASS→FAIL regressions).
+
+All tests pass on `go test -count=1 ./...`; `go vet ./...` clean.
+
+Rollout (§6) unchanged; no image rebuild needed. Operator can
+re-run the T3 canary on a quickfix task and confirm dispatch is
+attempted rather than the task auto-pausing.
 
 ## 1. Problem
 

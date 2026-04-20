@@ -319,6 +319,58 @@ The regular constraint limit is ignored for excepted files — only the baseline
 
 Use the `github.com/BurntSushi/toml` library (standard Go TOML parser). If not already a dependency, add it. Check `go.mod` first.
 
+#### 4.2.5. Tool Availability and SKIP Results
+
+Command constraints shell out to external tools (`go vet`, `gofmt`, and so
+on). The evaluation environment — the drem orchestrator, a worker container,
+or a developer host — may or may not have each tool installed.
+
+The orch container (`deploy/docker/orch.Dockerfile`) specifically **does
+not** ship the Go toolchain: the compiled drem binary is glibc-linked via
+CGO and doesn't need it, so the runtime stage (`debian:bookworm-slim`)
+would only carry Go for the constraint checks. That's ~120 MB per project
+image, which we decline to pay — constraints run inside the orch container
+during the quickfix-fast-track gate and the integration gate, and workers
+are the authoritative enforcement layer.
+
+`evalCommand` guards against missing tools via `exec.LookPath`:
+
+1. For each command constraint, `commandTool(c.Run)` extracts the first
+   bare token (skipping leading `KEY=value` env assignments) and treats
+   it as the binary name — `"go vet ./..."` → `"go"`,
+   `"GOFLAGS=foo go vet ./..."` → `"go"`.
+2. If `exec.LookPath(tool)` returns an error, the result is returned with
+   `Skipped: true` and `SkipReason: "tool unavailable: <tool>"`. The
+   command is **not executed** — no bash invocation, no spurious
+   "command not found" text leaking into violation messages.
+3. If the tool resolves, the command runs as before.
+
+Skipped results are tracked separately from Passed and Failed:
+
+```
+PASS: gofmt compliance
+SKIP: go vet (tool unavailable: go)
+FAIL: File length ceiling
+  internal/big.go has 900 lines, exceeds limit of 800
+──────────────────────────
+9 checks passed, 1 skipped, 1 failed
+```
+
+`Report.Skipped` holds the count; skips do not count toward
+`Report.Failed` and therefore do not block the constraint gate.
+
+`CompareReports` treats SKIP as "no signal" on either side of the
+comparison — it neither introduces false regressions nor masks real
+ones. Baseline and feature reports evaluated in the same environment
+will skip the same constraints, so the typical case is a symmetric
+SKIP on both sides.
+
+To keep reduced coverage visible, every call site that runs constraint
+evaluation inside the orch container logs an INFO entry per SKIP with
+the task ID, constraint name, and skip reason. Operators reading
+`/var/lib/drem/drem.log` can tell at a glance when a toolchain gap
+is bypassing a check.
+
 ### 4.3. Planner Prompt Integration
 
 Modify `internal/prompt/prompt.go` to:
