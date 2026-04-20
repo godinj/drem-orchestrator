@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -220,6 +221,39 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 			}
 		}
 
+		// Dispatch routing: container mode (o.Spawner wired) routes
+		// through spawnTypedWorker so the worker runs inside a
+		// drem-worker-<lang> container and the claude CLI execs from
+		// the bind-mounted prompt. Legacy mode (o.Spawner nil) falls
+		// through to o.runner.SpawnAgent, which shells out to claude
+		// on the host — only viable when the orchestrator runs on a
+		// host with claude installed, never inside the orch container.
+		// See plans/phase-3.5-subtask-dispatch-migration.md §"Why".
+		if o.Spawner != nil {
+			// Skip subtasks that are currently being prepped (waiting for prep agent).
+			if sub.Context != nil {
+				if _, inProgress := sub.Context["prep_in_progress"]; inProgress {
+					continue
+				}
+			}
+			if err := o.dispatchSubtaskViaSpawner(sub, agentType); err != nil {
+				o.logger.Error("spawn agent for subtask failed",
+					"subtask_id", sub.ID, "error", err)
+				// spawnTypedWorker already emitted a worker_spawn_failed
+				// TaskEvent; do not double-record. Fall through to the
+				// next candidate so a single subtask's failure does not
+				// starve the rest.
+				continue
+			}
+			continue
+		}
+
+		// Legacy host-subprocess path. Retained for development on a
+		// host with claude installed (e.g. running `drem` directly
+		// against a host sqlite DB) and for tests that exercise the
+		// schedule loop without wiring a Spawner. Production runs the
+		// container path above.
+
 		// Check subprocess runner capacity. Only applies to non-direct
 		// agents (OpenCode/Claude subprocess path). Direct agents already
 		// dispatched above bypass this gate.
@@ -314,6 +348,91 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 		o.logger.Info("subtask scheduled", "subtask_id", sub.ID, "agent_id", ag.ID, "type", agentType)
 	}
 
+	return nil
+}
+
+// dispatchSubtaskViaSpawner routes a single subtask through the
+// container-mode spawner (spawnTypedWorker). It mirrors the post-spawn
+// bookkeeping the legacy path performs — fast-track transitions from
+// BACKLOG through PLANNING and PLAN_REVIEW to IN_PROGRESS, plus the
+// subtask_scheduled event, task_transition and agent_status publishes,
+// and the Info log line. The Agent row is created by spawnTypedWorker
+// (via recordContainerOnAgent) with the container ID in TmuxSession;
+// this function reloads the subtask after the spawn call so the
+// scheduler picks up the assignment that recordContainerOnAgent wrote.
+//
+// Errors are returned to the caller, which logs them and continues to
+// the next candidate — a single subtask's failure must not starve the
+// rest. A non-nil error from spawnTypedWorker already carries a
+// worker_spawn_failed audit event emitted inside that method, so this
+// function does not duplicate the event write.
+//
+// See plans/phase-3.5-subtask-dispatch-migration.md §"Migration recipe".
+func (o *Orchestrator) dispatchSubtaskViaSpawner(sub *model.Task, agentType model.AgentType) error {
+	if o.Spawner == nil {
+		return fmt.Errorf("dispatchSubtaskViaSpawner: o.Spawner is nil")
+	}
+
+	ctx := context.Background()
+	if err := o.spawnTypedWorker(ctx, sub, string(agentType)); err != nil {
+		return fmt.Errorf("spawn %s via spawner: %w", agentType, err)
+	}
+
+	// Reload the subtask so AssignedAgentID (written by
+	// recordContainerOnAgent during the spawn) and the task row's
+	// container-carrying Agent handle are visible to the rest of the
+	// scheduling loop and the downstream publishers.
+	if err := o.db.First(sub, "id = ?", sub.ID).Error; err != nil {
+		return fmt.Errorf("reload subtask after container spawn: %w", err)
+	}
+	if sub.AssignedAgentID == nil {
+		// recordContainerOnAgent should always populate this; if it
+		// did not, treat it as a spawn failure and fail the subtask so
+		// the operator surfaces the gap rather than seeing a silent
+		// stall. Mirrors the legacy path's "agent record not found
+		// after spawn" failure mode, just with a container-specific
+		// reason string.
+		if err := o.failTask(sub, "agent record not found after container spawn"); err != nil {
+			o.logger.Error("schedule: fail subtask after missing agent",
+				"subtask_id", sub.ID, "error", err)
+		}
+		return fmt.Errorf("agent assignment missing after container spawn for subtask %s", sub.ID)
+	}
+
+	// Fast-track subtask: BACKLOG -> PLANNING -> PLAN_REVIEW -> IN_PROGRESS.
+	fastTrack := []model.TaskStatus{
+		model.StatusPlanning,
+		model.StatusPlanReview,
+		model.StatusInProgress,
+	}
+	for _, target := range fastTrack {
+		evt, tErr := state.TransitionTask(sub, target, "orchestrator",
+			map[string]any{"reason": "auto-schedule"})
+		if tErr != nil {
+			o.logger.Debug("fast-track subtask skip",
+				"subtask_id", sub.ID, "to", target, "error", tErr)
+			continue
+		}
+		if err := o.db.Create(evt).Error; err != nil {
+			return fmt.Errorf("save transition event: %w", err)
+		}
+	}
+	if err := o.db.Save(sub).Error; err != nil {
+		return fmt.Errorf("save subtask after fast-track: %w", err)
+	}
+
+	agentID := *sub.AssignedAgentID
+	o.emit("subtask_scheduled", map[string]any{
+		"task_id":    sub.ID,
+		"agent_id":   agentID,
+		"agent_type": agentType,
+	})
+	o.publishTaskTransition(sub.ID.String(), string(model.StatusBacklog),
+		string(sub.Status), "subtask scheduled")
+	o.publishAgentStatus(sub.ID.String(), agentID.String(),
+		string(agentType), string(model.AgentWorking))
+	o.logger.Info("subtask scheduled via spawner",
+		"subtask_id", sub.ID, "agent_id", agentID, "type", agentType)
 	return nil
 }
 
