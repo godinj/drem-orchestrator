@@ -128,6 +128,79 @@ Title: %s
 Description: %s
 `, truncate(testOutput, maxTestOutputLen), o.worktree.DefaultBranchName(), gitDiff, parent.Title, parent.Description)
 
+	// Container-mode dispatch: when o.Spawner is wired, the fixer
+	// runs in a worker container. The detailed fixerPrompt built above
+	// (with test failure output + diff) is NOT plumbed through
+	// buildSpawnContext yet — see
+	// plans/phase-3.5-subtask-dispatch-migration.md §"Open questions"
+	// Q2. The container-path prompt carries only the default
+	// prompt.Opts (task title + description + project context); the
+	// test-failure output flows through parent.Context (saved below)
+	// and the worker can read it via the DREM_TASK_ID → GET
+	// /tasks/{id} HTTP path. This is a deliberate narrowing for
+	// dispatch-migration-unblocking; plumb the prompt enrichment in
+	// a separate follow-up.
+	// See plans/phase-3.5-subtask-dispatch-migration.md Commit 5.
+	if o.Spawner != nil {
+		// Save parent.Context updates (testing_ready_fixer_attempted,
+		// test_failure_output) BEFORE the spawn so the worker sees them
+		// when it reads the task back from orch.
+		if err := o.db.Save(parent).Error; err != nil {
+			return fmt.Errorf("processTestingReady: save parent context before spawn: %w", err)
+		}
+		// spawnFixer expects a clean AssignedAgentID — clear any prior
+		// coder assignment so recordContainerOnAgent creates a fresh
+		// fixer Agent row. The legacy runner.SpawnAgentInWorktree path
+		// creates a new Agent row unconditionally; the container path
+		// needs this explicit clear because recordContainerOnAgent
+		// updates rather than replaces.
+		prevAgentID := parent.AssignedAgentID
+		parent.AssignedAgentID = nil
+		if err := o.db.Save(parent).Error; err != nil {
+			return fmt.Errorf("processTestingReady: clear assignment before spawn: %w", err)
+		}
+		if err := o.spawnFixer(context.Background(), parent); err != nil {
+			o.logger.Error("processTestingReady: spawn fixer failed via spawner",
+				"task_id", parent.ID, "error", err)
+			// Restore the prior assignment so reconciliation still
+			// tracks the originating worker before we gate for human
+			// review.
+			parent.AssignedAgentID = prevAgentID
+			parent.Context["needs_human_review"] = true
+			if err := o.db.Save(parent).Error; err != nil {
+				return fmt.Errorf("processTestingReady: save parent after failed container spawn: %w", err)
+			}
+			return nil
+		}
+		// Reload to pick up AssignedAgentID written by
+		// recordContainerOnAgent.
+		if err := o.db.First(parent, "id = ?", parent.ID).Error; err != nil {
+			return fmt.Errorf("processTestingReady: reload parent after container spawn: %w", err)
+		}
+		if parent.AssignedAgentID == nil {
+			o.logger.Error("processTestingReady: no agent assignment after container spawn",
+				"task_id", parent.ID)
+			parent.Context["needs_human_review"] = true
+			if err := o.db.Save(parent).Error; err != nil {
+				return fmt.Errorf("processTestingReady: save parent after missing assignment: %w", err)
+			}
+			return nil
+		}
+		// Silences "declared and not used" — fixerPrompt is retained
+		// verbatim so the legacy fallback block below continues to
+		// build and consume it without duplicating the prompt
+		// construction. The container path intentionally does not
+		// consume fixerPrompt; see §Q2.
+		_ = fixerPrompt
+		o.emit("testing_ready_fixer_spawned", map[string]any{
+			"task_id":  parent.ID,
+			"agent_id": *parent.AssignedAgentID,
+		})
+		o.logger.Info("testing_ready: fixer spawned via spawner for test failures",
+			"task_id", parent.ID, "fixer_id", *parent.AssignedAgentID)
+		return nil
+	}
+
 	if o.runner == nil {
 		o.logger.Error("processTestingReady: runner is nil, cannot spawn fixer", "task_id", parent.ID)
 		parent.Context["needs_human_review"] = true
