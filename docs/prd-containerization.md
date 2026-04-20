@@ -125,7 +125,7 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 
 **Modified modules:**
 
-- The orchestrator package has its worktree operations replaced by spawner RPC calls and Docker event subscriptions. State machine unchanged.
+- The orchestrator package has its worktree operations replaced by spawner RPC calls and Docker event subscriptions. State machine unchanged. Dispatch sites migrated as of 2026-04-20: subtask-coder (`subtask_scheduling.go`), reviewer + fixer public entrypoints (`session_spawning.go`), test-failure fixer re-dispatch (`test_execution.go`) now prefer `o.Spawner.SpawnWorker` via `spawnTypedWorker` when wired. The legacy `runner.SpawnAgent` host-subprocess path remains as a nil-Spawner fallback for local development on a host with the claude CLI installed, and for the two explicitly-retained subprocess fallbacks (warm-planner subprocess fallback in `task_processing.go`, warm-classifier subprocess fallback in `classifying.go`). See `plans/phase-3.5-subtask-dispatch-migration.md`.
 - The agent package routes spawn operations through the spawner RPC instead of direct subprocess exec. Agent-type-to-image mapping added.
 - The `drem` CLI gains `project register`, `project list`, and `project remove` commands.
 - The agentmon package is extended to subscribe to Docker container stdout sources in addition to the existing Claude transcript tailing.

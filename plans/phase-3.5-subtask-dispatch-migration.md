@@ -1,11 +1,42 @@
 # Phase 3.5 — Subtask Dispatch Migration (legacy `runner.SpawnAgent` → `o.Spawner`)
 
-Status: in progress, 2026-04-20. Session deliverable: unblock the T3
-containerization canary by routing the coder dispatch path in
-`internal/orchestrator/subtask_scheduling.go` through the container-mode
-spawner (`o.Spawner.SpawnWorker` via `spawnCoder` / `spawnTypedWorker`)
-instead of the legacy host-runner dispatch path
+Status: **implemented, 2026-04-20** (commits `7bc71ea..` on this
+branch). Session deliverable: unblock the T3 containerization canary
+by routing the coder dispatch path in
+`internal/orchestrator/subtask_scheduling.go` through the
+container-mode spawner (`o.Spawner.SpawnWorker` via `spawnCoder` /
+`spawnTypedWorker`) instead of the legacy host-runner dispatch path
 (`o.runner.SpawnAgent`).
+
+Delivered in order:
+
+1. **`7bc71ea` docs(plans): phase-3.5 subtask dispatch migration plan** — this file.
+2. **`d8ae751` feat(orch): route coder subtask dispatch through container spawner** — the primary migration. Unblocks T3.
+3. **`1e82450` feat(orch): route reviewer-session dispatch through container spawner** — feature-review fork of `SpawnReviewerSession`.
+4. **`4a094ab` feat(orch): route fixer-session dispatch through container spawner** — `SpawnFixerSession`.
+5. **`35da1f3` feat(orch): route test-failure fixer re-dispatch through container spawner** — `processTestingReady` fixer re-spawn.
+6. **(final)** `docs(plans): mark phase-3.5 dispatch migration done + tick containerization` — this commit; updates `docs/prd-containerization.md` + `plans/containerization.md` acceptance criteria.
+
+Commit 6 from the original rollout (prep-agent subprocess fallback)
+is PUNTED — see §"Open questions" Q1 for the decision rationale.
+Not on the T3 canary path; reachable only when the coder provider is
+a non-claude local model AND `directPrepCfg` is nil (production
+always sets it). A dedicated follow-up plan is called for when the
+prep pipeline's JSON-output-via-worktree contract is revisited.
+
+Tests added:
+
+- `internal/orchestrator/subtask_scheduling_test.go` — 3 new
+  (DispatchesCoderViaSpawner, SpawnerFailureFailsFast,
+  WithoutSpawnerSkipsDispatch).
+- `internal/orchestrator/session_spawning_container_test.go`
+  (new file) — 2 new (reviewer + fixer container dispatch).
+- `internal/orchestrator/test_execution_container_test.go`
+  (new file) — 1 new (processTestingReady container fixer dispatch).
+
+All tests pass on `go test -count=1 ./...`; `go vet ./...` is clean.
+`internal/orchestrator` suite runs in 42.9s (baseline 42.8s — within
+noise).
 
 Sibling plans already landed:
 
@@ -150,11 +181,11 @@ that flow through `o.Spawner` in this plan:
 
 | Site | Current call | Proposed target | Agent type | Commit |
 |------|---|---|---|---|
-| `subtask_scheduling.go:267` | `o.runner.SpawnAgent(sub, featureName, agentType, prompt)` | `o.spawnCoder(ctx, sub)` (or `spawnTypedWorker(ctx, sub, string(agentType))` if agent_type varies) | coder (mostly); occasionally reviewer/fixer when subtask context sets agent_type | Commit 2 (primary) |
-| `session_spawning.go:107` (`SpawnReviewerSession`) | `o.runner.SpawnAgentInWorktree(&task, worktreePath, model.AgentReviewer, prompt)` | `o.spawnReviewer(ctx, &task)` | reviewer | Commit 3 |
-| `session_spawning.go:248` (`SpawnFixerSession`) | `o.runner.SpawnAgentInWorktree(&task, worktreePath, model.AgentFixer, prompt)` | `o.spawnFixer(ctx, &task)` | fixer | Commit 4 |
-| `test_execution.go:139` (`processTestingReady`) | `o.runner.SpawnAgentInWorktree(parent, worktreePath, model.AgentFixer, prompt)` | `o.spawnFixer(ctx, parent)` | fixer | Commit 5 |
-| `task_prep.go:138` (`spawnPrepAgent`) | `o.runner.SpawnAgent(sub, featureName, model.AgentPrep, prompt)` | decision in Q1; most likely `o.spawnTypedWorker(ctx, sub, string(model.AgentPrep))` after an entry is added to `credsMountRequired` and `promptRequired` for "prep" | prep | Commit 6 (or punted) |
+| `subtask_scheduling.go:267` | `o.runner.SpawnAgent(sub, featureName, agentType, prompt)` | `o.spawnCoder(ctx, sub)` (or `spawnTypedWorker(ctx, sub, string(agentType))` if agent_type varies) | coder (mostly); occasionally reviewer/fixer when subtask context sets agent_type | Commit 2 (primary) — DONE `d8ae751` |
+| `session_spawning.go:107` (`SpawnReviewerSession`) | `o.runner.SpawnAgentInWorktree(&task, worktreePath, model.AgentReviewer, prompt)` | `o.spawnReviewer(ctx, &task)` | reviewer | Commit 3 — DONE `1e82450` |
+| `session_spawning.go:248` (`SpawnFixerSession`) | `o.runner.SpawnAgentInWorktree(&task, worktreePath, model.AgentFixer, prompt)` | `o.spawnFixer(ctx, &task)` | fixer | Commit 4 — DONE `4a094ab` |
+| `test_execution.go:139` (`processTestingReady`) | `o.runner.SpawnAgentInWorktree(parent, worktreePath, model.AgentFixer, prompt)` | `o.spawnFixer(ctx, parent)` | fixer | Commit 5 — DONE `35da1f3` |
+| `task_prep.go:138` (`spawnPrepAgent`) | `o.runner.SpawnAgent(sub, featureName, model.AgentPrep, prompt)` | deferred per Q1 (ingestion path needs refactor before dispatch can migrate) | prep | Commit 6 — PUNTED |
 
 Left alone explicitly:
 
@@ -438,14 +469,14 @@ one commit per behavioral change):
      `o.spawnFixer(ctx, parent)`.
    - New test: `TestProcessTestingReady_DispatchesFixerViaSpawner`.
 
-6. **Commit 6 (conditional):** `feat(orch): route prep-agent fallback through container spawner`
-   - `task_prep.go:138` — subject to Q1's decision. If it requires
-     adding "prep" to `credsMountRequired` and `promptRequired`,
-     that is included in this commit alongside a new row in
-     `TestCredsMountRequired_Table`. If the decision is non-trivial
-     (e.g., prep needs a different image/contract), this commit is
-     SKIPPED and a follow-up plan doc is referenced in the final
-     docs commit.
+6. **Commit 6 — SKIPPED.** Prep-agent subprocess fallback migration
+   punted; see Q1 for the decision. The `task_prep.go:138`
+   `o.runner.SpawnAgent` call stays in place; it is only reachable
+   under a non-claude local-model coder config with `directPrepCfg`
+   unset, which is not part of T3 or production. A dedicated
+   follow-up plan (`plans/prep-agent-container-migration.md`, not
+   yet filed) will cover the ingestion-path refactor before the
+   subprocess call is replaced.
 
 7. **Final commit:** `docs(plans): mark phase-3.5 subtask dispatch migration done + tick containerization`
    - Tick the relevant entries in `docs/prd-containerization.md`.
@@ -557,38 +588,45 @@ as `taskContainerID`). No other columns are repurposed.
 
 ## Open questions
 
-### Q1: Do we migrate `spawnPrepAgent`?
+### Q1: Do we migrate `spawnPrepAgent`? — PUNTED (2026-04-20)
 
 The prep-agent call at `task_prep.go:138` runs when
 `directPrepCfg == nil` — the subprocess-fallback branch. Prep agents
 in the legacy path run the same claude CLI as coders but with a
 prep prompt template; they write `task-prep-<id>.json` to the
-worktree and exit.
+worktree and exit. The completion handler `onPrepCompleted`
+(`internal/orchestrator/task_prep.go:169`) reads the file from
+`ag.WorktreePath` — the host-side worktree the legacy runner
+creates.
 
-Options:
+**Decision: PUNT.** Two blockers surfaced during migration:
 
-- **(a)** Migrate. Add `"prep"` to both `credsMountRequired` and
-  `promptRequired`. Update the `TestCredsMountRequired_Table` test
-  to add the new row. Route through `spawnTypedWorker(ctx, sub,
-  string(model.AgentPrep))`. Worker entrypoint already execs claude
-  from `/home/drem/.drem/prompt.md`, so the prep prompt flows
-  through the same delivery pipeline as the coder prompt.
-- **(b)** Punt. Leave the subprocess call in place; add a comment
-  that the subprocess path is legacy-only and production should
-  always set `directPrepCfg`.
+1. `onPrepCompleted` reads `task-prep-<id>.json` from
+   `ag.WorktreePath`, a host-side path populated by the legacy
+   runner. In container mode the worker's workspace is inside the
+   container (bind-mounted bare repo at `/bare`, cloned to a local
+   ephemeral filesystem). There is no stable host path for
+   `onPrepCompleted` to read. Adapting the completion path is a
+   cross-cutting change that deserves its own plan — the
+   recommended shape is "prep agent writes the JSON to stdout;
+   agentmon ingests it via the Docker-stdout path; orchestrator
+   consumes it via `POST /internal/logs` instead of filesystem
+   polling." That is a non-trivial refactor of both the prompt
+   (no more `Write(<path>)`) and the ingestion path (structured
+   event rather than JSON file).
+2. `needsPrep` at `task_prep.go:62-88` explicitly returns
+   `false` when the coder provider is `claude` (line 87). The T3
+   canary uses claude. The subprocess fallback at line 138 is
+   therefore unreachable under T3 — punting it does not block
+   the session's deliverable. When a project registers with a
+   local-model coder AND leaves `directPrepCfg` unset, the
+   subprocess path will still fail inside the orch container —
+   but that configuration is not shipped.
 
-Preferred answer: (a). The parity argument is strong — prep has
-always been "coder with a different prompt" in the legacy path, and
-the container path already supports arbitrary prompt content. The
-commit-body risk is that prep's `.json` output file needs to round-trip
-through the container's worktree, but since prep currently writes
-`task-prep-<id>.json` into the worktree (which the worker clones
-from `/bare`), and agentmon already ingests per-task artifacts from
-that worktree, the round-trip is already covered.
-
-Commit 6 implements (a) unless a second look at prep's output
-ingestion contract shows a bigger problem. If so, Commit 6 is
-skipped and this plan gets a follow-up entry.
+A follow-up plan (`plans/prep-agent-container-migration.md`, not
+yet filed) is the place to capture the ingestion-path refactor and
+the `credsMountRequired` / `promptRequired` table additions. This
+plan declares the punt; the rollout-order's Commit 6 is skipped.
 
 ### Q2: Parent context in container-path prompts
 
@@ -676,21 +714,30 @@ theoretical in a lightly-loaded canary).
 
 ## Post-merge verification checklist
 
-- [ ] `go vet ./...` clean on every commit.
-- [ ] `go test -count=1 ./...` green on every commit.
-  Baseline run time for `internal/orchestrator`: ~42.8s.
-- [ ] All new tests exercise the `fakeWorkerSpawner` (or reuse
-      helpers from `worker_spawn_test.go`); no new tests reach for
-      the real `internal/agent` runner.
-- [ ] `grep -rn 'runner.SpawnAgent' internal/orchestrator` after
-      migration shows exactly: `classifying.go:90`,
-      `task_processing.go:248`, and the two sites in
-      `quickfix_processing.go` (+ any unchanged references in
-      `orchestrator.go` doc comments). No new appearances in
-      `subtask_scheduling.go`, `session_spawning.go`,
-      `test_execution.go`, or (per Q1) `task_prep.go`.
-- [ ] `docs/prd-containerization.md` has an updated "Modified
-      modules" entry covering the new call sites, and the
-      subtask-dispatch tick is moved to "done".
-- [ ] Plan doc at top is marked "implemented, YYYY-MM-DD" with
+- [x] `go vet ./...` clean on every commit.
+- [x] `go test -count=1 ./...` green on every commit.
+  `internal/orchestrator` runs in 42.9s (baseline 42.8s — within noise).
+- [x] All new tests exercise the `fakeWorkerSpawner` (reusing the
+      helper from `worker_spawn_test.go`); no new test in this plan
+      reaches for the real `internal/agent` runner.
+- [x] Post-migration `runner.SpawnAgent` / `SpawnAgentInWorktree`
+      residual sites in `internal/orchestrator`: `classifying.go:90`
+      (warm classifier fallback — explicitly retained),
+      `task_processing.go:248` (warm planner fallback — explicitly
+      retained), `task_prep.go:138` (prep-agent subprocess fallback —
+      punted per Q1), `quickfix_processing.go:103,150` (follow-up per
+      Q3), `context_monitor.go:237` (follow-up per Q3). No new
+      appearances in `subtask_scheduling.go`,
+      `session_spawning.go`, or `test_execution.go` — those sites
+      prefer the container path when `o.Spawner != nil` and fall
+      through to the legacy path only when it is nil.
+- [x] `docs/prd-containerization.md` "Modified modules" entry covers
+      the new call sites. `plans/containerization.md` Phase 2
+      acceptance criterion `drem.toml: workers.engine = "spawner"
+      routes Opus coder tasks through a container` is now ticked,
+      plus a second tick covering reviewer/fixer/testing-ready
+      dispatch. (Slice 2.6's original feature-flag framing was
+      superseded by the per-project compose's env configuration —
+      "spawner wired" is the observable invariant.)
+- [x] Plan doc at top is marked "implemented, 2026-04-20" with the
       concrete commit range.

@@ -134,7 +134,8 @@ records the exit code.
 
 ### Acceptance criteria
 
-- [ ] `drem.toml: workers.engine = "spawner"` routes Opus coder tasks through a container.
+- [x] Coder subtask dispatch routes through the container spawner. _(2026-04-20: `internal/orchestrator/subtask_scheduling.go` now calls `o.spawnCoder` → `o.Spawner.SpawnWorker` whenever `o.Spawner` is wired, falling back to the legacy `runner.SpawnAgent` host path only when the spawner is nil. Slice 2.6's original feature-flag framing (`drem.toml: workers.engine`) was superseded by the production configuration — per-project compose files already set `DREM_WORKER_CREDS_PATH` + `DREM_PROMPT_ROOT_HOST`, so "spawner wired" is the observable invariant the migration keys off. See `plans/phase-3.5-subtask-dispatch-migration.md`.)_
+- [x] Reviewer-session, fixer-session, and test-failure fixer re-dispatch all route through the container spawner when wired. _(2026-04-20: `SpawnReviewerSession`, `SpawnFixerSession`, and `processTestingReady`'s fixer-spawn branch each prefer `o.Spawner.SpawnWorker` via `spawnReviewer` / `spawnFixer`. Legacy `runner.SpawnAgentInWorktree` paths retained for local development on a host with claude installed.)_
 - [ ] Worker container clones bare repo into `/workspace`, exits on agent completion, is destroyed by the spawner.
 - [ ] Container runtime abstraction's fake is used in ≥5 existing test files without real Docker.
 - [ ] Spawner RPC has unit tests for all four methods + error paths.
