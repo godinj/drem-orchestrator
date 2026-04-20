@@ -95,7 +95,7 @@ RUN /usr/sbin/groupadd --gid "${DREM_GID}" drem \
              --create-home --shell /bin/bash drem \
  && echo 'drem ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/drem \
  && chmod 0440 /etc/sudoers.d/drem \
- && mkdir -p /home/drem/work \
+ && mkdir -p /home/drem/work /home/drem/.claude \
  && chown -R drem:drem /home/drem
 
 # ---- opencode CLI ----------------------------------------------------------
