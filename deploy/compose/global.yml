@@ -272,6 +272,59 @@ services:
       retries: 3
       start_period: 10s
 
+  # ---------- drem-planner: warm HTTP planner ----------
+  # Serves POST /plan for orch when a task reaches PLANNING with
+  # provider=claude. Single replica, stateless between requests — the
+  # binary execs the `claude` CLI as a subprocess per /plan call and
+  # returns the resulting plan.json inline in the HTTP response. See
+  # plans/warm-planner-pivot.md for the design.
+  #
+  # Auth is subscription-only: ~/.claude/.credentials.json is bind-mounted
+  # read-only from the host operator's home into /home/drem/.claude. Host
+  # operator owns OAuth refresh via `claude login`; the container reads
+  # fresh creds on each /plan call. Planner /healthz validates the file
+  # is readable AND `claude --version` returns in <2s; failures flip the
+  # compose healthcheck to unhealthy so orch dispatch can fail fast on
+  # /healthz probe before eating a 5-minute claude timeout.
+  #
+  # No ANTHROPIC_API_KEY passthrough. Per operator direction 2026-04-20:
+  # subscription-only, so all claude-backed roles share the Max
+  # rate-limit pool.
+  drem-planner:
+    build:
+      context: ../..
+      dockerfile: deploy/docker/planner.Dockerfile
+    image: localhost:5000/drem-planner:latest
+    container_name: drem-planner
+    restart: unless-stopped
+    networks:
+      - drem-net
+    environment:
+      DREM_PLANNER_LISTEN: ":8090"
+      # Bearer token shared with orch — same convention as classifier and
+      # merger. Empty on dev hosts without agentmon; the binary falls
+      # open on missing-token when the env is unset.
+      DREM_AGENTMON_TOKEN: "${DREM_AGENTMON_TOKEN:-}"
+    volumes:
+      # Read-only bind-mount of the operator's Claude subscription creds.
+      # Mirrors the csuite agents pattern (compose.override.yml in
+      # ~/.drem/projects/drem-orchestrator/). Read-only so the container
+      # can't write refresh tokens the host then has to reconcile — host
+      # claude CLI interactive sessions own refresh; container just reads.
+      - type: bind
+        source: ${HOME}/.claude/.credentials.json
+        target: /home/drem/.claude/.credentials.json
+        read_only: true
+    labels:
+      drem.scope: "global"
+      drem.service: "drem-planner"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8090/healthz >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   # ---------- docker-query-proxy: narrow Docker-socket gateway for Kyle ----------
   # Exposes an allowlisted HTTP API (GET /containers, GET /containers/:id,
   # GET /containers/:id/logs) over the host Docker socket. Kyle calls this

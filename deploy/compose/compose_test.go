@@ -6,8 +6,10 @@
 package compose_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,6 +35,10 @@ type composeService struct {
 	Healthcheck map[string]any    `yaml:"healthcheck"`
 	Environment map[string]string `yaml:"environment"`
 	Build       map[string]any    `yaml:"build"`
+	// Volumes is the raw compose volumes block; for planner we assert the
+	// credentials bind-mount is present. Supports the long-form block
+	// (map) and short-form "src:tgt" strings.
+	Volumes []any `yaml:"volumes"`
 }
 
 // dependsOnServices returns the set of service names a compose entry
@@ -91,6 +97,53 @@ func TestGlobalYAML_DeclaresDremClassifier(t *testing.T) {
 	assert.Contains(t, stringifyYAMLNode(testField), "/healthz")
 }
 
+// TestGlobalYAML_DeclaresDremPlanner is the smoke test for
+// plans/warm-planner-pivot.md §§6, 8: the new drem-planner service must be
+// on drem-net, ship a /healthz-shaped healthcheck, and bind-mount the
+// operator's Claude subscription credentials read-only.
+func TestGlobalYAML_DeclaresDremPlanner(t *testing.T) {
+	data := readGlobalYAML(t)
+	var doc composeDoc
+	require.NoError(t, yaml.Unmarshal(data, &doc))
+
+	svc, ok := doc.Services["drem-planner"]
+	require.True(t, ok, "drem-planner service must be declared in global.yml")
+
+	assert.Equal(t, "localhost:5000/drem-planner:latest", svc.Image)
+	assert.Equal(t, "drem-planner", svc.ContainerName)
+	assert.Contains(t, svc.Networks, "drem-net", "drem-planner must attach drem-net")
+	assert.Equal(t, "global", svc.Labels["drem.scope"])
+	assert.Equal(t, "drem-planner", svc.Labels["drem.service"])
+
+	require.NotNil(t, svc.Healthcheck, "drem-planner must ship a healthcheck")
+	testField, ok := svc.Healthcheck["test"]
+	require.True(t, ok, "healthcheck must declare a test command")
+	assert.Contains(t, stringifyYAMLNode(testField), "/healthz")
+
+	// Credentials bind-mount must be present AND read-only per
+	// plans/warm-planner-pivot.md §1. A :rw mount would let the container
+	// clobber the host OAuth refresh state.
+	foundCreds := false
+	foundReadOnly := false
+	for _, v := range svc.Volumes {
+		s := stringifyYAMLNode(v)
+		if strings.Contains(s, ".claude/.credentials.json") {
+			foundCreds = true
+			// Long-form block: "read_only: true" substring present.
+			// Short-form: trailing ":ro".
+			if strings.Contains(s, "true") || strings.HasSuffix(strings.TrimSpace(s), ":ro") {
+				foundReadOnly = true
+			}
+		}
+	}
+	assert.True(t, foundCreds, "drem-planner must bind-mount ~/.claude/.credentials.json")
+	assert.True(t, foundReadOnly, "credentials bind-mount must be read-only")
+
+	// No ANTHROPIC_API_KEY passthrough — subscription-only auth.
+	_, hasAPIKey := svc.Environment["ANTHROPIC_API_KEY"]
+	assert.False(t, hasAPIKey, "drem-planner must NOT accept ANTHROPIC_API_KEY (subscription-only auth)")
+}
+
 // readGlobalYAML resolves the absolute path to global.yml regardless of
 // which directory `go test` was invoked from, then reads the bytes.
 func readGlobalYAML(t *testing.T) []byte {
@@ -104,11 +157,22 @@ func readGlobalYAML(t *testing.T) []byte {
 }
 
 // stringifyYAMLNode flattens a decoded YAML value (which may be []any,
-// string, or yaml.Node) to a single string for substring assertions.
+// string, map, or scalar) to a single string for substring assertions.
+// Maps stringify both keys and values so `{read_only: true}` flattens to
+// "read_only true" and consumers can assert on key names.
 func stringifyYAMLNode(v any) string {
 	switch x := v.(type) {
 	case string:
 		return x
+	case bool:
+		if x {
+			return "true"
+		}
+		return "false"
+	case int:
+		return fmt.Sprintf("%d", x)
+	case float64:
+		return fmt.Sprintf("%g", x)
 	case []any:
 		s := ""
 		for _, e := range x {
@@ -117,8 +181,8 @@ func stringifyYAMLNode(v any) string {
 		return s
 	case map[string]any:
 		s := ""
-		for _, e := range x {
-			s += stringifyYAMLNode(e) + " "
+		for k, e := range x {
+			s += k + " " + stringifyYAMLNode(e) + " "
 		}
 		return s
 	default:
