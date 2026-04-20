@@ -79,8 +79,11 @@ ENV DEBIAN_FRONTEND=noninteractive \
 #                               to a local build (rare given the lock).
 # - patch                       for apply-sglang-patches.sh.
 # - curl + ca-certificates      for HuggingFace / cubin downloads at
-#                               first-launch warmup.
+#                               first-launch warmup + rustup bootstrap.
 # - libgomp1                    runtime dep of several wheels.
+# - pkg-config + libssl-dev     required when outlines_core's cargo build
+#                               compiles `openssl-sys` from source on the
+#                               cp313 sdist path (no prebuilt cp313 wheel).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         software-properties-common \
@@ -89,7 +92,9 @@ RUN apt-get update && \
         patch \
         curl \
         ca-certificates \
-        libgomp1 && \
+        libgomp1 \
+        pkg-config \
+        libssl-dev && \
     add-apt-repository -y ppa:deadsnakes/ppa && \
     apt-get update && \
     apt-get install -y --no-install-recommends \

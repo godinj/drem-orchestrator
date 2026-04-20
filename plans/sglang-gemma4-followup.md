@@ -186,8 +186,9 @@ permanent again.
 | # | Commit at build | Outcome | Root cause | Fix |
 |---|---|---|---|---|
 | 1 | `bc8ab69` | FAIL @ pip install | `sglang` setup.py pins `transformers==5.3.0`; lock has `5.5.4` → resolver conflict | Add `--no-deps` to pip install (commit `4faf9dd`) |
-| 2 | `4faf9dd` | FAIL @ pip install | `outlines_core==0.1.26` has no cp313 wheel on PyPI; sdist needs `rustc` not present in base image | Install rustup (minimal toolchain) inside same RUN layer as pip, remove after (this commit) |
-| 3 | pending | — | — | — |
+| 2 | `4faf9dd` | FAIL @ pip install | `outlines_core==0.1.26` has no cp313 wheel on PyPI; sdist needs `rustc` not present in base image | Install rustup (minimal toolchain) inside same RUN layer as pip, remove after (commit `0ab4b76`) |
+| 3 | `0ab4b76` | FAIL @ pip install | `outlines_core`'s cargo build pulls `openssl-sys`; needs `pkg-config` + `libssl-dev` at compile time | Add both to apt layer (this commit) |
+| 4 | pending | — | — | — |
 
 Host parity note: the host venv succeeded with the same lock because
 rustup-installed Rust 1.93 is on `PATH` via `~/.cargo/bin`. The
