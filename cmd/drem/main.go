@@ -220,6 +220,13 @@ func main() {
 		orch.SetDirectClassifierConfig(&dcfg)
 	}
 
+	// Route classify jobs to the warm drem-classifier container when
+	// DREM_CLASSIFIER_URL is set. Empty env keeps the inline direct path
+	// as a rollback-safe default. See plans/warm-direct-classifier.md.
+	if classifierURL := os.Getenv("DREM_CLASSIFIER_URL"); classifierURL != "" {
+		orch.SetClassifierContainerEndpoint(classifierURL, os.Getenv("DREM_AGENTMON_TOKEN"))
+	}
+
 	// Enable direct SGLang prep agent. Prep is the read-only recon role that
 	// reuses the classifier's SGLang server but with a larger token budget for
 	// tool loops. Auto-enable when the prep role is explicitly set to direct,

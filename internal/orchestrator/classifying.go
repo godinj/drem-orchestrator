@@ -1,8 +1,12 @@
 package orchestrator
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -179,14 +183,17 @@ func (o *Orchestrator) processClassifyingTasksDirect() {
 		o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(model.AgentClassifier), string(model.AgentWorking))
 		o.logger.Info("direct classifier: classifying task", "task_id", task.ID, "agent_id", ag.ID)
 
-		// Call the SGLang API synchronously.
+		// Call either the warm drem-classifier container (when configured)
+		// or the inline SGLang API path. Both produce the same on-disk
+		// classification-<taskID>.json artifact so the downstream completion
+		// handler is unchanged.
 		var taskCtx map[string]any
 		if task.Context != nil {
 			taskCtx = task.Context
 		}
-		result, err := agent.RunDirectClassifier(*cfg, task.ID, task.Title, task.Description, taskCtx, mainWT)
-		if err != nil {
-			o.logger.Error("direct classifier: API call failed", "task_id", task.ID, "error", err)
+		tokensIn, tokensOut, classifyErr := o.dispatchClassify(*cfg, task, taskCtx, mainWT)
+		if classifyErr != nil {
+			o.logger.Error("direct classifier: API call failed", "task_id", task.ID, "error", classifyErr)
 			if failErr := o.onClassifierFailed(ag, task); failErr != nil {
 				o.logger.Error("direct classifier: on failed handler", "task_id", task.ID, "error", failErr)
 			}
@@ -195,8 +202,8 @@ func (o *Orchestrator) processClassifyingTasksDirect() {
 		}
 
 		// Record token usage on the agent for observability.
-		ag.TokensIn = result.TokensIn
-		ag.TokensOut = result.TokensOut
+		ag.TokensIn = tokensIn
+		ag.TokensOut = tokensOut
 		_ = o.db.Save(ag).Error
 
 		// Reuse the existing completion handler which reads the classification
@@ -207,6 +214,145 @@ func (o *Orchestrator) processClassifyingTasksDirect() {
 
 		dispatched++
 	}
+}
+
+// dispatchClassify routes to the warm drem-classifier container when
+// o.classifierContainerURL is set; otherwise it falls through to the inline
+// agent.RunDirectClassifier path. Both branches write the same
+// classification-<taskID>.json artifact in outputDir so onClassifierCompleted
+// doesn't need to know which path ran. Returns the prompt/completion token
+// counts for agent bookkeeping.
+func (o *Orchestrator) dispatchClassify(cfg agent.DirectClassifierConfig, task *model.Task, taskCtx map[string]any, outputDir string) (tokensIn, tokensOut int, err error) {
+	if o.classifierContainerURL != "" {
+		return o.classifyViaContainer(cfg, task, taskCtx, outputDir)
+	}
+	result, err := agent.RunDirectClassifier(cfg, task.ID, task.Title, task.Description, taskCtx, outputDir)
+	if err != nil {
+		return 0, 0, err
+	}
+	return result.TokensIn, result.TokensOut, nil
+}
+
+// classifyContainerRequest is the POST /classify body orch sends the warm
+// classifier container. Kept in this file so the shape-vs-remote shape is
+// co-located with its only caller.
+type classifyContainerRequest struct {
+	TaskID      string         `json:"task_id"`
+	Title       string         `json:"title"`
+	Description string         `json:"description"`
+	Context     map[string]any `json:"context,omitempty"`
+}
+
+// classifyContainerResponse mirrors cmd/drem-classifier's 200 response body.
+type classifyContainerResponse struct {
+	TaskID             string   `json:"task_id"`
+	Category           string   `json:"category,omitempty"`
+	ComplexityScore    int      `json:"complexity_score,omitempty"`
+	Title              string   `json:"title,omitempty"`
+	Description        string   `json:"description,omitempty"`
+	TargetFiles        []string `json:"target_files,omitempty"`
+	Rationale          string   `json:"rationale,omitempty"`
+	NeedsClarification bool     `json:"needs_clarification,omitempty"`
+	Questions          []string `json:"questions,omitempty"`
+	TokensIn           int      `json:"tokens_in"`
+	TokensOut          int      `json:"tokens_out"`
+	DurationMS         int      `json:"duration_ms"`
+}
+
+// classifyViaContainer POSTs a classify request to the warm drem-classifier
+// container and, on 200, writes the returned decision to
+// classification-<taskID>.json so onClassifierCompleted can pick it up via
+// the same path the inline runner uses. A 4xx/5xx upstream surfaces as a
+// non-nil error so the caller parks the task via onClassifierFailed.
+func (o *Orchestrator) classifyViaContainer(cfg agent.DirectClassifierConfig, task *model.Task, taskCtx map[string]any, outputDir string) (int, int, error) {
+	reqBody := classifyContainerRequest{
+		TaskID:      task.ID.String(),
+		Title:       task.Title,
+		Description: task.Description,
+		Context:     taskCtx,
+	}
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return 0, 0, fmt.Errorf("classifier container: marshal request: %w", err)
+	}
+
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = 90 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, o.classifierContainerURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, 0, fmt.Errorf("classifier container: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if o.classifierContainerToken != "" {
+		req.Header.Set("Authorization", "Bearer "+o.classifierContainerToken)
+	}
+
+	client := &http.Client{Timeout: timeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, 0, fmt.Errorf("classifier container: POST failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return 0, 0, fmt.Errorf("classifier container: read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0, fmt.Errorf("classifier container: POST %s returned %d: %s", o.classifierContainerURL, resp.StatusCode, truncateClassifierBody(respBody, 500))
+	}
+
+	var parsed classifyContainerResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return 0, 0, fmt.Errorf("classifier container: decode response: %w", err)
+	}
+
+	// Reassemble the ClassifierOutput shape that onClassifierCompleted reads
+	// from classification-<taskID>.json. We can't just forward respBody
+	// because the container's response envelope wraps the decision fields
+	// alongside telemetry; ClassifierOutput doesn't know about tokens_in.
+	fileOut := ClassifierOutput{
+		Category:           parsed.Category,
+		ComplexityScore:    parsed.ComplexityScore,
+		Title:              parsed.Title,
+		Description:        parsed.Description,
+		TargetFiles:        parsed.TargetFiles,
+		Rationale:          parsed.Rationale,
+		NeedsClarification: parsed.NeedsClarification,
+		Questions:          parsed.Questions,
+	}
+	fileJSON, err := json.MarshalIndent(fileOut, "", "  ")
+	if err != nil {
+		return 0, 0, fmt.Errorf("classifier container: marshal output file: %w", err)
+	}
+	outputPath := filepath.Join(outputDir, fmt.Sprintf("classification-%s.json", task.ID))
+	if err := os.WriteFile(outputPath, fileJSON, 0o644); err != nil {
+		return 0, 0, fmt.Errorf("classifier container: write %s: %w", outputPath, err)
+	}
+
+	o.logger.Info("classifier container: classified task",
+		"task_id", task.ID,
+		"duration_ms", parsed.DurationMS,
+		"tokens_in", parsed.TokensIn,
+		"tokens_out", parsed.TokensOut,
+		"needs_clarification", parsed.NeedsClarification,
+	)
+
+	return parsed.TokensIn, parsed.TokensOut, nil
+}
+
+// truncateClassifierBody bounds the error body captured in upstream-failure
+// error strings so classify logs don't drag in multi-KB LLM payloads.
+func truncateClassifierBody(b []byte, maxLen int) string {
+	if len(b) <= maxLen {
+		return string(b)
+	}
+	return string(b[:maxLen])
 }
 
 // onClassifierCompleted handles a classifier agent that finished successfully.

@@ -128,6 +128,8 @@ type Orchestrator struct {
 	skipConstraintGate          bool                            // bypass constraint gate evaluation
 	interactiveSupervisorConfig model.AgentCLIConfig            // model/effort for interactive supervisor sessions
 	directClassifierCfg         *agent.DirectClassifierConfig   // nil means use OpenCode subprocess path
+	classifierContainerURL      string                          // empty means use inline direct path (rollback-safe)
+	classifierContainerToken    string                          // Bearer token for POST /classify
 	directPlanReviewerCfg       *agent.DirectPlanReviewerConfig // nil means use subprocess path for plan review
 	directPrepCfg               *agent.DirectPrepConfig         // nil means use OpenCode subprocess path
 	directToolAgentCfg          *agent.DirectToolAgentConfig    // nil means use subprocess path for coder/reviewer/fixer
@@ -252,6 +254,21 @@ func (o *Orchestrator) SetDirectClassifierConfig(cfg *agent.DirectClassifierConf
 	o.directClassifierCfg = cfg
 	if cfg != nil {
 		o.logger.Info("direct classifier enabled", "endpoint", cfg.Endpoint, "model", cfg.Model)
+	}
+}
+
+// SetClassifierContainerEndpoint enables the warm drem-classifier container
+// path. When url is non-empty the orchestrator POSTs classify jobs to it
+// instead of calling agent.RunDirectClassifier inline; this isolates
+// classifier failure modes from the orch process (see plans/warm-direct-
+// classifier.md). token is forwarded as "Authorization: Bearer <token>"
+// and must match DREM_AGENTMON_TOKEN on the classifier container. Passing
+// an empty url falls back to the inline path for rollback safety.
+func (o *Orchestrator) SetClassifierContainerEndpoint(url, token string) {
+	o.classifierContainerURL = url
+	o.classifierContainerToken = token
+	if url != "" {
+		o.logger.Info("classifier container enabled", "endpoint", url, "auth", token != "")
 	}
 }
 
