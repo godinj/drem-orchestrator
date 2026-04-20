@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -12,6 +14,58 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 )
+
+// workerCredsPathEnv is the environment variable the per-project compose
+// template passes to orch carrying the host path of the operator's
+// claude subscription credentials file. Set by `drem project register`;
+// consumed by buildSpawnContext for every claude-backed worker.
+const workerCredsPathEnv = "DREM_WORKER_CREDS_PATH"
+
+// credsMountRequired reports whether the given agent_type runs the
+// claude CLI harness inside the container and therefore needs the
+// subscription credentials file bind-mounted. Roles not in this set
+// (notably merger, a Go binary) get an empty CredsMount and the
+// spawner omits the mount entry.
+//
+// The default for an unknown agent type is fail-closed (false): a
+// future type has to be added here deliberately alongside a test
+// covering it, so auth coverage cannot silently lag behind a new role.
+// See plans/worker-subscription-auth.md §5.
+func credsMountRequired(agentType string) bool {
+	switch agentType {
+	case string(model.AgentCoder),
+		string(model.AgentReviewer),
+		string(model.AgentFixer),
+		// Tester and supervisor are not model.AgentType constants yet;
+		// they are carried as string literals elsewhere in orch and
+		// remain literals here until the enum catches up.
+		"tester",
+		"supervisor":
+		return true
+	case "merger":
+		return false
+	}
+	return false
+}
+
+// resolveWorkerCredsPath returns the host path of the subscription
+// credentials file the spawner should bind-mount into a claude-backed
+// worker. It reads DREM_WORKER_CREDS_PATH first (set by `drem project
+// register` from the operator's host $HOME) and falls back to
+// $HOME/.claude/.credentials.json only if the env var is unset — the
+// fallback is there for ad-hoc local invocations; production always
+// sets the env var explicitly. Returns the empty string when neither
+// source yields a path; caller is responsible for fail-closing.
+func resolveWorkerCredsPath() string {
+	if p := os.Getenv(workerCredsPathEnv); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".claude", ".credentials.json")
+}
 
 // WorkerSpawner is the narrow surface the orchestrator consumes from the
 // spawner package. Defined at the consumption site (per architecture rule)
@@ -35,6 +89,7 @@ type spawnWorkerContext struct {
 	image      string
 	language   string
 	bareRepo   string
+	credsMount string
 	envVars    map[string]string
 	extraLabel map[string]string
 }
@@ -74,7 +129,11 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		return fmt.Errorf("spawn %s: orchestrator has no WorkerSpawner configured", agentType)
 	}
 
-	swc := o.buildSpawnContext(task, agentType)
+	swc, err := o.buildSpawnContext(task, agentType)
+	if err != nil {
+		o.recordSpawnFailureEvent(task, agentType, err)
+		return fmt.Errorf("spawn %s worker: %w", agentType, err)
+	}
 	params := spawner.SpawnWorkerParams{
 		Project:       swc.project,
 		AgentType:     swc.agentType,
@@ -84,12 +143,13 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		Env:           swc.envVars,
 		Labels:        swc.extraLabel,
 		BareRepoMount: swc.bareRepo,
+		CredsMount:    swc.credsMount,
 	}
 
-	res, err := o.Spawner.SpawnWorker(ctx, params)
-	if err != nil {
-		o.recordSpawnFailureEvent(task, agentType, err)
-		return fmt.Errorf("spawn %s worker: %w", agentType, err)
+	res, spawnErr := o.Spawner.SpawnWorker(ctx, params)
+	if spawnErr != nil {
+		o.recordSpawnFailureEvent(task, agentType, spawnErr)
+		return fmt.Errorf("spawn %s worker: %w", agentType, spawnErr)
 	}
 
 	// Record container ID and image identity on the agent row so the audit
@@ -124,8 +184,10 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 
 // buildSpawnContext derives the SpawnWorkerParams-shaped bundle from a task.
 // Kept in one place so every spawn path uses consistent label/env/branch
-// derivation.
-func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) spawnWorkerContext {
+// derivation. Returns an error when an agent type requires a
+// subscription-auth creds mount but no host path is available — in that
+// case spawning must fail-closed rather than produce an unauth'd worker.
+func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (spawnWorkerContext, error) {
 	project := o.projectID.String()
 	branch := task.WorktreeBranch
 	if branch == "" {
@@ -153,15 +215,29 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) spa
 		bareRepo = o.worktree.BareRepo()
 	}
 
+	// CredsMount is populated only for claude-backed roles. Fail-closed:
+	// if the role requires it but no host path is available, return an
+	// error so the caller emits a worker_spawn_failed event.
+	credsMount := ""
+	if credsMountRequired(agentType) {
+		credsMount = resolveWorkerCredsPath()
+		if credsMount == "" {
+			return spawnWorkerContext{}, fmt.Errorf(
+				"subscription-auth required for agent_type=%q but %s is unset and $HOME is unresolvable",
+				agentType, workerCredsPathEnv)
+		}
+	}
+
 	return spawnWorkerContext{
 		project:    project,
 		agentType:  agentType,
 		workerID:   workerID,
 		branch:     branch,
 		bareRepo:   bareRepo,
+		credsMount: credsMount,
 		envVars:    env,
 		extraLabel: labels,
-	}
+	}, nil
 }
 
 // resolveProjectLanguage returns the project language from the Project row,
