@@ -210,6 +210,7 @@ compose template is the artifact Kyle lives and dies by — get it right here.
 - [ ] Kyle's report distinguishes tasks, workers, and events per project from a single host invocation.
 - [ ] `docker_query` proxy rejects any write-verb request.
 - [ ] Kyle runs from the baked image, not bind-mounted source.
+- [x] `drem project register --update <name>` regenerates per-project compose.yml + drem.toml from current master templates, preserving SharedToken / OrchHostPort / DevMode / ContainerImageOverrides. Drift detection surfaces hand-patches before overwriting; `--dry-run`, `--force`, `--fail-on-drift`, and `--regenerate-token` flags cover the operator-choice matrix. compose.override.yml and operator-owned sidecars are never touched. _(2026-04-20: `internal/projects/state.go` extracts SharedToken + OrchHostPort from on-disk compose.yml; `internal/projects/drift.go` emits structural diffs; `cmd/drem/project.go` wires the flags. See `plans/drem-project-register-update.md`.)_
 
 ---
 

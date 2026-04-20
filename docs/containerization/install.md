@@ -314,6 +314,60 @@ Writes `~/.drem/projects.toml` and generates
 > but the first multi-project register is untested. Fix planned before
 > registering a second project.
 
+### Regenerating compose.yml + drem.toml — `register --update`
+
+Every plan that lands a new env var, bind-mount, or config key on
+the template adds template output the on-disk per-project files
+don't have. `drem project register --update` re-renders the
+per-project compose.yml + drem.toml from current master templates
+while preserving state that can't be regenerated from the registry
+alone (SharedToken above all).
+
+```bash
+# Review what would change (no writes, no side effects).
+drem project register --update drem-orchestrator --dry-run
+
+# Apply. Operators will see a drift summary if the on-disk files
+# have hand-patches the template doesn't produce; add --force to
+# overwrite them.
+drem project register --update drem-orchestrator
+drem project register --update drem-orchestrator --force
+
+# Bring up the stack with the new template output.
+docker compose -f ~/.drem/projects/drem-orchestrator/compose.yml up -d
+```
+
+Preserved across an update:
+- **SharedToken** (`DREM_AGENTMON_TOKEN` on orch + agentmon +
+  `DREM_BEARER_TOKEN` on csuite-watcher). Extracted from the
+  on-disk compose.yml. A missing token is fail-closed — the update
+  refuses to proceed without `--regenerate-token`, because silent
+  rotation would 401 every running service.
+- **OrchHostPort**. Registry-carried (`Project.OrchHostPort`); when
+  zero, falls back to the port observed in the on-disk compose.
+- **DevMode** and **ContainerImageOverrides**. Registry-carried.
+- **compose.override.yml** and any operator-owned sidecar files
+  (`csuite-run.sh`, etc.). The update writes ONLY `compose.yml`
+  and `drem.toml`.
+
+Reset auth intentionally (operator action, restart required):
+
+```bash
+# Rotate SharedToken — restart orch + agentmon + csuite-watcher
+# after this so every service picks up the new token.
+drem project register --update drem-orchestrator --regenerate-token --force
+docker compose -f ~/.drem/projects/drem-orchestrator/compose.yml up -d --force-recreate
+```
+
+CI invocation — block merges that would drift the on-disk compose:
+
+```bash
+drem project register --update drem-orchestrator --fail-on-drift --home-dir /path/to/sandbox
+# exit 0 if no drift; exit 1 and prints the diff if drift exists.
+```
+
+See `plans/drem-project-register-update.md` for the full design.
+
 ## Step 7 — Bring up the per-project stack
 
 ```bash

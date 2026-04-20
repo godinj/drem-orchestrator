@@ -1,11 +1,35 @@
 # drem project register --update — Implementation Plan
 
-Status: **not started.** Sibling plan to `plans/worker-subscription-auth.md`
-and `plans/worker-prompt-delivery.md`; mirrors their cadence (plan first,
-one commit per logical chunk, TDD per layer, docs-as-acceptance-criteria).
-Unblocks the T3 canary and every future rollout by making per-project
-`~/.drem/projects/<name>/{compose.yml,drem.toml}` regeneration
-idempotent and drift-free.
+Status: **implemented, 2026-04-20.** All 4 implementation commits
+(plan + state + drift + CLI) plus docs landed on
+worktree-agent-a75ff35d. Sibling plan to
+`plans/worker-subscription-auth.md` and
+`plans/worker-prompt-delivery.md`; mirrored their cadence (plan
+first, one commit per logical chunk, TDD per layer, docs-as-
+acceptance-criteria). Unblocks the T3 canary and every future
+rollout by making per-project `~/.drem/projects/<name>/{compose.yml,
+drem.toml}` regeneration idempotent and drift-free.
+
+Tests added:
+
+- `internal/projects/state_test.go` — 7 new
+  (full happy path, missing compose returns zero, unparseable YAML
+  errors, no token key is empty, no ports block is zero, malformed
+  port string is zero, empty project name errors).
+- `internal/projects/drift_test.go` — 8 new
+  (identical docs no drift, whitespace/comments not drift, added
+  env key, removed env key, changed env value, TOML section added,
+  TOML section removed, invalid YAML returns empty).
+- `cmd/drem/project_test.go` — 10 new
+  (PreservesSharedToken, DryRunDoesNotWrite, FailsWhenTokenMissing,
+  RegenerateTokenRotates, ForceOverwritesDrift, FailOnDriftErrors,
+  IsIdempotent, LeavesComposeOverrideAlone, NotRegisteredErrors,
+  RejectsUpdateFlagsOnFreshRegister).
+
+All tests pass on `go test -count=1 ./...`; `go vet ./...` is clean.
+
+Rollout step (§9) remains unchanged; the T3 canary regeneration
+is operator work post-merge.
 
 ## 0. Goal
 
