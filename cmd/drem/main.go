@@ -232,6 +232,18 @@ func main() {
 		orch.SetClassifierContainerEndpoint(classifierURL, os.Getenv("DREM_AGENTMON_TOKEN"))
 	}
 
+	// Route plan jobs to the warm drem-planner container when
+	// DREM_PLANNER_URL is set or the [agents.planner].endpoint key is
+	// populated in drem.toml. Empty keeps the legacy runner.SpawnAgent
+	// path as the rollback-safe default. See plans/warm-planner-pivot.md.
+	plannerURL := os.Getenv("DREM_PLANNER_URL")
+	if plannerURL == "" {
+		plannerURL = cfg.Agents.Planner.Endpoint
+	}
+	if plannerURL != "" {
+		orch.SetPlannerContainerEndpoint(plannerURL, os.Getenv("DREM_AGENTMON_TOKEN"))
+	}
+
 	// Enable direct SGLang prep agent. Prep is the read-only recon role that
 	// reuses the classifier's SGLang server but with a larger token budget for
 	// tool loops. Auto-enable when the prep role is explicitly set to direct,

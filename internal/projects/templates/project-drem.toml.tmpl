@@ -35,13 +35,16 @@ log_path       = "/var/lib/drem/drem.log"
   endpoint = "http://gq:8090/v1/chat/completions"
   model    = "gemma4-26b"
 
-# Planner runs as a per-task drem-planner container (spawn-on-demand)
-# against Anthropic's Opus via the claude CLI. See
-# plans/warm-direct-planner.md. Provider=claude enables the container
-# path in processPlanning; any other value falls back to the legacy
-# runner.SpawnAgent path for rollback safety. ANTHROPIC_API_KEY must be
-# set in the orch container's env (plumbed from the host shell through
-# deploy/compose/global.yml and the per-project compose template).
+# Planner runs as a long-lived warm drem-planner container (see
+# deploy/compose/global.yml) that orch reaches via POST /plan. See
+# plans/warm-planner-pivot.md. Provider=claude enables the HTTP path
+# in processPlanning; any other value (e.g. sglang-direct) falls back
+# to the legacy runner.SpawnAgent path for rollback safety.
+#
+# Auth is subscription-only: the planner container bind-mounts
+# ~/.claude/.credentials.json from the host read-only. Operator must
+# have run `claude login` on host before `docker compose up`. NO
+# ANTHROPIC_API_KEY passthrough — see plan §1.
 [agents.planner]
   provider = "claude"
   model    = "claude-opus-4-6"

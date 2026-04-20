@@ -147,54 +147,53 @@ func TestRender_GoTemplateFull(t *testing.T) {
 	require.Equal(t, data.MergerImage, parsed.Services["merger-template"].Image)
 }
 
-// TestRender_OrchForwardsAnthropicAPIKey asserts the compose template
-// declares an ANTHROPIC_API_KEY env passthrough from the host shell
-// under the orch service. dispatchPlan's container path reads it from
-// os.Getenv at spawn time; without the passthrough the planner fails
-// closed on every invocation.
-func TestRender_OrchForwardsAnthropicAPIKey(t *testing.T) {
+// TestRender_OrchDoesNotForwardAnthropicAPIKey asserts the compose
+// template does NOT declare an ANTHROPIC_API_KEY env passthrough on orch.
+// Per plans/warm-planner-pivot.md §§1, 8, subscription auth is handled
+// inside the drem-planner container via a bind-mounted credentials file;
+// orch never needs the API key and forwarding it would bypass the
+// subscription-only policy.
+func TestRender_OrchDoesNotForwardAnthropicAPIKey(t *testing.T) {
 	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
 	out, err := projects.Render(data)
 	require.NoError(t, err)
 
 	s := string(out)
-	require.Contains(t, s, "ANTHROPIC_API_KEY",
-		"orch env block must declare ANTHROPIC_API_KEY")
-	require.Contains(t, s, `"${ANTHROPIC_API_KEY:-}"`,
-		"orch env must passthrough ANTHROPIC_API_KEY from host shell")
+	require.NotContains(t, s, "ANTHROPIC_API_KEY",
+		"compose must NOT forward ANTHROPIC_API_KEY (subscription-only auth per plan §1)")
 }
 
-// TestRender_PlannerTemplatePrimesImage asserts the compose template
-// declares a planner-template service stub gated behind
-// profiles: ["never"], so `docker compose pull` primes the planner
-// image on first up but does not run it as a long-lived service.
-// Mirrors merger-template — planner is also spawn-on-demand per
-// plans/warm-direct-planner.md §3.
-func TestRender_PlannerTemplatePrimesImage(t *testing.T) {
+// TestRender_PlannerURLIsWired asserts the orch env declares
+// DREM_PLANNER_URL pointing at the warm drem-planner container. This is
+// the replacement for the deleted planner-template stub: orch now POSTs
+// to a long-lived planner container on drem-net.
+func TestRender_PlannerURLIsWired(t *testing.T) {
 	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
-	data.PlannerImage = "localhost:5000/drem-planner:latest"
 	out, err := projects.Render(data)
 	require.NoError(t, err)
 
 	s := string(out)
-	require.Contains(t, s, "planner-template:",
-		"planner-template service stub must be declared so docker compose pull primes the image")
-	require.Contains(t, s, data.PlannerImage,
-		"planner-template must reference the PlannerImage")
+	require.Contains(t, s, "DREM_PLANNER_URL",
+		"orch env must declare DREM_PLANNER_URL so it routes plan jobs to the warm planner")
+	require.Contains(t, s, "http://drem-planner:8090/plan",
+		"DREM_PLANNER_URL must point at the warm drem-planner container")
+}
 
-	// The stub must not be running; long-lived planners crash-loop on
-	// missing --task-id. The profiles: ["never"] gate keeps it inert.
+// TestRender_NoPlannerTemplateStub: the planner-template profiles:[never]
+// stub is removed because drem-planner is a long-lived service in
+// deploy/compose/global.yml, not a per-task spawn. A lingering stub
+// would regress the pivot by re-introducing an image-prime entry.
+func TestRender_NoPlannerTemplateStub(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
 	var parsed struct {
-		Services map[string]struct {
-			Image    string   `yaml:"image"`
-			Profiles []string `yaml:"profiles"`
-		} `yaml:"services"`
+		Services map[string]any `yaml:"services"`
 	}
 	require.NoError(t, yaml.Unmarshal(out, &parsed))
-	require.Contains(t, parsed.Services, "planner-template")
-	require.Equal(t, data.PlannerImage, parsed.Services["planner-template"].Image)
-	require.Equal(t, []string{"never"}, parsed.Services["planner-template"].Profiles,
-		"planner-template must stay behind profiles: [never]")
+	require.NotContains(t, parsed.Services, "planner-template",
+		"planner-template stub must be removed; see plans/warm-planner-pivot.md §4")
 }
 
 // TestRender_CppTemplateSwapsWorkerImage verifies that a C++ project

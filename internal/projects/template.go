@@ -34,12 +34,6 @@ type TemplateData struct {
 	WorkerImage string
 	// MergerImage is the merger container image tag.
 	MergerImage string
-	// PlannerImage is the drem-planner container image tag. Referenced
-	// by the planner-template stub (profiles: ["never"]) so
-	// `docker compose pull` primes the image on first up. The planner
-	// itself runs as a per-task spawn-on-demand container — see
-	// plans/warm-direct-planner.md.
-	PlannerImage string
 	// OrchImage is the orchestrator container image tag. Defaults to
 	// DefaultOrchImage (production distroless build); when DevMode is
 	// true the caller should swap in DefaultOrchDevImage.
@@ -83,10 +77,6 @@ const (
 	// DefaultOrchHostPort is the first host port allocated to a project's
 	// orchestrator container. Subsequent projects use DefaultOrchHostPort+N.
 	DefaultOrchHostPort = 8080
-	// DefaultPlannerImage is the per-task drem-planner container image
-	// tag referenced by the planner-template compose stub. Kept in sync
-	// with deploy/docker/planner.Dockerfile's push target.
-	DefaultPlannerImage = "localhost:5000/drem-planner:latest"
 )
 
 // NewSharedToken returns a freshly generated 32-byte hex-encoded token
@@ -130,9 +120,6 @@ func applyDefaults(data *TemplateData) {
 	}
 	if data.OrchHostPort == 0 {
 		data.OrchHostPort = DefaultOrchHostPort
-	}
-	if data.PlannerImage == "" {
-		data.PlannerImage = DefaultPlannerImage
 	}
 }
 
