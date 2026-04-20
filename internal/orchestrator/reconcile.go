@@ -10,6 +10,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
@@ -481,11 +482,21 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 	}
 
 	// Build a set of agent IDs that the runner considers active.
-	runningAgents := o.runner.GetRunningAgents()
-	runningSet := make(map[uuid.UUID]bool, len(runningAgents))
-	for _, ra := range runningAgents {
-		runningSet[ra.AgentID] = true
+	runningSet := make(map[uuid.UUID]bool)
+	if o.runner != nil {
+		for _, ra := range o.runner.GetRunningAgents() {
+			runningSet[ra.AgentID] = true
+		}
 	}
+
+	// Build a set of container IDs that the spawner considers running. In
+	// container mode, workers are dispatched via o.Spawner.SpawnWorker and
+	// never register with the legacy runner, so without this set every
+	// container worker ages past the grace period and gets false-positive
+	// killed. On RPC error, log a Warn and proceed with an empty set — this
+	// falls back to pre-fix behaviour (container agents may be flagged dead)
+	// rather than making a transient spawner outage newly catastrophic.
+	containerRunningSet := o.buildContainerRunningSet(context.Background())
 
 	fixed := 0
 	for i := range tasks {
@@ -503,6 +514,15 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 
 		// Skip agents that the runner still considers active.
 		if runningSet[ag.ID] {
+			continue
+		}
+
+		// Skip container-mode agents whose container is still running per
+		// the spawner. TmuxSession is repurposed to carry the container ID
+		// in container mode (see recordContainerOnAgent).
+		if ag.TmuxSession != "" && containerRunningSet[ag.TmuxSession] {
+			o.logger.Debug("reconcile stuck: container-mode agent still running, skipping",
+				"agent_id", ag.ID, "container_id", ag.TmuxSession, "task", task.Title)
 			continue
 		}
 
@@ -599,6 +619,33 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 		fixed++
 	}
 	return fixed, nil
+}
+
+// buildContainerRunningSet returns the set of container IDs the spawner
+// currently reports as running for this project. When no spawner is
+// configured (host-only mode) the set is empty. When the spawner RPC
+// fails, a Warn is logged and the empty set is returned — the reconciler
+// then behaves as it did before container-awareness was added: legacy
+// agents still work, container agents may be false-positive killed. This
+// is a deliberate trade: we do NOT want a transient spawner outage to
+// block stuck-agent recovery for host-mode agents that actually are dead.
+func (o *Orchestrator) buildContainerRunningSet(ctx context.Context) map[string]bool {
+	set := make(map[string]bool)
+	if o.Spawner == nil {
+		return set
+	}
+	res, err := o.Spawner.ListWorkers(ctx, spawner.ListWorkersParams{Project: o.projectID.String()})
+	if err != nil {
+		o.logger.Warn("reconcile stuck: list workers failed, falling back to empty container-running set",
+			"error", err)
+		return set
+	}
+	for _, w := range res.Workers {
+		if w.Status == "running" {
+			set[w.ContainerID] = true
+		}
+	}
+	return set
 }
 
 // reconcileOrphanedTaskAssignments finds tasks in actionable statuses
