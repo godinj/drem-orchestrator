@@ -33,6 +33,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	"github.com/godinj/drem-orchestrator/internal/ratelimit"
+	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/taskimport"
 	"github.com/godinj/drem-orchestrator/internal/tui"
@@ -242,6 +243,30 @@ func main() {
 	}
 	if plannerURL != "" {
 		orch.SetPlannerContainerEndpoint(plannerURL, os.Getenv("DREM_AGENTMON_TOKEN"))
+	}
+
+	// Wire the container-mode worker spawner. When DREM_SPAWNER_SOCKET is set
+	// (standard in the orch container per the compose template) or the
+	// default socket exists on disk, connect to the spawner service and set
+	// orch.Spawner so container-path dispatch (subtask_scheduling.go,
+	// session_spawning.go, test_execution.go, reconcile_containers.go,
+	// merge_dispatch.go) takes effect. Without this, o.Spawner stays nil and
+	// every site falls through to the legacy runner.SpawnAgent host-subprocess
+	// path — which fails inside the orch container because `claude` isn't on
+	// $PATH. See plans/phase-3.5-subtask-dispatch-migration.md.
+	//
+	// Absent socket keeps the legacy path as the rollback-safe default for
+	// local dev on a host where drem runs directly against a host sqlite DB.
+	spawnerSock := os.Getenv("DREM_SPAWNER_SOCKET")
+	if spawnerSock == "" {
+		spawnerSock = "/var/run/drem/spawner.sock"
+	}
+	if _, err := os.Stat(spawnerSock); err == nil {
+		orch.SetSpawner(spawner.NewClient(spawnerSock))
+		slog.Info("spawner client wired", "socket", spawnerSock)
+	} else {
+		slog.Info("spawner socket not present; container dispatch disabled, falling back to legacy runner",
+			"socket", spawnerSock, "error", err)
 	}
 
 	// Enable direct SGLang prep agent. Prep is the read-only recon role that
