@@ -466,6 +466,125 @@ func TestExecuteMerge_FailureReasonIncludesAttemptCount(t *testing.T) {
 	}
 }
 
+// TestExecuteMerge_TestsFailedFailsImmediately verifies that a drem-merger
+// exit code 3 (tests_failed) routes straight to StatusFailed without
+// consuming a retry attempt. Tests-failed cannot heal by retrying the
+// same merge — the feature branch itself is bad and needs a code change.
+func TestExecuteMerge_TestsFailedFailsImmediately(t *testing.T) {
+	merger := &stubMerger{results: []stubMergeResult{
+		{result: &MergeResult{
+			Success:       false,
+			FailureReason: "tests_failed",
+			ExitCode:      3,
+		}, err: nil},
+	}}
+	o, db, projectID := setupMergeTest(t, merger)
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+
+	if err := o.executeMerge(task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", task.ID)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("status after tests_failed = %q, want %q (no retry)",
+			updated.Status, model.StatusFailed)
+	}
+	state := LoadMergeAttemptState(&updated)
+	if state.AttemptCount() != 0 {
+		t.Errorf("attempt count after tests_failed = %d, want 0 (no retry)",
+			state.AttemptCount())
+	}
+}
+
+// TestExecuteMerge_PushFailedRetries verifies that a drem-merger exit
+// code 4 (push_failed) is treated as transient and flows through the
+// existing retry branch — a remote that advanced during the merge
+// typically heals on the next attempt.
+func TestExecuteMerge_PushFailedRetries(t *testing.T) {
+	merger := &stubMerger{results: []stubMergeResult{
+		{result: &MergeResult{
+			Success:       false,
+			FailureReason: "push_failed",
+			ExitCode:      4,
+		}, err: nil},
+	}}
+	o, db, projectID := setupMergeTest(t, merger)
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+
+	if err := o.executeMerge(task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", task.ID)
+	if updated.Status != model.StatusMerging {
+		t.Errorf("status after push_failed = %q, want %q (should retry)",
+			updated.Status, model.StatusMerging)
+	}
+	state := LoadMergeAttemptState(&updated)
+	if state.AttemptCount() != 1 {
+		t.Errorf("attempt count after push_failed = %d, want 1", state.AttemptCount())
+	}
+}
+
+// TestExecuteMerge_MiscExitFailsImmediately verifies that drem-merger
+// exit code 1 (misc — structural/config error) routes straight to
+// StatusFailed. Config errors never heal by retry; failing loud beats
+// silently burning the retry budget.
+func TestExecuteMerge_MiscExitFailsImmediately(t *testing.T) {
+	merger := &stubMerger{results: []stubMergeResult{
+		{result: &MergeResult{
+			Success:       false,
+			FailureReason: "misc",
+			ExitCode:      1,
+		}, err: nil},
+	}}
+	o, db, projectID := setupMergeTest(t, merger)
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+
+	if err := o.executeMerge(task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", task.ID)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("status after misc exit = %q, want %q (no retry)",
+			updated.Status, model.StatusFailed)
+	}
+	state := LoadMergeAttemptState(&updated)
+	if state.AttemptCount() != 0 {
+		t.Errorf("attempt count after misc exit = %d, want 0", state.AttemptCount())
+	}
+}
+
+// TestExecuteMerge_UnknownExitFailsImmediately verifies that an exit
+// code outside the documented {0,1,2,3,4} set (mapped to
+// FailureReason "unknown") fails loudly instead of silently retrying.
+func TestExecuteMerge_UnknownExitFailsImmediately(t *testing.T) {
+	merger := &stubMerger{results: []stubMergeResult{
+		{result: &MergeResult{
+			Success:       false,
+			FailureReason: "unknown",
+			ExitCode:      99,
+		}, err: nil},
+	}}
+	o, db, projectID := setupMergeTest(t, merger)
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+
+	if err := o.executeMerge(task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", task.ID)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("status after unknown exit = %q, want %q", updated.Status, model.StatusFailed)
+	}
+}
+
 func TestExecuteMerge_MergerError_ReturnsError(t *testing.T) {
 	// If the merger returns a Go error (not a merge failure), executeMerge
 	// should return the error directly without retry.

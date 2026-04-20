@@ -67,6 +67,32 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 			return nil
 		}
 
+		// Typed exit-code routing. drem-merger emits 0/2/3/4/1 + "other"
+		// and dispatchMerge maps those to MergeResult.FailureReason. Route
+		// non-retryable reasons (tests_failed / misc / unknown) straight to
+		// StatusFailed so we don't burn the retry budget on a state the
+		// next tick cannot improve. "conflict" falls through so the
+		// existing supervisor / fixer conflict-analysis path keeps working.
+		// "push_failed" is treated as transient and falls through to the
+		// existing retry branch below — a bumped remote typically heals
+		// on the next attempt.
+		switch result.FailureReason {
+		case "tests_failed":
+			reason := "merge aborted: pre-push tests failed"
+			if err := o.failTask(task, reason); err != nil {
+				return err
+			}
+			o.emit("merge_tests_failed", map[string]any{"task_id": task.ID})
+			return nil
+		case "misc", "unknown":
+			reason := fmt.Sprintf("merge aborted: %s exit from merger (code=%d)", result.FailureReason, result.ExitCode)
+			if err := o.failTask(task, reason); err != nil {
+				return err
+			}
+			o.emit("merge_aborted", map[string]any{"task_id": task.ID, "failure_reason": result.FailureReason, "exit_code": result.ExitCode})
+			return nil
+		}
+
 		// Transient failure (no real conflicts): retry with exponential backoff.
 		if len(result.Conflicts) == 0 {
 			attemptState := LoadMergeAttemptState(task)
