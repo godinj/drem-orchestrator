@@ -291,7 +291,7 @@ func TestHealthz_UpstreamUnreachable(t *testing.T) {
 	}, nil)
 	// Force an immediate refresh on every call so the test doesn't cache
 	// a stale healthy state from earlier runs.
-	srv.probeEvery = 0
+	srv.setHealthProbeTTL(0)
 
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
