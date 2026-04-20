@@ -16,6 +16,7 @@ var defaultImages = map[string]string{
 	"coder-cpp":   "localhost:5000/drem-worker-cpp:latest",
 	"g4":          "localhost:5000/drem-worker-go:latest",
 	"merger":      "localhost:5000/drem-merger:latest",
+	"planner":     "localhost:5000/drem-planner:latest",
 	"csuite-mike": "localhost:5000/drem-csuite-mike:latest",
 	"csuite-alex": "localhost:5000/drem-csuite-alex:latest",
 	"csuite-ross": "localhost:5000/drem-csuite-ross:latest",
