@@ -1,6 +1,6 @@
 # Warm Direct-Classifier Container — Implementation Plan
 
-Status: **design proposed, not yet implemented.** 2026-04-20.
+Status: **in progress.** 2026-04-20. Commit 1/6 landed: `agent.Classify` extracted; inline orch path and tests still green.
 
 Follow-up to T1 canary (commit `aca8bf3`) which proved the direct
 classifier roundtrip works inline in the orch process. The next move
