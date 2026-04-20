@@ -204,6 +204,9 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 					if evalErr != nil {
 						o.logger.Warn("constraint evaluation failed", "agent_id", ag.ID, "error", evalErr)
 					} else if delta.Skipped {
+						// Surface per-constraint SKIPs so reduced coverage
+						// from missing tools is never silent.
+						o.logConstraintSkips(task.ID, delta.FeatureReport)
 						o.logger.Info("constraint delta skipped (baseline unavailable)",
 							"agent_id", ag.ID, "reason", delta.SkipReason)
 						if delta.FeatureReport != nil {
@@ -211,6 +214,10 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 							implScoreFailed = 0 // don't penalize when baseline is unavailable
 						}
 					} else {
+						// Surface per-constraint SKIPs (tool missing in the
+						// evaluation environment) so reduced coverage is
+						// never silent.
+						o.logConstraintSkips(task.ID, delta.FeatureReport)
 						implScorePassed = delta.FeatureReport.Passed
 						// Only count NEW violations (not pre-existing ones)
 						implScoreFailed = len(delta.Comparison.NewViolations) + len(delta.Comparison.Worsened)

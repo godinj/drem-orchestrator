@@ -80,6 +80,25 @@ func (p ConstraintGatePolicy) ShouldTerminateEarly(current, previous constraints
 	return current.Magnitude() >= previous.Magnitude()
 }
 
+// logConstraintSkips emits an INFO log line for each Skipped result in the
+// report so operators retain visibility when a tool missing from the
+// evaluation environment (typically the orch container) causes a constraint
+// check to be bypassed. SKIPs are advisory — they do not block — but without
+// logging them, reduced coverage would be silent.
+func (o *Orchestrator) logConstraintSkips(taskID any, report *constraints.Report) {
+	if report == nil {
+		return
+	}
+	for _, r := range report.Results {
+		if r.Skipped {
+			o.logger.Info("constraint skipped (tool unavailable)",
+				"task_id", taskID,
+				"constraint", r.Name,
+				"reason", r.SkipReason)
+		}
+	}
+}
+
 // FormatConstraintFailure produces a structured failure message listing each
 // failed constraint with its current value, limit, and the attempt context.
 func FormatConstraintFailure(failures []ConstraintFailure, attempt, maxRetries int) string {
@@ -169,6 +188,11 @@ func (o *Orchestrator) evaluateConstraintGate(task *model.Task) (bool, error) {
 
 	featureReport := delta.FeatureReport
 	comparison := delta.Comparison
+
+	// Surface any SKIPs so operators can tell when tool-availability has
+	// reduced coverage in the evaluation environment (e.g. `go vet`
+	// running inside the orch container, which does not ship Go).
+	o.logConstraintSkips(task.ID, featureReport)
 
 	if len(comparison.Additions) > 0 {
 		o.logger.Info("new constraints detected (informational, not blocking)",

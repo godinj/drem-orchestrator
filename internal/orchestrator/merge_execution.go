@@ -227,34 +227,39 @@ func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
 			if evalErr != nil {
 				o.logger.Warn("quickfix constraint evaluation failed",
 					"task_id", task.ID, "error", evalErr)
-			} else if report.Failed > 0 {
-				o.logger.Warn("quickfix constraint violations, flagging for human review",
-					"task_id", task.ID, "failed", report.Failed)
+			} else {
+				// Surface SKIPs so operators can see when a missing tool
+				// (e.g. no Go in the orch container) reduces coverage.
+				o.logConstraintSkips(task.ID, report)
+				if report.Failed > 0 {
+					o.logger.Warn("quickfix constraint violations, flagging for human review",
+						"task_id", task.ID, "failed", report.Failed)
 
-				task.NeedsHumanReview = true
-				if task.Context == nil {
-					task.Context = make(model.JSONField)
-				}
-				task.Context["constraint_violations"] = constraints.FormatReport(report)
+					task.NeedsHumanReview = true
+					if task.Context == nil {
+						task.Context = make(model.JSONField)
+					}
+					task.Context["constraint_violations"] = constraints.FormatReport(report)
 
-				pauseEvt, pauseErr := state.TransitionTask(task, model.StatusPaused, "orchestrator",
-					map[string]any{"reason": "constraint-violations"})
-				if pauseErr != nil {
-					return fmt.Errorf("transition quickfix to merging: pause on constraint violation: %w", pauseErr)
-				}
-				if err := o.db.Save(task).Error; err != nil {
-					return fmt.Errorf("transition quickfix to merging: save constraint violations: %w", err)
-				}
-				if err := o.db.Create(pauseEvt).Error; err != nil {
-					return fmt.Errorf("transition quickfix to merging: save pause event: %w", err)
-				}
+					pauseEvt, pauseErr := state.TransitionTask(task, model.StatusPaused, "orchestrator",
+						map[string]any{"reason": "constraint-violations"})
+					if pauseErr != nil {
+						return fmt.Errorf("transition quickfix to merging: pause on constraint violation: %w", pauseErr)
+					}
+					if err := o.db.Save(task).Error; err != nil {
+						return fmt.Errorf("transition quickfix to merging: save constraint violations: %w", err)
+					}
+					if err := o.db.Create(pauseEvt).Error; err != nil {
+						return fmt.Errorf("transition quickfix to merging: save pause event: %w", err)
+					}
 
-				o.emit("quickfix_constraint_failed", map[string]any{
-					"task_id":    task.ID,
-					"failed":     report.Failed,
-					"violations": constraints.FormatReport(report),
-				})
-				return nil
+					o.emit("quickfix_constraint_failed", map[string]any{
+						"task_id":    task.ID,
+						"failed":     report.Failed,
+						"violations": constraints.FormatReport(report),
+					})
+					return nil
+				}
 			}
 		}
 	}
