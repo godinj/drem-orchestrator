@@ -107,11 +107,18 @@ func run(args []string, stderr io.Writer) error {
 	logger.Info("drem-planner: credentials validated", "path", cfg.credentialsPath)
 
 	deps := Deps{
-		// Commit 2: default stub plan generator. Commit 3 swaps this for
-		// the real claude-CLI subprocess implementation.
-		GeneratePlan: stubGeneratePlan,
+		// Real claude-CLI subprocess generator. The invoker exec's claude
+		// per request (long-lived container reads fresh creds on each
+		// call so the host's `claude login` refresh stays authoritative).
+		GeneratePlan: newClaudePlanGen(runRealClaude, cfg.claudeTimeout, DefaultPlannerModel),
 		ProbeHealth: func(ctx context.Context) error {
-			return credentialsProbe(ctx, cfg.credentialsPath)
+			// /healthz validates the credentials file AND that the claude
+			// binary is in PATH with a working --version. The second check
+			// bounds to 2s so a hung install doesn't block orch dispatch.
+			if err := credentialsProbe(ctx, cfg.credentialsPath); err != nil {
+				return err
+			}
+			return claudeVersionProbe(ctx, 2*time.Second)
 		},
 	}
 

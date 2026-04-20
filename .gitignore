@@ -61,7 +61,9 @@ deploy/docker/context/csuite-prompts/
 # Stray repo-root Go binaries left by `go build` without `-o`. All are
 # regenerable: drem-watchdog via deploy/docker/build-workers.sh,
 # drem-docker-query-proxy via its Dockerfile multi-stage build,
-# drem-classifier via deploy/docker/classifier.Dockerfile.
+# drem-classifier via deploy/docker/classifier.Dockerfile,
+# drem-planner via deploy/docker/planner.Dockerfile.
 /drem-watchdog
 /drem-docker-query-proxy
 /drem-classifier
+/drem-planner
