@@ -1,10 +1,42 @@
 # Worker Prompt Delivery — Implementation Plan
 
-Status: **not started, 2026-04-20.** Sibling plan to
+Status: **implemented, 2026-04-20.** All 6 implementation commits
+(`4b6f1f3..17b2523`) plus this plan-status update landed on
+worktree-agent-a5fb3e7b. Sibling plan to
 `plans/worker-subscription-auth.md` (commits `66be7f0..4f3f9fc`, landed
 earlier today); called out as a follow-up in that plan's §9. Unblocks
 the T3 canary — the first real coder task driven end-to-end through
 the containerized worker path.
+
+Tests added:
+
+- `internal/spawner/service_test.go` — 3 new
+  (PromptMount produces a read-only file mount + sets DREM_PROMPT_PATH
+  deterministically in env; missing host file fails SpawnWorker fast;
+  caller-set DREM_PROMPT_PATH in Env is overwritten by the canonical
+  target).
+- `internal/spawner/client_test.go` — extended round-trip carries
+  PromptMount through the JSON wire format.
+- `internal/agent/spawn_test.go` — extended to assert PromptMount
+  propagates through Manager.Spawn into WorkerSpawnParams.
+- `internal/agent/spawn_integration_test.go` — rpcAdapter carries
+  PromptMount across the real JSON-RPC boundary.
+- `internal/orchestrator/worker_spawn_test.go` — 3 new
+  (promptRequired table, spawnCoder writes the prompt file before the
+  spawner is called and leaves no tmp residue, missing prompt root
+  fails closed with reason=prompt_render_failed).
+- `internal/orchestrator/merge_dispatch_test.go` — 1 new
+  (merger dispatch omits both CredsMount and PromptMount).
+- `internal/projects/template_test.go` — 3 new
+  (DREM_PROMPT_ROOT_HOST wired on orch env + rw bind-mount at
+  host-identical target; default derivation from HostHome +
+  ProjectName when caller leaves WorkerPromptRoot zero; explicit
+  override wins over the default).
+
+All tests pass on `go test -count=1 ./...`; `go vet ./...` is clean.
+
+Rollout steps (§7) remain unchanged; the T3 canary is operator work
+post-merge.
 
 ## 0. What changes, what stays
 

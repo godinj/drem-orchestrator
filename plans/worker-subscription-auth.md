@@ -443,9 +443,11 @@ DB-write procedure" in the restart context).
 
 - Gate freezes (`plan_review`, `test_review`, `testing_ready`, `paused`)
   remain. T2.5 canary requires manually unfreezing one task briefly.
-- Worker prompt delivery — `DREM_PROMPT_PATH` exists but the wiring
+- ~~Worker prompt delivery — `DREM_PROMPT_PATH` exists but the wiring
   from orch plan → prompt file on host is a separate plan. This plan
-  proves auth works; the next plan proves coding works.
+  proves auth works; the next plan proves coding works.~~ **Done**
+  2026-04-20 in `plans/worker-prompt-delivery.md` (commits
+  `4b6f1f3..17b2523`).
 - Reviewer/fixer/tester harness specifics (what prompt, what tools,
   what success criteria) — separate plans per role.
 - Rate-limit governance beyond observability (back-pressure, budget
