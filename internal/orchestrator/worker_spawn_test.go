@@ -193,6 +193,13 @@ func TestSpawnCoder_BuildsExpectedParams(t *testing.T) {
 	require.Equal(t, task.ID.String()+".md", filepath.Base(p.PromptMount))
 	// And the env map never contains an API-key fallback.
 	require.NotContains(t, p.Env, "ANTHROPIC_API_KEY")
+	// /bare must be mounted read-write so the worker's watchdog can
+	// push committed in-flight work to the feature branch. A read-only
+	// mount would surface as "remote unpack failed" inside the
+	// container with no local orch-side signal. See
+	// plans/worker-bare-mount-rw.md.
+	require.True(t, p.BareRepoReadWrite,
+		"workers need /bare mounted rw so the watchdog can push commits")
 }
 
 func TestSpawnCoder_RecordsContainerIDAndImageOnAgent(t *testing.T) {

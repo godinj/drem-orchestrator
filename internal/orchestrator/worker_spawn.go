@@ -309,8 +309,18 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		Env:           swc.envVars,
 		Labels:        swc.extraLabel,
 		BareRepoMount: swc.bareRepo,
-		CredsMount:    swc.credsMount,
-		PromptMount:   swc.promptMount,
+		// The worker's drem-watchdog commits and pushes the agent's
+		// in-flight work to the feature branch in the bare repo on each
+		// tick (PRD §Lifecycle and recovery, user stories 17/18). The
+		// push target is /bare mounted inside the worker; without the
+		// read-write flag the spawner defaults to a read-only mount and
+		// `git push origin` fails with "remote unpack failed: unable to
+		// create temporary object directory". Merger already sets this
+		// explicitly in merge_dispatch.go; worker spawns need the same
+		// so the watchdog can function.
+		BareRepoReadWrite: true,
+		CredsMount:        swc.credsMount,
+		PromptMount:       swc.promptMount,
 	}
 
 	res, spawnErr := o.Spawner.SpawnWorker(ctx, params)
