@@ -367,6 +367,36 @@ func TestSpawnSupervisor_CarriesCredsMount(t *testing.T) {
 	require.Equal(t, "/host/.claude/.credentials.json", fake.spawnCalls[0].CredsMount)
 }
 
+// TestRejectAPIKeyInEnv_Table documents the policy boundary: an
+// ANTHROPIC_API_KEY key in the env map is always rejected; any other
+// env (or an empty map) is accepted. This codifies the
+// subscription-only auth policy so a future env extension that tries
+// to reintroduce API-key plumbing fails at the orchestrator boundary.
+func TestRejectAPIKeyInEnv_Table(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     map[string]string
+		wantErr bool
+	}{
+		{"nil", nil, false},
+		{"empty", map[string]string{}, false},
+		{"normal drem vars", map[string]string{"DREM_TASK_ID": "t"}, false},
+		{"with anthropic api key", map[string]string{"ANTHROPIC_API_KEY": "sk-xxx"}, true},
+		{"empty anthropic api key still rejected", map[string]string{"ANTHROPIC_API_KEY": ""}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := rejectAPIKeyInEnv(tc.env)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "ANTHROPIC_API_KEY")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestBuildSpawnContext_MergerOmitsCredsMount documents that the
 // merger role does NOT receive a CredsMount, even when the env var
 // is set. The merger is a Go binary and never runs the claude CLI.
@@ -387,4 +417,31 @@ func TestBuildSpawnContext_MergerOmitsCredsMount(t *testing.T) {
 	swc, err := o.buildSpawnContext(task, "merger")
 	require.NoError(t, err)
 	require.Equal(t, "", swc.credsMount, "merger must never carry a creds mount")
+}
+
+// TestRecordSpawnFailureEventWithReason_CarriesReasonInDetails verifies
+// the reason classifier lands on the TaskEvent details map so downstream
+// audit queries can filter by reason (e.g. policy_violation_api_key)
+// without parsing the free-form error string.
+func TestRecordSpawnFailureEventWithReason_CarriesReasonInDetails(t *testing.T) {
+	o, _ := workerSpawnTestRig(t)
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "t",
+		Description:    "d",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/r",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	o.recordSpawnFailureEventWithReason(task, "coder", spawnPolicyReasonAPIKey,
+		errors.New("policy violation: ANTHROPIC_API_KEY must not be set"))
+
+	var evts []model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_spawn_failed").Find(&evts).Error)
+	require.Len(t, evts, 1)
+	require.Equal(t, "coder", evts[0].NewValue)
+	require.Equal(t, "policy_violation_api_key", evts[0].Details["reason"])
+	require.Contains(t, evts[0].Details["error"], "ANTHROPIC_API_KEY")
 }

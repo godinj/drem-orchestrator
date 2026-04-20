@@ -134,6 +134,15 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		o.recordSpawnFailureEvent(task, agentType, err)
 		return fmt.Errorf("spawn %s worker: %w", agentType, err)
 	}
+	// Policy check: reject an ANTHROPIC_API_KEY smuggled into the env
+	// map (currently impossible via buildSpawnContext, but the boundary
+	// check stops a future envVars extension from regressing the
+	// subscription-only policy). See plans/worker-subscription-auth.md
+	// §6 commit 5.
+	if policyErr := rejectAPIKeyInEnv(swc.envVars); policyErr != nil {
+		o.recordSpawnFailureEventWithReason(task, agentType, spawnPolicyReasonAPIKey, policyErr)
+		return fmt.Errorf("spawn %s worker: %w", agentType, policyErr)
+	}
 	params := spawner.SpawnWorkerParams{
 		Project:       swc.project,
 		AgentType:     swc.agentType,
@@ -335,9 +344,20 @@ func (o *Orchestrator) recordSpawnEvent(task *model.Task, agentType, containerID
 // recordSpawnFailureEvent logs a spawn failure to the audit trail so a later
 // reviewer can correlate missing container IDs with spawner errors.
 func (o *Orchestrator) recordSpawnFailureEvent(task *model.Task, agentType string, err error) {
+	o.recordSpawnFailureEventWithReason(task, agentType, "", err)
+}
+
+// recordSpawnFailureEventWithReason is the reason-carrying variant used
+// by policy checks (e.g. the ANTHROPIC_API_KEY rejection) so the audit
+// trail surfaces a machine-readable classification in addition to the
+// free-form error string.
+func (o *Orchestrator) recordSpawnFailureEventWithReason(task *model.Task, agentType, reason string, err error) {
 	detail := model.JSONField{
 		"agent_type": agentType,
 		"error":      err.Error(),
+	}
+	if reason != "" {
+		detail["reason"] = reason
 	}
 	evt := &model.TaskEvent{
 		ID:        uuid.New(),
@@ -350,6 +370,25 @@ func (o *Orchestrator) recordSpawnFailureEvent(task *model.Task, agentType strin
 		CreatedAt: time.Now(),
 	}
 	_ = o.db.Create(evt).Error
+}
+
+// spawnPolicyReasonAPIKey is the classifier attached to
+// worker_spawn_failed events emitted when a worker spawn is rejected
+// because ANTHROPIC_API_KEY appeared in the Env map. Subscription-only
+// policy forbids shipping API-key auth through the default spawn path.
+const spawnPolicyReasonAPIKey = "policy_violation_api_key"
+
+// rejectAPIKeyInEnv returns a non-nil error when env carries an
+// ANTHROPIC_API_KEY key. The check codifies the subscription-only auth
+// policy at the orchestrator boundary — if a future change accidentally
+// reintroduces API-key plumbing, spawns fail closed at commit-lint
+// time rather than silently charging an unintended auth pool.
+func rejectAPIKeyInEnv(env map[string]string) error {
+	if _, found := env["ANTHROPIC_API_KEY"]; found {
+		return fmt.Errorf(
+			"policy violation: ANTHROPIC_API_KEY must not be set on a worker spawn; subscription auth is the only supported path")
+	}
+	return nil
 }
 
 // destroyWorkerForTask tears down the container associated with a task

@@ -159,16 +159,28 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 
 	argv := buildMergerArgv(task, o.projectID.String(), defaultBranch, o.testGate.TestCommand, orchURL, agentmonToken)
 
+	env := map[string]string{
+		"DREM_TASK_ID":        task.ID.String(),
+		"DREM_FEATURE_BRANCH": task.WorktreeBranch,
+		"DREM_TARGET_BRANCH":  defaultBranch,
+	}
+	// Merger does NOT carry Claude credentials — it is a Go binary
+	// (cmd/drem-merger) with no claude CLI execution. But the same
+	// subscription-only policy applies symmetrically at every spawn
+	// boundary: reject ANTHROPIC_API_KEY before the spawn lands so a
+	// future env extension cannot regress the policy silently. See
+	// plans/worker-subscription-auth.md §6 commit 5.
+	if policyErr := rejectAPIKeyInEnv(env); policyErr != nil {
+		o.recordSpawnFailureEventWithReason(task, "merger", spawnPolicyReasonAPIKey, policyErr)
+		return nil, fmt.Errorf("dispatchMerge: %w", policyErr)
+	}
+
 	params := spawner.SpawnWorkerParams{
 		Project:   o.projectID.String(),
 		AgentType: "merger",
 		WorkerID:  workerID,
 		Branch:    task.WorktreeBranch,
-		Env: map[string]string{
-			"DREM_TASK_ID":        task.ID.String(),
-			"DREM_FEATURE_BRANCH": task.WorktreeBranch,
-			"DREM_TARGET_BRANCH":  defaultBranch,
-		},
+		Env:       env,
 		Labels: map[string]string{
 			"drem.task_id":  task.ID.String(),
 			"drem.role":     "merger",
