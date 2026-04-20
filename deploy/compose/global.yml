@@ -99,8 +99,12 @@ services:
     # parser is natively supported.
     # Mirrors the host-side launcher documented in
     # plans/host-state-inventory.md §1.1.
+    #
+    # NOTE: the image's ENTRYPOINT is `python -m sglang.launch_server`,
+    # so this `command:` supplies ARGS ONLY — do not re-prefix with the
+    # interpreter invocation or argparse will reject the duplicated
+    # tokens as unrecognized positional args.
     command: >
-      python -m sglang.launch_server
       --host 0.0.0.0 --port 8081
       --model-path /models/${SGLANG_MODEL_SUBDIR:-gemma4-26b}
       --served-model-name ${SGLANG_SERVED_NAME:-gemma4-26b}
