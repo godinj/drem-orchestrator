@@ -214,6 +214,14 @@ Requires `$HOME/sglang-models/<subdir>` and `nvidia-container-toolkit`.
 Optional per-host tuning via `deploy/compose/.env`
 (see `.env.example` for the full knob list).
 
+> SGLang tool-call parser caveat: `SGLANG_TOOL_CALL_PARSER` defaults to
+> `hermes` because the stable `lmsysorg/sglang` image's parser registry
+> does not include `gemma4` and the container crash-loops on
+> `--tool-call-parser: invalid choice: 'gemma4'`. `hermes` is a
+> stopgap; see `plans/sglang-gemma4-followup.md` for the real fix
+> options (host SGLang via systemd, build SGLang from upstream git, or
+> bump to a newer image tag that ships the gemma4 parser).
+
 ```bash
 docker compose -f deploy/compose/global.yml up -d
 docker compose -f deploy/compose/global.yml ps

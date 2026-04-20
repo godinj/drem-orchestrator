@@ -88,9 +88,13 @@ services:
     # without rebuilding. Host-varying bits (model dir, weights subdir, served
     # name, per-host tuning) come from deploy/compose/.env — see
     # deploy/compose/.env.example for the full knob list. Flags that are
-    # gemma4-specific tuning (KV dtype, SWA ratio, attention/sampling backend,
-    # tool-call parser) are hardcoded here because swapping them amounts to
-    # swapping model families, which warrants a code change, not a config flip.
+    # gemma4-specific tuning (KV dtype, SWA ratio, attention/sampling backend)
+    # are hardcoded here because swapping them amounts to swapping model
+    # families, which warrants a code change, not a config flip. The tool-call
+    # parser is parameterized via SGLANG_TOOL_CALL_PARSER because the stable
+    # lmsysorg/sglang image's parser list does not include `gemma4`; operators
+    # need to pick a stopgap parser at .env time. See
+    # plans/sglang-gemma4-followup.md for the real fix.
     # Mirrors the host-side launcher documented in
     # plans/host-state-inventory.md §1.1.
     command: >
@@ -107,7 +111,7 @@ services:
       --attention-backend triton
       --sampling-backend pytorch
       --disable-piecewise-cuda-graph
-      --tool-call-parser gemma4
+      --tool-call-parser ${SGLANG_TOOL_CALL_PARSER:-hermes}
       --trust-remote-code
     deploy:
       resources:

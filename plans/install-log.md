@@ -108,8 +108,14 @@ $EDITOR deploy/compose/.env          # match model dir + subdir on this host
 
 Compose auto-loads `deploy/compose/.env` because it lives next to the
 compose file. Gemma4-specific flags (`--kv-cache-dtype fp8_e5m2`,
-`--tool-call-parser gemma4`, etc.) are hardcoded in the compose `command:`
-since swapping them means swapping model families.
+`--swa-full-tokens-ratio 0.08`, etc.) are hardcoded in the compose
+`command:` since swapping them means swapping model families. The one
+exception is `--tool-call-parser`, which is parameterized via
+`SGLANG_TOOL_CALL_PARSER` (default `hermes`) because the stable
+`lmsysorg/sglang` image's parser registry does not include `gemma4` —
+the container crash-loops on `--tool-call-parser: invalid choice:
+'gemma4'`. `hermes` is a stopgap; see
+`plans/sglang-gemma4-followup.md` for the real fix options.
 
 ---
 
