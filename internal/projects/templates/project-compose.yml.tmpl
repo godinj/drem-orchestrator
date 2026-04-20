@@ -47,6 +47,14 @@ services:
       # worker. Subscription-only auth — no API-key fallback. See
       # plans/worker-subscription-auth.md §§1, 6.
       DREM_WORKER_CREDS_PATH: "{{.WorkerCredsPath}}"
+      # Host directory where orch atomically writes per-task prompt
+      # files. The spawner (a separate container) later bind-mounts the
+      # individual file read-only into each worker at
+      # /home/drem/.drem/prompt.md. The path is host-identical on orch
+      # (bind-mount below) so os.WriteFile in orch and os.Stat in
+      # spawner see the same bytes. See
+      # plans/worker-prompt-delivery.md §§2, 4.
+      DREM_PROMPT_ROOT_HOST: "{{.WorkerPromptRoot}}"
     volumes:
       - drem-{{.ProjectName}}-db:/var/lib/drem
       - drem-{{.ProjectName}}-prompts:/var/lib/drem/prompts
@@ -55,6 +63,12 @@ services:
       # different target ("/bare") broke `git worktree list` because the repo
       # env var and the mount target disagreed.
       - {{.BareRepoPath}}:{{.BareRepoPath}}:rw
+      # Worker prompt root, bind-mounted read-write at its HOST-identical
+      # path so orch can write per-task prompt files and the spawner's
+      # (separate-container) pre-stat sees the same path orch wrote to.
+      # Read-write: orch writes, spawner only reads. See
+      # plans/worker-prompt-delivery.md §4.
+      - {{.WorkerPromptRoot}}:{{.WorkerPromptRoot}}:rw
       # drem.toml is generated alongside this compose file and mounted into
       # the orch CWD so LoadConfig finds it. Enables direct-classifier and
       # points the direct-tool endpoint at gq on drem-net. Path is absolute

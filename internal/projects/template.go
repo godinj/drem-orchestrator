@@ -79,6 +79,15 @@ type TemplateData struct {
 	// so a missing file fails closed with a clear error. Defaults to
 	// HostHome/.claude/.credentials.json when empty.
 	WorkerCredsPath string
+	// WorkerPromptRoot is the host directory under which orch writes
+	// per-task prompt files. Passed to orch via DREM_PROMPT_ROOT_HOST
+	// AND bind-mounted read-write into the orch container at the same
+	// host-identical path so orch's os.WriteFile lands on a path the
+	// spawner (which is a separate container) can bind-mount read-only
+	// back into a worker at /home/drem/.drem/prompt.md. Defaults to
+	// HostHome/.drem/projects/<ProjectName>/prompts when empty. See
+	// plans/worker-prompt-delivery.md §§2, 4.
+	WorkerPromptRoot string
 }
 
 // Default image tags for the orchestrator.
@@ -149,6 +158,17 @@ func applyDefaults(data *TemplateData) {
 	if data.WorkerCredsPath == "" && data.HostHome != "" {
 		data.WorkerCredsPath = filepath.Join(data.HostHome, ".claude", ".credentials.json")
 	}
+	// WorkerPromptRoot mirrors WorkerCredsPath's derivation pattern but
+	// is per-project (one prompt dir per project, not a shared host
+	// file). The path HAS to be under a host dir docker can bind-mount
+	// both into orch (rw, for writing) and into each worker (ro, for
+	// reading), which is why it lives under HostHome rather than inside
+	// the orch container's own filesystem. See
+	// plans/worker-prompt-delivery.md §2.
+	if data.WorkerPromptRoot == "" && data.HostHome != "" && data.ProjectName != "" {
+		data.WorkerPromptRoot = filepath.Join(
+			data.HostHome, ".drem", "projects", data.ProjectName, "prompts")
+	}
 }
 
 // WriteProjectCompose renders the template and writes it to
@@ -188,6 +208,17 @@ func WriteProjectComposeAt(homeDir, projectName string, data TemplateData) (stri
 	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create project dir %q: %w", dir, err)
+	}
+	// Pre-create the host-side prompts dir so the first worker spawn
+	// doesn't race to `MkdirAll` inside a bind-mount source docker
+	// would otherwise auto-create as root. Matches the subscription-
+	// auth `~/.claude` ownership rationale in worker-base.Dockerfile.
+	// Best-effort: if the path is outside this homeDir (explicit
+	// override), MkdirAll on its parent may fail and that's fine —
+	// the orch container still boots and the first spawn will surface
+	// the real error.
+	if data.WorkerPromptRoot != "" {
+		_ = os.MkdirAll(data.WorkerPromptRoot, 0o755)
 	}
 	path := filepath.Join(dir, "compose.yml")
 	if err := os.WriteFile(path, rendered, 0o644); err != nil {

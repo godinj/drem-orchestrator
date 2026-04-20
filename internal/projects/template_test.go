@@ -221,6 +221,79 @@ func TestRender_WorkerCredsPathExplicitOverride(t *testing.T) {
 		"explicit WorkerCredsPath must override the HostHome default")
 }
 
+// TestRender_WorkerPromptRootIsWired asserts the orch env declares
+// DREM_PROMPT_ROOT_HOST AND bind-mounts the same host-identical path
+// read-write on orch so os.WriteFile in orch and os.Stat in spawner
+// see the same bytes. See plans/worker-prompt-delivery.md §§2, 4.
+func TestRender_WorkerPromptRootIsWired(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	s := string(out)
+	require.Contains(t, s, "DREM_PROMPT_ROOT_HOST",
+		"orch env must declare DREM_PROMPT_ROOT_HOST so buildSpawnContext resolves it")
+	expectedRoot := "/home/operator/.drem/projects/drem-orchestrator/prompts"
+	require.Contains(t, s, expectedRoot,
+		"rendered root must derive from HostHome + ProjectName")
+
+	// Parse and assert the env value explicitly.
+	var parsed struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+			Volumes     []string          `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+	got := parsed.Services["orch"].Environment["DREM_PROMPT_ROOT_HOST"]
+	require.Equal(t, expectedRoot, got)
+
+	// The orch service must also bind-mount the same host path
+	// read-write at the host-identical target so orch's writes are
+	// visible to the spawner's pre-stat via the shared host filesystem.
+	foundMount := false
+	expectedMount := expectedRoot + ":" + expectedRoot + ":rw"
+	for _, v := range parsed.Services["orch"].Volumes {
+		if v == expectedMount {
+			foundMount = true
+			break
+		}
+	}
+	require.True(t, foundMount,
+		"orch must bind-mount WorkerPromptRoot at its host-identical path, rw; volumes=%v",
+		parsed.Services["orch"].Volumes)
+}
+
+// TestRender_WorkerPromptRootDefaultsFromHostHome asserts applyDefaults
+// fills in WorkerPromptRoot from HostHome + ProjectName when both are
+// zero-value at the caller. See plans/worker-prompt-delivery.md §4.
+func TestRender_WorkerPromptRootDefaultsFromHostHome(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/root"
+	data.WorkerPromptRoot = "" // explicit
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	require.Contains(t, string(out),
+		"/root/.drem/projects/drem-orchestrator/prompts",
+		"default WorkerPromptRoot must derive from HostHome + ProjectName")
+}
+
+// TestRender_WorkerPromptRootExplicitOverride asserts a caller-supplied
+// WorkerPromptRoot wins over the HostHome-derived default — necessary
+// for operators on unusual host layouts (shared-tmp, custom drem home).
+func TestRender_WorkerPromptRootExplicitOverride(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	data.WorkerPromptRoot = "/var/drem/prompts/drem-orchestrator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	s := string(out)
+	require.Contains(t, s, "/var/drem/prompts/drem-orchestrator")
+	require.NotContains(t, s, "/home/operator/.drem/projects/drem-orchestrator/prompts",
+		"explicit WorkerPromptRoot must override the HostHome default")
+}
+
 // TestRender_PlannerURLIsWired asserts the orch env declares
 // DREM_PLANNER_URL pointing at the warm drem-planner container. This is
 // the replacement for the deleted planner-template stub: orch now POSTs
