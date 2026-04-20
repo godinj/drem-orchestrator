@@ -1,6 +1,15 @@
 # Merger Spawn-on-Demand — Implementation Plan (Phase 6 wiring)
 
-Status: **design complete, not yet implemented.** 2026-04-20.
+Status: **implemented on worktree-agent-ab9c5911, 2026-04-19.** All
+five commits from §8 landed. Tests added: 2 in
+`internal/spawner/service_test.go` (Cmd forwarding, BareRepoReadWrite
+toggles mount RO flag), 5 in `internal/orchestrator/merge_dispatch_test.go`
+(argv composition, rw flag, default-branch elision, non-default branch
+flag, exit-code → FailureReason mapping table), 4 in
+`internal/orchestrator/merge_execution_test.go` (tests_failed /
+push_failed / misc / unknown exit-code routing), 1 in
+`internal/projects/template_test.go` (orch gets `DREM_ORCH_URL`).
+Awaiting review before master merge.
 
 Companion to the design doc `plans/merger-spawn-on-demand.md` (the PRD
 source of truth). This file is the surgical implementation plan:

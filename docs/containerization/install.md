@@ -298,9 +298,25 @@ The merger image is *not* listed; the previous `merger-pool` warm
 replicas were removed because `drem-merger` is a per-task one-shot
 binary that crash-loops when run with no argv. The template still
 declares a `merger-template` stub gated behind `profiles: ["never"]`
-so `docker compose pull` primes the image, but no merger container
-runs until spawn-on-demand wiring lands. See
-`plans/merger-spawn-on-demand.md`.
+so `docker compose pull` primes the image.
+
+Spawn-on-demand wiring is now live (see
+`plans/merger-spawn-on-demand-impl.md`): when a task reaches
+`StatusMerging`, the orchestrator's `dispatchMerge` asks the spawner
+for a short-lived merger container with `/bare` mounted read-write
+and all six required flags (`--feature-branch`, `--project`,
+`--task-id`, `--test-cmd`, `--orch-url`, `--agentmon-token`) passed
+as argv. The container runs one merge, POSTs a `merge_result`
+record to `/internal/logs`, exits with a typed code (0=success,
+2=conflict, 3=tests-failed, 4=push-failed, 1=misc), and the spawner
+removes it on the Docker-event path. Watch for it with:
+
+```bash
+docker ps -a --filter label=drem.agent_type=merger
+```
+
+You should see exactly one entry per merged task, all in `Exited`
+state within seconds of completion.
 
 > The `csuite-watcher` service reads its bridge auth + listen + DB path from
 > `DREM_BEARER_TOKEN` / `DREM_LISTEN_ADDR` / `DREM_DB_PATH` env vars (see the

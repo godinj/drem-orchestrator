@@ -1,6 +1,12 @@
 # Merger: spawn-on-demand wiring
 
-Status: open. Tracked here pending issue creation.
+Status: implemented 2026-04-19 on worktree-agent-ab9c5911 — see
+`plans/merger-spawn-on-demand-impl.md` for commit list, test surface,
+and exit-code → state-machine routing. Acceptance criteria 1–3, 6, 7
+land with that branch; 4 (per-project serialization) and 5 (cross-
+project parallelism) are properties of the existing tick loop (one
+tick-goroutine per orchestrator process, one orchestrator per project)
+and require no new code.
 
 ## Problem statement
 
