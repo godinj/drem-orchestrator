@@ -1,9 +1,39 @@
 # Worker Subscription-Auth — Implementation Plan
 
-Status: **planned, 2026-04-20.** Follows the warm-planner pivot
+Status: **implemented, 2026-04-20.** All 7 implementation commits
+(`66be7f0..3900029`) plus this plan-status update landed on
+worktree-agent-a5c0c6b4. Follows the warm-planner pivot
 (`plans/warm-planner-pivot.md`, commits `101f739..1f554b1`, merged
 2026-04-20) and extends its subscription-only policy to every worker
 role that runs the `claude` CLI harness.
+
+Tests added:
+
+- `internal/spawner/service_test.go` — 2 (CredsMount produces a
+  read-only file mount at /home/drem/.claude/.credentials.json;
+  missing host file fails SpawnWorker fast without reaching the
+  runtime).
+- `internal/spawner/client_test.go` — extended round-trip to carry
+  CredsMount through the JSON wire format.
+- `internal/agent/spawn_test.go` — extended to assert CredsMount
+  propagates through Manager.Spawn into WorkerSpawnParams.
+- `internal/agent/spawn_integration_test.go` — rpcAdapter carries
+  CredsMount across the real JSON-RPC boundary.
+- `internal/orchestrator/worker_spawn_test.go` — 6 new
+  (credsMountRequired table, every claude role populates CredsMount,
+  supervisor populates CredsMount, merger omits CredsMount, missing
+  env + missing $HOME fails-closed with a worker_spawn_failed event,
+  rejectAPIKeyInEnv table + recordSpawnFailureEventWithReason
+  carries the reason classifier).
+- `internal/projects/template_test.go` — 3 new
+  (DREM_WORKER_CREDS_PATH is wired from HostHome, default derivation
+  when caller leaves WorkerCredsPath zero, explicit override wins
+  over the HostHome default).
+
+All tests pass on `go test -count=1 ./...`; `go vet ./...` is clean.
+
+Rollout steps (§7) remain unchanged; the T2.5 canary is operator
+work post-merge.
 
 ## 0. What changes, what stays
 
