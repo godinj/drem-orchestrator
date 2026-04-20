@@ -275,7 +275,7 @@ unexpected exit, resuming from the most recent pushed commit.
 - [ ] A worker can crash mid-task and be respawned; the respawned worker's first commit includes work up to the last watchdog push from the crashed container.
 - [x] A merge failure due to test failure is recorded as a structured event in the orchestrator DB and visible via the API. _(2026-04-19: exit-code routing in `executeMerge` maps tests_failed to `failTask` + `merge_tests_failed` event; the merger container POSTs the full `merge_result` record to `/internal/logs`. See `plans/merger-spawn-on-demand-impl.md`.)_
 - [x] A merge success deletes the feature branch in the bare repo. _(2026-04-19: merger binary already does this via `internal/merger/merger.go`; spawn-on-demand wiring in `dispatchMerge` makes the path reachable.)_
-- [x] Planner runs as a per-task container rather than a host-side OpenCode subprocess. _(2026-04-19: `dispatchPlan` spawns `drem-planner` via the spawner RPC when `[agents.planner].provider` resolves to `claude`; the container runs the claude CLI in headless mode against the feature worktree and writes `plan.json`. See `plans/warm-direct-planner.md` — same spawn-on-demand shape as merger, but read-only `/bare` and `ANTHROPIC_API_KEY` forwarded via env.)_
+- [x] Planner runs as a long-lived warm container rather than a host-side OpenCode subprocess. _(2026-04-20: orch's `dispatchPlanHTTP` POSTs `/plan` to the warm `drem-planner` service on drem-net when `[agents.planner].provider` resolves to `claude`. Container shells out to the `claude` CLI per request against Anthropic Opus, returns plan.json inline in the response body. Subscription-only auth via a read-only bind-mount of `~/.claude/.credentials.json` — no ANTHROPIC_API_KEY passthrough anywhere in the generated compose. See `plans/warm-planner-pivot.md`. The earlier spawn-on-demand design in `plans/warm-direct-planner.md` landed briefly in c279f32..b2024ee but was replaced before T2 canary because per-task container polling reintroduced the tick-starvation pressure we moved classifier OUT of orch to fix.)_
 - [ ] No host-side git worktree exists anywhere after this phase.
 
 ---
@@ -328,7 +328,7 @@ be scaled / replaced independently.
 | # | Slice | Tag | Scope |
 |---|---|---|---|
 | 8.1 | Warm **drem-classifier** (done, see `plans/warm-direct-classifier.md`). `agent.Classify` refactor + HTTP server + Dockerfile + compose entry + orch routing toggle + template updates + walkthrough. | [Opus] | Done |
-| 8.2 | Warm **drem-planner** — same shape: extract `agent.Plan`, wrap in `cmd/drem-planner`, add Dockerfile + compose entry, wire orch. Tracked in follow-up `plans/warm-direct-planner.md`. | [Opus] | Parallel role |
+| 8.2 | Warm **drem-planner** — HTTP server that execs claude CLI per /plan request, long-lived single replica. Subscription-only auth via `~/.claude/.credentials.json` bind-mount (no API-key fallback). Tracked in `plans/warm-planner-pivot.md`; supersedes the spawn-on-demand draft in `plans/warm-direct-planner.md`. | [Opus] | Parallel role |
 | 8.3 | Warm **drem-prep** — same shape as planner; tracked in `plans/warm-direct-prep.md`. | [Opus] | Parallel role |
 | 8.4 | Drop the orch-side endpoint-health circuit breaker once each role's container has its own /healthz probe wired to gq (see plans/warm-direct-classifier.md §9 Q3). | [G4] | Cleanup |
 

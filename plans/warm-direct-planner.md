@@ -1,7 +1,18 @@
 # Spawn-on-Demand Planner Container — Implementation Plan
 
-Status: **implemented on worktree-agent-af401951, 2026-04-19.** All
-eight commits from §5 landed. Tests added:
+Status: **superseded-reference, 2026-04-20.** The spawn-on-demand
+design landed briefly on worktree-agent-af401951 (commits
+`c279f32..b2024ee`) but was replaced by the warm HTTP planner in
+`plans/warm-planner-pivot.md` before the first T2 canary. The
+per-task `InspectWorker` polling from an orch goroutine was the
+exact tick-starvation pressure we moved classifier OUT of orch to
+avoid; planner needed the same shape. This document is kept as
+reference because the spawn-on-demand analysis below is still useful
+for future heavy-compute roles that do suit that pattern.
+
+Original status line (historical): implemented on
+worktree-agent-af401951, 2026-04-19. All eight commits from §5
+landed. Tests added:
 
 - `internal/spawner/images_test.go` — 3 (planner mapping,
   merger-unchanged regression guard, unknown-type fallthrough).
