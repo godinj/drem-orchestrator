@@ -32,6 +32,15 @@ import "time"
 // pre-checks the host path exists before creating the container and
 // fails SpawnWorker fast if it does not. Leave empty for agent types
 // that do not run claude (notably merger, which is a Go binary).
+// PromptMount, when non-empty, is a host file path bind-mounted
+// read-only into the worker at /home/drem/.drem/prompt.md; the
+// spawner also sets DREM_PROMPT_PATH in the worker env to that
+// container-side path deterministically so the entrypoint's claude
+// invocation finds the prompt without per-caller env plumbing. The
+// spawner pre-checks the host path exists before creating the
+// container and fails SpawnWorker fast if it does not. Leave empty
+// for agent types that do not need a prompt (notably merger). See
+// plans/worker-prompt-delivery.md §3.
 type SpawnWorkerParams struct {
 	Project           string            `json:"project"`
 	AgentType         string            `json:"agent_type"`
@@ -44,6 +53,7 @@ type SpawnWorkerParams struct {
 	BareRepoReadWrite bool              `json:"bare_repo_read_write,omitempty"`
 	Cmd               []string          `json:"cmd,omitempty"`
 	CredsMount        string            `json:"creds_mount,omitempty"`
+	PromptMount       string            `json:"prompt_mount,omitempty"`
 }
 
 // SpawnWorkerResult is the return value of SpawnWorker. ContainerID is

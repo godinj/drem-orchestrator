@@ -25,6 +25,19 @@ const bareRepoMountPath = "/bare"
 // the claude CLI resolves it without CLAUDE_CONFIG_DIR gymnastics.
 const credsMountPath = "/home/drem/.claude/.credentials.json"
 
+// promptMountPath is where the orchestrator-rendered task prompt file
+// is bind-mounted inside a claude-harness worker. The value is
+// deterministic at the spawner boundary: the container-side path is
+// owned by the spawner, not the caller, so callers cannot regress
+// the contract by setting a conflicting DREM_PROMPT_PATH.
+const promptMountPath = "/home/drem/.drem/prompt.md"
+
+// workerPromptPathEnv is the env var the worker entrypoint
+// (deploy/docker/context/worker-entrypoint.sh:132-160) consults to
+// locate the prompt file. The spawner overwrites any caller-supplied
+// value so the env always agrees with promptMountPath.
+const workerPromptPathEnv = "DREM_PROMPT_PATH"
+
 // SpawnWorker builds a Spec, creates the container, and records it in the
 // in-memory registry. The three identifying labels (project, agent_type,
 // worker_id) and the branch label are set here and are NOT overridable by
@@ -78,10 +91,44 @@ func (s *Service) SpawnWorker(ctx context.Context, p SpawnWorkerParams) (SpawnWo
 		})
 	}
 
+	// Defensive copy of the caller's env so we can inject
+	// DREM_PROMPT_PATH deterministically without mutating the caller's
+	// map. p.Env may be nil; the copy always produces a valid map when
+	// we need one.
+	env := p.Env
+	if p.PromptMount != "" {
+		// Fail-closed: the worker entrypoint reads the prompt once at
+		// exec time. If orch didn't land the file on host yet, better
+		// to refuse the spawn here than to fall into interactive-claude
+		// mode inside the container (which silently exits).
+		if _, err := os.Stat(p.PromptMount); err != nil {
+			return SpawnWorkerResult{}, fmt.Errorf(
+				"prompt file not found at %s: orch must write the prompt before SpawnWorker: %w",
+				p.PromptMount, err)
+		}
+		// Read-only: workers must not overwrite their own prompt.
+		// Scratch space lives under /home/drem/work (the clone).
+		mounts = append(mounts, container.Mount{
+			Source:   p.PromptMount,
+			Target:   promptMountPath,
+			ReadOnly: true,
+		})
+		// Copy + overwrite DREM_PROMPT_PATH deterministically. The
+		// container-side path belongs to the spawner contract, not the
+		// caller, so a caller that accidentally set this env key in
+		// SpawnWorkerParams.Env cannot regress the mount target.
+		copied := make(map[string]string, len(env)+1)
+		for k, v := range env {
+			copied[k] = v
+		}
+		copied[workerPromptPathEnv] = promptMountPath
+		env = copied
+	}
+
 	spec := container.Spec{
 		Image:   image,
 		Cmd:     p.Cmd,
-		Env:     p.Env,
+		Env:     env,
 		Labels:  labels,
 		Mounts:  mounts,
 		Network: defaultNetwork,

@@ -89,12 +89,13 @@ func TestClient_SpawnWorker_SendsMethodAndParams(t *testing.T) {
 	client := NewClient(mock.sockPath)
 
 	res, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
-		Project:    "drem-orch",
-		AgentType:  "coder",
-		WorkerID:   "w-1",
-		Branch:     "feature/x",
-		Labels:     map[string]string{"drem.language": "go"},
-		CredsMount: "/host/.claude/.credentials.json",
+		Project:     "drem-orch",
+		AgentType:   "coder",
+		WorkerID:    "w-1",
+		Branch:      "feature/x",
+		Labels:      map[string]string{"drem.language": "go"},
+		CredsMount:  "/host/.claude/.credentials.json",
+		PromptMount: "/host/prompts/task-abc.md",
 	})
 	require.NoError(t, err)
 	require.Equal(t, "c-abc", res.ContainerID)
@@ -115,6 +116,9 @@ func TestClient_SpawnWorker_SendsMethodAndParams(t *testing.T) {
 	// CredsMount round-trips through the JSON wire format so the
 	// spawner sees the same host path the client sent.
 	require.Equal(t, "/host/.claude/.credentials.json", params.CredsMount)
+	// PromptMount likewise survives the wire format. See
+	// plans/worker-prompt-delivery.md §3.
+	require.Equal(t, "/host/prompts/task-abc.md", params.PromptMount)
 }
 
 func TestClient_DestroyWorker_SendsContainerID(t *testing.T) {

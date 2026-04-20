@@ -258,6 +258,126 @@ func TestService_SpawnWorker_CredsMountMissingFileFails(t *testing.T) {
 	}
 }
 
+// TestService_SpawnWorker_PromptMountProducesReadOnlyMountAndEnv verifies
+// that a populated PromptMount translates into a read-only bind mount at
+// /home/drem/.drem/prompt.md AND injects DREM_PROMPT_PATH into the Spec
+// env so the worker entrypoint's `claude -p` path finds it without the
+// caller having to plumb the env key explicitly. See
+// plans/worker-prompt-delivery.md §3.
+func TestService_SpawnWorker_PromptMountProducesReadOnlyMountAndEnv(t *testing.T) {
+	fake, client, cleanup := startHarness(t)
+	defer cleanup()
+
+	// Creds mount also needs to exist for the same spawn — claude-backed
+	// roles carry both. Pre-create both temp files.
+	credsPath := filepath.Join(t.TempDir(), ".credentials.json")
+	require.NoError(t, os.WriteFile(credsPath, []byte("{}"), 0o600))
+	promptPath := filepath.Join(t.TempDir(), "task-abc.md")
+	require.NoError(t, os.WriteFile(promptPath, []byte("# Task\nDo the thing."), 0o600))
+
+	_, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
+		Project:       "drem-orch",
+		AgentType:     "coder",
+		WorkerID:      "w-1",
+		Branch:        "feature/x",
+		Labels:        map[string]string{"drem.language": "go"},
+		BareRepoMount: "/host/bare",
+		CredsMount:    credsPath,
+		PromptMount:   promptPath,
+		Env:           map[string]string{"FOO": "bar"},
+	})
+	require.NoError(t, err)
+
+	var spawn *container.Call
+	for _, c := range fake.Calls() {
+		if c.Op == "Spawn" {
+			call := c
+			spawn = &call
+			break
+		}
+	}
+	require.NotNil(t, spawn, "expected a Spawn call")
+
+	// Three mounts in stable order: /bare, creds, prompt.
+	require.Len(t, spawn.Spec.Mounts, 3)
+	require.Equal(t, container.Mount{
+		Source:   promptPath,
+		Target:   "/home/drem/.drem/prompt.md",
+		ReadOnly: true,
+	}, spawn.Spec.Mounts[2])
+
+	// Env carries the deterministic DREM_PROMPT_PATH alongside the
+	// caller's FOO=bar.
+	require.Equal(t, "/home/drem/.drem/prompt.md", spawn.Spec.Env["DREM_PROMPT_PATH"])
+	require.Equal(t, "bar", spawn.Spec.Env["FOO"])
+}
+
+// TestService_SpawnWorker_PromptMountMissingFileFails verifies the
+// fail-closed pre-flight check: a PromptMount that does not exist on
+// host returns an error without reaching the runtime.
+func TestService_SpawnWorker_PromptMountMissingFileFails(t *testing.T) {
+	fake, client, cleanup := startHarness(t)
+	defer cleanup()
+
+	missing := filepath.Join(t.TempDir(), "does-not-exist", "task.md")
+
+	_, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
+		Project:     "drem-orch",
+		AgentType:   "coder",
+		WorkerID:    "w-1",
+		Branch:      "feature/x",
+		Labels:      map[string]string{"drem.language": "go"},
+		PromptMount: missing,
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "prompt file not found")
+	require.Contains(t, err.Error(), "orch must write the prompt")
+
+	for _, c := range fake.Calls() {
+		require.NotEqual(t, "Spawn", c.Op, "runtime must not be called when prompt file is missing")
+	}
+}
+
+// TestService_SpawnWorker_PromptMountOverwritesCallerDREM_PROMPT_PATH
+// verifies the deterministic-env contract: a caller that set
+// DREM_PROMPT_PATH in the Env map (wrong target, stale value, anything)
+// is always overridden by the spawner's canonical container-side path.
+func TestService_SpawnWorker_PromptMountOverwritesCallerDREM_PROMPT_PATH(t *testing.T) {
+	fake, client, cleanup := startHarness(t)
+	defer cleanup()
+
+	promptPath := filepath.Join(t.TempDir(), "task.md")
+	require.NoError(t, os.WriteFile(promptPath, []byte("# T"), 0o600))
+
+	_, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
+		Project:     "drem-orch",
+		AgentType:   "coder",
+		WorkerID:    "w-1",
+		Branch:      "feature/x",
+		Labels:      map[string]string{"drem.language": "go"},
+		PromptMount: promptPath,
+		Env: map[string]string{
+			// A malicious / buggy caller sets a wrong target here. The
+			// spawner must overwrite to the canonical mount target so
+			// the container-side path agrees with the bind-mount.
+			"DREM_PROMPT_PATH": "/tmp/attacker-controlled.md",
+		},
+	})
+	require.NoError(t, err)
+
+	var spawn *container.Call
+	for _, c := range fake.Calls() {
+		if c.Op == "Spawn" {
+			call := c
+			spawn = &call
+			break
+		}
+	}
+	require.NotNil(t, spawn)
+	require.Equal(t, "/home/drem/.drem/prompt.md", spawn.Spec.Env["DREM_PROMPT_PATH"],
+		"spawner must overwrite caller-supplied DREM_PROMPT_PATH to the canonical target")
+}
+
 func TestService_SpawnWorker_ExplicitImageOverride(t *testing.T) {
 	fake, client, cleanup := startHarness(t)
 	defer cleanup()
