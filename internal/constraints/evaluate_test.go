@@ -571,6 +571,193 @@ func TestEvalCommand(t *testing.T) {
 	}
 }
 
+// TestEvalCommandMissingToolSkips reproduces the T3 canary false-positive from
+// 2026-04-20: the orch container ran `go vet` without a Go toolchain installed
+// and surfaced `bash: line 1: go: command not found` as a FAIL, which paused
+// the task on a missing-tool rather than a real constraint violation. With the
+// fix, evalCommand detects the missing binary via exec.LookPath and returns a
+// Skipped result instead of running bash.
+func TestEvalCommandMissingToolSkips(t *testing.T) {
+	// Guard file: if the fix regresses and the command still executes, this
+	// file will be created in the worktree root. The test asserts its absence
+	// after evalCommand returns.
+	root := t.TempDir()
+	sentinel := filepath.Join(root, "tool-should-not-have-run.sentinel")
+
+	constraint := commandConstraint{
+		Name:   "fake vet",
+		Run:    "definitely-not-a-real-binary-42 vet ./...",
+		Expect: "exit_zero",
+	}
+
+	result, err := evalCommand(constraint, root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.Skipped {
+		t.Errorf("expected Skipped=true for missing tool, got %+v", result)
+	}
+	if result.Passed {
+		t.Error("Skipped result should not be Passed")
+	}
+	if result.SkipReason == "" {
+		t.Error("expected a non-empty SkipReason")
+	}
+	if !strings.Contains(result.SkipReason, "definitely-not-a-real-binary-42") {
+		t.Errorf("expected SkipReason to name the missing tool, got %q", result.SkipReason)
+	}
+	if _, err := os.Stat(sentinel); err == nil {
+		t.Error("sentinel file exists — command was executed despite missing tool")
+	}
+}
+
+// TestEvalCommandToolPresentRuns confirms the SKIP gate only fires on
+// missing tools. When the tool exists, evalCommand executes the command
+// and reports its real PASS/FAIL outcome.
+func TestEvalCommandToolPresentRuns(t *testing.T) {
+	cases := []struct {
+		name       string
+		constraint commandConstraint
+		wantPass   bool
+		wantMsg    string
+	}{
+		{
+			name: "present tool that exits zero passes",
+			constraint: commandConstraint{
+				Name:   "true check",
+				Run:    "true",
+				Expect: "exit_zero",
+			},
+			wantPass: true,
+		},
+		{
+			name: "present tool that exits non-zero fails",
+			constraint: commandConstraint{
+				Name:   "false check",
+				Run:    "echo boom >&2; false",
+				Expect: "exit_zero",
+			},
+			wantPass: false,
+			wantMsg:  "boom",
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			result, err := evalCommand(tt.constraint, root)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.Skipped {
+				t.Errorf("expected Skipped=false for present tool, got Skipped=true reason=%q",
+					result.SkipReason)
+			}
+			if result.Passed != tt.wantPass {
+				t.Errorf("expected Passed=%v, got %v; messages: %v",
+					tt.wantPass, result.Passed, result.Messages)
+			}
+			if tt.wantMsg != "" {
+				found := false
+				for _, msg := range result.Messages {
+					if strings.Contains(msg, tt.wantMsg) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected message containing %q, got %v",
+						tt.wantMsg, result.Messages)
+				}
+			}
+		})
+	}
+}
+
+// TestCommandTool verifies the heuristic that extracts the probable tool
+// binary from a shell invocation string.
+func TestCommandTool(t *testing.T) {
+	cases := []struct {
+		name string
+		run  string
+		want string
+	}{
+		{"empty string", "", ""},
+		{"only whitespace", "   \t  ", ""},
+		{"bare go invocation", "go vet ./...", "go"},
+		{"gofmt with flags", "gofmt -l ./internal/ ./cmd/", "gofmt"},
+		{"bash -c form", "bash -c 'echo hi'", "bash"},
+		{"env prefix single", "GOFLAGS=-mod=vendor go vet ./...", "go"},
+		{"env prefix multiple", "FOO=bar BAZ=qux go vet ./...", "go"},
+		{"piped command returns first", "go vet ./... | tee log", "go"},
+		{"absolute path tool", "/usr/local/go/bin/go vet ./...", "/usr/local/go/bin/go"},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			got := commandTool(tt.run)
+			if got != tt.want {
+				t.Errorf("commandTool(%q) = %q, want %q", tt.run, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFormatReportWithSkip verifies SKIP rows render distinctly from PASS
+// and FAIL, and that the summary line shows all three counters.
+func TestFormatReportWithSkip(t *testing.T) {
+	report := &Report{
+		Results: []Result{
+			{Name: "gofmt", Type: "command", Passed: true},
+			{Name: "go vet", Type: "command", Skipped: true, SkipReason: "tool unavailable: go"},
+			{Name: "line limit", Type: "max_lines", Passed: false,
+				Messages: []string{"big.go has 900 lines, exceeds limit of 800"}},
+		},
+		Passed:  1,
+		Skipped: 1,
+		Failed:  1,
+	}
+
+	output := FormatReport(report)
+
+	if !strings.Contains(output, "PASS: gofmt") {
+		t.Errorf("expected PASS row, got:\n%s", output)
+	}
+	if !strings.Contains(output, "SKIP: go vet (tool unavailable: go)") {
+		t.Errorf("expected SKIP row with reason, got:\n%s", output)
+	}
+	if !strings.Contains(output, "FAIL: line limit") {
+		t.Errorf("expected FAIL row, got:\n%s", output)
+	}
+	if !strings.Contains(output, "1 checks passed, 1 skipped, 1 failed") {
+		t.Errorf("expected three-count summary, got:\n%s", output)
+	}
+}
+
+// TestBuildReportCountsSkippedSeparately confirms the aggregate counts
+// partition Passed / Failed / Skipped without double-counting.
+func TestBuildReportCountsSkippedSeparately(t *testing.T) {
+	results := []Result{
+		{Name: "a", Passed: true},
+		{Name: "b", Passed: false},
+		{Name: "c", Skipped: true, SkipReason: "tool unavailable: xyz"},
+		{Name: "d", Passed: true},
+		{Name: "e", Skipped: true},
+	}
+
+	report := buildReport(results)
+
+	if report.Passed != 2 {
+		t.Errorf("expected Passed=2, got %d", report.Passed)
+	}
+	if report.Failed != 1 {
+		t.Errorf("expected Failed=1, got %d", report.Failed)
+	}
+	if report.Skipped != 2 {
+		t.Errorf("expected Skipped=2, got %d", report.Skipped)
+	}
+}
+
 func TestEvaluateFiles(t *testing.T) {
 	root := t.TempDir()
 

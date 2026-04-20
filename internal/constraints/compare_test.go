@@ -329,6 +329,152 @@ func TestCompareReports(t *testing.T) {
 	}
 }
 
+// TestCompareReportsWithSkipped verifies SKIP on either side of the comparison
+// is treated as "no signal": it neither introduces false regressions nor
+// masks genuine ones. Added with the orch-container-constraint-gate fix —
+// when `go vet` is unavailable the orch container emits SKIP instead of FAIL,
+// and both baseline and feature reports almost always SKIP the same
+// constraints because they evaluate in the same container.
+func TestCompareReportsWithSkipped(t *testing.T) {
+	tests := []struct {
+		name          string
+		baseline      *Report
+		current       *Report
+		wantDominated bool
+		wantNewViol   []string
+	}{
+		{
+			// baseline PASS, current SKIP: current side has no signal — treat as
+			// no regression. In practice this happens when a tool becomes
+			// unavailable between baseline and current (rare).
+			name: "baseline PASS current SKIP: not dominated",
+			baseline: &Report{
+				Results: []Result{{Name: "go vet", Passed: true}},
+				Passed:  1,
+			},
+			current: &Report{
+				Results: []Result{
+					{Name: "go vet", Skipped: true, SkipReason: "tool unavailable: go"},
+				},
+				Skipped: 1,
+			},
+			wantDominated: false,
+		},
+		{
+			// baseline SKIP, current PASS: current resolves to a real result.
+			// Tool reappeared — no baseline to compare against, so we can't call
+			// it a regression or an improvement. Treat as no-op.
+			name: "baseline SKIP current PASS: not dominated",
+			baseline: &Report{
+				Results: []Result{
+					{Name: "go vet", Skipped: true, SkipReason: "tool unavailable: go"},
+				},
+				Skipped: 1,
+			},
+			current: &Report{
+				Results: []Result{{Name: "go vet", Passed: true}},
+				Passed:  1,
+			},
+			wantDominated: false,
+		},
+		{
+			// baseline SKIP, current FAIL: current reports a violation, but we
+			// have no baseline to compare against. Do NOT treat as a new
+			// violation — the feature might have inherited this.
+			name: "baseline SKIP current FAIL: not dominated (no baseline signal)",
+			baseline: &Report{
+				Results: []Result{
+					{Name: "go vet", Skipped: true, SkipReason: "tool unavailable: go"},
+				},
+				Skipped: 1,
+			},
+			current: &Report{
+				Results: []Result{
+					{Name: "go vet", Passed: false,
+						Messages: []string{"internal/foo.go:12:3: unused variable"}},
+				},
+				Failed: 1,
+			},
+			wantDominated: false,
+		},
+		{
+			// baseline FAIL, current SKIP: current has no signal — do not count
+			// as improvement or regression.
+			name: "baseline FAIL current SKIP: not dominated",
+			baseline: &Report{
+				Results: []Result{
+					{Name: "go vet", Passed: false,
+						Messages: []string{"internal/foo.go:12:3: unused variable"}},
+				},
+				Failed: 1,
+			},
+			current: &Report{
+				Results: []Result{
+					{Name: "go vet", Skipped: true, SkipReason: "tool unavailable: go"},
+				},
+				Skipped: 1,
+			},
+			wantDominated: false,
+		},
+		{
+			// baseline SKIP, current SKIP: the usual case inside the orch
+			// container. Both sides evaluated in the same environment, both
+			// skipped the same constraint because the tool is missing.
+			name: "baseline SKIP current SKIP: not dominated (typical orch case)",
+			baseline: &Report{
+				Results: []Result{
+					{Name: "go vet", Skipped: true, SkipReason: "tool unavailable: go"},
+				},
+				Skipped: 1,
+			},
+			current: &Report{
+				Results: []Result{
+					{Name: "go vet", Skipped: true, SkipReason: "tool unavailable: go"},
+				},
+				Skipped: 1,
+			},
+			wantDominated: false,
+		},
+		{
+			// SKIP on one constraint must not mask a real PASS→FAIL regression
+			// on a DIFFERENT constraint.
+			name: "SKIP does not mask unrelated PASS to FAIL regression",
+			baseline: &Report{
+				Results: []Result{
+					{Name: "go vet", Skipped: true, SkipReason: "tool unavailable: go"},
+					{Name: "line limit", Passed: true},
+				},
+				Passed:  1,
+				Skipped: 1,
+			},
+			current: &Report{
+				Results: []Result{
+					{Name: "go vet", Skipped: true, SkipReason: "tool unavailable: go"},
+					{Name: "line limit", Passed: false,
+						Messages: []string{"big.go has 900 lines, exceeds limit of 800"}},
+				},
+				Failed:  1,
+				Skipped: 1,
+			},
+			wantDominated: true,
+			wantNewViol:   []string{"line limit"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CompareReports(tt.baseline, tt.current)
+
+			if got.Dominated != tt.wantDominated {
+				t.Errorf("Dominated = %v, want %v", got.Dominated, tt.wantDominated)
+			}
+			if !containsExactly(got.NewViolations, tt.wantNewViol) {
+				t.Errorf("NewViolations = %v, want %v", got.NewViolations, tt.wantNewViol)
+			}
+		})
+	}
+}
+
 // containsExactly returns true if got and want contain the same elements,
 // regardless of order, treating nil and empty slice as equivalent.
 func containsExactly(got, want []string) bool {
