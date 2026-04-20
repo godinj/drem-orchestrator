@@ -186,6 +186,27 @@ Rollback: the host-side launcher (operator's model-tuning
 the container build or bring-up fails. Same OpenAI-compatible endpoint
 on `127.0.0.1:8081`, so drem clients don't notice.
 
+#### Model-directory symlink caveat
+
+If the model dir contains a "textonly" variant that shares weights with
+the full multimodal dir via symlinks (as on the operator's reference
+host — `gemma-4-26B-A4B-it-AWQ-4bit-textonly/` links into
+`gemma-4-26B-A4B-it-AWQ-4bit/`), verify those symlinks are RELATIVE,
+not absolute. Absolute symlinks that point outside the bind-mount
+target (`/models` inside the container) dangle, producing
+`ValueError: Couldn't instantiate the backend tokenizer` on startup.
+One-shot fix:
+
+```bash
+cd $SGLANG_MODEL_DIR/gemma-4-26B-A4B-it-AWQ-4bit-textonly
+for f in chat_template.jinja generation_config.json \
+         model-0000{1,2,3,4}-of-00004.safetensors \
+         processor_config.json README.md recipe.yaml \
+         tokenizer_config.json tokenizer.json; do
+  ln -sfn "../gemma-4-26B-A4B-it-AWQ-4bit/$f" "$f"
+done
+```
+
 After 4a–4e the registry catalog should list 18 repositories:
 
 ```

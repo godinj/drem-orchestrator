@@ -62,9 +62,24 @@
 # Listen: 8081 (service-name `sglang` on the drem-net network).
 
 # ---------- 1. GPU base -----------------------------------------------------
-# nvidia/cuda :12.8.1-cudnn-runtime-ubuntu24.04 — matches the host's
+# nvidia/cuda :12.8.1-cudnn-devel-ubuntu24.04 — matches the host's
 # nvidia-*-cu12==12.8.x wheels. Concrete tag, not :latest.
-FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04
+#
+# WHY :devel AND NOT :runtime?
+#   sglang JIT-compiles several CUDA kernels at first model-load time
+#   (via tvm_ffi → ninja → nvcc). In particular
+#   `sglang.jit_kernel.gptq_marlin_repack` compiles on the first
+#   quantized-weight load and every AWQ-W4A16 load after a cache clear.
+#   The :runtime variant ships the CUDA libraries but NOT `nvcc`; the
+#   JIT step fails with `ninja: FAILED: [code=127] ... /bin/sh: 1:
+#   /usr/local/cuda/bin/nvcc: not found`. The host works because it has
+#   the full CUDA toolkit. :devel brings nvcc + CUDA headers so the
+#   first-boot JIT compile succeeds; resulting .so files cache in
+#   /root/.cache/tvm-ffi so subsequent boots don't re-compile.
+#
+#   Size delta: ~3–4 GB vs the runtime variant. Acceptable — the image
+#   was already 8 GB from torch + flashinfer + sglang-kernel wheels.
+FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
 # Avoid tzdata / debconf prompts during apt operations.
 ENV DEBIAN_FRONTEND=noninteractive \

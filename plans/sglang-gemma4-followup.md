@@ -189,8 +189,41 @@ permanent again.
 | 2 | `4faf9dd` | FAIL @ pip install | `outlines_core==0.1.26` has no cp313 wheel on PyPI; sdist needs `rustc` not present in base image | Install rustup (minimal toolchain) inside same RUN layer as pip, remove after (commit `0ab4b76`) |
 | 3 | `0ab4b76` | FAIL @ pip install | `outlines_core`'s cargo build pulls `openssl-sys`; needs `pkg-config` + `libssl-dev` at compile time | Add both to apt layer (commit `f43a11c`) |
 | 4 | `f43a11c` | BUILD OK; container boot FAIL | Compose `command:` duplicated the image's ENTRYPOINT tokens → `sglang serve: error: unrecognized arguments: python -m sglang.launch_server` | Trim compose `command:` to args only (commit `16b2503`) |
-| 5 | `16b2503` | BUILD cached; container boot FAIL | `ImportError: libnuma.so.1: cannot open shared object file` — sglang-kernel dlopens libnuma at import time | Add `libnuma1` to apt layer (this commit) |
-| 6 | pending | — | — | — |
+| 5 | `16b2503` | BUILD cached; container boot FAIL | `ImportError: libnuma.so.1: cannot open shared object file` — sglang-kernel dlopens libnuma at import time | Add `libnuma1` to apt layer (commit `4d93ed8`) |
+| 6 | `4d93ed8` | BUILD OK; container boot FAIL | `ValueError: Couldn't instantiate the backend tokenizer` — model dir `gemma-4-26B-A4B-it-AWQ-4bit-textonly/` had absolute symlinks to `/home/godinj/models/gemma-4-26B-A4B-it-AWQ-4bit/*`; inside container `/models` mount made those dangle | Host-side fix: rewrite symlinks as relative (`../gemma-4-26B-A4B-it-AWQ-4bit/*`). No image change. |
+| 7 | `4d93ed8` | BUILD cached; container boot FAIL | `RuntimeError: ninja exited with status 127` — sglang JIT-compiles `gptq_marlin_repack` CUDA kernel at first AWQ load; `:runtime` base image ships CUDA libs but not `nvcc` | Switch base from `nvidia/cuda:12.8.1-cudnn-runtime-ubuntu24.04` to `:devel` variant (this commit) |
+| 8 | pending | — | — | — |
+
+## Model directory symlink gotcha (single-machine install-time fix)
+
+The host keeps two parallel gemma-4 weight directories under
+`$SGLANG_MODEL_DIR`: a full multimodal one (`gemma-4-26B-A4B-it-AWQ-4bit`)
+and a text-only one (`gemma-4-26B-A4B-it-AWQ-4bit-textonly`) that
+shares the big safetensors + tokenizer files with the full dir via
+symlinks. The textonly symlinks were created with ABSOLUTE paths to
+`/home/godinj/models/...`. Inside the sglang container the bind mount
+is at `/models/...` — absolute symlinks that point outside the bind
+mount resolve to non-existent paths, so every tokenizer / safetensors
+read fails.
+
+Fix (idempotent, one-shot):
+```bash
+cd $SGLANG_MODEL_DIR/gemma-4-26B-A4B-it-AWQ-4bit-textonly
+for f in chat_template.jinja generation_config.json \
+         model-0000{1,2,3,4}-of-00004.safetensors \
+         processor_config.json README.md recipe.yaml \
+         tokenizer_config.json tokenizer.json; do
+  ln -sfn "../gemma-4-26B-A4B-it-AWQ-4bit/$f" "$f"
+done
+```
+Host continues to work (relative symlinks resolve the same way inside
+the same parent dir). Container works because the symlink target stays
+inside the bind mount.
+
+A fresh host install that downloads weights via HuggingFace + creates
+the textonly variant via a vendor script may recreate the absolute
+symlinks. Adding this fix to `docs/containerization/install.md` so the
+first-install runbook catches it.
 
 Host parity note: the host venv succeeded with the same lock because
 rustup-installed Rust 1.93 is on `PATH` via `~/.cargo/bin`. The
