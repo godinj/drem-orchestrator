@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 )
 
@@ -266,6 +267,125 @@ func validatePlanJSON(parsed model.JSONField) error {
 		}
 	}
 	return nil
+}
+
+// shouldSpawnPlannerContainer reports whether processPlanning should route
+// the planner spawn through the container / spawner path (dispatchPlan)
+// rather than the legacy runner.SpawnAgent path. The container path
+// applies iff a spawner is configured AND the planner's resolved
+// provider is Anthropic's claude — the planner image ships the claude
+// CLI, so any other provider (most notably sglang-direct) falls back
+// to the legacy runner for rollback safety.
+func (o *Orchestrator) shouldSpawnPlannerContainer() bool {
+	if o.Spawner == nil {
+		return false
+	}
+	if o.runner == nil {
+		return false
+	}
+	cfg := o.runner.AgentConfig(model.AgentPlanner)
+	return cfg.EffectiveProvider() == model.ProviderClaude
+}
+
+// spawnPlannerContainer drives the container path for processPlanning.
+// It resolves the planner's model / effort from the runner config,
+// reads ANTHROPIC_API_KEY from the orch env, invokes dispatchPlan,
+// and on success writes the parsed plan onto the task so the next
+// processPlanning tick's "plan already exists" branch advances the
+// task. Validation and exit-code failures do NOT return a Go error —
+// they increment the planner-spawn counter and return nil so the
+// tick loop retries until the MaxTotalPlannerSpawns budget is
+// exhausted.
+//
+// Returns a non-nil error only for genuinely fatal conditions:
+// missing ANTHROPIC_API_KEY (orch is misconfigured; retrying won't
+// help) or a spawner RPC error (infrastructure failure).
+func (o *Orchestrator) spawnPlannerContainer(task *model.Task, plannerPrompt string) error {
+	apiKey := os.Getenv("ANTHROPIC_API_KEY")
+	if apiKey == "" {
+		return errors.New("spawnPlannerContainer: ANTHROPIC_API_KEY unset in orch env; refusing to spawn")
+	}
+
+	plannerCfg := o.runner.AgentConfig(model.AgentPlanner)
+	cfg := PlannerSpawnConfig{
+		Model:  plannerCfg.Model,
+		Effort: plannerCfg.Effort,
+		APIKey: apiKey,
+	}
+
+	// Increment the total-planner-spawns counter BEFORE dispatchPlan so
+	// validation / exit-code failures still count against the budget.
+	// processPlanning reads this counter on its next tick to enforce
+	// MaxTotalPlannerSpawns.
+	totalSpawns := 0
+	if task.Context != nil {
+		if v, ok := task.Context["total_planner_spawns"].(float64); ok {
+			totalSpawns = int(v)
+		}
+	}
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context["total_planner_spawns"] = float64(totalSpawns + 1)
+
+	ctx := context.Background()
+	res, err := o.dispatchPlan(ctx, task, plannerPrompt, cfg)
+	if err != nil {
+		// Infrastructure failure (spawner RPC, missing bare repo, etc.).
+		// Still persist the incremented counter so retries don't loop
+		// forever on misconfiguration.
+		_ = o.db.Save(task).Error
+		return fmt.Errorf("spawnPlannerContainer: dispatch: %w", err)
+	}
+
+	if res.Success {
+		task.Plan = res.Plan
+		// Clear any stale agent assignment so the top of processPlanning
+		// doesn't try to reconcile a nonexistent Agent row on the next
+		// tick — the container path doesn't go through runner.SpawnAgent.
+		task.AssignedAgentID = nil
+	} else {
+		// Surface the failure reason for debugging; the tick loop will
+		// retry on the next pass, counting against MaxTotalPlannerSpawns.
+		o.logger.Warn("planner container did not produce a valid plan",
+			"task_id", task.ID, "exit_code", res.ExitCode,
+			"failure_reason", res.FailureReason)
+		o.emit("planner_container_failed", map[string]any{
+			"task_id":        task.ID,
+			"exit_code":      res.ExitCode,
+			"failure_reason": res.FailureReason,
+		})
+	}
+
+	if err := o.db.Save(task).Error; err != nil {
+		return fmt.Errorf("spawnPlannerContainer: save task: %w", err)
+	}
+	return nil
+}
+
+// plannerPromptFor produces the planner prompt text the container path
+// feeds to the claude CLI. Extracted into a helper so spawnPlannerContainer
+// can call it without re-deriving the featureDir / comments /
+// targetCoder* fields that processPlanning also needs.
+func (o *Orchestrator) plannerPromptFor(task *model.Task, project *model.Project) string {
+	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+	featureDir := o.worktree.FeatureWorktreePath(featureName)
+	comments, _ := o.GetComments(task.ID)
+	var targetProvider, targetModel string
+	if o.runner != nil {
+		coderCfg := o.runner.AgentConfig(model.AgentCoder)
+		targetProvider = string(coderCfg.EffectiveProvider())
+		targetModel = coderCfg.Model
+	}
+	return prompt.Generate(prompt.Opts{
+		Task:                task,
+		Project:             project,
+		AgentType:           model.AgentPlanner,
+		WorktreePath:        featureDir,
+		Comments:            comments,
+		TargetCoderProvider: targetProvider,
+		TargetCoderModel:    targetModel,
+	})
 }
 
 // validateIndexList enforces that every integer in a subtask's index

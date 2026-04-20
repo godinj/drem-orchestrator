@@ -209,6 +209,20 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 		}
 	}
 
+	// Container path: when the planner provider resolves to claude AND a
+	// spawner is configured, run planner as a per-task drem-planner
+	// container (plans/warm-direct-planner.md). Otherwise fall through to
+	// the legacy runner.SpawnAgent path so operator overrides and
+	// sandboxes without a spawner still work.
+	if o.shouldSpawnPlannerContainer() {
+		plannerPrompt := o.plannerPromptFor(task, &project)
+		if err := o.spawnPlannerContainer(task, plannerPrompt); err != nil {
+			return fmt.Errorf("process planning: spawn planner container: %w", err)
+		}
+		o.logger.Info("planner container dispatched", "task_id", task.ID)
+		return nil
+	}
+
 	// Generate planner prompt.
 	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
 	featureDir := o.worktree.FeatureWorktreePath(featureName)
@@ -230,7 +244,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 		TargetCoderModel:    targetModel,
 	})
 
-	// Spawn planner agent.
+	// Spawn planner agent (legacy path).
 	ag, err := o.runner.SpawnAgent(task, featureName, model.AgentPlanner, plannerPrompt)
 	if err != nil {
 		return fmt.Errorf("process planning: spawn planner: %w", err)
