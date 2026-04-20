@@ -116,8 +116,18 @@ ENV PATH=/opt/venv/bin:$PATH \
 #   - flash-attn-4, flashinfer-python, sglang-kernel as prebuilt wheels
 # 207 packages total. Single layer to keep cache hits cheap on
 # Dockerfile changes that don't touch the lock.
+#
+# --no-deps is REQUIRED. The lock file already enumerates every
+# transitive dep at exact pinned versions (it's a `pip freeze` of a
+# working host venv), so dependency resolution would be redundant — but
+# worse, sglang's setup.py declares `transformers==5.3.0` while the
+# host actually runs `transformers==5.5.4` (newer, needed for the
+# `gemma4_text` model architecture). pip's resolver rejects that as a
+# conflict; the host venv only works because it was assembled
+# out-of-order. With --no-deps we install exactly what `pip freeze`
+# captured, mirroring the host bit-for-bit.
 COPY deploy/docker/context/sglang-requirements.txt /build/sglang-requirements.txt
-RUN pip install -r /build/sglang-requirements.txt
+RUN pip install --no-deps -r /build/sglang-requirements.txt
 
 # ---------- 5. Apply Gemma-4 patches ---------------------------------------
 # Six patches against the just-installed sglang site-packages tree. The
