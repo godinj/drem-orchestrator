@@ -1,44 +1,79 @@
 # syntax=docker/dockerfile:1.7
 #
-# drem-planner — per-task planner container.
+# drem-planner — warm HTTP server.
 #
-# Runs the Anthropic `claude` CLI (npm @anthropic-ai/claude-code) in headless
-# mode against a feature worktree, producing a plan.json at the worktree
-# root. Spawned on-demand by the orchestrator's dispatchPlan; exits with
-# the CLI's exit code so the orch can route on typed exit codes.
+# Hosts cmd/drem-planner (plans/warm-planner-pivot.md) as a long-lived
+# service on drem-net. Orch POSTs /plan; the handler execs the `claude`
+# CLI as a subprocess per request and returns the resulting plan.json
+# inline in the response. Unlike the earlier one-shot image this one
+# ships both the compiled Go binary AND the claude CLI so the handler
+# can shell out without any host-side dependencies.
 #
-# Build context is the repo root (needs the entrypoint script under
-# deploy/docker/context/):
+# Multi-stage build:
+#   - Stage 1 compiles on golang:1.25-bookworm. CGO is on so the binary
+#     picks up sqlite etc. transitively when linked against the shared
+#     /internal packages; the glibc-linked binary matches the
+#     debian:bookworm-slim runtime.
+#   - Stage 2 ships debian:bookworm-slim + node + @anthropic-ai/claude-code
+#     + the Go binary + a non-root `drem` user (UID 1000) so the bind-
+#     mounted ~/.claude/.credentials.json resolves at /home/drem/.claude
+#     without any CLAUDE_CONFIG_DIR override. safe.directory='*' keeps
+#     git happy if a future pathway touches a bind-mounted bare repo.
 #
+# Build context is the repo root (needs go.mod + cmd/drem-planner):
 #   docker build -f deploy/docker/planner.Dockerfile \
 #     -t localhost:5000/drem-planner:latest .
 #   docker push localhost:5000/drem-planner:latest
 #
-# The runtime image ships git (the planner CLI reads repository state via
-# git commands during exploration) and ca-certificates (HTTPS to
-# api.anthropic.com). No Go build stage — the container's workload is the
-# claude CLI, not a custom binary.
-#
-# See plans/warm-direct-planner.md for the full design rationale and the
-# companion per-task spawn pattern pioneered in plans/merger-spawn-on-demand-impl.md.
+# Auth is subscription-only. No ANTHROPIC_API_KEY fallback. The host
+# operator runs `claude login` once; the per-project compose bind-mounts
+# ~/.claude/.credentials.json into /home/drem/.claude read-only, and
+# the planner's /healthz validates the file is readable + `claude
+# --version` returns on every probe.
 
-FROM debian:bookworm-slim
-
-# Pin the Node major line via NODE_MAJOR so image rebuilds stay deterministic
-# even when NodeSource updates its apt repo. Mirrors worker-base.Dockerfile.
 ARG NODE_MAJOR=22
 ARG CLAUDE_CODE_VERSION=latest
 
-# ---- base packages --------------------------------------------------------
+# ---------- build stage ----------
+FROM golang:1.25-bookworm AS build
+
 RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        curl \
-        git \
-        gnupg \
-        jq \
-        tini \
- && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends git ca-certificates gcc libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
+
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=1 GOOS=linux \
+    go build -trimpath -ldflags="-s -w" \
+    -o /out/drem-planner ./cmd/drem-planner
+
+# ---------- runtime stage ----------
+FROM debian:bookworm-slim
+
+ARG NODE_MAJOR
+ARG CLAUDE_CODE_VERSION
+
+# ---- base packages --------------------------------------------------------
+# curl + gnupg for NodeSource repo; jq + tini for runtime. wget for the
+# compose-level healthcheck's /healthz probe.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+         ca-certificates \
+         curl \
+         git \
+         gnupg \
+         jq \
+         tini \
+         wget \
+    && rm -rf /var/lib/apt/lists/*
 
 # ---- Node.js + npm (NodeSource) -------------------------------------------
 RUN set -eux; \
@@ -47,9 +82,8 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/*
 
 # ---- claude CLI -----------------------------------------------------------
-# Installed globally so the root-owned entrypoint can invoke it without PATH
-# massaging. Pinning a version is recommended for reproducibility; the
-# `latest` default mirrors worker-base.Dockerfile's convention.
+# Installed globally so the drem user can invoke it without PATH massaging.
+# CLAUDE_CODE_VERSION=latest on rebuilds; pin in a downstream release.
 RUN set -eux; \
     if [ "$CLAUDE_CODE_VERSION" = "latest" ]; then \
         npm install -g @anthropic-ai/claude-code ; \
@@ -59,23 +93,28 @@ RUN set -eux; \
     npm cache clean --force
 
 # ---- git cross-UID guard --------------------------------------------------
-# The planner clones / reads from a bare repo bind-mounted from the host
-# (operator UID) into this root-owned container. Git 2.35+ blocks cross-UID
-# repository access unless safe.directory lists it. Mirrors orch.Dockerfile
-# and merger.Dockerfile.
+# Any future bind-mounted repo will originate from the host operator UID.
+# Git 2.35+ blocks cross-UID repository access unless safe.directory lists
+# it. Match orch.Dockerfile + merger.Dockerfile.
 RUN git config --system --add safe.directory '*'
 
-# ---- entrypoint -----------------------------------------------------------
-COPY --chown=root:root deploy/docker/context/planner-entrypoint.sh \
-     /usr/local/bin/planner-entrypoint
-RUN chmod 0755 /usr/local/bin/planner-entrypoint
+# ---- non-root drem user (UID 1000) ---------------------------------------
+# Matches the host operator's UID so ~/.claude/.credentials.json bind-mounts
+# in as a file the drem user can read. $HOME resolves to /home/drem so the
+# claude CLI finds ~/.claude without any CLAUDE_CONFIG_DIR override — same
+# pattern as the csuite agents use (see ~/.drem/projects/drem-orchestrator/
+# compose.override.yml).
+RUN useradd --uid 1000 --home-dir /home/drem --shell /bin/bash --create-home drem \
+    && mkdir -p /home/drem/.claude \
+    && chown -R drem:drem /home/drem
 
-# /work is the worktree clone; /bare is the bind-mounted bare repo. The
-# orchestrator's dispatchPlan passes both via the spawner's BareRepoMount
-# field and the container's argv.
-VOLUME ["/work"]
-WORKDIR /work
+# ---- binary ---------------------------------------------------------------
+COPY --from=build /out/drem-planner /usr/local/bin/drem-planner
 
-# tini reaps zombies and forwards signals cleanly. The entrypoint script
-# does the flag-parsing + claude invocation then exits with the CLI's code.
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/planner-entrypoint"]
+USER drem
+WORKDIR /home/drem
+
+EXPOSE 8090
+
+# tini forwards SIGTERM to the planner for graceful shutdown.
+ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/drem-planner"]
