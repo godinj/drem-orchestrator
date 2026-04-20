@@ -163,3 +163,18 @@ services:
     labels:
       drem.project: "{{.ProjectName}}"
       drem.agent_type: merger
+
+  planner-template:
+    image: {{.PlannerImage}}
+    # drem-planner is the spawn-on-demand per-task planner container that
+    # runs the claude CLI against Anthropic's Opus. Like drem-merger it
+    # requires per-invocation flags (--task-id, --branch, --prompt-file,
+    # --model) and cannot run as a long-lived warm pool. The orchestrator's
+    # dispatchPlan spawns it via the spawner RPC when a task reaches
+    # PLANNING; see plans/warm-direct-planner.md. This entry exists only
+    # so `docker compose pull` primes the image; the service does not run.
+    profiles: ["never"]
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.agent_type: planner

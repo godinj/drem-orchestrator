@@ -147,6 +147,39 @@ func TestRender_GoTemplateFull(t *testing.T) {
 	require.Equal(t, data.MergerImage, parsed.Services["merger-template"].Image)
 }
 
+// TestRender_PlannerTemplatePrimesImage asserts the compose template
+// declares a planner-template service stub gated behind
+// profiles: ["never"], so `docker compose pull` primes the planner
+// image on first up but does not run it as a long-lived service.
+// Mirrors merger-template — planner is also spawn-on-demand per
+// plans/warm-direct-planner.md §3.
+func TestRender_PlannerTemplatePrimesImage(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.PlannerImage = "localhost:5000/drem-planner:latest"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	s := string(out)
+	require.Contains(t, s, "planner-template:",
+		"planner-template service stub must be declared so docker compose pull primes the image")
+	require.Contains(t, s, data.PlannerImage,
+		"planner-template must reference the PlannerImage")
+
+	// The stub must not be running; long-lived planners crash-loop on
+	// missing --task-id. The profiles: ["never"] gate keeps it inert.
+	var parsed struct {
+		Services map[string]struct {
+			Image    string   `yaml:"image"`
+			Profiles []string `yaml:"profiles"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+	require.Contains(t, parsed.Services, "planner-template")
+	require.Equal(t, data.PlannerImage, parsed.Services["planner-template"].Image)
+	require.Equal(t, []string{"never"}, parsed.Services["planner-template"].Profiles,
+		"planner-template must stay behind profiles: [never]")
+}
+
 // TestRender_CppTemplateSwapsWorkerImage verifies that a C++ project
 // pins the drem-worker-cpp image tag.
 func TestRender_CppTemplateSwapsWorkerImage(t *testing.T) {

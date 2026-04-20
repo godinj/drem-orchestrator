@@ -185,6 +185,10 @@ func templateDataFor(p projects.Project) projects.TemplateData {
 	if ov, ok := p.ContainerImageOverrides["merger"]; ok && ov != "" {
 		mergerImage = ov
 	}
+	plannerImage := projects.DefaultPlannerImage
+	if ov, ok := p.ContainerImageOverrides["planner"]; ok && ov != "" {
+		plannerImage = ov
+	}
 	csuiteImages := map[string]string{
 		"mike": "localhost:5000/drem-csuite-mike:latest",
 		"alex": "localhost:5000/drem-csuite-alex:latest",
@@ -202,6 +206,7 @@ func templateDataFor(p projects.Project) projects.TemplateData {
 		Language:     p.Language,
 		WorkerImage:  workerImage,
 		MergerImage:  mergerImage,
+		PlannerImage: plannerImage,
 		CsuiteImages: csuiteImages,
 		BareRepoPath: p.BareRepoPath,
 		SharedToken:  uuid.NewString(),
