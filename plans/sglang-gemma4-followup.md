@@ -180,3 +180,16 @@ permanent again.
   are tightly bound to upstream code that moves often.
 - **CI smoke build** would catch lock drift earlier, but requires a
   GPU runner. Out of scope until the project has GPU CI.
+
+## Build attempt history
+
+| # | Commit at build | Outcome | Root cause | Fix |
+|---|---|---|---|---|
+| 1 | `bc8ab69` | FAIL @ pip install | `sglang` setup.py pins `transformers==5.3.0`; lock has `5.5.4` → resolver conflict | Add `--no-deps` to pip install (commit `4faf9dd`) |
+| 2 | `4faf9dd` | FAIL @ pip install | `outlines_core==0.1.26` has no cp313 wheel on PyPI; sdist needs `rustc` not present in base image | Install rustup (minimal toolchain) inside same RUN layer as pip, remove after (this commit) |
+| 3 | pending | — | — | — |
+
+Host parity note: the host venv succeeded with the same lock because
+rustup-installed Rust 1.93 is on `PATH` via `~/.cargo/bin`. The
+container needs the toolchain injected and cleaned up inside one layer
+so the final image stays lean.

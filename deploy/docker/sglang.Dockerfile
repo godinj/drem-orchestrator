@@ -126,8 +126,24 @@ ENV PATH=/opt/venv/bin:$PATH \
 # conflict; the host venv only works because it was assembled
 # out-of-order. With --no-deps we install exactly what `pip freeze`
 # captured, mirroring the host bit-for-bit.
+#
+# RUST TOOLCHAIN: outlines_core==0.1.26 (pinned for API compat with
+# outlines==0.1.11 and the sglang patch set) ships cp39–cp312 wheels on
+# PyPI but no cp313 wheel. On Python 3.13 pip falls back to the sdist,
+# which is a PyO3 extension and needs `cargo`/`rustc`. The host venv has
+# rustup-installed Rust 1.93 on PATH; we mirror that here. Installed via
+# rustup (official upstream) into /opt/rust inside the same RUN layer as
+# pip install, then removed after. Keeps the final image layer clean:
+# toolchain never lands in a persisted layer, only outlines_core's
+# compiled .so does.
 COPY deploy/docker/context/sglang-requirements.txt /build/sglang-requirements.txt
-RUN pip install --no-deps -r /build/sglang-requirements.txt
+RUN set -eux; \
+    export RUSTUP_HOME=/opt/rust CARGO_HOME=/opt/rust; \
+    curl -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --profile minimal --no-modify-path; \
+    export PATH=/opt/rust/bin:$PATH; \
+    rustc --version; \
+    pip install --no-deps -r /build/sglang-requirements.txt; \
+    rm -rf /opt/rust
 
 # ---------- 5. Apply Gemma-4 patches ---------------------------------------
 # Six patches against the just-installed sglang site-packages tree. The
