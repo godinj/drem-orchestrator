@@ -81,6 +81,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # - curl + ca-certificates      for HuggingFace / cubin downloads at
 #                               first-launch warmup + rustup bootstrap.
 # - libgomp1                    runtime dep of several wheels.
+# - libnuma1                    runtime dep of sglang-kernel (dlopens
+#                               libnuma.so.1 during import). Host has it
+#                               from numactl; CUDA runtime base does not.
 # - pkg-config + libssl-dev     required when outlines_core's cargo build
 #                               compiles `openssl-sys` from source on the
 #                               cp313 sdist path (no prebuilt cp313 wheel).
@@ -93,6 +96,7 @@ RUN apt-get update && \
         curl \
         ca-certificates \
         libgomp1 \
+        libnuma1 \
         pkg-config \
         libssl-dev && \
     add-apt-repository -y ppa:deadsnakes/ppa && \

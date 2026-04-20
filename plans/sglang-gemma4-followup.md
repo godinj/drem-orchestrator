@@ -187,8 +187,10 @@ permanent again.
 |---|---|---|---|---|
 | 1 | `bc8ab69` | FAIL @ pip install | `sglang` setup.py pins `transformers==5.3.0`; lock has `5.5.4` → resolver conflict | Add `--no-deps` to pip install (commit `4faf9dd`) |
 | 2 | `4faf9dd` | FAIL @ pip install | `outlines_core==0.1.26` has no cp313 wheel on PyPI; sdist needs `rustc` not present in base image | Install rustup (minimal toolchain) inside same RUN layer as pip, remove after (commit `0ab4b76`) |
-| 3 | `0ab4b76` | FAIL @ pip install | `outlines_core`'s cargo build pulls `openssl-sys`; needs `pkg-config` + `libssl-dev` at compile time | Add both to apt layer (this commit) |
-| 4 | pending | — | — | — |
+| 3 | `0ab4b76` | FAIL @ pip install | `outlines_core`'s cargo build pulls `openssl-sys`; needs `pkg-config` + `libssl-dev` at compile time | Add both to apt layer (commit `f43a11c`) |
+| 4 | `f43a11c` | BUILD OK; container boot FAIL | Compose `command:` duplicated the image's ENTRYPOINT tokens → `sglang serve: error: unrecognized arguments: python -m sglang.launch_server` | Trim compose `command:` to args only (commit `16b2503`) |
+| 5 | `16b2503` | BUILD cached; container boot FAIL | `ImportError: libnuma.so.1: cannot open shared object file` — sglang-kernel dlopens libnuma at import time | Add `libnuma1` to apt layer (this commit) |
+| 6 | pending | — | — | — |
 
 Host parity note: the host venv succeeded with the same lock because
 rustup-installed Rust 1.93 is on `PATH` via `~/.cargo/bin`. The
