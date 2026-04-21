@@ -499,3 +499,66 @@ func TestNewSharedToken(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, a, b)
 }
+
+// TestRender_CsuiteWatcherRoutingMountsAreWired asserts that
+// csuite-watcher gets the shared /csuite/ mount and the private
+// /var/lib/watcher/ named-volume mount required by the outbox-
+// routing MVP (plans/csuite-watcher-outbox-routing.md §4). Without
+// the first, the watcher cannot see outbox files or write to
+// destination inboxes; without the second, the delivery ledger
+// can't persist across container recreation.
+func TestRender_CsuiteWatcherRoutingMountsAreWired(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Services map[string]struct {
+			Volumes []string `yaml:"volumes"`
+		} `yaml:"services"`
+		Volumes map[string]any `yaml:"volumes"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	watcher := parsed.Services["csuite-watcher"]
+	require.Contains(t, watcher.Volumes,
+		"/home/operator/.drem-csuite:/csuite:rw",
+		"watcher must bind-mount the csuite home root at /csuite so it "+
+			"can route outbox -> inbox files; volumes=%v", watcher.Volumes)
+	require.Contains(t, watcher.Volumes,
+		"drem-drem-orchestrator-csuite-watcher-data:/var/lib/watcher",
+		"watcher must mount its private named volume at /var/lib/watcher "+
+			"for the delivery ledger; volumes=%v", watcher.Volumes)
+	require.Contains(t, parsed.Volumes,
+		"drem-drem-orchestrator-csuite-watcher-data",
+		"top-level volumes block must declare the watcher-data named volume")
+}
+
+// TestRender_CsuiteWatcherTokenEnvIsDeclared asserts the compose
+// template declares CSUITE_WATCHER_TOKEN as an env key on the
+// watcher service (value unset, inherits from host shell at compose
+// up). Without the key, docker compose does not propagate the host
+// env var and the watcher rejects every /deliver request.
+func TestRender_CsuiteWatcherTokenEnvIsDeclared(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	env := parsed.Services["csuite-watcher"].Environment
+	require.Contains(t, env, "CSUITE_WATCHER_TOKEN",
+		"watcher env must declare CSUITE_WATCHER_TOKEN for host-shell "+
+			"passthrough; env=%v", env)
+	require.Contains(t, env, "CSUITE_WATCHER_DB_PATH",
+		"watcher env must declare CSUITE_WATCHER_DB_PATH pointing at "+
+			"the named-volume mount; env=%v", env)
+	require.Equal(t, "/var/lib/watcher/deliveries.db",
+		env["CSUITE_WATCHER_DB_PATH"])
+}

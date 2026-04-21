@@ -10,6 +10,11 @@ networks:
 volumes:
   drem-{{.ProjectName}}-db:
   drem-{{.ProjectName}}-prompts:
+  # csuite-watcher private state (delivery ledger). Named volume keeps
+  # watcher-internal SQLite out of the shared /csuite/ tree so a
+  # mis-aimed persona write can never corrupt the idempotency key.
+  # See plans/csuite-watcher-outbox-routing.md §4.
+  drem-{{.ProjectName}}-csuite-watcher-data:
   drem-spawner-sock:
     external: true
     name: drem-spawner-sock
@@ -110,6 +115,29 @@ services:
       DREM_BEARER_TOKEN: "{{.SharedToken}}"
       DREM_LISTEN_ADDR: ":8090"
       DREM_DB_PATH: "/var/lib/drem/csuite.db"
+      # Outbox-routing delivery ledger — SQLite stored under the named
+      # volume mounted at /var/lib/watcher below. See
+      # plans/csuite-watcher-outbox-routing.md §Failure modes.
+      CSUITE_WATCHER_DB_PATH: "/var/lib/watcher/deliveries.db"
+      # Shared secret for /deliver authentication. Passed from the host
+      # env at compose-up time (docker compose inherits unset values
+      # from the shell). Deliberately distinct from DREM_BEARER_TOKEN:
+      # different audiences, never share a secret. Generate once via
+      # `openssl rand -hex 32 > ~/.drem/csuite-watcher.token && chmod 600`
+      # then `export CSUITE_WATCHER_TOKEN=$(cat ~/.drem/csuite-watcher.token)`.
+      CSUITE_WATCHER_TOKEN:
+    volumes:
+      # Read-write view of the operator's shared csuite tree so the
+      # watcher can route outbox files into sibling personas' inboxes.
+      # The persona-side mounts (csuite-<persona> below) give each
+      # persona access only to its own subtree; the watcher is the
+      # single trusted router. See plans/csuite-watcher-outbox-routing.md
+      # §4 bind-mount topology change.
+      - {{.CsuiteHomeRoot}}:/csuite:rw
+      # Watcher-private state (delivery ledger). Named volume so the
+      # SQLite file survives container recreation but stays out of the
+      # shared /csuite/ tree.
+      - drem-{{.ProjectName}}-csuite-watcher-data:/var/lib/watcher
     networks: [drem-net]
     labels:
       drem.project: "{{.ProjectName}}"
