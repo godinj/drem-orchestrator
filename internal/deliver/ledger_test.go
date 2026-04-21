@@ -122,15 +122,21 @@ func TestDeliver_IdempotencySmoke(t *testing.T) {
 }
 
 // TestDeliver_NoDuplicate_LogsAndReturns501 verifies the
-// "would deliver" log line + 501 response for a fresh sha256.
+// "would deliver" log line + 501 response for a fresh sha256
+// pointing at a persona-class frontmatter (commit-3 still logs-only
+// for persona and kyle classes).
 func TestDeliver_NoDuplicate_LogsAndReturns501(t *testing.T) {
+	root := newCsuiteTree(t)
+	body := []byte("---\nfrom: alex\nto: kyle\n---\n\nmsg\n")
+	_, sha := stageOutbox(t, root, "alex", "w1.md", body)
+
 	l := openTestLedger(t)
 	var buf bytes.Buffer
 	lg := log.New(&buf, "", 0)
 	h := Handler(Config{Token: "secret", Ledger: l, Logger: lg})
-	w := post(t, h, "secret", validBody(t, "alex"))
+	w := post(t, h, "secret", buildBody(t, "alex", "/csuite/alex/outbox/w1.md", sha))
 	if w.Code != http.StatusNotImplemented {
-		t.Errorf("status = %d, want 501", w.Code)
+		t.Errorf("status = %d, want 501; body=%q", w.Code, w.Body.String())
 	}
 	if got := buf.String(); !bytes.Contains([]byte(got), []byte("would deliver")) {
 		t.Errorf("expected 'would deliver' log line, got %q", got)

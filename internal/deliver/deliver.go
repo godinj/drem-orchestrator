@@ -19,6 +19,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -159,9 +160,53 @@ func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.logger().Printf("deliver: would deliver: source=%s dest=TBD sha=%s path=%s",
-		req.SourcePersona, req.SHA256, req.OutboxPath)
-	writeJSONError(w, http.StatusNotImplemented, "delivery not yet implemented")
+	class, err := ClassifyFile(req.OutboxPath)
+	if errors.Is(err, ErrMultiRecipient) {
+		writeJSONError(w, http.StatusBadRequest, "multi-recipient not supported")
+		return
+	}
+	if err != nil {
+		h.logger().Printf("deliver: classify failed for sha=%s path=%s: %v", req.SHA256, req.OutboxPath, err)
+		writeJSONError(w, http.StatusInternalServerError, "classify failed")
+		return
+	}
+
+	switch class.Class {
+	case ClassQuarantine:
+		h.logger().Printf("deliver: quarantine: source=%s reason=%q sha=%s", req.SourcePersona, class.Reason, req.SHA256)
+		dest := quarantinePath(req.SourcePersona, req.OutboxPath)
+		if err := atomicCopyFile(req.OutboxPath, dest); err != nil {
+			h.logger().Printf("deliver: quarantine write failed: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "quarantine write failed")
+			return
+		}
+		if err := h.cfg.Ledger.Insert(Delivery{
+			SHA256:        req.SHA256,
+			SourcePersona: req.SourcePersona,
+			Dest:          ClassQuarantine,
+			SourcePath:    req.OutboxPath,
+			DestPath:      dest,
+			DeliveredAt:   time.Now().UTC(),
+		}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
+			h.logger().Printf("deliver: quarantine ledger insert failed: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "ledger insert failed")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": req.SHA256})
+		return
+	case ClassPersona, ClassKyle:
+		h.logger().Printf("deliver: would deliver: source=%s dest=%s sha=%s path=%s",
+			req.SourcePersona, class.Dest, req.SHA256, req.OutboxPath)
+		writeJSONError(w, http.StatusNotImplemented, "delivery not yet implemented")
+		return
+	default:
+		// Defensive — classifyBytes always returns one of the above.
+		h.logger().Printf("deliver: unknown class %q for sha=%s", class.Class, req.SHA256)
+		writeJSONError(w, http.StatusInternalServerError, "unknown classification")
+		return
+	}
 }
 
 // ValidateRequest enforces the schema documented in
