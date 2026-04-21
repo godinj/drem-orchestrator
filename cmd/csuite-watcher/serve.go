@@ -133,8 +133,21 @@ func runServe(args []string, stderr io.Writer) int {
 	// is intentionally a different secret from DREM_BEARER_TOKEN
 	// (bridge API audience) so a leak of one does not compromise the
 	// other.
+	deliverDBPath := os.Getenv("CSUITE_WATCHER_DB_PATH")
+	if deliverDBPath == "" {
+		deliverDBPath = deliver.DefaultDBPath
+	}
+	deliverDBPath = expandTilde(deliverDBPath)
+	ledger, err := deliver.OpenLedger(deliverDBPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: open delivery ledger: %v\n", err)
+		return 1
+	}
+	defer ledger.Close() //nolint:errcheck
+
 	deliverHandler := deliver.Handler(deliver.Config{
-		Token: os.Getenv("CSUITE_WATCHER_TOKEN"),
+		Token:  os.Getenv("CSUITE_WATCHER_TOKEN"),
+		Ledger: ledger,
 	})
 
 	srv := serve.New(serve.Config{

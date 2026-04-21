@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -60,6 +61,17 @@ type Config struct {
 	// this is a deliberate safety rail so a misconfigured watcher
 	// cannot accidentally accept anonymous traffic.
 	Token string
+
+	// Ledger is the SQLite-backed delivery ledger used for sha256
+	// idempotency checks. When nil (commit-1 behaviour) /deliver still
+	// validates auth and schema but returns 501 without consulting any
+	// durable state. Commit 2 and later wire a non-nil ledger.
+	Ledger *Ledger
+
+	// Logger is the destination for /deliver's informational log lines
+	// ("would deliver", classify decisions, etc.). When nil the
+	// package falls back to the default log package.
+	Logger *log.Logger
 }
 
 // Handler returns an http.Handler that dispatches /deliver and
@@ -81,6 +93,15 @@ type handler struct {
 	cfg Config
 }
 
+// logger returns the configured logger, defaulting to the stdlib
+// default if none was supplied. Keeps the call sites terse.
+func (h *handler) logger() *log.Logger {
+	if h.cfg.Logger != nil {
+		return h.cfg.Logger
+	}
+	return log.Default()
+}
+
 // healthz serves GET /healthz with a fixed body. No auth, no state —
 // suitable for docker HEALTHCHECK and external probes.
 func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
@@ -93,10 +114,10 @@ func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-// deliver serves POST /deliver. This commit implements steps 1-2 of
-// the plan's tracer-bullet sequence: auth + schema validation. On
-// success the endpoint returns 501 Not Implemented; real work is
-// wired in later commits.
+// deliver serves POST /deliver. The current tracer slice layers
+// auth, schema, and ledger idempotency. On a duplicate sha256 the
+// handler returns 409; on a new sha256 it logs "would deliver" and
+// replies 501 until later commits wire real delivery work.
 func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -117,7 +138,29 @@ func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Auth and schema both clean — but no delivery logic yet.
+	// Without a ledger we can't enforce idempotency — fall back to
+	// commit-1 behaviour so test scaffolding that omits a ledger
+	// keeps working.
+	if h.cfg.Ledger == nil {
+		writeJSONError(w, http.StatusNotImplemented, "delivery not yet implemented")
+		return
+	}
+
+	existing, found, err := h.cfg.Ledger.Lookup(req.SHA256)
+	if err != nil {
+		h.logger().Printf("deliver: ledger lookup failed for sha=%s: %v", req.SHA256, err)
+		writeJSONError(w, http.StatusInternalServerError, "ledger lookup failed")
+		return
+	}
+	if found {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": existing.SHA256})
+		return
+	}
+
+	h.logger().Printf("deliver: would deliver: source=%s dest=TBD sha=%s path=%s",
+		req.SourcePersona, req.SHA256, req.OutboxPath)
 	writeJSONError(w, http.StatusNotImplemented, "delivery not yet implemented")
 }
 
