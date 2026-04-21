@@ -45,6 +45,9 @@ classification-*.json
 # Ephemeral per-feature artifacts (orchestrator reads from agent worktrees, stores in DB)
 plan.json
 CLAUDE.md
+# ...except the repo-root CLAUDE.md, which is the project-wide guidance
+# file for Claude Code and must be tracked.
+!/CLAUDE.md
 repo-map.md
 
 # drembench ephemera (regenerable snapshots / per-run scratch)
