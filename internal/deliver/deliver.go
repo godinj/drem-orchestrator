@@ -23,7 +23,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -81,7 +83,7 @@ type Config struct {
 // endpoints. /healthz is intentionally unauthenticated so external
 // liveness probes work without the shared secret.
 func Handler(cfg Config) http.Handler {
-	h := &handler{cfg: cfg}
+	h := &handler{cfg: cfg, clock: time.Now}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.healthz)
 	mux.Handle("/deliver", TokenAuth(cfg.Token, http.HandlerFunc(h.deliver)))
@@ -92,6 +94,18 @@ func Handler(cfg Config) http.Handler {
 // Kept private; callers compose via Handler.
 type handler struct {
 	cfg Config
+
+	// destMutexes serialises write operations for a single
+	// destination so within-destination FIFO ordering (plan §6) holds.
+	// Cross-destination writes run concurrently. Value type is
+	// *sync.Mutex so zero-value semantics of sync.Map give us a fresh
+	// mutex per-destination on first LoadOrStore.
+	destMutexes sync.Map
+
+	// clock supplies the RFC3339 timestamp embedded in destination
+	// filenames. Overridable by tests to pin deterministic filenames
+	// where FIFO ordering matters.
+	clock func() time.Time
 }
 
 // logger returns the configured logger, defaulting to the stdlib
@@ -197,9 +211,18 @@ func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": req.SHA256})
 		return
 	case ClassPersona, ClassKyle:
-		h.logger().Printf("deliver: would deliver: source=%s dest=%s sha=%s path=%s",
-			req.SourcePersona, class.Dest, req.SHA256, req.OutboxPath)
-		writeJSONError(w, http.StatusNotImplemented, "delivery not yet implemented")
+		destPath, err := h.deliverToInbox(req, class)
+		if err != nil {
+			h.logger().Printf("deliver: %s -> %s failed sha=%s: %v",
+				req.SourcePersona, class.Dest, req.SHA256, err)
+			writeJSONError(w, http.StatusInternalServerError, "delivery failed")
+			return
+		}
+		h.logger().Printf("deliver: delivered source=%s dest=%s sha=%s dest_path=%s",
+			req.SourcePersona, class.Dest, req.SHA256, destPath)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": req.SHA256})
 		return
 	default:
 		// Defensive — classifyBytes always returns one of the above.
@@ -269,4 +292,75 @@ func writeJSONError(w http.ResponseWriter, code int, msg string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+// deliverToInbox is the real-delivery code path for persona and kyle
+// classes. It serialises per-destination via destMutexes, copies the
+// source file into the destination inbox with an atomic rename,
+// inserts the ledger row, and then moves the source into the
+// source's outbox/delivered/ tree. The ordering matters: ledger
+// commit happens AFTER the inbox write but BEFORE the source move,
+// so a crash between inbox-write and ledger-insert causes a rescan
+// replay (good — idempotent) and a crash between ledger-insert and
+// source-move leaves the source file in outbox/ (acceptable — next
+// rescan will see the ledger row and skip).
+//
+// Returns the protocol dest path on success.
+func (h *handler) deliverToInbox(req DeliverRequest, class Classification) (string, error) {
+	mu := h.destMutex(class.Dest)
+	mu.Lock()
+	defer mu.Unlock()
+
+	now := h.clock().UTC()
+	sha8 := req.SHA256
+	if len(sha8) > 8 {
+		sha8 = sha8[:8]
+	}
+	filename := fmt.Sprintf("%s-%s-%s.md", now.Format(time.RFC3339), req.SourcePersona, sha8)
+	destPath := fmt.Sprintf("/csuite/%s/inbox/%s", class.Dest, filename)
+
+	if err := atomicCopyFile(req.OutboxPath, destPath); err != nil {
+		return "", fmt.Errorf("copy to inbox: %w", err)
+	}
+
+	if err := h.cfg.Ledger.Insert(Delivery{
+		SHA256:        req.SHA256,
+		SourcePersona: req.SourcePersona,
+		Dest:          class.Dest,
+		SourcePath:    req.OutboxPath,
+		DestPath:      destPath,
+		DeliveredAt:   now,
+	}); err != nil {
+		// Ledger failed after the inbox write landed. Best-effort
+		// cleanup of the inbox file so a rescan doesn't see a
+		// ghost that has no ledger row and tries to redeliver (the
+		// recipient may already have processed it). The source file
+		// is NOT moved — the next rescan will re-route and hit the
+		// idempotency check once the ledger is healthy.
+		realDst := resolveCsuitePath(destPath)
+		_ = removeIfExists(realDst)
+		return "", fmt.Errorf("ledger insert: %w", err)
+	}
+
+	// Move the source into outbox/delivered/. Failure here is
+	// logged by the caller but does not undo the delivery — the
+	// ledger is authoritative, and a duplicate signal for a source
+	// still in outbox/ will hit 409 on the next attempt.
+	deliveredPath := fmt.Sprintf("/csuite/%s/outbox/delivered/%s",
+		req.SourcePersona, filepath.Base(req.OutboxPath))
+	realSrc := resolveCsuitePath(req.OutboxPath)
+	realDelivered := resolveCsuitePath(deliveredPath)
+	if err := moveSource(realSrc, realDelivered); err != nil {
+		h.logger().Printf("deliver: source move failed (ledger is committed): %v", err)
+	}
+	return destPath, nil
+}
+
+// destMutex returns the mutex guarding writes to the given
+// destination, creating one on first use. The mutex map never
+// shrinks — the set of destinations is small and bounded (four
+// personas + kyle + quarantine), so this is fine.
+func (h *handler) destMutex(dest string) *sync.Mutex {
+	v, _ := h.destMutexes.LoadOrStore(dest, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }

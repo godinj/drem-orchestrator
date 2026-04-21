@@ -171,38 +171,8 @@ func TestClassifyBytes_UnparseableFrontmatterQuarantines(t *testing.T) {
 // HTTP-level tests exercising ClassifyFile + quarantine write
 // ---------------------------------------------------------------------------
 
-// TestDeliver_PersonaClass_ReturnsNotImplemented verifies that a
-// valid persona recipient reaches the "would deliver" log line + 501
-// (commit-3 behaviour; commit-4 flips to real write).
-func TestDeliver_PersonaClass_ReturnsNotImplemented(t *testing.T) {
-	root := newCsuiteTree(t)
-	body := []byte("---\nfrom: alex\nto: mike\n---\n\nhello mike\n")
-	_, sha := stageOutbox(t, root, "alex", "m1.md", body)
-
-	l := openTestLedger(t)
-	h := Handler(Config{Token: "secret", Ledger: l})
-
-	w := post(t, h, "secret", buildBody(t, "alex", "/csuite/alex/outbox/m1.md", sha))
-	if w.Code != http.StatusNotImplemented {
-		t.Errorf("persona class: status = %d, want 501; body=%q", w.Code, w.Body.String())
-	}
-}
-
-// TestDeliver_KyleClass_ReturnsNotImplemented verifies "to: kyle"
-// reaches the 501 code path in commit 3.
-func TestDeliver_KyleClass_ReturnsNotImplemented(t *testing.T) {
-	root := newCsuiteTree(t)
-	body := []byte("---\nfrom: alex\nto: kyle\n---\n\nhello kyle\n")
-	_, sha := stageOutbox(t, root, "alex", "k1.md", body)
-
-	l := openTestLedger(t)
-	h := Handler(Config{Token: "secret", Ledger: l})
-
-	w := post(t, h, "secret", buildBody(t, "alex", "/csuite/alex/outbox/k1.md", sha))
-	if w.Code != http.StatusNotImplemented {
-		t.Errorf("kyle class: status = %d, want 501; body=%q", w.Code, w.Body.String())
-	}
-}
+// (persona / kyle happy-path tests live in deliver_inbox_test.go
+// alongside the rest of commit-4's real-delivery coverage.)
 
 // TestDeliver_QuarantineClass_WritesFileAndReturns202 verifies the
 // quarantine path: file is copied to /csuite/quarantine/<source>/,

@@ -90,3 +90,29 @@ func atomicCopyFile(src, dst string) error {
 func quarantinePath(sourcePersona, outboxPath string) string {
 	return "/csuite/quarantine/" + sourcePersona + "/" + filepath.Base(outboxPath)
 }
+
+// removeIfExists deletes the file at path if present, returning nil
+// when the file was already absent. Used for best-effort cleanup
+// after a partial delivery.
+func removeIfExists(path string) error {
+	err := os.Remove(path)
+	if err == nil {
+		return nil
+	}
+	if os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+// moveSource renames src to dst, creating the parent directory if
+// needed. Used to move delivered outbox files into outbox/delivered/.
+func moveSource(src, dst string) error {
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", filepath.Dir(dst), err)
+	}
+	if err := os.Rename(src, dst); err != nil {
+		return fmt.Errorf("rename %s -> %s: %w", src, dst, err)
+	}
+	return nil
+}
