@@ -64,8 +64,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 1000 drem \
     && useradd --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin drem \
-    && mkdir -p /var/lib/watcher /csuite \
-    && chown -R drem:drem /var/lib/watcher /csuite
+    && mkdir -p /var/lib/watcher /var/lib/drem /csuite \
+    && chown -R drem:drem /var/lib/watcher /var/lib/drem /csuite
 
 COPY --from=build /out/drem-csuite-watcher /usr/local/bin/drem-csuite-watcher
 

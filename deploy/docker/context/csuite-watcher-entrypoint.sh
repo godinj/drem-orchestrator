@@ -29,10 +29,16 @@ if [ "${1:-}" = "serve" ] || [ $# -eq 0 ]; then
     set -- /usr/local/bin/drem-csuite-watcher serve
 fi
 
-# chown is idempotent and cheap: once the named volume has been
-# chowned on first start it stays that way across restarts. Running it
-# unconditionally keeps the entrypoint stateless.
-chown -R drem:drem /var/lib/watcher 2>/dev/null || true
+# chown is idempotent and cheap: once the named volumes have been
+# chowned on first start they stay that way across restarts. Running
+# it unconditionally keeps the entrypoint stateless.
+#
+# /var/lib/watcher holds the delivery ledger SQLite file
+# (deliveries.db). /var/lib/drem holds the bridge API's csuite.db
+# (historical bridge state). Both land on docker-managed named or
+# anonymous dirs that come up root-owned on first mount; the drem
+# user cannot create SQLite files under a root-owned parent.
+chown -R drem:drem /var/lib/watcher /var/lib/drem 2>/dev/null || true
 
 # /csuite/ is a bind-mount of the operator's host tree — we do NOT
 # chown it here. The persona containers are already uid 1000 and so
