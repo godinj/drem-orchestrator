@@ -246,9 +246,10 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 		return fmt.Errorf("write compose file: %w", err)
 	}
 
-	// Configure receive.denyCurrentBranch=updateInstead on the bare
-	// repo so the worker watchdog's final `git push` succeeds against
-	// our shared-workspace layout. See plans/bare-repo-denyCurrentBranch.md.
+	// Configure receive.denyCurrentBranch=ignore on the bare repo so
+	// the worker watchdog's final `git push` (issued from inside a
+	// container with the bare repo bind-mounted) succeeds against our
+	// shared-workspace layout. See plans/bare-repo-denyCurrentBranch.md.
 	if err := projects.ConfigureBareRepo(p.BareRepoPath); err != nil {
 		return fmt.Errorf("configure bare repo: %w", err)
 	}

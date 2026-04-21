@@ -15,13 +15,23 @@ import (
 // single config write, so the ceiling is small on purpose.
 const configureBareRepoTimeout = 10 * time.Second
 
-// ConfigureBareRepo sets receive.denyCurrentBranch=updateInstead on
-// the bare git repository at barePath. This lets the worker
-// watchdog's final `git push origin <feature-branch>` succeed even
-// though our "bare" repo has host worktrees checked out under it —
-// when a push targets a checked-out branch, git updates the worktree
-// instead of rejecting (and rejects safely when the worktree is
-// dirty).
+// ConfigureBareRepo sets receive.denyCurrentBranch=ignore on the bare
+// git repository at barePath. This lets the worker watchdog's final
+// `git push origin <feature-branch>` succeed even though our "bare"
+// repo has host worktrees checked out under it — git accepts the
+// push to a currently-checked-out branch instead of rejecting with
+// "refusing to update checked out branch".
+//
+// Why ignore and not updateInstead: the worker pushes from inside a
+// container with the bare repo bind-mounted at /bare. `updateInstead`
+// tries to `cd` into the worktree's working directory, whose absolute
+// path was recorded at `git worktree add` time as a host-absolute
+// path. That host path is not visible inside the container, so
+// updateInstead fails with "fatal: exec 'update-index': cd to
+// '<host-path>' failed: No such file or directory" and the push is
+// rejected. `ignore` accepts the push without touching the worktree.
+// The host worktree goes stale, which is safe because merger runs
+// `git fetch --all && git reset --hard` before every merge.
 //
 // The function is idempotent: `git config <key> <value>` overwrites
 // with the same value (no-op) or sets a differing value. Calling it
@@ -59,7 +69,7 @@ func ConfigureBareRepo(barePath string) error {
 
 	cmd := exec.CommandContext(ctx, "git",
 		"--git-dir="+barePath,
-		"config", "receive.denyCurrentBranch", "updateInstead")
+		"config", "receive.denyCurrentBranch", "ignore")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("projects: ConfigureBareRepo: git config on %q failed: %w (%s)",
 			barePath, err, out)

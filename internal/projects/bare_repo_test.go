@@ -42,15 +42,15 @@ func readConfig(t *testing.T, bare, key string) string {
 }
 
 // TestConfigureBareRepo_HappyPath asserts that ConfigureBareRepo sets
-// receive.denyCurrentBranch=updateInstead on a freshly-initialised
-// bare repo.
+// receive.denyCurrentBranch=ignore on a freshly-initialised bare
+// repo.
 func TestConfigureBareRepo_HappyPath(t *testing.T) {
 	bare := initBareRepo(t)
 
 	err := ConfigureBareRepo(bare)
 	require.NoError(t, err)
 
-	require.Equal(t, "updateInstead", readConfig(t, bare, "receive.denyCurrentBranch"))
+	require.Equal(t, "ignore", readConfig(t, bare, "receive.denyCurrentBranch"))
 }
 
 // TestConfigureBareRepo_Idempotent asserts that calling the helper
@@ -61,25 +61,29 @@ func TestConfigureBareRepo_Idempotent(t *testing.T) {
 	require.NoError(t, ConfigureBareRepo(bare))
 	require.NoError(t, ConfigureBareRepo(bare))
 
-	require.Equal(t, "updateInstead", readConfig(t, bare, "receive.denyCurrentBranch"))
+	require.Equal(t, "ignore", readConfig(t, bare, "receive.denyCurrentBranch"))
 }
 
 // TestConfigureBareRepo_OverwritesDifferingValue asserts that the
 // helper is authoritative: a pre-existing value for
-// receive.denyCurrentBranch is overwritten with updateInstead.
+// receive.denyCurrentBranch is overwritten with ignore. The seed
+// value here is updateInstead because that was the original design
+// target before the container path-mismatch discovery; this test
+// doubles as a migration check for operators whose bare repo still
+// carries the old setting.
 func TestConfigureBareRepo_OverwritesDifferingValue(t *testing.T) {
 	bare := initBareRepo(t)
 
 	// Seed the repo with a different value.
 	cmd := exec.Command("git", "--git-dir="+bare, "config",
-		"receive.denyCurrentBranch", "ignore")
+		"receive.denyCurrentBranch", "updateInstead")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "seed git config failed: %s", out)
-	require.Equal(t, "ignore", readConfig(t, bare, "receive.denyCurrentBranch"))
+	require.Equal(t, "updateInstead", readConfig(t, bare, "receive.denyCurrentBranch"))
 
 	require.NoError(t, ConfigureBareRepo(bare))
 
-	require.Equal(t, "updateInstead", readConfig(t, bare, "receive.denyCurrentBranch"))
+	require.Equal(t, "ignore", readConfig(t, bare, "receive.denyCurrentBranch"))
 }
 
 // TestConfigureBareRepo_MissingPath asserts that a non-existent path

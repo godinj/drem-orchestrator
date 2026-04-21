@@ -449,10 +449,10 @@ func TestProjectUpdate_RejectsUpdateFlagsOnFreshRegister(t *testing.T) {
 
 // TestProjectRegister_SetsBareRepoDenyCurrentBranch asserts that a
 // fresh `drem project register` configures
-// receive.denyCurrentBranch=updateInstead on the target bare repo.
-// The setting lets the worker watchdog's final push succeed against
-// a shared-workspace bare repo (host worktrees checked out under
-// the bare). See plans/bare-repo-denyCurrentBranch.md.
+// receive.denyCurrentBranch=ignore on the target bare repo. The
+// setting lets the worker watchdog's final push succeed against a
+// shared-workspace bare repo (host worktrees checked out under the
+// bare). See plans/bare-repo-denyCurrentBranch.md.
 func TestProjectRegister_SetsBareRepoDenyCurrentBranch(t *testing.T) {
 	homeDir := t.TempDir()
 	bareRepo := testutil.SetupBareRepo(t)
@@ -467,7 +467,7 @@ func TestProjectRegister_SetsBareRepoDenyCurrentBranch(t *testing.T) {
 	}, io.Discard, io.Discard)
 	require.NoError(t, err)
 
-	require.Equal(t, "updateInstead",
+	require.Equal(t, "ignore",
 		readBareRepoConfig(t, bareRepo, "receive.denyCurrentBranch"))
 }
 
@@ -480,7 +480,7 @@ func TestProjectRegisterUpdate_IsIdempotentOnBareRepoConfig(t *testing.T) {
 	bareRepo := registerForUpdate(t, homeDir)
 
 	// Fresh register already set the value — confirm baseline.
-	require.Equal(t, "updateInstead",
+	require.Equal(t, "ignore",
 		readBareRepoConfig(t, bareRepo, "receive.denyCurrentBranch"))
 
 	// --update should reapply cleanly without error.
@@ -490,6 +490,6 @@ func TestProjectRegisterUpdate_IsIdempotentOnBareRepoConfig(t *testing.T) {
 	}, io.Discard, io.Discard)
 	require.NoError(t, err)
 
-	require.Equal(t, "updateInstead",
+	require.Equal(t, "ignore",
 		readBareRepoConfig(t, bareRepo, "receive.denyCurrentBranch"))
 }
