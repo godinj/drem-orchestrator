@@ -246,6 +246,13 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 		return fmt.Errorf("write compose file: %w", err)
 	}
 
+	// Configure receive.denyCurrentBranch=updateInstead on the bare
+	// repo so the worker watchdog's final `git push` succeeds against
+	// our shared-workspace layout. See plans/bare-repo-denyCurrentBranch.md.
+	if err := projects.ConfigureBareRepo(p.BareRepoPath); err != nil {
+		return fmt.Errorf("configure bare repo: %w", err)
+	}
+
 	fmt.Fprintf(stdout, "registered %q (language=%s)\n", p.Name, p.Language)
 	fmt.Fprintf(stdout, "drem.toml:    %s\n", configPath)
 	fmt.Fprintf(stdout, "compose file: %s\n", composePath)
@@ -383,6 +390,13 @@ func cmdProjectRegisterUpdate(opts registerUpdateOpts, stdout io.Writer) error {
 	}
 	if _, err := projects.WriteProjectComposeAt(opts.HomeDir, opts.Name, data); err != nil {
 		return fmt.Errorf("write compose: %w", err)
+	}
+
+	// Reapply the bare-repo config on every --update so operators
+	// migrating from old installs pick up the setting without a
+	// separate back-fill step. Idempotent by construction.
+	if err := projects.ConfigureBareRepo(p.BareRepoPath); err != nil {
+		return fmt.Errorf("configure bare repo: %w", err)
 	}
 
 	// 11. Summary.

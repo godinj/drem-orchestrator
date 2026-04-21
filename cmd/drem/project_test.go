@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -12,6 +13,21 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
+
+// readBareRepoConfig returns the value of the given git config key on
+// the bare repo at barePath, or "" when unset. Test-only helper.
+func readBareRepoConfig(t *testing.T, barePath, key string) string {
+	t.Helper()
+	cmd := exec.Command("git", "--git-dir="+barePath, "config", "--get", key)
+	out, err := cmd.Output()
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return ""
+		}
+		t.Fatalf("git config --get %s failed: %v", key, err)
+	}
+	return strings.TrimSpace(string(out))
+}
 
 // TestProjectRegisterAndList exercises the full register → list flow with
 // a --home-dir override so we never touch the real $HOME.
@@ -429,4 +445,51 @@ func TestProjectUpdate_RejectsUpdateFlagsOnFreshRegister(t *testing.T) {
 	// Expected: error because --force routes to update path and
 	// new-project is not in the registry yet.
 	require.Error(t, err)
+}
+
+// TestProjectRegister_SetsBareRepoDenyCurrentBranch asserts that a
+// fresh `drem project register` configures
+// receive.denyCurrentBranch=updateInstead on the target bare repo.
+// The setting lets the worker watchdog's final push succeed against
+// a shared-workspace bare repo (host worktrees checked out under
+// the bare). See plans/bare-repo-denyCurrentBranch.md.
+func TestProjectRegister_SetsBareRepoDenyCurrentBranch(t *testing.T) {
+	homeDir := t.TempDir()
+	bareRepo := testutil.SetupBareRepo(t)
+
+	err := dispatchProject([]string{
+		"register",
+		"--name", "drem-orchestrator",
+		"--bare", bareRepo,
+		"--language", "go",
+		"--orch-url", "http://localhost:8080",
+		"--home-dir", homeDir,
+	}, io.Discard, io.Discard)
+	require.NoError(t, err)
+
+	require.Equal(t, "updateInstead",
+		readBareRepoConfig(t, bareRepo, "receive.denyCurrentBranch"))
+}
+
+// TestProjectRegisterUpdate_IsIdempotentOnBareRepoConfig asserts that
+// the `--update` path also applies the bare-repo config (idempotent
+// reapplication is safe and keeps migrators from old installs
+// auto-covered when they regenerate alongside template drift).
+func TestProjectRegisterUpdate_IsIdempotentOnBareRepoConfig(t *testing.T) {
+	homeDir := t.TempDir()
+	bareRepo := registerForUpdate(t, homeDir)
+
+	// Fresh register already set the value — confirm baseline.
+	require.Equal(t, "updateInstead",
+		readBareRepoConfig(t, bareRepo, "receive.denyCurrentBranch"))
+
+	// --update should reapply cleanly without error.
+	err := dispatchProject([]string{
+		"register", "--update", "drem-orchestrator",
+		"--force", "--home-dir", homeDir,
+	}, io.Discard, io.Discard)
+	require.NoError(t, err)
+
+	require.Equal(t, "updateInstead",
+		readBareRepoConfig(t, bareRepo, "receive.denyCurrentBranch"))
 }
