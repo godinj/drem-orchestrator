@@ -32,9 +32,11 @@
 FROM debian:bookworm-slim
 
 # Pin every tool version here so bumps are a one-line change.
-# CLAUDE_CODE_VERSION: leave empty for the npm 'latest' dist-tag; set to a
-# concrete semver (e.g. "1.0.0") once the repo converges on a pin.
-ARG CLAUDE_CODE_VERSION=latest
+# CLAUDE_CODE_VERSION: pinned to the host operator's CLI line so worker
+# behaviour never silently diverges from operator expectations. Keep in
+# sync with deploy/docker/csuite-base.Dockerfile; rebuild both on every
+# bump.
+ARG CLAUDE_CODE_VERSION=2.1.116
 # OPENCODE_VERSION: passed through to the opencode install script; accepted
 # forms are documented at https://opencode.ai/install. "latest" is the default
 # of the upstream installer.
@@ -43,9 +45,14 @@ ARG NODE_MAJOR=20
 ARG DREM_UID=1000
 ARG DREM_GID=1000
 
+# DISABLE_AUTOUPDATER silences the Claude CLI's in-process self-update
+# path. Workers are one-shot containers that rarely live long enough
+# to auto-update, and even if they did the update would be lost at
+# the next spawn; the image pin above is the one way versions change.
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
+    DISABLE_AUTOUPDATER=1 \
     PATH=/usr/local/go/bin:/home/drem/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 # ---- base system packages -------------------------------------------------

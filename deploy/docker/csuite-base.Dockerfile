@@ -32,15 +32,25 @@
 FROM debian:bookworm-slim
 
 # Keep in sync with deploy/docker/worker-base.Dockerfile so both classes
-# of container speak the same Claude CLI version.
-ARG CLAUDE_CODE_VERSION=latest
+# of container speak the same Claude CLI version. The pin tracks the
+# host operator's `claude` version — bumping here without also bumping
+# the host CLI can silently diverge agent behaviour from operator
+# expectations. Rebuild both images on every bump.
+ARG CLAUDE_CODE_VERSION=2.1.116
 ARG NODE_MAJOR=20
 ARG DREM_UID=1000
 ARG DREM_GID=1000
 
+# DISABLE_AUTOUPDATER silences the Claude CLI's in-process self-update
+# path. Auto-update inside the csuite containers fails every run
+# because /usr/lib/node_modules is root-owned while the CLI runs as
+# drem (UID 1000); the image is immutable anyway, so the update would
+# be lost at the next restart even if it succeeded. The pin above is
+# the one way versions change; auto-update would defeat it.
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
+    DISABLE_AUTOUPDATER=1 \
     PATH=/home/drem/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 # ---- base system packages -------------------------------------------------
