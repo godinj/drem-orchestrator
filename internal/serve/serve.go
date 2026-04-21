@@ -98,13 +98,15 @@ func (s *Server) buildMux() *http.ServeMux {
 	// WebSocket endpoint handles its own auth (token via query param or header)
 	// because browsers cannot set custom headers on WebSocket upgrade requests.
 	mux.Handle("/api/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token))
-	// Outbox-routing endpoints. Both /healthz (unauth liveness) and
-	// /deliver (X-Csuite-Token auth) are provided by the optional
-	// DeliverHandler. Registering them as specific paths ahead of the
-	// "/" catch-all ensures they win the mux lookup.
+	// Outbox-routing endpoints. /healthz (unauth liveness), /deliver
+	// (X-Csuite-Token auth), and /rescan (X-Csuite-Token auth) are
+	// all provided by the optional DeliverHandler. Registering them
+	// as specific paths ahead of the "/" catch-all ensures they win
+	// the mux lookup.
 	if s.cfg.DeliverHandler != nil {
 		mux.Handle("/healthz", s.cfg.DeliverHandler)
 		mux.Handle("/deliver", s.cfg.DeliverHandler)
+		mux.Handle("/rescan", s.cfg.DeliverHandler)
 	}
 	// PWA static assets are served without auth — the browser needs to fetch
 	// the manifest, service worker, and app shell before the user can log in.

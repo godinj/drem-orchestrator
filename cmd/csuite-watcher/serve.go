@@ -145,10 +145,11 @@ func runServe(args []string, stderr io.Writer) int {
 	}
 	defer ledger.Close() //nolint:errcheck
 
-	deliverHandler := deliver.Handler(deliver.Config{
+	deliverCfg := deliver.Config{
 		Token:  os.Getenv("CSUITE_WATCHER_TOKEN"),
 		Ledger: ledger,
-	})
+	}
+	deliverHandler := deliver.Handler(deliverCfg)
 
 	srv := serve.New(serve.Config{
 		Token:          cfg.BearerToken,
@@ -161,6 +162,18 @@ func runServe(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: start server: %v\n", err)
 		return 1
 	}
+
+	// Startup rescan. Kicked off after the HTTP listener is bound so a
+	// persona that races to signal during watcher boot sees an
+	// accepting endpoint instead of a connection refused. The rescan
+	// runs in a goroutine so a slow filesystem walk doesn't hold up
+	// the main shutdown-watcher select below. Exactly-once per
+	// process-start — the operator can re-run it via POST /rescan.
+	go func() {
+		res := deliver.RescanOnce(deliverCfg)
+		fmt.Fprintf(stderr, "csuite-watcher: startup rescan: scanned=%d delivered=%d skipped=%d quarantined=%d errors=%d\n",
+			res.Scanned, res.Delivered, res.Skipped, res.Quarantined, len(res.Errors))
+	}()
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer cancel()

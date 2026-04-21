@@ -77,16 +77,18 @@ type Config struct {
 	Logger *log.Logger
 }
 
-// Handler returns an http.Handler that dispatches /deliver and
-// /healthz. Callers register it under a parent mux; the handler
-// switches internally by path so a single registration covers both
+// Handler returns an http.Handler that dispatches /deliver, /rescan,
+// and /healthz. Callers register it under a parent mux; the handler
+// switches internally by path so a single registration covers all
 // endpoints. /healthz is intentionally unauthenticated so external
-// liveness probes work without the shared secret.
+// liveness probes work without the shared secret; /deliver and
+// /rescan share the same X-Csuite-Token auth.
 func Handler(cfg Config) http.Handler {
 	h := &handler{cfg: cfg, clock: time.Now}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.healthz)
 	mux.Handle("/deliver", TokenAuth(cfg.Token, http.HandlerFunc(h.deliver)))
+	mux.Handle("/rescan", TokenAuth(cfg.Token, http.HandlerFunc(h.rescan)))
 	return mux
 }
 
