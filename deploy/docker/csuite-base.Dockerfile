@@ -14,11 +14,17 @@
 #     alex.md, ross.md, seth.md).
 #   - A non-root user `drem` (UID 1000) so file ownership matches the
 #     typical interactive host account.
-#   - The entrypoint script /usr/local/bin/csuite-run which reads
-#     CSUITE_AGENT and execs the Claude CLI against the matching prompt.
+#   - The csuite-persona poller binary (cmd/csuite-persona), pre-built
+#     on the host by deploy/docker/build-csuite.sh, plus the
+#     csuite-entrypoint.sh wrapper that execs it. See Wave 2 pivot in
+#     plans/csuite-persona-pivot.md — the poller replaced the prior
+#     `exec claude --print` model.
 #
 # Build context is deploy/docker/context/ and must contain:
-#   - csuite-run.sh (checked into the repo)
+#   - csuite-entrypoint.sh (Wave-2 entrypoint; checked into the repo).
+#   - csuite-run.sh (legacy Wave-1 entrypoint; retained in the image so
+#     operators can shell in and exec it for side-by-side debugging).
+#   - csuite-persona (pre-built Go binary staged by build-csuite.sh).
 #   - The docs/csuite-agents/prompts/ directory is pulled from a COPY of
 #     the staged context/csuite-prompts/ dir populated by build-csuite.sh.
 #
@@ -27,7 +33,7 @@
 #   docker push localhost:5000/drem-csuite-base:latest
 #
 # Per-persona descendants set CSUITE_AGENT only; they share this base's
-# entrypoint and prompt bundle.
+# entrypoint, poller binary, and prompt bundle.
 
 FROM debian:bookworm-slim
 
@@ -135,16 +141,36 @@ RUN mkdir -p /opt/csuite/prompts \
  && chown -R drem:drem /opt/csuite
 COPY --chown=drem:drem csuite-prompts/ /opt/csuite/prompts/
 
-# ---- entrypoint ------------------------------------------------------------
+# ---- Wave-2 persona poller + entrypoint -----------------------------------
+# csuite-persona is the headless inbox-driven poller that replaced the
+# prior `exec claude --print` design. It polls
+# /home/drem/.drem-csuite/<persona>/inbox on a 2s tick, invokes
+# `claude -p` once per message, and writes the reply to the outbox.
+# Signal handling and the claude-credentials path are documented in
+# internal/csuite/persona/persona.go. The binary is pre-built on the
+# host by build-csuite.sh (CGO_ENABLED=0 → no glibc coupling) so the
+# image stays free of a Go toolchain.
+COPY --chown=root:root csuite-persona /usr/local/bin/csuite-persona
+COPY --chown=root:root csuite-entrypoint.sh /usr/local/bin/csuite-entrypoint
+# csuite-run.sh is the legacy Wave-1 entrypoint. We keep it in the
+# image so operators can shell in and exec it when diagnosing a broken
+# persona poller, but it is no longer the default CMD.
 COPY --chown=root:root csuite-run.sh /usr/local/bin/csuite-run.sh
-RUN chmod 0755 /usr/local/bin/csuite-run.sh
+RUN chmod 0755 \
+        /usr/local/bin/csuite-persona \
+        /usr/local/bin/csuite-entrypoint \
+        /usr/local/bin/csuite-run.sh
 
 # ---- runtime surface -------------------------------------------------------
 USER drem
 WORKDIR /home/drem
 
-# tini reaps zombies and forwards SIGTERM/SIGINT to the Claude CLI.
+# tini reaps zombies and forwards SIGTERM/SIGINT to the poller, which
+# cancels its context at the next tick boundary and exits 0 once the
+# in-flight claude -p invocation returns.
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# Default command: csuite-run reads CSUITE_AGENT and execs Claude.
-CMD ["/usr/local/bin/csuite-run.sh"]
+# Default command: csuite-entrypoint reads CSUITE_AGENT and execs the
+# csuite-persona poller with the right flags. The poller derives every
+# other path from the persona name (see internal/csuite/persona).
+CMD ["/usr/local/bin/csuite-entrypoint"]

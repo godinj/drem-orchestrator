@@ -53,6 +53,25 @@ if [[ ! -f deploy/docker/context/csuite-run.sh ]]; then
     exit 1
 fi
 
+# csuite-entrypoint.sh is the Wave-2 entrypoint wrapper that execs the
+# csuite-persona poller with the right flags based on $CSUITE_AGENT.
+# Also checked into the repo.
+if [[ ! -f deploy/docker/context/csuite-entrypoint.sh ]]; then
+    echo "error: deploy/docker/context/csuite-entrypoint.sh is missing" >&2
+    exit 1
+fi
+
+# Pre-build the csuite-persona Go binary into the build context so the
+# csuite-base Dockerfile can COPY it like worker-base does with
+# drem-watchdog. CGO disabled → static-ish binary that runs cleanly on
+# debian:bookworm-slim with no libc surprises. See
+# plans/csuite-persona-pivot.md for the rationale.
+echo ">> building csuite-persona -> deploy/docker/context/csuite-persona"
+CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath -ldflags="-s -w" \
+    -o deploy/docker/context/csuite-persona \
+    ./cmd/csuite-persona
+
 # ---- build images --------------------------------------------------------
 cd deploy/docker
 
