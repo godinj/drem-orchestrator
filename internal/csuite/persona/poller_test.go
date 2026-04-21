@@ -1,0 +1,555 @@
+package persona_test
+
+// poller_test.go exercises the Wave-2 csuite-persona polling loop end-to-end
+// without invoking the real `claude` binary. All filesystem activity is rooted
+// at t.TempDir() so each test is hermetic; the Spawner interface is mocked
+// via persona.SpawnerFunc so the argv, stdin, and exit-code paths are all
+// observable.
+//
+// The tests here assert the external contract documented in the package-level
+// doc comment (internal/csuite/persona/persona.go):
+//
+//   - Deterministic mtime-ordered pickup of *.md inbox files.
+//   - Argv shape for `claude -p --system-prompt <prompt> --output-format text`.
+//   - Outbox filename carrying persona + timestamp.
+//   - State-file atomic replacement (no partial writes).
+//   - Inbox -> archive transition on success.
+//   - Sidecar .failures counter + .failed archival after MaxFailures.
+//   - SIGTERM-style context cancellation returns cleanly within one poll cycle.
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/godinj/drem-orchestrator/internal/csuite/persona"
+)
+
+// ---------------------------------------------------------------------------
+// Test harness.
+// ---------------------------------------------------------------------------
+
+// testFS is the fully-populated directory tree used by every test. Each
+// sub-path corresponds to the field of the same name on persona.Config.
+type testFS struct {
+	root       string
+	inboxDir   string
+	outboxDir  string
+	stateFile  string
+	archiveDir string
+	promptFile string
+}
+
+// newTestFS builds a tmpdir layout that mirrors what the compose bind-mounts
+// create at runtime. Returning the paths rather than a persona.Config lets
+// individual tests override just the piece they care about (e.g. poll
+// interval).
+func newTestFS(t *testing.T, promptBody string) testFS {
+	t.Helper()
+	root := t.TempDir()
+	inbox := filepath.Join(root, "inbox")
+	outbox := filepath.Join(root, "outbox")
+	archive := filepath.Join(inbox, ".archive")
+	state := filepath.Join(root, "state.md")
+	prompt := filepath.Join(root, "prompts", "seth.md")
+
+	for _, d := range []string{inbox, outbox, archive, filepath.Dir(prompt)} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	if err := os.WriteFile(prompt, []byte(promptBody), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+	return testFS{
+		root:       root,
+		inboxDir:   inbox,
+		outboxDir:  outbox,
+		stateFile:  state,
+		archiveDir: archive,
+		promptFile: prompt,
+	}
+}
+
+// baseConfig returns a persona.Config wired against fs with sensible test
+// defaults. PollInterval is intentionally tight so the loop spins quickly.
+func baseConfig(fs testFS) persona.Config {
+	return persona.Config{
+		Persona:       "seth",
+		InboxDir:      fs.inboxDir,
+		OutboxDir:     fs.outboxDir,
+		StateFile:     fs.stateFile,
+		ArchiveDir:    fs.archiveDir,
+		PromptFile:    fs.promptFile,
+		PollInterval:  20 * time.Millisecond,
+		ClaudeTimeout: time.Second,
+		MaxFailures:   3,
+		Now:           time.Now,
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+}
+
+// writeInboxMessage drops a message into the inbox with an explicit mtime so
+// tests can verify mtime-ordered pickup.
+func writeInboxMessage(t *testing.T, fs testFS, name, body string, when time.Time) {
+	t.Helper()
+	path := filepath.Join(fs.inboxDir, name)
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	if !when.IsZero() {
+		if err := os.Chtimes(path, when, when); err != nil {
+			t.Fatalf("chtimes %s: %v", path, err)
+		}
+	}
+}
+
+// spawnCall records a single invocation of the Spawner interface so tests
+// can assert on argv shape, stdin content, and invocation ordering.
+type spawnCall struct {
+	argv   []string
+	stdin  []byte
+	ctxErr error
+}
+
+// recorderSpawner returns a Spawner that records every call into calls and
+// returns stdout/exitCode supplied by handler. handler is called under a
+// mutex so concurrent tests stay deterministic.
+func recorderSpawner(calls *[]spawnCall, mu *sync.Mutex, handler func(call spawnCall) ([]byte, int, error)) persona.Spawner {
+	return persona.SpawnerFunc(func(ctx context.Context, args []string, stdin io.Reader) ([]byte, int, error) {
+		var body []byte
+		if stdin != nil {
+			b, err := io.ReadAll(stdin)
+			if err != nil {
+				return nil, -1, err
+			}
+			body = b
+		}
+		call := spawnCall{argv: append([]string(nil), args...), stdin: body, ctxErr: ctx.Err()}
+		mu.Lock()
+		*calls = append(*calls, call)
+		mu.Unlock()
+		if handler == nil {
+			return []byte("ok"), 0, nil
+		}
+		return handler(call)
+	})
+}
+
+// runPollerUntil launches p.Run in a goroutine and cancels ctx when cond
+// returns true or after timeout expires. It returns the timeout error so
+// callers can t.Fatal with a useful message.
+func runPollerUntil(t *testing.T, p *persona.Poller, cond func() bool, timeout time.Duration) error {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		_ = p.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			cancel()
+			<-done
+			return nil
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	return fmt.Errorf("condition not met within %s", timeout)
+}
+
+// ---------------------------------------------------------------------------
+// Tests.
+// ---------------------------------------------------------------------------
+
+// TestPoller_PicksUpInboxFile asserts the happy path: drop a .md file into
+// the inbox, observe a single spawner invocation with the correct argv, an
+// outbox file, and the original message moved to the archive.
+func TestPoller_PicksUpInboxFile(t *testing.T) {
+	fs := newTestFS(t, "Seth system prompt body.")
+	cfg := baseConfig(fs)
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	spawner := recorderSpawner(&calls, &mu, func(_ spawnCall) ([]byte, int, error) {
+		return []byte("hello from claude"), 0, nil
+	})
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "001-ping.md", "hi persona", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) >= 1
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for first spawn: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 spawn, got %d", len(calls))
+	}
+	argv := calls[0].argv
+	wantArgv := []string{
+		"claude",
+		"--dangerously-skip-permissions",
+		"-p", "hi persona",
+		"--system-prompt", "Seth system prompt body.",
+		"--output-format", "text",
+	}
+	if !equalArgv(argv, wantArgv) {
+		t.Fatalf("argv mismatch\nwant: %v\ngot:  %v", wantArgv, argv)
+	}
+
+	// Outbox must contain exactly one file whose name includes the persona.
+	outEntries := dirEntries(t, fs.outboxDir)
+	if len(outEntries) != 1 {
+		t.Fatalf("outbox entries: want 1, got %d (%v)", len(outEntries), outEntries)
+	}
+	if !strings.Contains(outEntries[0], "seth-reply-") {
+		t.Fatalf("outbox filename %q must include 'seth-reply-'", outEntries[0])
+	}
+
+	// Inbox must be empty (.archive dir does not count as an entry).
+	if got := visibleInboxFiles(t, fs.inboxDir); len(got) != 0 {
+		t.Fatalf("inbox want empty, got %v", got)
+	}
+	// Archive must contain the original filename.
+	archived := dirEntries(t, fs.archiveDir)
+	if len(archived) != 1 || archived[0] != "001-ping.md" {
+		t.Fatalf("archive want [001-ping.md], got %v", archived)
+	}
+}
+
+// TestPoller_OrderingByMtime drops two files with distinct mtimes and asserts
+// the older one is processed first. Ordering is load-bearing because the
+// poller is the only subscriber to the inbox — any reordering would change
+// the persona's perceived conversation history.
+func TestPoller_OrderingByMtime(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	spawner := recorderSpawner(&calls, &mu, nil)
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	past := time.Now().Add(-time.Minute)
+	// "z.md" has the older mtime; "a.md" is newer. Pure alphabetical order
+	// would flip the pair, so a passing test confirms mtime wins.
+	writeInboxMessage(t, fs, "z.md", "old", past)
+	writeInboxMessage(t, fs, "a.md", "new", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) >= 2
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for both spawns: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(strings.Join(calls[0].argv, " "), "old") {
+		t.Fatalf("first spawn should carry the older message, got %v", calls[0].argv)
+	}
+	if !strings.Contains(strings.Join(calls[1].argv, " "), "new") {
+		t.Fatalf("second spawn should carry the newer message, got %v", calls[1].argv)
+	}
+}
+
+// TestPoller_StateFileAtomicUpdate writes a poison state file, then triggers
+// a successful processing pass and asserts the new state.md is a complete
+// well-formed document (no partial write artifact, no leftover tempfile).
+func TestPoller_StateFileAtomicUpdate(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	// Pre-seed state.md with content the test can detect if the update is
+	// non-atomic (e.g. the poller truncates then writes without rename).
+	if err := os.WriteFile(fs.stateFile, []byte("POISON\n"), 0o644); err != nil {
+		t.Fatalf("seed state: %v", err)
+	}
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	spawner := recorderSpawner(&calls, &mu, nil)
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "msg.md", "hello", time.Now())
+	err = runPollerUntil(t, p, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) >= 1
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for spawn: %v", err)
+	}
+
+	data, err := os.ReadFile(fs.stateFile)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	body := string(data)
+	if strings.Contains(body, "POISON") {
+		t.Fatalf("state.md still contains poisoned content: %q", body)
+	}
+	for _, needle := range []string{"last_processed: msg.md", "last_status: ok", "last_exit_code: 0", "updated_at: "} {
+		if !strings.Contains(body, needle) {
+			t.Fatalf("state.md missing %q\nfull: %s", needle, body)
+		}
+	}
+	// No tempfile should be lingering next to state.md.
+	entries, err := os.ReadDir(filepath.Dir(fs.stateFile))
+	if err != nil {
+		t.Fatalf("read state dir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".state-") {
+			t.Fatalf("leftover tempfile %q in %s", e.Name(), filepath.Dir(fs.stateFile))
+		}
+	}
+}
+
+// TestPoller_FailureRetryThenArchive drives the sidecar counter to MaxFailures
+// and verifies the message is renamed to .failed, the sidecar is cleaned up,
+// and the loop does not retry it.
+func TestPoller_FailureRetryThenArchive(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.MaxFailures = 2
+
+	var calls int32
+	spawner := persona.SpawnerFunc(func(_ context.Context, args []string, _ io.Reader) ([]byte, int, error) {
+		atomic.AddInt32(&calls, 1)
+		return []byte("bad"), 7, nil
+	})
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "broken.md", "please fail", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		// After MaxFailures attempts the file should be archived as .failed
+		// and the original should be gone from the inbox.
+		_, err := os.Stat(filepath.Join(fs.archiveDir, "broken.md.failed"))
+		return err == nil
+	}, 3*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for .failed archival: %v (calls=%d, inbox=%v)",
+			err, atomic.LoadInt32(&calls), dirEntries(t, fs.inboxDir))
+	}
+
+	// Sidecar must be gone after archival.
+	if _, err := os.Stat(filepath.Join(fs.inboxDir, "broken.md.failures")); !os.IsNotExist(err) {
+		t.Fatalf("sidecar .failures should be gone, stat err=%v", err)
+	}
+
+	if got := atomic.LoadInt32(&calls); got < 2 {
+		t.Fatalf("want >=2 spawner calls before archival, got %d", got)
+	}
+
+	// Subsequent ticks should not re-invoke the spawner for the failed file.
+	before := atomic.LoadInt32(&calls)
+	time.Sleep(cfg.PollInterval * 3)
+	if atomic.LoadInt32(&calls) != before {
+		t.Fatalf("spawner was called again after archival")
+	}
+}
+
+// TestPoller_SpawnErrorIsRetried covers the "claude binary missing" branch:
+// the Spawner returns an error (not a non-zero exit). The poller must treat
+// this as a retriable failure and eventually archive the message.
+func TestPoller_SpawnErrorIsRetried(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.MaxFailures = 2
+
+	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
+		return nil, -1, fmt.Errorf("exec: \"claude\": not found")
+	})
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "doomed.md", "body", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		_, err := os.Stat(filepath.Join(fs.archiveDir, "doomed.md.failed"))
+		return err == nil
+	}, 3*time.Second)
+	if err != nil {
+		t.Fatalf("spawn-error branch never archived: %v", err)
+	}
+}
+
+// TestPoller_ContextCancelReturnsCleanly asserts the Run goroutine exits
+// promptly when ctx is cancelled between polls. The guarantee matters for
+// SIGTERM: docker stop waits 10s by default, so the loop must come to rest
+// well before that.
+func TestPoller_ContextCancelReturnsCleanly(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.PollInterval = 500 * time.Millisecond // long tick so cancel wins
+
+	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
+		t.Fatalf("spawner must not be called when inbox is empty")
+		return nil, 0, nil
+	})
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- p.Run(ctx) }()
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run returned err=%v; want nil on clean shutdown", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return within 2s of cancel")
+	}
+}
+
+// TestPoller_ValidateRejectsMissingInbox exercises the fail-fast behaviour of
+// Validate so a bind-mount misconfiguration crashes the container
+// immediately instead of polling forever.
+func TestPoller_ValidateRejectsMissingInbox(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.InboxDir = filepath.Join(fs.root, "does-not-exist")
+
+	if _, err := persona.New(cfg, persona.SpawnerFunc(stubSpawner)); err == nil {
+		t.Fatalf("New should reject missing inbox dir")
+	}
+}
+
+// TestPoller_ValidateRejectsUnknownPersona guards against typos in the
+// CSUITE_AGENT env var propagating into the default-path computation.
+func TestPoller_ValidateRejectsUnknownPersona(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.Persona = "nobody"
+	if _, err := persona.New(cfg, persona.SpawnerFunc(stubSpawner)); err == nil {
+		t.Fatalf("New should reject unknown persona")
+	}
+}
+
+// TestConfig_ApplyDefaults asserts the Persona-derived path defaults resolve
+// to /home/drem/.drem-csuite/<persona>/... and /opt/csuite/prompts/<persona>.md.
+// These defaults are the contract with the Dockerfile entrypoint.
+func TestConfig_ApplyDefaults(t *testing.T) {
+	cfg := persona.Config{Persona: "mike"}
+	cfg.ApplyDefaults()
+	if cfg.InboxDir != "/home/drem/.drem-csuite/mike/inbox" {
+		t.Errorf("InboxDir = %q", cfg.InboxDir)
+	}
+	if cfg.OutboxDir != "/home/drem/.drem-csuite/mike/outbox" {
+		t.Errorf("OutboxDir = %q", cfg.OutboxDir)
+	}
+	if cfg.StateFile != "/home/drem/.drem-csuite/mike/state.md" {
+		t.Errorf("StateFile = %q", cfg.StateFile)
+	}
+	if cfg.ArchiveDir != "/home/drem/.drem-csuite/mike/inbox/.archive" {
+		t.Errorf("ArchiveDir = %q", cfg.ArchiveDir)
+	}
+	if cfg.PromptFile != "/opt/csuite/prompts/mike.md" {
+		t.Errorf("PromptFile = %q", cfg.PromptFile)
+	}
+	if cfg.PollInterval != persona.DefaultPollInterval {
+		t.Errorf("PollInterval = %v", cfg.PollInterval)
+	}
+	if cfg.ClaudeTimeout != persona.DefaultClaudeTimeout {
+		t.Errorf("ClaudeTimeout = %v", cfg.ClaudeTimeout)
+	}
+	if cfg.MaxFailures != persona.DefaultMaxFailures {
+		t.Errorf("MaxFailures = %v", cfg.MaxFailures)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Helpers.
+// ---------------------------------------------------------------------------
+
+func stubSpawner(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
+	return nil, 0, nil
+}
+
+func equalArgv(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// dirEntries returns the names of non-directory entries in dir, sorted.
+func dirEntries(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir %s: %v", dir, err)
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// visibleInboxFiles returns .md entries in the inbox (excluding sidecar
+// .failures counters and the .archive dir). The poller's "is this message
+// gone?" check hinges on this matching ReadDir's own filtering.
+func visibleInboxFiles(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir %s: %v", dir, err)
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(e.Name(), ".md") {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
