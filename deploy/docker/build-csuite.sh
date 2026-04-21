@@ -79,6 +79,14 @@ echo ">> building localhost:5000/drem-csuite-base:latest"
 docker build -t localhost:5000/drem-csuite-base:latest \
     -f csuite-base.Dockerfile context/
 
+# Push the base image to the registry BEFORE building the persona
+# images. The persona Dockerfiles use `FROM localhost:5000/drem-csuite-base:latest`
+# which is a registry pull — if we don't push first, they will
+# FROM yesterday's base and layer ENV on top of stale bits. The
+# final push loop below re-pushes base (idempotent no-op).
+echo ">> pre-pushing drem-csuite-base so persona FROM resolves to current base"
+docker push localhost:5000/drem-csuite-base:latest
+
 for agent in mike alex ross seth; do
     echo ">> building localhost:5000/drem-csuite-${agent}:latest"
     docker build -t "localhost:5000/drem-csuite-${agent}:latest" \
