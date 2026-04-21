@@ -75,6 +75,46 @@ RUN /usr/sbin/groupadd --gid "${DREM_GID}" drem \
  && /usr/sbin/useradd  --uid "${DREM_UID}" --gid "${DREM_GID}" \
              --create-home --shell /bin/bash drem
 
+# ---- Claude Code first-run preseed ----------------------------------------
+# Claude Code gates the first run on three interactive prompts and blocks
+# on stdin until each is answered. In the compose-launched csuite
+# containers a TTY is attached but nothing is feeding stdin, so the CLI
+# deadlocks at the first prompt ("Syntax theme: Monokai Extended
+# (ctrl+t to disable)") and the agent never reaches its orchestrator
+# loop. Inbox dispatch to the persona is dead on arrival until the
+# prompts are satisfied. See docs/prd-containerization.md §C-Suite
+# runtime + the 2026-04-20 incident notes.
+#
+# Two files together let the CLI skip straight past onboarding, theme
+# selection, AND the folder-trust dialog:
+#   * ~/.claude.json           -- holds hasCompletedOnboarding (skips
+#                                 the welcome/onboarding pane),
+#                                 bypasses permissions-mode
+#                                 acknowledgement, and pre-populates
+#                                 projects["/home/drem"] with
+#                                 hasTrustDialogAccepted +
+#                                 hasCompletedProjectOnboarding so the
+#                                 "Is this a project you trust?" dialog
+#                                 does not fire on the working
+#                                 directory. The CLI rewrites this file
+#                                 on every start (adding userID,
+#                                 firstStartTime, etc.) so our seed just
+#                                 needs to set the gate keys; everything
+#                                 else is filled in by the running CLI.
+#   * ~/.claude/settings.json  -- holds the theme choice. 'dark' is the
+#                                 CLI default for non-TTY environments.
+#
+# Both files must be drem-owned because the CLI updates them at
+# runtime. The per-project compose.override.yml bind-mounts a host-side
+# .credentials.json onto /home/drem/.claude/.credentials.json at
+# container start; that file-level mount lands as a sibling of
+# settings.json and does not clobber it.
+COPY --chown=drem:drem claude-code-onboarding.json /home/drem/.claude.json
+RUN install -d -o drem -g drem -m 0700 /home/drem/.claude \
+ && chmod 0600 /home/drem/.claude.json
+COPY --chown=drem:drem claude-code-settings.json /home/drem/.claude/settings.json
+RUN chmod 0644 /home/drem/.claude/settings.json
+
 # ---- persona prompts -------------------------------------------------------
 # The build script (deploy/docker/build-csuite.sh) stages
 # docs/csuite-agents/prompts/{mike,alex,ross,seth}.md under
