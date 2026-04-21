@@ -64,6 +64,18 @@ func run(args []string, stdout, stderr *os.File) int {
 
 	logger := slog.New(slog.NewJSONHandler(stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
+	// Wire the post-write watcher signaler from environment. Empty
+	// CSUITE_SIGNAL_ENDPOINT disables signaling entirely (the
+	// returned Signaler is a no-op). See
+	// plans/csuite-watcher-outbox-routing.md §1-3.
+	signalCfg := persona.SignalConfig{
+		Endpoint:      os.Getenv("CSUITE_SIGNAL_ENDPOINT"),
+		Token:         os.Getenv("CSUITE_WATCHER_TOKEN"),
+		PersonaPrefix: os.Getenv("CSUITE_OUTBOX_PATH_PREFIX"),
+		WatcherPrefix: os.Getenv("CSUITE_WATCHER_PATH_PREFIX"),
+	}
+	signaler := persona.NewHTTPSignaler(signalCfg, logger)
+
 	cfg := persona.Config{
 		Persona:       *personaName,
 		InboxDir:      *inboxDir,
@@ -76,6 +88,7 @@ func run(args []string, stdout, stderr *os.File) int {
 		MaxFailures:   *maxFailures,
 		Logger:        logger,
 		Now:           time.Now,
+		Signaler:      signaler,
 	}
 	cfg.ApplyDefaults()
 

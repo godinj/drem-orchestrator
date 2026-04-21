@@ -115,6 +115,22 @@ type Config struct {
 	// logger is a programmer error. cmd/csuite-persona wires a slog JSON
 	// handler to stdout.
 	Logger *slog.Logger
+
+	// Signaler posts the post-write HTTP signal to the csuite-watcher
+	// after a successful outbox write. Zero value (nil) disables
+	// signaling altogether — the outbox file is written and the
+	// watcher's rescan path picks it up later. cmd/csuite-persona
+	// constructs NewHTTPSignaler from CSUITE_SIGNAL_ENDPOINT +
+	// CSUITE_WATCHER_TOKEN env vars. See
+	// plans/csuite-watcher-outbox-routing.md §1-3.
+	Signaler Signaler
+
+	// Fsyncer is the primitive called on the outbox file after a
+	// successful write but before the watcher signal fires. The fsync
+	// must happen before the signal so a crash between write and
+	// fsync cannot produce a delivery against stale bytes. Default:
+	// os.File.Sync via osFsyncer.
+	Fsyncer Fsyncer
 }
 
 // ApplyDefaults fills zero-value fields using Persona-derived defaults
@@ -151,6 +167,9 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.Now == nil {
 		c.Now = time.Now
+	}
+	if c.Fsyncer == nil {
+		c.Fsyncer = osFsyncer{}
 	}
 }
 

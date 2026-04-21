@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -15,6 +16,14 @@ import (
 	"strings"
 	"time"
 )
+
+// sha256Bytes returns the hex-encoded SHA-256 of data. Used to build
+// the watcher signal payload so the watcher's idempotency key maps 1:1
+// to the on-disk outbox file.
+func sha256Bytes(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
 
 // Poller owns the inbox scan loop. Construct one with New, then call
 // Run(ctx) from the binary's main goroutine. Run blocks until ctx is
@@ -219,6 +228,12 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 // the function continues so the inbox message still gets archived —
 // leaving the message in the inbox after a successful reply would cause
 // a duplicate spawn on the next tick.
+//
+// After the outbox write lands, recordSuccess fsyncs the file and fires
+// an HTTP signal to the csuite-watcher in a short-lived goroutine (see
+// plans/csuite-watcher-outbox-routing.md §1-3). Signal failures never
+// propagate into the poller loop — the watcher's rescan path is
+// designed to recover any signal we drop on the floor.
 func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Duration) error {
 	now := p.cfg.Now()
 	shortID := shortHash(name, body)
@@ -232,6 +247,39 @@ func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Durati
 		return fmt.Errorf("write outbox %q: %w", outPath, err)
 	}
 
+	// fsync BEFORE any signal goroutine launches. The watcher will
+	// open outPath immediately after receiving the signal; if we
+	// signal first and crash before fsync, the watcher either sees a
+	// short read or a mismatched sha256 against our signaled value.
+	fs := p.cfg.Fsyncer
+	if fs == nil {
+		fs = osFsyncer{}
+	}
+	if err := fs.Fsync(outPath); err != nil {
+		p.cfg.Logger.Warn("fsync outbox",
+			p.personaLabel,
+			slog.String("outbox_file", outName),
+			slog.Any("err", err))
+	}
+
+	// Compute sha256 of what we just wrote. The signal payload's hash
+	// must reference the on-disk contents, not an older value — fsync
+	// above guarantees the bytes are durable before we read them back.
+	sha := sha256Bytes(stdout)
+	emittedAt := now.UTC().Format(time.RFC3339)
+
+	// Fire the signal in a short-lived goroutine so the main poll
+	// loop is not blocked by retries. The outcome feeds state.md via
+	// writeStateExt after the goroutine completes.
+	//
+	// Until the goroutine returns we record last_signal_status as
+	// "pending"; when it completes it atomically rewrites state.md
+	// with the terminal outcome. If the poller is shutting down
+	// (ctx cancelled) the goroutine still completes but its
+	// writeStateExt call becomes a no-op inside a racing shutdown —
+	// we tolerate that because last_signal_status for the previous
+	// tick is less important than a clean exit.
+	signaler := p.signaler()
 	archivePath := filepath.Join(p.cfg.ArchiveDir, name)
 	if err := os.Rename(filepath.Join(p.cfg.InboxDir, name), archivePath); err != nil {
 		return fmt.Errorf("archive inbox %q: %w", name, err)
@@ -246,7 +294,52 @@ func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Durati
 		slog.String("outbox_file", outName),
 		slog.Duration("duration", dur),
 	)
-	return p.writeState(name, "ok", 0, dur)
+
+	// Short-circuit the goroutine entirely when signaling is disabled
+	// so no HTTP client is ever instantiated and no goroutine is
+	// spawned. Same external behaviour as the pre-signal code.
+	if _, disabled := signaler.(disabledSignaler); disabled || signaler == nil {
+		return p.writeStateExt(name, "ok", 0, dur, SignalDisabled)
+	}
+
+	// Pre-seed state.md with an "ok" record and no signal outcome yet
+	// so the main poll loop can return while the goroutine finishes.
+	// Final outcome is written when the signal completes.
+	if err := p.writeStateExt(name, "ok", 0, dur, ""); err != nil {
+		p.cfg.Logger.Warn("write state (pending signal)",
+			p.personaLabel,
+			slog.Any("err", err))
+	}
+
+	// outboxAbs is what the signal payload carries. It's the local
+	// filesystem path on the persona's side; the signaler translates
+	// to the watcher's path prefix before POSTing.
+	outboxAbs := outPath
+
+	go func() {
+		// Separate context: the signal call survives a main-loop
+		// cancellation so an in-flight retry can complete. Timeout is
+		// bounded by the Signaler's backoff budget (~13s worst case)
+		// plus a little slack for the final HTTP attempt.
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		outcome := signaler.Signal(ctx, p.cfg.Persona, outboxAbs, sha, emittedAt)
+		if err := p.writeStateExt(name, "ok", 0, dur, outcome); err != nil {
+			p.cfg.Logger.Warn("write state (post-signal)",
+				p.personaLabel,
+				slog.Any("err", err))
+		}
+	}()
+	return nil
+}
+
+// signaler returns the configured Signaler, defaulting to the
+// disabled no-op when the caller left the field nil.
+func (p *Poller) signaler() Signaler {
+	if p.cfg.Signaler == nil {
+		return disabledSignaler{}
+	}
+	return p.cfg.Signaler
 }
 
 // recordFailure bumps the message's sidecar counter and, if the counter
@@ -288,17 +381,31 @@ func (p *Poller) recordFailure(name, reason string, exitCode int, dur time.Durat
 }
 
 // writeState atomically replaces state.md with a fresh record of the
-// most-recently-processed message. Atomicity comes from a temp-file +
-// rename dance so a concurrent reader never sees a half-written file.
+// most-recently-processed message. Shorthand for writeStateExt with an
+// empty signal outcome — retained so existing call sites (failure
+// paths) don't have to care about the signal field.
 func (p *Poller) writeState(lastFile, status string, exitCode int, dur time.Duration) error {
+	return p.writeStateExt(lastFile, status, exitCode, dur, "")
+}
+
+// writeStateExt is the full-fat state writer. Empty signal outcomes
+// render as last_signal_status: pending so an operator tailing
+// state.md can tell the difference between "no signal yet" and
+// "signaling is disabled".
+func (p *Poller) writeStateExt(lastFile, status string, exitCode int, dur time.Duration, signal SignalOutcome) error {
 	now := p.cfg.Now().UTC().Format(time.RFC3339)
+	sigLabel := string(signal)
+	if sigLabel == "" {
+		sigLabel = "pending"
+	}
 	body := fmt.Sprintf(
-		"# %s persona state\n\nlast_processed: %s\nlast_status: %s\nlast_exit_code: %d\nlast_duration_ms: %d\nupdated_at: %s\n",
+		"# %s persona state\n\nlast_processed: %s\nlast_status: %s\nlast_exit_code: %d\nlast_duration_ms: %d\nlast_signal_status: %s\nupdated_at: %s\n",
 		p.cfg.Persona,
 		lastFile,
 		status,
 		exitCode,
 		dur.Milliseconds(),
+		sigLabel,
 		now,
 	)
 	dir := filepath.Dir(p.cfg.StateFile)
