@@ -1,36 +1,88 @@
-# Bare-repo `receive.denyCurrentBranch=updateInstead` — Implementation Plan
+# Bare-repo `receive.denyCurrentBranch=ignore` — Implementation Plan
 
-Status: **implemented, 2026-04-20.** All 4 commits
-(helper + tests, CLI wiring + tests, install doc, plan mark)
-landed on `worktree-agent-a8c837a8`. Sibling plan to
-`plans/drem-project-register-update.md`; mirrored its cadence
-(plan first, TDD per layer, docs-as-acceptance-criteria). Closes
-the canary-debugging gap where a worker's final `git push origin
-<feature-branch>` into `/bare` was rejected because the
-shared-workspace "bare" repo has host worktrees checked out.
+Status: **implemented, 2026-04-20; corrected, 2026-04-21.**
 
-Tests added:
+The original implementation landed on `worktree-agent-a8c837a8` with
+`updateInstead` as the chosen value. The T3 canary v11 then proved
+`updateInstead` is architecturally wrong for our container layout
+(see §0b Post-landing correction below). The fix-forward commit
+flips the value to `ignore`, updates the seven tests to match, and
+rewrites the design-options section so the chosen option is honest.
 
-- `internal/projects/bare_repo_test.go` — 5 new
-  (happy path, idempotent, overwrites differing value, missing
-  path, not a git repo).
-- `cmd/drem/project_test.go` — 2 new
-  (`TestProjectRegister_SetsBareRepoDenyCurrentBranch`,
-  `TestProjectRegisterUpdate_IsIdempotentOnBareRepoConfig`).
+Current state after the 2026-04-21 correction:
 
-All tests pass on `go test -count=1 ./...`; `go vet ./...` is clean.
+- `internal/projects/bare_repo.go` writes
+  `receive.denyCurrentBranch=ignore`.
+- 5 tests in `internal/projects/bare_repo_test.go`: happy path,
+  idempotent, overwrites differing value (seeded with
+  `updateInstead` — doubles as a migration check), missing path,
+  not a git repo.
+- 2 tests in `cmd/drem/project_test.go`:
+  `TestProjectRegister_SetsBareRepoDenyCurrentBranch`,
+  `TestProjectRegisterUpdate_IsIdempotentOnBareRepoConfig`.
+- `go test -count=1 ./...` passes; `go vet ./...` clean.
 
-Original design context preserved below.
+## 0b. Post-landing correction (2026-04-21)
+
+T3 canary v11 ran against the landed fix. All three worker
+containers reached claude-completion, committed locally, and the
+watchdog's push returned:
+
+```
+fatal: exec 'update-index': cd to '/home/godinj/git/drem-orchestrator.git/feature/<id>/integration' failed: No such file or directory
+! [remote rejected] feature/<id> -> feature/<id> (Up-to-date check failed)
+```
+
+The receive-pack on the server side (inside the worker container,
+because a local-file push runs receive-pack in the same process
+context) honoured `updateInstead` and tried to `cd` into the
+integration worktree's working directory. That path was recorded
+as a host-absolute path at `git worktree add` time on the host.
+Inside the worker container, `/bare` is the bind-mount of
+`<Project.BareRepoPath>`; the integration worktree's host path
+(`/home/godinj/git/drem-orchestrator.git/feature/<id>/integration`)
+is **not** bind-mounted into the container. `cd` fails. Push
+rejects.
+
+`updateInstead` is therefore a non-starter until either:
+
+1. the worker container also bind-mounts every integration worktree
+   at its host-absolute path (rejected: per-task dynamic mounts
+   would couple worker spawn to task lifecycle and invalidate the
+   warm-pool model); or
+2. the worktree registry inside the bare repo is rewritten to use
+   in-container paths (rejected: those paths would then break the
+   host's own worktree operations).
+
+`ignore` sidesteps the path question entirely: the receive-pack
+accepts the push to a checked-out branch without touching the
+working tree. The host worktree's working directory goes stale
+(the new tip is only reachable via `git log <branch>`), which is
+safe because every merger run starts with
+`git fetch --all && git reset --hard`. Stale worktrees are a
+debugging affordance, not a correctness requirement.
+
+The original plan's §3 rejected `ignore` on the premise that
+"silent staleness is worse than loud rejection." That premise
+turned out to be backwards — loud rejection means the canary
+fails and blocks the pipeline, while staleness is a UX footnote
+that the merger auto-resolves. The rejection of `ignore` also
+assumed `updateInstead` would work as documented, which v11
+disproved.
+
+Original design context preserved below, with the (A)/(B)
+chosen/rejected markers flipped and the rationale annotated.
 
 ---
 
 ## 0. Goal
 
 Every `drem project register` (fresh or `--update`) leaves the
-project's bare git repo with `receive.denyCurrentBranch=updateInstead`
+project's bare git repo with `receive.denyCurrentBranch=ignore`
 set, so the worker watchdog's final push at end-of-task succeeds
 against the shared-workspace bare repo without the operator
-hand-running `git config` after registration.
+hand-running `git config` after registration. (Original plan
+targeted `updateInstead`; see §0b for why that was wrong.)
 
 ## 1. Why now
 
@@ -107,22 +159,30 @@ Remove:
 
 ## 3. Design options considered
 
-### (A) `receive.denyCurrentBranch=updateInstead` — **chosen**
+### (A) `receive.denyCurrentBranch=updateInstead` — ~~chosen~~ **rejected after v11 disproved it (§0b)**
 
-Matches the data flow. The integration worktree under
+Theory: matches the data flow. The integration worktree under
 `<bare>/<branch>` is *supposed* to follow the feature branch tip
 so merger integration reads the freshest code. `updateInstead`
 gives us that for free; dirty-worktree safety built in.
 
-### (B) `receive.denyCurrentBranch=ignore`
+Reality: the worktree's working-dir path is host-absolute and not
+visible inside the worker container, so receive-pack's `cd` into
+that path fails and the push rejects. Per §0b, either of the two
+paths to make (A) work is a bigger refactor than we want for a
+canary unblock.
 
-Simpler — push always succeeds, never touches the worktree.
-Rejected: leaves the host worktree stale, which means any
-subsequent merger/integration read of
-`<bare>/<branch>/path/to/file` sees the pre-push contents until
-someone manually runs `git checkout` or `git reset --hard` in
-the worktree. Silent staleness is worse than the current loud
-rejection.
+### (B) `receive.denyCurrentBranch=ignore` — **chosen**
+
+Push always succeeds, receive-pack never touches the worktree.
+Host worktree's working tree goes stale (new tip only reachable
+via git plumbing until someone runs `git checkout` or `git reset
+--hard`), but every merger run already starts with `git fetch
+--all && git reset --hard`, so staleness is an artefact only
+visible to operators inspecting the worktree directly — never
+propagates into integration or merge results. Trivial to apply,
+no container path dependencies, works with or without the host
+worktrees under `<bare>/feature/<id>/`.
 
 ### (C) Make the bare repo actually bare
 
@@ -164,12 +224,13 @@ the same job with no moving parts. Rejected as overkill.
 1. **Happy path.** Init a bare repo in a temp dir with
    `git init --bare`, call `ConfigureBareRepo`, assert
    `git --git-dir=<bare> config --get receive.denyCurrentBranch`
-   returns `updateInstead`.
+   returns `ignore`.
 2. **Idempotent.** Call twice. Assert both return nil and the
-   value is still `updateInstead`.
-3. **Overwrites differing value.** Set
-   `receive.denyCurrentBranch=ignore` first, call helper, assert
-   value becomes `updateInstead` (we are authoritative).
+   value is still `ignore`.
+3. **Overwrites differing value.** Seed the repo with
+   `receive.denyCurrentBranch=updateInstead` (the pre-2026-04-21
+   value — test doubles as a migration check), call helper, assert
+   value becomes `ignore` (we are authoritative).
 4. **Missing path.** Call against a non-existent path, assert
    a clear error mentioning the path.
 5. **Not a git repo.** Call against an empty temp dir, assert
@@ -179,11 +240,11 @@ the same job with no moving parts. Rejected as overkill.
 
 6. **`TestProjectRegister_SetsBareRepoDenyCurrentBranch`** —
    fresh register against a temp bare. Assert
-   `receive.denyCurrentBranch` reads `updateInstead` after the
+   `receive.denyCurrentBranch` reads `ignore` after the
    register completes.
 7. **`TestProjectRegisterUpdate_IsIdempotentOnBareRepoConfig`** —
    register fresh, then `--update --force`; assert no error and
-   value is still `updateInstead`.
+   value is still `ignore`.
 
 ## 6. Commit sequence
 
@@ -212,14 +273,20 @@ For migrators with an existing project who skipped this fix
 cycle:
 
 ```bash
-# One-shot (the back-fill we already ran on drem-orchestrator):
+# One-shot (the back-fill the 2026-04-21 correction applied to
+# drem-orchestrator):
 git -C <Project.BareRepoPath> config \
-    receive.denyCurrentBranch updateInstead
+    receive.denyCurrentBranch ignore
 
 # Or re-run the update path to pick it up alongside any other
 # template drift:
 drem project register --update <project-name> --force
 ```
+
+Operators whose bare repo still has the pre-correction
+`updateInstead` value don't need to do anything if they re-register
+or run `--update --force` — `ConfigureBareRepo` is authoritative
+and overwrites.
 
 The `--update` path call-site means every `--update` invocation
 reapplies the setting, so operators who habitually regenerate
