@@ -550,21 +550,51 @@ func TestResolveFeatureWorktree(t *testing.T) {
 	}
 }
 
-func TestResolveFeatureWorktree_NoParent(t *testing.T) {
+// TestResolveFeatureWorktree_TopLevelTaskWithBranch verifies that a
+// top-level task (ParentTaskID == nil) with its own WorktreeBranch resolves
+// to the correct feature integration worktree path. This mirrors the
+// branch-resolution logic used by agent_results.go for the normal
+// completion path — the reconciler path must agree with it, otherwise
+// stuck-agent recovery cannot see commits on top-level tasks and
+// mis-routes them to the empty-work failure path.
+func TestResolveFeatureWorktree_TopLevelTaskWithBranch(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/bare-repo.git", Default: "main"}
 	o := testOrchestrator(t, db, wt)
 
-	subtask := &model.Task{
+	task := &model.Task{
+		ID:             uuid.New(),
+		ParentTaskID:   nil,
+		Title:          "top-level",
+		Description:    "test",
+		WorktreeBranch: "feature/my-feature",
+	}
+
+	result := o.resolveFeatureWorktree(task)
+	expected := filepath.Join("/tmp/bare-repo.git", "feature", "my-feature", "integration")
+	if result != expected {
+		t.Errorf("expected %q, got %q", expected, result)
+	}
+}
+
+// TestResolveFeatureWorktree_TopLevelTaskWithoutBranch covers the
+// truly-degenerate case: a top-level task with no branch recorded at all.
+// There is nothing to resolve, so the function must return "".
+func TestResolveFeatureWorktree_TopLevelTaskWithoutBranch(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/bare-repo.git", Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	task := &model.Task{
 		ID:           uuid.New(),
 		ParentTaskID: nil,
 		Title:        "standalone",
 		Description:  "test",
 	}
 
-	result := o.resolveFeatureWorktree(subtask)
+	result := o.resolveFeatureWorktree(task)
 	if result != "" {
-		t.Errorf("expected empty string for subtask without parent, got %q", result)
+		t.Errorf("expected empty string for top-level task without branch, got %q", result)
 	}
 }
 

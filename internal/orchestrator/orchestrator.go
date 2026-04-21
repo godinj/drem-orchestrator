@@ -621,13 +621,25 @@ func (o *Orchestrator) isWorkAlreadyMerged(subtask *model.Task, featureWorktree 
 }
 
 // resolveFeatureWorktree resolves the feature integration worktree path
-// for a subtask by looking up its parent task's WorktreeBranch.
-func (o *Orchestrator) resolveFeatureWorktree(subtask *model.Task) string {
-	if subtask.ParentTaskID == nil {
+// for a task. Top-level tasks carry WorktreeBranch on the task row itself;
+// subtasks inherit it from their parent. Mirrors the branch-resolution
+// logic in agent_results.go so the reconciler path agrees with the normal
+// completion path.
+func (o *Orchestrator) resolveFeatureWorktree(task *model.Task) string {
+	// Prefer the task's own branch when set. This covers both top-level
+	// tasks (which always own their branch) and subtasks whose branch has
+	// been materialised onto the task row.
+	if task.WorktreeBranch != "" {
+		fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+		return o.worktree.FeatureWorktreePath(fn)
+	}
+	// Fall back to the parent task's branch for subtasks that only carry
+	// the branch via parent_task_id.
+	if task.ParentTaskID == nil {
 		return ""
 	}
 	var parent model.Task
-	if err := o.db.Select("worktree_branch").First(&parent, "id = ?", subtask.ParentTaskID).Error; err != nil {
+	if err := o.db.Select("worktree_branch").First(&parent, "id = ?", task.ParentTaskID).Error; err != nil {
 		return ""
 	}
 	if parent.WorktreeBranch == "" {
