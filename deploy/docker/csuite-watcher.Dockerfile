@@ -46,14 +46,37 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # Debian slim (not distroless) because the watcher binary links against
 # glibc via the sqlite driver. ca-certificates is required for HTTPS
 # calls to the orchestrator when DREM_ORCH_URL is https://.
+#
+# The runtime user is `drem` with uid/gid 1000 — matching the persona
+# images and the host operator's `godinj` uid. This is load-bearing:
+# files the watcher writes into /csuite/<persona>/inbox/ are owned by
+# uid 1000 on the host, so Kyle's host-side Go binary (running as
+# uid 1000) can archive or delete them without sudo. Running as root
+# would leave root-owned files in the operator's home tree — a
+# footgun that blocks Kyle's poll loop. See
+# plans/csuite-watcher-outbox-routing.md §7a / commit 7.
 FROM debian:bookworm-slim
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+         gosu \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 1000 drem \
+    && useradd --uid 1000 --gid 1000 --no-create-home --shell /usr/sbin/nologin drem \
+    && mkdir -p /var/lib/watcher /csuite \
+    && chown -R drem:drem /var/lib/watcher /csuite
 
 COPY --from=build /out/drem-csuite-watcher /usr/local/bin/drem-csuite-watcher
+
+# entrypoint.sh chowns the named volume at /var/lib/watcher before
+# dropping to uid 1000. Docker-created named volumes come up owned by
+# root on first mount; a watcher process running as uid 1000 would
+# fail to create deliveries.db under that volume without the chown.
+# Using gosu (not sudo) so the drop-to-drem step doesn't require a
+# TTY and doesn't inherit root's env.
+COPY deploy/docker/context/csuite-watcher-entrypoint.sh /usr/local/bin/csuite-watcher-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/csuite-watcher-entrypoint.sh
 
 # The watcher binds its HTTP bridge on :8090 by default (see
 # cmd/csuite-watcher/serve.go). The per-project compose does not need
@@ -63,15 +86,19 @@ COPY --from=build /out/drem-csuite-watcher /usr/local/bin/drem-csuite-watcher
 # cmd/csuite-watcher/serve.go applyServeEnvOverrides). Required so this
 # image works without a drem.toml mount in the per-project compose stack:
 #
-#   DREM_BEARER_TOKEN  required; auth token for the bridge HTTP API.
-#                      No default. Container exits 1 if unset and no toml.
-#   DREM_LISTEN_ADDR   defaults to :8080 in the binary; the per-project
-#                      compose overrides to :8090 to match the historical
-#                      bridge port.
-#   DREM_DB_PATH       defaults to ~/.drem-csuite/csuite.db; compose
-#                      overrides to /var/lib/drem/csuite.db.
+#   DREM_BEARER_TOKEN   required; auth token for the bridge HTTP API.
+#                       No default. Container exits 1 if unset and no toml.
+#   DREM_LISTEN_ADDR    defaults to :8080 in the binary; the per-project
+#                       compose overrides to :8090 to match the historical
+#                       bridge port.
+#   DREM_DB_PATH        defaults to ~/.drem-csuite/csuite.db; compose
+#                       overrides to /var/lib/drem/csuite.db.
+#   CSUITE_WATCHER_TOKEN  required for /deliver and /rescan. Shared secret
+#                       with the persona containers.
+#   CSUITE_WATCHER_DB_PATH  path of the delivery ledger SQLite file.
+#                       Compose overrides to /var/lib/watcher/deliveries.db.
 #
 # Precedence: env > drem.toml [serve] > built-in default.
 
-ENTRYPOINT ["/usr/local/bin/drem-csuite-watcher"]
+ENTRYPOINT ["/usr/local/bin/csuite-watcher-entrypoint.sh"]
 CMD ["serve"]

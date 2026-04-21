@@ -156,11 +156,24 @@ services:
   # restart. Mounts land at host-identical paths inside the image's
   # /home/drem because the csuite-base Dockerfile sets WORKDIR to that.
 
+  # Persona signal wiring (plans/csuite-watcher-outbox-routing.md §1-3
+  # and commit 7b): each persona POSTs to http://csuite-watcher:8090/deliver
+  # after a successful outbox write so the watcher can route the reply
+  # into the addressed persona's inbox. CSUITE_WATCHER_TOKEN is passed
+  # through from the host shell env at `docker compose up` time — the
+  # valueless form in the template means "inherit from host env". The
+  # token is shared across every persona and the watcher; operator
+  # generates once via `openssl rand -hex 32 > ~/.drem/csuite-watcher.token`
+  # then exports CSUITE_WATCHER_TOKEN=$(cat ~/.drem/csuite-watcher.token)
+  # before `docker compose up`.
+
   csuite-mike:
     image: {{index .CsuiteImages "mike"}}
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
       DREM_ORCH_URL: "http://orch:8080"
+      CSUITE_WATCHER_TOKEN:
+      CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.CsuiteHomeRoot}}/mike:/home/drem/.drem-csuite/mike:rw
@@ -176,6 +189,8 @@ services:
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
       DREM_ORCH_URL: "http://orch:8080"
+      CSUITE_WATCHER_TOKEN:
+      CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.CsuiteHomeRoot}}/alex:/home/drem/.drem-csuite/alex:rw
@@ -191,6 +206,8 @@ services:
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
       DREM_ORCH_URL: "http://orch:8080"
+      CSUITE_WATCHER_TOKEN:
+      CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.CsuiteHomeRoot}}/ross:/home/drem/.drem-csuite/ross:rw
@@ -206,6 +223,8 @@ services:
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
       DREM_ORCH_URL: "http://orch:8080"
+      CSUITE_WATCHER_TOKEN:
+      CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.CsuiteHomeRoot}}/seth:/home/drem/.drem-csuite/seth:rw

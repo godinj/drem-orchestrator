@@ -562,3 +562,37 @@ func TestRender_CsuiteWatcherTokenEnvIsDeclared(t *testing.T) {
 	require.Equal(t, "/var/lib/watcher/deliveries.db",
 		env["CSUITE_WATCHER_DB_PATH"])
 }
+
+// TestRender_PersonaSignalEnvIsDeclared asserts each persona service
+// declares both CSUITE_WATCHER_TOKEN (host-shell passthrough) and
+// CSUITE_SIGNAL_ENDPOINT (pointing at the watcher's in-network name).
+// Without these, post-write signaling is disabled and every reply
+// waits for a rescan pass before reaching its addressee — the
+// regression Kyle and the operator explicitly called out in the
+// outbox-routing plan §7b.
+func TestRender_PersonaSignalEnvIsDeclared(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	for _, persona := range []string{"mike", "alex", "ross", "seth"} {
+		svc := "csuite-" + persona
+		env := parsed.Services[svc].Environment
+		require.Contains(t, env, "CSUITE_WATCHER_TOKEN",
+			"%s env must declare CSUITE_WATCHER_TOKEN; env=%v", svc, env)
+		require.Contains(t, env, "CSUITE_SIGNAL_ENDPOINT",
+			"%s env must declare CSUITE_SIGNAL_ENDPOINT; env=%v", svc, env)
+		require.Equal(t,
+			"http://csuite-watcher:8090/deliver",
+			env["CSUITE_SIGNAL_ENDPOINT"],
+			"%s CSUITE_SIGNAL_ENDPOINT must point at the watcher's in-network "+
+				"drem-net DNS name + /deliver", svc)
+	}
+}
