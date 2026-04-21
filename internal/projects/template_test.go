@@ -327,6 +327,80 @@ func TestRender_NoPlannerTemplateStub(t *testing.T) {
 		"planner-template stub must be removed; see plans/warm-planner-pivot.md §4")
 }
 
+// TestRender_CsuiteHomeMountsAreWired asserts that each csuite-*
+// service bind-mounts two host paths: the operator's Claude
+// subscription credentials (read-only) and the per-persona
+// inbox/outbox/state tree under <CsuiteHomeRoot>/<persona>
+// (read-write). Without either mount the containerized persona
+// cannot authenticate OR receive inbox messages. See CLAUDE.md
+// (subscription-only) and the csuite-docker end-to-end plan.
+func TestRender_CsuiteHomeMountsAreWired(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Services map[string]struct {
+			Volumes []string `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	for _, persona := range []string{"mike", "alex", "ross", "seth"} {
+		svc := "csuite-" + persona
+		creds := "/home/operator/.claude/.credentials.json:" +
+			"/home/drem/.claude/.credentials.json:ro"
+		home := "/home/operator/.drem-csuite/" + persona +
+			":/home/drem/.drem-csuite/" + persona + ":rw"
+
+		require.Contains(t, parsed.Services[svc].Volumes, creds,
+			"%s must bind-mount operator's Claude credentials read-only "+
+				"(subscription-only auth — no auth tokens, no API keys); "+
+				"volumes=%v", svc, parsed.Services[svc].Volumes)
+		require.Contains(t, parsed.Services[svc].Volumes, home,
+			"%s must bind-mount <CsuiteHomeRoot>/%s at /home/drem/.drem-csuite/%s "+
+				"read-write so inbox messages reach the container and "+
+				"state.md persists across restarts; volumes=%v",
+			svc, persona, persona, parsed.Services[svc].Volumes)
+	}
+}
+
+// TestRender_CsuiteHomeRootDefaultsFromHostHome asserts applyDefaults
+// fills in CsuiteHomeRoot as <HostHome>/.drem-csuite when the caller
+// leaves it zero-value. The csuite comms tree is host-global (one per
+// operator, not per project), so the default only depends on HostHome.
+func TestRender_CsuiteHomeRootDefaultsFromHostHome(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/root"
+	data.CsuiteHomeRoot = "" // explicit
+
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	require.Contains(t, string(out),
+		"/root/.drem-csuite/seth:/home/drem/.drem-csuite/seth:rw",
+		"default CsuiteHomeRoot must derive from HostHome")
+}
+
+// TestRender_CsuiteHomeRootExplicitOverride asserts a caller-supplied
+// CsuiteHomeRoot wins over the HostHome-derived default — necessary
+// for operators who run csuite off a shared/NFS path distinct from
+// their home.
+func TestRender_CsuiteHomeRootExplicitOverride(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	data.CsuiteHomeRoot = "/srv/drem-csuite"
+
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	s := string(out)
+	require.Contains(t, s,
+		"/srv/drem-csuite/seth:/home/drem/.drem-csuite/seth:rw")
+	require.NotContains(t, s,
+		"/home/operator/.drem-csuite/",
+		"explicit CsuiteHomeRoot must override the HostHome default")
+}
+
 // TestRender_CppTemplateSwapsWorkerImage verifies that a C++ project
 // pins the drem-worker-cpp image tag.
 func TestRender_CppTemplateSwapsWorkerImage(t *testing.T) {

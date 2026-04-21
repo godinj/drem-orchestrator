@@ -117,11 +117,25 @@ services:
     depends_on: [orch]
     restart: unless-stopped
 
+  # Each csuite-<persona> service bind-mounts two host paths read-only
+  # or read-write so the containerized persona can (a) authenticate
+  # against Claude via the operator's subscription credentials file —
+  # NEVER an auth token or API key, per the subscription-only directive
+  # in CLAUDE.md — and (b) reach the per-persona inbox/outbox/state
+  # tree the operator writes to on the host. Without the .drem-csuite
+  # mount, inbox messages dropped at <CsuiteHomeRoot>/<persona>/inbox/
+  # never reach the container and state.md writes die at container
+  # restart. Mounts land at host-identical paths inside the image's
+  # /home/drem because the csuite-base Dockerfile sets WORKDIR to that.
+
   csuite-mike:
     image: {{index .CsuiteImages "mike"}}
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
       DREM_ORCH_URL: "http://orch:8080"
+    volumes:
+      - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      - {{.CsuiteHomeRoot}}/mike:/home/drem/.drem-csuite/mike:rw
     networks: [drem-net]
     labels:
       drem.project: "{{.ProjectName}}"
@@ -134,6 +148,9 @@ services:
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
       DREM_ORCH_URL: "http://orch:8080"
+    volumes:
+      - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      - {{.CsuiteHomeRoot}}/alex:/home/drem/.drem-csuite/alex:rw
     networks: [drem-net]
     labels:
       drem.project: "{{.ProjectName}}"
@@ -146,6 +163,9 @@ services:
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
       DREM_ORCH_URL: "http://orch:8080"
+    volumes:
+      - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      - {{.CsuiteHomeRoot}}/ross:/home/drem/.drem-csuite/ross:rw
     networks: [drem-net]
     labels:
       drem.project: "{{.ProjectName}}"
@@ -158,6 +178,9 @@ services:
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
       DREM_ORCH_URL: "http://orch:8080"
+    volumes:
+      - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      - {{.CsuiteHomeRoot}}/seth:/home/drem/.drem-csuite/seth:rw
     networks: [drem-net]
     labels:
       drem.project: "{{.ProjectName}}"

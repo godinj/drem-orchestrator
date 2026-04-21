@@ -88,6 +88,17 @@ type TemplateData struct {
 	// HostHome/.drem/projects/<ProjectName>/prompts when empty. See
 	// plans/worker-prompt-delivery.md §§2, 4.
 	WorkerPromptRoot string
+	// CsuiteHomeRoot is the host directory that holds per-persona
+	// inbox/outbox/state trees for the four csuite agents (mike, alex,
+	// ross, seth). The compose template bind-mounts
+	// <CsuiteHomeRoot>/<persona>/ read-write into each csuite-*
+	// container at /home/drem/.drem-csuite/<persona>/ so inbox
+	// messages dropped by the host reach the containerized persona and
+	// state.md writes persist across restarts. Defaults to
+	// HostHome/.drem-csuite when empty. Shared across projects (one
+	// csuite comms tree per operator, not per project). See the csuite-
+	// docker end-to-end design and plans/ for the rationale.
+	CsuiteHomeRoot string
 }
 
 // Default image tags for the orchestrator.
@@ -168,6 +179,12 @@ func applyDefaults(data *TemplateData) {
 	if data.WorkerPromptRoot == "" && data.HostHome != "" && data.ProjectName != "" {
 		data.WorkerPromptRoot = filepath.Join(
 			data.HostHome, ".drem", "projects", data.ProjectName, "prompts")
+	}
+	// CsuiteHomeRoot is host-global (one per operator, not per project)
+	// so it only depends on HostHome. Defaulted here so render callers
+	// and compose.override.yml operators don't have to know the layout.
+	if data.CsuiteHomeRoot == "" && data.HostHome != "" {
+		data.CsuiteHomeRoot = filepath.Join(data.HostHome, ".drem-csuite")
 	}
 }
 
