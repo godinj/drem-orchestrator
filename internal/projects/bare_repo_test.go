@@ -1,6 +1,7 @@
 package projects
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -104,4 +105,134 @@ func TestConfigureBareRepo_NotAGitRepo(t *testing.T) {
 
 	err := ConfigureBareRepo(empty)
 	require.Error(t, err)
+}
+
+// TestConfigureBareRepo_PushSemantics is an integration test that
+// exercises the real reason we set receive.denyCurrentBranch=ignore:
+// a push from a clone to a branch that is ALSO checked out in a
+// host worktree under the bare repo must succeed, AND the worktree
+// must stay frozen at its old working-tree contents (stale) while
+// the branch ref advances.
+//
+// This mirrors the drem container layout: the bare repo lives at
+// `<bare>` with host worktrees `git worktree add`ed under
+// `<bare>/feature/<id>/integration`. Workers push from inside a
+// container that has `<bare>` bind-mounted; receive-pack runs on
+// the bare repo and, with `ignore`, accepts the push without
+// touching the worktree's working tree. Merger later reads the
+// bare refs directly (fresh clone per run), so staleness is safe.
+//
+// Validation:
+//  1. Bare repo accepts the push (exit 0).
+//  2. Bare repo's feature-branch ref advances to the new commit.
+//  3. Host worktree's working-tree files remain at the OLD contents
+//     (staleness confirmed); git status in the worktree reports the
+//     diff between worktree files and the (new) branch tip.
+func TestConfigureBareRepo_PushSemantics(t *testing.T) {
+	// Skip if git is missing (unlikely in CI, but keeps the test
+	// honest as a true integration test).
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+
+	gitEnv := append(os.Environ(),
+		"GIT_AUTHOR_NAME=test",
+		"GIT_AUTHOR_EMAIL=test@example.invalid",
+		"GIT_COMMITTER_NAME=test",
+		"GIT_COMMITTER_EMAIL=test@example.invalid",
+		// Avoid picking up the user's global git config which may
+		// set signing, hooks, or default-branch names that break
+		// deterministic assertions.
+		"GIT_CONFIG_GLOBAL=/dev/null",
+		"GIT_CONFIG_SYSTEM=/dev/null",
+	)
+	run := func(t *testing.T, dir string, args ...string) []byte {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = gitEnv
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, "git %v in %s failed: %s",
+			args, dir, out)
+		return out
+	}
+
+	tmp := t.TempDir()
+
+	// 1. Bare repo + initial master commit via a seeder clone.
+	bare := filepath.Join(tmp, "test.git")
+	run(t, tmp, "init", "--bare", "-b", "master", bare)
+
+	seeder := filepath.Join(tmp, "seeder")
+	run(t, tmp, "clone", bare, seeder)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(seeder, "README.md"), []byte("seed\n"), 0o644))
+	run(t, seeder, "add", "README.md")
+	run(t, seeder, "commit", "-m", "seed")
+	run(t, seeder, "push", "origin", "master")
+	// Seeder has served its purpose; real workflow wouldn't keep it.
+	require.NoError(t, os.RemoveAll(seeder))
+
+	// 2. Host worktree checked out on a feature branch, mirroring
+	//    `git worktree add <bare>/feature/<id>/integration -b ...`.
+	wt := filepath.Join(bare, "feature", "canary", "integration")
+	run(t, bare, "--git-dir="+bare, "worktree", "add",
+		"-b", "feature/canary", wt, "master")
+	oldTip := strings.TrimSpace(string(
+		run(t, bare, "--git-dir="+bare, "rev-parse", "feature/canary")))
+
+	// 3. Apply the config under test.
+	require.NoError(t, ConfigureBareRepo(bare))
+	require.Equal(t, "ignore",
+		readConfig(t, bare, "receive.denyCurrentBranch"))
+
+	// 4. A separate "pusher" clone does what a worker does: commit
+	//    on feature/canary and push to the bare repo. Without
+	//    `ignore`, this push would be rejected because feature/canary
+	//    is checked out in the host worktree.
+	pusher := filepath.Join(tmp, "pusher")
+	run(t, tmp, "clone", "-b", "feature/canary", bare, pusher)
+	require.NoError(t, os.WriteFile(
+		filepath.Join(pusher, "canary.txt"),
+		[]byte("canary\n"), 0o644))
+	run(t, pusher, "add", "canary.txt")
+	run(t, pusher, "commit", "-m", "canary commit")
+	newTip := strings.TrimSpace(string(
+		run(t, pusher, "rev-parse", "HEAD")))
+	require.NotEqual(t, oldTip, newTip, "pusher must advance the branch")
+
+	// Push to bare. This is the assertion the whole test exists for:
+	// with receive.denyCurrentBranch=ignore, this must succeed even
+	// though the branch is checked out in the host worktree.
+	pushCmd := exec.Command("git", "push", "origin",
+		"feature/canary:feature/canary")
+	pushCmd.Dir = pusher
+	pushCmd.Env = gitEnv
+	pushOut, pushErr := pushCmd.CombinedOutput()
+	require.NoError(t, pushErr,
+		"push to bare must succeed with ignore: %s", pushOut)
+
+	// 5. Bare ref advanced.
+	bareTipAfter := strings.TrimSpace(string(
+		run(t, bare, "--git-dir="+bare, "rev-parse", "feature/canary")))
+	require.Equal(t, newTip, bareTipAfter,
+		"bare repo's feature/canary must point at the pushed commit")
+
+	// 6. Worktree's working tree is stale: canary.txt should NOT
+	//    exist in the host worktree (push didn't touch the working
+	//    tree — that's the whole point of `ignore`).
+	_, err := os.Stat(filepath.Join(wt, "canary.txt"))
+	require.True(t, os.IsNotExist(err),
+		"host worktree must remain stale: canary.txt should not "+
+			"have been materialised (got err=%v)", err)
+
+	// 7. The worktree's branch ref (shared with the bare repo) HAS
+	//    advanced, so `git -C <wt> status` reports the divergence
+	//    between the old working-tree contents and the new HEAD.
+	//    We assert canary.txt appears in the porcelain status as a
+	//    deletion (HEAD has it, worktree doesn't).
+	statusOut := run(t, wt, "status", "--porcelain")
+	require.Contains(t, string(statusOut), "canary.txt",
+		"git status in stale worktree should report canary.txt "+
+			"as a divergence (HEAD advanced, working tree stale)")
 }
