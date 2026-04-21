@@ -1,6 +1,7 @@
 package persona
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
@@ -170,16 +171,24 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 	invocationCtx, cancel := context.WithTimeout(ctx, p.cfg.ClaudeTimeout)
 	defer cancel()
 
+	// Pipe the message body via stdin rather than as a positional
+	// argument to `-p`. Motivation: csuite messages begin with a YAML
+	// frontmatter block (`---\nfrom: kyle\n---\n\n...`) and claude's
+	// CLI flag parser interprets any positional arg that starts with a
+	// dash as a flag, producing "unknown option '---\nfrom: ...'" and
+	// exiting non-zero before any API call. `claude -p` with no body
+	// reads stdin (it's the documented form for long inputs), which
+	// sidesteps the argv-parsing surface entirely.
 	args := []string{
 		"claude",
 		"--dangerously-skip-permissions",
-		"-p", string(body),
+		"-p",
 		"--system-prompt", p.prompt,
 		"--output-format", "text",
 	}
 
 	start := p.cfg.Now()
-	stdout, exitCode, spawnErr := p.spawner.Spawn(invocationCtx, args, nil)
+	stdout, exitCode, spawnErr := p.spawner.Spawn(invocationCtx, args, bytes.NewReader(body))
 	duration := p.cfg.Now().Sub(start)
 
 	if spawnErr != nil {

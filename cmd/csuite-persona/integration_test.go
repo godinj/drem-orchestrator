@@ -196,34 +196,29 @@ func TestIntegration_InboxToOutboxRoundTrip(t *testing.T) {
 }
 
 // stubClaudeSource is a tiny Go program that mimics the minimum surface
-// of `claude -p` that the poller uses. It scans os.Args for the -p flag
-// (positional pair), echoes the user message and any --system-prompt
-// value to stdout, then exits 0. No auth, no network, no dependencies.
+// of `claude -p` that the poller uses. It reads the user message from
+// stdin (the fix for the frontmatter argv-parsing bug means `-p` no
+// longer takes a positional body), scans os.Args for --system-prompt,
+// and echoes both to stdout before exiting 0. No auth, no network, no
+// dependencies.
 const stubClaudeSource = `package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 )
 
 func main() {
 	args := os.Args[1:]
-	userMsg := ""
 	sysPrompt := ""
 	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "-p":
-			if i+1 < len(args) {
-				userMsg = args[i+1]
-				i++
-			}
-		case "--system-prompt":
-			if i+1 < len(args) {
-				sysPrompt = args[i+1]
-				i++
-			}
+		if args[i] == "--system-prompt" && i+1 < len(args) {
+			sysPrompt = args[i+1]
+			i++
 		}
 	}
-	fmt.Printf("stub-claude reply\nuser: %s\nsystem: %s\n", userMsg, sysPrompt)
+	body, _ := io.ReadAll(os.Stdin)
+	fmt.Printf("stub-claude reply\nuser: %s\nsystem: %s\n", string(body), sysPrompt)
 }
 `
