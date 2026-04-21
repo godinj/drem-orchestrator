@@ -895,6 +895,113 @@ func TestReconcileStuckAgents_SessionDead_NoCommits(t *testing.T) {
 	}
 }
 
+// TestReconcileStuckAgents_TopLevelTask_WithCommits_NotFailed is a
+// regression test for the bug exposed by canary v12:
+// resolveFeatureWorktree used to return "" for any task with
+// ParentTaskID == nil, which caused the stuck-agent reconciler to skip
+// the BranchHasNewCommits check and mis-route a top-level task whose
+// agent had actually committed work onto the empty-work retry path —
+// eventually marking it failed with
+// "agent session died without producing commits" even though the work
+// was safely pushed to the bare repo.
+//
+// Setup mirrors v12's reality:
+//   - A top-level task (ParentTaskID == nil) with its own WorktreeBranch.
+//   - An agent branch ahead of the feature branch (watchdog committed
+//     the agent's work but the tmux session exited before emitting the
+//     completion signal).
+//   - An agent row with Status=working, CreatedAt backdated past the
+//     grace period, not present in the runner's running map.
+//
+// Expectation: the reconciler must see the unmerged commits (via the
+// top-level task's own branch), route through the has-commits branch,
+// and must NOT mark the task failed.
+func TestReconcileStuckAgents_TopLevelTask_WithCommits_NotFailed(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "stuck-toplevel-commits"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	// Create an agent branch with commits that are NOT yet merged into
+	// the feature branch. This mirrors v12: the watchdog committed the
+	// agent's work onto its own branch and pushed to the bare repo.
+	featureBranch := "feature/" + featureName
+	agentBranch := "worktree-agent-toplevel-c"
+	runGitCmd(t, bareRepo, "branch", agentBranch, featureBranch)
+	agentDir := filepath.Join(bareRepo, "feature", featureName, "agent-toplevel-c")
+	if err := os.MkdirAll(filepath.Dir(agentDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, bareRepo, "worktree", "add", agentDir, agentBranch)
+	runGitCmd(t, agentDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, agentDir, "config", "user.name", "Test")
+	testFile := filepath.Join(agentDir, "toplevel-work.txt")
+	if err := os.WriteFile(testFile, []byte("top-level agent work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, agentDir, "add", ".")
+	runGitCmd(t, agentDir, "commit", "-m", "top-level agent commit")
+	// Do NOT merge into feature — agent has unmerged commits.
+
+	agentID := uuid.New()
+	taskID := uuid.New()
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "stuck-toplevel-agent",
+		Status:         model.AgentWorking,
+		WorktreeBranch: agentBranch,
+		WorktreePath:   agentDir,
+		CurrentTaskID:  &taskID,
+	}
+	db.Create(&ag)
+	// Backdate past grace period so reconciliation can act.
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
+
+	// Top-level task: ParentTaskID is nil, but WorktreeBranch is set.
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		ParentTaskID:    nil,
+		Title:           "top-level task with committed work",
+		Description:     "reconciler must see these commits via task.WorktreeBranch",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+		WorktreeBranch:  featureBranch,
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileStuckAgents()
+	if err != nil {
+		t.Fatalf("reconcileStuckAgents() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix for dead agent on top-level task with commits, got %d", fixes)
+	}
+
+	// Critical: the task must NOT have been marked failed with
+	// "agent session died without producing commits", and it must NOT
+	// have been mis-routed through the empty-work retry path (which
+	// would reset status to backlog and bump retry_count). With the
+	// fix in place, reconcileStuckAgents routes the task through
+	// synthesizeCompletion (has-commits branch), so retry_count stays
+	// unset and status is NOT backlog/failed.
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.Status == model.StatusFailed {
+		t.Fatalf("top-level task with committed work was marked failed — regression of the v12 canary bug (status=%s)", updated.Status)
+	}
+	if updated.Status == model.StatusBacklog {
+		t.Fatalf("top-level task with committed work was reset to backlog via the empty-work retry path — regression of the v12 canary bug (retry_count=%v)", updated.Context["retry_count"])
+	}
+	if updated.Context != nil {
+		if v, ok := updated.Context["retry_count"].(float64); ok && int(v) > 0 {
+			t.Errorf("retry_count was incremented (%d) — reconciler took the empty-work path instead of recognizing the watchdog's commits", int(v))
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // reconcileAlreadyMergedFeatures
 // ---------------------------------------------------------------------------
