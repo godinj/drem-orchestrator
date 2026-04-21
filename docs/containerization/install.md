@@ -321,8 +321,10 @@ git -C /home/godinj/git/drem-orchestrator.git config --get receive.denyCurrentBr
 ```
 
 Host worktrees go stale after a worker pushes, but that's fine: the
-merger always runs `git fetch --all && git reset --hard` before its
-work, so it reads the freshest tree.
+merger clones the integration branch fresh into a disposable
+workspace on every run (see `internal/merger/merger.go`), so it
+reads the bare repo's refs directly and never touches the host
+worktree.
 
 See `plans/bare-repo-denyCurrentBranch.md` for the design. Migrators
 with an existing project from before this change can either re-run

@@ -30,8 +30,11 @@ const configureBareRepoTimeout = 10 * time.Second
 // updateInstead fails with "fatal: exec 'update-index': cd to
 // '<host-path>' failed: No such file or directory" and the push is
 // rejected. `ignore` accepts the push without touching the worktree.
-// The host worktree goes stale, which is safe because merger runs
-// `git fetch --all && git reset --hard` before every merge.
+// The host worktree goes stale, which is safe because merger
+// clones the integration branch fresh into a disposable workspace
+// on every run (see internal/merger/merger.go: resetWorkDir +
+// cloneBranch) — it reads the bare repo's refs directly, never the
+// host worktree's working tree.
 //
 // The function is idempotent: `git config <key> <value>` overwrites
 // with the same value (no-op) or sets a differing value. Calling it

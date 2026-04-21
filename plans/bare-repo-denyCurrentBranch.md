@@ -58,9 +58,11 @@ rejects.
 accepts the push to a checked-out branch without touching the
 working tree. The host worktree's working directory goes stale
 (the new tip is only reachable via `git log <branch>`), which is
-safe because every merger run starts with
-`git fetch --all && git reset --hard`. Stale worktrees are a
-debugging affordance, not a correctness requirement.
+safe because the merger clones the integration branch fresh into a
+disposable workspace on every run (see `internal/merger/merger.go`:
+`resetWorkDir` + `cloneBranch`) — it reads the bare repo's refs
+directly, never the host worktree's working tree. Stale worktrees
+are a debugging affordance, not a correctness requirement.
 
 The original plan's §3 rejected `ignore` on the premise that
 "silent staleness is worse than loud rejection." That premise
@@ -177,8 +179,9 @@ canary unblock.
 Push always succeeds, receive-pack never touches the worktree.
 Host worktree's working tree goes stale (new tip only reachable
 via git plumbing until someone runs `git checkout` or `git reset
---hard`), but every merger run already starts with `git fetch
---all && git reset --hard`, so staleness is an artefact only
+--hard`), but the merger clones the integration branch fresh into
+a disposable workspace on every run (see
+`internal/merger/merger.go`), so staleness is an artefact only
 visible to operators inspecting the worktree directly — never
 propagates into integration or merge results. Trivial to apply,
 no container path dependencies, works with or without the host
