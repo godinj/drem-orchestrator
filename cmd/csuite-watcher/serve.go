@@ -17,6 +17,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
+	"github.com/godinj/drem-orchestrator/internal/deliver"
 	"github.com/godinj/drem-orchestrator/internal/serve"
 )
 
@@ -127,10 +128,20 @@ func runServe(args []string, stderr io.Writer) int {
 		listenAddr = ":8080"
 	}
 
+	// Outbox routing wiring — the /deliver and /healthz endpoints
+	// described in plans/csuite-watcher-outbox-routing.md. The token
+	// is intentionally a different secret from DREM_BEARER_TOKEN
+	// (bridge API audience) so a leak of one does not compromise the
+	// other.
+	deliverHandler := deliver.Handler(deliver.Config{
+		Token: os.Getenv("CSUITE_WATCHER_TOKEN"),
+	})
+
 	srv := serve.New(serve.Config{
-		Token: cfg.BearerToken,
-		Addr:  listenAddr,
-		Store: store,
+		Token:          cfg.BearerToken,
+		Addr:           listenAddr,
+		Store:          store,
+		DeliverHandler: deliverHandler,
 	})
 
 	if err := srv.Start(); err != nil {

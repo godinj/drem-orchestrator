@@ -28,6 +28,13 @@ type Config struct {
 	Token string // Bearer token for API authentication
 	Addr  string // TCP address to listen on; defaults to ":8080" when empty
 	Store dashboardStore
+
+	// DeliverHandler is an optional http.Handler mounted at /healthz
+	// and /deliver. When non-nil the bridge Server composes the
+	// outbox-routing endpoints alongside its own /api/* tree. Left nil
+	// (e.g. in host-mode integration tests) the bridge operates without
+	// routing support. See internal/deliver for the handler factory.
+	DeliverHandler http.Handler
 }
 
 // Server is the bridge HTTP server. Zero value is not usable; use New.
@@ -91,6 +98,14 @@ func (s *Server) buildMux() *http.ServeMux {
 	// WebSocket endpoint handles its own auth (token via query param or header)
 	// because browsers cannot set custom headers on WebSocket upgrade requests.
 	mux.Handle("/api/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token))
+	// Outbox-routing endpoints. Both /healthz (unauth liveness) and
+	// /deliver (X-Csuite-Token auth) are provided by the optional
+	// DeliverHandler. Registering them as specific paths ahead of the
+	// "/" catch-all ensures they win the mux lookup.
+	if s.cfg.DeliverHandler != nil {
+		mux.Handle("/healthz", s.cfg.DeliverHandler)
+		mux.Handle("/deliver", s.cfg.DeliverHandler)
+	}
 	// PWA static assets are served without auth — the browser needs to fetch
 	// the manifest, service worker, and app shell before the user can log in.
 	// The "/" pattern is a catch-all that serves index.html for unmatched paths.
