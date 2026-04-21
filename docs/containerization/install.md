@@ -307,6 +307,23 @@ Writes `~/.drem/projects.toml` and generates
 `~/.drem/projects/drem-orchestrator/compose.yml` from
 `internal/projects/templates/project-compose.yml.tmpl`.
 
+Register also sets `receive.denyCurrentBranch=updateInstead` on the
+target bare repo so the worker watchdog's final `git push` at
+end-of-task succeeds against our shared-workspace bare (which has
+host worktrees checked out under it; a plain bare would reject the
+push). Verify with:
+
+```bash
+git -C /home/godinj/git/drem-orchestrator.git config --get receive.denyCurrentBranch
+# → updateInstead
+```
+
+See `plans/bare-repo-denyCurrentBranch.md` for the design. Migrators
+with an existing project from before this change can either re-run
+`drem project register --update <name> --force` (reapplies it
+alongside any template drift) or back-fill directly with `git -C
+<bare> config receive.denyCurrentBranch updateInstead`.
+
 > Known wiring gap (carried from Tier 3, see `remaining-work.md`
 > §Known caveats): `cmd/drem/project.go`'s `templateDataFor` uses
 > `uuid.NewString()` for the shared token and leaves `OrchHostPort`,
