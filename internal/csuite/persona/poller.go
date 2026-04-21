@@ -268,68 +268,89 @@ func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Durati
 	sha := sha256Bytes(stdout)
 	emittedAt := now.UTC().Format(time.RFC3339)
 
-	// Fire the signal in a short-lived goroutine so the main poll
-	// loop is not blocked by retries. The outcome feeds state.md via
-	// writeStateExt after the goroutine completes.
-	//
-	// Until the goroutine returns we record last_signal_status as
-	// "pending"; when it completes it atomically rewrites state.md
-	// with the terminal outcome. If the poller is shutting down
-	// (ctx cancelled) the goroutine still completes but its
-	// writeStateExt call becomes a no-op inside a racing shutdown —
-	// we tolerate that because last_signal_status for the previous
-	// tick is less important than a clean exit.
+	// outboxAbs is what the signal payload carries. It's the local
+	// filesystem path on the persona's side; the signaler translates
+	// to the watcher's path prefix before POSTing.
+	outboxAbs := outPath
+
+	// Fire the signal BEFORE attempting the inbox-archive rename. The
+	// archive rename can race with a Claude subprocess that uses its
+	// Bash tool to `mv` the inbox file into .archive itself (some
+	// persona prompts instruct that explicitly). If we archived first
+	// and Claude had already moved the file, os.Rename returns
+	// ENOENT, the function short-circuits, and the signal never
+	// fires — blocking the watcher from ever routing the reply the
+	// persona just wrote. The signal only depends on the outbox write
+	// + fsync above, which is exactly what a watcher POST already
+	// needs. Decoupling here preserves the plan §Signal-failure-
+	// isolation guarantee: no post-write bookkeeping can starve the
+	// signal.
 	signaler := p.signaler()
+	_, signalDisabled := signaler.(disabledSignaler)
+	if !signalDisabled && signaler != nil {
+		// Pre-seed state.md with an "ok" record and no signal outcome
+		// yet so the main poll loop can return while the goroutine
+		// finishes. Final outcome is written when the signal completes.
+		if err := p.writeStateExt(name, "ok", 0, dur, ""); err != nil {
+			p.cfg.Logger.Warn("write state (pending signal)",
+				p.personaLabel,
+				slog.Any("err", err))
+		}
+		go func() {
+			// Separate context: the signal call survives a main-loop
+			// cancellation so an in-flight retry can complete. Timeout
+			// is bounded by the Signaler's backoff budget (~13s worst
+			// case) plus a little slack for the final HTTP attempt.
+			ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cancel()
+			outcome := signaler.Signal(ctx, p.cfg.Persona, outboxAbs, sha, emittedAt)
+			if err := p.writeStateExt(name, "ok", 0, dur, outcome); err != nil {
+				p.cfg.Logger.Warn("write state (post-signal)",
+					p.personaLabel,
+					slog.Any("err", err))
+			}
+		}()
+	}
+
+	// Attempt to archive the inbox file. An ENOENT here is benign:
+	// Claude-in-subprocess may have already `mv`d the file into
+	// .archive via its Bash tool (see persona prompts for seth/alex
+	// which instruct exactly that). Treating ENOENT as an error would
+	// cause the whole recordSuccess to unwind and drop state.md — even
+	// though the happy-path work (write outbox + fsync + signal) has
+	// already completed. Any other error (permission denied, target
+	// dir missing) still propagates so an operator notices.
 	archivePath := filepath.Join(p.cfg.ArchiveDir, name)
+	archived := true
 	if err := os.Rename(filepath.Join(p.cfg.InboxDir, name), archivePath); err != nil {
-		return fmt.Errorf("archive inbox %q: %w", name, err)
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("archive inbox %q: %w", name, err)
+		}
+		archived = false
+		p.cfg.Logger.Info("inbox file already moved before archive",
+			p.personaLabel,
+			slog.String("inbox_file", name),
+		)
 	}
 	// Clear sidecar counter (if the prior attempts failed before this
-	// tick succeeded).
+	// tick succeeded). Idempotent — no-op when the sidecar is absent.
 	_ = os.Remove(failuresPath(p.cfg.InboxDir, name))
 
 	p.cfg.Logger.Info("processed message",
 		p.personaLabel,
 		slog.String("inbox_file", name),
 		slog.String("outbox_file", outName),
+		slog.Bool("archived", archived),
 		slog.Duration("duration", dur),
 	)
 
-	// Short-circuit the goroutine entirely when signaling is disabled
-	// so no HTTP client is ever instantiated and no goroutine is
-	// spawned. Same external behaviour as the pre-signal code.
-	if _, disabled := signaler.(disabledSignaler); disabled || signaler == nil {
+	// Short-circuit: when signaling is disabled the goroutine above
+	// never fired, so no post-signal state write will happen. Write
+	// the terminal state.md record inline with SignalDisabled so
+	// operators can still tell the message was handled.
+	if signalDisabled || signaler == nil {
 		return p.writeStateExt(name, "ok", 0, dur, SignalDisabled)
 	}
-
-	// Pre-seed state.md with an "ok" record and no signal outcome yet
-	// so the main poll loop can return while the goroutine finishes.
-	// Final outcome is written when the signal completes.
-	if err := p.writeStateExt(name, "ok", 0, dur, ""); err != nil {
-		p.cfg.Logger.Warn("write state (pending signal)",
-			p.personaLabel,
-			slog.Any("err", err))
-	}
-
-	// outboxAbs is what the signal payload carries. It's the local
-	// filesystem path on the persona's side; the signaler translates
-	// to the watcher's path prefix before POSTing.
-	outboxAbs := outPath
-
-	go func() {
-		// Separate context: the signal call survives a main-loop
-		// cancellation so an in-flight retry can complete. Timeout is
-		// bounded by the Signaler's backoff budget (~13s worst case)
-		// plus a little slack for the final HTTP attempt.
-		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cancel()
-		outcome := signaler.Signal(ctx, p.cfg.Persona, outboxAbs, sha, emittedAt)
-		if err := p.writeStateExt(name, "ok", 0, dur, outcome); err != nil {
-			p.cfg.Logger.Warn("write state (post-signal)",
-				p.personaLabel,
-				slog.Any("err", err))
-		}
-	}()
 	return nil
 }
 

@@ -577,6 +577,81 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	}
 }
 
+// TestPoller_SignalFiresWhenInboxAlreadyArchived covers the race between
+// the poller's archive rename and a Claude-in-subprocess that uses its
+// Bash tool to move the inbox file into .archive itself (some persona
+// prompts instruct exactly that, e.g. seth's system prompt). The
+// post-write bookkeeping must not gate the signal — otherwise the
+// ENOENT on os.Rename would short-circuit recordSuccess before the
+// HTTP signal goroutine ever launches, and the watcher would never
+// route the reply unless a rescan pass happened to kick in. Plan
+// §Signal-failure-isolation pins the guarantee that outbox write +
+// fsync is sufficient state for a signal.
+func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	rec := &recordingSignaler{onCall: func(_ signalCall) persona.SignalOutcome {
+		return persona.SignalOK
+	}}
+	cfg.Signaler = rec
+
+	// Spawner pretends to be Claude: it reads the inbox body, then
+	// "uses its Bash tool" to move the inbox file into .archive before
+	// returning its reply. The poller's subsequent os.Rename then sees
+	// ENOENT on the source path.
+	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, stdin io.Reader) ([]byte, int, error) {
+		_, _ = io.ReadAll(stdin)
+		srcPath := filepath.Join(fs.inboxDir, "claude-moved-me.md")
+		dstPath := filepath.Join(fs.archiveDir, "claude-moved-me.md")
+		if err := os.Rename(srcPath, dstPath); err != nil {
+			return nil, 1, fmt.Errorf("test spawner: pre-archive: %v", err)
+		}
+		return []byte("reply-body"), 0, nil
+	})
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "claude-moved-me.md", "hello", time.Now())
+
+	// Signal MUST land even though the archive rename fails with
+	// ENOENT — the signal code runs before the archive attempt.
+	err = runPollerUntil(t, p, func() bool {
+		rec.mu.Lock()
+		defer rec.mu.Unlock()
+		return len(rec.calls) >= 1
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for signal after Claude-moved inbox: %v", err)
+	}
+
+	rec.mu.Lock()
+	calls := append([]signalCall(nil), rec.calls...)
+	rec.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("want 1 signal call, got %d", len(calls))
+	}
+	// The outbox file must exist and the signal's sha256 must match
+	// its on-disk contents.
+	outEntries := dirEntries(t, fs.outboxDir)
+	if len(outEntries) != 1 {
+		t.Fatalf("outbox entries: want 1, got %d (%v)", len(outEntries), outEntries)
+	}
+	if calls[0].persona != "seth" {
+		t.Errorf("persona = %q, want seth", calls[0].persona)
+	}
+	wantSHA := sha256Hex([]byte("reply-body"))
+	if calls[0].sha256 != wantSHA {
+		t.Errorf("sha256 = %q, want %q", calls[0].sha256, wantSHA)
+	}
+	// Archive directory must still have the file Claude moved; the
+	// poller's second archive attempt is a no-op here.
+	archived := dirEntries(t, fs.archiveDir)
+	if len(archived) != 1 || archived[0] != "claude-moved-me.md" {
+		t.Errorf("archive dir = %v, want [claude-moved-me.md]", archived)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers.
 // ---------------------------------------------------------------------------
