@@ -442,6 +442,166 @@ state within seconds of completion.
 > built-in default; the container has no `drem.toml` mounted and relies on
 > the env block populated from `Project.SharedToken`.
 
+## C-Suite personas: the persona poller runtime
+
+Wave 2 of the csuite-docker pivot (2026-04-20) replaced the long-lived
+interactive `claude` process that served as each persona container's
+entrypoint with the `csuite-persona` headless poller baked into
+`drem-csuite-base`. Before the pivot, `csuite-run.sh` did
+`exec claude --print --system-prompt-file …` and then just sat there —
+the CLI had no mechanism to notice files appearing in the persona's
+inbox, so the dispatcher's "drop a message into `~/.drem-csuite/seth/inbox/`"
+pattern reached a dead end. The poller closes that gap.
+
+### What the poller does
+
+On each tick (default 2s) the binary at `/usr/local/bin/csuite-persona`
+scans `/home/drem/.drem-csuite/<persona>/inbox/` for `*.md` files. For
+each file, oldest-first by mtime:
+
+1. Reads the message body.
+2. Invokes
+   `claude --dangerously-skip-permissions -p "<message>" --system-prompt "<persona prompt>" --output-format text`
+   as a subprocess with a 5-minute default timeout (configurable via
+   `-claude-timeout`).
+3. On exit 0: writes stdout to
+   `~/.drem-csuite/<persona>/outbox/<timestamp>-<persona>-reply-<shortid>.md`,
+   atomically replaces `~/.drem-csuite/<persona>/state.md` with a
+   structured record of the last-processed message, and moves the
+   original inbox file to `~/.drem-csuite/<persona>/inbox/.archive/`.
+4. On non-zero exit or spawn error: bumps a sidecar counter
+   (`<name>.failures`) and leaves the message in the inbox for the
+   next tick. After three failures (configurable via `-max-failures`)
+   the file is archived as `<name>.failed` so the loop moves on.
+
+Structured logs go to stdout via slog's JSON handler, which means
+`docker logs csuite-<persona>` is machine-parseable without extra
+formatting.
+
+### Directory layout inside the container
+
+```
+/home/drem/
+├── .claude/
+│   ├── .credentials.json   # bind-mounted read-only from host (Wave 1)
+│   └── settings.json       # baked into the image (theme preseed)
+├── .claude.json            # baked (onboarding skip flags)
+├── .drem-csuite/
+│   └── <persona>/
+│       ├── inbox/
+│       │   ├── *.md            # pending messages
+│       │   ├── *.md.failures   # sidecar counters (for retries)
+│       │   └── .archive/       # processed and failed messages
+│       ├── outbox/
+│       │   └── <ts>-<persona>-reply-<shortid>.md
+│       └── state.md            # last-processed record
+
+/opt/csuite/prompts/
+├── mike.md
+├── alex.md
+├── ross.md
+└── seth.md                 # --system-prompt value for the CLI
+```
+
+The whole `.drem-csuite/<persona>/` tree is bind-mounted from the host
+at `~/.drem-csuite/<persona>/` (Wave 1, commit `7fa9e85`) so an operator
+running `ls ~/.drem-csuite/seth/outbox/` on the host sees the replies
+without `docker cp`.
+
+### Authentication — subscription-only
+
+The poller never reads or sets `CLAUDE_CODE_OAUTH_TOKEN`,
+`ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`. The `claude` CLI
+authenticates via the operator's host credentials file bind-mounted
+read-only at `/home/drem/.claude/.credentials.json`. If that file is
+missing on host, every `claude -p` invocation will 401 and every
+message will hit the .failures retry path. Run `claude login` on host
+and rebuild — no container rebuild is needed for a credentials refresh,
+only a `claude login` on host.
+
+### Operator runbook — upgrading a pre-pivot project
+
+The bind-mounts that the poller depends on (per-persona
+`~/.drem-csuite/<persona>/`, the credentials file, the settings
+preseed) landed in the per-project compose template in Wave 1 and the
+image switch is this commit sequence. A project registered before Wave
+1 needs the mounts regenerated AND the image rebuilt:
+
+1. **Re-render `compose.yml` for each project that was registered
+   before Wave 1.** This picks up the bind-mounts and any other
+   template drift:
+
+   ```bash
+   drem project register --update <name>
+   # or with --force to stomp a hand-patched compose.yml
+   drem project register --update <name> --force
+   ```
+
+2. **Rebuild the csuite images with the poller baked in.** The build
+   script pre-compiles `cmd/csuite-persona` into the Docker build
+   context before invoking `docker build`:
+
+   ```bash
+   bash deploy/docker/build-csuite.sh
+   ```
+
+   This refreshes `drem-csuite-base` and
+   `drem-csuite-{mike,alex,ross,seth}` in the local registry at
+   `localhost:5000` and pushes them.
+
+3. **Edit `~/.drem/projects/<name>/compose.override.yml` to remove
+   the obsolete `csuite-run.sh` bind-mount** from every csuite-*
+   service. The file lives on the operator's host outside the repo.
+   With the Wave-2 image the poller is baked into the image and no
+   longer needs an override. Lines that look like the following on each
+   of `csuite-mike`, `csuite-alex`, `csuite-ross`, `csuite-seth` should
+   be deleted:
+
+   ```yaml
+   # Remove these if present:
+   - type: bind
+     source: <repo>/deploy/docker/context/csuite-run.sh
+     target: /usr/local/bin/csuite-run.sh
+     read_only: true
+   ```
+
+4. **Recreate only the persona services** so the compose graph does
+   not cascade into SGLang's CUDA-graph recapture. `--no-deps` is
+   mandatory (per CLAUDE.md "Do not run `docker compose up` without
+   `--no-deps` when scoping to a subset of services"):
+
+   ```bash
+   docker compose -f ~/.drem/projects/<name>/compose.yml \
+       up -d --no-deps --force-recreate \
+       csuite-mike csuite-alex csuite-ross csuite-seth
+   ```
+
+5. **Verify** with a round-trip test against one persona. Seth is a
+   good default target since he is the CTO and the prompt is the
+   smallest:
+
+   ```bash
+   cat > ~/.drem-csuite/seth/inbox/$(date +%Y%m%dT%H%M%S)-smoke.md <<'EOF'
+   Smoke test — reply with a single sentence.
+   EOF
+   # Wait a few seconds, then check:
+   ls ~/.drem-csuite/seth/outbox/
+   cat ~/.drem-csuite/seth/state.md
+   ls ~/.drem-csuite/seth/inbox/.archive/
+   ```
+
+   Expected outcome: the smoke-test file moved from inbox to archive,
+   one new file in outbox, `state.md` shows `last_status: ok`. If the
+   message sticks in the inbox with a `.failures` sidecar, check
+   `docker logs csuite-seth` for the reason — the most common cause is
+   a missing or expired `~/.claude/.credentials.json` on host.
+
+### Deferred items (tracked in `plans/csuite-persona-pivot.md`)
+
+- fsnotify-based inbox wake-up (the first cut is a polling loop).
+- `claude -p --resume` support for cross-message memory.
+- A worker-base preseed analogous to this one (separate drive-by task).
+
 ## Warm direct agents
 
 Two roles run as long-lived warm services on `drem-net` rather than
@@ -542,7 +702,11 @@ reserved for work that truly needs it.
 This one prerequisite covers three consumers in the stack:
 
 - **csuite agents** (mike / alex / ross / seth) — long-lived warm
-  containers that run the claude CLI inside their entrypoint.
+  containers that run the `csuite-persona` inbox poller (Wave 2 of
+  the csuite-docker pivot — see "C-Suite personas: the persona poller
+  runtime" below). Each message dropped into
+  `~/.drem-csuite/<persona>/inbox/` triggers one `claude -p`
+  invocation inside the container.
 - **drem-planner** — the warm planner service documented above.
 - **drem-worker-{go,cpp} coder / reviewer / fixer / tester /
   supervisor** — ephemeral per-task workers spawned by orch through
