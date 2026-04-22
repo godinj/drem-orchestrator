@@ -91,13 +91,37 @@ services:
       - {{.ConfigFilePath}}:/var/lib/drem/drem.toml:ro
       - drem-spawner-sock:/var/run/drem:ro{{if .DevMode}}
       - {{.RepoSourcePath}}:/src:ro{{end}}
+      # Bug E W3.2 goroutine-dump retrieval:
+      # cmd/drem installs a SIGUSR1 handler that writes
+      # /tmp/drem-goroutines-<unix_ts>.log inside the container. To read
+      # those dumps from the host without `docker cp`, add a bind-mount
+      # of the form `- /host/path:/tmp:rw` (omitted from the generated
+      # template so `drem project register` stays side-effect-free on
+      # the host FS). Operators who want durable access can add the
+      # mount to compose.override.yml and point it at a directory they
+      # control. See plans/bug-e-orch-load-shedding.md §W3.2.
     networks: [drem-net]
     labels:
       drem.project: "{{.ProjectName}}"
       drem.service: orch
     ports:
       - "127.0.0.1:{{.OrchHostPort}}:8080"
-    restart: unless-stopped
+    # Bug E W5.1: healthcheck + on-failure restart policy. A wedged orch
+    # (e.g. the 2026-04-21 retry-storm incident, or any future pathology
+    # W1's load-shedding does not cover) now gets auto-restarted rather
+    # than sitting dead until the operator notices. `curl` ships in the
+    # runtime image (see deploy/docker/orch.Dockerfile); GET /projects
+    # is the cheapest endpoint that touches the DB and returns useful
+    # error signal. `restart: on-failure` replaces the previous
+    # `unless-stopped` so an orch that crashes on startup does not
+    # restart-loop forever — only post-boot failures retry.
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8080/projects"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: on-failure
 
   agentmon:
     image: localhost:5000/drem-agentmon:latest

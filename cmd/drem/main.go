@@ -33,6 +33,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/metrics"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
+	"github.com/godinj/drem-orchestrator/internal/orchhttp"
 	"github.com/godinj/drem-orchestrator/internal/ratelimit"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
@@ -387,6 +388,31 @@ func main() {
 	// TUI runs as a pure client against the remote orchestrator HTTP API
 	// (e.g. the containerized drem-orch in the per-project compose).
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// Bug E W3.1 + W3.2: always-on observability hooks.
+	//
+	// pprof listener: gated on DREM_PPROF=1 and bound to 127.0.0.1:6060
+	// (override via DREM_PPROF_ADDR) so a distroless orch can serve a
+	// runtime profile to an operator who docker exec-curls it from the
+	// host. Off by default — the env gate keeps the profile surface
+	// opt-in. See internal/orchhttp/pprof.go.
+	//
+	// Goroutine-dump signal handler: a SIGUSR1 writes runtime.Stack
+	// into /tmp/drem-goroutines-<unix_ts>.log so the host operator can
+	// `docker kill --signal=USR1 drem-orchestrator-orch-1` when orch
+	// hangs, then read the dump via a /tmp bind-mount. See
+	// internal/orchhttp/goroutinedump.go.
+	if addr, _, err := orchhttp.StartPprofListener(ctx); err != nil {
+		slog.Warn("pprof listener disabled", "error", err)
+	} else if addr != "" {
+		slog.Info("pprof listener ready", "addr", addr)
+	}
+	if err := orchhttp.InstallGoroutineDumpHandler(ctx, "/tmp"); err != nil {
+		slog.Warn("SIGUSR1 goroutine dump handler disabled", "error", err)
+	} else {
+		slog.Info("SIGUSR1 goroutine dump handler installed", "dir", "/tmp")
+	}
+
 	if !*tuiOnly {
 		go orch.Run(ctx)
 

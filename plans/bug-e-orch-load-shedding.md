@@ -2,8 +2,28 @@
 
 **Status**: W1 (load-shedding middleware + /tasks DB-query timeout) and
 W2.1 (tasks composite index) merged 2026-04-21 per §Sequencing item 1.
-W3 (pprof + SIGUSR1), W4 (log sampling), and W5 (healthcheck +
-sightingProbe) still pending.
+W3.1 (pprof), W3.2 (SIGUSR1 dump), W4.1 (log sampling), and W5.1
+(healthcheck + restart) merged 2026-04-21 per §Sequencing items 2–4.
+W3.3 (Alex metrics task) and W5.2 (sightingProbe wiring) still pending
+on their separate cadences.
+
+**Scope delta 2026-04-21 (W5.1)**: curl vs wget — chose curl because the
+orch runtime image already ships ca-certificates, which means curl and
+its TLS dependency chain install near-free (~200 KB binary delta over
+the existing image). Verified the two candidates pull comparable-size
+transitive dep sets on debian:bookworm-slim; curl won on "fewer new
+packages pulled in" plus a more descriptive failure surface (`curl
+--fail` exits non-zero on HTTP >= 400 by default, wget needs
+`--spider`). See deploy/docker/orch.Dockerfile.
+
+**Scope delta 2026-04-21 (W3.2)**: the goroutine-dump /tmp bind-mount
+is documented in the compose template comment but not added to the
+generated volumes list — doing so would make `drem project register`
+create a new host directory and silently change the on-disk layout of
+every registered project. Operators who want durable access to the
+dumps add a `- /host/path:/tmp:rw` mount to compose.override.yml. The
+dumps still work inside the container without any mount; the bind-mount
+just makes them reachable from the host without `docker cp`.
 
 **Origin**: 2026-04-21. Seth (CTO) produced this prevention list during his RCA
 of the apparent "orch wedge" incident
@@ -114,16 +134,20 @@ commit series `test → feat → feat → feat → docs` on top of master tip
 
 ### W3 — Observability (distroless-compatible)
 
-1. **Always-on pprof, gated to localhost + env flag** — mount `net/http/pprof`
-   handlers on a separate listener bound to `127.0.0.1:6060` (different port
-   from the main API). Gate with `DREM_PPROF=1` env var. Zero-dep: stdlib
-   only. Distroless can run the handler; the blocker today is there's no
-   shell in the container to curl it, so also:
-2. **`SIGUSR1` handler → `runtime.Stack()` to a file** — register a signal
-   handler that writes a goroutine dump to `/tmp/drem-goroutines-<ts>.log`
-   whenever SIGUSR1 arrives. Host operator can `docker kill --signal=USR1
-   drem-orchestrator-orch-1` and then inspect the file via bind-mount.
-   No shell needed inside the container. Zero-dep: stdlib.
+1. **Always-on pprof, gated to localhost + env flag** — MERGED 2026-04-21.
+   `internal/orchhttp/pprof.go` exports `StartPprofListener(ctx)`; the
+   listener binds `127.0.0.1:6060` (override `DREM_PPROF_ADDR`) when
+   `DREM_PPROF=1`. Non-loopback binds return an error so the pprof
+   surface cannot be fat-fingered public. Stdlib-only. Wired from
+   `cmd/drem/main.go` right after the root context is created.
+2. **`SIGUSR1` handler → `runtime.Stack()` to a file** — MERGED
+   2026-04-21. `internal/orchhttp/goroutinedump.go` exports
+   `InstallGoroutineDumpHandler(ctx, dir)`; the handler writes
+   `/tmp/drem-goroutines-<unix_ts>.log` on every SIGUSR1, with a 1 MiB
+   starting buffer that grows once on overflow. Host operator triggers
+   with `docker kill --signal=USR1 drem-orchestrator-orch-1`; see the
+   bind-mount note above in the scope-delta block for retrieval.
+   Stdlib-only (os/signal + runtime).
 3. **Per-endpoint latency + error-rate counters — Alex task** — owned by
    Alex (CPO) per his operator-metrics surface responsibility. Basic
    counters: `orch_request_total{endpoint, status_bucket}`,
@@ -133,11 +157,16 @@ commit series `test → feat → feat → feat → docs` on top of master tip
 
 ### W4 — Log hygiene
 
-1. **Log sampling inside for-loops** — wrap error-rate-prone loop logs with
-   a sampling wrapper that emits at most once per N occurrences or per M
-   seconds. Today's `/tasks status=500` repeated >1000× per 200 KB of tail
-   is the canonical anti-pattern. Apply to `orchhttp` handlers first, then
-   sweep the rest of `internal/` for `for { ... log.X(...) }` shapes.
+1. **Log sampling inside for-loops** — MERGED 2026-04-21.
+   `internal/logging/sampler.go` exports `Sampler` with two policies
+   (`EveryN(n)` per-count, `EveryD(d)` per-time-window), per-site
+   counter isolation via `sync.Map`, and a Printf-style slog wrapper.
+   Applied in `internal/orchhttp/server.go` (per-request log, EveryN(32)
+   keyed on method+path) and `internal/orchhttp/handlers_public.go`
+   (`writeTasksTimeout`, EveryD(1s)) — the two sites that accounted for
+   the 1406-lines-per-200KB incident log tail. Scope guardrail: broader
+   sweep of `for { ... log.X(...) }` shapes across `internal/` is
+   follow-up.
 2. **Bounded `drem.log` via log rotation** — outside scope of Go code;
    document in install docs that `/var/lib/drem/data/drem.log` should rotate
    (`logrotate` config template or a systemd service template). Minimum
@@ -145,13 +174,15 @@ commit series `test → feat → feat → feat → docs` on top of master tip
 
 ### W5 — Ops
 
-1. **Docker healthcheck** in compose for `drem-orchestrator-orch-1`: `curl
-   --fail http://127.0.0.1:8080/projects || exit 1`, every 30s, 3 retries.
-   Paired with `restart: on-failure` in the compose service. An orch that
-   stops responding for 90 s gets restarted automatically, which would have
-   papered over today's incident entirely (well, until the client came back
-   and wedged the replacement — which is why W1 is the real fix, not just
-   this).
+1. **Docker healthcheck** — MERGED 2026-04-21.
+   `internal/projects/templates/project-compose.yml.tmpl` now sets
+   `healthcheck: curl --fail http://127.0.0.1:8080/projects` every 30s
+   with 3 retries and a 10s start period, paired with
+   `restart: on-failure`. `curl` is added to
+   `deploy/docker/orch.Dockerfile` runtime apt-get. The live compose
+   at `~/.drem/projects/drem-orchestrator/compose.yml` is also updated
+   in-place so the running deployment picks up the policy without
+   waiting for the next `drem project register --update`.
 2. **Cross-process wiring of `sightingProbe`** — carried over from Bug D
    (`plans/agentmon-observability-hardening.md`? — check location). The
    `ContainerSightingProbe` hook is plumbed but `sightingProbe` stays `nil`
@@ -169,12 +200,15 @@ Recommended order:
    → feat(timeout) → docs), ~360 LOC prod + 390 LOC test. Env knobs
    finalised as `DREM_ORCH_MAX_INFLIGHT`, `DREM_ORCH_TASKS_MAX_INFLIGHT`,
    and `DREM_ORCH_TASKS_QUERY_TIMEOUT_MS`.
-2. **W3.1 + W3.2 (pprof + SIGUSR1)** as a small observability PR. ~80 LOC.
-   Low risk, high debugging value next time something goes sideways.
-3. **W4.1 (log sampling)** as a focused PR across `orchhttp` + any obvious
-   offenders. ~100 LOC including tests. Low risk.
-4. **W5.1 (healthcheck + restart policy)** as a compose-config PR. Tiny.
-   Ships whenever.
+2. **W3.1 + W3.2 (pprof + SIGUSR1)** — DONE 2026-04-21. Landed in
+   `internal/orchhttp/pprof.go` and `internal/orchhttp/goroutinedump.go`
+   with a paired RED-GREEN test pair per file plus wiring in
+   `cmd/drem/main.go`.
+3. **W4.1 (log sampling)** — DONE 2026-04-21. Landed as
+   `internal/logging/sampler.go` + apply-sites in
+   `internal/orchhttp/server.go` and `internal/orchhttp/handlers_public.go`.
+4. **W5.1 (healthcheck + restart policy)** — DONE 2026-04-21. Landed
+   via the compose template + orch Dockerfile edits.
 5. **W5.2 (sightingProbe wiring)** separately — revisit the original Bug D
    plan doc; this is its natural follow-up.
 6. **W3.3 (latency metrics)** — Alex drafts spec, Kyle dispatches impl. No

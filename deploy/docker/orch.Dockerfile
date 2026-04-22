@@ -46,9 +46,17 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          ca-certificates \
+         curl \
          git \
          tini \
     && rm -rf /var/lib/apt/lists/*
+
+# curl is required by the compose healthcheck declared in
+# internal/projects/templates/project-compose.yml.tmpl — Bug E W5.1 hits
+# GET /projects (the cheapest endpoint with a useful error signal) every
+# 30s and restarts the container on three consecutive failures. The
+# binary adds ~200 KB + deps already satisfied by ca-certificates, so
+# the image-size cost is negligible compared to the observability gain.
 
 # The bare repo is bind-mounted from the host (owned by the operator's UID,
 # typically 1000) into this root-owned container. Git 2.35+ refuses cross-UID

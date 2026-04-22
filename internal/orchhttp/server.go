@@ -20,6 +20,8 @@ import (
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+
+	"github.com/godinj/drem-orchestrator/internal/logging"
 )
 
 // LogStreamer is the minimal interface Server needs to proxy
@@ -154,14 +156,30 @@ func (s *Server) requireAgentmonToken(next http.Handler) http.Handler {
 	})
 }
 
+// requestLogSampler gates the per-request "orchhttp request" log line
+// so a retry storm cannot reproduce the 2026-04-21 drem.log blow-up
+// (1406 lines per 200 KB tail at 495 req/s). EveryN(32) keeps enough
+// signal for routine triage without letting a bad client turn the log
+// file into a DoS vector. Bug E W4.1. See internal/logging/sampler.go.
+//
+// The sampler is package-level so every Server shares admission state —
+// tests that spin up multiple servers do not reset the counter, which
+// matches the production shape (one orch process, one log file).
+var requestLogSampler = logging.NewSampler(logging.EveryN(32))
+
 // logRequests wraps an http.Handler and logs method, path, status, and
 // duration at info level. A statusRecorder is used so the status code is
 // observable post-hoc; the default http.ResponseWriter does not expose it.
+// Emissions are sampled per site-tag via requestLogSampler; suppressed
+// requests still execute their handler but skip the log line.
 func logRequests(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rec, r)
+		if !requestLogSampler.Allow(requestLogSite(r)) {
+			return
+		}
 		slog.Info("orchhttp request",
 			"method", r.Method,
 			"path", r.URL.Path,
@@ -169,6 +187,22 @@ func logRequests(next http.Handler) http.Handler {
 			"duration_ms", time.Since(start).Milliseconds(),
 		)
 	})
+}
+
+// LogRequestsForTest exposes logRequests to external test packages so
+// the W4.1 apply-site regression can exercise the real middleware
+// wiring without standing up a full Server. Production code must use
+// Server.Routes instead.
+func LogRequestsForTest(next http.Handler) http.Handler { return logRequests(next) }
+
+// requestLogSite maps a request to the sampler site-tag. Method + path
+// means /tasks floods share one counter (the site we most want to
+// sample), while /workers and /events each get their own budget. Query
+// strings are excluded so ?status=backlog and ?status=done roll up to
+// the same site — we do not want ten thousand "statuses" in the
+// sync.Map.
+func requestLogSite(r *http.Request) string {
+	return r.Method + " " + r.URL.Path
 }
 
 // recoverPanics is the outermost middleware: it converts a panic in any

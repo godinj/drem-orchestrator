@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strconv"
@@ -14,9 +14,16 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/logging"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
+
+// tasksTimeoutLogSampler gates the per-timeout log emitted by
+// writeTasksTimeout. A saturated /tasks cap plus a slow SQLite scan
+// can produce one timeout log line per shed request; during the
+// 2026-04-21 retry storm that would have been ~495/s. Bug E W4.1.
+var tasksTimeoutLogSampler = logging.NewSampler(logging.EveryD(time.Second))
 
 // defaultTasksQueryTimeout is the hard ceiling the /tasks handler
 // applies to its SQLite list query. Bug E W1.3: without this, a cold
@@ -134,12 +141,17 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 }
 
 // writeTasksTimeout surfaces a /tasks DB timeout as 503 + Retry-After: 1
-// and emits a terse log.Printf line with the elapsed duration so
-// operators can correlate the shed response with the slow query in
-// drem.log. The plan explicitly calls out "include the elapsed duration"
-// as part of the log shape.
+// and emits a terse log line with the elapsed duration so operators can
+// correlate the shed response with the slow query in drem.log. The
+// emission is sampled — at most one per second per site — so a retry
+// storm cannot produce the gigabyte-log anti-pattern observed during
+// the 2026-04-21 incident.
 func writeTasksTimeout(w http.ResponseWriter, elapsed time.Duration) {
-	log.Printf("orchhttp /tasks DB query timeout after %s — shedding request", elapsed)
+	if tasksTimeoutLogSampler.Allow("tasks-timeout") {
+		slog.Warn("orchhttp /tasks DB query timeout — shedding request",
+			"elapsed", elapsed,
+		)
+	}
 	w.Header().Set("Retry-After", "1")
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusServiceUnavailable)
