@@ -1,9 +1,14 @@
 # Bug F — Spawner image-registry drift (one source of truth)
 
-**Status**: plan doc. The immediate v15/v16 unblock landed inline in
-`internal/spawner/images.go` with a drift-guard test. This plan covers
-the architectural follow-up: collapse the two parallel registries into
-one.
+**Status**: MERGED. Shipped as a 5-commit worktree on 2026-04-21 (see
+"Final shape" below). The architectural follow-up is complete: both
+`internal/spawner` and `internal/agent` delegate to the new
+`internal/images` package; the drift is now compile-impossible.
+
+The immediate v15/v16 unblock landed inline in
+`internal/spawner/images.go` with a drift-guard test (`fe5aced`). This
+plan covered the architectural follow-up: collapse the two parallel
+registries into one.
 
 **Origin**: 2026-04-22. Discovered during dogfood of the 5-phase orch-API
 gate-mutation pivot. After `drem cli approve 3ddba802` (v15) and
@@ -162,3 +167,45 @@ the next drift. Ships opportunistically — good worktree-subagent
 starter task when cycles open up, or inline on a quiet day.
 
 — kyle, 2026-04-22
+
+## Final shape (merged 2026-04-21)
+
+Shipped as a 5-commit worktree under the Option B recommendation:
+
+1. `test(images): failing tests for shared internal/images package`
+   — red tests in the new package.
+2. `feat(images): extract shared agent-type → image registry` — new
+   `internal/images/default.go` with the union table
+   (`DefaultImages`) and `Resolve(agentType, labels)`. Zero internal
+   imports. Unit tests turn green.
+3. `refactor(spawner): delegate image lookup to internal/images` —
+   `internal/spawner/images.go` drops its local `defaultImages` map
+   and becomes a 17-line shim over `images.Resolve`. The old
+   `TestResolveImage_NonCoderAgentTypesMapped` drift guard retires
+   (no longer meaningful against a single-table design); the other
+   two spawner tests call the shim directly.
+4. `refactor(agent): delegate image lookup to internal/images` —
+   `internal/agent/image_resolver.go` drops its local `DefaultImages`
+   map. The `ImageResolver` struct stays (it still owns `Overrides` +
+   `Language` per-project semantics) and delegates the default lookup
+   to `images.Resolve`. All pre-existing agent tests pass unchanged.
+5. `test(images): permanent enum-coverage drift guard + docs` — adds
+   `internal/images/enum_coverage_test.go`, which sources agent types
+   from `internal/model/enums.go`'s `AgentType` constants rather than
+   a hand-maintained list. Every constant must either resolve to an
+   image via `Resolve` or appear on the `intentionallyUnmapped`
+   allowlist (`AgentOrchestrator`, `AgentPlanner`, `AgentResearcher`,
+   `AgentPrep`). Adding a new `AgentType` without an image mapping
+   fails this test on the next CI run.
+
+Line-count deltas: `internal/spawner/images.go` 61 → 17 lines;
+`internal/agent/image_resolver.go` 85 → 78 lines; new
+`internal/images/default.go` 62 lines, `default_test.go` 96 lines,
+`enum_coverage_test.go` ~90 lines — all well under the constitution
+cap.
+
+Call sites (`internal/spawner/methods.go:53`,
+`internal/agent/image_resolver.go:Resolve`) kept their public API
+unchanged; the refactor is a pure internal restructure. A
+`grep -rn 'defaultImages\|DefaultImages'` over the tree shows the
+only production references are inside `internal/images/` itself.

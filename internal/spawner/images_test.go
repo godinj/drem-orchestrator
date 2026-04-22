@@ -3,18 +3,21 @@ package spawner
 import "testing"
 
 // TestResolveImage_PlannerNotMapped asserts that AgentType "planner" has
-// no mapping in the spawner image table. The warm drem-planner is a
-// long-lived service in deploy/compose/global.yml, not a spawn-on-demand
-// role — so the spawner must refuse a planner spawn rather than silently
-// succeeding against a stale image tag. See plans/warm-planner-pivot.md §7.
+// no mapping in the shared image table the spawner delegates to. The
+// warm drem-planner is a long-lived service in deploy/compose/global.yml,
+// not a spawn-on-demand role — so the spawner must refuse a planner
+// spawn rather than silently succeeding against a stale image tag. See
+// plans/warm-planner-pivot.md §7.
 func TestResolveImage_PlannerNotMapped(t *testing.T) {
 	if _, ok := resolveImage("planner", nil); ok {
 		t.Fatalf("resolveImage(planner): expected ok=false (warm planner only); got mapped image")
 	}
 }
 
-// TestResolveImage_MergerStillMapsToDremMerger is the regression guard:
-// the planner addition must not disturb the existing merger mapping.
+// TestResolveImage_MergerStillMapsToDremMerger pins the spawner-side
+// behaviour of the image shim: merger must resolve even though the
+// table itself lives in internal/images. Catches accidental rewires
+// of the shim that break a hot-path agent type.
 func TestResolveImage_MergerStillMapsToDremMerger(t *testing.T) {
 	got, ok := resolveImage("merger", nil)
 	if !ok {
@@ -36,34 +39,9 @@ func TestResolveImage_UnknownAgentTypeReturnsFalse(t *testing.T) {
 	}
 }
 
-// TestResolveImage_NonCoderAgentTypesMapped asserts every non-coder agent
-// type the orchestrator spawns through the spawner RPC resolves to a real
-// image. These mappings were historically duplicated in
-// internal/agent/image_resolver.go (DefaultImages) but the spawner-side
-// table drifted behind, causing the 2026-04-22 v15/v16 canary regression
-// where `SpawnWorker` returned `-32000 no image mapping for
-// agent_type="fixer"` after a test_review approval triggered fixer
-// dispatch. Every agent type in the sibling DefaultImages table must
-// resolve here too; this test is the drift guard.
-func TestResolveImage_NonCoderAgentTypesMapped(t *testing.T) {
-	cases := []struct {
-		agentType string
-		want      string
-	}{
-		{"reviewer", "localhost:5000/drem-worker-go:latest"},
-		{"fixer", "localhost:5000/drem-worker-go:latest"},
-		{"supervisor", "localhost:5000/drem-worker-go:latest"},
-		{"classifier", "localhost:5000/drem-worker-go:latest"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.agentType, func(t *testing.T) {
-			got, ok := resolveImage(tc.agentType, nil)
-			if !ok {
-				t.Fatalf("resolveImage(%s): expected mapping, got ok=false", tc.agentType)
-			}
-			if got != tc.want {
-				t.Fatalf("resolveImage(%s): got %q, want %q", tc.agentType, got, tc.want)
-			}
-		})
-	}
-}
+// Note: TestResolveImage_NonCoderAgentTypesMapped (the drift guard for
+// reviewer/fixer/supervisor/classifier) was retired when the spawner
+// migrated to the shared internal/images package. The guard is no
+// longer meaningful against a single-table design — it now lives as
+// internal/images/enum_coverage_test.go, which sources agent types
+// from internal/model/enums.go directly.
