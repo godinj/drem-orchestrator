@@ -215,6 +215,15 @@ services:
       DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      # Bind-mount the project's bare-repo master working-tree plans/
+      # directory so personas can read plan docs, PRDs, and investigation
+      # notes directly without delegating to a temp worker with repo
+      # access. Read-only; bare-repo master working tree is the source
+      # of truth. Path inside container: /home/drem/orch-plans/. Seth
+      # (CTO) flagged this as a recurring wall during pass-1 / pass-2
+      # synthesis passes — closing it eliminates delegation overhead on
+      # every future CTO synthesis.
+      - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
       - {{.CsuiteHomeRoot}}/mike:/home/drem/.drem-csuite/mike:rw
     networks: [drem-net]
     labels:
@@ -237,6 +246,15 @@ services:
       DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      # Bind-mount the project's bare-repo master working-tree plans/
+      # directory so personas can read plan docs, PRDs, and investigation
+      # notes directly without delegating to a temp worker with repo
+      # access. Read-only; bare-repo master working tree is the source
+      # of truth. Path inside container: /home/drem/orch-plans/. Seth
+      # (CTO) flagged this as a recurring wall during pass-1 / pass-2
+      # synthesis passes — closing it eliminates delegation overhead on
+      # every future CTO synthesis.
+      - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
       - {{.CsuiteHomeRoot}}/alex:/home/drem/.drem-csuite/alex:rw
     networks: [drem-net]
     labels:
@@ -259,6 +277,15 @@ services:
       DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      # Bind-mount the project's bare-repo master working-tree plans/
+      # directory so personas can read plan docs, PRDs, and investigation
+      # notes directly without delegating to a temp worker with repo
+      # access. Read-only; bare-repo master working tree is the source
+      # of truth. Path inside container: /home/drem/orch-plans/. Seth
+      # (CTO) flagged this as a recurring wall during pass-1 / pass-2
+      # synthesis passes — closing it eliminates delegation overhead on
+      # every future CTO synthesis.
+      - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
       - {{.CsuiteHomeRoot}}/ross:/home/drem/.drem-csuite/ross:rw
     networks: [drem-net]
     labels:
@@ -281,6 +308,15 @@ services:
       DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      # Bind-mount the project's bare-repo master working-tree plans/
+      # directory so personas can read plan docs, PRDs, and investigation
+      # notes directly without delegating to a temp worker with repo
+      # access. Read-only; bare-repo master working tree is the source
+      # of truth. Path inside container: /home/drem/orch-plans/. Seth
+      # (CTO) flagged this as a recurring wall during pass-1 / pass-2
+      # synthesis passes — closing it eliminates delegation overhead on
+      # every future CTO synthesis.
+      - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
       - {{.CsuiteHomeRoot}}/seth:/home/drem/.drem-csuite/seth:rw
     networks: [drem-net]
     labels:
