@@ -29,7 +29,7 @@ func (o *Orchestrator) reconcileOnStartup(ctx context.Context) error {
 		return nil
 	}
 
-	live, err := o.Spawner.ListWorkers(ctx, spawner.ListWorkersParams{Project: o.projectID.String()})
+	live, err := o.Spawner.ListWorkers(ctx, spawner.ListWorkersParams{ProjectID: o.projectID.String()})
 	if err != nil {
 		return fmt.Errorf("reconcileOnStartup: list workers: %w", err)
 	}

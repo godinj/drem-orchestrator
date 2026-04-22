@@ -32,14 +32,31 @@ When a DataSource call fails, the Update loop records the error in
 snapshot stays on screen and a "connection lost — retrying" banner
 appears beneath the detail panel.
 
-## Mutating actions (pause, resume, retry, comment, approve plan)
+## Mutating actions
 
-The orchestrator's public HTTP API is read-only. Mutating actions
-triggered from the TUI still go through the local path (in-process
-calls into `internal/orchestrator` via the `TUIOrchestrator` interface,
-or `drem cli <subcommand>` shell-outs). Remote-orchestrator support
-for these actions is a follow-up that requires authenticated write
-endpoints on the HTTP API — tracked in `docs/prd-containerization.md`.
+The TUI splits its mutating actions into two groups based on what
+Phase 3 of the orch API gate-mutation pivot converted to HTTP:
+
+1. **Gate mutations** (approve plan, reject plan, test-review approve /
+   reject, test pass / fail, clarification answer) route through
+   `pkg/orchclient` over HTTP. The Phase-3 adapter `*tui.HTTPOrchestrator`
+   satisfies `TUIOrchestrator`'s seven `Handle*` methods by POSTing to
+   `/projects/{name}/tasks/{id}/{approve,reject,pass,fail,answer}` on the
+   orchestrator's HTTP API. Typed errors from `orchclient`
+   (`ErrWrongStatus`, `ErrNotFound`, `ErrServer`, transport errors) are
+   surfaced verbatim so the TUI's status line can pattern-match via
+   `errors.As`. The containerized orchestrator is the single writer to
+   the project DB — this closes the double-writer escape hatch that the
+   old in-process `drem cli approve` path exposed. See
+   `plans/orch-api-gate-mutations.md`.
+
+2. **Non-gate mutations** (pause, resume, retry, comment, delete,
+   `Spawn*Session`, `IntegrationWorktreePath`, …) still go through the
+   local path: `*tui.HTTPOrchestrator` delegates these to an in-process
+   `*orchestrator.Orchestrator` via `WithFallback`. Remote-orchestrator
+   support for these actions is a follow-up that requires authenticated
+   write endpoints on the HTTP API — tracked in
+   `docs/prd-containerization.md`.
 
 ## Tests
 

@@ -3,34 +3,35 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/godinj/drem-orchestrator/internal/cli"
 	"github.com/godinj/drem-orchestrator/internal/db"
-	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	"github.com/godinj/drem-orchestrator/internal/tui"
+	"github.com/godinj/drem-orchestrator/pkg/orchclient"
 )
 
-// gateCommands is the set of CLI subcommands that require a live orchestrator.
-var gateCommands = map[string]bool{
-	"approve": true,
-	"reject":  true,
-	"answer":  true,
-	"pass":    true,
-	"fail":    true,
-}
-
 // runCLI handles the "drem cli" subcommand. It loads config, opens the
-// database, and delegates to the cli package. This function calls
-// os.Exit and does not return.
+// database for read-only subcommands (tasks, agents, failures, stats,
+// experiment, etc.), and constructs an *orchclient.Client pointed at
+// the containerized orchestrator's HTTP API for the five gate
+// mutations (approve, reject, answer, pass, fail).
+//
+// Gate commands no longer open the DB directly or spin up a second
+// in-process orchestrator — see plans/orch-api-gate-mutations.md §1
+// for the double-writer foot-gun this closes.
+//
+// This function calls os.Exit and does not return.
 func runCLI() {
 	// Find --config flag in os.Args before the subcommand args.
 	configPath := "drem.toml"
 	var cliArgs []string
 	args := os.Args[2:] // skip binary name and "cli"
 
-	// Extract --json and --config from the args.
+	// Extract --json, --config, and --orch-url from the args.
 	jsonMode := false
+	orchURL := os.Getenv("DREM_ORCH_URL")
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--json":
@@ -40,6 +41,11 @@ func runCLI() {
 			i++
 		case strings.HasPrefix(args[i], "--config="):
 			configPath = strings.TrimPrefix(args[i], "--config=")
+		case args[i] == "--orch-url" && i+1 < len(args):
+			orchURL = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "--orch-url="):
+			orchURL = strings.TrimPrefix(args[i], "--orch-url=")
 		default:
 			cliArgs = append(cliArgs, args[i])
 		}
@@ -57,22 +63,27 @@ func runCLI() {
 		os.Exit(1)
 	}
 
-	// If the subcommand is a gate command, create a minimal orchestrator
-	// so the handler methods (approve, reject, answer, pass, fail) can
-	// execute state transitions against the database. The host-mode
-	// worktree manager is built via orchestrator.NewHostWorktreeManager,
-	// so this file does not need to know about the worktree implementation.
-	var orch tui.TUIOrchestrator
-	if len(cliArgs) > 0 && gateCommands[cliArgs[0]] {
-		var wt orchestrator.WorktreeManager
-		if cfg.BareRepoPath != "" {
-			wt = orchestrator.NewHostWorktreeManager(cfg.BareRepoPath, cfg.DefaultBranch)
-		}
-		orch = orchestrator.NewForCLI(database, wt)
-	}
+	// Construct an HTTP client aimed at the orchestrator container. The
+	// five gate subcommands POST against this; read-only subcommands
+	// (tasks, agents, failures, stats, ...) continue to use the DB
+	// handle above — they are still considered safe because they do
+	// not write. Migrating them to HTTP is Phase 4 scope.
+	resolvedURL := tui.ResolveOrchURL(orchURL, cfg.OrchHTTPPort)
+	gateClient := orchclient.New(resolvedURL)
 
-	if err := cli.Run(database, cliArgs, os.Stdout, jsonMode, orch, cli.WithDBPath(cfg.DatabasePath)); err != nil {
+	project := projectNameFromBareRepo(cfg.BareRepoPath)
+
+	if err := cli.Run(database, cliArgs, os.Stdout, jsonMode, gateClient, project, cli.WithDBPath(cfg.DatabasePath)); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// projectNameFromBareRepo mirrors the derivation in main.go: the
+// project's server-visible name is the bare-repo directory's basename
+// with a trailing ".git" stripped. Kept local here so cli_cmd.go does
+// not drag main.go's large set of imports into its path.
+func projectNameFromBareRepo(bareRepoPath string) string {
+	base := filepath.Base(bareRepoPath)
+	return strings.TrimSuffix(base, ".git")
 }

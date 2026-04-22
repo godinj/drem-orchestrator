@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/godinj/drem-orchestrator/internal/agentmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchhttp"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
@@ -212,6 +213,57 @@ func TestIngestAcceptsKnownRecords(t *testing.T) {
 	var count int64
 	require.NoError(t, srv.DB.Model(&model.TaskEvent{}).Count(&count).Error)
 	require.EqualValues(t, 3, count)
+}
+
+// TestIngestAcceptsAgentmonHTTPIngestorRoundTrip is the cross-package
+// contract test for the agentmon↔orch authentication path. It drives
+// the real agentmon.HTTPIngestor (the production client) against the
+// real orchhttp.Server.requireAgentmonToken middleware (the production
+// server) with a matching shared token, and asserts the round-trip
+// succeeds.
+//
+// Motivation: the April 2026 41-hour ingest-401 outage slipped through
+// two separately-passing test suites. internal/orchhttp's middleware
+// tests hand-roll the X-Drem-Agentmon-Token header with the expected
+// name; internal/agentmon's client tests stand up an httptest server
+// and read whatever header the client chose to send. Neither caught
+// the fact that a server-side config gap left SharedToken="". Nor
+// would either catch a future rename of the header constant on one
+// side but not the other. This test pins the two together: the actual
+// header constant on the server must match the actual header constant
+// on the client, and the actual URL path on the server must match the
+// actual URL path on the client. If either side drifts, this test
+// fails.
+func TestIngestAcceptsAgentmonHTTPIngestorRoundTrip(t *testing.T) {
+	const token = "round-trip-secret"
+
+	db := testutil.NewTestDBWithModels(t)
+	testutil.CreateProject(t, db, projectName, "/tmp/repo.git", "master")
+	srv := orchhttp.New(db, token, nil, orchhttp.ProjectInfo{
+		Name:     projectName,
+		Language: "go",
+		OrchURL:  "http://localhost:8080",
+	})
+	ts := httptest.NewServer(srv.Routes())
+	defer ts.Close()
+
+	// Drive the production agentmon client — not a hand-rolled
+	// http.NewRequest — so a future rename of agentmonTokenHeader or
+	// the /internal/logs path on either side fails this test.
+	ing := &agentmon.HTTPIngestor{OrchURL: ts.URL, Token: token}
+	err := ing.Ingest(context.Background(), []agentmon.IngestRecord{{
+		Type:        "heartbeat",
+		ContainerID: "c1",
+		WorkerID:    "w1",
+		Timestamp:   time.Now().UTC(),
+		Payload:     map[string]any{"agent_id": "a1"},
+	}})
+	require.NoError(t, err, "agentmon HTTPIngestor and orchhttp.requireAgentmonToken must agree on header name and path; a 401 here means one side renamed its constant without updating the other")
+
+	// Belt-and-suspenders: the event row should have landed.
+	var count int64
+	require.NoError(t, srv.DB.Model(&model.TaskEvent{}).Count(&count).Error)
+	require.EqualValues(t, 1, count)
 }
 
 func TestIngestRejectsUnknownTypeAllOrNothing(t *testing.T) {

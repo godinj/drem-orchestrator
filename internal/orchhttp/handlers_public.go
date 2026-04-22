@@ -1,10 +1,13 @@
 package orchhttp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -14,6 +17,33 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
+
+// defaultTasksQueryTimeout is the hard ceiling the /tasks handler
+// applies to its SQLite list query. Bug E W1.3: without this, a cold
+// 4 GiB DB scan stretched the handler to 28 s during the 2026-04-21
+// incident — a handler slower than its TUI client's retry timeout is
+// never useful, so we fast-fail with 503 instead.
+const defaultTasksQueryTimeout = 5 * time.Second
+
+// envTasksQueryTimeoutMs tunes the /tasks DB-query ceiling at runtime.
+// Unset, empty, or "0" means defaultTasksQueryTimeout. Values are parsed
+// as a millisecond count — a Duration string would be nicer but ints
+// keep the env-var shape consistent with DREM_ORCH_MAX_INFLIGHT etc.
+const envTasksQueryTimeoutMs = "DREM_ORCH_TASKS_QUERY_TIMEOUT_MS"
+
+// tasksQueryTimeout resolves the env override into a Duration,
+// returning the default when unset or malformed.
+func tasksQueryTimeout() time.Duration {
+	raw := os.Getenv(envTasksQueryTimeoutMs)
+	if raw == "" {
+		return defaultTasksQueryTimeout
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 {
+		return defaultTasksQueryTimeout
+	}
+	return time.Duration(n) * time.Millisecond
+}
 
 // defaultLimit is applied when the caller does not specify ?limit= on an
 // endpoint that supports pagination. It is intentionally small so default
@@ -56,19 +86,31 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project not found", http.StatusNotFound)
 		return
 	}
+	// Bug E W1.3: hard ceiling on the DB query path so a slow SQLite
+	// scan cannot stretch handler latency beyond the configured budget.
+	// The 503 + log line is what operators see when this fires; clients
+	// should retry per the plan's fast-fail contract.
+	ctx, cancel := context.WithTimeout(r.Context(), tasksQueryTimeout())
+	defer cancel()
+
+	start := time.Now()
 	var project model.Project
-	err := s.DB.WithContext(r.Context()).Where("name = ?", name).First(&project).Error
+	err := s.DB.WithContext(ctx).Where("name = ?", name).First(&project).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		writeJSON(w, http.StatusOK, []orchdto.TaskDTO{})
 		return
 	}
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			writeTasksTimeout(w, time.Since(start))
+			return
+		}
 		writeDBError(w, err)
 		return
 	}
 
 	limit, offset := paginationFrom(r)
-	q := s.DB.WithContext(r.Context()).
+	q := s.DB.WithContext(ctx).
 		Where("project_id = ?", project.ID).
 		Order("created_at DESC").
 		Limit(limit).Offset(offset)
@@ -77,6 +119,10 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	}
 	var tasks []model.Task
 	if err := q.Find(&tasks).Error; err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			writeTasksTimeout(w, time.Since(start))
+			return
+		}
 		writeDBError(w, err)
 		return
 	}
@@ -85,6 +131,19 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toTaskDTO(t))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// writeTasksTimeout surfaces a /tasks DB timeout as 503 + Retry-After: 1
+// and emits a terse log.Printf line with the elapsed duration so
+// operators can correlate the shed response with the slow query in
+// drem.log. The plan explicitly calls out "include the elapsed duration"
+// as part of the log shape.
+func writeTasksTimeout(w http.ResponseWriter, elapsed time.Duration) {
+	log.Printf("orchhttp /tasks DB query timeout after %s — shedding request", elapsed)
+	w.Header().Set("Retry-After", "1")
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	_, _ = w.Write([]byte("tasks query timed out — retry after 1s\n"))
 }
 
 // handleListWorkers returns all agents associated with this project. The

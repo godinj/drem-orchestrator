@@ -35,6 +35,7 @@ func newContainerQuickFixRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner, m
 	o := &Orchestrator{
 		db:             db,
 		projectID:      project.ID,
+		projectName:    project.Name,
 		events:         events,
 		worktree:       &FakeWorktreeManager{BarePath: bareRepo, Default: "main"},
 		logger:         slog.Default().With("component", "quickfix_container_test"),
@@ -78,7 +79,10 @@ func TestProcessQuickFix_DispatchesViaSpawner(t *testing.T) {
 	require.Len(t, fake.spawnCalls, 1)
 	p := fake.spawnCalls[0]
 	assert.Equal(t, "coder", p.AgentType)
-	assert.Equal(t, project.ID.String(), p.Project)
+	// Dual-label contract (plans/dual-label-worker-spawn.md): Project
+	// carries the human-readable name; ProjectID carries the stable UUID.
+	assert.Equal(t, project.Name, p.Project)
+	assert.Equal(t, project.ID.String(), p.ProjectID)
 	assert.Equal(t, task.ID.String(), p.Env["DREM_TASK_ID"])
 	assert.Equal(t, "/host/.claude/.credentials.json", p.CredsMount)
 	assert.NotContains(t, p.Env, "ANTHROPIC_API_KEY")

@@ -182,7 +182,12 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 	}
 
 	params := spawner.SpawnWorkerParams{
-		Project:   o.projectID.String(),
+		// Project carries the human-readable name (drem.project label);
+		// ProjectID carries the stable UUID (drem.project_id label).
+		// Agentmon filters on the name env; internal orch filters on
+		// the UUID. See plans/dual-label-worker-spawn.md.
+		Project:   o.projectName,
+		ProjectID: o.projectID.String(),
 		AgentType: "merger",
 		WorkerID:  workerID,
 		Branch:    task.WorktreeBranch,

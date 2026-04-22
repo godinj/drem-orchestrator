@@ -64,8 +64,12 @@ func (o *Orchestrator) watchDockerEvents(ctx context.Context) error {
 	if o.Runtime == nil {
 		return fmt.Errorf("watchDockerEvents: no Runtime configured")
 	}
+	// Filter on the stable UUID label (drem.project_id) so a project
+	// rename never drops events. drem.project carries the human-readable
+	// name and is consumed by agentmon; the orch side uses the UUID.
+	// See plans/dual-label-worker-spawn.md.
 	filter := container.EventFilter{
-		Labels: map[string]string{"drem.project": o.projectID.String()},
+		Labels: map[string]string{"drem.project_id": o.projectID.String()},
 	}
 	ch, err := o.Runtime.SubscribeEvents(ctx, filter)
 	if err != nil {

@@ -22,7 +22,7 @@ func TestTasksList(t *testing.T) {
 
 	// List all
 	var buf bytes.Buffer
-	if err := Run(db, []string{"tasks"}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"tasks"}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("tasks: %v", err)
 	}
 	out := buf.String()
@@ -32,7 +32,7 @@ func TestTasksList(t *testing.T) {
 
 	// Filter by status
 	buf.Reset()
-	if err := Run(db, []string{"tasks", "--status=backlog"}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"tasks", "--status=backlog"}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("tasks --status: %v", err)
 	}
 	out = buf.String()
@@ -79,7 +79,7 @@ func TestTaskDetail(t *testing.T) {
 	db.Model(&parent).Update("assigned_agent_id", ag.ID)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"task", parent.ID.String()}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"task", parent.ID.String()}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("task detail: %v", err)
 	}
 	out := buf.String()
@@ -110,7 +110,7 @@ func TestAgentsList(t *testing.T) {
 
 	// List all
 	var buf bytes.Buffer
-	if err := Run(db, []string{"agents"}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"agents"}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("agents: %v", err)
 	}
 	out := buf.String()
@@ -120,7 +120,7 @@ func TestAgentsList(t *testing.T) {
 
 	// Filter by status
 	buf.Reset()
-	if err := Run(db, []string{"agents", "--status=working"}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"agents", "--status=working"}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("agents --status: %v", err)
 	}
 	out = buf.String()
@@ -140,7 +140,7 @@ func TestFailures(t *testing.T) {
 
 	// All failures (default 24h)
 	var buf bytes.Buffer
-	if err := Run(db, []string{"failures"}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"failures"}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("failures: %v", err)
 	}
 	out := buf.String()
@@ -153,7 +153,7 @@ func TestFailures(t *testing.T) {
 
 	// Zero duration = nothing should match
 	buf.Reset()
-	if err := Run(db, []string{"failures", "--since=0s"}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"failures", "--since=0s"}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("failures --since=0s: %v", err)
 	}
 	out = buf.String()
@@ -171,7 +171,7 @@ func TestStats(t *testing.T) {
 	testutil.CreateAgent(t, db, uuid.Nil, model.AgentCoder, model.AgentWorking)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"stats"}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"stats"}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("stats: %v", err)
 	}
 	out := buf.String()
@@ -189,7 +189,7 @@ func TestCreateTask(t *testing.T) {
 	_ = proj
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"create-task", "--title=New Feature", "--description=Build it"}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"create-task", "--title=New Feature", "--description=Build it"}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("create-task: %v", err)
 	}
 
@@ -212,7 +212,7 @@ func TestComment(t *testing.T) {
 	task := testutil.CreateTask(t, db, proj.ID, "Commentable Task", model.StatusBacklog)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"comment", task.ID.String(), "--body=Nice work"}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"comment", task.ID.String(), "--body=Nice work"}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("comment: %v", err)
 	}
 
@@ -235,7 +235,7 @@ func TestJSONOutput(t *testing.T) {
 	testutil.CreateTask(t, db, proj.ID, "JSON Task", model.StatusBacklog)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"tasks"}, &buf, true, nil); err != nil {
+	if err := Run(db, []string{"tasks"}, &buf, true, nil, ""); err != nil {
 		t.Fatalf("tasks --json: %v", err)
 	}
 
@@ -259,7 +259,7 @@ func TestTaskIDPrefix(t *testing.T) {
 	prefix := task.ID.String()[:8]
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"task", prefix}, &buf, false, nil); err != nil {
+	if err := Run(db, []string{"task", prefix}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("task prefix: %v", err)
 	}
 	out := buf.String()
@@ -273,7 +273,7 @@ func TestTaskIDPrefix(t *testing.T) {
 
 func TestUnknownSubcommand(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	err := Run(db, []string{"bogus"}, &bytes.Buffer{}, false, nil)
+	err := Run(db, []string{"bogus"}, &bytes.Buffer{}, false, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "unknown subcommand") {
 		t.Errorf("expected unknown subcommand error, got: %v", err)
 	}
@@ -281,7 +281,7 @@ func TestUnknownSubcommand(t *testing.T) {
 
 func TestInvalidTaskStatus(t *testing.T) {
 	db := testutil.NewTestDB(t)
-	err := Run(db, []string{"tasks", "--status=nonexistent"}, &bytes.Buffer{}, false, nil)
+	err := Run(db, []string{"tasks", "--status=nonexistent"}, &bytes.Buffer{}, false, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "unknown task status") {
 		t.Errorf("expected unknown task status error, got: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestCommentRequiresBody(t *testing.T) {
 	proj := testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
 	task := testutil.CreateTask(t, db, proj.ID, "Task", model.StatusBacklog)
 
-	err := Run(db, []string{"comment", task.ID.String()}, &bytes.Buffer{}, false, nil)
+	err := Run(db, []string{"comment", task.ID.String()}, &bytes.Buffer{}, false, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "--body is required") {
 		t.Errorf("expected --body required error, got: %v", err)
 	}
@@ -302,7 +302,7 @@ func TestCreateTaskRequiresTitle(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	_ = testutil.CreateProject(t, db, "test-proj", "/tmp/test.git", "master")
 
-	err := Run(db, []string{"create-task", "--description=Desc"}, &bytes.Buffer{}, false, nil)
+	err := Run(db, []string{"create-task", "--description=Desc"}, &bytes.Buffer{}, false, nil, "")
 	if err == nil || !strings.Contains(err.Error(), "--title is required") {
 		t.Errorf("expected --title required error, got: %v", err)
 	}
@@ -315,7 +315,7 @@ func TestStatsJSONOutput(t *testing.T) {
 	testutil.CreateTask(t, db, proj.ID, "Task B", model.StatusFailed)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"stats"}, &buf, true, nil); err != nil {
+	if err := Run(db, []string{"stats"}, &buf, true, nil, ""); err != nil {
 		t.Fatalf("stats --json: %v", err)
 	}
 
@@ -337,7 +337,7 @@ func TestCreateTaskWithProjectID(t *testing.T) {
 
 	var buf bytes.Buffer
 	if err := Run(db, []string{"create-task", "--title=ProjTask", "--description=D",
-		"--project-id=" + proj.ID.String()}, &buf, false, nil); err != nil {
+		"--project-id=" + proj.ID.String()}, &buf, false, nil, ""); err != nil {
 		t.Fatalf("create-task with project-id: %v", err)
 	}
 
@@ -356,7 +356,7 @@ func TestTaskDetailJSON(t *testing.T) {
 	task := testutil.CreateTask(t, db, proj.ID, "JSON Detail Task", model.StatusBacklog)
 
 	var buf bytes.Buffer
-	if err := Run(db, []string{"task", task.ID.String()}, &buf, true, nil); err != nil {
+	if err := Run(db, []string{"task", task.ID.String()}, &buf, true, nil, ""); err != nil {
 		t.Fatalf("task --json: %v", err)
 	}
 
@@ -389,7 +389,7 @@ func TestExperimentFromTask_HappyPath(t *testing.T) {
 		"--title=My Experiment",
 		"--profiles=fast,quality",
 		"--default=fast",
-	}, &buf, false, nil)
+	}, &buf, false, nil, "")
 	if err != nil {
 		t.Fatalf("experiment from-task: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestExperimentFromTask_JSON(t *testing.T) {
 		"--title=JSON Experiment",
 		"--profiles=fast,quality",
 		"--default=quality",
-	}, &buf, true, nil)
+	}, &buf, true, nil, "")
 	if err != nil {
 		t.Fatalf("experiment from-task --json: %v", err)
 	}
@@ -470,7 +470,7 @@ func TestExperimentFromTask_ReusePlan(t *testing.T) {
 		"--profiles=fast,quality",
 		"--default=fast",
 		"--reuse-plan",
-	}, &buf, false, nil)
+	}, &buf, false, nil, "")
 	if err != nil {
 		t.Fatalf("experiment from-task --reuse-plan: %v", err)
 	}
@@ -510,7 +510,7 @@ func TestExperimentFromTask_SourceTaskNotFound(t *testing.T) {
 		"--title=Ghost Experiment",
 		"--profiles=fast,quality",
 		"--default=fast",
-	}, &bytes.Buffer{}, false, nil)
+	}, &bytes.Buffer{}, false, nil, "")
 	if err == nil {
 		t.Fatal("expected error for non-existent source task, got nil")
 	}
@@ -533,7 +533,7 @@ func TestExperimentFromTask_MissingProfiles(t *testing.T) {
 		"--task=" + sourceTask.ID.String(),
 		"--title=No Profiles",
 		"--default=fast",
-	}, &bytes.Buffer{}, false, nil)
+	}, &bytes.Buffer{}, false, nil, "")
 	if err == nil {
 		t.Fatal("expected error for missing --profiles, got nil")
 	}
@@ -556,7 +556,7 @@ func TestExperimentFromTask_MissingDefault(t *testing.T) {
 		"--task=" + sourceTask.ID.String(),
 		"--title=No Default",
 		"--profiles=fast,quality",
-	}, &bytes.Buffer{}, false, nil)
+	}, &bytes.Buffer{}, false, nil, "")
 	if err == nil {
 		t.Fatal("expected error for missing --default, got nil")
 	}
@@ -577,7 +577,7 @@ func TestExperimentFromTask_MissingTask(t *testing.T) {
 		"--title=No Task Flag",
 		"--profiles=fast,quality",
 		"--default=fast",
-	}, &bytes.Buffer{}, false, nil)
+	}, &bytes.Buffer{}, false, nil, "")
 	if err == nil {
 		t.Fatal("expected error for missing --task, got nil")
 	}
@@ -602,7 +602,7 @@ func TestExperimentFromTask_SourceTaskNotDone(t *testing.T) {
 		"--title=From Incomplete Task",
 		"--profiles=fast,quality",
 		"--default=fast",
-	}, &bytes.Buffer{}, false, nil)
+	}, &bytes.Buffer{}, false, nil, "")
 	if err == nil {
 		t.Fatal("expected error for source task not in StatusDone, got nil")
 	}

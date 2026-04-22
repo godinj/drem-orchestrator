@@ -47,6 +47,7 @@ func TestService_SpawnWorker_ProducesSpawnCallWithLabelsAndMounts(t *testing.T) 
 
 	res, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
 		Project:       "drem-orch",
+		ProjectID:     "11111111-2222-3333-4444-555555555555",
 		AgentType:     "coder",
 		WorkerID:      "w-1",
 		Branch:        "feature/x",
@@ -73,8 +74,12 @@ func TestService_SpawnWorker_ProducesSpawnCallWithLabelsAndMounts(t *testing.T) 
 	require.Equal(t, "localhost:5000/drem-worker-go:latest", spawn.Spec.Image)
 
 	// Identifying labels are applied by the service; caller's drem.language
-	// label is preserved.
+	// label is preserved. Dual-label contract (plans/dual-label-worker-spawn.md):
+	// drem.project carries the human-readable name so agentmon's
+	// DREM_PROJECT env filter matches; drem.project_id carries the
+	// stable UUID so internal orch filters match even after a rename.
 	require.Equal(t, "drem-orch", spawn.Spec.Labels["drem.project"])
+	require.Equal(t, "11111111-2222-3333-4444-555555555555", spawn.Spec.Labels["drem.project_id"])
 	require.Equal(t, "coder", spawn.Spec.Labels["drem.agent_type"])
 	require.Equal(t, "w-1", spawn.Spec.Labels["drem.worker_id"])
 	require.Equal(t, "feature/x", spawn.Spec.Labels["drem.branch"])
@@ -457,13 +462,17 @@ func TestService_ListWorkers_FiltersByProject(t *testing.T) {
 	_, client, cleanup := startHarness(t)
 	defer cleanup()
 
-	// Spawn two workers on different projects.
+	// Spawn two workers on different projects. ProjectID threaded
+	// through so the dual-label contract is exercised at the
+	// service boundary too (see plans/dual-label-worker-spawn.md).
 	a, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
-		Project: "alpha", AgentType: "merger", WorkerID: "w-1", Branch: "b1",
+		Project: "alpha", ProjectID: "uuid-alpha",
+		AgentType: "merger", WorkerID: "w-1", Branch: "b1",
 	})
 	require.NoError(t, err)
 	b, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
-		Project: "beta", AgentType: "merger", WorkerID: "w-2", Branch: "b2",
+		Project: "beta", ProjectID: "uuid-beta",
+		AgentType: "merger", WorkerID: "w-2", Branch: "b2",
 	})
 	require.NoError(t, err)
 
@@ -471,11 +480,20 @@ func TestService_ListWorkers_FiltersByProject(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, all.Workers, 2)
 
+	// Filter by human-readable name.
 	alpha, err := client.ListWorkers(context.Background(), ListWorkersParams{Project: "alpha"})
 	require.NoError(t, err)
 	require.Len(t, alpha.Workers, 1)
 	require.Equal(t, a.ContainerID, alpha.Workers[0].ContainerID)
 	require.Equal(t, "alpha", alpha.Workers[0].Project)
+	require.Equal(t, "uuid-alpha", alpha.Workers[0].ProjectID)
+
+	// Filter by stable UUID — the path every internal orch filter uses.
+	byID, err := client.ListWorkers(context.Background(), ListWorkersParams{ProjectID: "uuid-beta"})
+	require.NoError(t, err)
+	require.Len(t, byID.Workers, 1)
+	require.Equal(t, b.ContainerID, byID.Workers[0].ContainerID)
+	require.Equal(t, "uuid-beta", byID.Workers[0].ProjectID)
 
 	beta, err := client.ListWorkers(context.Background(), ListWorkersParams{Project: "beta"})
 	require.NoError(t, err)

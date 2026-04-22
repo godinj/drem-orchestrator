@@ -4,17 +4,50 @@
 // goroutine per running container. Die/destroy events cancel the
 // corresponding tail. Ctx cancel shuts everything down and waits for
 // the tails to drain.
+//
+// Observability hooks (added after the 41h silent-outage incident
+// — see plans/agentmon-observability.md). Two gaps the incident
+// exposed:
+//   - A mismatched label filter matched ZERO events for 41 hours
+//     without emitting any WARN. DockerSource now emits a single
+//     Warn after Warn0Window elapses if the subscribe-to-now counter
+//     is still zero. The intent is "tell the operator loudly the
+//     first time a subscription has received nothing over a
+//     reasonable startup window", not to fail hard — a flaky
+//     daemon that takes 40s to deliver an event should NOT fail.
+//   - The stuck-agent reconciler was operating on stale DB
+//     heartbeats with no live signal. EventsMatchedLastMinute lets
+//     consumers (or liveness probes) cheaply sample whether the
+//     subscription is ingesting traffic without holding the Run
+//     mutex.
 
 package agentmon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/container"
 )
+
+// defaultWarn0Window is the window from subscribe-start after which a
+// DockerSource with zero observed events emits a one-shot Warn. Seth's
+// triage scope called for 30–60s; 45s is the midpoint, long enough
+// that a quiet CI does not trip it, short enough that a misconfigured
+// production subscription surfaces within a minute.
+const defaultWarn0Window = 45 * time.Second
+
+// eventsWindowSeconds is the trailing-second count over which
+// EventsMatchedLastMinute aggregates. Implemented as a ring of
+// per-second buckets; approximate is fine — this is for observability,
+// not billing.
+const eventsWindowSeconds = 60
 
 // Ingestor is the seam between the Docker-stdout path and the HTTP
 // upload. The production implementation is HTTPIngestor (in client.go);
@@ -41,11 +74,42 @@ type DockerSource struct {
 	// every container the daemon exposes — useful only in tests.
 	ContainerFilter container.EventFilter
 
+	// Warn0Window overrides the duration after which Run will emit a
+	// one-shot Warn if no events have arrived since the subscription
+	// opened. Zero means "use defaultWarn0Window". Tests set this to
+	// a small value (e.g. 50ms) to exercise the timer without sleeping.
+	Warn0Window time.Duration
+
+	// Now is the clock source used by the per-second bucket ring that
+	// backs EventsMatchedLastMinute. Zero means time.Now; tests inject
+	// a stub to advance time deterministically.
+	Now func() time.Time
+
+	// eventsSeen counts every event the Run loop observes through the
+	// subscription, including ones that are routed to no action (types
+	// other than start/die/OOM/destroy). The zero-events Warn uses this.
+	// atomic so the warn-timer goroutine can read it without locking.
+	eventsSeen atomic.Int64
+
+	// buckets is the per-second ring backing EventsMatchedLastMinute.
+	// Protected by bucketsMu. Size is eventsWindowSeconds; the consumer
+	// sums the buckets whose second-epoch falls in the trailing 60s.
+	bucketsMu sync.Mutex
+	buckets   [eventsWindowSeconds]bucketEntry
+
 	// state tracks active per-container tails so EventDie can cancel
 	// the matching tail goroutine.
 	mu    sync.Mutex
 	tails map[string]context.CancelFunc
 	wg    sync.WaitGroup
+}
+
+// bucketEntry is one slot in the per-second ring. Epoch is the unix
+// second the count belongs to; stale entries (older than the trailing
+// window) are skipped by the reader.
+type bucketEntry struct {
+	epoch int64
+	count int
 }
 
 // Run subscribes to lifecycle events and drives tails until ctx is
@@ -68,6 +132,12 @@ func (s *DockerSource) Run(ctx context.Context) error {
 		return fmt.Errorf("agentmon docker source: subscribe: %w", err)
 	}
 
+	// Kick off the one-shot zero-events WARN goroutine. It sleeps for
+	// Warn0Window, then samples eventsSeen; if still zero, logs the
+	// pre-formatted WARN and exits. Cancelling ctx wakes it early and
+	// suppresses the log (shutdown path should not spam).
+	s.startWarn0Goroutine(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -78,9 +148,150 @@ func (s *DockerSource) Run(ctx context.Context) error {
 				s.shutdown()
 				return nil
 			}
+			// Count BEFORE handling so a filter that matches-but-
+			// parses-wrong still registers — the whole point of the
+			// counter is to distinguish "zero traffic" from "traffic
+			// that didn't route to an action".
+			s.eventsSeen.Add(1)
+			s.recordEventNow()
 			s.handleEvent(ctx, ev)
 		}
 	}
+}
+
+// startWarn0Goroutine fires a single Warn after Warn0Window if no
+// events have been observed yet. It exits silently on ctx cancel —
+// shutdown is not a misconfiguration signal and should not WARN.
+func (s *DockerSource) startWarn0Goroutine(ctx context.Context) {
+	window := s.Warn0Window
+	if window <= 0 {
+		window = defaultWarn0Window
+	}
+	go func() {
+		timer := time.NewTimer(window)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		if s.eventsSeen.Load() > 0 {
+			return
+		}
+		slog.Warn(
+			"agentmon docker source: zero events matched in 45s since subscription start",
+			"filter_labels", filterLabelsJSON(s.ContainerFilter.Labels),
+			"window", window,
+			"project", s.Project,
+		)
+	}()
+}
+
+// filterLabelsJSON renders the filter's label map in a stable,
+// searchable form for operator greps. A plain map would be
+// non-deterministically ordered in log output; this function sorts
+// keys and emits compact JSON.
+func filterLabelsJSON(labels map[string]string) string {
+	if len(labels) == 0 {
+		return "{}"
+	}
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	ordered := make(map[string]string, len(labels))
+	for _, k := range keys {
+		ordered[k] = labels[k]
+	}
+	b, err := json.Marshal(ordered)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
+
+// recordEventNow buckets one observed event into the trailing-minute
+// ring. Called from Run for every event that reaches the select arm,
+// independent of whether the event matches a routed type.
+func (s *DockerSource) recordEventNow() {
+	now := s.clock()
+	epoch := now.Unix()
+	idx := int(epoch % eventsWindowSeconds)
+	s.bucketsMu.Lock()
+	defer s.bucketsMu.Unlock()
+	b := &s.buckets[idx]
+	if b.epoch != epoch {
+		// Reused slot; reset to this second.
+		b.epoch = epoch
+		b.count = 0
+	}
+	b.count++
+}
+
+// EventsMatchedLastMinute returns the number of events observed
+// through the subscription in the trailing 60 seconds. Consumers
+// (liveness probes, HTTP expvars, the reconciler) decide how to
+// surface it. Approximate: if many events landed in the same second
+// the counts may be rounded by at most one bucket on either edge.
+func (s *DockerSource) EventsMatchedLastMinute() int {
+	now := s.clock()
+	nowEpoch := now.Unix()
+	cutoff := nowEpoch - (eventsWindowSeconds - 1)
+	total := 0
+	s.bucketsMu.Lock()
+	defer s.bucketsMu.Unlock()
+	for _, b := range s.buckets {
+		if b.epoch >= cutoff && b.epoch <= nowEpoch {
+			total += b.count
+		}
+	}
+	return total
+}
+
+// HasSeen returns true if any event with the given container ID has
+// been observed since subscription start. Implements the hook shape
+// consumed by the orchestrator's reconcile_stuck predicate. A true
+// return means the subscription observed at least one lifecycle
+// event for the container (start, die, OOM, destroy, etc.) since
+// Run began. The DockerSource's tail map is authoritative for this
+// because startTail/stopTail mutate it on every relevant event.
+//
+// Note: when a tail exits naturally (e.g. the log stream closed),
+// removeTail drops the entry. That is fine for the reconciler's
+// purpose — a container whose tail ran and exited WAS sighted, and
+// the reconciler's question is "has this container ever been
+// observed" not "is it active". To cover that narrower case we
+// consult the per-second bucket total as a secondary signal: if
+// there were events in the trailing minute the subscription is
+// demonstrably live regardless of which container they were for.
+// For a strict "sighted this container id" signal callers should
+// build their own index over sighted IDs; the reconciler's shape
+// treats empty trailing-minute traffic as "agentmon is blind",
+// which is the v12–v14 failure mode.
+func (s *DockerSource) HasSeen(containerID string) bool {
+	s.mu.Lock()
+	_, active := s.tails[containerID]
+	s.mu.Unlock()
+	if active {
+		return true
+	}
+	// Fallback: if the subscription is demonstrably receiving events
+	// in the trailing minute, consider the daemon side of the pipe
+	// alive. A container whose tail exited is still covered by this
+	// because start/die events both count toward the bucket total.
+	// Callers that want strict per-ID sighting can wrap HasSeen with
+	// their own set keyed off EventStart observations.
+	return s.EventsMatchedLastMinute() > 0
+}
+
+// clock returns the current time from Now if set, else wall-clock.
+// Tests inject Now to advance buckets deterministically.
+func (s *DockerSource) clock() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // handleEvent routes a single lifecycle event to start or cancel a

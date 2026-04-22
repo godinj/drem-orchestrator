@@ -18,14 +18,16 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/experiment"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
-	"github.com/godinj/drem-orchestrator/internal/tui"
 )
 
 // Run parses args (after "cli" is consumed) and dispatches to the
 // appropriate handler. Returns an error for unknown subcommands or
-// handler failures. If orch is provided, gate commands (approve, reject,
-// answer, pass, fail) are also available.
-func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, orch tui.TUIOrchestrator, opts ...RunOption) error {
+// handler failures. If gate is provided, gate commands (approve,
+// reject, answer, pass, fail) are also available; they POST against
+// the containerized orchestrator's HTTP API rather than opening the
+// SQLite DB directly, closing the double-writer escape hatch
+// documented in plans/orch-api-gate-mutations.md §1.
+func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, gate GateClient, project string, opts ...RunOption) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, create-task, comment, experiment, approve, reject, answer, pass, fail, reset-circuit")
 	}
@@ -38,9 +40,12 @@ func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, orch tui.TUIOrc
 	sub := args[0]
 	rest := args[1:]
 
-	// Check for gate commands if orchestrator is provided
-	if orch != nil {
-		if handled, err := RegisterGateCommands(db, orch, sub, rest, w); handled {
+	// Gate mutations go through the orchestrator HTTP API so the
+	// container remains the single writer to the project DB. A nil
+	// client means gate commands are unavailable — callers that still
+	// invoke them get "unknown subcommand" below.
+	if gate != nil {
+		if handled, err := DispatchGate(gate, project, jsonMode, sub, rest, w); handled {
 			return err
 		}
 	}

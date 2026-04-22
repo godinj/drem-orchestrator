@@ -18,6 +18,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -28,6 +29,26 @@ import (
 // required.
 type LogStreamer interface {
 	StreamLogs(ctx context.Context, containerID string) (io.ReadCloser, error)
+}
+
+// GateOrchestrator is the minimum orchestrator surface the gate mutation
+// endpoints (POST /approve, /reject, /pass, /fail, /answer) need. It is
+// defined here — at the consumption site — per the "interfaces at the
+// consumption site" constitution rule, so this package does not import
+// internal/orchestrator or internal/tui just to name a type.
+//
+// *orchestrator.Orchestrator satisfies this interface in production; tests
+// inject a fake that records method calls and optionally returns a scripted
+// error so every branch of the handler can be exercised without a real
+// orchestrator.
+type GateOrchestrator interface {
+	HandlePlanApproved(taskID uuid.UUID) error
+	HandlePlanRejected(taskID uuid.UUID) error
+	HandleTestReviewApproved(taskID uuid.UUID) error
+	HandleTestReviewRejected(taskID uuid.UUID, feedback string) error
+	HandleTestPassed(taskID uuid.UUID) error
+	HandleTestFailed(taskID uuid.UUID) error
+	HandleClarificationAnswer(taskID uuid.UUID, answer string) error
 }
 
 // ProjectInfo is the static description of the single project this
@@ -46,11 +67,20 @@ type ProjectInfo struct {
 // safe for concurrent use — handlers only perform reads (plus a single
 // transactional write in the ingest handler) via the *gorm.DB which is
 // already goroutine-safe.
+//
+// Orch is the optional gate-mutation hook. When set, POST /approve,
+// /reject, /pass, /fail, /answer delegate to it; when nil those endpoints
+// return 503 so a read-only dev setup does not have to wire one. The
+// containerized production server sets Orch at construction time so the
+// single in-process orchestrator is the sole writer to the project DB —
+// closing the pre-containerization escape hatch where `drem cli approve`
+// spawned a second orchestrator inside a host process.
 type Server struct {
 	DB          *gorm.DB
 	SharedToken string
 	DockerLogs  LogStreamer
 	Project     ProjectInfo
+	Orch        GateOrchestrator
 }
 
 // New constructs a Server. A nil DockerLogs is permitted when the caller
@@ -83,10 +113,24 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /events", s.handleListEvents)
 	mux.HandleFunc("GET /logs", s.handleLogs)
 
+	// Gate mutation endpoints — delegate to the in-process orchestrator so
+	// the container remains the sole writer to the project DB.
+	mux.HandleFunc("POST /projects/{name}/tasks/{id}/approve", s.handleApproveTask)
+	mux.HandleFunc("POST /projects/{name}/tasks/{id}/reject", s.handleRejectTask)
+	mux.HandleFunc("POST /projects/{name}/tasks/{id}/pass", s.handlePassTask)
+	mux.HandleFunc("POST /projects/{name}/tasks/{id}/fail", s.handleFailTask)
+	mux.HandleFunc("POST /projects/{name}/tasks/{id}/answer", s.handleAnswerTask)
+
 	// Internal ingestion endpoint — protected by header auth.
 	mux.Handle("POST /internal/logs", s.requireAgentmonToken(http.HandlerFunc(s.handleIngest)))
 
-	return recoverPanics(logRequests(mux))
+	// Middleware stack (outermost first):
+	//   recoverPanics -> logRequests -> WithLoadShedding -> mux
+	// WithLoadShedding sits inside the logger so shed 503s still get
+	// logged with path + duration, but outside the mux so an overflow
+	// never reaches a handler goroutine. See internal/orchhttp/middleware.go
+	// for the per-endpoint /tasks cap and the global cap (Bug E W1).
+	return recoverPanics(logRequests(WithLoadShedding(mux)))
 }
 
 // agentmonTokenHeader is the canonical HTTP header that agentmon sends on

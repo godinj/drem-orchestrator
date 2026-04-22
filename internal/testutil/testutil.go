@@ -83,6 +83,10 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 		t.Fatalf("auto migrate: %v", err)
 	}
 	registerUUIDCallback(db)
+	// Mirror internal/db.Init so tests exercise the same composite index
+	// production does (Bug E W2.1). GORM AutoMigrate cannot emit the
+	// DESC direction; declare it explicitly.
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at DESC)")
 	return db
 }
 

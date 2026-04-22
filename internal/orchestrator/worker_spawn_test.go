@@ -130,6 +130,7 @@ func workerSpawnTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner, string
 	o := &Orchestrator{
 		db:             db,
 		projectID:      projectID,
+		projectName:    "worker-spawn-test",
 		events:         make(chan Event, 32),
 		worktree:       &FakeWorktreeManager{BarePath: bareRepo, Default: "main"},
 		logger:         slog.Default().With("component", "worker_spawn_test"),
@@ -174,7 +175,17 @@ func TestSpawnCoder_BuildsExpectedParams(t *testing.T) {
 
 	require.Len(t, fake.spawnCalls, 1)
 	p := fake.spawnCalls[0]
-	require.Equal(t, o.projectID.String(), p.Project)
+	// Dual-label contract (plans/dual-label-worker-spawn.md): Project
+	// carries the human-readable name (maps to drem.project; matches
+	// agentmon's DREM_PROJECT env filter); ProjectID carries the stable
+	// UUID (maps to drem.project_id; used by every internal orch filter).
+	// Both MUST be populated or the v13-v14 silent-outage regressions.
+	require.Equal(t, "worker-spawn-test", p.Project,
+		"SpawnWorkerParams.Project must be the project name so drem.project label matches agentmon's DREM_PROJECT filter")
+	require.Equal(t, o.projectID.String(), p.ProjectID,
+		"SpawnWorkerParams.ProjectID must be the project UUID so drem.project_id label matches orch's internal filters")
+	// Env mirrors the name for worker-side logging.
+	require.Equal(t, "worker-spawn-test", p.Env["DREM_PROJECT"])
 	require.Equal(t, "coder", p.AgentType)
 	require.Equal(t, "feature/task-x", p.Branch)
 	require.Equal(t, task.ID.String(), p.Env["DREM_TASK_ID"])
@@ -716,6 +727,113 @@ func TestSpawnTypedWorker_IdempotentPreservesInFlightCommits(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tipBefore, tipAfter,
 		"respawn must not rewind an in-flight worker's pushed commits")
+}
+
+// TestRecordContainerOnAgent_CreatePathPopulatesBranchAndTask is the
+// regression test for the v13 canary failure: when the spawn path
+// creates a synthetic agent row for a container worker (no prior
+// AssignedAgentID on the task), the row MUST carry WorktreeBranch and
+// CurrentTaskID so the reconcile_stuck.go commit-check guard
+// (`featureDir != "" && ag.WorktreeBranch != ""`) can route a
+// post-push container exit through synthesizeCompletion rather than
+// failing the task with "agent session died without producing commits."
+//
+// Before this fix, the create-synthetic branch in
+// recordContainerOnAgent omitted WorktreeBranch entirely; the update
+// path omitted it AND the task/agent-type coupling. Both are covered
+// by this pair of tests.
+func TestRecordContainerOnAgent_CreatePathPopulatesBranchAndTask(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
+	o, fake, _ := workerSpawnTestRig(t)
+
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "Branch must flow to agent row",
+		Description:    "d",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/abc",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	fake.spawnResults = []spawnOutcome{
+		{res: spawner.SpawnWorkerResult{ContainerID: "c-create-path"}},
+	}
+
+	require.NoError(t, o.spawnCoder(context.Background(), task))
+
+	// Reload task + agent from the DB and assert the agent row
+	// carries the branch/task/type coupling the reconciler needs.
+	require.NoError(t, o.db.First(task, "id = ?", task.ID).Error)
+	require.NotNil(t, task.AssignedAgentID,
+		"recordContainerOnAgent must attach a synthetic agent when none was assigned")
+
+	var ag model.Agent
+	require.NoError(t, o.db.First(&ag, "id = ?", task.AssignedAgentID).Error)
+
+	require.Equal(t, "feature/abc", ag.WorktreeBranch,
+		"agent row must carry the task's feature branch so reconcile_stuck.go can check for commits")
+	require.NotNil(t, ag.CurrentTaskID,
+		"agent row must carry CurrentTaskID so the reconciler can join agent → task")
+	require.Equal(t, task.ID, *ag.CurrentTaskID,
+		"CurrentTaskID must match the spawning task")
+	require.Equal(t, model.AgentCoder, ag.AgentType)
+	require.Equal(t, "c-create-path", ag.TmuxSession)
+}
+
+// TestRecordContainerOnAgent_UpdatePathPopulatesBranchAndTask covers
+// the sibling path: a pre-existing agent row (e.g. one created by the
+// legacy host-subprocess path or a retried spawn) MUST have its
+// WorktreeBranch and CurrentTaskID populated when the spawner attaches
+// a container to it. Before the fix, updateAgentContainer only wrote
+// TmuxSession / ModelID / HeartbeatAt and silently left branch + task
+// empty, producing the exact v13 symptom observed in production:
+// agent rows with correct container IDs but empty branch/task fields.
+func TestRecordContainerOnAgent_UpdatePathPopulatesBranchAndTask(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
+	o, fake, _ := workerSpawnTestRig(t)
+
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "Existing agent update path",
+		Description:    "d",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/def",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	// Pre-create an agent row with empty branch/task (mirrors the
+	// shape that produced the v13 incident) and assign it to the task.
+	preExisting := model.Agent{
+		ID:        uuid.New(),
+		ProjectID: o.projectID,
+		AgentType: model.AgentCoder,
+		Name:      "legacy-agent",
+		Status:    model.AgentIdle,
+		// WorktreeBranch deliberately empty.
+		// CurrentTaskID deliberately nil.
+	}
+	require.NoError(t, o.db.Create(&preExisting).Error)
+	task.AssignedAgentID = &preExisting.ID
+	require.NoError(t, o.db.Save(task).Error)
+
+	fake.spawnResults = []spawnOutcome{
+		{res: spawner.SpawnWorkerResult{ContainerID: "c-update-path"}},
+	}
+
+	require.NoError(t, o.spawnCoder(context.Background(), task))
+
+	var ag model.Agent
+	require.NoError(t, o.db.First(&ag, "id = ?", preExisting.ID).Error)
+	require.Equal(t, "feature/def", ag.WorktreeBranch,
+		"update path must write WorktreeBranch onto the pre-existing agent row")
+	require.NotNil(t, ag.CurrentTaskID,
+		"update path must populate CurrentTaskID on the pre-existing agent row")
+	require.Equal(t, task.ID, *ag.CurrentTaskID)
+	require.Equal(t, "c-update-path", ag.TmuxSession)
 }
 
 // TestSpawnTypedWorker_SubtaskWithMissingParentBranchFailsClosed

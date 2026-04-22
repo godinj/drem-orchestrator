@@ -55,6 +55,15 @@ func Init(dbPath string, logPath ...string) (*gorm.DB, error) {
 	// Data migration: copy tmux_window → tmux_session for existing rows.
 	db.Exec("UPDATE agents SET tmux_session = tmux_window WHERE tmux_session = '' AND tmux_window != ''")
 
+	// Composite index for the hot /tasks lookup (project-scoped, newest-
+	// first). Bug E W2.1: without this, SQLite picks the generic
+	// idx_tasks_project_id and a TEMP B-TREE sort, which at 4 GiB DB
+	// scale stretched /tasks latency to 7-28 s during the 2026-04-21
+	// retry storm. GORM AutoMigrate does not emit composite indexes
+	// with a direction modifier, so the migration is declared here as
+	// raw SQL alongside the existing tmux back-fill.
+	db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at DESC)")
+
 	return db, nil
 }
 

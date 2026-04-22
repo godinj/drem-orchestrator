@@ -1,10 +1,13 @@
 package agentmon
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"io"
+	"log/slog"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -215,4 +218,239 @@ func TestDockerSourceShutdownOnCtxCancel(t *testing.T) {
 func TestDockerSourceRequiresDependencies(t *testing.T) {
 	require.Error(t, (&DockerSource{}).Run(context.Background()))
 	require.Error(t, (&DockerSource{Runtime: container.NewFakeRuntime()}).Run(context.Background()))
+}
+
+// lockedBuffer wraps bytes.Buffer with a mutex so a slog handler
+// writing from background goroutines and the test's asserting
+// goroutine do not race on the underlying buffer.
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.buf.String()
+}
+
+// TestDockerSource_WarnOnZeroEventsAfterWindow asserts that a
+// subscription with no events delivered inside Warn0Window produces
+// exactly one WARN log line matching the documented grep target in
+// plans/agentmon-observability.md. This is the systemic sensor that
+// would have caught the 41h silent outage on day one.
+func TestDockerSource_WarnOnZeroEventsAfterWindow(t *testing.T) {
+	rt := newLiveFakeRuntime()
+	ing := newCaptureIngestor()
+
+	// Capture slog output into a buffer via a handler attached to a
+	// private logger. We route the package's slog.Warn calls by
+	// temporarily swapping slog.Default; restore after the test to
+	// avoid polluting the default logger for other tests.
+	logBuf := &lockedBuffer{}
+	handler := slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	prev := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	src := &DockerSource{
+		Runtime:         rt,
+		Ingestor:        ing,
+		Project:         "obs-test",
+		ContainerFilter: container.EventFilter{Labels: map[string]string{"drem.project": "obs-test"}},
+		Warn0Window:     50 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		require.NoError(t, src.Run(ctx))
+	}()
+	rt.waitForSubscription(t, 2*time.Second)
+
+	// No events are emitted; after Warn0Window the WARN must fire.
+	require.Eventually(t, func() bool {
+		return bytes.Contains([]byte(logBuf.String()),
+			[]byte("agentmon docker source: zero events matched in 45s since subscription start"))
+	}, 500*time.Millisecond, 10*time.Millisecond,
+		"zero-events WARN was not emitted within Warn0Window+slack")
+
+	// The filter labels must appear so operators can see WHICH filter
+	// produced zero hits — the whole point of including them.
+	require.Contains(t, logBuf.String(), "drem.project")
+
+	cancel()
+	<-done
+}
+
+// TestDockerSource_WarnSuppressedWhenEventsArrive asserts that at
+// least one event in the window suppresses the WARN, so a healthy
+// subscription does not produce false positives.
+func TestDockerSource_WarnSuppressedWhenEventsArrive(t *testing.T) {
+	rt := newLiveFakeRuntime()
+	ing := newCaptureIngestor()
+
+	logBuf := &lockedBuffer{}
+	handler := slog.NewTextHandler(logBuf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	prev := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	src := &DockerSource{
+		Runtime:     rt,
+		Ingestor:    ing,
+		Warn0Window: 100 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		require.NoError(t, src.Run(ctx))
+	}()
+	rt.waitForSubscription(t, 2*time.Second)
+
+	// Emit one event well inside the window.
+	rt.EmitEvent(container.Event{
+		Type:        container.EventStart,
+		ContainerID: "c-quiet",
+		Labels:      map[string]string{},
+		Timestamp:   time.Now(),
+	})
+
+	// Wait past Warn0Window + slack; no zero-events WARN should fire.
+	time.Sleep(250 * time.Millisecond)
+	require.NotContains(t, logBuf.String(),
+		"zero events matched in 45s since subscription start")
+
+	cancel()
+	<-done
+}
+
+// TestDockerSource_EventsMatchedLastMinute exercises the per-second
+// bucket ring. We inject a deterministic clock, emit events at known
+// epochs, and assert the trailing-60s sum. Because the subscription
+// happens-before semantics require the event to have reached the Run
+// loop before we sample, we use require.Eventually to give the
+// goroutine time to increment the bucket.
+func TestDockerSource_EventsMatchedLastMinute(t *testing.T) {
+	rt := newLiveFakeRuntime()
+	ing := newCaptureIngestor()
+
+	var nowSec atomic.Int64
+	nowSec.Store(1_000_000)
+	clock := func() time.Time { return time.Unix(nowSec.Load(), 0) }
+
+	src := &DockerSource{
+		Runtime:     rt,
+		Ingestor:    ing,
+		Warn0Window: time.Hour, // suppress WARN in this test
+		Now:         clock,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		require.NoError(t, src.Run(ctx))
+	}()
+	rt.waitForSubscription(t, 2*time.Second)
+
+	// Emit 3 events in the current second.
+	for i := 0; i < 3; i++ {
+		rt.EmitEvent(container.Event{
+			Type:        container.EventStart,
+			ContainerID: "c-now-" + string(rune('a'+i)),
+			Labels:      map[string]string{},
+			Timestamp:   clock(),
+		})
+	}
+	require.Eventually(t, func() bool {
+		return src.EventsMatchedLastMinute() == 3
+	}, 2*time.Second, 10*time.Millisecond,
+		"expected 3 events counted in the trailing minute")
+
+	// Advance to +30s, emit 2 more. Both buckets should still be in
+	// the trailing 60s window, so total is 5.
+	nowSec.Add(30)
+	for i := 0; i < 2; i++ {
+		rt.EmitEvent(container.Event{
+			Type:        container.EventStart,
+			ContainerID: "c-30-" + string(rune('a'+i)),
+			Labels:      map[string]string{},
+			Timestamp:   clock(),
+		})
+	}
+	require.Eventually(t, func() bool {
+		return src.EventsMatchedLastMinute() == 5
+	}, 2*time.Second, 10*time.Millisecond,
+		"expected 3+2=5 events counted in the trailing minute")
+
+	// Advance past the window; now the first 3 fall off and only the
+	// most-recent 2 should remain.
+	nowSec.Add(31) // total +61, first batch now outside 60s window
+	require.Equal(t, 2, src.EventsMatchedLastMinute(),
+		"expected first-batch events to have aged out of the trailing minute")
+
+	cancel()
+	<-done
+}
+
+// TestDockerSource_HasSeenReflectsActiveAndRecentTraffic verifies
+// that HasSeen returns true while a tail is live and keeps returning
+// true as long as the subscription has recent traffic — the exact
+// guarantee the reconciler's correlation predicate depends on.
+func TestDockerSource_HasSeenReflectsActiveAndRecentTraffic(t *testing.T) {
+	rt := newLiveFakeRuntime()
+	ing := newCaptureIngestor()
+
+	src := &DockerSource{
+		Runtime:     rt,
+		Ingestor:    ing,
+		Warn0Window: time.Hour,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		require.NoError(t, src.Run(ctx))
+	}()
+	rt.waitForSubscription(t, 2*time.Second)
+
+	// Before any event: HasSeen(anything) must be false — nothing has
+	// come through the subscription yet.
+	require.False(t, src.HasSeen("c-unknown"))
+
+	// Emit a start for c1; HasSeen(c1) should become true once the
+	// tail registers.
+	rt.EmitEvent(container.Event{
+		Type:        container.EventStart,
+		ContainerID: "c1",
+		Labels:      map[string]string{"drem.worker-id": "w1"},
+		Timestamp:   time.Now(),
+	})
+	require.Eventually(t, func() bool {
+		return src.HasSeen("c1")
+	}, 2*time.Second, 10*time.Millisecond,
+		"HasSeen(c1) never became true after EventStart")
+
+	// A container we never saw should still return true IF we had
+	// recent traffic (agentmon-is-alive fallback).
+	require.True(t, src.HasSeen("c-different"),
+		"HasSeen should fall back to recent-traffic heuristic")
+
+	cancel()
+	<-done
 }

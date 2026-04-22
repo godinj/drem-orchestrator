@@ -66,6 +66,76 @@ const dataFetchTimeout = 5 * time.Second
 // containerization prompt ("1s -> 2s -> 5s -> 10s cap").
 const dataBackoffCap = 10 * time.Second
 
+// canDispatch is the pure gate predicate used by dispatchTasksRefresh
+// and dispatchAgentsRefresh. It returns true iff a refresh is allowed
+// to fire RIGHT NOW given the single-flight gate (inflight) and the
+// backoff hold (nextAllowed). A zero nextAllowed means "no hold."
+//
+// Extracting this keeps the test matrix (retry_storm_test.go) pure:
+// tests exercise the gate logic without building tea.Cmd plumbing, at
+// the same altitude as nextDataBackoff / datasource_backoff_test.go.
+func canDispatch(inflight bool, nextAllowed, now time.Time) bool {
+	if inflight {
+		return false
+	}
+	if nextAllowed.IsZero() {
+		return true
+	}
+	return !now.Before(nextAllowed)
+}
+
+// dispatchTasksRefresh is the single-flight-gated entry point used by
+// the periodicRefreshMsg and EventMsg branches of Update. It returns
+// nil (not an error — a nil tea.Cmd is a no-op) if a /tasks fetch is
+// already in flight OR if we are inside a backoff hold window;
+// otherwise it sets the gate and returns the existing loadTasks Cmd.
+//
+// Invariant: the returned Cmd ALWAYS emits either tasksLoadedMsg or
+// dataErrMsg — there is no third path. That invariant keeps the gate
+// from stranding on error (see Update's dataErrMsg handler which
+// explicitly clears tasksInflight).
+//
+// Takes a pointer receiver so the gate bit is mutated in place on the
+// Update-local value. Safe because Update's `m Model` is addressable.
+func (m *Model) dispatchTasksRefresh() tea.Cmd {
+	if !canDispatch(m.tasksInflight, m.nextAllowedRefresh, m.now()) {
+		return nil
+	}
+	m.tasksInflight = true
+	return m.loadTasks()
+}
+
+// dispatchAgentsRefresh mirrors dispatchTasksRefresh for the /workers
+// endpoint. Per-endpoint gating (not a global gate) preserves today's
+// semantics where tasks and agents fetch independently — a slow
+// /tasks does not stall /workers and vice versa.
+func (m *Model) dispatchAgentsRefresh() tea.Cmd {
+	if !canDispatch(m.agentsInflight, m.nextAllowedRefresh, m.now()) {
+		return nil
+	}
+	m.agentsInflight = true
+	return m.loadAgents()
+}
+
+// schedulePeriodicTick returns the singleton periodic tick Cmd used
+// by Init and the periodicRefreshMsg branch. Expressed as a helper so
+// there is exactly one call site per "re-arm" event; if you add a
+// second, you have re-introduced the tick-compounding bug.
+func schedulePeriodicTick() tea.Cmd {
+	return tea.Tick(periodicRefreshInterval, func(time.Time) tea.Msg {
+		return periodicRefreshMsg{}
+	})
+}
+
+// now is the clock accessor honoured by the dispatch helpers. It
+// prefers the injected nowFunc (tests) and falls back to time.Now.
+func (m *Model) now() time.Time {
+	if m.nowFunc != nil {
+		return m.nowFunc()
+	}
+	return time.Now()
+}
+
 // nextDataBackoff advances the backoff ladder one step. The ladder is
 // 1s -> 2s -> 5s -> 10s -> 10s...; it is exposed as a pure function so
 // backoff behaviour stays testable without exercising tea.Cmd plumbing.

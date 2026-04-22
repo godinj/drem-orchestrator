@@ -117,6 +117,7 @@ type Orchestrator struct {
 	bugreportDir                string                 // path to .drem/bug-reports/ drop directory
 	testGate                    TestGateConfig
 	projectID                   uuid.UUID
+	projectName                 string // human-readable label; pairs with projectID on worker labels (see plans/dual-label-worker-spawn.md)
 	events                      chan<- Event
 	tick                        time.Duration
 	stale                       time.Duration
@@ -171,17 +172,54 @@ type Orchestrator struct {
 	// /internal/logs. Mirrors DREM_AGENTMON_TOKEN from the per-project
 	// compose file. Populated via SetInternalEndpoints.
 	agentmonToken string
+
+	// sightingProbe lets the stuck-agent reconciler ask "has agentmon's
+	// subscription ever observed this container?" before declaring a
+	// container-mode agent dead. See plans/agentmon-observability.md.
+	// Nil is safe (host-mode legacy) and preserves the original
+	// kill-on-stale-DB behaviour. When set, a false return from
+	// HasSeen short-circuits the kill so v12–v14-style false positives
+	// do not fire when agentmon itself is silently misconfigured.
+	sightingProbe ContainerSightingProbe
 }
 
-// New creates an Orchestrator. The supervisor parameter is optional — pass nil
-// to disable LLM-powered decision points and fall back to existing behavior.
-// The bugSvc parameter is optional — pass nil to disable bug report ingestion.
-// maxConcurrent is used for experiment-aware scheduling.
+// ContainerSightingProbe is the hook the orchestrator's stuck-agent
+// reconciler consults before killing a container-mode agent. The
+// production implementation is an *agentmon.DockerSource via its
+// HasSeen method; tests pass a fake. The interface lives in this
+// package (not agentmon) so adding the hook does not introduce a
+// new internal/* import to internal/orchestrator — constitution
+// constraints pin that package's internal imports at 17, shrink-only.
+type ContainerSightingProbe interface {
+	// HasSeen returns true if the subscription backing this probe has
+	// observed any lifecycle event for containerID since Run began,
+	// OR if the subscription has demonstrable recent traffic (the
+	// agentmon-is-alive fallback). A false return means the probe
+	// is unable to confirm the container exists through its live
+	// event stream — the exact situation that caused the v12–v14
+	// false-positive kills.
+	HasSeen(containerID string) bool
+}
+
+// SetContainerSightingProbe installs the agentmon HasSeen probe that
+// reconcileStuckAgents consults before killing a container-mode agent.
+// Pass nil (the default) to keep the legacy behaviour where the
+// reconciler trusts the spawner's ListWorkers + DB heartbeats alone.
 //
+// The expected production wiring builds the probe from the agentmon
+// DockerSource that the orch container spawns via SetRuntime, so
+// orch and agentmon share a single event subscription.
+func (o *Orchestrator) SetContainerSightingProbe(p ContainerSightingProbe) {
+	o.sightingProbe = p
+}
+
+// New creates an Orchestrator. sup/bugSvc are optional (nil disables).
+// maxConcurrent is used for experiment-aware scheduling. projectName is the
+// human-readable project label; it pairs with projectID on worker labels so
+// drem.project/drem.project_id stay in lockstep (plans/dual-label-worker-spawn.md).
 // The merger parameter that previously preceded mem is retired: the
-// feature-into-main merge path now runs via dispatchMerge against the
-// merger container (see merge_dispatch.go). Callers that need to override
-// the dispatch for tests use SetMergeDispatcher.
+// feature-into-main merge path runs via dispatchMerge against the merger
+// container (merge_dispatch.go); tests override via SetMergeDispatcher.
 func New(
 	db *gorm.DB,
 	dbPath string,
@@ -190,6 +228,7 @@ func New(
 	mem *memory.Manager,
 	sup *supervisor.Supervisor,
 	projectID uuid.UUID,
+	projectName string,
 	events chan<- Event,
 	tickInterval time.Duration,
 	staleTimeout time.Duration,
@@ -214,6 +253,7 @@ func New(
 		bugreportDir:    bugDir,
 		testGate:        defaultTestGateConfig(),
 		projectID:       projectID,
+		projectName:     projectName,
 		events:          events,
 		tick:            tickInterval,
 		stale:           staleTimeout,
@@ -352,10 +392,8 @@ func (o *Orchestrator) SetInternalEndpoints(orchURL, agentmonToken string) {
 }
 
 // NewWithExperimentScheduling creates an Orchestrator with experiment-aware
-// scheduling enabled. When experiments are active, normal tasks are paused
-// and the agent pool is partitioned across experiment variants.
-//
-// See New for the rationale behind dropping the merger parameter.
+// scheduling. Normal tasks pause while experiments run; the agent pool is
+// partitioned across variants. See New for the merger/projectName contract.
 func NewWithExperimentScheduling(
 	db *gorm.DB,
 	dbPath string,
@@ -364,6 +402,7 @@ func NewWithExperimentScheduling(
 	mem *memory.Manager,
 	sup *supervisor.Supervisor,
 	projectID uuid.UUID,
+	projectName string,
 	events chan<- Event,
 	tickInterval time.Duration,
 	staleTimeout time.Duration,
@@ -374,7 +413,7 @@ func NewWithExperimentScheduling(
 	maxConcurrent int,
 	contextFixerPct ...int,
 ) *Orchestrator {
-	orch := New(db, dbPath, runner, wt, mem, sup, projectID, events, tickInterval, staleTimeout, contextWarnPct, contextStopPct, bugSvc, bugDir, contextFixerPct...)
+	orch := New(db, dbPath, runner, wt, mem, sup, projectID, projectName, events, tickInterval, staleTimeout, contextWarnPct, contextStopPct, bugSvc, bugDir, contextFixerPct...)
 	orch.experimentScheduler = NewExperimentScheduler(db, maxConcurrent)
 	return orch
 }

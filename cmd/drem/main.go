@@ -25,6 +25,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
+	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/eventbus"
@@ -37,6 +38,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/taskimport"
 	"github.com/godinj/drem-orchestrator/internal/tui"
+	"github.com/godinj/drem-orchestrator/pkg/orchclient"
 )
 
 func main() {
@@ -132,7 +134,10 @@ func main() {
 		return
 	}
 
-	_ = projectName // retained for future session-naming needs
+	// projectName is the human-readable project label. Previously only used
+	// for session naming; it is now also threaded into the orchestrator as
+	// o.projectName so worker spawns can emit drem.project=<name> alongside
+	// drem.project_id=<UUID>. See plans/dual-label-worker-spawn.md.
 
 	// Redirect logging to file so it doesn't corrupt the TUI.
 	logFile, err := os.OpenFile(cfg.LogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
@@ -205,7 +210,7 @@ func main() {
 	bugReportSvc := bugreport.New(database)
 
 	orchEvents := make(chan orchestrator.Event, 100)
-	orch := orchestrator.NewWithExperimentScheduling(database, cfg.DatabasePath, runner, wt, mem, sup, project.ID, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.MaxConcurrentAgents, cfg.ContextFixerPercent)
+	orch := orchestrator.NewWithExperimentScheduling(database, cfg.DatabasePath, runner, wt, mem, sup, project.ID, projectName, orchEvents, cfg.TickInterval, cfg.StaleTimeout, cfg.ContextWarnPercent, cfg.ContextStopPercent, bugReportSvc, bugReportDir, cfg.MaxConcurrentAgents, cfg.ContextFixerPercent)
 	orch.SetInteractiveSupervisorConfig(cfg.Agents.InteractiveSupervisorCLIConfig())
 
 	// Enable direct SGLang classifier when configured or auto-detected.
@@ -268,6 +273,27 @@ func main() {
 	if _, err := os.Stat(spawnerSock); err == nil {
 		orch.SetSpawner(spawner.NewClient(spawnerSock))
 		slog.Info("spawner client wired", "socket", spawnerSock)
+
+		// Container-mode deploys MUST also have a container.Runtime
+		// wired so orchestrator.watchDockerEvents runs (see
+		// orchestrator.Run, which guards the event-watch goroutine on
+		// o.Runtime != nil). Before this wiring landed, watchDockerEvents
+		// never ran in containerised deploys — the fourth observability
+		// gap discovered during v13–v14 triage (see
+		// plans/agentmon-observability.md). DREM_IN_CONTAINER=1 (set by
+		// the orch container image) is the opt-in signal; host-mode dev
+		// keeps the legacy behaviour where Runtime stays nil and
+		// watchDockerEvents does not start.
+		if os.Getenv("DREM_IN_CONTAINER") == "1" {
+			rt, rterr := container.NewDockerRuntime()
+			if rterr != nil {
+				slog.Warn("docker runtime: could not connect; watchDockerEvents will stay disabled",
+					"error", rterr)
+			} else {
+				orch.SetRuntime(rt)
+				slog.Info("docker runtime wired for watchDockerEvents")
+			}
+		}
 	} else {
 		slog.Info("spawner socket not present; container dispatch disabled, falling back to legacy runner",
 			"socket", spawnerSock, "error", err)
@@ -368,7 +394,7 @@ func main() {
 		// ingestion). See docs/prd-containerization.md — Kyle and the TUI both
 		// call this API. A nil log streamer means GET /logs returns 503 until
 		// agentmon is containerized and wired through.
-		startOrchHTTP(ctx, cfg, database, project.Name)
+		startOrchHTTP(ctx, cfg, database, project.Name, orch)
 	}
 
 	// Start C-Suite dashboard poller backed by disk state files.
@@ -386,6 +412,21 @@ func main() {
 	resolvedOrchURL := tui.ResolveOrchURL(*orchURL, cfg.OrchHTTPPort)
 	dataSource := tui.NewHTTPDataSource(resolvedOrchURL, project.Name)
 	slog.Info("TUI data source configured", "url", resolvedOrchURL, "project", project.Name)
+
+	// Phase 3 of the orch API gate-mutation pivot: the TUI's gate actions
+	// (approve / reject / pass / fail / answer) route through pkg/orchclient
+	// over HTTP instead of calling the in-process orchestrator directly.
+	// This closes the same double-writer escape hatch Phase 2 is closing
+	// for `drem cli`. The in-process orch is still constructed (above) and
+	// still runs its reconciler/scheduler via orch.Run(ctx) below; we just
+	// hand the TUI an adapter that POSTs gate mutations to the orch's HTTP
+	// API. Non-gate methods (pause/resume/retry/comment/spawn/…) fall
+	// through to the in-process orch via WithFallback — those are out of
+	// scope for Phase 3 and stay functional.
+	//
+	// See plans/orch-api-gate-mutations.md "Phase 3" and
+	// internal/tui/http_orchestrator.go.
+	tuiOrch := tui.NewHTTPOrchestrator(orchclient.New(resolvedOrchURL), project.Name).WithFallback(orch)
 
 	// Register our own signal handler so we control shutdown — not
 	// Bubble Tea.  WithoutSignalHandler() prevents Bubble Tea from
@@ -431,7 +472,7 @@ func main() {
 	go func() {
 		for {
 			prog := tea.NewProgram(
-				tui.NewModel(database, dataSource, orch, nil, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
+				tui.NewModel(database, dataSource, tuiOrch, nil, project.ID, tuiEvents, cfg.LogPath, bugreportSvc, csuitePoller.Snapshots(), csuiteStore),
 				tea.WithAltScreen(),
 				tea.WithoutSignalHandler(),
 			)

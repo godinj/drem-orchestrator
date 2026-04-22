@@ -124,6 +124,7 @@ func newContainerSubtaskRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner, mo
 	o := &Orchestrator{
 		db:             db,
 		projectID:      project.ID,
+		projectName:    project.Name,
 		events:         events,
 		worktree:       &FakeWorktreeManager{BarePath: bareRepo, Default: "main"},
 		logger:         slog.Default().With("component", "subtask_scheduling_test"),
@@ -178,10 +179,13 @@ func TestScheduleSubtasks_DispatchesCoderViaSpawner(t *testing.T) {
 
 	require.NoError(t, o.scheduleSubtasks(&parent))
 
-	// SpawnWorker was called with coder params.
+	// SpawnWorker was called with coder params. Dual-label contract
+	// (plans/dual-label-worker-spawn.md): Project is the name;
+	// ProjectID is the UUID; both land on container labels.
 	require.Len(t, fake.spawnCalls, 1)
 	p := fake.spawnCalls[0]
-	assert.Equal(t, project.ID.String(), p.Project)
+	assert.Equal(t, project.Name, p.Project)
+	assert.Equal(t, project.ID.String(), p.ProjectID)
 	assert.Equal(t, "coder", p.AgentType)
 	assert.Equal(t, sub.ID.String(), p.Env["DREM_TASK_ID"])
 	assert.Equal(t, "/host/.claude/.credentials.json", p.CredsMount)

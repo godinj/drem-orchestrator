@@ -563,6 +563,107 @@ func TestRender_CsuiteWatcherTokenEnvIsDeclared(t *testing.T) {
 		env["CSUITE_WATCHER_DB_PATH"])
 }
 
+// TestRender_HostDataDirBindMountIsWired asserts the orch service
+// bind-mounts HostDataDir onto /var/lib/drem read-write, replacing
+// the pre-pivot `drem-<project>-db` named volume. Host bind-mount
+// lets the operator inspect drem.db (plus its WAL/shm sidecars)
+// directly with sqlite3/du/cp — no `docker run --rm -v <vol>:/src`
+// detour. See plans/orch-db-host-access-impl.md (Option A).
+func TestRender_HostDataDirBindMountIsWired(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Services map[string]struct {
+			Volumes []string `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	expectedMount := "/home/operator/.drem/projects/drem-orchestrator/data:/var/lib/drem:rw"
+	require.Contains(t, parsed.Services["orch"].Volumes, expectedMount,
+		"orch must bind-mount HostDataDir at /var/lib/drem read-write; "+
+			"volumes=%v", parsed.Services["orch"].Volumes)
+
+	// The pre-pivot named-volume reference on the orch service MUST be
+	// gone — if it stayed, docker would mount the (empty, on a fresh
+	// project) named volume over our bind-mount and mask the operator's
+	// host tree.
+	for _, v := range parsed.Services["orch"].Volumes {
+		require.NotEqual(t, "drem-drem-orchestrator-db:/var/lib/drem", v,
+			"orch must no longer reference the pre-pivot named db volume; "+
+				"volumes=%v", parsed.Services["orch"].Volumes)
+	}
+
+	// The prompts named volume inside /var/lib/drem/prompts must
+	// still stack on top of the host bind-mount — it's a separate
+	// storage tier the compose template has carried since inception.
+	require.Contains(t, parsed.Services["orch"].Volumes,
+		"drem-drem-orchestrator-prompts:/var/lib/drem/prompts",
+		"prompts named volume must stay wired; volumes=%v",
+		parsed.Services["orch"].Volumes)
+}
+
+// TestRender_HostDataDirDefaultsFromHostHome asserts applyDefaults
+// fills in HostDataDir as <HostHome>/.drem/projects/<ProjectName>/data
+// when the caller leaves it zero-value. Mirrors the WorkerPromptRoot
+// defaulting pattern so every per-project host-side tree lives under
+// one predictable root.
+func TestRender_HostDataDirDefaultsFromHostHome(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/root"
+	data.HostDataDir = "" // explicit
+
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	require.Contains(t, string(out),
+		"/root/.drem/projects/drem-orchestrator/data:/var/lib/drem:rw",
+		"default HostDataDir must derive from HostHome + ProjectName")
+}
+
+// TestRender_HostDataDirExplicitOverride asserts a caller-supplied
+// HostDataDir wins over the HostHome-derived default — necessary for
+// operators on NFS / dedicated SSD / encrypted-volume host layouts.
+func TestRender_HostDataDirExplicitOverride(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	data.HostDataDir = "/srv/drem-state/drem-orchestrator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	s := string(out)
+	require.Contains(t, s, "/srv/drem-state/drem-orchestrator:/var/lib/drem:rw")
+	require.NotContains(t, s,
+		"/home/operator/.drem/projects/drem-orchestrator/data:/var/lib/drem:rw",
+		"explicit HostDataDir must override the HostHome default")
+}
+
+// TestWriteProjectComposeAt_PrecreatesHostDataDir asserts the helper
+// creates the host-side data dir on disk so docker's auto-create as
+// root doesn't race the first `docker compose up`. Best-effort Chown
+// failures are not fatal; the MkdirAll itself must land.
+func TestWriteProjectComposeAt_PrecreatesHostDataDir(t *testing.T) {
+	homeDir := t.TempDir()
+	data := projects.TemplateData{
+		ProjectName:  "drem-orchestrator",
+		OrchURL:      "http://localhost:8080",
+		Language:     projects.LanguageGo,
+		WorkerImage:  "drem-worker-go:latest",
+		MergerImage:  "drem-merger:latest",
+		BareRepoPath: "/home/dev/git/drem-orchestrator.git",
+		SharedToken:  "token-123",
+		HostHome:     homeDir,
+	}
+	_, err := projects.WriteProjectComposeAt(homeDir, "drem-orchestrator", data)
+	require.NoError(t, err)
+
+	dataDir := filepath.Join(homeDir, ".drem", "projects", "drem-orchestrator", "data")
+	info, err := os.Stat(dataDir)
+	require.NoError(t, err, "WriteProjectComposeAt must pre-create HostDataDir")
+	require.True(t, info.IsDir(), "HostDataDir must be a directory")
+}
+
 // TestRender_PersonaSignalEnvIsDeclared asserts each persona service
 // declares both CSUITE_WATCHER_TOKEN (host-shell passthrough) and
 // CSUITE_SIGNAL_ENDPOINT (pointing at the watcher's in-network name).

@@ -181,5 +181,13 @@ func TestDataErrMsg_SetsBannerAndKeepsSnapshot(t *testing.T) {
 	require.EqualError(t, m.dataErr, "down")
 	require.Equal(t, 1*time.Second, m.dataBackoff, "first failure arms 1s backoff")
 	require.Len(t, m.board.tasks, 1, "snapshot must persist across failures")
-	require.NotNil(t, cmd, "dataErrMsg must schedule a retry tick")
+	// Post-retry-storm-fix (plans/tui-retry-storm-prevention.md): the
+	// dataErrMsg branch deliberately does NOT schedule a replacement
+	// tick — that was Site 2 of the retry storm (tick compounding).
+	// The singleton periodic tick from Init drives the retry; the
+	// nextAllowedRefresh hold window below gates dispatches during
+	// backoff without spawning concurrent loops.
+	require.Nil(t, cmd, "dataErrMsg must NOT schedule a replacement tick")
+	require.False(t, m.nextAllowedRefresh.IsZero(),
+		"dataErrMsg must seed nextAllowedRefresh so the next tick is gated")
 }

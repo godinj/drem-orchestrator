@@ -75,6 +75,24 @@ type Model struct {
 	// a failure. It advances on each consecutive failure and caps at 10s,
 	// per the containerization prompt; a successful refresh resets it.
 	dataBackoff time.Duration
+
+	// tasksInflight is the single-flight gate for the /tasks endpoint.
+	// While true, dispatchTasksRefresh() returns nil so we never stack
+	// concurrent fetches on a slow backend. Released on tasksLoadedMsg or
+	// dataErrMsg. See plans/tui-retry-storm-prevention.md.
+	tasksInflight bool
+	// agentsInflight is the single-flight gate for the /workers endpoint.
+	// Independent of tasksInflight so a slow /tasks does not stall
+	// /workers and vice versa.
+	agentsInflight bool
+	// nextAllowedRefresh is the wall-clock instant before which dispatch
+	// helpers refuse to fire. Seeded by dataErrMsg to now+dataBackoff and
+	// cleared on successful load. Zero means "no hold — fire freely."
+	nextAllowedRefresh time.Time
+	// nowFunc is the clock used by dispatch helpers to evaluate
+	// nextAllowedRefresh. Nil means real time.Now. Tests inject a fixed
+	// clock here so they can walk the backoff window deterministically.
+	nowFunc func() time.Time
 }
 
 // NewModel creates the root TUI model.
@@ -121,19 +139,34 @@ func NewModel(
 		experiments:  NewExperimentView(db),
 		focus:        FocusBoard,
 		keys:         defaultKeyMap(),
+		// Arm the single-flight gates from the start: Init() launches
+		// the initial loadTasks/loadAgents Cmds directly (bypassing
+		// the dispatch helpers), and the first periodicRefreshMsg
+		// could otherwise fire a duplicate fetch before the Init
+		// loads return. The first tasksLoadedMsg/agentsLoadedMsg
+		// releases each gate. See plans/tui-retry-storm-prevention.md.
+		tasksInflight:  true,
+		agentsInflight: true,
 	}
 }
 
 // Init returns the initial commands: load tasks, load agents, listen for events,
-// start the periodic refresh tick, and listen for C-Suite snapshots.
+// start the singleton periodic refresh tick, and listen for C-Suite snapshots.
+//
+// The periodic tick is a singleton BY CONSTRUCTION: it is scheduled here
+// exactly once, and re-armed at exactly one call site in Update
+// (periodicRefreshMsg branch). Error paths do NOT schedule a replacement
+// tick — they merely seed nextAllowedRefresh and let the existing
+// singleton tick drive the retry. Introducing a second schedulePeriodicTick
+// call re-introduces the tick-compounding bug (Site 2, the primary engine
+// in the 2026-04-21 retry-storm incident). See
+// plans/tui-retry-storm-prevention.md.
 func (m Model) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.loadTasks(),
 		m.loadAgents(),
 		listenForEvents(m.events),
-		tea.Tick(periodicRefreshInterval, func(time.Time) tea.Msg {
-			return periodicRefreshMsg{}
-		}),
+		schedulePeriodicTick(),
 	}
 	if m.csuiteSnaps != nil {
 		cmds = append(cmds, listenForCsuiteSnapshot(m.csuiteSnaps))
@@ -151,30 +184,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tasksLoadedMsg:
+		// Release the single-flight gate and clear the backoff hold so
+		// the very next dispatch can fire. The previous implementation
+		// fired m.refreshData() here (completion-edge re-fire) — that
+		// was Site 1 of the 2026-04-21 retry-storm incident: "completion
+		// is the rate limiter," a guaranteed hot loop with no pacing.
+		// Deleted on purpose; the singleton periodic tick is now the
+		// sole steady-state refresh driver. See
+		// plans/tui-retry-storm-prevention.md.
+		m.tasksInflight = false
 		m.board.tasks = msg.tasks
 		m.board.relocateCursor()
 		m.board.adjustScroll()
 		m.updateDetail()
 		m.dataErr = nil
 		m.dataBackoff = 0
-		return m, m.refreshData()
+		m.nextAllowedRefresh = time.Time{}
+		return m, nil
 
 	case agentsLoadedMsg:
+		// Release the agents single-flight gate; mirror the tasks path.
+		m.agentsInflight = false
 		m.agents.agents = msg.agents
 		m.dataErr = nil
 		m.dataBackoff = 0
+		m.nextAllowedRefresh = time.Time{}
 		return m, nil
 
 	case dataErrMsg:
-		// Remember the failure for the banner, bump backoff for the next
-		// retry, but keep the last-good snapshot visible. A retry tick is
-		// scheduled so the poll loop doesn't stall after a failure; the
-		// regular periodicRefreshMsg will also keep polling in parallel.
+		// Release BOTH gates on error — the source of the failure is not
+		// knowable from dataErrMsg alone (loadTasks and loadAgents both
+		// funnel into dataErrMsg), so we conservatively clear both.
+		// Leaving either inflight would strand the gate forever.
+		//
+		// Do NOT schedule a replacement tick. The previous implementation
+		// fired tea.Tick here, and the periodicRefreshMsg branch also
+		// re-armed itself, so every error spawned a new concurrent
+		// periodic loop — Site 2, the primary engine of the 2026-04-21
+		// retry-storm incident (N errors -> N+1 loops forever). The
+		// singleton periodic tick scheduled by Init is the sole driver;
+		// nextAllowedRefresh below gates dispatches during the backoff
+		// window without creating any new ticks.
+		m.tasksInflight = false
+		m.agentsInflight = false
 		m.dataErr = msg.err
 		m.dataBackoff = nextDataBackoff(m.dataBackoff)
-		return m, tea.Tick(m.dataBackoff, func(time.Time) tea.Msg {
-			return periodicRefreshMsg{}
-		})
+		m.nextAllowedRefresh = m.now().Add(m.dataBackoff)
+		return m, nil
 
 	case dataRefreshedMsg:
 		m.board.tasks = msg.tasks
@@ -196,15 +252,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case EventMsg:
-		// Orchestrator event: refresh data and re-listen.
-		return m, tea.Batch(m.refreshData(), listenForEvents(m.events))
+		// Orchestrator event: attempt a tasks refresh and re-listen.
+		//
+		// The refresh goes through the single-flight gate: if a fetch
+		// is already in flight (or we are inside a backoff window),
+		// dispatchTasksRefresh returns nil and the event is effectively
+		// "swallowed." That is INTENTIONAL. Under the old code every
+		// event fired a parallel refreshData, which amplified the
+		// storm (Site 3 in the 2026-04-21 incident RCA). The fresh
+		// data will land on the next periodic tick at most 2s later —
+		// acceptable latency for a dashboard. Don't "fix" this by
+		// re-introducing completion-edge or parallel fires.
+		return m, tea.Batch(m.dispatchTasksRefresh(), listenForEvents(m.events))
 
 	case periodicRefreshMsg:
-		// Periodic refresh: re-read DB (picks up context usage updates)
-		// and schedule the next tick.
-		return m, tea.Batch(m.refreshData(), tea.Tick(periodicRefreshInterval, func(time.Time) tea.Msg {
-			return periodicRefreshMsg{}
-		}))
+		// Periodic refresh: gated dispatch of both endpoints plus the
+		// re-arm of THIS periodic tick. This is the single re-arm call
+		// site — do not add a second one anywhere else (see the
+		// dataErrMsg handler comment on why).
+		return m, tea.Batch(
+			m.dispatchTasksRefresh(),
+			m.dispatchAgentsRefresh(),
+			schedulePeriodicTick(),
+		)
 
 	case logCapturedMsg:
 		// Discard stale log capture if the selection has moved.

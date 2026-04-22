@@ -39,10 +39,14 @@ const promptMountPath = "/home/drem/.drem/prompt.md"
 const workerPromptPathEnv = "DREM_PROMPT_PATH"
 
 // SpawnWorker builds a Spec, creates the container, and records it in the
-// in-memory registry. The three identifying labels (project, agent_type,
+// in-memory registry. The identifying labels (project, project_id, agent_type,
 // worker_id) and the branch label are set here and are NOT overridable by
 // the caller's Labels map — caller labels merge over a fresh base but we
-// re-apply ours last so the registry invariants hold.
+// re-apply ours last so the registry invariants hold. drem.project is the
+// human-readable name (matches agentmon's DREM_PROJECT env filter);
+// drem.project_id is the stable UUID (used by every internal orch filter).
+// See plans/dual-label-worker-spawn.md for the v13-v14 outage that drove
+// the dual-label contract.
 func (s *Service) SpawnWorker(ctx context.Context, p SpawnWorkerParams) (SpawnWorkerResult, error) {
 	if p.Project == "" || p.AgentType == "" || p.WorkerID == "" {
 		return SpawnWorkerResult{}, fmt.Errorf("project, agent_type, and worker_id are required")
@@ -59,6 +63,7 @@ func (s *Service) SpawnWorker(ctx context.Context, p SpawnWorkerParams) (SpawnWo
 
 	labels := mergeLabels(p.Labels, map[string]string{
 		"drem.project":    p.Project,
+		"drem.project_id": p.ProjectID,
 		"drem.agent_type": p.AgentType,
 		"drem.worker_id":  p.WorkerID,
 		"drem.branch":     p.Branch,
@@ -142,6 +147,7 @@ func (s *Service) SpawnWorker(ctx context.Context, p SpawnWorkerParams) (SpawnWo
 	info := WorkerInfo{
 		ContainerID: h.ID,
 		Project:     p.Project,
+		ProjectID:   p.ProjectID,
 		AgentType:   p.AgentType,
 		WorkerID:    p.WorkerID,
 		Branch:      p.Branch,
@@ -172,16 +178,24 @@ func (s *Service) DestroyWorker(ctx context.Context, p DestroyWorkerParams) erro
 	return nil
 }
 
-// ListWorkers returns every registry entry whose project label matches the
-// filter. An empty Project returns every entry. Status is refreshed from
-// the runtime per-entry so callers see the current lifecycle state rather
-// than the snapshot captured at spawn time; a failed Inspect falls back to
-// the cached status so a transiently-removed container is still reported.
+// ListWorkers returns every registry entry whose project labels match the
+// filter. Both filters are AND'd; empty fields are ignored so callers can
+// pass either the name (Project) or the stable UUID (ProjectID). Internal
+// orchestrator consumers pass ProjectID so the filter survives renames;
+// operators calling over the RPC from the host may pass either.
+// See plans/dual-label-worker-spawn.md.
+// Status is refreshed from the runtime per-entry so callers see the current
+// lifecycle state rather than the snapshot captured at spawn time; a failed
+// Inspect falls back to the cached status so a transiently-removed
+// container is still reported.
 func (s *Service) ListWorkers(ctx context.Context, p ListWorkersParams) (ListWorkersResult, error) {
 	s.mu.Lock()
 	entries := make([]WorkerInfo, 0, len(s.registry))
 	for _, e := range s.registry {
 		if p.Project != "" && e.info.Project != p.Project {
+			continue
+		}
+		if p.ProjectID != "" && e.info.ProjectID != p.ProjectID {
 			continue
 		}
 		entries = append(entries, e.info)

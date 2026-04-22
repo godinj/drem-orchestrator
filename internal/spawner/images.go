@@ -10,7 +10,18 @@ package spawner
 // "coder" is language-sensitive: the resolver appends "-<language>" taken
 // from Labels["drem.language"] before looking up in this table, so
 // coder-go and coder-cpp map to their per-language worker images while
-// language-agnostic agents (merger, csuite-*) resolve directly.
+// language-agnostic agents (merger, csuite-*, reviewer/fixer/supervisor/
+// classifier) resolve directly.
+//
+// Sibling table `internal/agent/image_resolver.go:DefaultImages` must
+// stay in sync with this one — they are two registries for the same
+// mapping and drift between them is what caused the 2026-04-22 v15/v16
+// canary regression (reviewer/fixer/supervisor/classifier lived in the
+// agent-side table but not here, so spawner RPC dispatch failed with
+// `-32000 no image mapping for agent_type="fixer"`). The drift-guard
+// test is `images_test.go:TestResolveImage_NonCoderAgentTypesMapped`;
+// the longer-term fix — collapsing the two tables into one — is
+// `plans/bug-f-spawner-image-registry-drift.md`.
 var defaultImages = map[string]string{
 	"coder-go":    "localhost:5000/drem-worker-go:latest",
 	"coder-cpp":   "localhost:5000/drem-worker-cpp:latest",
@@ -20,6 +31,10 @@ var defaultImages = map[string]string{
 	// long-lived container in deploy/compose/global.yml, not a spawn-
 	// on-demand role. Orch reaches it over HTTP via dispatchPlanHTTP.
 	// See plans/warm-planner-pivot.md §7.
+	"reviewer":    "localhost:5000/drem-worker-go:latest",
+	"fixer":       "localhost:5000/drem-worker-go:latest",
+	"supervisor":  "localhost:5000/drem-worker-go:latest",
+	"classifier":  "localhost:5000/drem-worker-go:latest",
 	"csuite-mike": "localhost:5000/drem-csuite-mike:latest",
 	"csuite-alex": "localhost:5000/drem-csuite-alex:latest",
 	"csuite-ross": "localhost:5000/drem-csuite-ross:latest",

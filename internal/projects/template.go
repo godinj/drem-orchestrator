@@ -99,6 +99,18 @@ type TemplateData struct {
 	// csuite comms tree per operator, not per project). See the csuite-
 	// docker end-to-end design and plans/ for the rationale.
 	CsuiteHomeRoot string
+	// HostDataDir is the host directory bind-mounted into the orch
+	// container at /var/lib/drem. Holds the SQLite database (drem.db),
+	// its WAL + shm sidecars, and any other orch-managed state. A host
+	// bind-mount (rather than a named docker volume) lets operators
+	// inspect the DB directly with sqlite3/du/cp without
+	// `docker run --rm -v <vol>:/src alpine cat ...` gymnastics.
+	// Defaults to HostHome/.drem/projects/<ProjectName>/data when
+	// empty. The named `drem-<ProjectName>-db` volume is still
+	// declared in the top-level volumes block so the existing on-disk
+	// state remains reachable for the one-time migration copy-out.
+	// See plans/orch-db-host-access-impl.md (Option A).
+	HostDataDir string
 }
 
 // Default image tags for the orchestrator.
@@ -186,6 +198,12 @@ func applyDefaults(data *TemplateData) {
 	if data.CsuiteHomeRoot == "" && data.HostHome != "" {
 		data.CsuiteHomeRoot = filepath.Join(data.HostHome, ".drem-csuite")
 	}
+	// HostDataDir is per-project (the orch DB is per-project). Mirrors
+	// WorkerPromptRoot's derivation. See plans/orch-db-host-access-impl.md.
+	if data.HostDataDir == "" && data.HostHome != "" && data.ProjectName != "" {
+		data.HostDataDir = filepath.Join(
+			data.HostHome, ".drem", "projects", data.ProjectName, "data")
+	}
 }
 
 // WriteProjectCompose renders the template and writes it to
@@ -219,6 +237,12 @@ func WriteProjectComposeAt(homeDir, projectName string, data TemplateData) (stri
 	if data.ConfigFilePath == "" {
 		data.ConfigFilePath = filepath.Join(dir, configFilename)
 	}
+	// Apply defaults locally so the WorkerPromptRoot / HostDataDir
+	// MkdirAll steps below see the same paths Render bakes into the
+	// compose file. Render receives its own by-value copy and re-runs
+	// applyDefaults internally — double-application is idempotent
+	// (each branch is no-op when the field is already set).
+	applyDefaults(&data)
 	rendered, err := Render(data)
 	if err != nil {
 		return "", err
@@ -236,6 +260,21 @@ func WriteProjectComposeAt(homeDir, projectName string, data TemplateData) (stri
 	// the real error.
 	if data.WorkerPromptRoot != "" {
 		_ = os.MkdirAll(data.WorkerPromptRoot, 0o755)
+	}
+	// Pre-create the host-side data dir so the first orch boot doesn't
+	// race docker into creating the bind-mount source as root (which
+	// would then surface as permission errors when we eventually run
+	// orch as non-root). Best-effort chown to 1000:1000 matches the
+	// drem user inside the container image (see deploy/docker/
+	// worker-base.Dockerfile and the csuite-watcher uid-1000 fix in
+	// commit 469dd38). Chown errors are ignored — the operator may be
+	// running as a non-root uid that can't chown, and the orch
+	// container runs as root today regardless. See
+	// plans/orch-db-host-access-impl.md §2.
+	if data.HostDataDir != "" {
+		if err := os.MkdirAll(data.HostDataDir, 0o755); err == nil {
+			_ = os.Chown(data.HostDataDir, 1000, 1000)
+		}
 	}
 	path := filepath.Join(dir, "compose.yml")
 	if err := os.WriteFile(path, rendered, 0o644); err != nil {

@@ -869,7 +869,7 @@ func TestContextUsageTypes(t *testing.T) {
 
 func TestContextFixerPctDefault(t *testing.T) {
 	events := make(chan Event, 100)
-	o := New(nil, "", nil, nil, nil, nil, uuid.New(), events, time.Second, time.Minute, 75, 90, nil, "")
+	o := New(nil, "", nil, nil, nil, nil, uuid.New(), "drem-test", events, time.Second, time.Minute, 75, 90, nil, "")
 	if o.contextFixerPct != 85 {
 		t.Errorf("expected default contextFixerPct=85, got %d", o.contextFixerPct)
 	}
@@ -877,7 +877,7 @@ func TestContextFixerPctDefault(t *testing.T) {
 
 func TestContextFixerPctCustom(t *testing.T) {
 	events := make(chan Event, 100)
-	o := New(nil, "", nil, nil, nil, nil, uuid.New(), events, time.Second, time.Minute, 75, 90, nil, "", 80)
+	o := New(nil, "", nil, nil, nil, nil, uuid.New(), "drem-test", events, time.Second, time.Minute, 75, 90, nil, "", 80)
 	if o.contextFixerPct != 80 {
 		t.Errorf("expected contextFixerPct=80, got %d", o.contextFixerPct)
 	}
@@ -885,7 +885,7 @@ func TestContextFixerPctCustom(t *testing.T) {
 
 func TestContextThresholdConstants(t *testing.T) {
 	events := make(chan Event, 100)
-	o := New(nil, "", nil, nil, nil, nil, uuid.New(), events, time.Second, time.Minute, 75, 90, nil, "")
+	o := New(nil, "", nil, nil, nil, nil, uuid.New(), "drem-test", events, time.Second, time.Minute, 75, 90, nil, "")
 	if o.contextWarnPct != 75 {
 		t.Errorf("expected contextWarnPct=75, got %d", o.contextWarnPct)
 	}

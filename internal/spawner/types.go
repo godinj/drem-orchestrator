@@ -11,30 +11,37 @@ package spawner
 
 import "time"
 
-// SpawnWorkerParams is the payload of the SpawnWorker RPC. Project,
-// AgentType, and WorkerID are mandatory — they populate the three
-// identifying labels used for every subsequent list and inspect operation.
-// Branch is the Git ref the worker will clone; Labels adds caller-supplied
-// labels on top of the three identifying ones (most notably
-// "drem.language", which steers coder image selection). Image is an
-// explicit override; when empty the spawner resolves the image from the
-// agent-type → image table in images.go. Env passes through to the
-// container. BareRepoMount, when non-empty, is bind-mounted at /bare so
-// the worker can clone from it. By default the mount is read-only; set
-// BareRepoReadWrite to true for per-task mergers that must push. Cmd is
-// the container's argv — empty leaves the image's ENTRYPOINT/CMD
-// unchanged; populated it replaces CMD exactly, letting orchestrator
-// callers pass per-invocation flags (for example the merger's
-// --feature-branch / --task-id / --orch-url pairs). CredsMount, when
-// non-empty, is a host path bind-mounted read-only at
-// /home/drem/.claude/.credentials.json so the worker's claude CLI can
-// read the host operator's subscription credentials; the spawner
-// pre-checks the host path exists before creating the container and
-// fails SpawnWorker fast if it does not. Leave empty for agent types
-// that do not run claude (notably merger, which is a Go binary).
-// PromptMount, when non-empty, is a host file path bind-mounted
-// read-only into the worker at /home/drem/.drem/prompt.md; the
-// spawner also sets DREM_PROMPT_PATH in the worker env to that
+// SpawnWorkerParams is the payload of the SpawnWorker RPC. Project is
+// the human-readable project name (e.g. "drem-orchestrator") and maps
+// to the drem.project label on the container. ProjectID is the stable
+// project UUID and maps to the drem.project_id label. Agentmon filters
+// live events on drem.project=<name> (the env var DREM_PROJECT is the
+// name), while every internal orchestrator consumer filters on
+// drem.project_id=<UUID>. A container MUST carry both labels so agentmon
+// and the orchestrator agree on identity regardless of rename. See
+// plans/dual-label-worker-spawn.md for the v13-v14 outage that drove
+// this split. AgentType and WorkerID round out the four identifying
+// labels used for every subsequent list and inspect operation. Branch
+// is the Git ref the worker will clone; Labels adds caller-supplied
+// labels on top of the identifying ones (most notably "drem.language",
+// which steers coder image selection). Image is an explicit override;
+// when empty the spawner resolves the image from the agent-type → image
+// table in images.go. Env passes through to the container. BareRepoMount,
+// when non-empty, is bind-mounted at /bare so the worker can clone from
+// it. By default the mount is read-only; set BareRepoReadWrite to true
+// for per-task mergers that must push. Cmd is the container's argv —
+// empty leaves the image's ENTRYPOINT/CMD unchanged; populated it
+// replaces CMD exactly, letting orchestrator callers pass
+// per-invocation flags (for example the merger's --feature-branch /
+// --task-id / --orch-url pairs). CredsMount, when non-empty, is a host
+// path bind-mounted read-only at /home/drem/.claude/.credentials.json
+// so the worker's claude CLI can read the host operator's subscription
+// credentials; the spawner pre-checks the host path exists before
+// creating the container and fails SpawnWorker fast if it does not.
+// Leave empty for agent types that do not run claude (notably merger,
+// which is a Go binary). PromptMount, when non-empty, is a host file
+// path bind-mounted read-only into the worker at /home/drem/.drem/prompt.md;
+// the spawner also sets DREM_PROMPT_PATH in the worker env to that
 // container-side path deterministically so the entrypoint's claude
 // invocation finds the prompt without per-caller env plumbing. The
 // spawner pre-checks the host path exists before creating the
@@ -43,6 +50,7 @@ import "time"
 // plans/worker-prompt-delivery.md §3.
 type SpawnWorkerParams struct {
 	Project           string            `json:"project"`
+	ProjectID         string            `json:"project_id"`
 	AgentType         string            `json:"agent_type"`
 	WorkerID          string            `json:"worker_id"`
 	Branch            string            `json:"branch"`
@@ -76,18 +84,27 @@ type DestroyWorkerParams struct {
 type EmptyResult struct{}
 
 // ListWorkersParams filters the returned registry. An empty Project string
-// returns every tracked container; a non-empty string returns only
-// containers whose "drem.project" label equals Project.
+// returns every tracked container; a non-empty string matches the in-memory
+// registry's cached Project value, which is populated from
+// SpawnWorkerParams.Project (the human-readable name). Internal consumers
+// that want the stable-identifier filter should use ProjectID, which maps
+// to the drem.project_id label at the container boundary.
+// See plans/dual-label-worker-spawn.md.
 type ListWorkersParams struct {
-	Project string `json:"project,omitempty"`
+	Project   string `json:"project,omitempty"`
+	ProjectID string `json:"project_id,omitempty"`
 }
 
 // WorkerInfo is the registry entry returned by ListWorkers. Status is
 // resolved by a fresh Inspect against the runtime at list time; stale
-// values are never returned from the in-memory registry alone.
+// values are never returned from the in-memory registry alone. Project
+// is the human-readable name; ProjectID is the stable UUID. Both are
+// cached at spawn time so ListWorkers filters cheaply without a Docker
+// label round-trip. See plans/dual-label-worker-spawn.md.
 type WorkerInfo struct {
 	ContainerID string    `json:"container_id"`
 	Project     string    `json:"project"`
+	ProjectID   string    `json:"project_id"`
 	AgentType   string    `json:"agent_type"`
 	WorkerID    string    `json:"worker_id"`
 	Branch      string    `json:"branch"`

@@ -89,6 +89,24 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 			}
 		}
 
+		// Agentmon-correlation predicate: before declaring a container-mode
+		// agent dead, consult the ContainerSightingProbe (backed in prod by
+		// agentmon's DockerSource.HasSeen). If the probe is wired AND
+		// returns false, agentmon has no live signal for this container —
+		// which means either the container is truly gone OR agentmon itself
+		// is blind. The v12–v14 incident was the latter: a 41h label-
+		// filter mismatch meant agentmon matched zero events and the
+		// reconciler killed live agents based on stale DB heartbeats.
+		// Skipping the kill here preserves correctness under that failure
+		// mode — the operator sees distinct log spam pointing at agentmon,
+		// not false-positive kills. Probe=nil preserves pre-container host
+		// behaviour unchanged.
+		if o.sightingProbe != nil && ag.TmuxSession != "" && !o.sightingProbe.HasSeen(ag.TmuxSession) {
+			o.logger.Warn("reconcile stuck: skipping dead-agent kill because agentmon has no sighting",
+				"agent_id", ag.ID, "task", task.Title, "container_id", ag.TmuxSession)
+			continue
+		}
+
 		// Agent is NOT in the runner's running map AND DB status is working.
 		o.logger.Warn("detected dead agent session without completion",
 			"agent_id", ag.ID, "task", task.Title, "session", ag.TmuxSession)
@@ -178,7 +196,7 @@ func (o *Orchestrator) buildContainerRunningSet(ctx context.Context) map[string]
 	if o.Spawner == nil {
 		return set
 	}
-	res, err := o.Spawner.ListWorkers(ctx, spawner.ListWorkersParams{Project: o.projectID.String()})
+	res, err := o.Spawner.ListWorkers(ctx, spawner.ListWorkersParams{ProjectID: o.projectID.String()})
 	if err != nil {
 		o.logger.Warn("reconcile stuck: list workers failed, falling back to empty container-running set",
 			"error", err)

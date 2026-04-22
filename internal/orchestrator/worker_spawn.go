@@ -211,9 +211,13 @@ type WorkerSpawner interface {
 
 // spawnWorkerContext captures the minimal data required by spawnCoder et al.
 // It is populated from the task + project and returned so the orchestrator
-// can record the resulting container ID on the right DB row.
+// can record the resulting container ID on the right DB row. project is
+// the human-readable name (maps to drem.project + DREM_PROJECT env);
+// projectID is the stable UUID (maps to drem.project_id). See
+// plans/dual-label-worker-spawn.md.
 type spawnWorkerContext struct {
 	project     string
+	projectID   string
 	agentType   string
 	workerID    string
 	branch      string
@@ -302,6 +306,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 	}
 	params := spawner.SpawnWorkerParams{
 		Project:       swc.project,
+		ProjectID:     swc.projectID,
 		AgentType:     swc.agentType,
 		WorkerID:      swc.workerID,
 		Branch:        swc.branch,
@@ -331,7 +336,16 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 
 	// Record container ID and image identity on the agent row so the audit
 	// trail in user story 49 has a single join from task → agent → container.
-	if err := o.recordContainerOnAgent(task, res.ContainerID, params.Image, agentType); err != nil {
+	//
+	// params.Branch (not task.WorktreeBranch) is the canonical branch
+	// the worker actually clones — buildSpawnContext already derives it
+	// from the task and fills in the synthetic "feature/<taskID>" when
+	// the task row was missing one. Passing it here keeps the agent
+	// row's WorktreeBranch in lockstep with the container's
+	// DREM_BRANCH env var and drem.branch label, so the reconciler's
+	// commit-check finds the right ref regardless of which branch
+	// source the spawner used.
+	if err := o.recordContainerOnAgent(task, res.ContainerID, params.Image, agentType, params.Branch); err != nil {
 		o.logger.Error("spawn worker: record agent container", "task_id", task.ID, "error", err)
 	}
 
@@ -365,7 +379,14 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 // subscription-auth creds mount but no host path is available — in that
 // case spawning must fail-closed rather than produce an unauth'd worker.
 func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (spawnWorkerContext, error) {
-	project := o.projectID.String()
+	// projectName is the human-readable label; projectID is the stable UUID.
+	// Both are emitted as container labels (drem.project / drem.project_id)
+	// so agentmon's name-based filter and every internal orch UUID filter
+	// both match. See plans/dual-label-worker-spawn.md. projectName may be
+	// empty in legacy test rigs that construct the Orchestrator directly;
+	// the spawner validates Project non-empty so those tests will fail loudly.
+	projectName := o.projectName
+	projectID := o.projectID.String()
 	branch := task.WorktreeBranch
 	if branch == "" {
 		branch = "feature/" + taskFeatureName(task)
@@ -374,7 +395,7 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 
 	env := map[string]string{
 		"DREM_TASK_ID":   task.ID.String(),
-		"DREM_PROJECT":   project,
+		"DREM_PROJECT":   projectName,
 		"DREM_AGENT":     agentType,
 		"DREM_BRANCH":    branch,
 		"DREM_WORKER_ID": workerID,
@@ -423,7 +444,12 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 	// See plans/worker-prompt-delivery.md §§2, 4.
 	promptMount := ""
 	if promptRequired(agentType) {
-		promptRoot := resolveWorkerPromptRoot(project)
+		// resolveWorkerPromptRoot's fallback builds
+		// $HOME/.drem/projects/<project>/prompts so the name is the
+		// right handle (matches the per-project compose's host layout);
+		// production sets DREM_PROMPT_ROOT_HOST explicitly so the arg
+		// is only used for the local-dev fallback path.
+		promptRoot := resolveWorkerPromptRoot(projectName)
 		if promptRoot == "" {
 			return spawnWorkerContext{}, fmt.Errorf(
 				"prompt delivery required for agent_type=%q but %s is unset and $HOME is unresolvable",
@@ -449,7 +475,8 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 	}
 
 	return spawnWorkerContext{
-		project:     project,
+		project:     projectName,
+		projectID:   projectID,
 		agentType:   agentType,
 		workerID:    workerID,
 		branch:      branch,
@@ -476,10 +503,26 @@ func (o *Orchestrator) resolveProjectLanguage() string {
 	return "go"
 }
 
-// recordContainerOnAgent writes the container ID and image onto the assigned
-// agent row. When no agent is assigned yet, a synthetic one is created and
-// attached so the audit trail is complete (user story 49).
-func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, image, agentType string) error {
+// recordContainerOnAgent writes the container ID, image, and
+// task/branch coupling onto the assigned agent row. When no agent is
+// assigned yet, a synthetic one is created and attached so the audit
+// trail is complete (user story 49).
+//
+// branch is the feature branch the worker clones — the spawner has
+// already set DREM_BRANCH + drem.branch on the container to this
+// value. The same string must land on the Agent row so
+// reconcile_stuck.go's commit-check guard
+// (`featureDir != "" && ag.WorktreeBranch != ""`) can resolve the ref
+// and route a post-push container exit through synthesizeCompletion
+// instead of failing the task with "agent session died without
+// producing commits." The v13 canary regression surfaced exactly that
+// gap: both the create-synthetic and update-existing paths silently
+// dropped the branch; this function pins the contract that both paths
+// persist it alongside CurrentTaskID and AgentType.
+//
+// See plans/container-agent-branch-persistence.md for the full symptom
+// and fix narrative.
+func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, image, agentType, branch string) error {
 	if containerID == "" {
 		return nil
 	}
@@ -488,22 +531,28 @@ func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, ima
 	var ag model.Agent
 	if task.AssignedAgentID != nil {
 		if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err == nil {
-			return o.updateAgentContainer(&ag, containerID, image, now)
+			return o.updateAgentContainer(&ag, containerID, image, agentType, branch, task.ID, now)
 		}
 	}
 
-	// No agent yet — create one carrying the container fields so the TUI and
-	// audit queries can find the spawn immediately.
+	// No agent yet — create one carrying every field the reconciler,
+	// TUI, and audit queries need. In particular: WorktreeBranch and
+	// CurrentTaskID MUST be populated so reconcile_stuck.go can
+	// commit-check the branch on a container exit. Status is set to
+	// AgentWorking because the spawner has just handed us a live
+	// container; status transitions away from Working are owned by the
+	// heartbeat / exit-event paths.
 	ag = model.Agent{
-		ID:            uuid.New(),
-		ProjectID:     o.projectID,
-		AgentType:     model.AgentType(agentType),
-		Name:          fmt.Sprintf("%s-%s", agentType, task.ID.String()[:shortIDLen]),
-		Status:        model.AgentWorking,
-		CurrentTaskID: &task.ID,
-		TmuxSession:   containerID, // re-use TmuxSession as the container handle
-		ModelID:       image,
-		HeartbeatAt:   &now,
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentType(agentType),
+		Name:           fmt.Sprintf("%s-%s", agentType, task.ID.String()[:shortIDLen]),
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &task.ID,
+		WorktreeBranch: branch,
+		TmuxSession:    containerID, // re-use TmuxSession as the container handle
+		ModelID:        image,
+		HeartbeatAt:    &now,
 	}
 	if err := o.db.Create(&ag).Error; err != nil {
 		return fmt.Errorf("recordContainerOnAgent: create agent: %w", err)
@@ -516,12 +565,32 @@ func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, ima
 	return nil
 }
 
-// updateAgentContainer writes container metadata onto an existing agent.
-func (o *Orchestrator) updateAgentContainer(ag *model.Agent, containerID, image string, now time.Time) error {
+// updateAgentContainer writes container metadata onto an existing
+// agent row. The pre-fix version only wrote TmuxSession / ModelID /
+// HeartbeatAt and silently dropped the branch + task coupling,
+// producing the v13 canary symptom (agent row with correct container
+// ID but empty worktree_branch). The post-fix version writes the same
+// set of fields the create-synthetic path does, so both entry points
+// leave an Agent row in a shape the reconciler can reason about.
+//
+// branch is the feature branch the spawner cloned into the container
+// (buildSpawnContext.branch). It is written unconditionally — an empty
+// string is never the right value for a container-mode worker and
+// should have been caught at spawn-context build time. taskID is the
+// task driving the spawn; both agentType and WorktreeBranch are
+// rewritten on every update because a pre-existing agent row could
+// carry stale values from a prior assignment on a different task /
+// branch (e.g. after a retry that recycles the same row).
+func (o *Orchestrator) updateAgentContainer(ag *model.Agent, containerID, image, agentType, branch string, taskID uuid.UUID, now time.Time) error {
 	ag.TmuxSession = containerID
 	if image != "" {
 		ag.ModelID = image
 	}
+	if agentType != "" {
+		ag.AgentType = model.AgentType(agentType)
+	}
+	ag.WorktreeBranch = branch
+	ag.CurrentTaskID = &taskID
 	ag.HeartbeatAt = &now
 	if err := o.db.Save(ag).Error; err != nil {
 		return fmt.Errorf("updateAgentContainer: save: %w", err)

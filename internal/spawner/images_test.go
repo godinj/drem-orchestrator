@@ -35,3 +35,35 @@ func TestResolveImage_UnknownAgentTypeReturnsFalse(t *testing.T) {
 		t.Fatalf("resolveImage(nonexistent): expected ok=false")
 	}
 }
+
+// TestResolveImage_NonCoderAgentTypesMapped asserts every non-coder agent
+// type the orchestrator spawns through the spawner RPC resolves to a real
+// image. These mappings were historically duplicated in
+// internal/agent/image_resolver.go (DefaultImages) but the spawner-side
+// table drifted behind, causing the 2026-04-22 v15/v16 canary regression
+// where `SpawnWorker` returned `-32000 no image mapping for
+// agent_type="fixer"` after a test_review approval triggered fixer
+// dispatch. Every agent type in the sibling DefaultImages table must
+// resolve here too; this test is the drift guard.
+func TestResolveImage_NonCoderAgentTypesMapped(t *testing.T) {
+	cases := []struct {
+		agentType string
+		want      string
+	}{
+		{"reviewer", "localhost:5000/drem-worker-go:latest"},
+		{"fixer", "localhost:5000/drem-worker-go:latest"},
+		{"supervisor", "localhost:5000/drem-worker-go:latest"},
+		{"classifier", "localhost:5000/drem-worker-go:latest"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.agentType, func(t *testing.T) {
+			got, ok := resolveImage(tc.agentType, nil)
+			if !ok {
+				t.Fatalf("resolveImage(%s): expected mapping, got ok=false", tc.agentType)
+			}
+			if got != tc.want {
+				t.Fatalf("resolveImage(%s): got %q, want %q", tc.agentType, got, tc.want)
+			}
+		})
+	}
+}
