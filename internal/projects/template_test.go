@@ -207,6 +207,70 @@ func TestRender_WorkerCredsPathDefaultsFromHostHome(t *testing.T) {
 	require.Contains(t, string(out), "/root/.claude/.credentials.json")
 }
 
+// TestRender_CsuiteWatcherTokenPathIsWired asserts every persona
+// container bind-mounts the operator's csuite-watcher token file at
+// the same /run/secrets/csuite-watcher-token path, and that each
+// persona's environment sets CSUITE_WATCHER_TOKEN_FILE pointing at
+// that mount. Scoreboard item 33: the host-shell-env inherit path
+// (CSUITE_WATCHER_TOKEN: with no value) was silently dropping the
+// token on compose-up when the operator forgot to export it; the
+// file-mount path is the canonical source of truth.
+func TestRender_CsuiteWatcherTokenPathIsWired(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	s := string(out)
+
+	// Default derives from HostHome.
+	const wantHostPath = "/home/operator/.drem/csuite-watcher.token"
+	require.Contains(t, s, wantHostPath,
+		"compose must bind-mount the csuite-watcher token file under HostHome")
+	require.Contains(t, s, "/run/secrets/csuite-watcher-token",
+		"compose must mount the token file at the persona binary's expected path")
+	require.Contains(t, s, "CSUITE_WATCHER_TOKEN_FILE",
+		"persona env must declare CSUITE_WATCHER_TOKEN_FILE so the binary can fall back to file read")
+
+	// Parse and cross-check each persona.
+	var parsed struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+			Volumes     []string          `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+	for _, p := range []string{"csuite-mike", "csuite-alex", "csuite-ross", "csuite-seth"} {
+		svc, ok := parsed.Services[p]
+		require.True(t, ok, "service %s missing from rendered compose", p)
+		require.Equal(t, "/run/secrets/csuite-watcher-token",
+			svc.Environment["CSUITE_WATCHER_TOKEN_FILE"],
+			"%s must set CSUITE_WATCHER_TOKEN_FILE to the mount path", p)
+		// Find the token mount line among volumes.
+		var found bool
+		for _, v := range svc.Volumes {
+			if strings.Contains(v, "/run/secrets/csuite-watcher-token") {
+				require.Contains(t, v, wantHostPath,
+					"%s token mount must bind-mount %s", p, wantHostPath)
+				found = true
+				break
+			}
+		}
+		require.True(t, found, "%s missing csuite-watcher token mount", p)
+	}
+}
+
+// TestRender_CsuiteWatcherTokenPathExplicitOverride asserts a
+// caller-supplied value overrides the HostHome-derived default.
+func TestRender_CsuiteWatcherTokenPathExplicitOverride(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	data.CsuiteWatcherTokenPath = "/etc/drem/csuite-watcher.token"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	s := string(out)
+	require.Contains(t, s, "/etc/drem/csuite-watcher.token")
+}
+
 // TestRender_WorkerCredsPathExplicitOverride asserts a caller-supplied
 // WorkerCredsPath wins over the HostHome-derived default.
 func TestRender_WorkerCredsPathExplicitOverride(t *testing.T) {

@@ -224,3 +224,29 @@ func TestRun_UnknownSubcommandStillErrors(t *testing.T) {
 		t.Errorf("expected 'unknown subcommand' in stderr, got: %q", buf.String())
 	}
 }
+
+// TestParseRescanInterval covers the env var parsing for the periodic
+// rescan loop. Scoreboard item 5: a periodic rescan catches missed
+// signals without operator intervention.
+func TestParseRescanInterval(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want string // Duration.String() — 0 means disabled
+	}{
+		{"empty falls back to default", "", "5m0s"},
+		{"malformed falls back to default", "not-a-duration", "5m0s"},
+		{"explicit 1 minute", "1m", "1m0s"},
+		{"explicit 30 seconds", "30s", "30s"},
+		{"zero disables", "0s", "0s"},
+		{"negative disables", "-1s", "0s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseRescanInterval(tt.env)
+			if got.String() != tt.want {
+				t.Errorf("parseRescanInterval(%q) = %v, want %s", tt.env, got, tt.want)
+			}
+		})
+	}
+}

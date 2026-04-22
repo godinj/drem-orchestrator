@@ -404,9 +404,14 @@ func TestPoller_FsyncBeforeSignal(t *testing.T) {
 	cfg.Fsyncer = fsyncer
 	cfg.Signaler = rec
 
+	// Post-G3: stdout must carry frontmatter for the stub-write path
+	// to run (otherwise the poller suppresses the stub and no signal
+	// fires). The invariant this test pins is ordering of fsync vs.
+	// signal, which requires the signal to fire at all.
+	const stdoutFM = "---\nfrom: seth\nto: kyle\n---\n\nreply-body"
 	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, stdin io.Reader) ([]byte, int, error) {
 		_, _ = io.ReadAll(stdin)
-		return []byte("reply-body"), 0, nil
+		return []byte(stdoutFM), 0, nil
 	})
 	p, err := persona.New(cfg, spawner)
 	if err != nil {
@@ -437,7 +442,7 @@ func TestPoller_FsyncBeforeSignal(t *testing.T) {
 		t.Fatalf("expected exactly one signal call, got %d", len(sigCalls))
 	}
 	// The recorded sha256 must match the body we returned from the spawner.
-	wantSHA := sha256Hex([]byte("reply-body"))
+	wantSHA := sha256Hex([]byte(stdoutFM))
 	if sigCalls[0].sha256 != wantSHA {
 		t.Errorf("sha256 in signal = %q, want %q", sigCalls[0].sha256, wantSHA)
 	}
@@ -542,8 +547,9 @@ func TestPoller_TornWriteScenario(t *testing.T) {
 	cfg.Fsyncer = fsyncer
 	cfg.Signaler = rec
 
+	// Post-G3: stdout must carry frontmatter so the stub path runs.
 	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
-		return []byte("the final bytes"), 0, nil
+		return []byte("---\nfrom: seth\nto: kyle\n---\n\nthe final bytes"), 0, nil
 	})
 	p, err := persona.New(cfg, spawner)
 	if err != nil {
@@ -564,7 +570,7 @@ func TestPoller_TornWriteScenario(t *testing.T) {
 	sigCalls := append([]signalCall(nil), rec.calls...)
 	rec.mu.Unlock()
 
-	wantSHA := sha256Hex([]byte("the final bytes"))
+	wantSHA := sha256Hex([]byte("---\nfrom: seth\nto: kyle\n---\n\nthe final bytes"))
 	if sigCalls[0].sha256 != wantSHA {
 		t.Errorf("sha256 in signal = %q, want %q (from poller-owned stdout bytes)", sigCalls[0].sha256, wantSHA)
 	}
@@ -580,8 +586,9 @@ func TestPoller_OutboxPathIsAbsoluteLocalPath(t *testing.T) {
 	rec := &recordingSignaler{}
 	cfg.Signaler = rec
 
+	// Post-G3: stdout must carry frontmatter so the stub path runs.
 	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
-		return []byte("body"), 0, nil
+		return []byte("---\nfrom: seth\nto: kyle\n---\n\nbody"), 0, nil
 	})
 	p, err := persona.New(cfg, spawner)
 	if err != nil {

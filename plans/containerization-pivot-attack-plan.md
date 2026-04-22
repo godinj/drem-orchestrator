@@ -91,6 +91,15 @@ Format: `N. [GROUP] [PRIORITY] <Title> — <description> (<sources>) — effort:
 
 ### Group A — Communication plane (BLOCKING, comms-plane-on-fire lead)
 
+**Session N status (2026-04-22):** items 2, 3, 4, 5, 33 merged. Item 1
+(quarantine-rate verification) is a measurement, not a code fix — see
+the Session N final shape below. Item 6 (watcher image parity) is the
+only remaining Group A row for a future session. Item 7 is marked
+CONFIRMED already; the Option A stub-suppression mandated there was
+shipped as part of item 2.
+
+
+
 1. **[A] [CRITICAL-TODAY] Live csuite pipeline 93% quarantine rate**
    — 83 quarantine / 3 kyle / 2 alex / 1 seth on recent window. The
    comms plane is on fire right now, not a future mechanism concern.
@@ -587,3 +596,102 @@ this scoreboard) persona→Kyle routing does not work — you'll hand-read
 until Session N closes that gap. Self-reinforcing irony acknowledged.
 
 — seth
+
+---
+
+## Session N final shape (2026-04-22)
+
+Shipped in order: item 2 → item 33 → item 5 → item 4 → item 3.
+
+### (A) Item 2 — G3 dual-write fix
+
+**Commit:** `fix(csuite-persona): suppress poller stub when Claude
+writes outbox (G3)`. Poller now snapshots the outbox before each
+`claude -p`, diffs after, and suppresses the stub write when Claude
+used its Write tool to emit a well-formed outbox file. Second leg:
+when stdout is plain text (no frontmatter) AND Claude wrote nothing,
+the stub is still suppressed — a guaranteed-quarantine file is worse
+than no file. stdout that is already frontmatter-framed retains the
+legacy stub-wrap path for backward compat. Tests:
+`TestPoller_SuppressesStubWhenClaudeWroteOutbox`,
+`TestPoller_SuppressesStubWhenStdoutHasNoFrontmatter`,
+`TestPoller_KeepsStubWhenStdoutIsFrontmatter`.
+
+### (B) Item 33 — Watcher 401 X-Csuite-Token header
+
+**Commit:** `fix(csuite-persona): token-file fallback + fail-fast on
+empty token`. Root cause was operator-setup: the compose template used
+the valueless-inherit form `CSUITE_WATCHER_TOKEN:` which depends on
+host shell env at compose-up time. Three-layer fix:
+
+  1. Startup fail-fast in `cmd/csuite-persona`: if
+     `CSUITE_SIGNAL_ENDPOINT` is set but `CSUITE_WATCHER_TOKEN` is
+     empty, exit 1 with a clear diagnostic rather than boot into a
+     silent 401-loop.
+  2. `CSUITE_WATCHER_TOKEN_FILE` fallback env var — read the token
+     from a bind-mounted file when the primary env var is empty.
+  3. Compose template wires `~/.drem/csuite-watcher.token` as a
+     read-only bind-mount at `/run/secrets/csuite-watcher-token` for
+     every persona, with `CSUITE_WATCHER_TOKEN_FILE` pointing at it.
+     New `TemplateData.CsuiteWatcherTokenPath` field with HostHome-
+     derived default. Regenerating compose via `drem project register
+     --update` picks this up automatically.
+
+### (C) Item 5 — Persona→persona routing parity
+
+**Commit:** `feat(csuite-watcher): periodic rescan + persona-to-persona
+routing test`. Routing code already handled all persona pairs
+uniformly — the live symptom was downstream of item 33's 401s plus
+startup-rescan-only wiring. Two fixes:
+
+  1. Periodic rescan goroutine runs every `DREM_WATCHER_RESCAN_INTERVAL`
+     (default 5m; 0 disables). Catches any missed deliveries without
+     operator intervention.
+  2. `TestDeliver_PersonaToPersonaPairs` pins the full 12-pair
+     cartesian product so future changes can't silently special-case
+     a subset.
+
+### (D) Item 4 — Kyle inbox reader CLI
+
+**Commit:** `feat(cli): drem cli kyle inbox — filesystem-rooted inbox
+reader`. Option β from the plan. Surface: `drem cli kyle inbox
+[--list | --read N | --count | --archive N]`. Lightweight, no daemon.
+Honours `DREM_CSUITE_HOME` override. 360-file inbox verified live.
+
+### (E) Item 3 — `.failures` sidecar reaper
+
+**Commit:** `feat(csuite-persona): reap orphan .failures sidecars on
+startup (G1)`. New `ReapOnceOnStartup(cfg)` walks
+`<inbox>/*.md.failures` and applies: anchor-in-inbox → leave (active);
+anchor-in-archive → reap; anchor-nowhere → ERROR log. Wired into
+`cmd/csuite-persona` startup. Next seth container restart reaps the
+two pending orphans: `20260421T235306Z-kyle-tui-retry-storm-design.md.failures`
+and `20260422-072000-kyle-containerization-pivot-gap-synthesis.md.failures`.
+
+### (F) Item 1 — F28 quarantine-rate verification
+
+**Pre-fix watcher DB (2026-04-22 13:30 UTC):** 104 quarantine / 10 kyle
+/ 4 alex / 2 seth / 1 mike across 121 deliveries. 86% quarantine rate
+— dominated by G3 dual-write stubs.
+
+Post-fix measurement requires seth container restart (which reaps the
+two orphan sidecars as a side-effect) plus a fresh `claude -p` turn to
+observe the new code path end-to-end. Success gate (below 10%
+quarantine rate week-of) requires a week-long dogfood window that is
+out of Session N scope by design — captured as an N+1 carry-over.
+**Trend is correct:** the dominant quarantine class was the poller
+stub, now suppressed by item 2.
+
+### Items deferred to Session N+1 or later
+
+- Item 1 week-long quarantine-rate measurement (above).
+- Item 6 — pre-Task-#11 watcher image parity drift. Medium priority,
+  effort M; leave for a dedicated image-reproducibility session.
+- Groups B/C/D/E/F/H/I scoreboard items all unchanged.
+
+### Merge traceability
+
+Every Session N commit is squash-merged under this branch. Merge
+commit hash recorded in the final report.
+
+— Kyle-dispatch, Session N closeout

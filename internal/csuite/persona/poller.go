@@ -177,6 +177,23 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 		return fmt.Errorf("read %q: %w", inboxPath, err)
 	}
 
+	// Snapshot the outbox BEFORE Claude runs. The diff after Claude
+	// returns tells us whether Claude used its Write tool to emit a
+	// well-formed `<ts>-<persona>-to-<recipient>-*.md` outbox file
+	// during the turn — in which case the poller must NOT write a
+	// redundant stub (G3 dual-write fix: the stub never carries
+	// frontmatter and the watcher quarantines it on arrival). See
+	// plans/containerization-pivot-attack-plan.md §3 Group A item 2.
+	outboxBefore, snapErr := snapshotOutbox(p.cfg.OutboxDir)
+	if snapErr != nil {
+		// A failure to snapshot falls back to the old stub-writing
+		// behaviour; log and continue. Missing-dir is already handled
+		// by snapshotOutbox itself.
+		p.cfg.Logger.Warn("outbox snapshot failed",
+			p.personaLabel,
+			slog.Any("err", snapErr))
+	}
+
 	invocationCtx, cancel := context.WithTimeout(ctx, p.cfg.ClaudeTimeout)
 	defer cancel()
 
@@ -219,75 +236,173 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 		return p.recordFailure(name, reason, exitCode, duration)
 	}
 
-	return p.recordSuccess(name, body, stdout, duration)
+	return p.recordSuccess(name, body, stdout, duration, outboxBefore)
 }
 
-// recordSuccess writes stdout to the outbox, moves the inbox file into
-// the archive, clears the sidecar failure counter (if any), and updates
-// state.md atomically. Any non-fatal error along the way is logged and
-// the function continues so the inbox message still gets archived —
-// leaving the message in the inbox after a successful reply would cause
-// a duplicate spawn on the next tick.
+// recordSuccess writes stdout to the outbox (unless Claude already
+// wrote a well-formed outbox file during the turn — see G3 dual-write
+// fix below), moves the inbox file into the archive, clears the sidecar
+// failure counter (if any), and updates state.md atomically. Any
+// non-fatal error along the way is logged and the function continues so
+// the inbox message still gets archived — leaving the message in the
+// inbox after a successful reply would cause a duplicate spawn on the
+// next tick.
 //
-// After the outbox write lands, recordSuccess fsyncs the file and fires
-// an HTTP signal to the csuite-watcher in a short-lived goroutine (see
-// plans/csuite-watcher-outbox-routing.md §1-3). Signal failures never
-// propagate into the poller loop — the watcher's rescan path is
-// designed to recover any signal we drop on the floor.
-func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Duration) error {
+// # G3 dual-write fix (plans/containerization-pivot-attack-plan.md §3)
+//
+// Before this fix, the poller ALWAYS wrapped Claude's stdout into a
+// `<ts>-<persona>-reply-<hash>.md` stub and dropped it in the outbox.
+// When Claude's system prompt told it to use the Write tool to emit a
+// properly-framed `<ts>-<persona>-to-<recipient>-<subject>.md` file
+// with YAML frontmatter, the persona turn produced TWO outbox files:
+//   - the frontmatter-bearing file (routes correctly through watcher)
+//   - the poller stub (no frontmatter → quarantined)
+//
+// The dual-write was a fail-open race: either file could be signaled,
+// and the stub being signaled meant the delivery hit quarantine. The
+// fix: diff the outbox against the pre-Claude snapshot. If Claude wrote
+// any well-formed outbox file during the turn, suppress the stub
+// entirely. If Claude wrote nothing, STILL suppress the stub (a
+// quarantined stub is worse than no output — the operator can inspect
+// state.md to see turn completion).
+//
+// Claude-written files are picked up by the watcher's startup/periodic
+// rescan (internal/deliver/rescan.go) so no signal is strictly required,
+// but we also proactively signal each new file from this poller tick
+// to keep the latency story honest.
+//
+// After the outbox write lands (if it lands), recordSuccess fsyncs the
+// file and fires an HTTP signal to the csuite-watcher in a short-lived
+// goroutine (see plans/csuite-watcher-outbox-routing.md §1-3). Signal
+// failures never propagate into the poller loop — the watcher's rescan
+// path is designed to recover any signal we drop on the floor.
+func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Duration, outboxBefore map[string]struct{}) error {
 	now := p.cfg.Now()
-	shortID := shortHash(name, body)
-	outName := fmt.Sprintf("%s-%s-reply-%s.md",
-		now.UTC().Format("20060102T150405Z"),
-		p.cfg.Persona,
-		shortID,
-	)
-	outPath := filepath.Join(p.cfg.OutboxDir, outName)
-	if err := os.WriteFile(outPath, stdout, 0o644); err != nil {
-		return fmt.Errorf("write outbox %q: %w", outPath, err)
-	}
 
-	// fsync BEFORE any signal goroutine launches. The watcher will
-	// open outPath immediately after receiving the signal; if we
-	// signal first and crash before fsync, the watcher either sees a
-	// short read or a mismatched sha256 against our signaled value.
-	fs := p.cfg.Fsyncer
-	if fs == nil {
-		fs = osFsyncer{}
-	}
-	if err := fs.Fsync(outPath); err != nil {
-		p.cfg.Logger.Warn("fsync outbox",
+	// G3: detect Claude-written outbox files that appeared during the
+	// turn. `claudeWritten` is the list of newly-present filenames that
+	// parse as well-formed outbox messages (YAML frontmatter + matching
+	// `<from>-to-<to>` filename shape). Any such file means the poller
+	// stub is redundant and must be suppressed.
+	claudeWritten, diffErr := newWellFormedOutboxFiles(p.cfg.OutboxDir, p.cfg.Persona, outboxBefore)
+	if diffErr != nil {
+		p.cfg.Logger.Warn("outbox diff after claude -p",
 			p.personaLabel,
-			slog.String("outbox_file", outName),
-			slog.Any("err", err))
+			slog.Any("err", diffErr))
 	}
 
-	// Compute sha256 of what we just wrote. The signal payload's hash
-	// must reference the on-disk contents, not an older value — fsync
-	// above guarantees the bytes are durable before we read them back.
-	sha := sha256Bytes(stdout)
-	emittedAt := now.UTC().Format(time.RFC3339)
-
-	// outboxAbs is what the signal payload carries. It's the local
-	// filesystem path on the persona's side; the signaler translates
-	// to the watcher's path prefix before POSTing.
-	outboxAbs := outPath
-
-	// Fire the signal BEFORE attempting the inbox-archive rename. The
-	// archive rename can race with a Claude subprocess that uses its
-	// Bash tool to `mv` the inbox file into .archive itself (some
-	// persona prompts instruct that explicitly). If we archived first
-	// and Claude had already moved the file, os.Rename returns
-	// ENOENT, the function short-circuits, and the signal never
-	// fires — blocking the watcher from ever routing the reply the
-	// persona just wrote. The signal only depends on the outbox write
-	// + fsync above, which is exactly what a watcher POST already
-	// needs. Decoupling here preserves the plan §Signal-failure-
-	// isolation guarantee: no post-write bookkeeping can starve the
-	// signal.
+	// Signal each Claude-written file. The watcher's rescan path will
+	// eventually pick up any signal we drop, but proactive signaling
+	// shortens the latency.
 	signaler := p.signaler()
 	_, signalDisabled := signaler.(disabledSignaler)
-	if !signalDisabled && signaler != nil {
+
+	for _, outName := range claudeWritten {
+		outPath := filepath.Join(p.cfg.OutboxDir, outName)
+		p.cfg.Logger.Info("claude wrote outbox file directly",
+			p.personaLabel,
+			slog.String("inbox_file", name),
+			slog.String("outbox_file", outName),
+		)
+		if !signalDisabled && signaler != nil {
+			fileBody, rerr := readOutboxFile(outPath)
+			if rerr != nil {
+				p.cfg.Logger.Warn("read claude-written outbox file",
+					p.personaLabel,
+					slog.String("outbox_file", outName),
+					slog.Any("err", rerr))
+				continue
+			}
+			sha := sha256Bytes(fileBody)
+			emittedAt := now.UTC().Format(time.RFC3339)
+			outPathForSignal := outPath
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+				defer cancel()
+				_ = signaler.Signal(ctx, p.cfg.Persona, outPathForSignal, sha, emittedAt)
+			}()
+		}
+	}
+
+	// G3: if Claude wrote at least one outbox file, suppress the stub
+	// entirely. We still archive the inbox message and update state.md
+	// so the poll loop advances.
+	stubSuppressed := len(claudeWritten) > 0
+
+	// G3 second leg: even when Claude wrote NOTHING to outbox, do not
+	// fall back to writing a stub. A stub with no frontmatter is
+	// guaranteed to hit watcher quarantine; better to record "turn
+	// produced no outbox message" in state.md and move on. Operators
+	// inspecting a container that has stopped producing outbox files
+	// have state.md + container logs to diagnose the silent-turn case.
+	stubSuppressedNoOutput := !stubSuppressed && isProbablyStdoutStub(stdout)
+	if stubSuppressedNoOutput {
+		stubSuppressed = true
+		p.cfg.Logger.Info("turn produced no frontmatter-bearing outbox file; stub suppressed",
+			p.personaLabel,
+			slog.String("inbox_file", name),
+			slog.Int("stdout_bytes", len(stdout)),
+		)
+	}
+
+	var outName, outPath string
+	sha := ""
+	emittedAt := now.UTC().Format(time.RFC3339)
+
+	if !stubSuppressed {
+		// Legacy path: stub-wrap stdout. This branch is now only
+		// entered when stdout itself happens to start with "---\n" and
+		// contain a closing "\n---" (i.e. Claude emitted a
+		// frontmatter-framed reply to stdout directly, which the
+		// watcher CAN classify). Rare in practice; kept for backward
+		// compatibility with any persona prompt that documents "reply
+		// inline with frontmatter on stdout".
+		shortID := shortHash(name, body)
+		outName = fmt.Sprintf("%s-%s-reply-%s.md",
+			now.UTC().Format("20060102T150405Z"),
+			p.cfg.Persona,
+			shortID,
+		)
+		outPath = filepath.Join(p.cfg.OutboxDir, outName)
+		if err := os.WriteFile(outPath, stdout, 0o644); err != nil {
+			return fmt.Errorf("write outbox %q: %w", outPath, err)
+		}
+
+		// fsync BEFORE any signal goroutine launches. The watcher will
+		// open outPath immediately after receiving the signal; if we
+		// signal first and crash before fsync, the watcher either sees a
+		// short read or a mismatched sha256 against our signaled value.
+		fsync := p.cfg.Fsyncer
+		if fsync == nil {
+			fsync = osFsyncer{}
+		}
+		if err := fsync.Fsync(outPath); err != nil {
+			p.cfg.Logger.Warn("fsync outbox",
+				p.personaLabel,
+				slog.String("outbox_file", outName),
+				slog.Any("err", err))
+		}
+
+		// Compute sha256 of what we just wrote. The signal payload's
+		// hash must reference the on-disk contents, not an older
+		// value — fsync above guarantees the bytes are durable before
+		// we read them back.
+		sha = sha256Bytes(stdout)
+	}
+
+	// Fire the signal for the stub (if we wrote one) BEFORE attempting
+	// the inbox-archive rename. The archive rename can race with a
+	// Claude subprocess that uses its Bash tool to `mv` the inbox file
+	// into .archive itself (some persona prompts instruct that
+	// explicitly). If we archived first and Claude had already moved
+	// the file, os.Rename returns ENOENT, the function short-circuits,
+	// and the signal never fires — blocking the watcher from ever
+	// routing the reply the persona just wrote. The signal only depends
+	// on the outbox write + fsync above, which is exactly what a
+	// watcher POST already needs. Decoupling here preserves the plan
+	// §Signal-failure-isolation guarantee: no post-write bookkeeping
+	// can starve the signal.
+	if !stubSuppressed && !signalDisabled && signaler != nil {
 		// Pre-seed state.md with an "ok" record and no signal outcome
 		// yet so the main poll loop can return while the goroutine
 		// finishes. Final outcome is written when the signal completes.
@@ -296,6 +411,7 @@ func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Durati
 				p.personaLabel,
 				slog.Any("err", err))
 		}
+		outboxAbs := outPath
 		go func() {
 			// Separate context: the signal call survives a main-loop
 			// cancellation so an in-flight retry can complete. Timeout
@@ -340,18 +456,140 @@ func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Durati
 		p.personaLabel,
 		slog.String("inbox_file", name),
 		slog.String("outbox_file", outName),
+		slog.Bool("stub_suppressed", stubSuppressed),
+		slog.Int("claude_written_outbox_files", len(claudeWritten)),
 		slog.Bool("archived", archived),
 		slog.Duration("duration", dur),
 	)
 
-	// Short-circuit: when signaling is disabled the goroutine above
-	// never fired, so no post-signal state write will happen. Write
-	// the terminal state.md record inline with SignalDisabled so
-	// operators can still tell the message was handled.
-	if signalDisabled || signaler == nil {
-		return p.writeStateExt(name, "ok", 0, dur, SignalDisabled)
+	// Short-circuit: when signaling is disabled, or we suppressed the
+	// stub (so no signal goroutine will fire), write the terminal
+	// state.md record inline.
+	if stubSuppressed || signalDisabled || signaler == nil {
+		finalOutcome := SignalDisabled
+		if stubSuppressed && !signalDisabled && signaler != nil {
+			// We DID fire signals for each Claude-written file above,
+			// but those are fire-and-forget (no state.md feedback
+			// channel). Use a neutral marker so operators can tell
+			// "stub was suppressed; Claude wrote its own files" apart
+			// from "signaling was disabled".
+			finalOutcome = SignalOK
+		}
+		return p.writeStateExt(name, "ok", 0, dur, finalOutcome)
 	}
 	return nil
+}
+
+// newWellFormedOutboxFiles lists outbox filenames that appeared after
+// the Claude invocation (absent from `before`) AND match the
+// `<ts>-<persona>-to-<recipient>-*.md` filename shape AND parse as
+// valid frontmatter. Returns the names (not paths), sorted for
+// determinism.
+func newWellFormedOutboxFiles(outboxDir, persona string, before map[string]struct{}) ([]string, error) {
+	entries, err := os.ReadDir(outboxDir)
+	if err != nil {
+		return nil, err
+	}
+	var found []string
+	for _, ent := range entries {
+		if ent.IsDir() {
+			continue
+		}
+		name := ent.Name()
+		if !strings.HasSuffix(name, ".md") {
+			continue
+		}
+		if _, existed := before[name]; existed {
+			continue
+		}
+		if !filenameLooksLikePersonaToRecipient(name, persona) {
+			// New file with an unrecognised filename shape: ignore (do
+			// not treat as a Claude-written outbox — conservative).
+			continue
+		}
+		// Validate frontmatter by peek-reading the first few KiB.
+		path := filepath.Join(outboxDir, name)
+		if !fileHasFrontmatter(path) {
+			continue
+		}
+		found = append(found, name)
+	}
+	sort.Strings(found)
+	return found, nil
+}
+
+// snapshotOutbox returns a set of outbox filenames currently on disk.
+// A missing outbox directory is treated as empty rather than an error
+// so first-run personas don't blow up the snapshot.
+func snapshotOutbox(outboxDir string) (map[string]struct{}, error) {
+	set := make(map[string]struct{})
+	entries, err := os.ReadDir(outboxDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return set, nil
+		}
+		return set, err
+	}
+	for _, ent := range entries {
+		if ent.IsDir() {
+			continue
+		}
+		set[ent.Name()] = struct{}{}
+	}
+	return set, nil
+}
+
+// filenameLooksLikePersonaToRecipient returns true if name matches the
+// convention `<ts>-<persona>-to-<recipient>-<subject>.md` for the given
+// persona. The recipient token is not validated against a closed list
+// here — classify.go already enforces the recipient whitelist downstream.
+func filenameLooksLikePersonaToRecipient(name, persona string) bool {
+	// Cheap substring match: we want "-<persona>-to-" somewhere in
+	// the name. The watcher's own classifier reads the YAML `to:`
+	// field for the authoritative routing decision, so the filename
+	// check is purely a trigger to decide "did Claude write a real
+	// message file?".
+	return strings.Contains(name, "-"+persona+"-to-")
+}
+
+// fileHasFrontmatter returns true if the first bytes of path start
+// with "---\n" and contain a matching "\n---" close. Matches the
+// watcher's extractFrontmatter contract without importing that package
+// (keeping the persona package free of deliver/ dependencies).
+func fileHasFrontmatter(path string) bool {
+	f, err := os.Open(path) //nolint:gosec // path under configured outbox
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, 8*1024)
+	n, err := f.Read(buf)
+	if err != nil && err.Error() != "EOF" {
+		return false
+	}
+	data := buf[:n]
+	if !bytes.HasPrefix(data, []byte("---\n")) {
+		return false
+	}
+	rest := data[len("---\n"):]
+	return bytes.Contains(rest, []byte("\n---"))
+}
+
+// readOutboxFile reads a file from disk in full. Used when we need to
+// hash a Claude-written outbox file for the signal payload.
+func readOutboxFile(path string) ([]byte, error) {
+	return os.ReadFile(path) //nolint:gosec // path under configured outbox
+}
+
+// isProbablyStdoutStub returns true if stdout looks like an
+// unstructured reply (no frontmatter). A frontmatter-framed stdout is
+// rare but possible; when present we keep the legacy stub-wrap path so
+// the reply still routes.
+func isProbablyStdoutStub(stdout []byte) bool {
+	if !bytes.HasPrefix(stdout, []byte("---\n")) {
+		return true
+	}
+	return !bytes.Contains(stdout[len("---\n"):], []byte("\n---"))
 }
 
 // signaler returns the configured Signaler, defaulting to the

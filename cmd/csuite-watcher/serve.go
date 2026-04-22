@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"gorm.io/driver/sqlite"
@@ -110,6 +111,26 @@ func loadAuditToken(path string) (string, error) {
 //	DREM_BEARER_TOKEN → cfg.BearerToken
 //	DREM_LISTEN_ADDR  → cfg.ListenAddr
 //	DREM_DB_PATH      → cfg.DBPath
+// parseRescanInterval parses DREM_WATCHER_RESCAN_INTERVAL. Empty or
+// malformed values fall back to the 5-minute default. A non-positive
+// value (e.g. "0s") disables the periodic rescan entirely — useful in
+// tests and for operators who want manual control via POST /rescan.
+func parseRescanInterval(env string) time.Duration {
+	const fallback = 5 * time.Minute
+	if env == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(env)
+	if err != nil {
+		return fallback
+	}
+	if d <= 0 {
+		// Explicit disable.
+		return 0
+	}
+	return d
+}
+
 func applyServeEnvOverrides(cfg *serveTomlConfig) {
 	if v := os.Getenv("DREM_BEARER_TOKEN"); v != "" {
 		cfg.BearerToken = v
@@ -224,20 +245,46 @@ func runServe(args []string, stderr io.Writer) int {
 		return 1
 	}
 
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer cancel()
+
 	// Startup rescan. Kicked off after the HTTP listener is bound so a
 	// persona that races to signal during watcher boot sees an
 	// accepting endpoint instead of a connection refused. The rescan
 	// runs in a goroutine so a slow filesystem walk doesn't hold up
-	// the main shutdown-watcher select below. Exactly-once per
-	// process-start — the operator can re-run it via POST /rescan.
+	// the main shutdown-watcher select below.
 	go func() {
 		res := deliver.RescanOnce(deliverCfg)
 		fmt.Fprintf(stderr, "csuite-watcher: startup rescan: scanned=%d delivered=%d skipped=%d quarantined=%d errors=%d\n",
 			res.Scanned, res.Delivered, res.Skipped, res.Quarantined, len(res.Errors))
 	}()
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
-	defer cancel()
+	// Periodic rescan. Scoreboard item 5: a signal that silently drops
+	// (token 401 prior to item 33's fix, transient network hiccup,
+	// persona crash between write and signal) used to mean the file
+	// sat in the outbox forever — startup rescan only ran once per
+	// process lifetime. A periodic rescan every
+	// DREM_WATCHER_RESCAN_INTERVAL (default 5 minutes) catches any
+	// missed deliveries across every persona pair without operator
+	// intervention. The ledger-hit skip inside Rescan keeps the cost
+	// bounded as the outbox grows.
+	rescanInterval := parseRescanInterval(os.Getenv("DREM_WATCHER_RESCAN_INTERVAL"))
+	if rescanInterval > 0 {
+		go func() {
+			ticker := time.NewTicker(rescanInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					res := deliver.RescanOnce(deliverCfg)
+					fmt.Fprintf(stderr, "csuite-watcher: periodic rescan: scanned=%d delivered=%d skipped=%d quarantined=%d errors=%d\n",
+						res.Scanned, res.Delivered, res.Skipped, res.Quarantined, len(res.Errors))
+				}
+			}
+		}()
+	}
 
 	<-ctx.Done()
 

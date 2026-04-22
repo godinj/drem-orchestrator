@@ -111,6 +111,18 @@ type TemplateData struct {
 	// state remains reachable for the one-time migration copy-out.
 	// See plans/orch-db-host-access-impl.md (Option A).
 	HostDataDir string
+
+	// CsuiteWatcherTokenPath is the host path of the operator's
+	// csuite-watcher shared token file (generated once via
+	// `openssl rand -hex 32 > ~/.drem/csuite-watcher.token`). The
+	// compose template bind-mounts it read-only at
+	// /run/secrets/csuite-watcher-token into every persona container;
+	// the csuite-persona binary reads CSUITE_WATCHER_TOKEN_FILE when
+	// CSUITE_WATCHER_TOKEN is empty. This breaks the dependency on the
+	// host shell having CSUITE_WATCHER_TOKEN exported at compose-up
+	// time — scoreboard item 33. Defaults to
+	// HostHome/.drem/csuite-watcher.token when empty.
+	CsuiteWatcherTokenPath string
 }
 
 // Default image tags for the orchestrator.
@@ -203,6 +215,12 @@ func applyDefaults(data *TemplateData) {
 	if data.HostDataDir == "" && data.HostHome != "" && data.ProjectName != "" {
 		data.HostDataDir = filepath.Join(
 			data.HostHome, ".drem", "projects", data.ProjectName, "data")
+	}
+	// CsuiteWatcherTokenPath is host-global (one operator token for
+	// all personas + the watcher). Scoreboard item 33 / attack plan §3.
+	if data.CsuiteWatcherTokenPath == "" && data.HostHome != "" {
+		data.CsuiteWatcherTokenPath = filepath.Join(
+			data.HostHome, ".drem", "csuite-watcher.token")
 	}
 }
 

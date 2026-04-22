@@ -85,6 +85,62 @@ func TestDeliver_HappyPath_Persona(t *testing.T) {
 	}
 }
 
+// TestDeliver_PersonaToPersonaPairs exercises every pair in the
+// closed set of personas — the scoreboard item 5 success gate
+// ("seth→alex, seth→ross land in recipient inboxes") and its
+// generalisation: routing must work uniformly for any sender/recipient
+// pair across the four personas. Prior to scoreboard item 33 being
+// shipped the signal layer ate these routes with 401s; this test
+// asserts the routing code path itself handles each pair without
+// special-casing.
+func TestDeliver_PersonaToPersonaPairs(t *testing.T) {
+	personas := []string{"mike", "alex", "ross", "seth"}
+	for _, src := range personas {
+		for _, dst := range personas {
+			if src == dst {
+				continue
+			}
+			src, dst := src, dst
+			t.Run(src+"_to_"+dst, func(t *testing.T) {
+				root := newCsuiteTree(t)
+				body := []byte("---\nfrom: " + src + "\nto: " + dst + "\n---\n\nping from " + src + "\n")
+				fname := "pair-" + src + "-" + dst + ".md"
+				_, sha := stageOutbox(t, root, src, fname, body)
+
+				l := openTestLedger(t)
+				h := Handler(Config{Token: "secret", Ledger: l})
+
+				w := post(t, h, "secret",
+					buildBody(t, src, "/csuite/"+src+"/outbox/"+fname, sha))
+				if w.Code != http.StatusAccepted {
+					t.Fatalf("%s->%s: status=%d body=%q", src, dst, w.Code, w.Body.String())
+				}
+
+				dstInbox := filepath.Join(root, dst, "inbox")
+				entries, err := os.ReadDir(dstInbox)
+				if err != nil {
+					t.Fatalf("readdir %s: %v", dstInbox, err)
+				}
+				if len(entries) != 1 {
+					t.Fatalf("%s inbox: got %d entries, want 1", dst, len(entries))
+				}
+				name := entries[0].Name()
+				if !bytes.Contains([]byte(name), []byte("-"+src+"-")) {
+					t.Errorf("%s->%s: dest filename missing source: %q", src, dst, name)
+				}
+
+				d, found, err := l.Lookup(sha)
+				if err != nil || !found {
+					t.Fatalf("%s->%s: ledger lookup: found=%v err=%v", src, dst, found, err)
+				}
+				if d.Dest != dst {
+					t.Errorf("%s->%s: ledger dest=%q, want %q", src, dst, d.Dest, dst)
+				}
+			})
+		}
+	}
+}
+
 // TestDeliver_HappyPath_Kyle verifies "to: kyle" lands in
 // /csuite/kyle/inbox/.
 func TestDeliver_HappyPath_Kyle(t *testing.T) {

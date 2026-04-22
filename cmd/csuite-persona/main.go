@@ -32,6 +32,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -68,9 +69,55 @@ func run(args []string, stdout, stderr *os.File) int {
 	// CSUITE_SIGNAL_ENDPOINT disables signaling entirely (the
 	// returned Signaler is a no-op). See
 	// plans/csuite-watcher-outbox-routing.md §1-3.
+	endpoint := os.Getenv("CSUITE_SIGNAL_ENDPOINT")
+	token := os.Getenv("CSUITE_WATCHER_TOKEN")
+
+	// Scoreboard item 33 (mitigation path 2): if the env var was not
+	// passed through from the host shell but a token file was
+	// bind-mounted in (CSUITE_WATCHER_TOKEN_FILE), read from the file.
+	// This breaks the dependency on the host shell having the env
+	// var exported at `docker compose up` time — the file is always
+	// accessible from a bind-mount independent of shell state.
+	if token == "" {
+		if path := os.Getenv("CSUITE_WATCHER_TOKEN_FILE"); path != "" {
+			b, rerr := os.ReadFile(path) //nolint:gosec // path is operator-controlled
+			if rerr != nil {
+				fmt.Fprintf(stderr, "csuite-persona: read CSUITE_WATCHER_TOKEN_FILE=%q: %v\n", path, rerr)
+				return 1
+			}
+			token = strings.TrimSpace(string(b))
+		}
+	}
+
+	// Scoreboard item 33: fail fast when the signaling endpoint is
+	// wired but the token is empty. Pre-fix symptom was a persistent
+	// stream of `status=401 body="{"error":"missing X-Csuite-Token
+	// header"}"` poller warnings while deliveries silently backed up
+	// in the watcher's rescan queue. The valueless-inherit form
+	// `CSUITE_WATCHER_TOKEN:` in the compose template depends on the
+	// host shell having the env var set at `docker compose up` time;
+	// if the operator forgot to export it the persona container boots
+	// healthy but can never complete the auth handshake. A startup
+	// error surfaces the misconfiguration in `docker logs` immediately
+	// rather than burying it in poll-tick-level WARN output. See
+	// plans/containerization-pivot-attack-plan.md §3 Group A item 33.
+	if endpoint != "" && token == "" {
+		fmt.Fprintln(stderr,
+			"csuite-persona: CSUITE_SIGNAL_ENDPOINT is set but CSUITE_WATCHER_TOKEN is empty.")
+		fmt.Fprintln(stderr,
+			"csuite-persona: This means the watcher will reject every signal with 401.")
+		fmt.Fprintln(stderr,
+			"csuite-persona: Export CSUITE_WATCHER_TOKEN on the host before `docker compose up`:")
+		fmt.Fprintln(stderr,
+			"csuite-persona:   export CSUITE_WATCHER_TOKEN=$(cat ~/.drem/csuite-watcher.token)")
+		fmt.Fprintln(stderr,
+			"csuite-persona: Or unset CSUITE_SIGNAL_ENDPOINT to disable signaling entirely.")
+		return 1
+	}
+
 	signalCfg := persona.SignalConfig{
-		Endpoint:      os.Getenv("CSUITE_SIGNAL_ENDPOINT"),
-		Token:         os.Getenv("CSUITE_WATCHER_TOKEN"),
+		Endpoint:      endpoint,
+		Token:         token,
 		PersonaPrefix: os.Getenv("CSUITE_OUTBOX_PATH_PREFIX"),
 		WatcherPrefix: os.Getenv("CSUITE_WATCHER_PATH_PREFIX"),
 	}
@@ -97,6 +144,12 @@ func run(args []string, stdout, stderr *os.File) int {
 		fmt.Fprintf(stderr, "csuite-persona: %v\n", err)
 		return 1
 	}
+
+	// Scoreboard item 3: reap orphan `.failures` sidecars whose anchor
+	// .md is already in the archive. Runs once at startup; any new
+	// orphans created at runtime are caught on the next container
+	// restart. See internal/csuite/persona/reaper.go.
+	_ = persona.ReapOnceOnStartup(cfg)
 
 	// SIGTERM/SIGINT cancels the context; Run's loop observes ctx.Done
 	// at every tick boundary and between messages, so shutdown happens

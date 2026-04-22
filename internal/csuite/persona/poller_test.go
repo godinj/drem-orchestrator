@@ -179,14 +179,20 @@ func runPollerUntil(t *testing.T, p *persona.Poller, cond func() bool, timeout t
 // TestPoller_PicksUpInboxFile asserts the happy path: drop a .md file into
 // the inbox, observe a single spawner invocation with the correct argv, an
 // outbox file, and the original message moved to the archive.
+//
+// Post-G3-fix: the poller suppresses the stub unless stdout itself is
+// frontmatter-framed. This test supplies a frontmatter-framed stdout
+// body so the legacy stub path stays exercised; the stub suppression
+// path is covered in TestPoller_SuppressesStubWhenClaudeWroteOutbox.
 func TestPoller_PicksUpInboxFile(t *testing.T) {
 	fs := newTestFS(t, "Seth system prompt body.")
 	cfg := baseConfig(fs)
 
+	const stdoutFM = "---\nfrom: seth\nto: kyle\n---\n\nhello from claude\n"
 	var calls []spawnCall
 	var mu sync.Mutex
 	spawner := recorderSpawner(&calls, &mu, func(_ spawnCall) ([]byte, int, error) {
-		return []byte("hello from claude"), 0, nil
+		return []byte(stdoutFM), 0, nil
 	})
 	p, err := persona.New(cfg, spawner)
 	if err != nil {
@@ -599,6 +605,10 @@ func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
 	// "uses its Bash tool" to move the inbox file into .archive before
 	// returning its reply. The poller's subsequent os.Rename then sees
 	// ENOENT on the source path.
+	//
+	// Post-G3: returns a frontmatter-framed stdout so the poller keeps
+	// the legacy stub-write path (non-frontmatter stdout now
+	// suppresses the stub — see TestPoller_SuppressesStubWhenStdoutHasNoFrontmatter).
 	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, stdin io.Reader) ([]byte, int, error) {
 		_, _ = io.ReadAll(stdin)
 		srcPath := filepath.Join(fs.inboxDir, "claude-moved-me.md")
@@ -606,7 +616,7 @@ func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
 		if err := os.Rename(srcPath, dstPath); err != nil {
 			return nil, 1, fmt.Errorf("test spawner: pre-archive: %v", err)
 		}
-		return []byte("reply-body"), 0, nil
+		return []byte("---\nfrom: seth\nto: kyle\n---\n\nreply-body"), 0, nil
 	})
 	p, err := persona.New(cfg, spawner)
 	if err != nil {
@@ -640,7 +650,7 @@ func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
 	if calls[0].persona != "seth" {
 		t.Errorf("persona = %q, want seth", calls[0].persona)
 	}
-	wantSHA := sha256Hex([]byte("reply-body"))
+	wantSHA := sha256Hex([]byte("---\nfrom: seth\nto: kyle\n---\n\nreply-body"))
 	if calls[0].sha256 != wantSHA {
 		t.Errorf("sha256 = %q, want %q", calls[0].sha256, wantSHA)
 	}
@@ -649,6 +659,142 @@ func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
 	archived := dirEntries(t, fs.archiveDir)
 	if len(archived) != 1 || archived[0] != "claude-moved-me.md" {
 		t.Errorf("archive dir = %v, want [claude-moved-me.md]", archived)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// G3 dual-write fix tests.
+// ---------------------------------------------------------------------------
+
+// TestPoller_SuppressesStubWhenClaudeWroteOutbox is the primary
+// regression proof for the G3 dual-write fix (scoreboard item 2).
+// When the spawner simulates Claude's Write tool by creating a
+// well-formed `<ts>-<persona>-to-<recipient>-*.md` file in the outbox
+// during the turn, the poller MUST NOT also write a redundant stub.
+// Pre-fix, the stub was always emitted and quarantined; post-fix the
+// outbox carries exactly one file — the one Claude wrote.
+func TestPoller_SuppressesStubWhenClaudeWroteOutbox(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+
+	const claudeWritten = "20260422T140000Z-seth-to-alex-scoreboard.md"
+	const claudeBody = "---\nfrom: seth\nto: alex\ntimestamp: 2026-04-22T14:00:00Z\nsubject: scoreboard\n---\n\nbody here\n"
+
+	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, stdin io.Reader) ([]byte, int, error) {
+		_, _ = io.ReadAll(stdin)
+		// Simulate Claude's Write tool emitting a frontmatter-bearing
+		// outbox file during the turn.
+		if err := os.WriteFile(filepath.Join(fs.outboxDir, claudeWritten), []byte(claudeBody), 0o644); err != nil {
+			return nil, 1, fmt.Errorf("simulated Write: %v", err)
+		}
+		// Claude's stdout is a plain-text "turn summary" with no
+		// frontmatter — this was the shape that was being quarantined.
+		return []byte("Turn complete. Wrote scoreboard reply to Alex."), 0, nil
+	})
+
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "trigger.md", "hi", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		// Wait for state.md to land — signals "turn is done".
+		data, _ := os.ReadFile(fs.stateFile)
+		return strings.Contains(string(data), "last_processed: trigger.md")
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for state.md: %v", err)
+	}
+
+	// Outbox must contain EXACTLY the file Claude wrote — no stub.
+	entries := dirEntries(t, fs.outboxDir)
+	if len(entries) != 1 {
+		t.Fatalf("outbox entries: want 1 (claude's file only), got %d: %v", len(entries), entries)
+	}
+	if entries[0] != claudeWritten {
+		t.Fatalf("outbox[0] = %q, want %q (and NO stub)", entries[0], claudeWritten)
+	}
+	// Cross-check: none of the entries should look like a stub.
+	for _, n := range entries {
+		if strings.Contains(n, "-reply-") {
+			t.Errorf("outbox contains stub %q — G3 fix regressed", n)
+		}
+	}
+}
+
+// TestPoller_SuppressesStubWhenStdoutHasNoFrontmatter covers the
+// second leg of the G3 fix: when Claude emits NO well-formed outbox
+// file AND stdout is a plain-text turn summary, the poller must not
+// fall back to writing a stub. Quarantined stubs were the whole fail
+// mode this fix eliminates.
+func TestPoller_SuppressesStubWhenStdoutHasNoFrontmatter(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+
+	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
+		return []byte("Turn complete. Nothing to say this turn."), 0, nil
+	})
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "silent.md", "are you there?", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		data, _ := os.ReadFile(fs.stateFile)
+		return strings.Contains(string(data), "last_processed: silent.md")
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for state.md: %v", err)
+	}
+
+	// Outbox MUST be empty — no stub for quarantine-bound non-frontmatter output.
+	entries := dirEntries(t, fs.outboxDir)
+	if len(entries) != 0 {
+		t.Fatalf("outbox must be empty (stub suppressed), got %v", entries)
+	}
+	// Inbox must still be archived — the turn ran to completion even though
+	// no outbox file was emitted.
+	archived := dirEntries(t, fs.archiveDir)
+	if len(archived) != 1 || archived[0] != "silent.md" {
+		t.Fatalf("archive = %v, want [silent.md]", archived)
+	}
+}
+
+// TestPoller_KeepsStubWhenStdoutIsFrontmatter is the narrow path that
+// preserves backward compatibility with any persona prompt that
+// documents "reply inline on stdout with a full frontmatter block."
+// Stdout that starts with "---\n" and contains a closing "\n---"
+// remains eligible for stub-wrapping — the watcher can classify it.
+func TestPoller_KeepsStubWhenStdoutIsFrontmatter(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+
+	const fmStdout = "---\nfrom: seth\nto: kyle\n---\n\ninline reply"
+	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
+		return []byte(fmStdout), 0, nil
+	})
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "ping.md", "hi", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		data, _ := os.ReadFile(fs.stateFile)
+		return strings.Contains(string(data), "last_processed: ping.md")
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for state.md: %v", err)
+	}
+
+	entries := dirEntries(t, fs.outboxDir)
+	if len(entries) != 1 {
+		t.Fatalf("want 1 outbox entry (stub from fm-stdout), got %d: %v", len(entries), entries)
+	}
+	if !strings.Contains(entries[0], "seth-reply-") {
+		t.Errorf("outbox[0] = %q, want persona-reply-* filename", entries[0])
 	}
 }
 

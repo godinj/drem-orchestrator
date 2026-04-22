@@ -29,7 +29,7 @@ import (
 // documented in plans/orch-api-gate-mutations.md §1.
 func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, gate GateClient, project string, opts ...RunOption) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, create-task, comment, experiment, approve, reject, answer, pass, fail, retry, reset-circuit")
+		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, create-task, comment, experiment, approve, reject, answer, pass, fail, retry, reset-circuit, kyle")
 	}
 
 	var ro runOptions
@@ -69,8 +69,25 @@ func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, gate GateClient
 		return handleExperiment(db, rest, w, jsonMode)
 	case "reset-circuit":
 		return handleResetCircuit(ro.dbPath, w)
+	case "kyle":
+		return handleKyle(rest, w, jsonMode)
 	default:
 		return fmt.Errorf("unknown subcommand: %q", sub)
+	}
+}
+
+// handleKyle dispatches `drem cli kyle <subsub> ...`. Today the only
+// supported subsub is `inbox`; future additions (e.g. `kyle state`)
+// slot in here. Scoreboard item 4 / attack plan §3 Group A.
+func handleKyle(args []string, w io.Writer, jsonMode bool) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: drem cli kyle <subsubcommand>\nsubsubcommands: inbox")
+	}
+	switch args[0] {
+	case "inbox":
+		return RunKyleInbox(DefaultKyleInboxDir(), args[1:], w, jsonMode)
+	default:
+		return fmt.Errorf("unknown kyle subcommand: %q", args[0])
 	}
 }
 
