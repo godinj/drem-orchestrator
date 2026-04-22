@@ -75,20 +75,34 @@ type Config struct {
 	// ("would deliver", classify decisions, etc.). When nil the
 	// package falls back to the default log package.
 	Logger *log.Logger
+
+	// AuditToken is the bearer secret checked by the /v1/deliveries
+	// and /v1/queue read-only audit endpoints. Intentionally a
+	// separate field from Token: /deliver's X-Csuite-Token
+	// authenticates in-network persona containers, while AuditToken
+	// authenticates the operator's `drem csuite audit` CLI. An empty
+	// AuditToken causes the audit endpoints to reject every request
+	// (fail-closed, same posture as Token).
+	//
+	// See plans/csuite-audit-cli.md §Auth flow.
+	AuditToken string
 }
 
 // Handler returns an http.Handler that dispatches /deliver, /rescan,
-// and /healthz. Callers register it under a parent mux; the handler
+// /healthz, and the read-only audit endpoints (/v1/deliveries,
+// /v1/queue). Callers register it under a parent mux; the handler
 // switches internally by path so a single registration covers all
 // endpoints. /healthz is intentionally unauthenticated so external
 // liveness probes work without the shared secret; /deliver and
-// /rescan share the same X-Csuite-Token auth.
+// /rescan share the X-Csuite-Token auth; the /v1/* audit endpoints
+// use bearer auth against Config.AuditToken.
 func Handler(cfg Config) http.Handler {
 	h := &handler{cfg: cfg, clock: time.Now}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.healthz)
 	mux.Handle("/deliver", TokenAuth(cfg.Token, http.HandlerFunc(h.deliver)))
 	mux.Handle("/rescan", TokenAuth(cfg.Token, http.HandlerFunc(h.rescan)))
+	h.registerAuditRoutes(mux)
 	return mux
 }
 

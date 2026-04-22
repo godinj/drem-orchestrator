@@ -103,10 +103,17 @@ func (s *Server) buildMux() *http.ServeMux {
 	// all provided by the optional DeliverHandler. Registering them
 	// as specific paths ahead of the "/" catch-all ensures they win
 	// the mux lookup.
+	//
+	// The /v1/deliveries and /v1/queue audit endpoints (plan
+	// csuite-audit-cli.md §V1 endpoint surface) are also served by
+	// DeliverHandler but use their own bearer-token auth against
+	// AuditToken rather than X-Csuite-Token.
 	if s.cfg.DeliverHandler != nil {
 		mux.Handle("/healthz", s.cfg.DeliverHandler)
 		mux.Handle("/deliver", s.cfg.DeliverHandler)
 		mux.Handle("/rescan", s.cfg.DeliverHandler)
+		mux.Handle("/v1/deliveries", s.cfg.DeliverHandler)
+		mux.Handle("/v1/queue", s.cfg.DeliverHandler)
 	}
 	// PWA static assets are served without auth — the browser needs to fetch
 	// the manifest, service worker, and app shell before the user can log in.

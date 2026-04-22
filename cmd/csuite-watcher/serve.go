@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/BurntSushi/toml"
@@ -50,6 +51,54 @@ func loadServeConfig(path string) (serveTomlConfig, error) {
 		return serveTomlConfig{}, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return cfg.Serve, nil
+}
+
+// DefaultAuditTokenPath is the operator-facing default location of
+// the bearer token used to authenticate the `drem csuite audit`
+// CLI. The CLI reads the same default when --token is not set, so
+// these two constants must stay in sync. Overridable via
+// DREM_AUDIT_TOKEN_PATH.
+const DefaultAuditTokenPath = "~/.drem/csuite-watcher.token"
+
+// auditTokenPath returns the expanded path to the audit token file,
+// honouring DREM_AUDIT_TOKEN_PATH when set.
+func auditTokenPath() string {
+	if v := os.Getenv("DREM_AUDIT_TOKEN_PATH"); v != "" {
+		return expandTilde(v)
+	}
+	return expandTilde(DefaultAuditTokenPath)
+}
+
+// loadAuditToken reads the audit token from path, enforcing file
+// permissions of 0600 (owner-read/write only). Anything else —
+// missing file, world-readable, or the expanded path does not exist —
+// surfaces as a non-nil error so the caller can fail closed.
+//
+// The returned token is a trimmed string. Empty token files are
+// treated as an error so a misconfigured watcher cannot
+// accidentally serve an audit endpoint that matches every client's
+// empty bearer.
+func loadAuditToken(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("stat %s: %w", path, err)
+	}
+	// Refuse to start if the file is group- or world-readable. The
+	// check is "any permission bit beyond 0600" so a rare 0400 file
+	// still works — the concerning cases are 0604, 0640, 0644, etc.
+	mode := info.Mode().Perm()
+	if mode&0o077 != 0 {
+		return "", fmt.Errorf("token file %s has permissions %#o; must be 0600", path, mode)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // path pinned by caller
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", path, err)
+	}
+	tok := strings.TrimSpace(string(data))
+	if tok == "" {
+		return "", fmt.Errorf("token file %s is empty", path)
+	}
+	return tok, nil
 }
 
 // applyServeEnvOverrides mutates cfg, replacing any field whose corresponding
@@ -145,9 +194,21 @@ func runServe(args []string, stderr io.Writer) int {
 	}
 	defer ledger.Close() //nolint:errcheck
 
+	// Audit token for the /v1/* endpoints. Read from a 0600 file at
+	// ~/.drem/csuite-watcher.token (overridable via DREM_AUDIT_TOKEN_PATH).
+	// Missing or non-0600 files cause serve to fail-closed with a
+	// diagnostic message; the operator must initialise the token
+	// out-of-band. See plans/csuite-audit-cli.md §Auth flow.
+	auditToken, err := loadAuditToken(auditTokenPath())
+	if err != nil {
+		fmt.Fprintf(stderr, "error: load audit token: %v\n", err)
+		return 1
+	}
+
 	deliverCfg := deliver.Config{
-		Token:  os.Getenv("CSUITE_WATCHER_TOKEN"),
-		Ledger: ledger,
+		Token:      os.Getenv("CSUITE_WATCHER_TOKEN"),
+		Ledger:     ledger,
+		AuditToken: auditToken,
 	}
 	deliverHandler := deliver.Handler(deliverCfg)
 

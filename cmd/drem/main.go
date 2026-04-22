@@ -49,6 +49,10 @@ func main() {
 		runProject(os.Args[2:])
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "csuite" {
+		runCsuite()
+		return
+	}
 
 	// Parse flags. Env var fallbacks let the containerized orch image run
 	// without a baked drem.toml; the per-project compose template sets
