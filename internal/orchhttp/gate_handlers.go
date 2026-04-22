@@ -226,6 +226,21 @@ func (s *Server) handleAnswerTask(w http.ResponseWriter, r *http.Request) {
 // clears retry_count/last_error/failure diagnostics, unlinks stale agents,
 // and records a "user retried task" event. See
 // internal/orchestrator/task_api.go RetryTask for the full semantics.
+//
+// Parent re-animation cascade (Bug I #1 fix): when the target task is a
+// subtask (ParentTaskID != nil) and its parent is also in StatusFailed, we
+// first call RetryTask on the parent, then on the subtask. This re-animates
+// the parent via the canonical failed→backlog edge so the tick loop's
+// scheduleSubtasks(parent) path resumes and picks up the retried child on
+// the next tick. Without the cascade, the subtask transitions to backlog
+// but sits there forever because its parent stays at failed and the
+// scheduler's parent-state gate never invokes scheduleSubtasks(parent).
+//
+// We reuse the RetryTask primitive (not a direct failed→in_progress edge)
+// deliberately: the failed→backlog transition is where any subtask-detach
+// / stale-agent-unlink logic lives, so cascading through the same entry
+// point means no drift between child-level and parent-level retry. A DONE
+// parent is left alone — the cascade is scoped to FAILED parents only.
 func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
 	if s.Orch == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "gate mutations not configured")
@@ -243,6 +258,35 @@ func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("task in status %q, expected one of [failed]", task.Status))
 		return
 	}
+
+	// Parent re-animation cascade: if the target is a subtask whose parent is
+	// also in StatusFailed, retry the parent first so the scheduler's
+	// parent-state gate opens back up. Any error on the parent load (other
+	// than "not found") or retry surfaces as 500; a missing parent row just
+	// skips the cascade and proceeds with the single-task retry.
+	if task.ParentTaskID != nil {
+		var parent model.Task
+		err := s.DB.WithContext(r.Context()).
+			Where("id = ?", *task.ParentTaskID).
+			First(&parent).Error
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			// Parent row missing — treat as a standalone retry.
+		case err != nil:
+			slog.Error("orchhttp: retry parent load failed",
+				"task_id", task.ID, "parent_id", *task.ParentTaskID, "err", err)
+			writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
+			return
+		case parent.Status == model.StatusFailed:
+			if err := s.Orch.RetryTask(parent.ID); err != nil {
+				slog.Error("orchhttp: retry parent failed",
+					"task_id", task.ID, "parent_id", parent.ID, "err", err)
+				writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
+				return
+			}
+		}
+	}
+
 	if err := s.Orch.RetryTask(task.ID); err != nil {
 		slog.Error("orchhttp: retry failed", "task_id", task.ID, "err", err)
 		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())

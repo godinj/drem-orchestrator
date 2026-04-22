@@ -1,8 +1,54 @@
 # Bug I — Event-channel saturation + orphan-subtask scheduler starvation
 
-**Status**: OPEN. Investigation complete; fix not yet greenlit. Plan
-filed to capture the **two separate root causes** the retry-agent
-dogfood conflated into one report.
+**Status**: Root Cause #1 **MERGED** (2026-04-21, retry-endpoint
+cascade landed at `internal/orchhttp/gate_handlers.go`
+`handleRetryTask`). Root Cause #2 **OPEN** — deferred per Seth's
+recommendation until Bug H lands and we re-measure the WARN cadence.
+
+## Root Cause #1 — Final shape (MERGED)
+
+Seth (CTO) rejected the original Option A framing below (direct
+`failed → in_progress` parent edge). Shipped shape, per his
+correction:
+
+- Retry HTTP handler at `internal/orchhttp/gate_handlers.go`
+  detects `task.ParentTaskID != nil && parent.Status == FAILED`
+  on entry.
+- Cascades via the **existing** `RetryTask` primitive — first
+  `RetryTask(parent)`, then `RetryTask(child)`. No new state-machine
+  edge. Both calls ride the already-allowed `FAILED → BACKLOG`
+  transition in `internal/state/machine.go::ValidTransitions`.
+- Scheduler's `processBacklog` promotes `BACKLOG → IN_PROGRESS` on
+  the parent on the next tick via the canonical live-promotion path.
+  With the parent live, `scheduleSubtasks(parent)` resumes and picks
+  up the retried child naturally — no custom reconciler pass.
+
+**Rationale (Seth's framing, preserved):**
+- Any subtask-detach / stale-agent-unlink logic added in task
+  `6eed2a6f` lives on the `FAILED → BACKLOG` edge. Reusing the same
+  edge for the parent means no drift.
+- Single retry primitive — no divergent code paths to maintain.
+- Orphan-subtask pickup is a natural consequence of parent
+  re-animation, not a reconciler quirk.
+
+**Scope guards shipped with the cascade:**
+- DONE parents are not re-animated (only `FAILED` parents trigger
+  cascade) — covered by `TestRetrySubtask_DoneParentLeftAlone`.
+- A dangling `ParentTaskID` (parent row deleted out-of-band) falls
+  through to single-task retry — covered by
+  `TestRetrySubtask_MissingParentFallsThrough`.
+- Happy-path cascade covered by
+  `TestRetrySubtask_ReAnimatesFailedParent` (both rows transition to
+  `BACKLOG`, parent-retry call ordered before child-retry call).
+
+---
+
+Original investigation notes (pre-fix) preserved below for audit
+trail.
+
+**Status (pre-fix)**: OPEN. Investigation complete; fix not yet
+greenlit. Plan filed to capture the **two separate root causes** the
+retry-agent dogfood conflated into one report.
 
 **Origin**: 2026-04-22. Retry-CLI dogfood flipped v15 subtask
 `8a7616f1-49c2-4622-8f07-b8b423273ee7` from `failed → backlog` at
@@ -86,9 +132,13 @@ they just fill the log with noise.
 
 ## Fix options
 
-### Fix for root cause #1 — Orphan subtask scheduler pickup
+### Fix for root cause #1 — Orphan subtask scheduler pickup — MERGED
 
-**Option A (preferred) — Retry-endpoint cascade to parent.**
+Seth's correction superseded the options below. The shipped shape is
+documented at the top of this doc ("Root Cause #1 — Final shape").
+Retained below for audit trail only — do not re-implement.
+
+**Option A (preferred, ORIGINAL FRAMING — SUPERSEDED) — Retry-endpoint cascade to parent.**
 When the retry endpoint is called on a subtask, also check the parent
 task's status. If parent is `failed`, transition it to the earliest
 appropriate live state (`in_progress` if it had coded work,

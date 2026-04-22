@@ -545,6 +545,113 @@ func TestServer_RetryTaskEndpoint_NoOrchReturns503(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }
 
+// TestRetrySubtask_ReAnimatesFailedParent covers Bug I #1: when the retry
+// endpoint targets a subtask whose parent is also in StatusFailed, the
+// handler must cascade RetryTask(parent) before RetryTask(child). Without
+// this cascade the child transitions to backlog but sits there forever —
+// scheduleSubtasks(parent) is the only path that dispatches backlog
+// subtasks, and it only runs when the parent is in a live status.
+func TestRetrySubtask_ReAnimatesFailedParent(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+
+	parent := testutil.CreateTask(t, srv.DB, project.ID, "parent", model.StatusFailed)
+	child := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    project.ID,
+		Title:        "child",
+		Description:  "child",
+		Status:       model.StatusFailed,
+		Category:     model.CategoryStandard,
+		ParentTaskID: &parent.ID,
+	}
+	require.NoError(t, srv.DB.Create(&child).Error)
+
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, child.ID.String()), "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	// Response DTO reflects the child, not the parent.
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, child.ID.String(), dto.ID)
+	require.Equal(t, string(model.StatusBacklog), dto.Status)
+
+	// Both rows in the DB are now BACKLOG.
+	var reloadedParent, reloadedChild model.Task
+	require.NoError(t, srv.DB.First(&reloadedParent, "id = ?", parent.ID).Error)
+	require.NoError(t, srv.DB.First(&reloadedChild, "id = ?", child.ID).Error)
+	require.Equal(t, model.StatusBacklog, reloadedParent.Status,
+		"parent must re-animate so the scheduler's parent-state gate opens")
+	require.Equal(t, model.StatusBacklog, reloadedChild.Status,
+		"child still transitions to backlog after the cascade")
+
+	// Exactly two RetryTask calls: parent first, then child.
+	require.Len(t, fake.Calls, 2)
+	require.Equal(t, "RetryTask", fake.Calls[0].Method)
+	require.Equal(t, parent.ID, fake.Calls[0].TaskID,
+		"parent retry must fire before child retry so the scheduler sees parent live when it picks up the child")
+	require.Equal(t, "RetryTask", fake.Calls[1].Method)
+	require.Equal(t, child.ID, fake.Calls[1].TaskID)
+}
+
+// TestRetrySubtask_DoneParentLeftAlone proves the cascade is scoped to
+// FAILED parents only. A subtask under a DONE parent still retries as a
+// single call — we do not re-animate completed work.
+func TestRetrySubtask_DoneParentLeftAlone(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+
+	parent := testutil.CreateTask(t, srv.DB, project.ID, "done-parent", model.StatusDone)
+	child := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    project.ID,
+		Title:        "child",
+		Description:  "child",
+		Status:       model.StatusFailed,
+		Category:     model.CategoryStandard,
+		ParentTaskID: &parent.ID,
+	}
+	require.NoError(t, srv.DB.Create(&child).Error)
+
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, child.ID.String()), "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	// Parent untouched.
+	var reloadedParent model.Task
+	require.NoError(t, srv.DB.First(&reloadedParent, "id = ?", parent.ID).Error)
+	require.Equal(t, model.StatusDone, reloadedParent.Status,
+		"DONE parent must not be re-animated by a child retry")
+
+	// Only the child's retry was called.
+	require.Len(t, fake.Calls, 1)
+	require.Equal(t, "RetryTask", fake.Calls[0].Method)
+	require.Equal(t, child.ID, fake.Calls[0].TaskID)
+}
+
+// TestRetrySubtask_MissingParentFallsThrough guards against a dangling
+// ParentTaskID (e.g. parent row deleted out-of-band). The handler must
+// still retry the child rather than returning 500 or 404.
+func TestRetrySubtask_MissingParentFallsThrough(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+
+	ghostParent := uuid.New()
+	child := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    project.ID,
+		Title:        "orphan",
+		Description:  "orphan",
+		Status:       model.StatusFailed,
+		Category:     model.CategoryStandard,
+		ParentTaskID: &ghostParent,
+	}
+	require.NoError(t, srv.DB.Create(&child).Error)
+
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, child.ID.String()), "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	require.Len(t, fake.Calls, 1)
+	require.Equal(t, "RetryTask", fake.Calls[0].Method)
+	require.Equal(t, child.ID, fake.Calls[0].TaskID)
+}
+
 // Extra: orch nil should degrade to 503 (safety: don't crash).
 func TestGateEndpointNoOrchReturns503(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t)
