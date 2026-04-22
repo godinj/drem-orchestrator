@@ -36,6 +36,7 @@ type GateClient interface {
 	Pass(ctx context.Context, project string, taskID uuid.UUID) (orchdto.TaskDTO, error)
 	Fail(ctx context.Context, project string, taskID uuid.UUID) (orchdto.TaskDTO, error)
 	Answer(ctx context.Context, project string, taskID uuid.UUID, body string) (orchdto.TaskDTO, error)
+	Retry(ctx context.Context, project string, taskID uuid.UUID) (orchdto.TaskDTO, error)
 }
 
 // gateHandlers is the dispatcher for the five gate mutation
@@ -80,6 +81,8 @@ func DispatchGate(client GateClient, project string, jsonMode bool, subcommand s
 		return true, gh.handlePass(args, w)
 	case "fail":
 		return true, gh.handleFail(args, w)
+	case "retry":
+		return true, gh.handleRetry(args, w)
 	default:
 		return false, nil
 	}
@@ -155,6 +158,25 @@ func (gh *gateHandlers) handleFail(args []string, w io.Writer) error {
 		return err
 	}
 	dto, err := gh.client.Fail(context.Background(), gh.project, id)
+	if err != nil {
+		return err
+	}
+	return gh.render(dto, w)
+}
+
+// handleRetry POSTs /retry after resolving the short-prefix. Only
+// status=failed is accepted server-side; a non-failed task surfaces
+// as ErrWrongStatus from orchclient. See
+// plans/v15-v16-failed-task-recovery.md for the recovery workflow.
+func (gh *gateHandlers) handleRetry(args []string, w io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: drem cli retry <task-id>")
+	}
+	id, err := gh.resolve(args[0])
+	if err != nil {
+		return err
+	}
+	dto, err := gh.client.Retry(context.Background(), gh.project, id)
 	if err != nil {
 		return err
 	}

@@ -23,13 +23,13 @@ import (
 // Run parses args (after "cli" is consumed) and dispatches to the
 // appropriate handler. Returns an error for unknown subcommands or
 // handler failures. If gate is provided, gate commands (approve,
-// reject, answer, pass, fail) are also available; they POST against
+// reject, answer, pass, fail, retry) are also available; they POST against
 // the containerized orchestrator's HTTP API rather than opening the
 // SQLite DB directly, closing the double-writer escape hatch
 // documented in plans/orch-api-gate-mutations.md §1.
 func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, gate GateClient, project string, opts ...RunOption) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, create-task, comment, experiment, approve, reject, answer, pass, fail, reset-circuit")
+		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, create-task, comment, experiment, approve, reject, answer, pass, fail, retry, reset-circuit")
 	}
 
 	var ro runOptions

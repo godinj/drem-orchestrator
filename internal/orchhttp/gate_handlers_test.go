@@ -37,6 +37,7 @@ type fakeGateOrch struct {
 	ErrTestPassed         error
 	ErrTestFailed         error
 	ErrClarification      error
+	ErrRetryTask          error
 
 	// Call log for assertion.
 	Calls []fakeCall
@@ -108,6 +109,14 @@ func (f *fakeGateOrch) HandleClarificationAnswer(taskID uuid.UUID, answer string
 	return f.transition(taskID, model.StatusPlanning)
 }
 
+func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error {
+	f.logCall("RetryTask", taskID, "")
+	if f.ErrRetryTask != nil {
+		return f.ErrRetryTask
+	}
+	return f.transition(taskID, model.StatusBacklog)
+}
+
 // transition mutates the task's Status directly on the underlying DB. Real
 // orchestrator methods do additional work (events, worktrees, etc); the fake
 // only needs the row to reflect the new status so the handler's re-fetch
@@ -176,6 +185,9 @@ func failURL(base, task string) string {
 }
 func answerURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/answer", base, projectName, task)
+}
+func retryURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/retry", base, projectName, task)
 }
 
 // ------------------------------------------------------------------
@@ -458,6 +470,79 @@ func TestRejectMalformedJSONReturns400(t *testing.T) {
 	resp, body := doJSON(t, http.MethodPost, rejectURL(base, task.ID.String()), `{not json`)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	require.Contains(t, decodeErr(t, body), "invalid")
+}
+
+// ------------------------------------------------------------------
+// Retry — failed → backlog.
+// ------------------------------------------------------------------
+func TestServer_RetryTaskEndpoint_Happy(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "stuck", model.StatusFailed)
+
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	require.Equal(t, "application/json; charset=utf-8", resp.Header.Get("Content-Type"))
+
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, task.ID.String(), dto.ID)
+	require.Equal(t, string(model.StatusBacklog), dto.Status)
+
+	require.Len(t, fake.Calls, 1)
+	require.Equal(t, "RetryTask", fake.Calls[0].Method)
+	require.Equal(t, task.ID, fake.Calls[0].TaskID)
+}
+
+func TestServer_RetryTaskEndpoint_UnknownTask(t *testing.T) {
+	_, _, _, base := setupGateHTTPTest(t)
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, uuid.NewString()), "")
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	require.Equal(t, "task not found", decodeErr(t, body))
+}
+
+func TestServer_RetryTaskEndpoint_WrongStatus(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "running", model.StatusInProgress)
+
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), "in_progress")
+	require.Contains(t, decodeErr(t, body), "failed")
+}
+
+func TestServer_RetryTaskEndpoint_MalformedUUID(t *testing.T) {
+	_, _, _, base := setupGateHTTPTest(t)
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, "not-a-uuid"), "")
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), "invalid task id")
+}
+
+func TestServer_RetryTaskEndpoint_OrchError(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	fake.ErrRetryTask = errors.New("retry blew up")
+	task := testutil.CreateTask(t, srv.DB, project.ID, "broken", model.StatusFailed)
+
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), "retry blew up")
+}
+
+func TestServer_RetryTaskEndpoint_NoOrchReturns503(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t)
+	project := testutil.CreateProject(t, db, projectName, "/tmp/repo.git", "master")
+	task := testutil.CreateTask(t, db, project.ID, "x", model.StatusFailed)
+
+	srv := orchhttp.New(db, "secret-token", nil, orchhttp.ProjectInfo{
+		Name:     projectName,
+		Language: "go",
+		OrchURL:  "http://localhost:8080",
+	})
+	// Deliberately do NOT set srv.Orch.
+	ts := httptest.NewServer(srv.Routes())
+	defer ts.Close()
+
+	resp, _ := doJSON(t, http.MethodPost, retryURL(ts.URL, task.ID.String()), "")
+	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }
 
 // Extra: orch nil should degrade to 503 (safety: don't crash).

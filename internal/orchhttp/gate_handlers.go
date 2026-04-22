@@ -220,6 +220,37 @@ func (s *Server) handleAnswerTask(w http.ResponseWriter, r *http.Request) {
 	s.writeUpdatedTask(w, task.ID)
 }
 
+// handleRetryTask dispatches POST /projects/{name}/tasks/{id}/retry. Only
+// failed is accepted; any other status returns 409. Delegates to
+// Orchestrator.RetryTask, which does the failed→backlog transition,
+// clears retry_count/last_error/failure diagnostics, unlinks stale agents,
+// and records a "user retried task" event. See
+// internal/orchestrator/task_api.go RetryTask for the full semantics.
+func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
+	if s.Orch == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "gate mutations not configured")
+		return
+	}
+	if !s.requireProject(w, r) {
+		return
+	}
+	task, ok := s.loadTaskForMutation(w, r)
+	if !ok {
+		return
+	}
+	if task.Status != model.StatusFailed {
+		writeJSONError(w, http.StatusConflict,
+			fmt.Sprintf("task in status %q, expected one of [failed]", task.Status))
+		return
+	}
+	if err := s.Orch.RetryTask(task.ID); err != nil {
+		slog.Error("orchhttp: retry failed", "task_id", task.ID, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
+		return
+	}
+	s.writeUpdatedTask(w, task.ID)
+}
+
 // requireProject verifies that the {name} path segment matches this server's
 // single project. On mismatch it writes a 404 and returns false so callers
 // can early-return.

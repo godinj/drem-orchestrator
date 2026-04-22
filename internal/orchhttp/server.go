@@ -51,6 +51,11 @@ type GateOrchestrator interface {
 	HandleTestPassed(taskID uuid.UUID) error
 	HandleTestFailed(taskID uuid.UUID) error
 	HandleClarificationAnswer(taskID uuid.UUID, answer string) error
+	// RetryTask transitions a task in StatusFailed back to StatusBacklog so
+	// the scheduler can redispatch it. Used by POST /tasks/{id}/retry and
+	// the TUI's retry action. Returns an error if the task is not in
+	// StatusFailed or is missing.
+	RetryTask(taskID uuid.UUID) error
 }
 
 // ProjectInfo is the static description of the single project this
@@ -122,6 +127,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/pass", s.handlePassTask)
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/fail", s.handleFailTask)
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/answer", s.handleAnswerTask)
+	mux.HandleFunc("POST /projects/{name}/tasks/{id}/retry", s.handleRetryTask)
 
 	// Internal ingestion endpoint — protected by header auth.
 	mux.Handle("POST /internal/logs", s.requireAgentmonToken(http.HandlerFunc(s.handleIngest)))

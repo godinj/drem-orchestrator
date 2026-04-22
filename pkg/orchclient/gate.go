@@ -106,6 +106,19 @@ func (c *Client) Answer(ctx context.Context, project string, taskID uuid.UUID, b
 	return out, nil
 }
 
+// Retry transitions a failed task back to backlog so the orchestrator
+// can redispatch it. Returns *ErrWrongStatus if the task is not in
+// status=failed, *ErrNotFound if the task does not exist. See
+// plans/v15-v16-failed-task-recovery.md for the recovery workflow.
+func (c *Client) Retry(ctx context.Context, project string, taskID uuid.UUID) (orchdto.TaskDTO, error) {
+	var out orchdto.TaskDTO
+	path := gatePath(project, taskID, "retry")
+	if err := c.postGate(ctx, path, nil, &out); err != nil {
+		return orchdto.TaskDTO{}, err
+	}
+	return out, nil
+}
+
 // gatePath returns the HTTP path for a gate mutation verb on the given
 // task in the given project. The project name is URL-escaped; the UUID
 // is emitted in its canonical 36-char form which is already URL-safe.

@@ -50,6 +50,8 @@ type fakeGateClient struct {
 	failErr    error
 	answerDTO  orchdto.TaskDTO
 	answerErr  error
+	retryDTO   orchdto.TaskDTO
+	retryErr   error
 
 	// Call recording for assertions.
 	lastProject string
@@ -109,6 +111,13 @@ func (f *fakeGateClient) Answer(ctx context.Context, project string, taskID uuid
 	f.lastBody = body
 	f.calls = append(f.calls, "answer")
 	return f.answerDTO, f.answerErr
+}
+
+func (f *fakeGateClient) Retry(ctx context.Context, project string, taskID uuid.UUID) (orchdto.TaskDTO, error) {
+	f.lastProject = project
+	f.lastTaskID = taskID
+	f.calls = append(f.calls, "retry")
+	return f.retryDTO, f.retryErr
 }
 
 // Compile-time check: fakeGateClient satisfies the production interface.
@@ -365,6 +374,62 @@ func TestHTTPAnswerWrongStatus(t *testing.T) {
 	err := runGate(f, "canvas", "answer", []string{id.String()[:8], "--body=ok"}, &buf, false)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "needs_clarification")
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Retry
+// ────────────────────────────────────────────────────────────────────────────
+
+func TestHTTPRetryHappy(t *testing.T) {
+	id := uuid.New()
+	f := &fakeGateClient{
+		resolvedID: id.String(),
+		retryDTO:   sampleTaskDTO(id, "backlog"),
+	}
+	var buf bytes.Buffer
+	err := runGate(f, "canvas", "retry", []string{id.String()[:8]}, &buf, false)
+	require.NoError(t, err)
+	require.Equal(t, []string{"resolve", "retry"}, f.calls)
+	require.Equal(t, "canvas", f.lastProject)
+	require.Equal(t, id, f.lastTaskID)
+	require.Contains(t, buf.String(), "backlog")
+}
+
+func TestHTTPRetryWrongStatus(t *testing.T) {
+	id := uuid.New()
+	f := &fakeGateClient{
+		resolvedID: id.String(),
+		retryErr:   &orchclient.ErrWrongStatus{Message: `task in status "in_progress", expected one of [failed]`},
+	}
+	var buf bytes.Buffer
+	err := runGate(f, "canvas", "retry", []string{id.String()[:8]}, &buf, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "failed")
+}
+
+func TestHTTPRetryMissingArg(t *testing.T) {
+	f := &fakeGateClient{}
+	var buf bytes.Buffer
+	err := runGate(f, "canvas", "retry", nil, &buf, false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "usage")
+	require.Empty(t, f.calls)
+}
+
+func TestHTTPRetryJSONMode(t *testing.T) {
+	id := uuid.New()
+	f := &fakeGateClient{
+		resolvedID: id.String(),
+		retryDTO:   sampleTaskDTO(id, "backlog"),
+	}
+	var buf bytes.Buffer
+	err := runGate(f, "canvas", "retry", []string{id.String()[:8]}, &buf, true)
+	require.NoError(t, err)
+
+	var out orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &out))
+	require.Equal(t, id.String(), out.ID)
+	require.Equal(t, "backlog", out.Status)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

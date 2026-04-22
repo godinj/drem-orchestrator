@@ -320,6 +320,53 @@ func TestAnswerWrongStatus(t *testing.T) {
 	require.True(t, errors.As(err, &ws))
 }
 
+// -- Retry ---------------------------------------------------------------
+
+func TestClient_Retry_Success(t *testing.T) {
+	id := uuid.New()
+	h := &gateHandler{status: http.StatusOK, respBody: sampleDTOJSON(t, id, "backlog")}
+	c, _ := newGateClient(t, h)
+
+	got, err := c.Retry(context.Background(), "canvas", id)
+	require.NoError(t, err)
+	require.Equal(t, id.String(), got.ID)
+	require.Equal(t, "backlog", got.Status)
+	require.Equal(t, "/projects/canvas/tasks/"+id.String()+"/retry", h.path)
+	require.Equal(t, http.MethodPost, h.method)
+}
+
+func TestClient_Retry_NotFound(t *testing.T) {
+	h := &gateHandler{status: http.StatusNotFound, respBody: `{"error":"task not found"}`}
+	c, _ := newGateClient(t, h)
+
+	_, err := c.Retry(context.Background(), "canvas", uuid.New())
+	require.Error(t, err)
+	var nf *orchclient.ErrNotFound
+	require.True(t, errors.As(err, &nf), "want *ErrNotFound, got %T: %v", err, err)
+	require.Contains(t, nf.Message, "task not found")
+}
+
+func TestClient_Retry_Conflict(t *testing.T) {
+	h := &gateHandler{status: http.StatusConflict, respBody: `{"error":"task in status \"in_progress\", expected one of [failed]"}`}
+	c, _ := newGateClient(t, h)
+
+	_, err := c.Retry(context.Background(), "canvas", uuid.New())
+	require.Error(t, err)
+	var ws *orchclient.ErrWrongStatus
+	require.True(t, errors.As(err, &ws), "want *ErrWrongStatus, got %T: %v", err, err)
+	require.Contains(t, ws.Message, "failed")
+}
+
+func TestClient_Retry_BadRequest(t *testing.T) {
+	h := &gateHandler{status: http.StatusBadRequest, respBody: `{"error":"invalid task id"}`}
+	c, _ := newGateClient(t, h)
+
+	_, err := c.Retry(context.Background(), "canvas", uuid.New())
+	require.Error(t, err)
+	var bad *orchclient.ErrBadRequest
+	require.True(t, errors.As(err, &bad), "want *ErrBadRequest, got %T: %v", err, err)
+}
+
 // -- Header + path + method correctness ----------------------------------
 
 // TestAllMethodsSendJSONContentType drives each of the five methods
