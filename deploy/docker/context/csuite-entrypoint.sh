@@ -51,4 +51,20 @@ echo "csuite-entrypoint: starting persona=${CSUITE_AGENT} project=${DREM_PROJECT
 #   prompt:  /opt/csuite/prompts/${CSUITE_AGENT}.md
 # The poller derives these from -persona when the corresponding flags
 # are empty, so we only need to pass -persona here.
+#
+# DREM_CLAUDE_TIMEOUT (optional) overrides the poller's default 5-minute
+# per-invocation timeout. Accepts any Go duration string (e.g. "30m",
+# "1h", "90m"). Unset falls back to persona.DefaultClaudeTimeout
+# (5 min). Motivation: CTO-synthesis tasks routinely exceed 5 min of
+# claude -p wall-clock; 5 min bounds a single transactional reply but
+# is too tight for deep analysis passes. Per-persona tuning is done by
+# setting DREM_CLAUDE_TIMEOUT in the project compose template
+# (internal/projects/templates/project-compose.yml.tmpl).
+if [[ -n "${DREM_CLAUDE_TIMEOUT:-}" ]]; then
+    echo "csuite-entrypoint: claude-timeout=${DREM_CLAUDE_TIMEOUT} (overriding default)"
+    exec /usr/local/bin/csuite-persona \
+        -persona "${CSUITE_AGENT}" \
+        -claude-timeout "${DREM_CLAUDE_TIMEOUT}"
+fi
+
 exec /usr/local/bin/csuite-persona -persona "${CSUITE_AGENT}"

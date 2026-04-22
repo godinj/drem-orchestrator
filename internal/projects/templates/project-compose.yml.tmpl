@@ -208,6 +208,11 @@ services:
       DREM_ORCH_URL: "http://orch:8080"
       CSUITE_WATCHER_TOKEN:
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
+      # Extend the poller's per-claude-p timeout from the 5-minute
+      # default to 60 minutes so CTO-synthesis and deep-analysis tasks
+      # don't hit the default ceiling. See csuite-entrypoint.sh for
+      # the env-var contract.
+      DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.CsuiteHomeRoot}}/mike:/home/drem/.drem-csuite/mike:rw
@@ -225,6 +230,11 @@ services:
       DREM_ORCH_URL: "http://orch:8080"
       CSUITE_WATCHER_TOKEN:
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
+      # Extend the poller's per-claude-p timeout from the 5-minute
+      # default to 60 minutes so CTO-synthesis and deep-analysis tasks
+      # don't hit the default ceiling. See csuite-entrypoint.sh for
+      # the env-var contract.
+      DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.CsuiteHomeRoot}}/alex:/home/drem/.drem-csuite/alex:rw
@@ -242,6 +252,11 @@ services:
       DREM_ORCH_URL: "http://orch:8080"
       CSUITE_WATCHER_TOKEN:
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
+      # Extend the poller's per-claude-p timeout from the 5-minute
+      # default to 60 minutes so CTO-synthesis and deep-analysis tasks
+      # don't hit the default ceiling. See csuite-entrypoint.sh for
+      # the env-var contract.
+      DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.CsuiteHomeRoot}}/ross:/home/drem/.drem-csuite/ross:rw
@@ -259,6 +274,11 @@ services:
       DREM_ORCH_URL: "http://orch:8080"
       CSUITE_WATCHER_TOKEN:
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
+      # Extend the poller's per-claude-p timeout from the 5-minute
+      # default to 60 minutes so CTO-synthesis and deep-analysis tasks
+      # don't hit the default ceiling. See csuite-entrypoint.sh for
+      # the env-var contract.
+      DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.CsuiteHomeRoot}}/seth:/home/drem/.drem-csuite/seth:rw
