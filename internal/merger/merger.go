@@ -74,6 +74,14 @@ type Merger struct {
 	// inside WorkDir after a clean merge. Empty TestCmd means "no tests",
 	// which is treated as a passing test (documented behaviour mirroring
 	// internal/merge/DetectBuildCommand's no-op return).
+	//
+	// TODO(seth): tighten the contract so library-side silent-skip on
+	// empty TestCmd either requires an explicit opt-in
+	// (e.g. AllowSkipTests bool) or is removed entirely. The orch-side
+	// fail-close guard in merge_dispatch.go now refuses to spawn
+	// drem-merger with an empty --test-cmd, but the in-process library
+	// path still defaults to "no tests" for any caller that forgets to
+	// populate TestCmd. See Bug H follow-up plan.
 	TestCmd string
 
 	// TestTimeout overrides the default 10-minute bound on TestCmd.

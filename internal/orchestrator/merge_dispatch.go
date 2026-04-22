@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +13,30 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 )
+
+// errMergerSpawnSkippedEmptyTestCmd is the sentinel error dispatchMerge
+// returns when buildMergerArgv rejects an empty TestCommand. The fail-fast
+// guard lives inside dispatchMerge: when this sentinel surfaces, the task
+// has already been transitioned to FAILED with the operator-facing
+// failure_reason populated — executeMerge swallows the sentinel and
+// returns nil so the dispatchMerges tick loop does not log it as an
+// error.
+//
+// Fail-close framing (Seth): spawning drem-merger with an empty
+// --test-cmd would crash the container (the CLI rejects the empty
+// string). Silent-skipping tests in an automated merge pipeline is a
+// quality regression; refusing to spawn at all is the safe choice.
+//
+//nolint:errname // "err" prefix matches the package's existing sentinel naming.
+var errMergerSpawnSkippedEmptyTestCmd = errors.New(
+	"merger spawn skipped: project has no test command",
+)
+
+// mergerSpawnSkippedReason is the exact operator-facing reason string
+// written to task.Context["failure_reason"] when the fail-fast guard
+// trips. Kept as a constant so tests can assert on the string without
+// re-declaring it.
+const mergerSpawnSkippedReason = "merger spawn skipped: project has no test command"
 
 // MergeDispatcher is the orchestrator-internal contract for dispatching a
 // feature-into-main merge. In production it is satisfied by Orchestrator's
@@ -157,7 +183,25 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 		agentmonToken = os.Getenv("DREM_AGENTMON_TOKEN")
 	}
 
-	argv := buildMergerArgv(task, o.projectID.String(), defaultBranch, o.testGate.TestCommand, orchURL, agentmonToken)
+	argv, err := buildMergerArgv(task, o.projectID.String(), defaultBranch, o.testGate.TestCommand, orchURL, agentmonToken)
+	if err != nil {
+		// Fail-close: refuse to spawn drem-merger with argv it will
+		// reject at parseFlags. Transition the task to FAILED with a
+		// first-class operator-facing reason so the state surfaces on
+		// the task API without requiring a container log grep.
+		// See plans/bug-h-merger-crash-on-v17-advance.md (Option A).
+		if errors.Is(err, errMergerSpawnSkippedEmptyTestCmd) {
+			if failErr := o.failTask(task, mergerSpawnSkippedReason); failErr != nil {
+				return nil, fmt.Errorf("dispatchMerge: fail-fast: %w (fail transition: %v)", err, failErr)
+			}
+			o.logger.Warn("merger spawn skipped: project has no test command",
+				"task_id", task.ID,
+				"project_id", o.projectID,
+				"hint", "set test_command in drem.toml or register project from a working tree with go.mod/package.json/pyproject.toml/Cargo.toml")
+			return nil, err
+		}
+		return nil, fmt.Errorf("dispatchMerge: build argv: %w", err)
+	}
 
 	env := map[string]string{
 		"DREM_TASK_ID":        task.ID.String(),
@@ -271,7 +315,19 @@ var defaultIntegrationBranches = map[string]bool{
 // cmd/drem-merger/main.go::parseFlags for the required-flag set and
 // plans/merger-spawn-on-demand-impl.md for the rationale behind each
 // flag's provenance.
-func buildMergerArgv(task *model.Task, projectID, integrationBranch, testCmd, orchURL, agentmonToken string) []string {
+//
+// Returns errMergerSpawnSkippedEmptyTestCmd when testCmd is empty after
+// trimming whitespace. drem-merger's parseFlags (cmd/drem-merger/main.go)
+// rejects empty --test-cmd with exit code 1, producing a container
+// crash-loop that is invisible from the orch logs. Failing here instead
+// surfaces a first-class failure_reason on the task and skips the spawn
+// entirely. See plans/bug-h-merger-crash-on-v17-advance.md (Option A,
+// fail-close framing) — the library-side silent-skip contract in
+// internal/merger/merger.go is the complementary out-of-scope follow-up.
+func buildMergerArgv(task *model.Task, projectID, integrationBranch, testCmd, orchURL, agentmonToken string) ([]string, error) {
+	if strings.TrimSpace(testCmd) == "" {
+		return nil, errMergerSpawnSkippedEmptyTestCmd
+	}
 	argv := []string{
 		"--feature-branch", task.WorktreeBranch,
 		"--project", projectID,
@@ -286,7 +342,7 @@ func buildMergerArgv(task *model.Task, projectID, integrationBranch, testCmd, or
 	if integrationBranch != "" && !defaultIntegrationBranches[integrationBranch] {
 		argv = append(argv, "--integration-branch", integrationBranch)
 	}
-	return argv
+	return argv, nil
 }
 
 // awaitMergerExit polls Inspect until the merger container transitions to

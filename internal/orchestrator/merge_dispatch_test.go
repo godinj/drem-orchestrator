@@ -259,3 +259,107 @@ func itoaExit(n int) string {
 	}
 	return string(buf[i:])
 }
+
+// TestBuildMergerArgv_EmptyTestCmdRejected covers Bug H's fail-close
+// guard. drem-merger's parseFlags rejects empty --test-cmd with exit 1,
+// so orchestrator must refuse to spawn rather than crash-loop. See
+// plans/bug-h-merger-crash-on-v17-advance.md.
+//
+// Three assertions:
+//  1. buildMergerArgv returns errMergerSpawnSkippedEmptyTestCmd for
+//     empty TestCommand, whitespace-only TestCommand, and tab.
+//  2. dispatchMerge with empty TestCommand does NOT call the spawner.
+//  3. The task is transitioned to FAILED with failure_reason set to
+//     the operator-visible string Seth approved.
+func TestBuildMergerArgv_EmptyTestCmdRejected(t *testing.T) {
+	t.Run("unit: buildMergerArgv returns sentinel on empty testCmd", func(t *testing.T) {
+		task := &model.Task{
+			ID:             uuid.New(),
+			WorktreeBranch: "feature/empty-test-cmd",
+		}
+		for _, tc := range []struct {
+			name    string
+			testCmd string
+		}{
+			{"empty", ""},
+			{"whitespace", "   "},
+			{"tab", "\t"},
+			{"newline", "\n"},
+		} {
+			tc := tc
+			t.Run(tc.name, func(t *testing.T) {
+				argv, err := buildMergerArgv(task, "proj-id", "main", tc.testCmd, "http://orch", "tok")
+				require.Nil(t, argv)
+				require.ErrorIs(t, err, errMergerSpawnSkippedEmptyTestCmd)
+			})
+		}
+	})
+
+	t.Run("unit: buildMergerArgv accepts non-empty testCmd", func(t *testing.T) {
+		task := &model.Task{
+			ID:             uuid.New(),
+			WorktreeBranch: "feature/ok",
+		}
+		argv, err := buildMergerArgv(task, "proj-id", "main", "go test ./...", "http://orch", "tok")
+		require.NoError(t, err)
+		require.NotEmpty(t, argv)
+	})
+
+	t.Run("integration: dispatchMerge fails task without spawning", func(t *testing.T) {
+		o, fake := dispatchMergeTestRig(t)
+		// Override test gate: simulate a project whose drem.toml has no
+		// test_command and whose main worktree lacks any known project
+		// marker (so inference returned empty).
+		o.testGate = TestGateConfig{TestCommand: ""}
+
+		task := &model.Task{
+			ID:             uuid.New(),
+			ProjectID:      o.projectID,
+			Title:          "empty test cmd guard",
+			Status:         model.StatusMerging,
+			WorktreeBranch: "feature/no-test-cmd",
+		}
+		require.NoError(t, o.db.Create(task).Error)
+
+		res, err := o.dispatchMerge(context.Background(), task)
+		require.Nil(t, res)
+		require.ErrorIs(t, err, errMergerSpawnSkippedEmptyTestCmd,
+			"dispatchMerge must surface the sentinel so executeMerge swallows it cleanly")
+
+		require.Empty(t, fake.spawnCalls,
+			"fail-close: spawner must NOT be invoked when TestCommand is empty")
+
+		// Reload the task and verify the FAILED transition + failure_reason.
+		var reloaded model.Task
+		require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+		require.Equal(t, model.StatusFailed, reloaded.Status,
+			"task must be transitioned to FAILED")
+		require.NotNil(t, reloaded.Context)
+		reason, ok := reloaded.Context["failure_reason"].(string)
+		require.True(t, ok, "failure_reason must be populated on task.Context")
+		require.Equal(t, "merger spawn skipped: project has no test command", reason,
+			"failure_reason must match the Seth-approved operator-facing phrasing")
+	})
+
+	t.Run("integration: executeMerge swallows the sentinel", func(t *testing.T) {
+		o, fake := dispatchMergeTestRig(t)
+		o.testGate = TestGateConfig{TestCommand: ""}
+
+		task := &model.Task{
+			ID:             uuid.New(),
+			ProjectID:      o.projectID,
+			Title:          "executeMerge swallow",
+			Status:         model.StatusMerging,
+			WorktreeBranch: "feature/swallow",
+		}
+		require.NoError(t, o.db.Create(task).Error)
+
+		// executeMerge must return nil — not a wrapped error — so the
+		// dispatchMerges tick loop does not emit a spurious error log
+		// for a task that was handled cleanly (FAILED + reason set).
+		err := o.executeMerge(task)
+		require.NoError(t, err,
+			"executeMerge must swallow errMergerSpawnSkippedEmptyTestCmd: task is already FAILED")
+		require.Empty(t, fake.spawnCalls)
+	})
+}

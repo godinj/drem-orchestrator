@@ -593,3 +593,78 @@ func TestDefaultTestGateConfig(t *testing.T) {
 		t.Errorf("expected empty CompileCommand by default, got %q", cfg.CompileCommand)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// ApplyTestCommandInference — Bug H Option A startup wiring
+// ---------------------------------------------------------------------------
+
+// TestInferTestCommand_AppliedAtStartup covers the bootstrap-time
+// inference wiring. When drem.toml leaves test_command empty but the
+// project's main worktree contains a known build marker (go.mod,
+// package.json, etc.), the orchestrator populates TestGateConfig
+// before the first merge runs. This prevents drem-merger's
+// parseFlags from rejecting an empty --test-cmd and the fail-close
+// guard in dispatchMerge from tripping for any project whose type is
+// inferable.
+//
+// See plans/bug-h-merger-crash-on-v17-advance.md (Option A, inference
+// step).
+func TestInferTestCommand_AppliedAtStartup(t *testing.T) {
+	t.Run("go project gets 'go test ./...'", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o := &Orchestrator{logger: testLogger()}
+		o.SetTestGateConfig(TestGateConfig{TestCommand: ""})
+		o.ApplyTestCommandInference(dir)
+		if got := o.testGate.TestCommand; got != "go test ./..." {
+			t.Errorf("expected 'go test ./...' after inference, got %q", got)
+		}
+	})
+
+	t.Run("node project gets 'npm test'", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o := &Orchestrator{logger: testLogger()}
+		o.SetTestGateConfig(TestGateConfig{TestCommand: ""})
+		o.ApplyTestCommandInference(dir)
+		if got := o.testGate.TestCommand; got != "npm test" {
+			t.Errorf("expected 'npm test', got %q", got)
+		}
+	})
+
+	t.Run("explicit test_command from drem.toml wins over inference", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		o := &Orchestrator{logger: testLogger()}
+		o.SetTestGateConfig(TestGateConfig{TestCommand: "make test"})
+		o.ApplyTestCommandInference(dir)
+		if got := o.testGate.TestCommand; got != "make test" {
+			t.Errorf("inference must not override explicit config; got %q", got)
+		}
+	})
+
+	t.Run("unknown project type leaves TestCommand empty (guard trips later)", func(t *testing.T) {
+		dir := t.TempDir() // no go.mod / package.json / etc.
+		o := &Orchestrator{logger: testLogger()}
+		o.SetTestGateConfig(TestGateConfig{TestCommand: ""})
+		o.ApplyTestCommandInference(dir)
+		if got := o.testGate.TestCommand; got != "" {
+			t.Errorf("unknown project type must leave TestCommand empty, got %q", got)
+		}
+	})
+
+	t.Run("empty project dir is a no-op", func(t *testing.T) {
+		o := &Orchestrator{logger: testLogger()}
+		o.SetTestGateConfig(TestGateConfig{TestCommand: ""})
+		o.ApplyTestCommandInference("")
+		if got := o.testGate.TestCommand; got != "" {
+			t.Errorf("empty dir must not change TestCommand, got %q", got)
+		}
+	})
+}

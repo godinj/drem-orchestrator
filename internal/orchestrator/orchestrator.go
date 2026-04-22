@@ -273,6 +273,39 @@ func (o *Orchestrator) SetTestGateConfig(cfg TestGateConfig) {
 	o.testGate = cfg
 }
 
+// ApplyTestCommandInference populates TestGateConfig.TestCommand from
+// inferTestCommand(projectDir) when the currently-configured value is
+// empty. projectDir is typically the main worktree path (the checkout of
+// the default branch) so well-known build-system files (go.mod,
+// package.json, pyproject.toml, Cargo.toml) are discoverable.
+//
+// This is the startup-time complement to Bug H's fail-close guard in
+// dispatchMerge: for Go projects that leave test_command unset in
+// drem.toml, inference supplies "go test ./..." before the first merge
+// attempt so the guard does not trip. For non-Go projects where
+// inference returns empty, the guard takes over and refuses to spawn
+// the merger with a first-class failure_reason.
+//
+// Safe to call when the project dir is empty or unknown — the inference
+// helper returns "" and TestCommand stays unset. Safe to call multiple
+// times — later calls with a non-empty config value win.
+// See plans/bug-h-merger-crash-on-v17-advance.md (Option A).
+func (o *Orchestrator) ApplyTestCommandInference(projectDir string) {
+	if o.testGate.TestCommand != "" || projectDir == "" {
+		return
+	}
+	inferred := inferTestCommand(projectDir)
+	if inferred == "" {
+		o.logger.Info("test command inference found no known project markers",
+			"project_dir", projectDir,
+			"hint", "set test_command in drem.toml if this project has tests")
+		return
+	}
+	o.testGate.TestCommand = inferred
+	o.logger.Info("test command inferred from project markers",
+		"project_dir", projectDir, "test_command", inferred)
+}
+
 // SetInteractiveSupervisorConfig sets the model/effort flags used when
 // spawning interactive supervisor sessions via tmux.
 func (o *Orchestrator) SetInteractiveSupervisorConfig(cfg model.AgentCLIConfig) {

@@ -1,8 +1,9 @@
 # Bug H — Merger exits code=1 with `missing required flags: [--test-cmd]`
 
-**Status**: OPEN. Investigation complete; fix not yet greenlit. Plan
-filed to capture root cause and fix options so operator can pick an
-implementation path.
+**Status**: MERGED (2026-04-22). Option A shipped with Seth's
+fail-close framing correction applied. See "Final shape" at the
+bottom for what actually landed, LOC delta, test coverage, and the
+library-side follow-up Seth will file separately.
 
 **Origin**: 2026-04-22. Surfaced during live dogfood of the new
 v15/v16 retry CLI (Bug F follow-up). v17 parent
@@ -190,3 +191,114 @@ lands. Without A, though, the underlying mismatch remains.
 ## Operator decision point
 
 Pick A+D, B alone, or A+B+D. Do NOT ship C.
+
+## Final shape (merged 2026-04-22)
+
+**Option chosen**: A — inference + fail-fast guard. Seth reviewed and
+approved with one framing correction: **fail-close, not fail-open.**
+Silent test-skipping inside an automated merge pipeline is a silent
+quality regression — the worst class of bug because nobody notices
+until a latent failure ships. The merger CLI's rejection of empty
+`--test-cmd` is therefore **correct** and was left untouched;
+`cmd/drem-merger/main.go::parseFlags` still enforces a non-empty
+`--test-cmd`. The orch-side fix now refuses to spawn the merger with
+an empty argv value and surfaces a first-class `failure_reason` on
+the task instead.
+
+Option D (verbose merger exit logging) was not shipped in this
+commit sequence — the fail-close guard catches this particular
+contract mismatch before any container spawn happens, so the
+observability gap D addresses is no longer exercised on the Bug H
+code path. D remains a reasonable follow-up for the next
+unknown-class merger crash.
+
+### Files changed
+
+- `internal/orchestrator/merge_dispatch.go` — new
+  `errMergerSpawnSkippedEmptyTestCmd` sentinel + exported
+  `mergerSpawnSkippedReason` constant; `buildMergerArgv` signature
+  extended to `([]string, error)` and now rejects whitespace-only
+  `--test-cmd` values; `dispatchMerge` recognizes the sentinel,
+  calls `failTask` with Seth's approved reason string, and returns
+  the sentinel for executeMerge to swallow.
+- `internal/orchestrator/merge_execution.go` — `executeMerge` now
+  matches `errors.Is(err, errMergerSpawnSkippedEmptyTestCmd)` and
+  returns nil so the `dispatchMerges` tick loop does not log a
+  spurious error for a task that was handled cleanly (FAILED +
+  reason populated).
+- `internal/orchestrator/orchestrator.go` — new
+  `ApplyTestCommandInference(projectDir string)` method. When
+  `TestGateConfig.TestCommand` is empty, looks for `go.mod`,
+  `package.json`, `pyproject.toml`, `Cargo.toml` in projectDir and
+  populates the field via the existing `inferTestCommand` helper.
+- `cmd/drem/main.go` — after `SetTestGateConfig`, calls
+  `wt.MainWorktreePath()` and passes the result to
+  `ApplyTestCommandInference` when `cfg.TestCommand == ""`. For Go
+  projects registered before `test_command` was documented in
+  drem.toml this yields `"go test ./..."` automatically.
+- `internal/merger/merger.go` — `//TODO(seth)` comment on the
+  `TestCmd` field flagging the library-side silent-skip contract
+  as out-of-scope for this worktree and slated for a follow-up.
+
+**LOC delta**: roughly +110 / -3 across the five files above (new
+sentinel, new method, new wiring, updated argv signature, doc-line
+comment on TestCmd).
+
+### Test coverage added
+
+- `TestBuildMergerArgv_EmptyTestCmdRejected`
+  (`internal/orchestrator/merge_dispatch_test.go`). Four subtests:
+  (1) `buildMergerArgv` returns the sentinel for empty /
+  whitespace / tab / newline TestCommand; (2) `buildMergerArgv`
+  accepts a non-empty value; (3) `dispatchMerge` with empty
+  TestCommand does NOT invoke the spawner and transitions the task
+  to FAILED with `failure_reason == "merger spawn skipped: project
+  has no test command"`; (4) `executeMerge` swallows the sentinel
+  so no error surfaces upward to the tick loop.
+- `TestInferTestCommand_AppliedAtStartup`
+  (`internal/orchestrator/test_gate_test.go`). Five subtests
+  covering Go inference, Node inference, explicit-config wins over
+  inference, unknown-project-type leaves TestCommand empty (and
+  the guard trips later), and an empty projectDir no-ops safely.
+
+Full repo `go test ./...` stays GREEN.
+
+### Out-of-scope follow-up
+
+**Library-side silent-skip contract tightening.**
+`internal/merger/merger.go`'s `TestCmd` field documents "empty
+means no tests, rollback-safe default for unknown project types."
+This is itself a fail-open default that contradicts the CLI
+validator's fail-close posture. Seth approved keeping the library
+unchanged in this worktree and filing a separate follow-up to:
+
+- Either introduce an explicit opt-in
+  (`Merger.AllowSkipTests bool`, default false) so any caller that
+  sets `TestCmd: ""` without setting `AllowSkipTests: true` gets a
+  construction-time error.
+- Or remove the silent-skip path entirely and require every caller
+  to supply a non-empty TestCmd.
+
+The `//TODO(seth)` comment added to the field in this commit
+sequence marks the follow-up so the next reviewer sees the link.
+No changes to `internal/merger/merger.go` beyond that comment.
+
+### What the operator sees post-merge
+
+For v17 (and v15/v16 once retried), the next tick that finds the
+task in `merging` will:
+
+1. Load the (now-inferred or operator-supplied) TestCommand. For
+   the drem-orchestrator project itself, inference on the main
+   worktree finds `go.mod` and yields `"go test ./..."` — merger
+   spawns and runs tests as expected.
+2. If inference still returns empty (non-Go / non-Node / non-Python
+   / non-Rust project, or a project with no markers), the
+   fail-close guard transitions the task to FAILED with
+   `failure_reason == "merger spawn skipped: project has no test
+   command"`. Operator fixes the `drem.toml` and retries via the
+   existing Bug F retry CLI.
+
+No more `missing required flags: [--test-cmd]` container crashes;
+no more `"merge aborted: misc exit from merger (code=1)"` orch
+error with no context.

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -35,6 +36,13 @@ func (o *Orchestrator) dispatchMerges() {
 func (o *Orchestrator) executeMerge(task *model.Task) error {
 	result, err := o.mergeDispatch(context.Background(), task)
 	if err != nil {
+		// Fail-close: dispatchMerge refused to spawn because TestCommand
+		// is empty and has already transitioned the task to FAILED with
+		// the operator-facing reason. No further state-machine work is
+		// needed here; returning nil avoids a spurious error log.
+		if errors.Is(err, errMergerSpawnSkippedEmptyTestCmd) {
+			return nil
+		}
 		return fmt.Errorf("execute merge: %w", err)
 	}
 

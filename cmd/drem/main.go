@@ -350,6 +350,22 @@ func main() {
 		ScopedTests:    scopedTests,
 		TestTimeout:    cfg.TestTimeout,
 	})
+	// When drem.toml leaves test_command empty, infer it from the main
+	// worktree (go.mod → "go test ./...", package.json → "npm test",
+	// etc.). Prevents drem-merger crash-looping with
+	// `missing required flags: [--test-cmd]` for Go projects registered
+	// before test_command was documented in drem.toml. The fail-close
+	// guard in dispatchMerge catches the remaining non-Go, non-Node,
+	// non-Python, non-Rust cases. See
+	// plans/bug-h-merger-crash-on-v17-advance.md (Option A).
+	if cfg.TestCommand == "" {
+		if mainWT, mainErr := wt.MainWorktreePath(); mainErr == nil {
+			orch.ApplyTestCommandInference(mainWT)
+		} else {
+			slog.Debug("test command inference skipped: no main worktree path",
+				"error", mainErr)
+		}
+	}
 	orch.SetSkipConstraintGate(cfg.SkipConstraintGate)
 
 	// Plumb the in-cluster orchestrator URL and agentmon shared token
