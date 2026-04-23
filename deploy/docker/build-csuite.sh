@@ -38,13 +38,27 @@ PROMPT_DST="deploy/docker/context/csuite-prompts"
 echo ">> staging C-Suite prompts -> ${PROMPT_DST}"
 rm -rf "${PROMPT_DST}"
 mkdir -p "${PROMPT_DST}"
-for persona in mike alex seth kyle; do
+# Mike/Alex/Seth prompts stage 1:1 — their source files are already
+# container-shaped (poller runtime, outbox-file output contract).
+# Kyle is the exception: the canonical docs/csuite-agents/prompts/
+# kyle.md is the interactive-runtime variant (TTY, chat, stdout) and
+# would actively mis-train the poller. The container runtime reads
+# docs/csuite-agents/prompts/kyle-container.md instead, staged under
+# the filename kyle.md so the image layout stays uniform
+# (/opt/csuite/prompts/<persona>.md). See
+# plans/kyle-container-prompt-split.md.
+for persona in mike alex seth; do
     if [[ ! -f "${PROMPT_SRC}/${persona}.md" ]]; then
         echo "error: ${PROMPT_SRC}/${persona}.md is missing" >&2
         exit 1
     fi
     cp "${PROMPT_SRC}/${persona}.md" "${PROMPT_DST}/${persona}.md"
 done
+if [[ ! -f "${PROMPT_SRC}/kyle-container.md" ]]; then
+    echo "error: ${PROMPT_SRC}/kyle-container.md is missing" >&2
+    exit 1
+fi
+cp "${PROMPT_SRC}/kyle-container.md" "${PROMPT_DST}/kyle.md"
 
 # csuite-run.sh is the PID-1 script baked into drem-csuite-base. It must
 # already exist in the build context (checked into git).
