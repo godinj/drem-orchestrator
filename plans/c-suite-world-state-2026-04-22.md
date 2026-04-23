@@ -212,11 +212,16 @@ Seth pass-2 §5 listed 14 ambiguities. Operator answered all 14 on 2026-04-22. A
 
 ---
 
-## §7. Q2 pod sequence (proposed, awaiting operator ratification)
+## §7. Q2 pod sequence (operator-ratified 2026-04-22)
 
 From Seth pass-2 §6. Dependency-ordered. Load-bearing caveats removed per operator.
 
-1. **Pod 1 — Reliability triage + dead-code retirement (Week 1)**: watcher audit-token compose fix, DB backup/restore, resource caps (compose template has zero `deploy.resources.limits` — confirmed 2026-04-22), Bug-J merger preserve-on-failure prototype, **OpenCode + `internal/worktreehost/` retirement** (~1,500–2,000 LOC removal; see §2a). If capacity becomes tight mid-flight, spin retirement into Pod 1.5.
+1. **Pod 1 — Reliability triage + dead-code retirement (Week 1)**:
+   - ✅ **watcher audit-token compose fix** — landed 2026-04-22 (commit `5b81714`). Template bind-mount + `DREM_AUDIT_TOKEN_PATH` env + unit test. Watcher operational; startup rescan delivered 31 backlog outbox files.
+   - ✅ **Bug-J merger preserve-workdir-mount-point fix** — landed 2026-04-22 (commit `a525e0c`). `resetWorkDir` clears contents not the mount point; `cloneBranch` clones into `.`. Image rebuilt + pushed.
+   - ⏳ DB backup/restore — not started.
+   - ⏳ resource caps (compose template has zero `deploy.resources.limits` — confirmed 2026-04-22) — not started.
+   - ⏳ **OpenCode + `internal/worktreehost/` retirement** (~1,500–2,000 LOC removal; see §2a). If capacity becomes tight mid-flight, spin retirement into Pod 1.5.
 2. **Pod 2 — Metrics service + ops-relay (Week 2, parallel with Pod 1)**: Mimir container, Prom clients in agentmon/orch/sglang, grafana dashboards, **plus ops-relay scaffold** (orch operational-issue events → csuite-watcher → Mike inbox). Ops-relay unblocks §3c audit feed AND §2b Q3 Mike routing.
 3. **Pod 3 — Gate delegation Tier 1+2 (Weeks 3–4)**: Mike auto-approves `testing_ready`, Seth auto-approves `test_review`, audit feed, reverse CLI, kill-switch, operator daily-review surface.
 4. **Pod 4 — TUI binary + container split (Weeks 4–5, parallel with Pod 3)**: extract `cmd/drem-tui`, containerize, `docker exec` drill-in.
