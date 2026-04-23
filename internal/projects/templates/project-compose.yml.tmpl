@@ -153,13 +153,29 @@ services:
       # volume mounted at /var/lib/watcher below. See
       # plans/csuite-watcher-outbox-routing.md §Failure modes.
       CSUITE_WATCHER_DB_PATH: "/var/lib/watcher/deliveries.db"
-      # Shared secret for /deliver authentication. Passed from the host
-      # env at compose-up time (docker compose inherits unset values
-      # from the shell). Deliberately distinct from DREM_BEARER_TOKEN:
-      # different audiences, never share a secret. Generate once via
-      # `openssl rand -hex 32 > ~/.drem/csuite-watcher.token && chmod 600`
-      # then `export CSUITE_WATCHER_TOKEN=$(cat ~/.drem/csuite-watcher.token)`.
+      # Shared secret for /deliver authentication. Resolved by
+      # cmd/csuite-watcher/serve.go loadDeliverToken() in this order:
+      # (1) CSUITE_WATCHER_TOKEN env, (2) CSUITE_WATCHER_TOKEN_FILE.
+      # The file-fallback below is the primary path now — the
+      # valueless env-inherit form depends on the operator having
+      # exported the token in the host shell at `docker compose up`
+      # time, which is a recurring foot-gun (scoreboard item 33:
+      # pre-fix symptom was every POST /deliver returning 401 after
+      # an operator-forgot-export and every persona→persona delivery
+      # falling back to the 5-minute rescan). Deliberately distinct
+      # from DREM_BEARER_TOKEN: different audiences, never share a
+      # secret. Generate once via
+      # `openssl rand -hex 32 > ~/.drem/csuite-watcher.token && chmod 600`.
       CSUITE_WATCHER_TOKEN:
+      # File-fallback path for CSUITE_WATCHER_TOKEN. Points at the
+      # same /run/secrets/csuite-watcher-token bind-mount the
+      # personas use, so a single host-side token file
+      # (~/.drem/csuite-watcher.token) feeds every side of the
+      # signal. Independent of host shell env state at compose-up
+      # time. See plans/csuite-watcher-outbox-routing.md and
+      # cmd/csuite-persona/main.go:81-90 for the mirror-image
+      # resolution path.
+      CSUITE_WATCHER_TOKEN_FILE: "/run/secrets/csuite-watcher-token"
       # Audit token path for /v1/audit/* endpoints (consumed by
       # `drem csuite audit` CLI). Points at the same shared-secret file
       # the personas bind-mount read-only below; the watcher binary
@@ -206,13 +222,28 @@ services:
   # Persona signal wiring (plans/csuite-watcher-outbox-routing.md §1-3
   # and commit 7b): each persona POSTs to http://csuite-watcher:8090/deliver
   # after a successful outbox write so the watcher can route the reply
-  # into the addressed persona's inbox. CSUITE_WATCHER_TOKEN is passed
-  # through from the host shell env at `docker compose up` time — the
-  # valueless form in the template means "inherit from host env". The
-  # token is shared across every persona and the watcher; operator
+  # into the addressed persona's inbox.
+  #
+  # Both sides of the signal (every persona AND the watcher itself)
+  # resolve CSUITE_WATCHER_TOKEN via env-or-file:
+  #   1. CSUITE_WATCHER_TOKEN env (valueless form below, inherits from
+  #      host shell at `docker compose up` time) — kept for backward
+  #      compat.
+  #   2. CSUITE_WATCHER_TOKEN_FILE pointing at the
+  #      /run/secrets/csuite-watcher-token bind-mount — the primary
+  #      path. Independent of host shell state: the operator writes
+  #      ~/.drem/csuite-watcher.token once and the file-fallback picks
+  #      it up on every compose-up regardless of whether
+  #      CSUITE_WATCHER_TOKEN was exported. Scoreboard item 33 closed
+  #      the host-shell dependency for the personas in an earlier
+  #      commit; the matching watcher-side mitigation lives in
+  #      cmd/csuite-watcher/serve.go loadDeliverToken().
+  #
+  # The token is shared across every persona and the watcher; operator
   # generates once via `openssl rand -hex 32 > ~/.drem/csuite-watcher.token`
-  # then exports CSUITE_WATCHER_TOKEN=$(cat ~/.drem/csuite-watcher.token)
-  # before `docker compose up`.
+  # then (optionally, for env path 1) exports
+  # CSUITE_WATCHER_TOKEN=$(cat ~/.drem/csuite-watcher.token) before
+  # `docker compose up`. If the export is forgotten, path 2 covers it.
 
   csuite-mike:
     image: {{index .CsuiteImages "mike"}}

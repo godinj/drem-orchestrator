@@ -766,6 +766,58 @@ func TestRender_CsuiteWatcherTokenEnvIsDeclared(t *testing.T) {
 		env["CSUITE_WATCHER_DB_PATH"])
 }
 
+// TestRender_CsuiteWatcherTokenFileIsWired asserts the csuite-watcher
+// service declares CSUITE_WATCHER_TOKEN_FILE pointing at the
+// /run/secrets/csuite-watcher-token bind-mount so
+// cmd/csuite-watcher/serve.go loadDeliverToken() can fall back to
+// the file when the host-shell CSUITE_WATCHER_TOKEN env var is
+// empty at `docker compose up` time. Without this wiring every POST
+// /deliver used to return 401 and every persona→persona delivery
+// fell back to the 5-minute rescan. Mirror of
+// TestRender_CsuiteWatcherAuditTokenIsWired for the deliver token.
+func TestRender_CsuiteWatcherTokenFileIsWired(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+			Volumes     []string          `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	svc, ok := parsed.Services["csuite-watcher"]
+	require.True(t, ok, "csuite-watcher service missing from rendered compose")
+
+	require.Equal(t, "/run/secrets/csuite-watcher-token",
+		svc.Environment["CSUITE_WATCHER_TOKEN_FILE"],
+		"csuite-watcher must set CSUITE_WATCHER_TOKEN_FILE to the mount "+
+			"path so loadDeliverToken can resolve the token when the env "+
+			"var is empty")
+
+	// The matching bind-mount must still be present — the env var is
+	// meaningless without the file it points at. The audit-token test
+	// already covers presence via a different env var; assert again
+	// here so a future refactor that renames one doesn't silently
+	// break the other.
+	var found bool
+	for _, v := range svc.Volumes {
+		if strings.Contains(v, "/run/secrets/csuite-watcher-token") {
+			require.Contains(t, v, ":ro",
+				"csuite-watcher token bind-mount must be read-only")
+			found = true
+			break
+		}
+	}
+	require.True(t, found,
+		"csuite-watcher missing /run/secrets/csuite-watcher-token "+
+			"bind-mount — CSUITE_WATCHER_TOKEN_FILE would point at a "+
+			"non-existent path")
+}
+
 // TestRender_HostDataDirBindMountIsWired asserts the orch service
 // bind-mounts HostDataDir onto /var/lib/drem read-write, replacing
 // the pre-pivot `drem-<project>-db` named volume. Host bind-mount

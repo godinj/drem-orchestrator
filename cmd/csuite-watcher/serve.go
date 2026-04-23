@@ -70,6 +70,48 @@ func auditTokenPath() string {
 	return expandTilde(DefaultAuditTokenPath)
 }
 
+// loadDeliverToken resolves the shared secret used to authenticate
+// POST /deliver (the outbox-routing fast path that matches watcher's
+// X-Csuite-Token header against the persona's token). Resolution
+// order mirrors cmd/csuite-persona/main.go:81-90 so both sides of
+// the call agree on where the token lives when the host shell env
+// is not populated:
+//
+//  1. CSUITE_WATCHER_TOKEN (env) — the legacy host-shell passthrough.
+//     Docker compose inherits unset values from the shell at
+//     `docker compose up` time; if the operator exported
+//     CSUITE_WATCHER_TOKEN before bringing the stack up, this wins.
+//  2. CSUITE_WATCHER_TOKEN_FILE (env pointing at a mounted file) —
+//     the file-fallback path. The persona service blocks bind-mount
+//     ~/.drem/csuite-watcher.token at /run/secrets/csuite-watcher-token
+//     read-only and point CSUITE_WATCHER_TOKEN_FILE at that path; the
+//     watcher picks up the same file via its own bind-mount. This
+//     survives host-shell gaps between compose-ups (scoreboard item
+//     33 — pre-fix symptom: every POST /deliver returned 401 because
+//     the valueless env-inherit form landed empty, and every
+//     persona→persona delivery fell back to the 5-minute rescan).
+//
+// An empty resolution (neither env var populated, or the file exists
+// but trims to "") surfaces as a non-nil error so the caller can
+// fail-closed at startup rather than silently booting a watcher that
+// would reject every signal.
+func loadDeliverToken() (string, error) {
+	token := os.Getenv("CSUITE_WATCHER_TOKEN")
+	if token == "" {
+		if path := os.Getenv("CSUITE_WATCHER_TOKEN_FILE"); path != "" {
+			b, rerr := os.ReadFile(path) //nolint:gosec // path is operator-controlled
+			if rerr != nil {
+				return "", fmt.Errorf("read CSUITE_WATCHER_TOKEN_FILE=%q: %w", path, rerr)
+			}
+			token = strings.TrimSpace(string(b))
+		}
+	}
+	if token == "" {
+		return "", fmt.Errorf("CSUITE_WATCHER_TOKEN not configured: set env or CSUITE_WATCHER_TOKEN_FILE")
+	}
+	return token, nil
+}
+
 // loadAuditToken reads the audit token from path, enforcing file
 // permissions of 0600 (owner-read/write only). Anything else —
 // missing file, world-readable, or the expanded path does not exist —
@@ -226,8 +268,29 @@ func runServe(args []string, stderr io.Writer) int {
 		return 1
 	}
 
+	// Scoreboard item 33 (watcher-side mitigation): resolve the /deliver
+	// token via env-or-file instead of a bare os.Getenv. The valueless
+	// CSUITE_WATCHER_TOKEN: form in the compose template depends on the
+	// host shell having the env var exported at `docker compose up` time;
+	// if the operator forgot, the env lands empty and every POST /deliver
+	// used to return 401 "watcher token not configured". The file-fallback
+	// (CSUITE_WATCHER_TOKEN_FILE, backed by a read-only bind-mount the
+	// template now wires by default) makes the resolution independent of
+	// host shell state. Mirrors cmd/csuite-persona/main.go:81-90.
+	deliverToken, err := loadDeliverToken()
+	if err != nil {
+		fmt.Fprintf(stderr, "error: load deliver token: %v\n", err)
+		return 1
+	}
+	if os.Getenv("CSUITE_WATCHER_TOKEN") != "" {
+		fmt.Fprintln(stderr, "csuite-watcher: loaded watcher token from env CSUITE_WATCHER_TOKEN")
+	} else {
+		fmt.Fprintf(stderr, "csuite-watcher: loaded watcher token from file %q\n",
+			os.Getenv("CSUITE_WATCHER_TOKEN_FILE"))
+	}
+
 	deliverCfg := deliver.Config{
-		Token:      os.Getenv("CSUITE_WATCHER_TOKEN"),
+		Token:      deliverToken,
 		Ledger:     ledger,
 		AuditToken: auditToken,
 	}
