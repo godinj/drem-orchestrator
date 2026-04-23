@@ -1,5 +1,5 @@
 // Package persona hosts the inbox-driven headless poller used by the
-// C-Suite persona containers (mike, alex, seth).
+// C-Suite persona containers (mike, alex, seth, kyle).
 //
 // # Architectural shape
 //
@@ -65,8 +65,12 @@ const DefaultClaudeTimeout = 5 * time.Minute
 // is not stuck on a permanently-bad message.
 const DefaultMaxFailures = 3
 
-// AllowedPersonas lists every valid value for Config.Persona.
-var AllowedPersonas = []string{"mike", "alex", "seth"}
+// AllowedPersonas lists every valid value for Config.Persona. Kyle (the
+// CEO persona) runs the same csuite-persona poller as the other three
+// but with a per-project :rw bind-mount on the orch-plans tree (the
+// compose template enforces that difference, not this package). See
+// plans/container-kyle-transition.md.
+var AllowedPersonas = []string{"mike", "alex", "seth", "kyle"}
 
 // Config carries every runtime knob for the poller. Zero values mean
 // "derive from Persona" where applicable.

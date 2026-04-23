@@ -32,6 +32,7 @@ func fullTemplateData(name, lang string) projects.TemplateData {
 			"mike": "localhost:5000/drem-csuite-mike:latest",
 			"alex": "localhost:5000/drem-csuite-alex:latest",
 			"seth": "localhost:5000/drem-csuite-seth:latest",
+			"kyle": "localhost:5000/drem-csuite-kyle:latest",
 		},
 		BareRepoPath: "/home/dev/git/" + name + ".git",
 		SharedToken:  "abc123def456",
@@ -238,7 +239,7 @@ func TestRender_CsuiteWatcherTokenPathIsWired(t *testing.T) {
 		} `yaml:"services"`
 	}
 	require.NoError(t, yaml.Unmarshal(out, &parsed))
-	for _, p := range []string{"csuite-mike", "csuite-alex", "csuite-seth"} {
+	for _, p := range []string{"csuite-mike", "csuite-alex", "csuite-seth", "csuite-kyle"} {
 		svc, ok := parsed.Services[p]
 		require.True(t, ok, "service %s missing from rendered compose", p)
 		require.Equal(t, "/run/secrets/csuite-watcher-token",
@@ -256,6 +257,99 @@ func TestRender_CsuiteWatcherTokenPathIsWired(t *testing.T) {
 		}
 		require.True(t, found, "%s missing csuite-watcher token mount", p)
 	}
+}
+
+// TestRender_CsuiteKyleServicePresent asserts that the csuite-kyle
+// service block renders with the expected shape — same as the other
+// three personas PLUS the Kyle-only :rw orch-plans bind-mount. Kyle is
+// the C-Suite's plan-author; the compose template breaks the strict
+// persona-block symmetry intentionally to grant him write access to
+// plans/ in the bare-repo master working tree without delegating
+// through a worker. See plans/container-kyle-transition.md §Phase 1
+// (Seth adjustment #2).
+func TestRender_CsuiteKyleServicePresent(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	s := string(out)
+
+	var parsed struct {
+		Services map[string]struct {
+			Image       string            `yaml:"image"`
+			Environment map[string]string `yaml:"environment"`
+			Volumes     []string          `yaml:"volumes"`
+			DependsOn   []string          `yaml:"depends_on"`
+			Labels      map[string]string `yaml:"labels"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	svc, ok := parsed.Services["csuite-kyle"]
+	require.True(t, ok, "rendered compose is missing csuite-kyle service block")
+
+	// Image maps to the kyle entry of CsuiteImages.
+	require.Equal(t, "localhost:5000/drem-csuite-kyle:latest", svc.Image,
+		"csuite-kyle must use the drem-csuite-kyle image")
+
+	// Env parity with mike/alex/seth.
+	require.Equal(t, "drem-orchestrator", svc.Environment["DREM_PROJECT"])
+	require.Equal(t, "http://orch:8080", svc.Environment["DREM_ORCH_URL"])
+	require.Equal(t, "/run/secrets/csuite-watcher-token",
+		svc.Environment["CSUITE_WATCHER_TOKEN_FILE"])
+	require.Equal(t, "http://csuite-watcher:8090/deliver",
+		svc.Environment["CSUITE_SIGNAL_ENDPOINT"])
+	require.Equal(t, "60m", svc.Environment["DREM_CLAUDE_TIMEOUT"])
+
+	// Kyle-only privilege: the orch-plans mount is :rw, not :ro. The
+	// other three personas must stay :ro so their plan writes go
+	// through a PR/worker path; Kyle is deliberately exempted because
+	// he is the plan-author in the C-Suite.
+	var plansRW bool
+	for _, v := range svc.Volumes {
+		if strings.Contains(v, ":/home/drem/orch-plans:") {
+			require.True(t, strings.HasSuffix(v, ":/home/drem/orch-plans:rw"),
+				"csuite-kyle orch-plans mount must be :rw, got %q", v)
+			plansRW = true
+		}
+	}
+	require.True(t, plansRW, "csuite-kyle missing orch-plans mount")
+
+	// Kyle state tree mounts at the kyle-specific host-side subdir.
+	var kyleHomeMounted bool
+	for _, v := range svc.Volumes {
+		if strings.Contains(v, "/kyle:/home/drem/.drem-csuite/kyle:rw") {
+			kyleHomeMounted = true
+		}
+	}
+	require.True(t, kyleHomeMounted,
+		"csuite-kyle missing kyle state bind-mount at ~/.drem-csuite/kyle")
+
+	// Label contract matches the other persona services.
+	require.Equal(t, "drem-orchestrator", svc.Labels["drem.project"])
+	require.Equal(t, "csuite-kyle", svc.Labels["drem.agent_type"])
+
+	// depends_on [orch] just like the others.
+	require.Contains(t, svc.DependsOn, "orch")
+
+	// Cross-persona sanity: mike/alex/seth must still have :ro on the
+	// plans mount so we don't silently elevate the wrong persona.
+	for _, p := range []string{"csuite-mike", "csuite-alex", "csuite-seth"} {
+		other, ok := parsed.Services[p]
+		require.True(t, ok)
+		for _, v := range other.Volumes {
+			if strings.Contains(v, ":/home/drem/orch-plans:") {
+				require.True(t, strings.HasSuffix(v, ":/home/drem/orch-plans:ro"),
+					"%s orch-plans mount must remain :ro (kyle is the only :rw persona), got %q",
+					p, v)
+			}
+		}
+	}
+
+	// Top-level comment sanity — the plan asked for an explanatory
+	// preamble on the kyle service. Verify it renders.
+	require.Contains(t, s, "csuite-kyle is the CEO persona",
+		"rendered compose should carry the csuite-kyle explanatory comment")
 }
 
 // TestRender_CsuiteWatcherAuditTokenIsWired asserts the csuite-watcher

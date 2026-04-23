@@ -32,6 +32,7 @@ var DefaultImages = map[string]string{
 	"csuite-mike": "localhost:5000/drem-csuite-mike:latest",
 	"csuite-alex": "localhost:5000/drem-csuite-alex:latest",
 	"csuite-seth": "localhost:5000/drem-csuite-seth:latest",
+	"csuite-kyle": "localhost:5000/drem-csuite-kyle:latest",
 	// "planner" is deliberately absent — the warm drem-planner is a
 	// long-lived container in deploy/compose/global.yml, not a spawn-
 	// on-demand role. Orch reaches it over HTTP via dispatchPlanHTTP.

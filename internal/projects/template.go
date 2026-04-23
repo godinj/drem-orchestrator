@@ -38,7 +38,7 @@ type TemplateData struct {
 	// DefaultOrchImage (production distroless build); when DevMode is
 	// true the caller should swap in DefaultOrchDevImage.
 	OrchImage string
-	// CsuiteImages maps C-Suite persona ("mike", "alex", "seth")
+	// CsuiteImages maps C-Suite persona ("mike", "alex", "seth", "kyle")
 	// to its container image tag.
 	CsuiteImages map[string]string
 	// BareRepoPath is the absolute path to the project's bare repository

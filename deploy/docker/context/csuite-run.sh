@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 #
-# csuite-run — PID-1-side script for the three C-Suite container images
-# (Mike, Alex, Seth).
+# csuite-run — legacy Wave-1 PID-1-side script for the C-Suite container
+# images (Mike, Alex, Seth, Kyle). Kept in the base image for side-by-side
+# debugging; the canonical entrypoint is csuite-entrypoint.sh
+# (Wave-2 csuite-persona poller). Do not wire as the default CMD.
 #
-# Each persona image (deploy/docker/csuite-{mike,alex,seth}.Dockerfile)
+# Each persona image (deploy/docker/csuite-{mike,alex,seth,kyle}.Dockerfile)
 # layers on top of drem-csuite-base and sets the CSUITE_AGENT environment
 # variable. This script reads CSUITE_AGENT, resolves the matching prompt
 # under /opt/csuite/prompts/, and execs the Claude CLI against it.
@@ -18,7 +20,7 @@
 #
 # Environment contract (set by the per-project compose template):
 #
-#   CSUITE_AGENT      persona name: mike, alex, or seth (required)
+#   CSUITE_AGENT      persona name: mike, alex, seth, or kyle (required)
 #   DREM_PROJECT      project name (informational; logged only)
 #   DREM_ORCH_URL     orchestrator HTTP URL inside drem-net
 #
@@ -36,9 +38,9 @@ if [[ -z "${CSUITE_AGENT:-}" ]]; then
 fi
 
 case "${CSUITE_AGENT}" in
-    mike|alex|seth) ;;
+    mike|alex|seth|kyle) ;;
     *)
-        echo "csuite-run: unknown CSUITE_AGENT=${CSUITE_AGENT} (want mike|alex|seth)" >&2
+        echo "csuite-run: unknown CSUITE_AGENT=${CSUITE_AGENT} (want mike|alex|seth|kyle)" >&2
         exit 64
         ;;
 esac

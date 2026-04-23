@@ -1,5 +1,5 @@
 // Command csuite-persona is the inbox-driven headless poller that runs
-// inside the three C-Suite persona containers (mike, alex, seth).
+// inside the four C-Suite persona containers (mike, alex, seth, kyle).
 //
 // It replaces the prior long-lived interactive claude invocation
 // (deploy/docker/context/csuite-run.sh) with a polling loop that scans
@@ -49,7 +49,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	fs := flag.NewFlagSet("csuite-persona", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	personaName := fs.String("persona", "", "Persona name: mike, alex, or seth (required)")
+	personaName := fs.String("persona", "", "Persona name: mike, alex, seth, or kyle (required)")
 	inboxDir := fs.String("inbox-dir", "", "Override inbox directory (default /home/drem/.drem-csuite/<persona>/inbox)")
 	outboxDir := fs.String("outbox-dir", "", "Override outbox directory (default /home/drem/.drem-csuite/<persona>/outbox)")
 	stateFile := fs.String("state-file", "", "Override state file (default /home/drem/.drem-csuite/<persona>/state.md)")

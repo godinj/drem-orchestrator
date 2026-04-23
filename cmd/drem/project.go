@@ -455,6 +455,7 @@ func templateDataFor(p projects.Project) projects.TemplateData {
 		"mike": "localhost:5000/drem-csuite-mike:latest",
 		"alex": "localhost:5000/drem-csuite-alex:latest",
 		"seth": "localhost:5000/drem-csuite-seth:latest",
+		"kyle": "localhost:5000/drem-csuite-kyle:latest",
 	}
 	for persona := range csuiteImages {
 		if ov, ok := p.ContainerImageOverrides["csuite-"+persona]; ok && ov != "" {

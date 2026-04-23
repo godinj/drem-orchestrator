@@ -346,6 +346,59 @@ services:
     depends_on: [orch]
     restart: unless-stopped
 
+  # csuite-kyle is the CEO persona. Runs the same csuite-persona poller
+  # as mike/alex/seth but with one deliberate privilege asymmetry:
+  # the orch-plans bind-mount is :rw (not :ro). Kyle is the C-Suite's
+  # plan-author — he authors PRDs, plan docs, and session records under
+  # plans/ in the bare-repo master working tree — so he needs to write
+  # there directly rather than delegate to a worker. The other three
+  # personas remain :ro; only Kyle's service block differs. See
+  # plans/container-kyle-transition.md §Phase 1 (Seth adjustment #2).
+  csuite-kyle:
+    image: {{index .CsuiteImages "kyle"}}
+    environment:
+      DREM_PROJECT: "{{.ProjectName}}"
+      DREM_ORCH_URL: "http://orch:8080"
+      # Scoreboard item 33 mitigation: the persona binary reads
+      # CSUITE_WATCHER_TOKEN_FILE when CSUITE_WATCHER_TOKEN is empty,
+      # so the token-file bind-mount below is the primary path
+      # (survives operator shell-env gaps between compose-ups). The
+      # env-var inherit form is kept for backward-compat but should
+      # be considered deprecated.
+      CSUITE_WATCHER_TOKEN:
+      CSUITE_WATCHER_TOKEN_FILE: "/run/secrets/csuite-watcher-token"
+      CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
+      # Extend the poller's per-claude-p timeout from the 5-minute
+      # default to 60 minutes so CEO-level synthesis and deep-analysis
+      # tasks don't hit the default ceiling. Same tuning as the other
+      # three personas.
+      DREM_CLAUDE_TIMEOUT: "60m"
+    volumes:
+      - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      # Scoreboard item 33: bind-mount the csuite-watcher shared token
+      # file read-only into the container. The persona binary reads
+      # CSUITE_WATCHER_TOKEN_FILE (set above) when CSUITE_WATCHER_TOKEN
+      # is empty, so this mount path is the canonical source of truth
+      # regardless of host shell env state at `docker compose up` time.
+      - {{.CsuiteWatcherTokenPath}}:/run/secrets/csuite-watcher-token:ro
+      # Kyle-only :rw on the plans tree. Every other persona's block
+      # mounts this path :ro. Kyle writes plan docs during normal
+      # operation — PRD drafts, container-Kyle-transition.md style
+      # plan files, session records, scoreboard spin-outs — and
+      # delegating every edit to a worker container would add minutes
+      # of latency to every plan revision. The operator's interactive
+      # Kyle instance writes to the same path on the host; the
+      # coexistence rules in docs/csuite-agents/prompts/kyle.md
+      # (Phase 4) spell out how the two Kyles hand off the tree.
+      - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:rw
+      - {{.CsuiteHomeRoot}}/kyle:/home/drem/.drem-csuite/kyle:rw
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.agent_type: csuite-kyle
+    depends_on: [orch]
+    restart: unless-stopped
+
   worker-template:
     image: {{.WorkerImage}}
     # Worker containers are spawned on demand by drem-spawner; this entry
