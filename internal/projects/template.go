@@ -294,6 +294,28 @@ func WriteProjectComposeAt(homeDir, projectName string, data TemplateData) (stri
 			_ = os.Chown(data.HostDataDir, 1000, 1000)
 		}
 	}
+	// Pre-create the operator pseudo-persona's inbox tree under
+	// CsuiteHomeRoot so "to: operator" replies delivered by the
+	// watcher land on a directory the operator's `drem csuite send`
+	// CLI can read from. Unlike the four real personas
+	// (mike/alex/seth/kyle), operator has no container and therefore
+	// no docker bind-mount auto-creating the dir — register-time
+	// explicit provisioning is the only hook.
+	//
+	// Created: <CsuiteHomeRoot>/operator/inbox/.archive/ (the
+	// .archive subdir is what `drem csuite inbox archive` writes to
+	// in Phase 4; creating it here avoids a "first-archive races
+	// mkdir" case). Inbox-only — no outbox, no state.md — because
+	// operator is destination-only (see
+	// plans/drem-csuite-send-cli.md §8). Best-effort: failure here
+	// is logged via the returned error only when the path really
+	// cannot be created; for an arbitrary CsuiteHomeRoot override
+	// that points outside $HOME, this mirrors the
+	// WorkerPromptRoot / HostDataDir best-effort posture above.
+	if data.CsuiteHomeRoot != "" {
+		opArchive := filepath.Join(data.CsuiteHomeRoot, "operator", "inbox", ".archive")
+		_ = os.MkdirAll(opArchive, 0o755)
+	}
 	path := filepath.Join(dir, "compose.yml")
 	if err := os.WriteFile(path, rendered, 0o644); err != nil {
 		return "", fmt.Errorf("write compose file %q: %w", path, err)

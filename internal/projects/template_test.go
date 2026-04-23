@@ -867,6 +867,47 @@ func TestWriteProjectComposeAt_PrecreatesHostDataDir(t *testing.T) {
 	require.True(t, info.IsDir(), "HostDataDir must be a directory")
 }
 
+// TestWriteProjectComposeAt_PrecreatesOperatorInboxTree asserts the
+// helper creates <CsuiteHomeRoot>/operator/inbox/.archive/ at
+// registration time. The operator pseudo-persona has no container
+// and therefore no bind-mount to auto-create the dir — register-time
+// explicit provisioning is the only hook. Inbox-only (no outbox, no
+// state.md): operator is destination-only. See
+// plans/drem-csuite-send-cli.md §Phase 1.
+func TestWriteProjectComposeAt_PrecreatesOperatorInboxTree(t *testing.T) {
+	homeDir := t.TempDir()
+	data := projects.TemplateData{
+		ProjectName:  "drem-orchestrator",
+		OrchURL:      "http://localhost:8080",
+		Language:     projects.LanguageGo,
+		WorkerImage:  "drem-worker-go:latest",
+		MergerImage:  "drem-merger:latest",
+		BareRepoPath: "/home/dev/git/drem-orchestrator.git",
+		SharedToken:  "token-123",
+		HostHome:     homeDir,
+	}
+	_, err := projects.WriteProjectComposeAt(homeDir, "drem-orchestrator", data)
+	require.NoError(t, err)
+
+	inbox := filepath.Join(homeDir, ".drem-csuite", "operator", "inbox")
+	info, err := os.Stat(inbox)
+	require.NoError(t, err,
+		"WriteProjectComposeAt must pre-create <CsuiteHomeRoot>/operator/inbox")
+	require.True(t, info.IsDir(), "operator inbox must be a directory")
+
+	archive := filepath.Join(inbox, ".archive")
+	info, err = os.Stat(archive)
+	require.NoError(t, err,
+		"WriteProjectComposeAt must pre-create <CsuiteHomeRoot>/operator/inbox/.archive")
+	require.True(t, info.IsDir(), "operator inbox .archive must be a directory")
+
+	// Operator is destination-only: no outbox dir.
+	outbox := filepath.Join(homeDir, ".drem-csuite", "operator", "outbox")
+	_, err = os.Stat(outbox)
+	require.True(t, os.IsNotExist(err),
+		"operator must NOT have an outbox dir (destination-only persona)")
+}
+
 // TestRender_PersonaSignalEnvIsDeclared asserts each persona service
 // declares both CSUITE_WATCHER_TOKEN (host-shell passthrough) and
 // CSUITE_SIGNAL_ENDPOINT (pointing at the watcher's in-network name).

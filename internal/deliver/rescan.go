@@ -187,7 +187,14 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 			}
 			res.Quarantined++
 			h.logger().Printf("rescan: quarantine %s/%s reason=%q", src, c.name, class.Reason)
-		case ClassPersona:
+		case ClassPersona, ClassOperator:
+			// ClassOperator is destination-only: a persona wrote a
+			// "to: operator" reply that the rescan must deliver into
+			// /csuite/operator/inbox/. deliverToInbox handles both
+			// classes identically because class.Dest carries the
+			// destination name (persona or "operator"). Operator is
+			// NOT added to rescanPersonas — it has no outbox to scan
+			// from. See plans/drem-csuite-send-cli.md §Phase 1.
 			destPath, err := h.deliverToInbox(req, class)
 			if err != nil {
 				res.Errors = append(res.Errors,

@@ -232,7 +232,11 @@ func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": req.SHA256})
 		return
-	case ClassPersona:
+	case ClassPersona, ClassOperator:
+		// ClassOperator shares the same delivery mechanics as
+		// ClassPersona: class.Dest is "operator", so deliverToInbox
+		// lands the file at /csuite/operator/inbox/ via the same
+		// path-builder. See plans/drem-csuite-send-cli.md §Phase 1.
 		destPath, err := h.deliverToInbox(req, class)
 		if err != nil {
 			h.logger().Printf("deliver: %s -> %s failed sha=%s: %v",

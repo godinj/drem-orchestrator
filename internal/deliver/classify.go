@@ -19,17 +19,27 @@ const frontmatterCap = 64 * 1024
 
 // Destination class names. Kept as typed string constants so callers
 // don't sprinkle literals through switch statements.
+//
+// ClassOperator is the routing class for replies addressed to the
+// human operator (frontmatter `to: operator`). The watcher delivers
+// these into the `operator` pseudo-persona's inbox at
+// `/csuite/operator/inbox/`, which the `drem csuite send` CLI reads
+// from. Operator is a destination-only persona: it has an inbox but
+// no outbox (personas write to it, it does not write back as a
+// source) — see plans/drem-csuite-send-cli.md §8.
 const (
 	ClassPersona    = "persona"
+	ClassOperator   = "operator"
 	ClassQuarantine = "quarantine"
 )
 
 // Classification is the result of reading and classifying an outbox
 // file's frontmatter. Dest names the destination persona for the
-// persona class; it is empty for the quarantine class.
+// persona class; it is the literal "operator" for the operator class
+// and empty for the quarantine class.
 type Classification struct {
-	Class  string // ClassPersona | ClassQuarantine
-	Dest   string // destination persona (for ClassPersona), empty (for ClassQuarantine)
+	Class  string // ClassPersona | ClassOperator | ClassQuarantine
+	Dest   string // destination persona (for ClassPersona / ClassOperator), empty (for ClassQuarantine)
 	Reason string // diagnostic reason when Class == ClassQuarantine
 }
 
@@ -96,6 +106,11 @@ func classifyBytes(data []byte) (Classification, error) {
 		switch dest {
 		case "mike", "alex", "seth", "kyle":
 			return Classification{Class: ClassPersona, Dest: dest}, nil
+		case "operator":
+			// Persona → operator reply. Routes into the operator
+			// pseudo-persona's inbox at /csuite/operator/inbox/.
+			// See plans/drem-csuite-send-cli.md §Phase 1.
+			return Classification{Class: ClassOperator, Dest: "operator"}, nil
 		case "":
 			return Classification{Class: ClassQuarantine, Reason: "empty 'to' field"}, nil
 		default:

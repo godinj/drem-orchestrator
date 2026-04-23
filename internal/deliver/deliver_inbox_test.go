@@ -165,6 +165,71 @@ func TestDeliver_HappyPath_Kyle(t *testing.T) {
 	}
 }
 
+// TestDeliver_HappyPath_Operator verifies the full happy path for a
+// persona → operator reply. Mike writes a "to: operator" outbox file,
+// the watcher classifies it as ClassOperator (class.Dest =
+// "operator"), and deliverToInbox copies it into
+// /csuite/operator/inbox/ with a ledger row recording
+// Dest: "operator". Same mechanics as TestDeliver_HappyPath_Persona
+// but exercises the new class arm from
+// plans/drem-csuite-send-cli.md §Phase 1.
+func TestDeliver_HappyPath_Operator(t *testing.T) {
+	root := newCsuiteTree(t)
+	body := []byte("---\nfrom: mike\nto: operator\n---\n\nreply body for the operator\n")
+	srcOnDisk, sha := stageOutbox(t, root, "mike", "op1.md", body)
+
+	l := openTestLedger(t)
+	h := Handler(Config{Token: "secret", Ledger: l})
+
+	w := post(t, h, "secret", buildBody(t, "mike", "/csuite/mike/outbox/op1.md", sha))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%q", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp["delivery_id"] != sha {
+		t.Errorf("delivery_id = %q, want %q", resp["delivery_id"], sha)
+	}
+
+	// Source file was moved into mike's delivered/.
+	if _, err := os.Stat(srcOnDisk); !os.IsNotExist(err) {
+		t.Errorf("source still at outbox: err=%v", err)
+	}
+
+	// Exactly one file landed in operator's inbox, byte-identical to source.
+	opInbox := filepath.Join(root, "operator", "inbox")
+	entries, err := os.ReadDir(opInbox)
+	if err != nil {
+		t.Fatalf("readdir operator inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("operator inbox: got %d files, want 1", len(entries))
+	}
+	got, err := os.ReadFile(filepath.Join(opInbox, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Errorf("delivered body != source body")
+	}
+
+	// Ledger row records Dest="operator" (the class.Dest string
+	// literal, not the class name itself).
+	d, found, err := l.Lookup(sha)
+	if err != nil || !found {
+		t.Fatalf("Lookup: found=%v err=%v", found, err)
+	}
+	if d.Dest != "operator" {
+		t.Errorf("ledger dest = %q, want operator", d.Dest)
+	}
+	if d.DestPath != "/csuite/operator/inbox/"+entries[0].Name() {
+		t.Errorf("ledger dest_path = %q, want /csuite/operator/inbox/%s",
+			d.DestPath, entries[0].Name())
+	}
+}
+
 // TestDeliver_AutoCreatesInboxDir verifies that a missing destination
 // inbox dir is created on demand. Mimics "known persona -> mkdir"
 // from plan §Failure modes.

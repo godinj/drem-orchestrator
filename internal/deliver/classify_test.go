@@ -25,14 +25,24 @@ func testLogger(buf *bytes.Buffer) *log.Logger {
 // t.TempDir, redirects the package-level csuiteRoot var for the
 // duration of the test, and returns the root path so tests can
 // stage outbox files under <root>/<persona>/outbox/.
+//
+// The operator pseudo-persona is included as an inbox-only entry —
+// it receives "to: operator" replies from the four real personas but
+// has no outbox of its own (operator is a destination, not a source).
+// Matches the tree layout `drem project register` provisions
+// host-side; see plans/drem-csuite-send-cli.md §Phase 1.
 func newCsuiteTree(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, persona := range []string{"mike", "alex", "seth", "kyle"} {
-		if err := os.MkdirAll(filepath.Join(root, persona, "outbox"), 0o755); err != nil {
+	for _, persona := range []string{"mike", "alex", "seth", "kyle", "operator"} {
+		if err := os.MkdirAll(filepath.Join(root, persona, "inbox"), 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
-		if err := os.MkdirAll(filepath.Join(root, persona, "inbox"), 0o755); err != nil {
+		// operator has no outbox — it's a destination-only persona.
+		if persona == "operator" {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Join(root, persona, "outbox"), 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
 	}
@@ -91,6 +101,22 @@ func TestClassifyBytes_PersonaRecipient(t *testing.T) {
 				t.Errorf("got %+v, want class=persona dest=%s", got, persona)
 			}
 		})
+	}
+}
+
+// TestClassifyBytes_Operator verifies a scalar "to: operator" routes
+// to ClassOperator. The operator pseudo-persona is the destination
+// for persona → operator replies produced by drem csuite send; it is
+// inbox-only, not a source persona. See
+// plans/drem-csuite-send-cli.md §Phase 1.
+func TestClassifyBytes_Operator(t *testing.T) {
+	body := []byte("---\nfrom: mike\nto: operator\n---\n\nreply\n")
+	got, err := classifyBytes(body)
+	if err != nil {
+		t.Fatalf("classifyBytes: %v", err)
+	}
+	if got.Class != ClassOperator || got.Dest != "operator" {
+		t.Errorf("got %+v, want class=operator dest=operator", got)
 	}
 }
 

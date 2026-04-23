@@ -245,6 +245,51 @@ func TestRescan_RoutesKyleOutboxToPersonaInbox(t *testing.T) {
 	}
 }
 
+// TestRescan_RoutesOperatorOutboxToOperatorInbox covers the persona →
+// operator rescan path added 2026-04-22 alongside ClassOperator.
+// When a persona has written a "to: operator" reply to its outbox but
+// the watcher missed the POST /deliver signal, the 5-min rescan pass
+// must still route the file into /csuite/operator/inbox/. Operator is
+// NOT in rescanPersonas (destination-only — no outbox to scan from);
+// this test proves the ClassOperator arm fires correctly when a real
+// source persona (mike) is walked. See
+// plans/drem-csuite-send-cli.md §Phase 1.
+func TestRescan_RoutesOperatorOutboxToOperatorInbox(t *testing.T) {
+	root := newCsuiteTree(t)
+	body := []byte("---\nfrom: mike\nto: operator\n---\n\nreply for operator\n")
+	_, sha := stageOutbox(t, root, "mike", "mike-to-op.md", body)
+
+	l := openTestLedger(t)
+	h := &handler{cfg: Config{Token: "secret", Ledger: l}, clock: time.Now}
+
+	res := h.Rescan()
+	if res.Scanned != 1 {
+		t.Errorf("scanned = %d, want 1 (got %+v)", res.Scanned, res)
+	}
+	if res.Delivered != 1 {
+		t.Errorf("delivered = %d, want 1 — operator must be a valid dest (got %+v)",
+			res.Delivered, res)
+	}
+	if len(res.Errors) != 0 {
+		t.Errorf("errors = %v, want none", res.Errors)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(root, "operator", "inbox"))
+	if err != nil {
+		t.Fatalf("readdir operator inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("operator inbox count = %d, want 1", len(entries))
+	}
+	d, found, err := l.Lookup(sha)
+	if err != nil || !found {
+		t.Fatalf("ledger lookup: found=%v err=%v", found, err)
+	}
+	if d.Dest != "operator" {
+		t.Errorf("ledger dest = %q, want operator", d.Dest)
+	}
+}
+
 // TestRescan_IgnoresNonMdFiles confirms the rescan's .md filter —
 // sidecar files, swap files, etc. must not be processed.
 func TestRescan_IgnoresNonMdFiles(t *testing.T) {
