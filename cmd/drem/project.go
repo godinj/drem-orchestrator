@@ -454,7 +454,6 @@ func templateDataFor(p projects.Project) projects.TemplateData {
 	csuiteImages := map[string]string{
 		"mike": "localhost:5000/drem-csuite-mike:latest",
 		"alex": "localhost:5000/drem-csuite-alex:latest",
-		"ross": "localhost:5000/drem-csuite-ross:latest",
 		"seth": "localhost:5000/drem-csuite-seth:latest",
 	}
 	for persona := range csuiteImages {
