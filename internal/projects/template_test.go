@@ -258,6 +258,52 @@ func TestRender_CsuiteWatcherTokenPathIsWired(t *testing.T) {
 	}
 }
 
+// TestRender_CsuiteWatcherAuditTokenIsWired asserts the csuite-watcher
+// service itself bind-mounts the audit-token file and sets
+// DREM_AUDIT_TOKEN_PATH so cmd/csuite-watcher/serve.go's loadAuditToken
+// can resolve the file. Commit 199efe2 added loadAuditToken as a hard
+// startup requirement without updating the compose template, producing
+// a watcher restart loop on the first image rebuild. See
+// plans/csuite-watcher-audit-token-mount-gap.md.
+func TestRender_CsuiteWatcherAuditTokenIsWired(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+			Volumes     []string          `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	svc, ok := parsed.Services["csuite-watcher"]
+	require.True(t, ok, "csuite-watcher service missing from rendered compose")
+
+	require.Equal(t, "/run/secrets/csuite-watcher-token",
+		svc.Environment["DREM_AUDIT_TOKEN_PATH"],
+		"csuite-watcher must set DREM_AUDIT_TOKEN_PATH to the mount path "+
+			"so loadAuditToken resolves the file")
+
+	const wantHostPath = "/home/operator/.drem/csuite-watcher.token"
+	var found bool
+	for _, v := range svc.Volumes {
+		if strings.Contains(v, "/run/secrets/csuite-watcher-token") {
+			require.Contains(t, v, wantHostPath,
+				"csuite-watcher audit-token mount must bind %s", wantHostPath)
+			require.Contains(t, v, ":ro",
+				"csuite-watcher audit-token mount must be read-only")
+			found = true
+			break
+		}
+	}
+	require.True(t, found,
+		"csuite-watcher missing audit-token bind-mount — "+
+			"without it the watcher restart-loops on loadAuditToken ENOENT")
+}
+
 // TestRender_CsuiteWatcherTokenPathExplicitOverride asserts a
 // caller-supplied value overrides the HostHome-derived default.
 func TestRender_CsuiteWatcherTokenPathExplicitOverride(t *testing.T) {

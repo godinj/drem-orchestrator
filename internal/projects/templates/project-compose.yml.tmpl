@@ -160,6 +160,13 @@ services:
       # `openssl rand -hex 32 > ~/.drem/csuite-watcher.token && chmod 600`
       # then `export CSUITE_WATCHER_TOKEN=$(cat ~/.drem/csuite-watcher.token)`.
       CSUITE_WATCHER_TOKEN:
+      # Audit token path for /v1/audit/* endpoints (consumed by
+      # `drem csuite audit` CLI). Points at the same shared-secret file
+      # the personas bind-mount read-only below; the watcher binary
+      # loads it via cmd/csuite-watcher/serve.go loadAuditToken(). Added
+      # to close the 199efe2 compose-template gap — see
+      # plans/csuite-watcher-audit-token-mount-gap.md.
+      DREM_AUDIT_TOKEN_PATH: "/run/secrets/csuite-watcher-token"
     volumes:
       # Read-write view of the operator's shared csuite tree so the
       # watcher can route outbox files into sibling personas' inboxes.
@@ -172,6 +179,12 @@ services:
       # SQLite file survives container recreation but stays out of the
       # shared /csuite/ tree.
       - drem-{{.ProjectName}}-csuite-watcher-data:/var/lib/watcher
+      # Shared audit-token file, read-only. Same host path the personas
+      # bind below under /run/secrets/csuite-watcher-token — reuse keeps
+      # the operator on a single-file rotation workflow. Required by
+      # cmd/csuite-watcher/serve.go; missing mount → ENOENT → restart
+      # loop. See plans/csuite-watcher-audit-token-mount-gap.md.
+      - {{.CsuiteWatcherTokenPath}}:/run/secrets/csuite-watcher-token:ro
     networks: [drem-net]
     labels:
       drem.project: "{{.ProjectName}}"
