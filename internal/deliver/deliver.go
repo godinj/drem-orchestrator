@@ -232,7 +232,7 @@ func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": req.SHA256})
 		return
-	case ClassPersona, ClassKyle:
+	case ClassPersona:
 		destPath, err := h.deliverToInbox(req, class)
 		if err != nil {
 			h.logger().Printf("deliver: %s -> %s failed sha=%s: %v",

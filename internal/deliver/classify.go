@@ -21,16 +21,15 @@ const frontmatterCap = 64 * 1024
 // don't sprinkle literals through switch statements.
 const (
 	ClassPersona    = "persona"
-	ClassKyle       = "kyle"
 	ClassQuarantine = "quarantine"
 )
 
 // Classification is the result of reading and classifying an outbox
-// file's frontmatter. Dest names the persona or "kyle" for real
-// classes; it is empty for the quarantine class.
+// file's frontmatter. Dest names the destination persona for the
+// persona class; it is empty for the quarantine class.
 type Classification struct {
-	Class  string // ClassPersona | ClassKyle | ClassQuarantine
-	Dest   string // destination persona (for ClassPersona), "kyle" (for ClassKyle), empty (for ClassQuarantine)
+	Class  string // ClassPersona | ClassQuarantine
+	Dest   string // destination persona (for ClassPersona), empty (for ClassQuarantine)
 	Reason string // diagnostic reason when Class == ClassQuarantine
 }
 
@@ -95,10 +94,8 @@ func classifyBytes(data []byte) (Classification, error) {
 	case yaml.ScalarNode:
 		dest := toNode.Value
 		switch dest {
-		case "mike", "alex", "seth":
+		case "mike", "alex", "seth", "kyle":
 			return Classification{Class: ClassPersona, Dest: dest}, nil
-		case "kyle":
-			return Classification{Class: ClassKyle, Dest: "kyle"}, nil
 		case "":
 			return Classification{Class: ClassQuarantine, Reason: "empty 'to' field"}, nil
 		default:

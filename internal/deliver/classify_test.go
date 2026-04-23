@@ -74,9 +74,11 @@ func buildBody(t *testing.T, source, outboxPath, sha string) []byte {
 }
 
 // TestClassifyBytes_PersonaRecipient verifies scalar persona names
-// route to ClassPersona with Dest set.
+// route to ClassPersona with Dest set. Post-Phase-2, kyle is a
+// regular persona alongside mike/alex/seth — all four share the
+// ClassPersona code path.
 func TestClassifyBytes_PersonaRecipient(t *testing.T) {
-	cases := []string{"mike", "alex", "seth"}
+	cases := []string{"mike", "alex", "seth", "kyle"}
 	for _, persona := range cases {
 		persona := persona
 		t.Run(persona, func(t *testing.T) {
@@ -89,18 +91,6 @@ func TestClassifyBytes_PersonaRecipient(t *testing.T) {
 				t.Errorf("got %+v, want class=persona dest=%s", got, persona)
 			}
 		})
-	}
-}
-
-// TestClassifyBytes_Kyle verifies "to: kyle" routes to ClassKyle.
-func TestClassifyBytes_Kyle(t *testing.T) {
-	body := []byte("---\nfrom: alex\nto: kyle\n---\n\nmsg\n")
-	got, err := classifyBytes(body)
-	if err != nil {
-		t.Fatalf("classifyBytes: %v", err)
-	}
-	if got.Class != ClassKyle || got.Dest != "kyle" {
-		t.Errorf("got %+v, want kyle", got)
 	}
 }
 

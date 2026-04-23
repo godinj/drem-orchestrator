@@ -187,7 +187,7 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 			}
 			res.Quarantined++
 			h.logger().Printf("rescan: quarantine %s/%s reason=%q", src, c.name, class.Reason)
-		case ClassPersona, ClassKyle:
+		case ClassPersona:
 			destPath, err := h.deliverToInbox(req, class)
 			if err != nil {
 				res.Errors = append(res.Errors,
