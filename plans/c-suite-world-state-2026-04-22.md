@@ -27,6 +27,8 @@ These are the new target architecture. Where a prompt or plan-doc describes the 
 ### §2a. Worktrees → container FS (and dead-code retirement)
 The pre-pivot worktree model is gone. Every worker/agent operation happens inside an ephemeral container's filesystem. Merger accesses worker artifacts via the docker interface (`docker cp`, `docker exec`), not via host worktrees. The TUI and audit flows render in-flight work by `docker exec <container> git diff` (or equivalent), not by reading host paths. When a prompt or doc says "worktree," substitute "container FS" unless the context is the master bare-repo working tree (which still exists and is read-only bind-mounted at `/home/drem/orch-plans/`).
 
+**Containerized personas (4):** Kyle, Mike, Alex, Seth each run as their own Claude Code container (see `plans/container-kyle-transition.md`). Kyle runs as the fourth containerized persona alongside Mike/Alex/Seth — not as a host-side CLI. Kyle's compose block has a `:rw` bind-mount on `orch-plans` as a Kyle-only privilege (the other three personas bind `orch-plans` read-only).
+
 **Dead-code retirement (scheduled Pod 1, operator-ratified 2026-04-22):** `internal/worktreehost/` and the OpenCode agent-harness code path are provably unreachable from live production flows (2026-04-22 audit). Every live agent spawns through `o.Spawner.SpawnWorker()` into a container; `DREM_AGENT_HARNESS=opencode` is never set; the default entrypoint execs Claude CLI. OpenCode is installed in the worker base image as dead weight (~50 MB) but never invoked. Retirement scope: delete `internal/worktreehost/`, `internal/orchestrator/host_worktree_adapter.go`, `internal/agent/runner_start.go` OpenCode path, `internal/agent/process.go` OpenCode helpers, `internal/ctxmon/opencode.*`, `docs/opencode-provider/`, `opencode-plan.md`; refactor `cmd/drem/main.go` + `cmd/drem/config.go` + `agent/runner.go` + `model/agentconfig.go`. ~1,500–2,000 LOC removed. Risk: LOW (all paths already unreachable). Phase 2 (optional, post-retirement): drop OpenCode installer from `deploy/docker/worker-base.Dockerfile` for the image-size win.
 
 **Worker-harness vocabulary (post-retirement state):**
@@ -99,7 +101,7 @@ The pre-pivot worktree model is gone. Every worker/agent operation happens insid
 - Rationale: 5–35s saved per task not worth state-leakage debugging cost.
 
 ### §2g. Every long-running process in a container
-- Host-side processes are audit-blind. Anything persistent moves into a container. Kyle's CLI-on-host is the one explicit exception (subscription-auth constraint).
+- Host-side processes are audit-blind. Anything persistent moves into a container. (Pre-pivot this doc listed Kyle's CLI-on-host as the one exception; as of 2026-04-22, Kyle runs as the fourth containerized persona alongside Mike/Alex/Seth — see §2a and `plans/container-kyle-transition.md`.)
 
 ### §2h. Paused task refresh & merge-conflict resolution (operator-ratified 2026-04-22)
 **Paused task refresh on resume (#29):**
@@ -219,6 +221,7 @@ From Seth pass-2 §6. Dependency-ordered. Load-bearing caveats removed per opera
 1. **Pod 1 — Reliability triage + dead-code retirement (Week 1)**:
    - ✅ **watcher audit-token compose fix** — landed 2026-04-22 (commit `5b81714`). Template bind-mount + `DREM_AUDIT_TOKEN_PATH` env + unit test. Watcher operational; startup rescan delivered 31 backlog outbox files.
    - ✅ **Bug-J merger preserve-workdir-mount-point fix** — landed 2026-04-22 (commit `a525e0c`). `resetWorkDir` clears contents not the mount point; `cloneBranch` clones into `.`. Image rebuilt + pushed.
+   - ✅ **container-Kyle transition Phases 1–5** — landed 2026-04-22 (commits `2639508` and later). Kyle is now the fourth containerized persona; kyle-vs-persona classification collapsed; coexistence rules in `docs/csuite-agents/prompts/kyle.md`; Q12 (`plans/kyle-context-save-restart-investigation.md`) closed. See `plans/container-kyle-transition.md`.
    - ⏳ DB backup/restore — not started.
    - ⏳ resource caps (compose template has zero `deploy.resources.limits` — confirmed 2026-04-22) — not started.
    - ⏳ **OpenCode + `internal/worktreehost/` retirement** (~1,500–2,000 LOC removal; see §2a). If capacity becomes tight mid-flight, spin retirement into Pod 1.5.

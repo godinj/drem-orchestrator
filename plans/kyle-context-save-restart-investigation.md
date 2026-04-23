@@ -1,5 +1,29 @@
 # Kyle Context Save/Restart Slowness — Investigation Plan
 
+## RESOLVED — 2026-04-22
+
+Resolved by the container-Kyle transition (see
+`plans/container-kyle-transition.md`, Phase 1 at commit 2639508).
+Each container-Kyle turn is stateless: the poller reads the inbox
+message, invokes `claude -p` with the kyle.md prompt, writes a reply,
+and exits the turn. Context growth across operator dialogue is no
+longer a concern for the canonical always-on Kyle — the investigation's
+original "interactive Kyle session context creeps toward compaction"
+premise does not apply to container-Kyle at all.
+
+Interactive-Kyle sessions (operator-invoked) still retain context
+within a single session, but the coexistence rules in
+`docs/csuite-agents/prompts/kyle.md` §Runtime mode direct operator
+→ Kyle traffic specifically to interactive mode where session-bounded
+context is the intended behaviour. Save-and-restart remains available
+for long interactive sessions via the existing
+`csuite-save-and-restart` skill.
+
+This investigation is closed. No further code or plan work needed
+under Q12.
+
+---
+
 **Seed date:** 2026-04-22
 **Status:** Investigation plan (no code changes yet).
 **Owner:** Kyle (CEO persona) owns the problem; delegated investigation TBD.
