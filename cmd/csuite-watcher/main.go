@@ -267,7 +267,7 @@ func toRunnerConfig(cfg watcherTomlConfig) watcher.RunnerConfig {
 		PromptDir:     expandTilde(cfg.PromptDir),
 	}
 	if rc.AllowedAgents == nil {
-		rc.AllowedAgents = []string{"mike", "alex", "ross", "seth"}
+		rc.AllowedAgents = []string{"mike", "alex", "seth"}
 	}
 	if rc.InboxBaseDir == "" {
 		rc.InboxBaseDir = expandTilde("~/.drem-csuite")

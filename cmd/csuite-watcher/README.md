@@ -32,7 +32,7 @@ The `run` command reads the `[watcher]` section from drem.toml:
 [watcher]
   db_path             = "~/.drem-csuite/watcher.db"
   inbox_base_dir      = "~/.drem-csuite"
-  allowed_agents      = ["mike", "alex", "ross", "seth"]
+  allowed_agents      = ["mike", "alex", "seth"]
   inbox_poll_interval = "2s"
   safety_interval     = "5m"
   heartbeat_interval  = "30s"
@@ -42,7 +42,7 @@ The `run` command reads the `[watcher]` section from drem.toml:
 |-------|---------|-------------|
 | `db_path` | `~/.drem-csuite/watcher.db` | SQLite database for metrics and heartbeats |
 | `inbox_base_dir` | `~/.drem-csuite` | Root directory for `<agent>/inbox/` signal files |
-| `allowed_agents` | `["mike", "alex", "ross", "seth"]` | Agents permitted to run turns |
+| `allowed_agents` | `["mike", "alex", "seth"]` | Agents permitted to run turns |
 | `inbox_poll_interval` | `2s` | How often to scan for `.signal` files |
 | `safety_interval` | `5m` | How often the safety timer wakes "mike" |
 | `heartbeat_interval` | `30s` | How often heartbeats are written to DB |
