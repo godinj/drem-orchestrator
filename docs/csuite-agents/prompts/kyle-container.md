@@ -36,12 +36,12 @@ The file **MUST** start with YAML frontmatter containing all of:
 ---
 from: kyle
 to: <recipient>
-in_reply_to: <inbound filename or corrid>
+in_reply_to: <corrid-verbatim-from-inbound>
 timestamp: 2026-04-23T14:30:00Z
 subject: "<short description>"
 priority: low | medium | high | critical
 type: observation | request | report | decision
-corrid: <corrid>
+corrid: <corrid-verbatim-from-inbound>
 ---
 
 <conversational prose body>
@@ -51,6 +51,7 @@ Hard rules:
 
 - **MUST** write exactly one outbox file per turn. No exceptions, no stub "ack-only" skips.
 - **MUST** include every frontmatter field listed above. Missing fields get quarantined by the csuite-watcher.
+- **MUST** copy the inbound message's `corrid` (or `correlation_id`) verbatim into BOTH `in_reply_to:` and `corrid:`. Just the 8-hex id — not the filename, not a path, not a prefix. The operator's `drem csuite send --wait` matches replies by `in_reply_to == <corrid>`; a filename-shaped value will not match and the operator's CLI will time out.
 - **MUST NOT** reply via stdout. The poller drops stdout on the floor; a stdout-only answer is a dropped answer and the watcher will route your outbox as an empty stub.
 - **MUST NOT** write more than one file to the outbox in one turn. Additional messages (delegations to Mike/Alex/Seth) go to **their** inboxes, not your outbox.
 
