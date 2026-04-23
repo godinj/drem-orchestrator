@@ -2,22 +2,22 @@ package main
 
 // drem csuite send — one-shot operator→persona messaging.
 //
-// Phase 2 of plans/drem-csuite-send-cli.md. Depends on Phase 1's
-// ClassOperator routing (commit c823f2f): when a persona replies with
-// `to: operator`, the watcher delivers it to
-// <CsuiteHomeRoot>/operator/inbox/ where the waiter below picks it up.
+// Phase 2 of plans/drem-csuite-send-cli.md landed the core CLI at
+// commit 2bf75f3. Phase 3 (this commit) layers:
 //
-// Scope in this commit:
+//   -f, --file FILE          read body from file (≤ 64 KiB, must exist)
+//   -e, --editor             open $EDITOR with an instructional header
+//   --with-frontmatter       print full reply (frontmatter + body)
+//   --json                   emit reply as a JSON envelope
 //
-//   -m, --message STR        inline body
-//   -                        positional bare '-' reads stdin
-//   -t, --topic TOPIC        frontmatter topic (default: first body line)
-//   --wait                   block until reply arrives (default)
-//   --no-wait                exit after inbox drop; print filename
-//   --timeout DURATION       wait budget (default 3m)
-//   --correlation-id ID      override auto-generated 8-hex corrid
+// Body-source precedence (plan §Phase 3):
 //
-// Deferred to Phase 3: -e/--editor, -f/--file, --json, --with-frontmatter.
+//   --message > --file > --editor > positional '-' (stdin) >
+//   auto-stdin (non-TTY) > error.
+//
+// Supplying two or more of -m / -f / -e / '-' is a usage error.
+// --with-frontmatter and --json are mutually exclusive with each other.
+//
 // Deferred to Phase 4: drem csuite inbox list/read/archive subcommands.
 
 import (
@@ -57,21 +57,31 @@ func runCsuiteSend(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	fs.Usage = func() { printSendUsage(stderr) }
 
 	var (
-		message       string
-		topic         string
-		wait          bool
-		noWait        bool
-		timeout       time.Duration
-		correlationID string
+		message         string
+		filePath        string
+		useEditor       bool
+		topic           string
+		wait            bool
+		noWait          bool
+		timeout         time.Duration
+		correlationID   string
+		withFrontmatter bool
+		asJSON          bool
 	)
 	fs.StringVar(&message, "m", "", "inline message body")
 	fs.StringVar(&message, "message", "", "inline message body")
+	fs.StringVar(&filePath, "f", "", "read body from file")
+	fs.StringVar(&filePath, "file", "", "read body from file")
+	fs.BoolVar(&useEditor, "e", false, "open $EDITOR to compose the body")
+	fs.BoolVar(&useEditor, "editor", false, "open $EDITOR to compose the body")
 	fs.StringVar(&topic, "t", "", "frontmatter topic (default: first body line)")
 	fs.StringVar(&topic, "topic", "", "frontmatter topic (default: first body line)")
 	fs.BoolVar(&wait, "wait", true, "block until reply arrives (default)")
 	fs.BoolVar(&noWait, "no-wait", false, "exit after inbox drop; print filename")
 	fs.DurationVar(&timeout, "timeout", defaultSendTimeout, "wait budget (Go duration syntax)")
 	fs.StringVar(&correlationID, "correlation-id", "", "override auto-generated 8-hex correlation id")
+	fs.BoolVar(&withFrontmatter, "with-frontmatter", false, "print reply with full YAML frontmatter")
+	fs.BoolVar(&asJSON, "json", false, "emit reply as a JSON envelope (supersedes --with-frontmatter)")
 
 	// The plan's command shape puts `<persona>` as the first positional
 	// argument, but stdlib `flag` stops at the first non-flag token.
@@ -107,7 +117,39 @@ func runCsuiteSend(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	// opt-out signal).
 	waitForIt := !noWait
 
-	body, err := resolveBody(message, rest, stdin)
+	// Reply output mode resolution (Phase 3). Resolved up-front so a
+	// --with-frontmatter + --json clash fails before we write an inbox
+	// file — the operator can retry without a stale message already
+	// dropped for the persona to process.
+	replyMode, err := selectReplyMode(withFrontmatter, asJSON)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 2
+	}
+
+	// Pre-resolve the correlation ID so it can be surfaced in the
+	// editor's instructional header (operator can grep it out of the
+	// scrollback if the wait times out). Generation order is unchanged
+	// otherwise.
+	if correlationID == "" {
+		cid, err := generateCorrelationID()
+		if err != nil {
+			fmt.Fprintf(stderr, "error: generate correlation id: %v\n", err)
+			return 1
+		}
+		correlationID = cid
+	}
+
+	body, err := resolveBody(bodyResolveConfig{
+		Message:       message,
+		FilePath:      filePath,
+		UseEditor:     useEditor,
+		Positional:    rest,
+		Stdin:         stdin,
+		Persona:       personaName,
+		Topic:         topic,
+		CorrelationID: correlationID,
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 2
@@ -119,15 +161,6 @@ func runCsuiteSend(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 
 	if topic == "" {
 		topic = deriveTopic(body)
-	}
-
-	if correlationID == "" {
-		cid, err := generateCorrelationID()
-		if err != nil {
-			fmt.Fprintf(stderr, "error: generate correlation id: %v\n", err)
-			return 1
-		}
-		correlationID = cid
 	}
 
 	csuiteHome, err := resolveCsuiteHomeRoot()
@@ -156,7 +189,7 @@ func runCsuiteSend(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 	}
 
 	ctx := context.Background()
-	replyBody, _, err := waitForReply(ctx, waiterConfig{
+	_, replyPath, err := waitForReply(ctx, waiterConfig{
 		OperatorInboxDir: filepath.Join(csuiteHome, "operator", "inbox"),
 		CorrelationID:    correlationID,
 		SentAt:           now,
@@ -172,8 +205,22 @@ func runCsuiteSend(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
-	fmt.Fprint(stdout, replyBody)
-	if !strings.HasSuffix(replyBody, "\n") {
+
+	// Re-read the reply file raw — the waiter only returns the body,
+	// but --with-frontmatter and --json both need the YAML block too.
+	// Cheap re-read: the file is ≤ 64 KiB by the watcher's own cap.
+	raw, err := os.ReadFile(replyPath) //nolint:gosec // path produced by the waiter against the configured inbox
+	if err != nil {
+		fmt.Fprintf(stderr, "error: read reply %q: %v\n", replyPath, err)
+		return 1
+	}
+	out, err := formatReply(replyMode, raw, replyPath)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: %v\n", err)
+		return 1
+	}
+	fmt.Fprint(stdout, out)
+	if !strings.HasSuffix(out, "\n") {
 		fmt.Fprintln(stdout)
 	}
 	return 0
@@ -186,6 +233,8 @@ func runCsuiteSend(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 var sendFlagsTakingValue = map[string]bool{
 	"-m":              true,
 	"--message":       true,
+	"-f":              true,
+	"--file":          true,
 	"-t":              true,
 	"--topic":         true,
 	"--timeout":       true,
@@ -256,32 +305,91 @@ func isAllowedPersona(name string) bool {
 	return false
 }
 
-// resolveBody implements the precedence from plan §6:
+// bodyResolveConfig bundles the inputs to resolveBody. Struct form
+// keeps the signature stable as new body-source flags land (one field
+// per flag, rather than an ever-growing positional arg list).
+type bodyResolveConfig struct {
+	Message       string    // --message
+	FilePath      string    // --file
+	UseEditor     bool      // --editor
+	Positional    []string  // remaining positional args post flag-parse
+	Stdin         io.Reader // source for '-' / auto-stdin
+	Persona       string    // for editor header
+	Topic         string    // for editor header ("" → auto)
+	CorrelationID string    // for editor header
+}
+
+// resolveBody implements the Phase 3 precedence from plan §Phase 3:
 //
-//	--message > positional '-' (stdin) > auto-stdin (non-TTY) > error.
+//	--message > --file > --editor > positional '-' (stdin) >
+//	auto-stdin (non-TTY) > error.
 //
-// A positional string other than "-" is a usage error — the plan does
-// not support a bare body string as a positional argument (would
-// collide with future subcommand extensions).
-func resolveBody(message string, positional []string, stdin io.Reader) (string, error) {
-	if message != "" {
-		if len(positional) > 0 {
-			return "", fmt.Errorf("cannot combine --message with positional body source")
+// Supplying two or more of -m / -f / -e / '-' is a usage error
+// ("multiple body sources specified; pick one"). A positional string
+// other than "-" remains a usage error (would collide with future
+// subcommand extensions).
+func resolveBody(cfg bodyResolveConfig) (string, error) {
+	// Dash-positional detection. Bare "-" is the stdin sentinel; any
+	// other positional is a misuse.
+	dashStdin := false
+	switch len(cfg.Positional) {
+	case 0:
+		// nothing to do.
+	case 1:
+		if cfg.Positional[0] == "-" {
+			dashStdin = true
+		} else {
+			return "", fmt.Errorf("unexpected positional argument %q (use -m STR or pipe via '-')", cfg.Positional[0])
 		}
-		return message, nil
+	default:
+		return "", fmt.Errorf("unexpected positional arguments %v", cfg.Positional)
 	}
-	if len(positional) == 1 && positional[0] == "-" {
-		data, err := io.ReadAll(stdin)
+
+	// Conflict detection: the operator must pick one explicit body
+	// source. Two or more of -m / -f / -e / '-' is never ambiguous
+	// enough to silently pick a winner.
+	explicit := 0
+	if cfg.Message != "" {
+		explicit++
+	}
+	if cfg.FilePath != "" {
+		explicit++
+	}
+	if cfg.UseEditor {
+		explicit++
+	}
+	if dashStdin {
+		explicit++
+	}
+	if explicit > 1 {
+		return "", fmt.Errorf("multiple body sources specified; pick one of -m / -f / -e / '-'")
+	}
+
+	switch {
+	case cfg.Message != "":
+		return cfg.Message, nil
+
+	case cfg.FilePath != "":
+		return readBodyFromFile(cfg.FilePath)
+
+	case cfg.UseEditor:
+		return openEditorForBody(editorConfig{
+			Persona:       cfg.Persona,
+			Topic:         cfg.Topic,
+			CorrelationID: cfg.CorrelationID,
+			Editor:        resolveEditor(),
+		})
+
+	case dashStdin:
+		data, err := io.ReadAll(cfg.Stdin)
 		if err != nil {
 			return "", fmt.Errorf("read stdin: %w", err)
 		}
 		return string(data), nil
 	}
-	if len(positional) > 0 {
-		return "", fmt.Errorf("unexpected positional argument %q (use -m STR or pipe via '-')", positional[0])
-	}
+
 	// No explicit body source. Auto-read stdin when not a TTY.
-	if f, ok := stdin.(*os.File); ok {
+	if f, ok := cfg.Stdin.(*os.File); ok {
 		info, statErr := f.Stat()
 		if statErr == nil && info.Mode()&os.ModeCharDevice == 0 && info.Size() >= 0 {
 			data, err := io.ReadAll(f)
@@ -291,7 +399,31 @@ func resolveBody(message string, positional []string, stdin io.Reader) (string, 
 			return string(data), nil
 		}
 	}
-	return "", fmt.Errorf("no message body: use -m STR, '-' to read stdin, or pipe into the command")
+	return "", fmt.Errorf("no body source; pass -m, -f, -e, or pipe via stdin")
+}
+
+// readBodyFromFile reads path, enforcing the 64 KiB cap and rejecting
+// a missing file with a clean diagnostic. Directories and non-regular
+// files fall out naturally through os.Stat / os.ReadFile — the first
+// error wins and surfaces to the operator. Plan §Phase 3 names an
+// exists + size check; anything else (symlink-to-outside-HOME, etc.)
+// stays out of scope for v1.
+func readBodyFromFile(path string) (string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("read body file %q: %w", path, err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("read body file %q: is a directory", path)
+	}
+	if info.Size() > maxBodyBytes {
+		return "", fmt.Errorf("read body file %q: too large (%d bytes, max %d)", path, info.Size(), maxBodyBytes)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // operator-supplied path is intentional
+	if err != nil {
+		return "", fmt.Errorf("read body file %q: %w", path, err)
+	}
+	return string(data), nil
 }
 
 // deriveTopic produces a default topic from the body's first non-empty
@@ -357,6 +489,8 @@ func printSendUsage(w io.Writer) {
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Body source (pick one):")
 	fmt.Fprintln(w, "  -m, --message STR     inline message body")
+	fmt.Fprintln(w, "  -f, --file FILE       read body from file (≤ 64 KiB)")
+	fmt.Fprintln(w, "  -e, --editor          open $EDITOR (default vi) with an instructional header")
 	fmt.Fprintln(w, "  -                     read body from stdin (positional)")
 	fmt.Fprintln(w, "  (none)                read stdin when piped, else error")
 	fmt.Fprintln(w)
@@ -366,6 +500,8 @@ func printSendUsage(w io.Writer) {
 	fmt.Fprintln(w, "      --no-wait         exit after inbox drop; print written filename")
 	fmt.Fprintln(w, "      --timeout DUR     wait budget (Go duration; default 3m)")
 	fmt.Fprintln(w, "      --correlation-id ID  override auto-generated 8-hex corrid")
+	fmt.Fprintln(w, "      --with-frontmatter   print reply with full YAML frontmatter")
+	fmt.Fprintln(w, "      --json               emit reply as a JSON envelope")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Exit codes:")
 	fmt.Fprintln(w, "  0  success")

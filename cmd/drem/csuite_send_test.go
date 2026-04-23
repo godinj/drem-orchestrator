@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -394,3 +395,304 @@ func TestCsuiteSend_IsAllowedPersona(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------
+// Phase 3: editor-mode tests.
+// The spawner is injected so we never launch a real editor — the fake
+// simulates keystrokes by writing directly to the tempfile path.
+// ---------------------------------------------------------------------
+
+// TestCsuiteSend_EditorReadsBodyFromTempfile asserts the core editor
+// round-trip: the header is seeded, the spawner writes a body, and the
+// returned string contains only the body (no instructional comments).
+func TestCsuiteSend_EditorReadsBodyFromTempfile(t *testing.T) {
+	wantBody := "mike — please review Pod 7 asap.\n\nsecond paragraph.\n"
+	spawner := func(editor, path string) error {
+		// Simulate "operator deleted the header, typed a body, saved".
+		return os.WriteFile(path, []byte(wantBody), 0o644)
+	}
+	got, err := openEditorForBody(editorConfig{
+		Persona:       "mike",
+		Topic:         "pod 7 review",
+		CorrelationID: "deadbeef",
+		Editor:        "vi",
+		Spawner:       spawner,
+	})
+	if err != nil {
+		t.Fatalf("openEditorForBody: %v", err)
+	}
+	if got != wantBody {
+		t.Errorf("body: got %q want %q", got, wantBody)
+	}
+}
+
+// TestCsuiteSend_EditorStripsInstructionalHeader exercises the strip
+// logic. The spawner simulates "operator saved without deleting the
+// header" — the returned body must be the real content, with any '#'
+// lines that live AFTER the first non-comment line preserved verbatim.
+func TestCsuiteSend_EditorStripsInstructionalHeader(t *testing.T) {
+	spawner := func(editor, path string) error {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		// Preserve the seeded header; append a body that itself
+		// contains a markdown heading (must survive stripping).
+		body := "\n\nReal content line 1.\n# This is a markdown H1, not a comment.\nline 3.\n"
+		return os.WriteFile(path, append(raw, []byte(body)...), 0o644)
+	}
+	got, err := openEditorForBody(editorConfig{
+		Persona:       "alex",
+		Topic:         "",
+		CorrelationID: "abcd1234",
+		Editor:        "vi",
+		Spawner:       spawner,
+	})
+	if err != nil {
+		t.Fatalf("openEditorForBody: %v", err)
+	}
+	if !strings.HasPrefix(got, "Real content line 1.\n") {
+		t.Errorf("body should start with real content after stripping, got prefix %q", got[:min(40, len(got))])
+	}
+	if !strings.Contains(got, "# This is a markdown H1") {
+		t.Errorf("body should preserve '#' lines AFTER the first real line, got %q", got)
+	}
+	// Sanity: the instructional header lines must be gone.
+	if strings.Contains(got, "# Write your message to alex") {
+		t.Errorf("body still contains instructional header: %q", got)
+	}
+}
+
+// TestCsuiteSend_EditorRejectsEmptyBody asserts that an unmodified
+// tempfile (just the header) surfaces as an error, not a silent send
+// of an empty body.
+func TestCsuiteSend_EditorRejectsEmptyBody(t *testing.T) {
+	// Spawner is a no-op: leaves the file as seeded (header only).
+	spawner := func(editor, path string) error { return nil }
+	_, err := openEditorForBody(editorConfig{
+		Persona:       "seth",
+		Topic:         "quiet",
+		CorrelationID: "11112222",
+		Editor:        "vi",
+		Spawner:       spawner,
+	})
+	if err == nil {
+		t.Fatalf("expected empty-body error, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty body") {
+		t.Errorf("unexpected error shape: %v", err)
+	}
+}
+
+// TestCsuiteSend_EditorPropagatesEditorExitError asserts a non-zero
+// editor exit translates into a clear "editor exited" diagnostic.
+func TestCsuiteSend_EditorPropagatesEditorExitError(t *testing.T) {
+	spawner := func(editor, path string) error { return errors.New("exit 1") }
+	_, err := openEditorForBody(editorConfig{
+		Persona:       "kyle",
+		Topic:         "broken",
+		CorrelationID: "00ff00ff",
+		Editor:        "false",
+		Spawner:       spawner,
+	})
+	if err == nil {
+		t.Fatalf("expected editor-exit error, got nil")
+	}
+	if !strings.Contains(err.Error(), "editor exited") {
+		t.Errorf("unexpected error shape: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------
+// Phase 3: file-body-source tests.
+// ---------------------------------------------------------------------
+
+// TestCsuiteSend_FileBodySourceReadsContents passes -f to resolveBody
+// and asserts the file contents flow through verbatim.
+func TestCsuiteSend_FileBodySourceReadsContents(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "body.md")
+	content := "line 1\nline 2\nfinal.\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolveBody(bodyResolveConfig{
+		FilePath: path,
+		Persona:  "mike",
+	})
+	if err != nil {
+		t.Fatalf("resolveBody: %v", err)
+	}
+	if got != content {
+		t.Errorf("body: got %q want %q", got, content)
+	}
+}
+
+// TestCsuiteSend_FileBodySourceRejectsMissingFile surfaces a clean
+// diagnostic when the operator typos the path.
+func TestCsuiteSend_FileBodySourceRejectsMissingFile(t *testing.T) {
+	tmp := t.TempDir()
+	_, err := resolveBody(bodyResolveConfig{
+		FilePath: filepath.Join(tmp, "does-not-exist.md"),
+		Persona:  "mike",
+	})
+	if err == nil {
+		t.Fatalf("expected missing-file error, got nil")
+	}
+	if !strings.Contains(err.Error(), "does-not-exist.md") {
+		t.Errorf("error should mention the path, got %v", err)
+	}
+}
+
+// TestCsuiteSend_FileBodySourceRejectsOversize asserts the 64 KiB cap
+// is enforced at the resolveBody layer so the operator sees the error
+// before any inbox write attempt.
+func TestCsuiteSend_FileBodySourceRejectsOversize(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "big.md")
+	// maxBodyBytes + 1 byte triggers the cap.
+	if err := os.WriteFile(path, []byte(strings.Repeat("a", maxBodyBytes+1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveBody(bodyResolveConfig{
+		FilePath: path,
+		Persona:  "mike",
+	})
+	if err == nil {
+		t.Fatalf("expected oversize error, got nil")
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Errorf("unexpected error shape: %v", err)
+	}
+}
+
+// TestCsuiteSend_BodySourcePrecedenceMultipleError exercises the
+// conflict detector: -m "a" -f somefile is ambiguous and must error.
+func TestCsuiteSend_BodySourcePrecedenceMultipleError(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "b.md")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := resolveBody(bodyResolveConfig{
+		Message:  "inline",
+		FilePath: path,
+		Persona:  "mike",
+	})
+	if err == nil {
+		t.Fatalf("expected multi-source error, got nil")
+	}
+	if !strings.Contains(err.Error(), "multiple body sources") {
+		t.Errorf("unexpected error shape: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------
+// Phase 3: reply-formatter tests.
+// formatReply is pure; stage raw bytes and assert the output shape.
+// ---------------------------------------------------------------------
+
+// rawReplyFixture is the canonical reply-file bytes used across the
+// formatter tests. Body includes newlines + trailing content so the
+// JSON escaping path is exercised.
+var rawReplyFixture = []byte("---\n" +
+	"from: mike\n" +
+	"to: operator\n" +
+	"topic: p3 smoke\n" +
+	"sent_at: 2026-04-22T15:04:05Z\n" +
+	"in_reply_to: deadbeef\n" +
+	"correlation_id: aabbccdd\n" +
+	"---\n\n" +
+	"Hello operator.\n\nMulti-line reply body.\n")
+
+func TestCsuiteSend_FormatReply_BodyOnly(t *testing.T) {
+	out, err := formatReply(replyModeBody, rawReplyFixture, "/tmp/reply.md")
+	if err != nil {
+		t.Fatalf("formatReply: %v", err)
+	}
+	want := "Hello operator.\n\nMulti-line reply body.\n"
+	if out != want {
+		t.Errorf("body-only: got %q want %q", out, want)
+	}
+}
+
+func TestCsuiteSend_FormatReply_WithFrontmatter(t *testing.T) {
+	out, err := formatReply(replyModeWithFrontmatter, rawReplyFixture, "/tmp/reply.md")
+	if err != nil {
+		t.Fatalf("formatReply: %v", err)
+	}
+	if !strings.HasPrefix(out, "---\n") {
+		t.Errorf("with-frontmatter output should begin with '---\\n', got %q", out[:min(10, len(out))])
+	}
+	if !strings.Contains(out, "Hello operator.") {
+		t.Errorf("with-frontmatter output missing body")
+	}
+}
+
+func TestCsuiteSend_FormatReply_JSON(t *testing.T) {
+	out, err := formatReply(replyModeJSON, rawReplyFixture, "/tmp/reply.md")
+	if err != nil {
+		t.Fatalf("formatReply: %v", err)
+	}
+	var env jsonReplyEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("unmarshal: %v — raw output: %s", err, out)
+	}
+	if env.Path != "/tmp/reply.md" {
+		t.Errorf("envelope path: got %q want %q", env.Path, "/tmp/reply.md")
+	}
+	for _, k := range []string{"from", "to", "topic", "sent_at", "in_reply_to", "correlation_id"} {
+		if _, ok := env.Frontmatter[k]; !ok {
+			t.Errorf("envelope frontmatter missing key %q", k)
+		}
+	}
+	if !strings.HasPrefix(env.Body, "Hello operator.") {
+		t.Errorf("envelope body: got %q", env.Body)
+	}
+}
+
+// TestCsuiteSend_FormatReply_JSONEscapesNewlines hardens the
+// body-preservation contract: a body containing real newline chars
+// must survive JSON round-trip without collapsing to " " or dropping.
+func TestCsuiteSend_FormatReply_JSONEscapesNewlines(t *testing.T) {
+	raw := []byte("---\nfrom: mike\nto: operator\n---\n\nline1\nline2\nline3\n")
+	out, err := formatReply(replyModeJSON, raw, "")
+	if err != nil {
+		t.Fatalf("formatReply: %v", err)
+	}
+	var env jsonReplyEnvelope
+	if err := json.Unmarshal([]byte(out), &env); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if env.Body != "line1\nline2\nline3\n" {
+		t.Errorf("body round-trip: got %q want %q", env.Body, "line1\nline2\nline3\n")
+	}
+	// Path should be omitted (omitempty) when empty.
+	if strings.Contains(out, `"path"`) {
+		t.Errorf("empty path should be omitted from JSON envelope: %s", out)
+	}
+}
+
+// TestCsuiteSend_FormatReply_WithFrontmatterAndJSONConflict covers the
+// mutual-exclusion gate in selectReplyMode (the surface the CLI hits
+// before formatReply runs).
+func TestCsuiteSend_FormatReply_WithFrontmatterAndJSONConflict(t *testing.T) {
+	_, err := selectReplyMode(true, true)
+	if err == nil {
+		t.Fatalf("expected conflict error, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("unexpected error shape: %v", err)
+	}
+	// Sanity: single-flag modes still resolve cleanly.
+	if m, _ := selectReplyMode(true, false); m != replyModeWithFrontmatter {
+		t.Errorf("with-frontmatter mode: got %q", m)
+	}
+	if m, _ := selectReplyMode(false, true); m != replyModeJSON {
+		t.Errorf("json mode: got %q", m)
+	}
+	if m, _ := selectReplyMode(false, false); m != replyModeBody {
+		t.Errorf("body mode: got %q", m)
+	}
+}
+
