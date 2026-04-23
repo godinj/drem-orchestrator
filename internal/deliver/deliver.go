@@ -37,12 +37,18 @@ import (
 const tokenHeader = "X-Csuite-Token"
 
 // validPersonas is the closed set of source personas the operator has
-// approved. Ross was retired 2026-04-22; the three remaining personas
-// are mike, alex, seth.
+// approved. Ross was retired 2026-04-22; the remaining three
+// containerized personas are mike, alex, seth. Kyle (host-side CEO
+// persona running as a Claude Code instance, not a container) is
+// also a valid source so Kyle can route outbox messages through the
+// watcher the same way the containerized personas do. Without kyle
+// here, host-Kyle → persona delivery has no routed path and the
+// operator is forced into direct-inbox filesystem drops.
 var validPersonas = map[string]struct{}{
 	"mike": {},
 	"alex": {},
 	"seth": {},
+	"kyle": {},
 }
 
 // DeliverRequest is the JSON wire format for POST /deliver. The body
@@ -253,7 +259,7 @@ func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 // later commits (which layer additional logic on top) can reuse it.
 func ValidateRequest(req *DeliverRequest) error {
 	if _, ok := validPersonas[req.SourcePersona]; !ok {
-		return fmt.Errorf("source_persona must be one of mike|alex|seth, got %q", req.SourcePersona)
+		return fmt.Errorf("source_persona must be one of mike|alex|seth|kyle, got %q", req.SourcePersona)
 	}
 	if req.OutboxPath == "" {
 		return fmt.Errorf("outbox_path must not be empty")

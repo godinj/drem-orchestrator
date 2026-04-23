@@ -135,6 +135,22 @@ func TestDeliver_BadSourcePersona(t *testing.T) {
 	}
 }
 
+// TestValidateRequest_KyleIsValidSource asserts kyle passes the source-
+// persona check. Added 2026-04-22 so host-side Kyle can route outbox
+// files through the watcher without being forced into direct-inbox
+// filesystem drops.
+func TestValidateRequest_KyleIsValidSource(t *testing.T) {
+	req := &DeliverRequest{
+		SourcePersona: "kyle",
+		OutboxPath:    "/csuite/kyle/outbox/2026-04-22T100000Z-kyle-directive.md",
+		SHA256:        "9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c9f1c",
+		EmittedAt:     "2026-04-22T10:00:00Z",
+	}
+	if err := ValidateRequest(req); err != nil {
+		t.Errorf("ValidateRequest returned %v; kyle must be a valid source persona", err)
+	}
+}
+
 // TestDeliver_OutboxPathPrefixMismatch verifies the endpoint rejects
 // outbox_path values that don't live under the source persona's
 // outbox directory.

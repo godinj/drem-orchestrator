@@ -208,6 +208,43 @@ func TestRescan_QuarantineOnMalformed(t *testing.T) {
 	}
 }
 
+// TestRescan_RoutesKyleOutboxToPersonaInbox covers the host-Kyle →
+// persona routing path added 2026-04-22. Kyle runs as a host-side
+// Claude Code instance (not a container) and cannot POST /deliver, so
+// his only route is to drop files into ~/.drem-csuite/kyle/outbox and
+// let the watcher's periodic rescan pick them up. The rescan must
+// therefore treat kyle as a valid source persona.
+func TestRescan_RoutesKyleOutboxToPersonaInbox(t *testing.T) {
+	root := newCsuiteTree(t)
+	body := []byte("---\nfrom: kyle\nto: mike\n---\n\ndirective from the CEO\n")
+	_, sha := stageOutbox(t, root, "kyle", "kyle-to-mike.md", body)
+
+	l := openTestLedger(t)
+	h := &handler{cfg: Config{Token: "secret", Ledger: l}, clock: time.Now}
+
+	res := h.Rescan()
+	if res.Scanned != 1 {
+		t.Errorf("scanned = %d, want 1 (got %+v)", res.Scanned, res)
+	}
+	if res.Delivered != 1 {
+		t.Errorf("delivered = %d, want 1 — kyle must be a valid source (got %+v)", res.Delivered, res)
+	}
+	if len(res.Errors) != 0 {
+		t.Errorf("errors = %v, want none — kyle must validate as a source persona", res.Errors)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(root, "mike", "inbox"))
+	if err != nil {
+		t.Fatalf("readdir mike inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("mike inbox count = %d, want 1 — kyle→mike routing must populate mike's inbox", len(entries))
+	}
+	if _, found, err := l.Lookup(sha); err != nil || !found {
+		t.Errorf("ledger lookup: found=%v err=%v — kyle delivery must be recorded", found, err)
+	}
+}
+
 // TestRescan_IgnoresNonMdFiles confirms the rescan's .md filter —
 // sidecar files, swap files, etc. must not be processed.
 func TestRescan_IgnoresNonMdFiles(t *testing.T) {

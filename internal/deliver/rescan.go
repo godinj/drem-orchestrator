@@ -20,8 +20,11 @@ import (
 // the startup rescan. Held explicit (not auto-discovered from the
 // filesystem) so a stray directory can never accidentally become a
 // source persona. Kept identical to validPersonas but as a slice so
-// walk order is deterministic for tests.
-var rescanPersonas = []string{"mike", "alex", "seth"}
+// walk order is deterministic for tests. Kyle is present so the
+// host-side CEO persona can emit outbox messages that the watcher
+// will route into containerized personas' inboxes on the same rescan
+// cadence as mike/alex/seth.
+var rescanPersonas = []string{"mike", "alex", "seth", "kyle"}
 
 // RescanResult is the JSON body returned by POST /rescan. The field
 // names are stable — tooling may parse them.
