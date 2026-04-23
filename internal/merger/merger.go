@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -345,31 +346,35 @@ func (req MergeRequest) validate() error {
 	return nil
 }
 
-// resetWorkDir removes workDir if it exists and recreates an empty parent
-// so the subsequent `git clone` can create workDir itself.
+// resetWorkDir empties workDir without removing the directory itself.
+//
+// Bug J: the merger container bind-mounts the feature worktree onto
+// /work (workDir) directly — workDir IS the mount point, not a child
+// of it. `os.RemoveAll(workDir)` eventually tries to unlinkat the
+// mount point, which the kernel refuses with EBUSY. We want the same
+// semantic ("drop every child"), but only touch children so the mount
+// point stays intact. If workDir does not exist, we create it so the
+// subsequent clone-into-. has somewhere to land.
+//
+// See plans/bug-j-merger-reset-workdir-unlinkat-busy.md for the full
+// write-up.
 func resetWorkDir(workDir string) error {
-	if err := os.RemoveAll(workDir); err != nil {
-		return fmt.Errorf("remove %s: %w", workDir, err)
+	entries, err := os.ReadDir(workDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			if mkErr := os.MkdirAll(workDir, 0o755); mkErr != nil {
+				return fmt.Errorf("mkdir %s: %w", workDir, mkErr)
+			}
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", workDir, err)
 	}
-	// Ensure the parent exists; git clone creates workDir itself.
-	parent := parentDir(workDir)
-	if parent != "" && parent != "." {
-		if err := os.MkdirAll(parent, 0o755); err != nil {
-			return fmt.Errorf("mkdir parent %s: %w", parent, err)
+	for _, e := range entries {
+		p := filepath.Join(workDir, e.Name())
+		if rmErr := os.RemoveAll(p); rmErr != nil {
+			return fmt.Errorf("remove %s: %w", p, rmErr)
 		}
 	}
 	return nil
 }
 
-// parentDir returns the parent directory of path without depending on
-// filepath.Dir's platform-specific return value for edge cases.
-func parentDir(path string) string {
-	idx := strings.LastIndex(path, "/")
-	if idx < 0 {
-		return ""
-	}
-	if idx == 0 {
-		return "/"
-	}
-	return path[:idx]
-}

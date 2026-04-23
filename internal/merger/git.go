@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -58,12 +59,24 @@ func runGit(ctx context.Context, workDir string, args ...string) gitOutput {
 	}
 }
 
-// cloneBranch clones bareRepo into workDir at the given branch. workDir must
-// not already exist (git clone creates it).
+// cloneBranch clones bareRepo into workDir at the given branch.
+//
+// Bug J shape change: the merger runs inside a container where workDir
+// is the bind-mount point of a pre-existing host directory, so workDir
+// MUST be preserved. We clone INTO workDir (git's `.` target) rather
+// than asking git to create workDir for us. The directory must exist
+// and be empty; resetWorkDir takes care of both. If workDir does not
+// exist (legacy callers running on a host filesystem), we create it so
+// the old semantics still work.
+//
+// See plans/bug-j-merger-reset-workdir-unlinkat-busy.md.
 func cloneBranch(ctx context.Context, bareRepo, branch, workDir string) error {
-	out := runGit(ctx, "", "clone", "--branch", branch, bareRepo, workDir)
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", workDir, err)
+	}
+	out := runGit(ctx, workDir, "clone", "--branch", branch, bareRepo, ".")
 	if out.Err != nil {
-		return fmt.Errorf("git clone --branch %s %s %s: %w: %s",
+		return fmt.Errorf("git clone --branch %s %s into %s: %w: %s",
 			branch, bareRepo, workDir, out.Err, out.Combined())
 	}
 	return nil

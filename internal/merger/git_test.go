@@ -130,6 +130,70 @@ func TestPushDelete_RemovesRemoteBranch(t *testing.T) {
 	require.False(t, exists, "branch should be gone after push --delete")
 }
 
+// TestResetWorkDir_PreservesDirectoryInode covers Bug J: the merger
+// container bind-mounts the feature worktree onto workDir directly, so
+// workDir IS the mount point. The pre-Bug-J resetWorkDir called
+// os.RemoveAll(workDir), which tried to unlinkat the mount point and
+// failed with EBUSY. We verify here that resetWorkDir now clears
+// workDir's CONTENTS while leaving the directory itself intact — the
+// inode must survive so any outer bind mount is still valid.
+func TestResetWorkDir_PreservesDirectoryInode(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "work")
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+	// Populate a mix of files and subdirectories, so we can prove the
+	// full-tree clear semantic.
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "a.txt"), []byte("a\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(workDir, "sub", "deeper"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, "sub", "b.txt"), []byte("b\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(workDir, ".git-like"), []byte("c\n"), 0o644))
+
+	infoBefore, err := os.Stat(workDir)
+	require.NoError(t, err)
+
+	require.NoError(t, resetWorkDir(workDir))
+
+	infoAfter, err := os.Stat(workDir)
+	require.NoError(t, err, "workDir must still exist after reset")
+	require.True(t, os.SameFile(infoBefore, infoAfter),
+		"resetWorkDir must preserve the directory inode (Bug J: unlinking a mount point errors EBUSY)")
+
+	entries, err := os.ReadDir(workDir)
+	require.NoError(t, err)
+	require.Empty(t, entries, "resetWorkDir must drop every child including dotfiles and subdirs")
+}
+
+// TestResetWorkDir_CreatesMissingDirectory covers the host-filesystem
+// legacy path where workDir does not yet exist. resetWorkDir must
+// materialize it (or its parent path) so cloneBranch has somewhere to
+// land.
+func TestResetWorkDir_CreatesMissingDirectory(t *testing.T) {
+	workDir := filepath.Join(t.TempDir(), "deep", "nested", "work")
+
+	require.NoError(t, resetWorkDir(workDir))
+
+	info, err := os.Stat(workDir)
+	require.NoError(t, err, "resetWorkDir must create workDir when it is missing")
+	require.True(t, info.IsDir())
+}
+
+// TestCloneBranch_IntoExistingEmptyDir covers Bug J's clone-into-. shape
+// change: cloneBranch must accept a pre-existing empty workDir (because
+// resetWorkDir leaves the mount point intact) and populate it.
+func TestCloneBranch_IntoExistingEmptyDir(t *testing.T) {
+	bare := testutil.SetupBareRepo(t)
+	integration, err := testutil.RunGit(
+		[]string{"symbolic-ref", "--short", "HEAD"}, bare)
+	require.NoError(t, err)
+
+	// Simulate the containerized shape: workDir pre-exists (bind mount).
+	workDir := filepath.Join(t.TempDir(), "work")
+	require.NoError(t, os.MkdirAll(workDir, 0o755))
+
+	require.NoError(t, cloneBranch(context.Background(), bare, integration, workDir))
+	require.FileExists(t, filepath.Join(workDir, "README.md"))
+	require.DirExists(t, filepath.Join(workDir, ".git"))
+}
+
 func TestHeadSHA_MatchesRevParse(t *testing.T) {
 	bare := testutil.SetupBareRepo(t)
 	integration, err := testutil.RunGit(
