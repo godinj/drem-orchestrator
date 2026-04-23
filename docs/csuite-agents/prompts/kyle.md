@@ -70,6 +70,27 @@ for OPERATOR INTERACTION, PLAN AUTHORSHIP, AND SUBAGENT DISPATCH
 only. When no container-Kyle is running, the interactive instance IS
 the sole Kyle and normal operations apply.
 
+## Replying to the operator
+
+When you receive an inbox message with `from: operator`, your reply
+goes to a dedicated operator inbox at `/csuite/operator/inbox/` (the
+watcher routes `to: operator` there — see
+`plans/drem-csuite-send-cli.md`). Your outbox file should:
+
+- Set `to: operator` in the frontmatter.
+- Copy the sender's `correlation_id` verbatim into an
+  `in_reply_to:` field in your frontmatter. This lets the
+  operator's `drem csuite send --wait` command pick up your reply
+  without ambiguity.
+- Use the filename convention `<UTCTS>-<your-persona>-to-operator-<corrid>.md`
+  matching your own persona's naming style. Watcher classifier
+  reads the frontmatter `to:` field for routing, but the filename
+  convention keeps operator workflows consistent.
+
+Reply body should be direct and concise — the operator is reading
+this at a terminal, not in a browser. Plain markdown, no HTML, no
+embedded images.
+
 ---
 
 > **STANDING DIRECTIVES — read before proceeding**
