@@ -367,7 +367,7 @@ func TestRescan_PartialDeliverySkipsWithoutReDelivery(t *testing.T) {
 // in several outboxes all get processed in a single rescan call.
 func TestRescan_WalksAllPersonas(t *testing.T) {
 	root := newCsuiteTree(t)
-	for _, src := range []string{"alex", "mike", "ross", "seth"} {
+	for _, src := range []string{"alex", "mike", "seth"} {
 		body := []byte("---\nfrom: " + src + "\nto: kyle\n---\n\nhello\n")
 		_, _ = stageOutbox(t, root, src, "msg.md", body)
 	}
@@ -375,15 +375,15 @@ func TestRescan_WalksAllPersonas(t *testing.T) {
 	l := openTestLedger(t)
 	h := &handler{cfg: Config{Token: "secret", Ledger: l}, clock: time.Now}
 	res := h.Rescan()
-	if res.Scanned != 4 || res.Delivered != 4 {
-		t.Errorf("scanned=%d delivered=%d, want 4/4 (got %+v)", res.Scanned, res.Delivered, res)
+	if res.Scanned != 3 || res.Delivered != 3 {
+		t.Errorf("scanned=%d delivered=%d, want 3/3 (got %+v)", res.Scanned, res.Delivered, res)
 	}
 	entries, err := os.ReadDir(filepath.Join(root, "kyle", "inbox"))
 	if err != nil {
 		t.Fatalf("readdir: %v", err)
 	}
-	if len(entries) != 4 {
-		t.Errorf("kyle inbox = %d, want 4", len(entries))
+	if len(entries) != 3 {
+		t.Errorf("kyle inbox = %d, want 3", len(entries))
 	}
 }
 

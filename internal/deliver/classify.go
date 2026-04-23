@@ -95,7 +95,7 @@ func classifyBytes(data []byte) (Classification, error) {
 	case yaml.ScalarNode:
 		dest := toNode.Value
 		switch dest {
-		case "mike", "alex", "ross", "seth":
+		case "mike", "alex", "seth":
 			return Classification{Class: ClassPersona, Dest: dest}, nil
 		case "kyle":
 			return Classification{Class: ClassKyle, Dest: "kyle"}, nil

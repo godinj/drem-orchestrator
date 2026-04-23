@@ -37,11 +37,11 @@ import (
 const tokenHeader = "X-Csuite-Token"
 
 // validPersonas is the closed set of source personas the operator has
-// approved. The plan (§5) lists these four explicitly.
+// approved. Ross was retired 2026-04-22; the three remaining personas
+// are mike, alex, seth.
 var validPersonas = map[string]struct{}{
 	"mike": {},
 	"alex": {},
-	"ross": {},
 	"seth": {},
 }
 
@@ -253,7 +253,7 @@ func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 // later commits (which layer additional logic on top) can reuse it.
 func ValidateRequest(req *DeliverRequest) error {
 	if _, ok := validPersonas[req.SourcePersona]; !ok {
-		return fmt.Errorf("source_persona must be one of mike|alex|ross|seth, got %q", req.SourcePersona)
+		return fmt.Errorf("source_persona must be one of mike|alex|seth, got %q", req.SourcePersona)
 	}
 	if req.OutboxPath == "" {
 		return fmt.Errorf("outbox_path must not be empty")

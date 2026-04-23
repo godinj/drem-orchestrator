@@ -11,7 +11,7 @@ import (
 )
 
 // knownAgents is the fixed set of C-Suite agents to monitor.
-var knownAgents = []string{"kyle", "mike", "alex", "ross", "seth"}
+var knownAgents = []string{"kyle", "mike", "alex", "seth"}
 
 // Heartbeat freshness thresholds for deriving AgentMonStatus.
 const (

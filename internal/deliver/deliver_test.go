@@ -178,7 +178,7 @@ func TestDeliver_BadEmittedAt(t *testing.T) {
 // behaviour for commit 1.
 func TestDeliver_HappyPathReturns501(t *testing.T) {
 	h := newHandler("secret")
-	for _, persona := range []string{"mike", "alex", "ross", "seth"} {
+	for _, persona := range []string{"mike", "alex", "seth"} {
 		persona := persona
 		t.Run(persona, func(t *testing.T) {
 			w := post(t, h, "secret", validBody(t, persona))

@@ -242,7 +242,7 @@ func TestInboxSignalTrigger_NewDirectoryDiscovery(t *testing.T) {
 //  2. Signals written after Stop produce no further events.
 func TestInboxSignalTrigger_StopBehaviour(t *testing.T) {
 	base := t.TempDir()
-	inbox := mkInbox(t, base, "ross")
+	inbox := mkInbox(t, base, "mike")
 
 	tr := watcher.NewInboxSignalTrigger(base, testPollInterval)
 	if err := tr.Start(context.Background()); err != nil {

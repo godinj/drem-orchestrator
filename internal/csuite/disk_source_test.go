@@ -70,7 +70,6 @@ func TestDiskSnapshotSource_AgentSummaries_AllOnline(t *testing.T) {
 		"kyle": "---\nlast_heartbeat: " + freshHeartbeat + "\ncontext_percent: 55\ncurrent_activity: planning\n---\n",
 		"mike": "---\nlast_heartbeat: " + freshHeartbeat + "\ncontext_percent: 25\ncurrent_activity: monitoring\n---\n",
 		"alex": "---\nlast_heartbeat: " + freshHeartbeat + "\ncontext_percent: 80\ncurrent_activity: coding\n---\n",
-		"ross": "---\nlast_heartbeat: " + freshHeartbeat + "\ncontext_percent: 10\ncurrent_activity: testing\n---\n",
 		"seth": "---\nlast_heartbeat: " + freshHeartbeat + "\ncontext_percent: 40\ncurrent_activity: reviewing\n---\n",
 	}, nil)
 
@@ -80,8 +79,8 @@ func TestDiskSnapshotSource_AgentSummaries_AllOnline(t *testing.T) {
 		t.Fatalf("AgentSummaries() error: %v", err)
 	}
 
-	if len(summaries) != 5 {
-		t.Fatalf("expected 5 summaries, got %d", len(summaries))
+	if len(summaries) != 4 {
+		t.Fatalf("expected 4 summaries, got %d", len(summaries))
 	}
 
 	byName := make(map[string]csuite.AgentSummary)
@@ -108,7 +107,6 @@ func TestDiskSnapshotSource_AgentSummaries_StaleHeartbeat(t *testing.T) {
 		"kyle": "---\nlast_heartbeat: " + stale + "\ncontext_percent: 55\ncurrent_activity: planning\n---\n",
 		"mike": "",
 		"alex": "",
-		"ross": "",
 		"seth": "",
 	}, nil)
 
@@ -135,7 +133,6 @@ func TestDiskSnapshotSource_AgentSummaries_OfflineHeartbeat(t *testing.T) {
 		"kyle": "---\nlast_heartbeat: " + old + "\ncontext_percent: 55\ncurrent_activity: planning\n---\n",
 		"mike": "",
 		"alex": "",
-		"ross": "",
 		"seth": "",
 	}, nil)
 
@@ -160,7 +157,6 @@ func TestDiskSnapshotSource_AgentSummaries_MissingStateFile(t *testing.T) {
 		"kyle": "",
 		"mike": "",
 		"alex": "",
-		"ross": "",
 		"seth": "",
 	}, nil)
 
@@ -195,7 +191,6 @@ func TestDiskSnapshotSource_AgentSummaries_MalformedFrontmatter(t *testing.T) {
 		"kyle": "not valid frontmatter at all",
 		"mike": "",
 		"alex": "",
-		"ross": "",
 		"seth": "",
 	}, nil)
 
@@ -232,8 +227,8 @@ func TestDiskSnapshotSource_AgentSummaries_MissingAgentDir(t *testing.T) {
 		t.Fatalf("AgentSummaries() error: %v", err)
 	}
 
-	if len(summaries) != 5 {
-		t.Fatalf("expected 5 summaries (all known agents), got %d", len(summaries))
+	if len(summaries) != 4 {
+		t.Fatalf("expected 4 summaries (all known agents), got %d", len(summaries))
 	}
 
 	byName := make(map[string]csuite.AgentSummary)
@@ -258,7 +253,6 @@ func TestDiskSnapshotSource_UnreadMessageCounts_Basic(t *testing.T) {
 		"kyle": "",
 		"mike": "",
 		"alex": "",
-		"ross": "",
 		"seth": "",
 	}, map[string]int{
 		"kyle": 3,
@@ -288,7 +282,6 @@ func TestDiskSnapshotSource_UnreadMessageCounts_IgnoresNonMd(t *testing.T) {
 		"kyle": "",
 		"mike": "",
 		"alex": "",
-		"ross": "",
 		"seth": "",
 	}, map[string]int{
 		"kyle": 2,
@@ -320,7 +313,7 @@ func TestDiskSnapshotSource_UnreadMessageCounts_MissingInboxDir(t *testing.T) {
 		t.Fatalf("UnreadMessageCounts() error: %v", err)
 	}
 
-	for _, name := range []string{"kyle", "mike", "alex", "ross", "seth"} {
+	for _, name := range []string{"kyle", "mike", "alex", "seth"} {
 		if counts[name] != 0 {
 			t.Errorf("%s: expected 0, got %d", name, counts[name])
 		}
@@ -354,7 +347,6 @@ func TestDiskSnapshotSource_HeartbeatBoundaries(t *testing.T) {
 				"kyle": "---\nlast_heartbeat: " + hb + "\ncontext_percent: 10\ncurrent_activity: test\n---\n",
 				"mike": "",
 				"alex": "",
-				"ross": "",
 				"seth": "",
 			}, nil)
 
@@ -388,7 +380,6 @@ func TestDiskSnapshotSource_AgentSummaries_IncludesUnreadCount(t *testing.T) {
 		"kyle": "---\nlast_heartbeat: " + now + "\ncontext_percent: 55\ncurrent_activity: planning\n---\n",
 		"mike": "",
 		"alex": "",
-		"ross": "",
 		"seth": "",
 	}, map[string]int{
 		"kyle": 5,
@@ -429,8 +420,8 @@ func TestDiskSnapshotSource_EmptyDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AgentSummaries() error: %v", err)
 	}
-	if len(summaries) != 5 {
-		t.Fatalf("expected 5 summaries even with empty dir, got %d", len(summaries))
+	if len(summaries) != 4 {
+		t.Fatalf("expected 4 summaries even with empty dir, got %d", len(summaries))
 	}
 	for _, s := range summaries {
 		if s.Status != csuite.AgentMonOffline {
@@ -442,7 +433,7 @@ func TestDiskSnapshotSource_EmptyDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UnreadMessageCounts() error: %v", err)
 	}
-	for _, name := range []string{"kyle", "mike", "alex", "ross", "seth"} {
+	for _, name := range []string{"kyle", "mike", "alex", "seth"} {
 		if counts[name] != 0 {
 			t.Errorf("%s: expected 0, got %d", name, counts[name])
 		}

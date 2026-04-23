@@ -103,7 +103,7 @@ setup_mock_csuite() {
     mkdir -p "$td"
 
     # Bootstrap agent directories
-    for agent in kyle mike alex ross seth; do
+    for agent in kyle mike alex seth; do
         mkdir -p "${td}/${agent}/inbox/archive"
         mkdir -p "${td}/${agent}/outbox"
     done
@@ -138,16 +138,6 @@ heartbeat: 1711267200
 ---
 # Current Focus
 Triaging incoming tasks from backlog
-EOF
-
-    cat > "${td}/ross/state.md" <<'EOF'
----
-role: QA Lead
-context_percent: 15
-heartbeat: 1711267200
----
-# Current Focus
-Reviewing test coverage for recent merges
 EOF
 
     cat > "${td}/seth/state.md" <<'EOF'
@@ -196,9 +186,9 @@ type: observation
 5 new tasks triaged and moved to backlog.
 EOF
 
-    cat > "${td}/mike/inbox/20260324-073100-ross.md" <<'EOF'
+    cat > "${td}/mike/inbox/20260324-073100-seth.md" <<'EOF'
 ---
-from: ross
+from: seth
 to: mike
 timestamp: 2026-03-24T07:31:00Z
 subject: "Test coverage gap"
@@ -359,7 +349,6 @@ test_situation_report_has_agent_health() {
     assert_contains "$content" "kyle"
     assert_contains "$content" "mike"
     assert_contains "$content" "alex"
-    assert_contains "$content" "ross"
     assert_contains "$content" "seth"
 
     echo "  $CURRENT_TEST: done"
@@ -390,15 +379,26 @@ test_situation_report_has_alive_dead_status() {
     local mockbin
     mockbin="$(setup_mock_csuite "$td")"
 
-    # Mock tmux shows kyle, mike, alex, seth alive but NOT ross
+    # Override mock tmux so seth is NOT listed (simulating a dead session).
+    cat > "${mockbin}/tmux" <<'TMUX_EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "list-sessions" ] || [ "${2:-}" = "list-sessions" ]; then
+    echo "csuite-kyle: 1 windows (created Mon Mar 24 07:00:00 2026)"
+    echo "csuite-mike: 1 windows (created Mon Mar 24 07:00:00 2026)"
+    echo "csuite-alex: 1 windows (created Mon Mar 24 07:00:00 2026)"
+    exit 0
+fi
+exit 1
+TMUX_EOF
+    chmod +x "${mockbin}/tmux"
+
     run_status "$td" "$mockbin" --report 2>&1 || true
 
     local content
     content="$(cat "${td}/situation-report.md" 2>/dev/null || echo "")"
 
-    # ross has no tmux session in the mock, should be marked dead
-    # The exact format is up to implementation, but report should distinguish
-    assert_contains "$content" "ross"
+    # seth has no tmux session in the mock, but should still appear in report
+    assert_contains "$content" "seth"
 
     echo "  $CURRENT_TEST: done"
 }

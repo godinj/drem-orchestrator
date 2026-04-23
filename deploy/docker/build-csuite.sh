@@ -5,7 +5,7 @@
 # Phase 3 of the containerization effort (docs/prd-containerization.md
 # §Images). One-command entry point for refreshing:
 #   - localhost:5000/drem-csuite-base:latest
-#   - localhost:5000/drem-csuite-{mike,alex,ross,seth}:latest
+#   - localhost:5000/drem-csuite-{mike,alex,seth}:latest
 #   - localhost:5000/drem-csuite-watcher:latest
 #   - localhost:5000/drem-orch:latest          (production)
 #   - localhost:5000/drem-orch-dev:latest      (development)
@@ -38,7 +38,7 @@ PROMPT_DST="deploy/docker/context/csuite-prompts"
 echo ">> staging C-Suite prompts -> ${PROMPT_DST}"
 rm -rf "${PROMPT_DST}"
 mkdir -p "${PROMPT_DST}"
-for persona in mike alex ross seth; do
+for persona in mike alex seth; do
     if [[ ! -f "${PROMPT_SRC}/${persona}.md" ]]; then
         echo "error: ${PROMPT_SRC}/${persona}.md is missing" >&2
         exit 1
@@ -87,7 +87,7 @@ docker build -t localhost:5000/drem-csuite-base:latest \
 echo ">> pre-pushing drem-csuite-base so persona FROM resolves to current base"
 docker push localhost:5000/drem-csuite-base:latest
 
-for agent in mike alex ross seth; do
+for agent in mike alex seth; do
     echo ">> building localhost:5000/drem-csuite-${agent}:latest"
     docker build -t "localhost:5000/drem-csuite-${agent}:latest" \
         -f "csuite-${agent}.Dockerfile" context/
@@ -114,7 +114,6 @@ for img in \
     drem-csuite-base \
     drem-csuite-mike \
     drem-csuite-alex \
-    drem-csuite-ross \
     drem-csuite-seth \
     drem-csuite-watcher \
     drem-orch \

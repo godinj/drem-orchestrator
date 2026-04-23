@@ -1,5 +1,15 @@
 # PRD: C-Suite Agent Team
 
+> **Retirement note (2026-04-22):** Ross (Chief HR) has been retired as a
+> C-Suite persona. The role's responsibilities (context-window monitoring,
+> agent lifecycle, temp-worker lifecycle, workforce-gap identification)
+> have been redistributed — Mike now owns container-lifecycle and
+> recovery authority; turn-based agents no longer need context-window
+> monitoring (fresh start every turn). The historical text below still
+> describes Ross as a peer; treat all Ross-specific language as
+> superseded. The live team is Kyle, Mike, Alex, Seth. See
+> `plans/c-suite-world-state-2026-04-22.md` §3d, §3e.
+
 ## Problem Statement
 
 The drem-orchestrator requires significant manual effort to operate. The workflow contains numerous bugs, and fixing one bug frequently reveals others. The operator must manually triage failures, prioritize the backlog, monitor agent health, verify architectural adherence, and manage the overall development pipeline — all of which prevents the orchestrator from becoming a tool that can be left to run autonomously.
@@ -12,15 +22,16 @@ The goal is to create a self-improving layer: a team of executive-level Claude C
 
 Introduce a **C-Suite agent team** that operates entirely outside the drem-orchestrator Go binary. These are long-running Claude Code sessions, each with a distinct executive role, that coordinate via disk-based inboxes and manage a pool of temporary operator agents. Together, they form a self-improvement loop around the orchestrator.
 
-The team consists of five agents:
+The team (post Ross retirement, 2026-04-22) consists of four agents:
 
 - **Kyle (CEO)** — the operator's direct interface. Reactive hub that receives reports from other C-Suite agents, writes summaries to disk, and delegates work. Kyle starts the other agents when the operator begins a conversation.
-- **Mike (COO)** — monitors the orchestrator's database for operational issues (failure rates, stuck tasks, agent deaths). Works with Alex on next steps. Spawns temporary operator agents to run the orchestrator and observe its behavior.
+- **Mike (COO)** — monitors the orchestrator's database for operational issues (failure rates, stuck tasks, agent deaths). Works with Alex on next steps. Spawns temporary operator agents to run the orchestrator and observe its behavior. Holds container-lifecycle recovery authority (respawn, pause, fail-with-report) — responsibilities formerly split with Ross.
 - **Alex (CPO)** — owns product direction. Prioritizes the backlog based on pain points and roadmap understanding. Reviews filed issues, bug reports, and PRDs. Uses the "grill me" skill with the operator to design new features. Can consult other C-Suite agents for input.
-- **Ross (Chief HR)** — manages the workforce. Monitors context window health of all agents (C-Suite and temp workers) via ctxmon, triggers save-to-disk when thresholds are reached, and orchestrates agent restarts with restored context. Also identifies when new C-Suite roles are needed and onboards them.
 - **Seth (CTO)** — guards technical quality. Watches everything merged into master and iteratively verifies adherence to the constitution and architecture decisions. Uses the "repo-audit" skill for lightweight incremental checks rather than deep audits on every merge.
 
-**Temporary operator agents** are spawned by Mike and lifecycle-managed by Ross. They run the orchestrator, observe its behavior, write bug reports, and verify that tests pass — but do not make code changes themselves. One temp worker runs at a time initially.
+*(Historical: **Ross (Chief HR)** previously managed workforce context health and temp-worker lifecycle. Retired 2026-04-22; responsibilities redistributed to Mike or dropped. See retirement note at the top of this doc.)*
+
+**Temporary operator agents** are spawned and lifecycle-managed directly by Mike. They run the orchestrator, observe its behavior, write bug reports, and verify that tests pass — but do not make code changes themselves. One temp worker runs at a time initially.
 
 Key properties:
 - **External to the orchestrator**: The C-Suite agents are not managed by the drem-orchestrator software. They manage and iterate on it.

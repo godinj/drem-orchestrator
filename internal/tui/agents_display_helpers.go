@@ -41,8 +41,6 @@ func imageForAgentType(t model.AgentType) string {
 		return "localhost:5000/drem-csuite-mike:latest"
 	case "csuite-alex":
 		return "localhost:5000/drem-csuite-alex:latest"
-	case "csuite-ross":
-		return "localhost:5000/drem-csuite-ross:latest"
 	case "csuite-seth":
 		return "localhost:5000/drem-csuite-seth:latest"
 	}

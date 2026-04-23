@@ -38,7 +38,7 @@ type TemplateData struct {
 	// DefaultOrchImage (production distroless build); when DevMode is
 	// true the caller should swap in DefaultOrchDevImage.
 	OrchImage string
-	// CsuiteImages maps C-Suite persona ("mike", "alex", "ross", "seth")
+	// CsuiteImages maps C-Suite persona ("mike", "alex", "seth")
 	// to its container image tag.
 	CsuiteImages map[string]string
 	// BareRepoPath is the absolute path to the project's bare repository
@@ -89,8 +89,8 @@ type TemplateData struct {
 	// plans/worker-prompt-delivery.md §§2, 4.
 	WorkerPromptRoot string
 	// CsuiteHomeRoot is the host directory that holds per-persona
-	// inbox/outbox/state trees for the four csuite agents (mike, alex,
-	// ross, seth). The compose template bind-mounts
+	// inbox/outbox/state trees for the three csuite agents (mike, alex,
+	// seth). The compose template bind-mounts
 	// <CsuiteHomeRoot>/<persona>/ read-write into each csuite-*
 	// container at /home/drem/.drem-csuite/<persona>/ so inbox
 	// messages dropped by the host reach the containerized persona and

@@ -396,10 +396,10 @@ func TestMultipleTransitions_ProduceMultipleEvents(t *testing.T) {
 
 func TestCsuiteAgents_ContainsExpectedAgents(t *testing.T) {
 	expected := map[string]bool{
-		"kyle": true, "mike": true, "alex": true, "ross": true, "seth": true,
+		"kyle": true, "mike": true, "alex": true, "seth": true,
 	}
-	if len(csuiteAgents) != 5 {
-		t.Fatalf("expected 5 agents, got %d", len(csuiteAgents))
+	if len(csuiteAgents) != 4 {
+		t.Fatalf("expected 4 agents, got %d", len(csuiteAgents))
 	}
 	for _, agent := range csuiteAgents {
 		if !expected[agent] {

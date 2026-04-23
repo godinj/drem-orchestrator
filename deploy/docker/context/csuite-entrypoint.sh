@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# csuite-entrypoint — Wave-2 PID-1-side script for the four C-Suite
-# container images (mike, alex, ross, seth).
+# csuite-entrypoint — Wave-2 PID-1-side script for the three C-Suite
+# container images (mike, alex, seth).
 #
 # Replaces deploy/docker/context/csuite-run.sh (which was the Wave-1
 # "exec claude --print" entrypoint). Instead of launching a long-lived
@@ -14,7 +14,7 @@
 # Environment contract (set by the per-project compose template; unchanged
 # from csuite-run.sh):
 #
-#   CSUITE_AGENT      persona name: mike, alex, ross, or seth (required)
+#   CSUITE_AGENT      persona name: mike, alex, or seth (required)
 #   DREM_PROJECT      project name (informational; logged only)
 #   DREM_ORCH_URL     orchestrator HTTP URL inside drem-net (unused by
 #                     the poller itself; available to any claude -p
@@ -34,9 +34,9 @@ if [[ -z "${CSUITE_AGENT:-}" ]]; then
 fi
 
 case "${CSUITE_AGENT}" in
-    mike|alex|ross|seth) ;;
+    mike|alex|seth) ;;
     *)
-        echo "csuite-entrypoint: unknown CSUITE_AGENT=${CSUITE_AGENT} (want mike|alex|ross|seth)" >&2
+        echo "csuite-entrypoint: unknown CSUITE_AGENT=${CSUITE_AGENT} (want mike|alex|seth)" >&2
         exit 64
         ;;
 esac

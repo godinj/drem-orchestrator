@@ -65,11 +65,11 @@ func (r *lifecycleMockRunner) runCount() int {
 	return r.count
 }
 
-// allowedCfg returns a Config that permits mike, alex, ross, and seth.
+// allowedCfg returns a Config that permits mike, alex, and seth.
 // kyle is intentionally absent.
 func allowedCfg() watcher.Config {
 	return watcher.Config{
-		AllowedAgents: []string{"mike", "alex", "ross", "seth"},
+		AllowedAgents: []string{"mike", "alex", "seth"},
 	}
 }
 

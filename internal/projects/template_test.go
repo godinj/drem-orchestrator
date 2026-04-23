@@ -31,7 +31,6 @@ func fullTemplateData(name, lang string) projects.TemplateData {
 		CsuiteImages: map[string]string{
 			"mike": "localhost:5000/drem-csuite-mike:latest",
 			"alex": "localhost:5000/drem-csuite-alex:latest",
-			"ross": "localhost:5000/drem-csuite-ross:latest",
 			"seth": "localhost:5000/drem-csuite-seth:latest",
 		},
 		BareRepoPath: "/home/dev/git/" + name + ".git",
@@ -110,7 +109,7 @@ func TestRender_GoTemplateFull(t *testing.T) {
 	s := string(out)
 	for _, service := range []string{
 		"orch:", "agentmon:", "csuite-watcher:",
-		"csuite-mike:", "csuite-alex:", "csuite-ross:", "csuite-seth:",
+		"csuite-mike:", "csuite-alex:", "csuite-seth:",
 	} {
 		require.Contains(t, s, service, "missing service %q", service)
 	}
@@ -239,7 +238,7 @@ func TestRender_CsuiteWatcherTokenPathIsWired(t *testing.T) {
 		} `yaml:"services"`
 	}
 	require.NoError(t, yaml.Unmarshal(out, &parsed))
-	for _, p := range []string{"csuite-mike", "csuite-alex", "csuite-ross", "csuite-seth"} {
+	for _, p := range []string{"csuite-mike", "csuite-alex", "csuite-seth"} {
 		svc, ok := parsed.Services[p]
 		require.True(t, ok, "service %s missing from rendered compose", p)
 		require.Equal(t, "/run/secrets/csuite-watcher-token",
@@ -411,7 +410,7 @@ func TestRender_CsuiteHomeMountsAreWired(t *testing.T) {
 	}
 	require.NoError(t, yaml.Unmarshal(out, &parsed))
 
-	for _, persona := range []string{"mike", "alex", "ross", "seth"} {
+	for _, persona := range []string{"mike", "alex", "seth"} {
 		svc := "csuite-" + persona
 		creds := "/home/operator/.claude/.credentials.json:" +
 			"/home/drem/.claude/.credentials.json:ro"
@@ -544,7 +543,7 @@ func TestRender_ParsesAsYAML(t *testing.T) {
 	services, ok := parsed["services"].(map[string]any)
 	require.True(t, ok, "services must be a map")
 	for _, name := range []string{"orch", "agentmon", "csuite-watcher",
-		"csuite-mike", "csuite-alex", "csuite-ross", "csuite-seth"} {
+		"csuite-mike", "csuite-alex", "csuite-seth"} {
 		require.Contains(t, services, name)
 	}
 	// merger-pool was removed because drem-merger is a per-task one-shot
@@ -747,7 +746,7 @@ func TestRender_PersonaSignalEnvIsDeclared(t *testing.T) {
 	}
 	require.NoError(t, yaml.Unmarshal(out, &parsed))
 
-	for _, persona := range []string{"mike", "alex", "ross", "seth"} {
+	for _, persona := range []string{"mike", "alex", "seth"} {
 		svc := "csuite-" + persona
 		env := parsed.Services[svc].Environment
 		require.Contains(t, env, "CSUITE_WATCHER_TOKEN",

@@ -125,7 +125,7 @@ priority: high
 type: request
 ---
 
-Please start all C-Suite agents immediately. Launch them in order: Ross, Seth, Alex, Mike.
+Please start all C-Suite agents immediately. Launch them in order: Seth, Alex, Mike.
 Report back with the status of each agent after startup.
 MSGEOF
 

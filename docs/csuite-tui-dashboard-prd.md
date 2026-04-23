@@ -2,7 +2,7 @@
 
 ## Problem Statement
 
-The drem-orchestrator TUI provides full visibility into orchestrator tasks and agents (planners, coders, testers), but has zero visibility into the C-Suite agent layer (Kyle, Mike, Alex, Ross, Seth) or the temp workers they spawn. Operators must use a separate non-interactive shell script (`csuite-status.sh --dashboard`) or manually read files in `~/.drem-csuite/` to understand what the C-Suite agents are doing, what messages they're exchanging, and what instructions temp workers received.
+The drem-orchestrator TUI provides full visibility into orchestrator tasks and agents (planners, coders, testers), but has zero visibility into the C-Suite agent layer (Kyle, Mike, Alex, Seth) or the temp workers they spawn. Operators must use a separate non-interactive shell script (`csuite-status.sh --dashboard`) or manually read files in `~/.drem-csuite/` to understand what the C-Suite agents are doing, what messages they're exchanging, and what instructions temp workers received.
 
 This forces operators to context-switch between the TUI and terminal, makes it impossible to take actions (restart agents, send messages, kill workers) without manual shell commands, and obscures the message flow that drives all C-Suite coordination.
 
@@ -42,7 +42,7 @@ Data is ingested into the database via two paths: a background goroutine in the 
 Three new tables:
 
 **`csuite_agents`** — One row per C-Suite agent, upserted on each state sync.
-- `name` (PK): kyle, mike, alex, ross, seth
+- `name` (PK): kyle, mike, alex, seth
 - `status`: alive/dead
 - `context_percent`: integer
 - `heartbeat_at`: timestamp
@@ -101,7 +101,6 @@ On insert, if the row count exceeds 100, the oldest rows are deleted.
 │ kyle    alive   12%   2m    idle  │ w-003 mike  9340.. working │
 │ mike    dead    --    15m   --    │ w-004 alex  2209.. working │
 │ alex    alive   18%   <1m   loop  │                            │
-│ ross    alive   8%    5m    mon   │                            │
 │ seth    alive   22%   3m    audit │                            │
 ├─Messages / Detail─────────────────┴────────────────────────────┤
 │ [Context-sensitive: inbox or all-messages for selected agent,  │

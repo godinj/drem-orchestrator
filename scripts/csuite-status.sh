@@ -51,7 +51,7 @@ usage() {
 }
 
 CSUITE_DIR="${CSUITE_DIR:-$HOME/.drem-csuite}"
-AGENTS=(kyle mike alex ross seth)
+AGENTS=(kyle mike alex seth)
 
 # Alert thresholds
 CTX_WARN=75

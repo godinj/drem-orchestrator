@@ -1,5 +1,5 @@
 // Package persona hosts the inbox-driven headless poller used by the
-// C-Suite persona containers (mike, alex, ross, seth).
+// C-Suite persona containers (mike, alex, seth).
 //
 // # Architectural shape
 //
@@ -66,7 +66,7 @@ const DefaultClaudeTimeout = 5 * time.Minute
 const DefaultMaxFailures = 3
 
 // AllowedPersonas lists every valid value for Config.Persona.
-var AllowedPersonas = []string{"mike", "alex", "ross", "seth"}
+var AllowedPersonas = []string{"mike", "alex", "seth"}
 
 // Config carries every runtime knob for the poller. Zero values mean
 // "derive from Persona" where applicable.

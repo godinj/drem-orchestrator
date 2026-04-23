@@ -25,7 +25,7 @@ func (r *runnerMockRunner) Run(_ context.Context, _ string) ([]byte, int, error)
 func runnerCfg(t *testing.T) watcher.RunnerConfig {
 	t.Helper()
 	return watcher.RunnerConfig{
-		AllowedAgents:     []string{"mike", "alex", "ross", "seth"},
+		AllowedAgents:     []string{"mike", "alex", "seth"},
 		InboxBaseDir:      t.TempDir(),
 		InboxPollInterval: 10 * time.Millisecond,
 		SafetyInterval:    100 * time.Millisecond,

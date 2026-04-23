@@ -99,7 +99,7 @@ test_bootstrap() {
     CSUITE_DIR="$td" bash "${SCRIPT_DIR}/csuite-bootstrap.sh" >/dev/null
 
     # Verify directories
-    for agent in kyle mike alex ross seth; do
+    for agent in kyle mike alex seth; do
         assert_dir_exists "${td}/${agent}/inbox"
         assert_dir_exists "${td}/${agent}/inbox/archive"
         assert_dir_exists "${td}/${agent}/outbox"

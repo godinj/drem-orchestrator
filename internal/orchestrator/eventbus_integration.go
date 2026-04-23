@@ -8,7 +8,7 @@ import (
 )
 
 // csuiteAgents is the fixed set of C-Suite agents that receive event deliveries.
-var csuiteAgents = []string{"kyle", "mike", "alex", "ross", "seth"}
+var csuiteAgents = []string{"kyle", "mike", "alex", "seth"}
 
 // publishTaskTransition publishes a task status change event to the C-Suite
 // event bus and creates delivery records for all known agents. Errors are

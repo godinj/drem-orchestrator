@@ -30,7 +30,6 @@ type EventInfo struct {
 //	mike (COO):  task_status_changed
 //	alex (CPO):  task_status_changed
 //	seth (CTO):  task_status_changed
-//	ross (HR):   task_status_changed
 //	unknown:     all event types (safe fallback)
 type FilteredPrecheck struct {
 	inboxBaseDir string
@@ -43,7 +42,6 @@ var AgentEventTypes = map[string][]string{
 	"mike": {"task_status_changed"},
 	"alex": {"task_status_changed"},
 	"seth": {"task_status_changed"},
-	"ross": {"task_status_changed"},
 }
 
 // NewFilteredPrecheck creates a FilteredPrecheck that checks inbox messages

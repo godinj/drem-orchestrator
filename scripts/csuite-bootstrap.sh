@@ -9,7 +9,7 @@ set -euo pipefail
 
 CSUITE_DIR="${CSUITE_DIR:-$HOME/.drem-csuite}"
 
-AGENTS=(kyle mike alex ross seth)
+AGENTS=(kyle mike alex seth)
 
 created_dirs=0
 created_files=0

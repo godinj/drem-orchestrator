@@ -180,9 +180,9 @@ func TestLedger_ConcurrentInsert(t *testing.T) {
 	var okCount, dupCount atomic.Int64
 	d := Delivery{
 		SHA256:        "cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33cc33",
-		SourcePersona: "ross",
+		SourcePersona: "mike",
 		Dest:          "seth",
-		SourcePath:    "/csuite/ross/outbox/x.md",
+		SourcePath:    "/csuite/mike/outbox/x.md",
 		DestPath:      "/csuite/seth/inbox/x.md",
 	}
 	start := make(chan struct{})

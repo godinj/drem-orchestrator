@@ -401,15 +401,6 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Notify Mike
-# ---------------------------------------------------------------------------
-
-csuite_send ross mike "Worker ${WORKER_ID} launched" normal report \
-    "Temp worker ${WORKER_ID} has been launched with task brief '${BRIEF_FILENAME}'. Harness: ${HARNESS}. Session: ${SESSION_NAME}." >/dev/null
-
-echo "Notified Mike that ${WORKER_ID} is active."
-
-# ---------------------------------------------------------------------------
 # Output summary
 # ---------------------------------------------------------------------------
 

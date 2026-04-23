@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 #
-# drem-csuite-base — shared base image for the four C-Suite personas
-# (Mike, Alex, Ross, Seth).
+# drem-csuite-base — shared base image for the three C-Suite personas
+# (Mike, Alex, Seth).
 #
 # Phase 3 of the containerization effort (docs/prd-containerization.md
 # §Images and user stories 19-22). Every C-Suite persona image layers on
@@ -11,7 +11,7 @@
 #   - The Claude Code CLI (@anthropic-ai/claude-code) pinned to the same
 #     line as the worker images (deploy/docker/worker-base.Dockerfile).
 #   - The persona prompt bundle under /opt/csuite/prompts/ (mike.md,
-#     alex.md, ross.md, seth.md).
+#     alex.md, seth.md).
 #   - A non-root user `drem` (UID 1000) so file ownership matches the
 #     typical interactive host account.
 #   - The csuite-persona poller binary (cmd/csuite-persona), pre-built
@@ -133,9 +133,9 @@ RUN chmod 0644 /home/drem/.claude/settings.json
 
 # ---- persona prompts -------------------------------------------------------
 # The build script (deploy/docker/build-csuite.sh) stages
-# docs/csuite-agents/prompts/{mike,alex,ross,seth}.md under
+# docs/csuite-agents/prompts/{mike,alex,seth}.md under
 # deploy/docker/context/csuite-prompts/ before invoking `docker build`.
-# Each persona image (csuite-{mike,alex,ross,seth}.Dockerfile) selects
+# Each persona image (csuite-{mike,alex,seth}.Dockerfile) selects
 # one of them via CSUITE_AGENT at runtime.
 RUN mkdir -p /opt/csuite/prompts \
  && chown -R drem:drem /opt/csuite

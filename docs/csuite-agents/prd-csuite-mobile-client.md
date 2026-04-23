@@ -20,7 +20,7 @@ The operator's messages are written to the database with `from_agent: "operator"
 ## User Stories
 
 1. As an operator, I want to open a URL on my phone and see my conversations with C-Suite agents, so that I can check on the system without being at my workstation.
-2. As an operator, I want per-agent tabs (Kyle, Mike, Seth, Alex, Ross), so that I can see my conversation history with each agent separately.
+2. As an operator, I want per-agent tabs (Kyle, Mike, Seth, Alex), so that I can see my conversation history with each agent separately.
 3. As an operator, I want each tab to show messages between me and that agent in chronological order, so that I can follow the conversation thread naturally.
 4. As an operator, I want to type a message and send it to the currently selected agent, so that I can communicate with any C-Suite agent directly.
 5. As an operator, I want new messages from agents to appear in real time without refreshing, so that I have live visibility into agent activity.
@@ -101,7 +101,7 @@ The PWA is a single-page application built with vanilla HTML, CSS, and JavaScrip
 
 **Layout:**
 
-- **Top bar** — Agent tab strip (Kyle, Mike, Seth, Alex, Ross) with unread badges
+- **Top bar** — Agent tab strip (Kyle, Mike, Seth, Alex) with unread badges
 - **Middle** — Scrollable message thread for the selected agent. Operator messages on the right, agent messages on the left. Each agent message has a play button (speaker icon) for TTS.
 - **Bottom bar** — Quick-action buttons row, then the input area with a text field, record button (microphone icon), and send button
 

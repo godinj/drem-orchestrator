@@ -21,7 +21,7 @@ import (
 // filesystem) so a stray directory can never accidentally become a
 // source persona. Kept identical to validPersonas but as a slice so
 // walk order is deterministic for tests.
-var rescanPersonas = []string{"mike", "alex", "ross", "seth"}
+var rescanPersonas = []string{"mike", "alex", "seth"}
 
 // RescanResult is the JSON body returned by POST /rescan. The field
 // names are stable — tooling may parse them.

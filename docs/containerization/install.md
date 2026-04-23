@@ -150,7 +150,7 @@ bash deploy/docker/build-csuite.sh
 curl -s 127.0.0.1:5000/v2/_catalog
 ```
 
-Builds and pushes: `drem-csuite-base`, `drem-csuite-{mike,alex,ross,seth}`,
+Builds and pushes: `drem-csuite-base`, `drem-csuite-{mike,alex,seth}`,
 `drem-csuite-watcher`, `drem-orch`, `drem-orch-dev`.
 
 ### 4d — Worker images
@@ -237,7 +237,7 @@ After 4a–4f the registry catalog should list 20 repositories:
 ```
 drem-agentmon
 drem-classifier
-drem-csuite-{alex,base,mike,ross,seth}
+drem-csuite-{alex,base,mike,seth}
 drem-csuite-watcher
 drem-docker-query-proxy
 drem-gq
@@ -402,7 +402,7 @@ docker compose -f ~/.drem/projects/drem-orchestrator/compose.yml up -d
 docker compose -f ~/.drem/projects/drem-orchestrator/compose.yml ps
 ```
 
-Expect: `orch`, `agentmon`, `csuite-watcher`, `csuite-{mike,alex,ross,seth}`.
+Expect: `orch`, `agentmon`, `csuite-watcher`, `csuite-{mike,alex,seth}`.
 
 The merger image is *not* listed as a running service; it spawns
 on-demand per task. The template declares a `merger-template` stub
@@ -499,7 +499,6 @@ formatting.
 /opt/csuite/prompts/
 ├── mike.md
 ├── alex.md
-├── ross.md
 └── seth.md                 # --system-prompt value for the CLI
 ```
 
@@ -546,7 +545,7 @@ image switch is this commit sequence. A project registered before Wave
    ```
 
    This refreshes `drem-csuite-base` and
-   `drem-csuite-{mike,alex,ross,seth}` in the local registry at
+   `drem-csuite-{mike,alex,seth}` in the local registry at
    `localhost:5000` and pushes them.
 
 3. **Edit `~/.drem/projects/<name>/compose.override.yml` to remove
@@ -554,7 +553,7 @@ image switch is this commit sequence. A project registered before Wave
    service. The file lives on the operator's host outside the repo.
    With the Wave-2 image the poller is baked into the image and no
    longer needs an override. Lines that look like the following on each
-   of `csuite-mike`, `csuite-alex`, `csuite-ross`, `csuite-seth` should
+   of `csuite-mike`, `csuite-alex`, `csuite-seth` should
    be deleted:
 
    ```yaml
@@ -573,7 +572,7 @@ image switch is this commit sequence. A project registered before Wave
    ```bash
    docker compose -f ~/.drem/projects/<name>/compose.yml \
        up -d --no-deps --force-recreate \
-       csuite-mike csuite-alex csuite-ross csuite-seth
+       csuite-mike csuite-alex csuite-seth
    ```
 
 5. **Verify** with a round-trip test against one persona. Seth is a
@@ -701,7 +700,7 @@ reserved for work that truly needs it.
 
 This one prerequisite covers three consumers in the stack:
 
-- **csuite agents** (mike / alex / ross / seth) — long-lived warm
+- **csuite agents** (mike / alex / seth) — long-lived warm
   containers that run the `csuite-persona` inbox poller (Wave 2 of
   the csuite-docker pivot — see "C-Suite personas: the persona poller
   runtime" below). Each message dropped into

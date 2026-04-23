@@ -352,34 +352,6 @@ test_tmux_session_launched() {
     echo "  $CURRENT_TEST: done"
 }
 
-test_notifies_mike() {
-    CURRENT_TEST="test_notifies_mike"
-    local td="${TMPDIR_ROOT}/notify_mike"
-    local mockbin
-    mockbin="$(setup_spawn_env "$td")"
-
-    run_spawn "$td" "$mockbin" "${td}/task-brief.md" --worker-id worker-010 >/dev/null
-
-    # Check mike's inbox for the notification
-    local mike_msgs
-    mike_msgs="$(find "${td}/mike/inbox" -maxdepth 1 -name '*.md' -type f 2>/dev/null)"
-
-    if [ -n "$mike_msgs" ]; then
-        PASS=$((PASS + 1))
-    else
-        echo "  FAIL ($CURRENT_TEST): no notification message found in mike's inbox"
-        FAIL=$((FAIL + 1))
-    fi
-
-    # The notification should mention the worker ID
-    local msg_content
-    msg_content="$(cat ${td}/mike/inbox/*.md 2>/dev/null)"
-    assert_contains "$msg_content" "worker-010"
-    assert_contains "$msg_content" "launched"
-
-    echo "  $CURRENT_TEST: done"
-}
-
 test_existing_session_blocked() {
     CURRENT_TEST="test_existing_session_blocked"
     local td="${TMPDIR_ROOT}/existing_session"
@@ -504,20 +476,7 @@ BRIEF_EOF
     assert_contains "$tmux_log" "new-session"
     assert_contains "$tmux_log" "csuite-worker-001"
 
-    # Step 7: Verify Mike received notification
-    local mike_msg_count
-    mike_msg_count="$(find "${td}/mike/inbox" -maxdepth 1 -name '*.md' -type f 2>/dev/null | wc -l | tr -d ' ')"
-    assert_eq "$mike_msg_count" "1"
-
-    local mike_msg
-    mike_msg="$(cat ${td}/mike/inbox/*.md)"
-    assert_contains "$mike_msg" "from: ross"
-    assert_contains "$mike_msg" "to: mike"
-    assert_contains "$mike_msg" "worker-001"
-    assert_contains "$mike_msg" "launched"
-    assert_contains "$mike_msg" "e2e-brief.md"
-
-    # Step 8: Spawn a second worker — should get worker-002
+    # Step 7: Spawn a second worker — should get worker-002
     local output2
     output2="$(run_spawn "$td" "$mockbin" "${td}/e2e-brief.md")"
     rc=$?
@@ -525,7 +484,7 @@ BRIEF_EOF
     assert_contains "$output2" "worker-002"
     assert_dir_exists "${td}/temp-workers/worker-002"
 
-    # Step 9: Verify both workers are listed via csuite_list_workers
+    # Step 8: Verify both workers are listed via csuite_list_workers
     export CSUITE_DIR="$td"
     source "${SCRIPT_DIR}/csuite-proto.sh"
     local workers
@@ -534,7 +493,7 @@ BRIEF_EOF
     assert_contains "$workers" "worker-002"
     unset CSUITE_DIR
 
-    # Step 10: Verify csuite-status.sh can see the workers (if available)
+    # Step 9: Verify csuite-status.sh can see the workers (if available)
     if [ -f "${SCRIPT_DIR}/csuite-status.sh" ]; then
         local status_output
         status_output="$(CSUITE_DIR="$td" PATH="${mockbin}:${PATH}" bash "${SCRIPT_DIR}/csuite-status.sh" --report 2>&1 || true)"
@@ -564,7 +523,6 @@ test_creates_worker_directory_structure
 test_copies_task_brief_to_inbox
 test_state_file_has_metadata
 test_tmux_session_launched
-test_notifies_mike
 test_existing_session_blocked
 test_dry_run_no_side_effects
 test_worker_id_flag_requires_value

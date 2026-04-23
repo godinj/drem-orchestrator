@@ -28,7 +28,7 @@ func testLogger(buf *bytes.Buffer) *log.Logger {
 func newCsuiteTree(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	for _, persona := range []string{"mike", "alex", "ross", "seth", "kyle"} {
+	for _, persona := range []string{"mike", "alex", "seth", "kyle"} {
 		if err := os.MkdirAll(filepath.Join(root, persona, "outbox"), 0o755); err != nil {
 			t.Fatalf("mkdir: %v", err)
 		}
@@ -76,7 +76,7 @@ func buildBody(t *testing.T, source, outboxPath, sha string) []byte {
 // TestClassifyBytes_PersonaRecipient verifies scalar persona names
 // route to ClassPersona with Dest set.
 func TestClassifyBytes_PersonaRecipient(t *testing.T) {
-	cases := []string{"mike", "alex", "ross", "seth"}
+	cases := []string{"mike", "alex", "seth"}
 	for _, persona := range cases {
 		persona := persona
 		t.Run(persona, func(t *testing.T) {

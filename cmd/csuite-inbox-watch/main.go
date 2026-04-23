@@ -25,7 +25,7 @@ import (
 )
 
 func main() {
-	agent := flag.String("agent", "", "Agent name (e.g., kyle, mike, alex, ross, seth)")
+	agent := flag.String("agent", "", "Agent name (e.g., kyle, mike, alex, seth)")
 	socket := flag.String("socket", "drem", "Tmux socket name")
 	dir := flag.String("dir", "", "C-Suite base directory (default: ~/.drem-csuite)")
 	flag.Parse()

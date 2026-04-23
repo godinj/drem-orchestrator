@@ -27,7 +27,7 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 4. As the developer, I want a single global GQ service to manage rate limits across all projects, so that the shared resources (SGLang, the Anthropic API) are fairly allocated.
 5. As the developer, I want a single global SGLang container serving all projects, so that GPU resources are not fragmented.
 6. As the developer, I want Kyle to be a single global container that reports on every registered project, so that I have one surface to ask "what is the state of the world" across all my work.
-7. As the developer, I want the C-Suite agents (Mike, Alex, Ross, Seth) to run as warm containers per project, so that one-shot prompts return quickly without paying container startup cost.
+7. As the developer, I want the C-Suite agents (Mike, Alex, Seth) to run as warm containers per project, so that one-shot prompts return quickly without paying container startup cost.
 8. As the developer, I want workers to run as ephemeral containers, so that any crash, leaked file, or stuck process is automatically cleaned up by destroying the container.
 9. As the developer, I want the merger to run as a warm pool of containers per project, so that merges start instantly when a task completes.
 10. As the developer, I want each worker container to clone its branch from the bare repository into its own container filesystem at startup, so that workers never touch the host filesystem directly.
@@ -85,7 +85,7 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 - **Orchestrator is the single state surface per project.** Kyle and the TUI read exclusively from each project's orchestrator HTTP API. Direct database access from agents is forbidden.
 - **Kyle is a global singleton.** One Kyle container runs per host and calls each registered project's orchestrator API using static configuration from `~/.drem/projects.toml`.
 - **Agentmon absorbs log shipping.** The existing transcript-extraction logic is extended to subscribe to Docker container stdout for every labeled container. Agentmon POSTs structured state records (commits, pushes, test results, crashes, heartbeat, tool-call counts, build errors) to the correct project's orchestrator over an internal HTTP endpoint. Raw logs remain inside Docker's log driver; the orchestrator proxies `docker logs` on demand.
-- **Warm containers.** Orchestrator, spawner, agentmon, SGLang, GQ, Kyle, and each project's C-Suite (Mike, Alex, Ross, Seth) are warm. (Originally a per-project merger pool of 2–3 containers was also planned; see the merger note under "Ephemeral containers".)
+- **Warm containers.** Orchestrator, spawner, agentmon, SGLang, GQ, Kyle, and each project's C-Suite (Mike, Alex, Seth) are warm. (Originally a per-project merger pool of 2–3 containers was also planned; see the merger note under "Ephemeral containers".)
 - **C-Suite runtime pivot (Wave 2, 2026-04-20).** Each C-Suite persona's warm container now runs the `csuite-persona` inbox poller (`cmd/csuite-persona`) as its PID-1 process, not a long-lived interactive `claude` process. The poller scans `~/.drem-csuite/<persona>/inbox/` on a 2 s tick and invokes `claude -p --system-prompt <persona>.md` once per message, writing the reply to `~/.drem-csuite/<persona>/outbox/` and archiving the processed message. This closes a dead-end in the prior design where the interactive CLI had no mechanism to observe inbox files. Authentication remains subscription-only via the read-only `/home/drem/.claude/.credentials.json` bind-mount. See `plans/csuite-persona-pivot.md` and `docs/containerization/install.md` §"C-Suite personas: the persona poller runtime".
 - **Ephemeral containers.** Workers (Opus coders, G4 workers), merger invocations, one-shot C-Suite prompts. NOTE: the original PRD called for a warm merger pool, but `drem-merger` is implemented as a per-task one-shot binary that crash-loops when run with no argv. The merger-pool service was removed from the per-project compose template; merger now runs only as on-demand spawns. Spawn-on-demand wiring is tracked in `plans/merger-spawn-on-demand.md`.
 - **Recovery strategy.** A watchdog process baked into worker images commits and pushes to the bare repository every minute and after every passing test. On worker container death, the orchestrator detects the exit via a Docker event, spawns a replacement container, and resumes from the most recent pushed commit. Volume-based full-filesystem restore is explicitly out of scope for the first cut.
@@ -93,7 +93,7 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 ### Compose topology
 
 - **Global compose (lives in the drem-orchestrator repository).** Services: Kyle, SGLang, GQ, local image registry, spawner, agentmon.
-- **Per-project compose (generated into `~/.drem/projects/<name>/compose.yml`).** Services: orchestrator, csuite-watcher, four warm C-Suite containers (Mike, Alex, Ross, Seth). The merger image is referenced by an image-prime stub (`merger-template`, `profiles: ["never"]`) so `docker compose pull` primes the tag; the warm merger pool was removed pending spawn-on-demand wiring (`plans/merger-spawn-on-demand.md`).
+- **Per-project compose (generated into `~/.drem/projects/<name>/compose.yml`).** Services: orchestrator, csuite-watcher, three warm C-Suite containers (Mike, Alex, Seth). The merger image is referenced by an image-prime stub (`merger-template`, `profiles: ["never"]`) so `docker compose pull` primes the tag; the warm merger pool was removed pending spawn-on-demand wiring (`plans/merger-spawn-on-demand.md`).
 - **Ephemeral containers** (workers, merger invocations, one-shot C-Suite prompts) are spawned on demand by the spawner service and are not listed in any compose file.
 
 ### Project registry
@@ -103,7 +103,7 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 ### Images
 
 - **Per-language worker images.** `drem-worker-go`, `drem-worker-cpp`. Image selection is driven by the project's declared `language` field. No fat universal image.
-- **Other images.** `drem-merger`, `drem-csuite-mike`, `drem-csuite-alex`, `drem-csuite-ross`, `drem-csuite-seth`, `drem-kyle`, `drem-orch`, `drem-spawner`, `drem-agentmon`.
+- **Other images.** `drem-merger`, `drem-csuite-mike`, `drem-csuite-alex`, `drem-csuite-seth`, `drem-kyle`, `drem-orch`, `drem-spawner`, `drem-agentmon`.
 - **Registry.** Local registry container running on the host. Remote registry is a future concern.
 
 ### Dev workflow

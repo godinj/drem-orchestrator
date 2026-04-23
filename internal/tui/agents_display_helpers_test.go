@@ -175,7 +175,6 @@ func TestImageForAgentType(t *testing.T) {
 		{"merger resolves to merger image", "merger", "localhost:5000/drem-merger:latest"},
 		{"csuite-mike resolves to csuite-mike image", "csuite-mike", "localhost:5000/drem-csuite-mike:latest"},
 		{"csuite-alex resolves to csuite-alex image", "csuite-alex", "localhost:5000/drem-csuite-alex:latest"},
-		{"csuite-ross resolves to csuite-ross image", "csuite-ross", "localhost:5000/drem-csuite-ross:latest"},
 		{"csuite-seth resolves to csuite-seth image", "csuite-seth", "localhost:5000/drem-csuite-seth:latest"},
 		{"empty type yields dash", "", "-"},
 		{"unknown type falls back to drem-worker-<type>", "planner", "localhost:5000/drem-worker-planner:latest"},

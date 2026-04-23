@@ -87,14 +87,13 @@ func TestDeliver_HappyPath_Persona(t *testing.T) {
 
 // TestDeliver_PersonaToPersonaPairs exercises every pair in the
 // closed set of personas — the scoreboard item 5 success gate
-// ("seth→alex, seth→ross land in recipient inboxes") and its
-// generalisation: routing must work uniformly for any sender/recipient
-// pair across the four personas. Prior to scoreboard item 33 being
-// shipped the signal layer ate these routes with 401s; this test
-// asserts the routing code path itself handles each pair without
-// special-casing.
+// ("seth→alex lands in recipient inbox") and its generalisation:
+// routing must work uniformly for any sender/recipient pair across
+// the three personas. Prior to scoreboard item 33 being shipped the
+// signal layer ate these routes with 401s; this test asserts the
+// routing code path itself handles each pair without special-casing.
 func TestDeliver_PersonaToPersonaPairs(t *testing.T) {
-	personas := []string{"mike", "alex", "ross", "seth"}
+	personas := []string{"mike", "alex", "seth"}
 	for _, src := range personas {
 		for _, dst := range personas {
 			if src == dst {

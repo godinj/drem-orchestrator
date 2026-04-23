@@ -84,7 +84,7 @@ routing:
 
   - event: agent_status_changed
     to_status: [dead]
-    wake: [mike, ross]
+    wake: [mike]
 
   - event: task_filed
     wake: [alex]
@@ -209,7 +209,7 @@ A good test for this feature verifies observable behavior through the module's p
 - Each notification is a `[]string` containing the names of agents that have new unacked event deliveries. The routing layer (outside the watcher package) computes this list from the event deliveries and pushes it onto the channel.
 - `Run(ctx)` blocks until the context is cancelled or the channel is closed. It is safe to cancel the context at any time.
 
-**Kyle exception:** "kyle" is silently skipped. If a notification contains `["mike", "kyle", "ross"]`, only `TriggerAgent("mike")` and `TriggerAgent("ross")` are called. Kyle's delivery records are created and tracked in the event bus (so Kyle can read his event history), but the trigger system never attempts to manage his lifecycle.
+**Kyle exception:** "kyle" is silently skipped. If a notification contains `["mike", "kyle", "alex"]`, only `TriggerAgent("mike")` and `TriggerAgent("alex")` are called. Kyle's delivery records are created and tracked in the event bus (so Kyle can read his event history), but the trigger system never attempts to manage his lifecycle.
 
 **Decoupling from eventbus:** The `watcher` package does not import `eventbus`. The channel is the integration seam. In production, the routing layer calls `Bus.Publish()`, creates delivery rows via `Bus.Deliver()`, computes the target agent list, and sends it to the channel. In tests, the test itself does this directly, demonstrating that the two subsystems are independently testable.
 
@@ -259,6 +259,6 @@ This design keeps the `watcher` package's import count at zero internal packages
 
 - The event bus and the disk-based inbox serve complementary purposes. The event bus carries orchestrator-originated events (task transitions, agent status changes). The disk-based inbox carries inter-agent messages (observations, requests, reports, decisions). Agents check both when they start a turn. Over time, the inbox protocol may migrate to the event bus, but that is not in scope here.
 - The watcher's turn-based model aligns Claude Code's natural behavior with the system's needs. Instead of agents fighting to stay alive, they do their work and exit. The watcher handles scheduling and metrics externally. This should result in more reliable agent behavior and lower resource consumption.
-- Fresh starts every turn eliminate context management entirely for non-Kyle agents. There are no save thresholds, no `restart-context.md`, no `/csuite-save-and-restart`, no session tracking. `state.md` is the sole persistence mechanism -- agents curate it at the end of every turn, and it serves as compact, high-signal memory that is strictly better than raw accumulated conversation history (which is mostly stale tool output and query results). This dramatically simplifies Ross's role: Ross no longer monitors context windows or orchestrates save/restart cycles for non-Kyle agents. Ross's remaining responsibilities are temp worker lifecycle management, Kyle's context monitoring (since Kyle still accumulates context as an interactive session), and workforce gap identification.
+- Fresh starts every turn eliminate context management entirely for non-Kyle agents. There are no save thresholds, no `restart-context.md`, no `/csuite-save-and-restart`, no session tracking. `state.md` is the sole persistence mechanism -- agents curate it at the end of every turn, and it serves as compact, high-signal memory that is strictly better than raw accumulated conversation history (which is mostly stale tool output and query results). Context-window monitoring and save/restart cycles are not needed for turn-based containerized personas. Kyle (the only still-interactive persona) manages his own context; temp worker lifecycle and workforce-gap identification now sit with Mike (Ross was retired 2026-04-22).
 - The `claude -p --output-format json` response provides structured data including token counts, which the lifecycle manager parses for metrics. If the JSON schema changes in future Claude Code versions, the parser will need updating, but the interface is stable enough for this use case.
 - The 5-minute safety timer for Mike is a pragmatic concession. In an ideal system, the event bridge captures everything and no polling is needed. The timer exists to catch edge cases where the hook fails silently or an event is missed. If the event bridge proves reliable, the timer interval can be extended or removed.

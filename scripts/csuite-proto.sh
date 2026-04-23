@@ -255,7 +255,7 @@ csuite_create_worker() {
 
 # Block until a message signal arrives or timeout expires.
 # Usage: csuite_wait_for_inbox <agent> [timeout_seconds]
-#   agent   — agent name (e.g. "ross")
+#   agent   — agent name (e.g. "mike")
 #   timeout — max seconds to wait (default 30)
 #
 # Uses inotifywait to watch for a .signal file in the agent's inbox.
