@@ -189,6 +189,9 @@ func answerURL(base, task string) string {
 func retryURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/retry", base, projectName, task)
 }
+func commentURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/comments", base, projectName, task)
+}
 
 // ------------------------------------------------------------------
 // 1. Approve happy path, plan_review → in_progress.
@@ -650,6 +653,41 @@ func TestRetrySubtask_MissingParentFallsThrough(t *testing.T) {
 	require.Len(t, fake.Calls, 1)
 	require.Equal(t, "RetryTask", fake.Calls[0].Method)
 	require.Equal(t, child.ID, fake.Calls[0].TaskID)
+}
+
+func TestCommentTaskEndpoint_Happy(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "needs context", model.StatusMerging)
+
+	resp, body := doJSON(t, http.MethodPost, commentURL(base, task.ID.String()), `{"body":"supersede candidate from current base"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	var dto orchdto.TaskCommentDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, task.ID.String(), dto.TaskID)
+	require.Equal(t, "csuite", dto.Author)
+	require.Equal(t, "supersede candidate from current base", dto.Body)
+
+	var comments []model.TaskComment
+	require.NoError(t, srv.DB.Where("task_id = ?", task.ID).Find(&comments).Error)
+	require.Len(t, comments, 1)
+	require.Equal(t, dto.ID, comments[0].ID.String())
+}
+
+func TestCommentTaskEndpoint_EmptyBodyReturns400(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "x", model.StatusBacklog)
+
+	resp, body := doJSON(t, http.MethodPost, commentURL(base, task.ID.String()), `{"body":"   "}`)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), "body is required")
+}
+
+func TestCommentTaskEndpoint_UnknownTaskReturns404(t *testing.T) {
+	_, _, _, base := setupGateHTTPTest(t)
+	resp, body := doJSON(t, http.MethodPost, commentURL(base, uuid.NewString()), `{"body":"x"}`)
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+	require.Equal(t, "task not found", decodeErr(t, body))
 }
 
 // Extra: orch nil should degrade to 503 (safety: don't crash).

@@ -278,9 +278,9 @@ func firstNonEmpty(values ...string) string {
 //
 // # G3 dual-write fix (plans/containerization-pivot-attack-plan.md §3)
 //
-// Before this fix, the poller ALWAYS wrapped Claude's stdout into a
+// Before this fix, the poller ALWAYS wrapped model stdout into a
 // `<ts>-<persona>-reply-<hash>.md` stub and dropped it in the outbox.
-// When Claude's system prompt told it to use the Write tool to emit a
+// When the persona prompt told it to use the Write tool to emit a
 // properly-framed `<ts>-<persona>-to-<recipient>-<subject>.md` file
 // with YAML frontmatter, the persona turn produced TWO outbox files:
 //   - the frontmatter-bearing file (routes correctly through watcher)
@@ -288,13 +288,13 @@ func firstNonEmpty(values ...string) string {
 //
 // The dual-write was a fail-open race: either file could be signaled,
 // and the stub being signaled meant the delivery hit quarantine. The
-// fix: diff the outbox against the pre-Claude snapshot. If Claude wrote
+// fix: diff the outbox against the pre-invocation snapshot. If the persona wrote
 // any well-formed outbox file during the turn, suppress the stub
-// entirely. If Claude wrote nothing, STILL suppress the stub (a
+// entirely. If the persona wrote nothing, STILL suppress the stub (a
 // quarantined stub is worse than no output — the operator can inspect
 // state.md to see turn completion).
 //
-// Claude-written files are picked up by the watcher's startup/periodic
+// Persona-written files are picked up by the watcher's startup/periodic
 // rescan (internal/deliver/rescan.go) so no signal is strictly required,
 // but we also proactively signal each new file from this poller tick
 // to keep the latency story honest.
@@ -307,19 +307,19 @@ func firstNonEmpty(values ...string) string {
 func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Duration, outboxBefore map[string]struct{}) error {
 	now := p.cfg.Now()
 
-	// G3: detect Claude-written outbox files that appeared during the
+	// G3: detect persona-written outbox files that appeared during the
 	// turn. `claudeWritten` is the list of newly-present filenames that
 	// parse as well-formed outbox messages (YAML frontmatter + matching
 	// `<from>-to-<to>` filename shape). Any such file means the poller
 	// stub is redundant and must be suppressed.
 	claudeWritten, diffErr := newWellFormedOutboxFiles(p.cfg.OutboxDir, p.cfg.Persona, outboxBefore)
 	if diffErr != nil {
-		p.cfg.Logger.Warn("outbox diff after claude -p",
+		p.cfg.Logger.Warn("outbox diff after model invocation",
 			p.personaLabel,
 			slog.Any("err", diffErr))
 	}
 
-	// Signal each Claude-written file. The watcher's rescan path will
+	// Signal each persona-written file. The watcher's rescan path will
 	// eventually pick up any signal we drop, but proactive signaling
 	// shortens the latency.
 	signaler := p.signaler()
@@ -327,7 +327,7 @@ func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Durati
 
 	for _, outName := range claudeWritten {
 		outPath := filepath.Join(p.cfg.OutboxDir, outName)
-		p.cfg.Logger.Info("claude wrote outbox file directly",
+		p.cfg.Logger.Info("persona wrote outbox file directly",
 			p.personaLabel,
 			slog.String("inbox_file", name),
 			slog.String("outbox_file", outName),
@@ -352,12 +352,12 @@ func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Durati
 		}
 	}
 
-	// G3: if Claude wrote at least one outbox file, suppress the stub
+	// G3: if the persona wrote at least one outbox file, suppress the stub
 	// entirely. We still archive the inbox message and update state.md
 	// so the poll loop advances.
 	stubSuppressed := len(claudeWritten) > 0
 
-	// G3 second leg: even when Claude wrote NOTHING to outbox, do not
+	// G3 second leg: even when the persona wrote NOTHING to outbox, do not
 	// fall back to writing a stub. A stub with no frontmatter is
 	// guaranteed to hit watcher quarantine; better to record "turn
 	// produced no outbox message" in state.md and move on. Operators
@@ -457,7 +457,7 @@ func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Durati
 	}
 
 	// Attempt to archive the inbox file. An ENOENT here is benign:
-	// Claude-in-subprocess may have already `mv`d the file into
+	// The child model process may have already `mv`d the file into
 	// .archive via its Bash tool (see persona prompts for seth/alex
 	// which instruct exactly that). Treating ENOENT as an error would
 	// cause the whole recordSuccess to unwind and drop state.md — even
@@ -496,10 +496,10 @@ func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Durati
 	if stubSuppressed || signalDisabled || signaler == nil {
 		finalOutcome := SignalDisabled
 		if stubSuppressed && !signalDisabled && signaler != nil {
-			// We DID fire signals for each Claude-written file above,
+			// We DID fire signals for each persona-written file above,
 			// but those are fire-and-forget (no state.md feedback
 			// channel). Use a neutral marker so operators can tell
-			// "stub was suppressed; Claude wrote its own files" apart
+			// "stub was suppressed; persona wrote its own files" apart
 			// from "signaling was disabled".
 			finalOutcome = SignalOK
 		}
@@ -509,7 +509,7 @@ func (p *Poller) recordSuccess(name string, body, stdout []byte, dur time.Durati
 }
 
 // newWellFormedOutboxFiles lists outbox filenames that appeared after
-// the Claude invocation (absent from `before`) AND match the
+// the model invocation (absent from `before`) AND match the
 // `<ts>-<persona>-to-<recipient>-*.md` filename shape AND parse as
 // valid frontmatter. Returns the names (not paths), sorted for
 // determinism.
@@ -532,7 +532,7 @@ func newWellFormedOutboxFiles(outboxDir, persona string, before map[string]struc
 		}
 		if !filenameLooksLikePersonaToRecipient(name, persona) {
 			// New file with an unrecognised filename shape: ignore (do
-			// not treat as a Claude-written outbox — conservative).
+			// not treat as a persona-written outbox — conservative).
 			continue
 		}
 		// Validate frontmatter by peek-reading the first few KiB.
@@ -604,7 +604,7 @@ func fileHasFrontmatter(path string) bool {
 }
 
 // readOutboxFile reads a file from disk in full. Used when we need to
-// hash a Claude-written outbox file for the signal payload.
+// hash a persona-written outbox file for the signal payload.
 func readOutboxFile(path string) ([]byte, error) {
 	return os.ReadFile(path) //nolint:gosec // path under configured outbox
 }
@@ -642,7 +642,7 @@ func (p *Poller) recordFailure(name, reason string, exitCode int, dur time.Durat
 			slog.String("file", name),
 			slog.Any("err", err))
 	}
-	p.cfg.Logger.Warn("claude invocation failed",
+	p.cfg.Logger.Warn("model invocation failed",
 		p.personaLabel,
 		slog.String("file", name),
 		slog.Int("exit_code", exitCode),

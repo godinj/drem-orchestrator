@@ -11,7 +11,7 @@ import (
 )
 
 // stderrCaptureLimit caps how many bytes of child stderr we surface in
-// error messages. 4 KiB is enough to hold a claude CLI usage blurb or a
+// error messages. 4 KiB is enough to hold a model CLI usage blurb or a
 // stack trace head without letting a runaway diagnostic spew unbounded
 // bytes into the returned error string (which ends up in structured
 // logs).
@@ -30,27 +30,27 @@ func NewCodexSpawner() Spawner {
 	return SpawnerFunc(spawnCLI)
 }
 
-// NewClaudeSpawner returns a Spawner that launches `claude -p` via
-// os/exec.CommandContext. The returned spawner:
+// NewClaudeSpawner returns a Spawner that launches the caller-provided model
+// CLI argv via os/exec.CommandContext. The returned spawner:
 //
 //   - Runs the command in a new process group (Setpgid) so SIGKILL-on-
-//     context-cancellation terminates any grandchildren claude may have
+//     context-cancellation terminates any grandchildren the CLI may have
 //     spawned (e.g. its internal tool shells).
 //   - Captures stdout into a buffer; stdout is the persona's reply and
 //     goes to the outbox.
 //   - Captures stderr into a separate buffer so diagnostic output from
-//     claude can be folded into the returned error when the process
+//     the child CLI can be folded into the returned error when the process
 //     exits non-zero or fails to launch. Prior to this change stderr was
 //     silently discarded (cmd.Stderr=nil routes to /dev/null in os/exec),
-//     which masked bugs like "claude -p parses ---frontmatter--- as CLI
+//     which masked bugs like "the model CLI parses ---frontmatter--- as CLI
 //     flags".
 //   - Reports the exit code via the int return so the caller can
-//     distinguish "claude ran, returned non-zero" from "claude could not
+//     distinguish "the CLI ran, returned non-zero" from "the CLI could not
 //     be launched" (which surfaces as a non-nil error).
 //
 // Subscription-only auth: this function never sets any token env var.
-// The claude CLI picks up credentials from the bind-mounted
-// /home/drem/.claude/.credentials.json file.
+// The child CLI picks up subscription credentials from its bind-mounted
+// credentials file; this package does not set token env vars.
 func NewClaudeSpawner() Spawner {
 	return SpawnerFunc(spawnCLI)
 }
@@ -70,7 +70,7 @@ func spawnCLI(ctx context.Context, args []string, stdin io.Reader) ([]byte, int,
 		if cmd.Process == nil {
 			return nil
 		}
-		// Kill the whole process group so any claude sub-tools die
+		// Kill the whole process group so any child sub-tools die
 		// alongside the parent.
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}

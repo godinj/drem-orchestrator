@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -51,6 +52,11 @@ type rejectRequest struct {
 // answerRequest is the required body of POST /answer.
 type answerRequest struct {
 	Body string `json:"body"`
+}
+
+type commentRequest struct {
+	Author string `json:"author"`
+	Body   string `json:"body"`
 }
 
 // handleApproveTask dispatches POST /projects/{name}/tasks/{id}/approve to
@@ -293,6 +299,47 @@ func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeUpdatedTask(w, task.ID)
+}
+
+// handleCommentTask appends an advisory comment to a task. Comments are not a
+// lifecycle transition, so the endpoint accepts any existing task status and
+// records the author/body as a TaskComment for the next agent spawn prompt.
+func (s *Server) handleCommentTask(w http.ResponseWriter, r *http.Request) {
+	if !s.requireProject(w, r) {
+		return
+	}
+	task, ok := s.loadTaskForMutation(w, r)
+	if !ok {
+		return
+	}
+
+	var req commentRequest
+	if err := decodeOptionalJSON(r.Body, &req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	req.Body = strings.TrimSpace(req.Body)
+	if req.Body == "" {
+		writeJSONError(w, http.StatusBadRequest, "body is required")
+		return
+	}
+	req.Author = strings.TrimSpace(req.Author)
+	if req.Author == "" {
+		req.Author = "csuite"
+	}
+
+	comment := model.TaskComment{
+		ID:     uuid.New(),
+		TaskID: task.ID,
+		Author: req.Author,
+		Body:   req.Body,
+	}
+	if err := s.DB.WithContext(r.Context()).Create(&comment).Error; err != nil {
+		slog.Error("orchhttp: comment failed", "task_id", task.ID, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, toTaskCommentDTO(comment))
 }
 
 // requireProject verifies that the {name} path segment matches this server's

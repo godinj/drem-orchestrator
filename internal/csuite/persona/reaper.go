@@ -2,7 +2,7 @@ package persona
 
 // reaper.go implements the startup scan that reconciles orphan
 // `.failures` sidecar files against their companion `.md` anchors.
-// Scoreboard item 3 / attack plan §3 Group A: when Claude's Bash tool
+// Scoreboard item 3 / attack plan §3 Group A: when the model CLI's shell tool
 // moves an inbox file into .archive/ BEFORE the poller sees a
 // successful exit code (some persona prompts instruct Claude to `mv`
 // the inbox file into .archive/ itself), the poller's recordFailure
@@ -15,7 +15,7 @@ package persona
 //   - 20260421T235306Z-kyle-tui-retry-storm-design.md.failures
 //   - 20260422-072000-kyle-containerization-pivot-gap-synthesis.md.failures
 //
-// Both had their .md anchors sitting in .archive/ already (Claude's
+// Both had their .md anchors sitting in .archive/ already (the retry
 // retry attempt succeeded on a later tick but the stale counter
 // lingered).
 //

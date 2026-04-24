@@ -125,7 +125,7 @@ func (c *Client) WorkerHistory(ctx context.Context, id string) (orchdto.WorkerHi
 func (c *Client) Events(ctx context.Context, since time.Time, limit int) ([]orchdto.EventDTO, error) {
 	q := url.Values{}
 	if !since.IsZero() {
-		q.Set("since", since.UTC().Format(time.RFC3339))
+		q.Set("since", since.UTC().Format(time.RFC3339Nano))
 	}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))

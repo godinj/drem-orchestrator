@@ -141,11 +141,11 @@ func TestEventsEncodesSinceAndLimit(t *testing.T) {
 	h := &recordingHandler{status: http.StatusOK, body: "[]"}
 	c, _ := newClient(t, h)
 
-	since := time.Date(2026, 4, 19, 12, 0, 0, 0, time.UTC)
+	since := time.Date(2026, 4, 19, 12, 0, 0, 123, time.UTC)
 	_, err := c.Events(context.Background(), since, 25)
 	require.NoError(t, err)
 	require.Equal(t, "/events", h.lastPath)
-	require.Contains(t, h.lastRaw, "since=2026-04-19T12%3A00%3A00Z")
+	require.Contains(t, h.lastRaw, "since=2026-04-19T12%3A00%3A00.000000123Z")
 	require.Contains(t, h.lastRaw, "limit=25")
 }
 

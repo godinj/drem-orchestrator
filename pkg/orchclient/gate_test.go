@@ -367,6 +367,40 @@ func TestClient_Retry_BadRequest(t *testing.T) {
 	require.True(t, errors.As(err, &bad), "want *ErrBadRequest, got %T: %v", err, err)
 }
 
+// -- Comment -------------------------------------------------------------
+
+func TestClient_Comment_Success(t *testing.T) {
+	id := uuid.New()
+	commentID := uuid.New()
+	body, err := json.Marshal(orchdto.TaskCommentDTO{ID: commentID.String(), TaskID: id.String(), Author: "csuite", Body: "new context"})
+	require.NoError(t, err)
+	h := &gateHandler{status: http.StatusOK, respBody: string(body)}
+	c, _ := newGateClient(t, h)
+
+	got, err := c.Comment(context.Background(), "canvas", id, "new context")
+	require.NoError(t, err)
+	require.Equal(t, commentID.String(), got.ID)
+	require.Equal(t, id.String(), got.TaskID)
+	require.Equal(t, "/projects/canvas/tasks/"+id.String()+"/comments", h.path)
+	require.Equal(t, http.MethodPost, h.method)
+	require.Equal(t, "application/json", h.ctype)
+
+	var payload struct {
+		Body string `json:"body"`
+	}
+	require.NoError(t, json.Unmarshal(h.rawBody, &payload))
+	require.Equal(t, "new context", payload.Body)
+}
+
+func TestClient_Comment_EmptyBodyGuardsNetwork(t *testing.T) {
+	h := &gateHandler{status: http.StatusOK, respBody: `{}`}
+	c, _ := newGateClient(t, h)
+
+	_, err := c.Comment(context.Background(), "canvas", uuid.New(), " ")
+	require.Error(t, err)
+	require.Equal(t, int32(0), atomic.LoadInt32(&h.calls), "expected no network call for empty body")
+}
+
 // -- Header + path + method correctness ----------------------------------
 
 // TestAllMethodsSendJSONContentType drives each of the five methods

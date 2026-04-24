@@ -10,7 +10,9 @@
 # Multi-stage Go build → distroless/static runtime, matching the pattern
 # established by gq.Dockerfile and spawner.Dockerfile.
 #
-# Build context is the repo root (needs go.mod + cmd/csuite-watcher):
+# Build context is the repo root (needs go.mod + cmd/csuite-watcher). The
+# source path is covered by deploy/docker/csuite_contract_test.go so image
+# metadata cannot outlive a removed command silently:
 #   docker build -f deploy/docker/csuite-watcher.Dockerfile \
 #     -t localhost:5000/drem-csuite-watcher:latest .
 #   docker push localhost:5000/drem-csuite-watcher:latest

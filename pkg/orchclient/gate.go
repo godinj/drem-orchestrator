@@ -119,6 +119,23 @@ func (c *Client) Retry(ctx context.Context, project string, taskID uuid.UUID) (o
 	return out, nil
 }
 
+// Comment appends a C-Suite advisory comment to a task. Comments are accepted
+// for tasks in any status and are included in future agent prompts.
+func (c *Client) Comment(ctx context.Context, project string, taskID uuid.UUID, body string) (orchdto.TaskCommentDTO, error) {
+	if strings.TrimSpace(body) == "" {
+		return orchdto.TaskCommentDTO{}, &ErrBadRequest{Message: "comment body is required"}
+	}
+	payload := struct {
+		Body string `json:"body"`
+	}{Body: body}
+	var out orchdto.TaskCommentDTO
+	path := gatePath(project, taskID, "comments")
+	if err := c.postGate(ctx, path, payload, &out); err != nil {
+		return orchdto.TaskCommentDTO{}, err
+	}
+	return out, nil
+}
+
 // gatePath returns the HTTP path for a gate mutation verb on the given
 // task in the given project. The project name is URL-escaped; the UUID
 // is emitted in its canonical 36-char form which is already URL-safe.

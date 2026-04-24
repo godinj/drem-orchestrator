@@ -8,8 +8,8 @@
 # top of this base and sets CSUITE_AGENT to select its persona prompt.
 #
 # The base lays down:
-#   - The Claude Code CLI and OpenAI Codex CLI pinned to the same line as
-#     the worker images (deploy/docker/worker-base.Dockerfile).
+#   - The Claude Code CLI, OpenCode CLI, and OpenAI Codex CLI pinned to the
+#     same line as the worker images (deploy/docker/worker-base.Dockerfile).
 #   - dremctl, the HTTP-only orchestrator CLI for persona operations.
 #   - The persona prompt bundle under /opt/csuite/prompts/ (mike.md,
 #     alex.md, seth.md, kyle.md).
@@ -19,7 +19,9 @@
 #     on the host by deploy/docker/build-csuite.sh, plus the
 #     csuite-entrypoint.sh wrapper that execs it. See Wave 2 pivot in
 #     plans/csuite-persona-pivot.md — the poller replaced the prior
-#     `exec claude --print` model.
+#     `exec claude --print` model. The poller currently invokes OpenCode
+#     with subscription auth; prompts that still mention `claude -p` are
+#     historical unless explicitly marked as an interactive Claude runtime.
 #
 # Build context is deploy/docker/context/ and must contain:
 #   - csuite-entrypoint.sh (Wave-2 entrypoint; checked into the repo).

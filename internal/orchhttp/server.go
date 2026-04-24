@@ -1,13 +1,12 @@
-// Package orchhttp exposes the orchestrator's read-only public HTTP API
-// (consumed by Kyle and the TUI) and the internal ingestion endpoint
+// Package orchhttp exposes the orchestrator's public HTTP API
+// (consumed by Kyle, the TUI, and dremctl) and the internal ingestion endpoint
 // (consumed by agentmon). The orchestrator remains the sole writer to the
 // project's SQLite database — this package is the only network surface
 // through which external agents and reporting tools read state.
 //
-// Per docs/prd-containerization.md, the public endpoints are read-only;
-// the single write endpoint is POST /internal/logs, authenticated via a
-// per-project shared token. No WebSocket/SSE surface is exposed; log
-// follow is implemented with chunked HTTP only.
+// Mutating public endpoints are intentionally narrow lifecycle/comment
+// operations handled in-process by the orchestrator. No WebSocket/SSE surface
+// is exposed; log follow is implemented with chunked HTTP only.
 package orchhttp
 
 import (
@@ -111,7 +110,7 @@ func New(db *gorm.DB, token string, logs LogStreamer, project ProjectInfo) *Serv
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
-	// Public read-only endpoints.
+	// Public read endpoints.
 	mux.HandleFunc("GET /projects", s.handleListProjects)
 	mux.HandleFunc("GET /projects/{name}/tasks", s.handleListTasks)
 	mux.HandleFunc("GET /projects/{name}/workers", s.handleListWorkers)
@@ -128,6 +127,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/fail", s.handleFailTask)
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/answer", s.handleAnswerTask)
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/retry", s.handleRetryTask)
+	mux.HandleFunc("POST /projects/{name}/tasks/{id}/comments", s.handleCommentTask)
 
 	// Internal ingestion endpoint — protected by header auth.
 	mux.Handle("POST /internal/logs", s.requireAgentmonToken(http.HandlerFunc(s.handleIngest)))

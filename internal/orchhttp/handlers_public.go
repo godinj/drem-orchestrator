@@ -442,6 +442,16 @@ func toTaskDTO(t model.Task) orchdto.TaskDTO {
 	}
 }
 
+func toTaskCommentDTO(c model.TaskComment) orchdto.TaskCommentDTO {
+	return orchdto.TaskCommentDTO{
+		ID:        c.ID.String(),
+		TaskID:    c.TaskID.String(),
+		Author:    c.Author,
+		Body:      c.Body,
+		CreatedAt: c.CreatedAt,
+	}
+}
+
 // toWorkerDTO marshals an internal model.Agent into the public WorkerDTO
 // shape. HeartbeatAt is the "last I saw you alive" timestamp; a nil
 // pointer surfaces as the zero time, which is the agreed sentinel.

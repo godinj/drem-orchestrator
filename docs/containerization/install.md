@@ -453,6 +453,11 @@ the CLI had no mechanism to notice files appearing in the persona's
 inbox, so the dispatcher's "drop a message into `~/.drem-csuite/seth/inbox/`"
 pattern reached a dead end. The poller closes that gap.
 
+2026-04-24 correction: the shipped poller invokes OpenCode, not
+`claude -p`. Older prompt text and plans that describe `claude -p` as
+the persona subprocess are historical unless they explicitly describe an
+interactive Claude runtime.
+
 ### What the poller does
 
 On each tick (default 2s) the binary at `/usr/local/bin/csuite-persona`
@@ -460,15 +465,16 @@ scans `/home/drem/.drem-csuite/<persona>/inbox/` for `*.md` files. For
 each file, oldest-first by mtime:
 
 1. Reads the message body.
-2. Invokes
-   `claude --dangerously-skip-permissions -p "<message>" --system-prompt "<persona prompt>" --output-format text`
+2. Invokes `opencode run --format json --agent build --dir /home/drem`
    as a subprocess with a 5-minute default timeout (configurable via
-   `-claude-timeout`).
-3. On exit 0: writes stdout to
-   `~/.drem-csuite/<persona>/outbox/<timestamp>-<persona>-reply-<shortid>.md`,
-   atomically replaces `~/.drem-csuite/<persona>/state.md` with a
-   structured record of the last-processed message, and moves the
-   original inbox file to `~/.drem-csuite/<persona>/inbox/.archive/`.
+   `-claude-timeout`, a legacy flag name retained for compatibility).
+   The poller embeds the persona prompt and inbox body into OpenCode's
+   final positional prompt argument.
+3. On exit 0: signals any well-formed outbox files the persona wrote,
+   suppresses malformed stdout stubs, atomically replaces
+   `~/.drem-csuite/<persona>/state.md` with a structured record of the
+   last-processed message, and moves the original inbox file to
+   `~/.drem-csuite/<persona>/inbox/.archive/`.
 4. On non-zero exit or spawn error: bumps a sidecar counter
    (`<name>.failures`) and leaves the message in the inbox for the
    next tick. After three failures (configurable via `-max-failures`)
@@ -510,13 +516,13 @@ without `docker cp`.
 ### Authentication — subscription-only
 
 The poller never reads or sets `CLAUDE_CODE_OAUTH_TOKEN`,
-`ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`. The `claude` CLI
-authenticates via the operator's host credentials file bind-mounted
-read-only at `/home/drem/.claude/.credentials.json`. If that file is
-missing on host, every `claude -p` invocation will 401 and every
-message will hit the .failures retry path. Run `claude login` on host
-and rebuild — no container rebuild is needed for a credentials refresh,
-only a `claude login` on host.
+`ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`. The shipped persona
+runtime uses OpenCode with the Codex subscription auth file bind-mounted
+read-only at `/home/drem/.codex/auth.json`; OpenCode reads it through
+the configured multi-auth plugin. If that file is missing or expired,
+each `opencode run` invocation fails and the message hits the .failures
+retry path. Refresh the subscription auth on the host; do not add API
+token env-var fallback.
 
 ### Operator runbook — upgrading a pre-pivot project
 
@@ -546,7 +552,10 @@ image switch is this commit sequence. A project registered before Wave
 
    This refreshes `drem-csuite-base` and
    `drem-csuite-{mike,alex,seth}` in the local registry at
-   `localhost:5000` and pushes them.
+   `localhost:5000` and pushes them. It also builds
+   `drem-csuite-watcher` from `./cmd/csuite-watcher`; if that command is
+   missing, the build-contract test in `deploy/docker` should fail before
+   an image build is attempted.
 
 3. **Edit `~/.drem/projects/<name>/compose.override.yml` to remove
    the obsolete `csuite-run.sh` bind-mount** from every csuite-*
@@ -593,12 +602,12 @@ image switch is this commit sequence. A project registered before Wave
    one new file in outbox, `state.md` shows `last_status: ok`. If the
    message sticks in the inbox with a `.failures` sidecar, check
    `docker logs csuite-seth` for the reason — the most common cause is
-   a missing or expired `~/.claude/.credentials.json` on host.
+   a missing or expired OpenCode/Codex subscription auth file on host.
 
 ### Deferred items (tracked in `plans/csuite-persona-pivot.md`)
 
 - fsnotify-based inbox wake-up (the first cut is a polling loop).
-- `claude -p --resume` support for cross-message memory.
+- Cross-message memory support for the current OpenCode persona runtime.
 - A worker-base preseed analogous to this one (separate drive-by task).
 
 ## Warm direct agents
@@ -698,19 +707,16 @@ Per operator direction 2026-04-20, the whole agent fleet shares the
 operator's Claude Max rate-limit pool so API-key spending stays
 reserved for work that truly needs it.
 
-This one prerequisite covers three consumers in the stack:
-
-- **csuite agents** (mike / alex / seth) — long-lived warm
-  containers that run the `csuite-persona` inbox poller (Wave 2 of
-  the csuite-docker pivot — see "C-Suite personas: the persona poller
-  runtime" below). Each message dropped into
-  `~/.drem-csuite/<persona>/inbox/` triggers one `claude -p`
-  invocation inside the container.
+This one prerequisite covers the Claude-backed consumers in the stack:
 - **drem-planner** — the warm planner service documented above.
 - **drem-worker-{go,cpp} coder / reviewer / fixer / tester /
   supervisor** — ephemeral per-task workers spawned by orch through
   `drem-spawner`. See plans/worker-subscription-auth.md for the
   end-to-end design.
+
+The C-Suite persona poller is a separate OpenCode runtime. It uses the
+OpenCode/Codex subscription auth mount described in "C-Suite personas:
+the persona poller runtime" and does not consume Claude API tokens.
 
 The merger role (`drem-merger`) is a Go binary, does NOT run the
 claude CLI, and deliberately skips this mount.
@@ -729,11 +735,11 @@ Implications for the operator:
 2. **The credentials file is bind-mounted read-only** into each
    consumer at `/home/drem/.claude/.credentials.json`. Every container
    runs as UID 1000 `drem` (matches the operator's typical host UID) so
-   the path resolves without `CLAUDE_CONFIG_DIR` overrides. csuite
-   agents declare the mount in
-   `~/.drem/projects/drem-orchestrator/compose.override.yml`; the
-   planner mounts the file from `deploy/compose/global.yml`; worker
-   containers get it via orch — see the "Worker mount path" note below.
+   the path resolves without `CLAUDE_CONFIG_DIR` overrides. The planner
+   mounts the file from `deploy/compose/global.yml`; worker containers
+   get it via orch — see the "Worker mount path" note below. C-Suite
+   personas may retain the mount for rollback/debugging, but their
+   current poller path is OpenCode.
 
 3. **The bind-mount is read-only on purpose.** Host `claude` CLI
    interactive sessions own OAuth refresh; each container only reads

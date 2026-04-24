@@ -340,13 +340,15 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 		args     []string
 		wantPath string
 		wantBody string
+		wantOut  string
 	}{
-		{name: "approve", args: []string{"approve", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/approve"},
-		{name: "reject", args: []string{"reject", "12345678", "--reason", "too vague"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/reject", wantBody: `{"reason":"too vague"}`},
-		{name: "pass", args: []string{"pass", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/pass"},
-		{name: "fail", args: []string{"fail", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/fail"},
-		{name: "answer", args: []string{"answer", "12345678", "--body", "use port 9090"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/answer", wantBody: `{"body":"use port 9090"}`},
-		{name: "retry", args: []string{"retry", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/retry"},
+		{name: "approve", args: []string{"approve", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/approve", wantOut: "in_progress"},
+		{name: "reject", args: []string{"reject", "12345678", "--reason", "too vague"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/reject", wantBody: `{"reason":"too vague"}`, wantOut: "in_progress"},
+		{name: "pass", args: []string{"pass", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/pass", wantOut: "in_progress"},
+		{name: "fail", args: []string{"fail", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/fail", wantOut: "in_progress"},
+		{name: "answer", args: []string{"answer", "12345678", "--body", "use port 9090"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/answer", wantBody: `{"body":"use port 9090"}`, wantOut: "in_progress"},
+		{name: "retry", args: []string{"retry", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/retry", wantOut: "in_progress"},
+		{name: "comment", args: []string{"comment", "12345678", "--body", "supersede from current base"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/comments", wantBody: `{"body":"supersede from current base"}`, wantOut: "comment"},
 	}
 
 	for _, tt := range tests {
@@ -361,6 +363,10 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 					writeJSONResponse(t, w, []map[string]any{{"id": testTaskID, "title": "A", "status": "plan_review", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")}})
 				case r.Method == http.MethodPost:
 					posts = append(posts, rec)
+					if strings.HasSuffix(r.URL.Path, "/comments") {
+						writeJSONResponse(t, w, map[string]any{"id": "87654321-1234-1234-1234-123456789abc", "task_id": testTaskID, "author": "csuite", "body": "supersede from current base", "created_at": rfc3339("2026-04-24T10:01:00Z")})
+						return
+					}
 					writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": "A", "status": "in_progress", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")})
 				default:
 					http.NotFound(w, r)
@@ -388,8 +394,8 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 			if strings.TrimSpace(posts[0].Body) != tt.wantBody {
 				t.Fatalf("POST body = %q, want %q", strings.TrimSpace(posts[0].Body), tt.wantBody)
 			}
-			if !strings.Contains(out.String(), "in_progress") {
-				t.Fatalf("mutation output missing status: %q", out.String())
+			if !strings.Contains(out.String(), tt.wantOut) {
+				t.Fatalf("mutation output %q missing %q", out.String(), tt.wantOut)
 			}
 		})
 	}

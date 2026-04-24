@@ -37,6 +37,15 @@ The pre-pivot worktree model is gone. Every worker/agent operation happens insid
 - **OpenCode harness:** retired (scheduled Pod 1). Never invoked in production anyway.
 - A future container-native stateful-worker harness that replaces Claude CLI is NOT in Q2 scope — it's post-core. Claude CLI is the current exception, not OpenCode.
 
+**C-Suite persona-runtime exception (2026-04-24 correction):** the
+above OpenCode retirement refers to the worker/agent harness path, not
+the warm C-Suite persona poller. The shipped `cmd/csuite-persona` binary
+currently invokes `opencode run` inside the persona containers, with
+subscription auth supplied by the mounted OpenCode/Codex auth file and
+no Claude API-token fallback. Older docs that say the persona poller
+invokes `claude -p` are pre-correction shorthand unless they explicitly
+describe an interactive Claude Code runtime.
+
 ### §2b. Orch does NOT call spawner directly; spawner becomes the assigner (operator-ratified 2026-04-22)
 
 **Posture.** Separate "what the system should do next" (orch state machine) from "which container runs it, with what resources, at what rate" (spawner). The pre-pivot pattern where orch directly called `spawner.SpawnWorker(...)` is the target for replacement.
@@ -286,6 +295,7 @@ Estimated Q2 deliverable: ~35 stories full-close, ~12 stories PARTIAL→BUILT, o
 | OpenCode harness | retired (Pod 1); Claude CLI is the current stateful-worker harness | §2a |
 | drem-bridge as event router | drem-bridge is a read API; ops-relay is the event router (to be built) | §2b |
 | host-exec drem CLI for persona ops | `dremctl` inside the persona container | §2i |
+| persona poller invokes `claude -p` | persona poller invokes `opencode run` | §2a correction, 2026-04-24 |
 
 ---
 

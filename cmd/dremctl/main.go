@@ -38,6 +38,7 @@ Commands:
   fail <task-id-prefix>
   answer <task-id-prefix> --body TEXT
   retry <task-id-prefix>
+  comment <task-id-prefix> --body TEXT
 `
 
 const taskPageLimit = 500
@@ -110,7 +111,7 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 			return err
 		}
 		return handleStatus(ctx, client, cfg, stdout)
-	case "approve", "reject", "pass", "fail", "answer", "retry":
+	case "approve", "reject", "pass", "fail", "answer", "retry", "comment":
 		if err := requireProject(cfg); err != nil {
 			return err
 		}
@@ -318,7 +319,7 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 			return err
 		}
 	}
-	if command == "answer" {
+	if command == "answer" || command == "comment" {
 		body, args, err = parseStringOption(args, "body")
 		if err != nil {
 			return err
@@ -350,6 +351,12 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 		dto, err = client.Answer(ctx, cfg.project, taskID, body)
 	case "retry":
 		dto, err = client.Retry(ctx, cfg.project, taskID)
+	case "comment":
+		comment, err := client.Comment(ctx, cfg.project, taskID, body)
+		if err != nil {
+			return err
+		}
+		return renderComment(stdout, cfg.json, comment)
 	default:
 		return fmt.Errorf("unknown mutation %q", command)
 	}
@@ -363,8 +370,8 @@ func mutationUsage(command string) string {
 	switch command {
 	case "reject":
 		return "reject <task-id-prefix> [--reason TEXT]"
-	case "answer":
-		return "answer <task-id-prefix> --body TEXT"
+	case "answer", "comment":
+		return command + " <task-id-prefix> --body TEXT"
 	default:
 		return command + " <task-id-prefix>"
 	}
@@ -549,6 +556,14 @@ func renderMutatedTask(w io.Writer, jsonMode bool, task orchdto.TaskDTO) error {
 		return writeJSON(w, task)
 	}
 	fmt.Fprintf(w, "task %s -> %s\n", shortID(task.ID), task.Status)
+	return nil
+}
+
+func renderComment(w io.Writer, jsonMode bool, comment orchdto.TaskCommentDTO) error {
+	if jsonMode {
+		return writeJSON(w, comment)
+	}
+	fmt.Fprintf(w, "comment %s added to task %s\n", shortID(comment.ID), shortID(comment.TaskID))
 	return nil
 }
 

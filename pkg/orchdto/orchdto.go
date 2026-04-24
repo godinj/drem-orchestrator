@@ -40,6 +40,16 @@ type TaskDTO struct {
 	AssignedWorker string    `json:"assigned_worker"`
 }
 
+// TaskCommentDTO is the public projection returned after appending a task
+// comment through the HTTP API.
+type TaskCommentDTO struct {
+	ID        string    `json:"id"`
+	TaskID    string    `json:"task_id"`
+	Author    string    `json:"author"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // WorkerDTO describes a single worker (agent) — its container, branch,
 // current task, and liveness timestamps. Returned by /workers/:id and
 // /projects/:name/workers.
