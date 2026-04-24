@@ -42,7 +42,7 @@ func (s *Supervisor) evaluate(ctx context.Context, prompt string) (string, error
 
 	var args []string
 	if s.cliConfig.EffectiveProvider() == model.ProviderCodex {
-		args = []string{"exec", "--sandbox", "danger-full-access", "--ask-for-approval", "never"}
+		args = []string{"exec", "--dangerously-bypass-approvals-and-sandbox"}
 		args = append(args, s.cliConfig.CLIArgs()...)
 		args = append(args, "-")
 	} else {

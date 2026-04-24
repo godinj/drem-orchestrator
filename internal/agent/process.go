@@ -198,7 +198,7 @@ func StartCodexProcess(ctx context.Context, codexBin, promptPath, cwd string, ex
 		return nil, fmt.Errorf("start codex process: create log: %w", err)
 	}
 
-	args := []string{"exec", "--json", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "--cd", cwd}
+	args := []string{"exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--cd", cwd}
 	args = append(args, extraArgs...)
 	args = append(args, "-")
 	cmd := exec.CommandContext(ctx, codexBin, args...)

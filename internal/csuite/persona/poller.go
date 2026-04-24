@@ -205,8 +205,7 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 		"codex",
 		"exec",
 		"--json",
-		"--sandbox", "danger-full-access",
-		"--ask-for-approval", "never",
+		"--dangerously-bypass-approvals-and-sandbox",
 		"--cd", "/home/drem",
 	}
 	if model := os.Getenv("DREM_CODEX_MODEL"); model != "" {

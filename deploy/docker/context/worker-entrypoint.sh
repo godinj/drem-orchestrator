@@ -160,7 +160,7 @@ case "${HARNESS}" in
         ;;
 
     codex)
-        codex_args=(exec --json --sandbox danger-full-access --ask-for-approval never --cd "${WORK_DIR}")
+        codex_args=(exec --json --dangerously-bypass-approvals-and-sandbox --cd "${WORK_DIR}")
         if [[ -n "${DREM_MODEL:-}" ]]; then
             codex_args+=(--model "${DREM_MODEL}")
         fi

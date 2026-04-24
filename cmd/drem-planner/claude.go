@@ -55,8 +55,7 @@ func runRealClaude(ctx context.Context, prompt string, model string) ([]byte, []
 	args := []string{
 		"exec",
 		"--json",
-		"--sandbox", "danger-full-access",
-		"--ask-for-approval", "never",
+		"--dangerously-bypass-approvals-and-sandbox",
 		"--model", model,
 		"--output-last-message", outPath,
 		"-",

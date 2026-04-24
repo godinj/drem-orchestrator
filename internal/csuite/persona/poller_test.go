@@ -222,8 +222,7 @@ func TestPoller_PicksUpInboxFile(t *testing.T) {
 		"codex",
 		"exec",
 		"--json",
-		"--sandbox", "danger-full-access",
-		"--ask-for-approval", "never",
+		"--dangerously-bypass-approvals-and-sandbox",
 		"--cd", "/home/drem",
 		"-",
 	}
@@ -362,7 +361,7 @@ func TestPoller_FrontmatterBodyGoesViaStdin(t *testing.T) {
 	}
 
 	// Secondary invariant: the argv uses Codex stdin mode.
-	want := []string{"codex", "exec", "--json", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "--cd", "/home/drem", "-"}
+	want := []string{"codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--cd", "/home/drem", "-"}
 	if !equalArgv(call.argv, want) {
 		t.Fatalf("argv shape regressed\nwant: %v\ngot:  %v", want, call.argv)
 	}
