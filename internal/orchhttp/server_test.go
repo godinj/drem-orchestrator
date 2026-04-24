@@ -316,6 +316,29 @@ func TestListEventsSinceFilter(t *testing.T) {
 	require.Equal(t, "push", events[0].Type)
 }
 
+func TestListEventsWithoutSinceReturnsLatestFirst(t *testing.T) {
+	srv, ts, _ := setupHTTPTest(t, nil)
+
+	old := time.Now().UTC().Add(-2 * time.Hour)
+	newer := time.Now().UTC()
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID: uuid.New(), TaskID: uuid.New(), EventType: "old", Actor: "w1", CreatedAt: old,
+	}).Error)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID: uuid.New(), TaskID: uuid.New(), EventType: "newer", Actor: "w1", CreatedAt: newer,
+	}).Error)
+
+	resp, err := http.Get(ts.URL + "/events?limit=1")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var events []orchdto.EventDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&events))
+	require.Len(t, events, 1)
+	require.Equal(t, "newer", events[0].Type)
+}
+
 func TestWorkerHistoryReturnsEvents(t *testing.T) {
 	srv, ts, _ := setupHTTPTest(t, nil)
 

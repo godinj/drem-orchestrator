@@ -251,21 +251,22 @@ func (s *Server) handleWorkerHistory(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleListEvents returns the raw TaskEvent stream, optionally filtered
-// by ?since=<rfc3339> and bounded by ?limit. Events are returned
-// oldest-first so a consumer that polls with since=previous-last-ts can
-// cursor forward without missing rows.
+// by ?since=<rfc3339> and bounded by ?limit. Without since, it returns
+// newest-first so operator-facing CLIs show current activity by default.
+// With since, it returns oldest-first so polling consumers can cursor
+// forward without missing rows.
 func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
 	limit, _ := paginationFrom(r)
-	q := s.DB.WithContext(r.Context()).
-		Order("created_at ASC").
-		Limit(limit)
+	q := s.DB.WithContext(r.Context()).Limit(limit)
 	if since := r.URL.Query().Get("since"); since != "" {
 		ts, err := time.Parse(time.RFC3339, since)
 		if err != nil {
 			http.Error(w, "invalid since timestamp", http.StatusBadRequest)
 			return
 		}
-		q = q.Where("created_at >= ?", ts)
+		q = q.Where("created_at >= ?", ts).Order("created_at ASC")
+	} else {
+		q = q.Order("created_at DESC")
 	}
 	var events []model.TaskEvent
 	if err := q.Find(&events).Error; err != nil {
