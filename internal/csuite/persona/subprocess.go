@@ -17,8 +17,15 @@ import (
 // logs).
 const stderrCaptureLimit = 4 * 1024
 
-// NewCodexSpawner returns a Spawner that launches Codex via
+// NewOpenCodeSpawner returns a Spawner that launches OpenCode via
 // os/exec.CommandContext.
+func NewOpenCodeSpawner() Spawner {
+	return SpawnerFunc(spawnCLI)
+}
+
+// NewCodexSpawner returns a Spawner that launches Codex via
+// os/exec.CommandContext. Kept as a compatibility alias for older tests and
+// operators while persona containers migrate to OpenCode.
 func NewCodexSpawner() Spawner {
 	return SpawnerFunc(spawnCLI)
 }

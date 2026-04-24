@@ -41,7 +41,7 @@ services:
       # Warm drem-planner endpoint — orch POSTs plan jobs here instead of
       # spawning per-task planner containers. The planner container
       # bind-mounts the operator's Codex auth file and shells out to
-      # codex exec per request.
+      # its configured coding harness per request.
       DREM_PLANNER_URL: "http://drem-planner:8090/plan"
       # Host path of the operator's Claude subscription credentials
       # file. Orch forwards this into every claude-backed worker spawn
@@ -261,6 +261,10 @@ services:
       CSUITE_WATCHER_TOKEN:
       CSUITE_WATCHER_TOKEN_FILE: "/run/secrets/csuite-watcher-token"
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
+      OPENCODE_MULTI_AUTH_CODEX_AUTH_FILE: "/home/drem/.codex/auth.json"
+      OPENCODE_MULTI_AUTH_PREFER_CODEX_LATEST: "1"
+      DREM_OPENCODE_MODEL: "openai/gpt-5.5"
+      DREM_OPENCODE_VARIANT: "high"
       # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CTO-synthesis and deep-analysis tasks
       # don't hit the default ceiling. See csuite-entrypoint.sh for
@@ -318,6 +322,10 @@ services:
       CSUITE_WATCHER_TOKEN:
       CSUITE_WATCHER_TOKEN_FILE: "/run/secrets/csuite-watcher-token"
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
+      OPENCODE_MULTI_AUTH_CODEX_AUTH_FILE: "/home/drem/.codex/auth.json"
+      OPENCODE_MULTI_AUTH_PREFER_CODEX_LATEST: "1"
+      DREM_OPENCODE_MODEL: "openai/gpt-5.5"
+      DREM_OPENCODE_VARIANT: "high"
       # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CTO-synthesis and deep-analysis tasks
       # don't hit the default ceiling. See csuite-entrypoint.sh for
@@ -367,6 +375,10 @@ services:
       CSUITE_WATCHER_TOKEN:
       CSUITE_WATCHER_TOKEN_FILE: "/run/secrets/csuite-watcher-token"
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
+      OPENCODE_MULTI_AUTH_CODEX_AUTH_FILE: "/home/drem/.codex/auth.json"
+      OPENCODE_MULTI_AUTH_PREFER_CODEX_LATEST: "1"
+      DREM_OPENCODE_MODEL: "openai/gpt-5.5"
+      DREM_OPENCODE_VARIANT: "high"
       # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CTO-synthesis and deep-analysis tasks
       # don't hit the default ceiling. See csuite-entrypoint.sh for
@@ -424,6 +436,10 @@ services:
       CSUITE_WATCHER_TOKEN:
       CSUITE_WATCHER_TOKEN_FILE: "/run/secrets/csuite-watcher-token"
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
+      OPENCODE_MULTI_AUTH_CODEX_AUTH_FILE: "/home/drem/.codex/auth.json"
+      OPENCODE_MULTI_AUTH_PREFER_CODEX_LATEST: "1"
+      DREM_OPENCODE_MODEL: "openai/gpt-5.5"
+      DREM_OPENCODE_VARIANT: "high"
       # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CEO-level synthesis and deep-analysis
       # tasks don't hit the default ceiling. Same tuning as the other

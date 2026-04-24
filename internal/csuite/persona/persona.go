@@ -4,34 +4,30 @@
 // # Architectural shape
 //
 // Wave 2 of the csuite-docker pivot replaced the long-lived interactive
-// claude process that formerly served as the container entrypoint
+// model process that formerly served as the container entrypoint
 // (deploy/docker/context/csuite-run.sh) with a polling loop: every tick,
 // the loop scans the persona's inbox for new .md messages and invokes
-// `claude -p` once per message, writing the reply into the persona's
-// outbox and archiving the processed inbox file. The prior design left
-// an interactive claude process running with no mechanism to observe
-// inbox files — an effective dead-end. See docs/containerization/install.md
-// for the operator-facing view and plans/csuite-persona-pivot.md for the
-// rationale.
+// a non-interactive coding harness once per message, writing the reply into
+// the persona's outbox and archiving the processed inbox file. The prior
+// design left an interactive model process running with no mechanism to
+// observe inbox files — an effective dead-end. See
+// docs/containerization/install.md for the operator-facing view and
+// plans/csuite-persona-pivot.md for the rationale.
 //
 // # Subscription-only authentication
 //
-// The poller never reads or sets any Claude authentication token. The
-// only acceptable auth path (per CLAUDE.md "Authentication:
-// subscription-only") is the operator's Claude subscription surfaced via
-// the OAuth credentials file bind-mounted read-only into each container
-// at `/home/drem/.claude/.credentials.json`. Setting
-// CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN is
-// a policy violation and is intentionally not wired into the Spawner
-// interface below. The `claude` CLI reads the credentials file
-// transparently when it runs inside the container.
+// The poller never reads or sets API keys. Persona containers use OpenCode
+// with the Codex OAuth auth file bind-mounted read-only at
+// `/home/drem/.codex/auth.json`; the OpenCode Codex-auth plugin reads that
+// file through OPENCODE_MULTI_AUTH_CODEX_AUTH_FILE. Legacy Claude credential
+// mounts remain in compose for rollback compatibility only.
 //
 // Package layout
 //
 //   - Config     — all poller knobs (paths, poll interval, invocation
 //     timeout, failure threshold). Defaults derived from persona name.
-//   - Spawner    — the interface the poller uses to launch `claude -p`.
-//     Production implementation is claudeSpawner (subprocess.go); tests
+//   - Spawner    — the interface the poller uses to launch OpenCode.
+//     Production implementation is spawnCLI (subprocess.go); tests
 //     provide a fake via SpawnerFunc.
 //   - Poller     — holds resolved config + spawner and runs the main
 //     loop (Run) until ctx is cancelled. Each tick processes the inbox
@@ -54,10 +50,8 @@ import (
 // DefaultPollInterval is the spacing between successive inbox scans.
 const DefaultPollInterval = 2 * time.Second
 
-// DefaultClaudeTimeout bounds a single `claude -p` invocation. Five minutes
-// matches the longest-observed healthy turn in the current watcher
-// runtime while giving Claude enough room to reason with the mounted
-// credentials file (which can trigger a slow OAuth refresh on first use).
+// DefaultClaudeTimeout bounds a single model invocation. The name is retained
+// for CLI/config compatibility with the earlier Claude-backed poller.
 const DefaultClaudeTimeout = 5 * time.Minute
 
 // DefaultMaxFailures is the per-message retry budget before the poller
@@ -104,7 +98,7 @@ type Config struct {
 	// PollInterval governs the tick cadence. Default DefaultPollInterval.
 	PollInterval time.Duration
 
-	// ClaudeTimeout bounds a single claude -p invocation. Default
+	// ClaudeTimeout bounds a single model invocation. Default
 	// DefaultClaudeTimeout.
 	ClaudeTimeout time.Duration
 
@@ -233,11 +227,11 @@ func ensureDir(dir string) error {
 	return nil
 }
 
-// Spawner launches `claude -p` (or a test double). The contract:
+// Spawner launches the configured model CLI (or a test double). The contract:
 //
-//   - args is the full argv, leading element "claude".
+//   - args is the full argv, leading element usually "opencode".
 //   - stdin supplies the user message (nil if args carries it as a
-//     positional argument; see claudeSpawner in subprocess.go).
+//     positional argument; see poller.go's OpenCode invocation).
 //   - stdout bytes are the reply; exitCode is the process exit status
 //     (0 on success). err is non-nil only if the process could not be
 //     launched or the context was cancelled.

@@ -46,6 +46,7 @@ FROM debian:bookworm-slim
 # expectations. Rebuild both images on every bump.
 ARG CLAUDE_CODE_VERSION=2.1.116
 ARG CODEX_VERSION=latest
+ARG OPENCODE_VERSION=latest
 ARG NODE_MAJOR=20
 ARG DREM_UID=1000
 ARG DREM_GID=1000
@@ -61,7 +62,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=C.UTF-8 \
     DISABLE_AUTOUPDATER=1 \
     CSUITE_PROTO_SH=/opt/csuite/bin/csuite-proto.sh \
-    PATH=/home/drem/.local/bin:/opt/csuite/bin:/usr/local/bin:/usr/bin:/bin
+    PATH=/home/drem/.opencode/bin:/home/drem/.local/bin:/opt/csuite/bin:/usr/local/bin:/usr/bin:/bin
 
 # ---- base system packages -------------------------------------------------
 # C-Suite agents emit structured messages (JSON/markdown), poke the
@@ -143,10 +144,22 @@ RUN printf '%s\n' \
 # container start; that file-level mount lands as a sibling of
 # settings.json and does not clobber it.
 COPY --chown=drem:drem claude-code-onboarding.json /home/drem/.claude.json
-RUN install -d -o drem -g drem -m 0700 /home/drem/.claude /home/drem/.codex \
+RUN install -d -o drem -g drem -m 0700 /home/drem/.claude /home/drem/.codex /home/drem/.config /home/drem/.config/opencode \
  && chmod 0600 /home/drem/.claude.json
 COPY --chown=drem:drem claude-code-settings.json /home/drem/.claude/settings.json
 RUN chmod 0644 /home/drem/.claude/settings.json
+
+# ---- OpenCode CLI + Codex subscription config -----------------------------
+# Persona containers use OpenCode as the harness while authenticating through
+# the operator's Codex subscription auth file, bind-mounted at
+# /home/drem/.codex/auth.json by the per-project compose template.
+USER drem
+RUN set -eux; \
+    export OPENCODE_VERSION="${OPENCODE_VERSION}" ; \
+    curl -fsSL https://opencode.ai/install | bash
+COPY --chown=drem:drem opencode-codex-subscription.json /home/drem/.config/opencode/opencode.json
+RUN opencode plugin @guard22/opencode-multi-auth-codex@latest --global --force
+USER root
 
 # ---- persona prompts -------------------------------------------------------
 # The build script (deploy/docker/build-csuite.sh) stages

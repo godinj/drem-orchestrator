@@ -92,14 +92,14 @@ type recordingSignaler struct {
 }
 
 type signalCall struct {
-	persona     string
-	outboxPath  string
-	sha256      string
-	emittedAt   string
-	observedAt  time.Time
-	fsyncCalls  int
-	fsyncOrder  []string
-	fsyncerObs  *recordingFsyncer // pointer captured so we can read ordering later
+	persona    string
+	outboxPath string
+	sha256     string
+	emittedAt  string
+	observedAt time.Time
+	fsyncCalls int
+	fsyncOrder []string
+	fsyncerObs *recordingFsyncer // pointer captured so we can read ordering later
 }
 
 func (r *recordingSignaler) Signal(_ context.Context, personaName, outboxPath, sha, emittedAt string) persona.SignalOutcome {
@@ -409,8 +409,7 @@ func TestPoller_FsyncBeforeSignal(t *testing.T) {
 	// fires). The invariant this test pins is ordering of fsync vs.
 	// signal, which requires the signal to fire at all.
 	const stdoutFM = "---\nfrom: seth\nto: kyle\n---\n\nreply-body"
-	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, stdin io.Reader) ([]byte, int, error) {
-		_, _ = io.ReadAll(stdin)
+	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
 		return []byte(stdoutFM), 0, nil
 	})
 	p, err := persona.New(cfg, spawner)

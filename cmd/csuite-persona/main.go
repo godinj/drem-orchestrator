@@ -3,7 +3,7 @@
 //
 // It replaces the prior long-lived interactive model invocation
 // (deploy/docker/context/csuite-run.sh) with a polling loop that scans
-// the persona's inbox, invokes `codex exec` once per message, and writes
+// the persona's inbox, invokes `opencode run` once per message, and writes
 // the reply to the persona's outbox. See internal/csuite/persona for
 // the loop semantics and docs/containerization/install.md for the
 // operator-facing runbook.
@@ -17,12 +17,9 @@
 //
 // # Subscription-only authentication
 //
-// This binary never reads or sets any Claude auth token. The claude
-// CLI transparently picks up credentials from the bind-mounted
-// /home/drem/.claude/.credentials.json. See CLAUDE.md "Authentication:
-// subscription-only" — CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, and
-// ANTHROPIC_AUTH_TOKEN are policy violations and are intentionally not
-// surfaced as flags or env vars.
+// This binary never reads or sets API keys. The OpenCode Codex-auth plugin
+// picks up the bind-mounted /home/drem/.codex/auth.json through
+// OPENCODE_MULTI_AUTH_CODEX_AUTH_FILE.
 package main
 
 import (
@@ -139,7 +136,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	}
 	cfg.ApplyDefaults()
 
-	p, err := persona.New(cfg, persona.NewCodexSpawner())
+	p, err := persona.New(cfg, persona.NewOpenCodeSpawner())
 	if err != nil {
 		fmt.Fprintf(stderr, "csuite-persona: %v\n", err)
 		return 1

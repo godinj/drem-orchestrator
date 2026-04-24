@@ -27,7 +27,7 @@ func sha256Bytes(data []byte) string {
 
 // Poller owns the inbox scan loop. Construct one with New, then call
 // Run(ctx) from the binary's main goroutine. Run blocks until ctx is
-// cancelled and finishes any in-flight `claude -p` invocation before
+// cancelled and finishes any in-flight model invocation before
 // returning so SIGTERM does not abandon work mid-turn.
 type Poller struct {
 	cfg          Config
@@ -66,7 +66,7 @@ func New(cfg Config, spawner Spawner) (*Poller, error) {
 //     .failures counters and the .archive subdir).
 //  2. Sorts them by mtime ascending so the oldest message is processed
 //     first. Deterministic ordering survives container restarts.
-//  3. For each file, calls processMessage to invoke claude -p once and
+//  3. For each file, calls processMessage to invoke OpenCode once and
 //     either archive the message (success) or bump its .failures sidecar
 //     (non-zero exit / spawn error).
 //
@@ -165,7 +165,7 @@ func (p *Poller) scanOnce(ctx context.Context) error {
 }
 
 // processMessage handles a single inbox file end-to-end. The happy path
-// is: read -> spawn claude -p -> write reply to outbox -> move to
+// is: read -> spawn OpenCode -> write reply to outbox -> move to
 // archive -> update state.md. Failures short-circuit to recordFailure
 // which bumps a per-message counter and eventually archives the file
 // as `<name>.failed`.
@@ -198,26 +198,28 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 	invocationCtx, cancel := context.WithTimeout(ctx, p.cfg.ClaudeTimeout)
 	defer cancel()
 
-	// Pipe the full turn prompt through stdin rather than as a positional
-	// argument. C-Suite messages begin with YAML frontmatter, and stdin
-	// avoids every CLI argv parsing edge around leading dashes.
+	// Pass the full turn prompt as OpenCode's final positional argument.
+	// Codex subscription auth is supplied by the OpenCode plugin reading the
+	// bind-mounted /home/drem/.codex/auth.json file.
 	args := []string{
-		"codex",
-		"exec",
-		"--json",
-		"--dangerously-bypass-approvals-and-sandbox",
-		"--cd", "/home/drem",
+		"opencode",
+		"run",
+		"--format", "json",
+		"--agent", "build",
+		"--dir", "/home/drem",
 	}
-	if model := os.Getenv("DREM_CODEX_MODEL"); model != "" {
+	model := firstNonEmpty(os.Getenv("DREM_OPENCODE_MODEL"), os.Getenv("DREM_CODEX_MODEL"), "openai/gpt-5.5")
+	if model != "" {
 		args = append(args, "--model", model)
 	}
-	if effort := os.Getenv("DREM_CODEX_EFFORT"); effort != "" {
-		args = append(args, "-c", "model_reasoning_effort=\""+effort+"\"")
+	variant := firstNonEmpty(os.Getenv("DREM_OPENCODE_VARIANT"), os.Getenv("DREM_CODEX_EFFORT"), "high")
+	if variant != "" {
+		args = append(args, "--variant", variant)
 	}
-	args = append(args, "-")
+	args = append(args, string(p.codexTurnPrompt(body)))
 
 	start := p.cfg.Now()
-	stdout, exitCode, spawnErr := p.spawner.Spawn(invocationCtx, args, bytes.NewReader(p.codexTurnPrompt(body)))
+	stdout, exitCode, spawnErr := p.spawner.Spawn(invocationCtx, args, nil)
 	duration := p.cfg.Now().Sub(start)
 
 	if spawnErr != nil {
@@ -249,6 +251,15 @@ func (p *Poller) codexTurnPrompt(body []byte) []byte {
 	b.WriteString("Process this C-Suite inbox message. Write any reply as a well-formed markdown file in your persona outbox; do not rely on stdout for delivery.\n\n")
 	b.Write(body)
 	return b.Bytes()
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // recordSuccess writes stdout to the outbox (unless Claude already

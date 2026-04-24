@@ -2,20 +2,20 @@
 
 // Package main — integration_test.go wires the real persona.Poller
 // against a real os/exec.CommandContext-backed Spawner, using a stub
-// `claude` binary compiled into a temp directory and prepended to
-// $PATH. This catches argv/stdin/ENV regressions that the
+// `opencode` binary compiled into a temp directory and prepended to
+// $PATH. This catches argv/prompt/ENV regressions that the
 // SpawnerFunc-mocked unit tests in internal/csuite/persona cannot see.
 //
 // The file is build-tag gated (`//go:build integration`) so the main
 // test sweep opts in with `go test -tags=integration ./...`. Default
 // `go test ./...` does not compile this file, so there is no risk of
-// a CI slowdown from the claude-stub build step. The test additionally
+// a CI slowdown from the opencode-stub build step. The test additionally
 // short-circuits to t.Skip when a Go toolchain is not on PATH.
 //
 // Why a real subprocess rather than extending the unit-test mocks: the
 // Dockerfile swap from csuite-run.sh to csuite-persona introduces a
-// fresh PATH and CWD for the claude invocation. If either regresses
-// (e.g. an env-var leakage, a $HOME mismatch, a stdin buffering
+// fresh PATH and CWD for the OpenCode invocation. If either regresses
+// (e.g. an env-var leakage, a $HOME mismatch, a prompt argument
 // surprise with exec.Cmd.Run), the unit tests would not notice because
 // they never hand the argv to os/exec. This test exercises the real
 // os/exec pipeline end-to-end.
@@ -65,17 +65,17 @@ func TestIntegration_InboxToOutboxRoundTrip(t *testing.T) {
 		t.Fatalf("write prompt: %v", err)
 	}
 
-	// Build the stub `codex` binary. Keeping its source in a child
+	// Build the stub `opencode` binary. Keeping its source in a child
 	// tempdir (not binDir) so the compiled binary is the only thing
 	// the PATH prefix exposes.
 	stubSrc := filepath.Join(root, "stub", "main.go")
 	if err := os.MkdirAll(filepath.Dir(stubSrc), 0o755); err != nil {
 		t.Fatalf("mkdir stub src: %v", err)
 	}
-	if err := os.WriteFile(stubSrc, []byte(stubCodexSource), 0o644); err != nil {
+	if err := os.WriteFile(stubSrc, []byte(stubOpenCodeSource), 0o644); err != nil {
 		t.Fatalf("write stub source: %v", err)
 	}
-	stubBin := filepath.Join(binDir, "codex")
+	stubBin := filepath.Join(binDir, "opencode")
 	build := exec.Command("go", "build", "-o", stubBin, stubSrc)
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
@@ -101,7 +101,7 @@ func TestIntegration_InboxToOutboxRoundTrip(t *testing.T) {
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	p, err := persona.New(cfg, persona.NewCodexSpawner())
+	p, err := persona.New(cfg, persona.NewOpenCodeSpawner())
 	if err != nil {
 		t.Fatalf("persona.New: %v", err)
 	}
@@ -197,25 +197,28 @@ func TestIntegration_InboxToOutboxRoundTrip(t *testing.T) {
 	}
 }
 
-// stubCodexSource is a tiny Go program that mimics the minimum surface
-// of `codex exec -` that the poller uses. It reads the full turn prompt from
-// stdin and writes a well-formed outbox file so the poller suppresses stdout.
-const stubCodexSource = `package main
+// stubOpenCodeSource is a tiny Go program that mimics the minimum surface
+// of `opencode run <prompt>` that the poller uses. It reads the full turn
+// prompt from the final argv element and writes a well-formed outbox file so
+// the poller suppresses stdout.
+const stubOpenCodeSource = `package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"time"
 )
 
 func main() {
-	body, _ := io.ReadAll(os.Stdin)
+	body := ""
+	if len(os.Args) > 1 {
+		body = os.Args[len(os.Args)-1]
+	}
 	out := filepath.Join(os.Getenv("HOME"), ".drem-csuite", "seth", "outbox")
 	_ = os.MkdirAll(out, 0755)
 	name := time.Now().UTC().Format("20060102T150405Z") + "-seth-to-kyle-integration.md"
-	_ = os.WriteFile(filepath.Join(out, name), []byte("---\nfrom: seth\nto: kyle\n---\n\n"+string(body)), 0644)
+	_ = os.WriteFile(filepath.Join(out, name), []byte("---\nfrom: seth\nto: kyle\n---\n\n"+body), 0644)
 	fmt.Println(` + "`" + `{"type":"done"}` + "`" + `)
 }
 `

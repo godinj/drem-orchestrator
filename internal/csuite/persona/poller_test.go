@@ -1,16 +1,16 @@
 package persona_test
 
 // poller_test.go exercises the Wave-2 csuite-persona polling loop end-to-end
-// without invoking the real `claude` binary. All filesystem activity is rooted
+// without invoking the real `opencode` binary. All filesystem activity is rooted
 // at t.TempDir() so each test is hermetic; the Spawner interface is mocked
-// via persona.SpawnerFunc so the argv, stdin, and exit-code paths are all
+// via persona.SpawnerFunc so the argv, prompt, and exit-code paths are all
 // observable.
 //
 // The tests here assert the external contract documented in the package-level
 // doc comment (internal/csuite/persona/persona.go):
 //
 //   - Deterministic mtime-ordered pickup of *.md inbox files.
-//   - Argv shape for `claude -p --system-prompt <prompt> --output-format text`.
+//   - Argv shape for `opencode run --format json --agent build`.
 //   - Outbox filename carrying persona + timestamp.
 //   - State-file atomic replacement (no partial writes).
 //   - Inbox -> archive transition on success.
@@ -113,11 +113,18 @@ func writeInboxMessage(t *testing.T, fs testFS, name, body string, when time.Tim
 }
 
 // spawnCall records a single invocation of the Spawner interface so tests
-// can assert on argv shape, stdin content, and invocation ordering.
+// can assert on argv shape, prompt content, and invocation ordering.
 type spawnCall struct {
 	argv   []string
 	stdin  []byte
 	ctxErr error
+}
+
+func (c spawnCall) promptArg() string {
+	if len(c.argv) == 0 {
+		return ""
+	}
+	return c.argv[len(c.argv)-1]
 }
 
 // recorderSpawner returns a Spawner that records every call into calls and
@@ -215,22 +222,24 @@ func TestPoller_PicksUpInboxFile(t *testing.T) {
 		t.Fatalf("want 1 spawn, got %d", len(calls))
 	}
 	argv := calls[0].argv
-	// Argv shape after the stdin-pipe fix: `-p` has no body argument;
-	// the body is fed via stdin. This prevents claude's CLI flag parser
-	// from mistaking a frontmatter `---` for a flag.
+	// OpenCode receives the full turn prompt as the final positional arg.
 	wantArgv := []string{
-		"codex",
-		"exec",
-		"--json",
-		"--dangerously-bypass-approvals-and-sandbox",
-		"--cd", "/home/drem",
-		"-",
+		"opencode",
+		"run",
+		"--format", "json",
+		"--agent", "build",
+		"--dir", "/home/drem",
+		"--model", "openai/gpt-5.5",
+		"--variant", "high",
 	}
-	if !equalArgv(argv, wantArgv) {
+	if len(argv) != len(wantArgv)+1 || !equalArgv(argv[:len(wantArgv)], wantArgv) {
 		t.Fatalf("argv mismatch\nwant: %v\ngot:  %v", wantArgv, argv)
 	}
-	if !strings.Contains(string(calls[0].stdin), "hi persona") {
-		t.Fatalf("stdin mismatch: got %q", string(calls[0].stdin))
+	if calls[0].stdin != nil {
+		t.Fatalf("stdin must be nil for opencode positional prompt")
+	}
+	if !strings.Contains(argv[len(argv)-1], "hi persona") {
+		t.Fatalf("prompt argv mismatch: got %q", argv[len(argv)-1])
 	}
 
 	// Outbox must contain exactly one file whose name includes the persona.
@@ -285,26 +294,20 @@ func TestPoller_OrderingByMtime(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// After the stdin-pipe fix, the message body is in call.stdin, not argv.
-	if !strings.Contains(string(calls[0].stdin), "old") {
-		t.Fatalf("first spawn should carry the older message, got stdin=%q argv=%v",
-			string(calls[0].stdin), calls[0].argv)
+	if !strings.Contains(calls[0].promptArg(), "old") {
+		t.Fatalf("first spawn should carry the older message, got prompt=%q argv=%v",
+			calls[0].promptArg(), calls[0].argv)
 	}
-	if !strings.Contains(string(calls[1].stdin), "new") {
-		t.Fatalf("second spawn should carry the newer message, got stdin=%q argv=%v",
-			string(calls[1].stdin), calls[1].argv)
+	if !strings.Contains(calls[1].promptArg(), "new") {
+		t.Fatalf("second spawn should carry the newer message, got prompt=%q argv=%v",
+			calls[1].promptArg(), calls[1].argv)
 	}
 }
 
-// TestPoller_FrontmatterBodyGoesViaStdin is the regression test for Bug
-// 1. A csuite message begins with YAML frontmatter ("---\nfrom: alex\n
-// ---\n\nHello."); when that body was passed as a positional arg to
-// `claude -p` the CLI's flag parser rejected it with "unknown option
-// '---\nfrom: alex...'" and exited non-zero before any API call. The
-// fix pipes the body via stdin and leaves `-p` without a body arg. The
-// invariant asserted here: the body MUST NOT appear in the argv, and
-// the body MUST appear verbatim in what was written to stdin.
-func TestPoller_FrontmatterBodyGoesViaStdin(t *testing.T) {
+// TestPoller_FrontmatterBodyGoesInFinalOpenCodeArg asserts that the
+// frontmatter-bearing message body is isolated to OpenCode's final prompt
+// argument and never appears in the flag prefix.
+func TestPoller_FrontmatterBodyGoesInFinalOpenCodeArg(t *testing.T) {
 	fs := newTestFS(t, "Alex system prompt.")
 	cfg := baseConfig(fs)
 	cfg.Persona = "alex"
@@ -338,31 +341,26 @@ func TestPoller_FrontmatterBodyGoesViaStdin(t *testing.T) {
 	}
 	call := calls[0]
 
-	// Primary invariant: the frontmatter body must NOT appear in argv.
-	// Check both the full joined argv and each element so no substring
-	// leak slips through.
-	joined := strings.Join(call.argv, " ")
-	if strings.Contains(joined, body) {
-		t.Fatalf("frontmatter body leaked into argv: %q", joined)
-	}
-	for _, a := range call.argv {
+	// Primary invariant: frontmatter can only appear in the final
+	// OpenCode prompt argument, never in the flag prefix.
+	for _, a := range call.argv[:len(call.argv)-1] {
 		if strings.Contains(a, "from: kyle") {
 			t.Fatalf("frontmatter metadata leaked into argv element %q", a)
 		}
-		// `---` is especially diagnostic of the old shape.
 		if strings.HasPrefix(a, "---") {
-			t.Fatalf("argv element %q starts with --- which claude CLI misparses as a flag", a)
+			t.Fatalf("flag argv element %q starts with frontmatter", a)
 		}
 	}
 
-	// And must appear verbatim in stdin.
-	if !strings.Contains(string(call.stdin), body) {
-		t.Fatalf("frontmatter body not on stdin\nwant: %q\ngot:  %q", body, string(call.stdin))
+	// And must appear verbatim in the final prompt argument.
+	if !strings.Contains(call.argv[len(call.argv)-1], body) {
+		t.Fatalf("frontmatter body not in prompt argv\nwant: %q\ngot:  %q", body, call.argv[len(call.argv)-1])
 	}
 
-	// Secondary invariant: the argv uses Codex stdin mode.
-	want := []string{"codex", "exec", "--json", "--dangerously-bypass-approvals-and-sandbox", "--cd", "/home/drem", "-"}
-	if !equalArgv(call.argv, want) {
+	// Secondary invariant: the argv uses OpenCode build mode and keeps
+	// the large prompt as the final argument.
+	want := []string{"opencode", "run", "--format", "json", "--agent", "build", "--dir", "/home/drem", "--model", "openai/gpt-5.5", "--variant", "high"}
+	if len(call.argv) != len(want)+1 || !equalArgv(call.argv[:len(want)], want) {
 		t.Fatalf("argv shape regressed\nwant: %v\ngot:  %v", want, call.argv)
 	}
 }
@@ -609,8 +607,7 @@ func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
 	// Post-G3: returns a frontmatter-framed stdout so the poller keeps
 	// the legacy stub-write path (non-frontmatter stdout now
 	// suppresses the stub — see TestPoller_SuppressesStubWhenStdoutHasNoFrontmatter).
-	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, stdin io.Reader) ([]byte, int, error) {
-		_, _ = io.ReadAll(stdin)
+	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
 		srcPath := filepath.Join(fs.inboxDir, "claude-moved-me.md")
 		dstPath := filepath.Join(fs.archiveDir, "claude-moved-me.md")
 		if err := os.Rename(srcPath, dstPath); err != nil {
@@ -680,8 +677,7 @@ func TestPoller_SuppressesStubWhenClaudeWroteOutbox(t *testing.T) {
 	const claudeWritten = "20260422T140000Z-seth-to-alex-scoreboard.md"
 	const claudeBody = "---\nfrom: seth\nto: alex\ntimestamp: 2026-04-22T14:00:00Z\nsubject: scoreboard\n---\n\nbody here\n"
 
-	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, stdin io.Reader) ([]byte, int, error) {
-		_, _ = io.ReadAll(stdin)
+	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
 		// Simulate Claude's Write tool emitting a frontmatter-bearing
 		// outbox file during the turn.
 		if err := os.WriteFile(filepath.Join(fs.outboxDir, claudeWritten), []byte(claudeBody), 0o644); err != nil {
