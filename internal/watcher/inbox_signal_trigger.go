@@ -95,17 +95,32 @@ func (t *InboxSignalTrigger) pollLoop(ctx context.Context) {
 	}
 }
 
-// poll performs a single scan of the base directory for *.signal files.
+// poll performs a single scan of the base directory for signal files.
+// It checks both dotfiles (.signal, created by csuite-proto.sh and the
+// bridge server) and regular signal files (*.signal) for compatibility.
 func (t *InboxSignalTrigger) poll() {
-	pattern := filepath.Join(t.baseDir, "*/inbox/*.signal")
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		log.Printf("%s: glob error: %v", inboxSignalSource, err)
-		return
+	// Glob does not match dotfiles, so we check .signal files explicitly
+	// by scanning agent directories, then also glob for *.signal.
+	var matches []string
+
+	// Check for .signal dotfiles in each agent inbox.
+	agentDirs, _ := filepath.Glob(filepath.Join(t.baseDir, "*/inbox"))
+	for _, inboxDir := range agentDirs {
+		dotSignal := filepath.Join(inboxDir, ".signal")
+		if _, err := os.Stat(dotSignal); err == nil {
+			matches = append(matches, dotSignal)
+		}
 	}
 
+	// Also check for non-dot signal files (*.signal) for backwards compat.
+	globMatches, err := filepath.Glob(filepath.Join(t.baseDir, "*/inbox/*.signal"))
+	if err != nil {
+		log.Printf("%s: glob error: %v", inboxSignalSource, err)
+	}
+	matches = append(matches, globMatches...)
+
 	for _, match := range matches {
-		// Path structure: <baseDir>/<agent>/inbox/<file>.signal
+		// Path structure: <baseDir>/<agent>/inbox/<file>
 		// Agent name is the basename of the directory two levels above the file.
 		inboxDir := filepath.Dir(match)
 		agentDir := filepath.Dir(inboxDir)

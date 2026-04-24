@@ -31,6 +31,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/eventbus"
 	"github.com/godinj/drem-orchestrator/internal/watcher"
 )
@@ -208,17 +209,32 @@ func runWatcher(args []string, stderr io.Writer) int {
 	}
 	defer bus.Close()
 
-	// Pre-trigger inbox check: skip turns when agent has no relevant inbox
-	// messages or unacked event bus deliveries. Filters events by type per
-	// agent and auto-acks non-relevant events.
-	runnerCfg.Precheck = watcher.NewFilteredPrecheck(
-		runnerCfg.InboxBaseDir,
-		&busAdapter{bus: bus},
-	)
+	// Open csuite.Store on the same csuite.db for DB-backed message checks.
+	csuiteDBDSN := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000", eventBusPath)
+	csuiteDB, err := gorm.Open(sqlite.Open(csuiteDBDSN), &gorm.Config{Logger: gormLogger})
+	if err != nil {
+		fmt.Fprintf(stderr, "error: open csuite store: %v\n", err)
+		return 1
+	}
+	csuiteStore := csuite.NewStore(csuiteDB)
+
+	// Pre-trigger inbox check: skip turns when the agent has no DB-backed
+	// messages, relevant filesystem inbox messages, or relevant event bus
+	// deliveries. The filtered precheck auto-acks non-relevant events.
+	runnerCfg.Precheck = &dbBackedPrecheck{
+		store: csuiteStore,
+		next: watcher.NewFilteredPrecheck(
+			runnerCfg.InboxBaseDir,
+			&busAdapter{bus: bus},
+		),
+	}
 
 	// Create a real CommandRunner that spawns claude subprocesses.
+	// Use the current working directory (the repo worktree) so agents
+	// can source scripts/csuite-proto.sh with a relative path.
+	cwd, _ := os.Getwd()
 	runner := &claudeCommandRunner{
-		workDir:   expandTilde(cfg.InboxBaseDir),
+		workDir:   cwd,
 		promptDir: runnerCfg.PromptDir,
 	}
 
@@ -267,7 +283,7 @@ func toRunnerConfig(cfg watcherTomlConfig) watcher.RunnerConfig {
 		PromptDir:     expandTilde(cfg.PromptDir),
 	}
 	if rc.AllowedAgents == nil {
-		rc.AllowedAgents = []string{"mike", "alex", "seth"}
+		rc.AllowedAgents = []string{"mike", "alex", "ross", "seth"}
 	}
 	if rc.InboxBaseDir == "" {
 		rc.InboxBaseDir = expandTilde("~/.drem-csuite")
@@ -319,6 +335,30 @@ func (a *busAdapter) UnackedDeliveriesByTypes(agent string, eventTypes []string)
 
 func (a *busAdapter) Ack(agent string, eventIDs []string) error {
 	return a.bus.Ack(agent, eventIDs)
+}
+
+// dbBackedPrecheck adds bridge/PWA/csuite-chat DB inbox messages to the
+// watcher precheck while preserving the filtered event-bus behavior.
+type dbBackedPrecheck struct {
+	store *csuite.Store
+	next  watcher.TurnPrecheck
+}
+
+func (p *dbBackedPrecheck) HasWork(agent string) bool {
+	if p.store != nil {
+		counts, err := p.store.UnreadCountByAgent()
+		if err != nil {
+			log.Printf("precheck: DB message query for %s: %v", agent, err)
+			return true
+		}
+		if counts[agent] > 0 {
+			return true
+		}
+	}
+	if p.next == nil {
+		return false
+	}
+	return p.next.HasWork(agent)
 }
 
 // claudeCommandRunner is the production CommandRunner that spawns claude

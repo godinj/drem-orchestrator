@@ -6,6 +6,11 @@
 
 CSUITE_DIR="${CSUITE_DIR:-$HOME/.drem-csuite}"
 
+# Bridge server config for DB-backed messaging.
+# Set these to mirror disk messages into the bridge database.
+CSUITE_BRIDGE_ADDR="${DREM_BRIDGE_ADDR:-}"
+CSUITE_BRIDGE_TOKEN="${DREM_BRIDGE_TOKEN:-}"
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -59,6 +64,45 @@ _csuite_notify() {
     return 0
 }
 
+# Mirror a message to the bridge DB via REST API.
+# Usage: _csuite_mirror_to_bridge <from> <to> <subject> <priority> <type> <body>
+#
+# No-op if CSUITE_BRIDGE_ADDR or CSUITE_BRIDGE_TOKEN is empty.
+# Failures are logged to stderr but never block the caller.
+_csuite_mirror_to_bridge() {
+    [ -z "$CSUITE_BRIDGE_ADDR" ] && return 0
+    [ -z "$CSUITE_BRIDGE_TOKEN" ] && return 0
+
+    local from="$1" to="$2" subject="$3" priority="$4" type="$5" body="$6"
+
+    # Map proto priority → bridge priority (bridge only accepts low|normal|high).
+    case "$priority" in
+        critical) priority="high" ;;
+        low|normal|high) ;; # pass through
+        *) priority="normal" ;;
+    esac
+
+    # Map proto type → bridge type (bridge accepts status|request|alert).
+    case "$type" in
+        request|decision) type="request" ;;
+        observation|report) type="status" ;;
+        *) type="status" ;;
+    esac
+
+    local url="http://${CSUITE_BRIDGE_ADDR}/api/messages"
+
+    # Use printf to safely embed the body in JSON (escapes newlines/quotes).
+    local json_body
+    json_body=$(printf '%s' "$body" | python3 -c 'import sys,json; print(json.dumps(sys.stdin.read()))' 2>/dev/null)
+    [ -z "$json_body" ] && json_body="\"$body\""
+
+    curl -s -o /dev/null -X POST "$url" \
+        -H "Authorization: Bearer ${CSUITE_BRIDGE_TOKEN}" \
+        -H "Content-Type: application/json" \
+        -d "{\"from_agent\":\"${from}\",\"to_agent\":\"${to}\",\"subject\":\"${subject}\",\"body\":${json_body},\"priority\":\"${priority}\",\"type\":\"${type}\"}" \
+        2>/dev/null || true
+}
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -106,6 +150,9 @@ MSGEOF
 
     # Push-notify the recipient if the message type requires action
     _csuite_notify "$to" "$type"
+
+    # Mirror to bridge DB so csuite-chat/PWA can see the message.
+    _csuite_mirror_to_bridge "$from" "$to" "$subject" "$priority" "$type" "$body"
 
     echo "$filepath"
 }

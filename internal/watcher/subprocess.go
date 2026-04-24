@@ -3,7 +3,9 @@ package watcher
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -34,6 +36,10 @@ func RunClaudeSubprocess(ctx context.Context, agent string, workDir string, syst
 	)
 	if workDir != "" {
 		cmd.Dir = workDir
+		// Set CSUITE_PROTO_SH so agent prompts can source the protocol
+		// library via absolute path regardless of claude's working directory.
+		protoPath := filepath.Join(workDir, "scripts", "csuite-proto.sh")
+		cmd.Env = append(os.Environ(), "CSUITE_PROTO_SH="+protoPath)
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {

@@ -2,7 +2,10 @@ package serve
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -159,7 +162,68 @@ func createMessageFromRequest(req sendMessageRequest, s dashboardStore) (*csuite
 	if err := s.CreateMessage(msg); err != nil {
 		return nil, err
 	}
+
+	// Write an inbox .md file so disk-based agent prompts can read it,
+	// then touch .signal so the watcher wakes the agent.
+	writeInboxFile(req, msg.CreatedAt)
+	touchSignalFile(req.ToAgent)
+
 	return msg, nil
+}
+
+// writeInboxFile writes a .md file to the recipient's disk inbox in the same
+// format as csuite-proto.sh's csuite_send, so agent prompts that read from
+// disk can see messages sent via the bridge API.
+func writeInboxFile(req sendMessageRequest, createdAt time.Time) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	inboxDir := filepath.Join(home, ".drem-csuite", req.ToAgent, "inbox")
+	_ = os.MkdirAll(inboxDir, 0o700)
+
+	ts := createdAt.UTC()
+	filename := fmt.Sprintf("%s-%s.md", ts.Format("20060102-150405"), req.FromAgent)
+	filePath := filepath.Join(inboxDir, filename)
+
+	// Map bridge priority/type to proto values for consistency.
+	priority := req.Priority
+	if priority == "" {
+		priority = "normal"
+	}
+	msgType := req.Type
+	if msgType == "" {
+		msgType = "request"
+	}
+
+	content := fmt.Sprintf(`---
+from: %s
+to: %s
+timestamp: %s
+subject: "%s"
+priority: %s
+type: %s
+---
+
+%s
+`, req.FromAgent, req.ToAgent, ts.Format(time.RFC3339), req.Subject, priority, msgType, req.Body)
+
+	_ = os.WriteFile(filePath, []byte(content), 0o644)
+}
+
+// touchSignalFile creates a .signal file in the recipient's inbox directory
+// to trigger the watcher to spawn a turn for that agent.
+func touchSignalFile(agent string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	signalPath := filepath.Join(home, ".drem-csuite", agent, "inbox", ".signal")
+	_ = os.MkdirAll(filepath.Dir(signalPath), 0o700)
+	f, err := os.Create(signalPath)
+	if err == nil {
+		f.Close()
+	}
 }
 
 func toMessageResponse(m csuite.CsuiteInboxMessage) messageResponse {
