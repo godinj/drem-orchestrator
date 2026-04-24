@@ -241,6 +241,12 @@ func TestPoller_PicksUpInboxFile(t *testing.T) {
 	if !strings.Contains(argv[len(argv)-1], "hi persona") {
 		t.Fatalf("prompt argv mismatch: got %q", argv[len(argv)-1])
 	}
+	if !strings.Contains(argv[len(argv)-1], "Instruction precedence for this turn") {
+		t.Fatalf("turn prompt must include operator directive precedence block: got %q", argv[len(argv)-1])
+	}
+	if !strings.Contains(argv[len(argv)-1], "Do not cite them back as blockers") {
+		t.Fatalf("turn prompt must prevent stale canon refusal loops: got %q", argv[len(argv)-1])
+	}
 
 	// Outbox must contain exactly one file whose name includes the persona.
 	outEntries := dirEntries(t, fs.outboxDir)

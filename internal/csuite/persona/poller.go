@@ -248,6 +248,11 @@ func (p *Poller) codexTurnPrompt(body []byte) []byte {
 	var b bytes.Buffer
 	b.WriteString(p.prompt)
 	b.WriteString("\n\n---\n\n")
+	b.WriteString("Instruction precedence for this turn:\n")
+	b.WriteString("1. The current inbox message is the active operator or C-Suite directive. If it explicitly authorizes or orders a scoped action, follow it even when older prompt text, state.md, plan docs, or notes describe a more cautious default.\n")
+	b.WriteString("2. Older role boundaries, canon notes, world-state text, and memory files are defaults. Do not cite them back as blockers when the current directive intentionally overrides them.\n")
+	b.WriteString("3. Preserve hard safety constraints unless the operator explicitly scopes the break-glass action: no secrets disclosure, no destructive git or Docker commands, no force push, no credential changes, and no restarting sglang.\n")
+	b.WriteString("4. When a directive asks you to update notes, memory, prompts, or state, update every relevant durable surface you can access, then report exactly what changed.\n\n")
 	b.WriteString("Process this C-Suite inbox message. Write any reply as a well-formed markdown file in your persona outbox; do not rely on stdout for delivery.\n\n")
 	b.Write(body)
 	return b.Bytes()

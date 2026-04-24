@@ -317,13 +317,19 @@ func TestRender_CsuiteKyleServicePresent(t *testing.T) {
 
 	// Kyle state tree mounts at the kyle-specific host-side subdir.
 	var kyleHomeMounted bool
+	var kylePromptMounted bool
 	for _, v := range svc.Volumes {
 		if strings.Contains(v, "/kyle:/home/drem/.drem-csuite/kyle:rw") {
 			kyleHomeMounted = true
 		}
+		if strings.Contains(v, "/kyle-container.md:/opt/csuite/prompts/kyle.md:ro") {
+			kylePromptMounted = true
+		}
 	}
 	require.True(t, kyleHomeMounted,
 		"csuite-kyle missing kyle state bind-mount at ~/.drem-csuite/kyle")
+	require.True(t, kylePromptMounted,
+		"csuite-kyle missing kyle-container prompt bind-mount at /opt/csuite/prompts/kyle.md")
 
 	// Label contract matches the other persona services.
 	require.Equal(t, "drem-orchestrator", svc.Labels["drem.project"])
@@ -531,11 +537,12 @@ func TestRender_NoPlannerTemplateStub(t *testing.T) {
 }
 
 // TestRender_CsuiteHomeMountsAreWired asserts that each csuite-*
-// service bind-mounts two host paths: the operator's Claude
-// subscription credentials (read-only) and the per-persona
-// inbox/outbox/state tree under <CsuiteHomeRoot>/<persona>
-// (read-write). Without either mount the containerized persona
-// cannot authenticate OR receive inbox messages. See CLAUDE.md
+// service bind-mounts the operator's Claude subscription credentials
+// (read-only), the shared C-Suite root (read-only for evidence review),
+// and the per-persona inbox/outbox/state tree under
+// <CsuiteHomeRoot>/<persona> (read-write). Without these mounts the
+// containerized persona cannot authenticate, receive inbox messages, or
+// review sibling-owned evidence bundles. See CLAUDE.md
 // (subscription-only) and the csuite-docker end-to-end plan.
 func TestRender_CsuiteHomeMountsAreWired(t *testing.T) {
 	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
@@ -554,13 +561,26 @@ func TestRender_CsuiteHomeMountsAreWired(t *testing.T) {
 		svc := "csuite-" + persona
 		creds := "/home/operator/.claude/.credentials.json:" +
 			"/home/drem/.claude/.credentials.json:ro"
+		sharedHome := "/home/operator/.drem-csuite:" +
+			"/home/drem/.drem-csuite:ro"
 		home := "/home/operator/.drem-csuite/" + persona +
 			":/home/drem/.drem-csuite/" + persona + ":rw"
+		prompt := "/home/dev/git/drem-orchestrator.git/master/docs/csuite-agents/prompts/" + persona + ".md:" +
+			"/opt/csuite/prompts/" + persona + ".md:ro"
 
 		require.Contains(t, parsed.Services[svc].Volumes, creds,
 			"%s must bind-mount operator's Claude credentials read-only "+
 				"(subscription-only auth — no auth tokens, no API keys); "+
 				"volumes=%v", svc, parsed.Services[svc].Volumes)
+		require.Contains(t, parsed.Services[svc].Volumes, sharedHome,
+			"%s must bind-mount <CsuiteHomeRoot> read-only at "+
+				"/home/drem/.drem-csuite so sibling-owned evidence bundles "+
+				"are visible without write access; volumes=%v",
+			svc, parsed.Services[svc].Volumes)
+		require.Contains(t, parsed.Services[svc].Volumes, prompt,
+			"%s must bind-mount its repo prompt over /opt/csuite/prompts so "+
+				"operator prompt fixes take effect on container recreate; volumes=%v",
+			svc, parsed.Services[svc].Volumes)
 		require.Contains(t, parsed.Services[svc].Volumes, home,
 			"%s must bind-mount <CsuiteHomeRoot>/%s at /home/drem/.drem-csuite/%s "+
 				"read-write so inbox messages reach the container and "+

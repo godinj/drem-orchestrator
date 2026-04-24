@@ -273,6 +273,7 @@ services:
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.WorkerCodexAuthPath}}:/home/drem/.codex/auth.json:ro
+      - {{.BareRepoPath}}/master/docs/csuite-agents/prompts/mike.md:/opt/csuite/prompts/mike.md:ro
       # Scoreboard item 33: bind-mount the csuite-watcher shared token
       # file read-only into the container. The persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE (set above) when CSUITE_WATCHER_TOKEN
@@ -288,6 +289,10 @@ services:
       # synthesis passes — closing it eliminates delegation overhead on
       # every future CTO synthesis.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
+      # Read-only shared C-Suite root so personas can review sibling-owned
+      # evidence bundles without write access. The persona-specific mount below
+      # overlays its own subtree read-write for inbox/outbox/state.
+      - {{.CsuiteHomeRoot}}:/home/drem/.drem-csuite:ro
       - {{.CsuiteHomeRoot}}/mike:/home/drem/.drem-csuite/mike:rw
       # host-exec bearer token (read-only). Enables the baked-in
       # /opt/csuite/bin/host-exec wrapper (shipped by drem-csuite-base)
@@ -334,6 +339,7 @@ services:
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.WorkerCodexAuthPath}}:/home/drem/.codex/auth.json:ro
+      - {{.BareRepoPath}}/master/docs/csuite-agents/prompts/alex.md:/opt/csuite/prompts/alex.md:ro
       # Scoreboard item 33: bind-mount the csuite-watcher shared token
       # file read-only into the container. The persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE (set above) when CSUITE_WATCHER_TOKEN
@@ -349,6 +355,10 @@ services:
       # synthesis passes — closing it eliminates delegation overhead on
       # every future CTO synthesis.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
+      # Read-only shared C-Suite root so personas can review sibling-owned
+      # evidence bundles without write access. The persona-specific mount below
+      # overlays its own subtree read-write for inbox/outbox/state.
+      - {{.CsuiteHomeRoot}}:/home/drem/.drem-csuite:ro
       - {{.CsuiteHomeRoot}}/alex:/home/drem/.drem-csuite/alex:rw
       # host-exec bearer token (read-only). See csuite-mike block.
       - {{.HostExecTokenPath}}:/etc/drem/host-exec.token:ro
@@ -387,6 +397,7 @@ services:
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.WorkerCodexAuthPath}}:/home/drem/.codex/auth.json:ro
+      - {{.BareRepoPath}}/master/docs/csuite-agents/prompts/seth.md:/opt/csuite/prompts/seth.md:ro
       # Scoreboard item 33: bind-mount the csuite-watcher shared token
       # file read-only into the container. The persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE (set above) when CSUITE_WATCHER_TOKEN
@@ -402,6 +413,10 @@ services:
       # synthesis passes — closing it eliminates delegation overhead on
       # every future CTO synthesis.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
+      # Read-only shared C-Suite root so personas can review sibling-owned
+      # evidence bundles without write access. The persona-specific mount below
+      # overlays its own subtree read-write for inbox/outbox/state.
+      - {{.CsuiteHomeRoot}}:/home/drem/.drem-csuite:ro
       - {{.CsuiteHomeRoot}}/seth:/home/drem/.drem-csuite/seth:rw
       # host-exec bearer token (read-only). See csuite-mike block.
       - {{.HostExecTokenPath}}:/etc/drem/host-exec.token:ro
@@ -448,6 +463,7 @@ services:
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
       - {{.WorkerCodexAuthPath}}:/home/drem/.codex/auth.json:ro
+      - {{.BareRepoPath}}/master/docs/csuite-agents/prompts/kyle-container.md:/opt/csuite/prompts/kyle.md:ro
       # Scoreboard item 33: bind-mount the csuite-watcher shared token
       # file read-only into the container. The persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE (set above) when CSUITE_WATCHER_TOKEN
@@ -464,6 +480,10 @@ services:
       # coexistence rules in docs/csuite-agents/prompts/kyle.md
       # (Phase 4) spell out how the two Kyles hand off the tree.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:rw
+      # Read-only shared C-Suite root so Kyle can review sibling-owned evidence
+      # bundles without broad write access. The Kyle-specific mount below
+      # overlays his own subtree read-write for inbox/outbox/state.
+      - {{.CsuiteHomeRoot}}:/home/drem/.drem-csuite:ro
       - {{.CsuiteHomeRoot}}/kyle:/home/drem/.drem-csuite/kyle:rw
       # host-exec bearer token (read-only). See csuite-mike block.
       - {{.HostExecTokenPath}}:/etc/drem/host-exec.token:ro
