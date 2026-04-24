@@ -52,6 +52,7 @@ type AgentsConfig struct {
 	Fixer                 AgentConfig `toml:"fixer"`
 	Researcher            AgentConfig `toml:"researcher"`
 	Prep                  AgentConfig `toml:"prep"`
+	Merger                AgentConfig `toml:"merger"`
 	Supervisor            AgentConfig `toml:"supervisor"`
 	InteractiveSupervisor AgentConfig `toml:"interactive_supervisor"`
 }
@@ -74,6 +75,8 @@ func (a AgentsConfig) ForAgentType(at model.AgentType) model.AgentCLIConfig {
 		ac = a.Researcher
 	case model.AgentPrep:
 		ac = a.Prep
+	case model.AgentMerger:
+		ac = a.Merger
 	default:
 		ac = AgentConfig{Effort: "medium"}
 	}
@@ -188,6 +191,7 @@ func (a AgentsConfig) ContainerImageOverrides() map[string]string {
 	add("fixer", a.Fixer.ContainerImage)
 	add("researcher", a.Researcher.ContainerImage)
 	add("prep", a.Prep.ContainerImage)
+	add("merger", a.Merger.ContainerImage)
 	add("supervisor", a.Supervisor.ContainerImage)
 	return out
 }
@@ -228,6 +232,7 @@ func DefaultConfig() Config {
 			Fixer:                 AgentConfig{Effort: "medium"},
 			Researcher:            AgentConfig{Effort: "medium"},
 			Prep:                  AgentConfig{Effort: "medium"},
+			Merger:                AgentConfig{Effort: "medium"},
 			Supervisor:            AgentConfig{Effort: "low"},
 			InteractiveSupervisor: AgentConfig{Effort: "medium"},
 		},

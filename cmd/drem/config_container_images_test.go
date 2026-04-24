@@ -101,10 +101,12 @@ func TestLoadConfig_AgentContainerImageOverrides(t *testing.T) {
 	if overrides["coder"] != "localhost:5000/drem-worker-go:v1.2" {
 		t.Errorf("overrides[coder] = %q", overrides["coder"])
 	}
-	// Merger is not in AgentsConfig — ensure the schema parsed at least
-	// the coder override. [agents.merger] is silently accepted at the
-	// TOML layer (BurntSushi tolerates unknown tables by default) but
-	// not surfaced through AgentsConfig.
+	if cfg.Agents.Merger.ContainerImage != "localhost:5000/drem-merger:v1.2" {
+		t.Errorf("Merger.ContainerImage = %q", cfg.Agents.Merger.ContainerImage)
+	}
+	if overrides["merger"] != "localhost:5000/drem-merger:v1.2" {
+		t.Errorf("overrides[merger] = %q", overrides["merger"])
+	}
 }
 
 // TestLoadConfig_ContainerImageOverrides_EmptyOnDefaults asserts that

@@ -35,6 +35,12 @@ log_path       = "/var/lib/drem/drem.log"
   endpoint = "http://gq:8090/v1/chat/completions"
   model    = "gemma4-26b"
 
+# Merger is configured as an SGLang/Gemma role so any merger-side agent work
+# uses the same gq-fronted SGLang path as the direct tool agents.
+[agents.merger]
+  provider = "sglang-direct"
+  model    = "gemma4-26b"
+
 # Planner runs as a long-lived warm drem-planner container (see
 # deploy/compose/global.yml) that orch reaches via POST /plan. Provider=codex
 # enables the HTTP path in processPlanning.

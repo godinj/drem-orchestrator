@@ -41,6 +41,10 @@ skip_constraint_gate  = false
   provider = "sglang-direct"
   model    = "gemma4-26b"
 
+[agents.merger]
+  provider = "sglang-direct"
+  model    = "gemma4-26b"
+
 [agents.supervisor]
   provider = "codex"
   model    = "gpt-5.5"

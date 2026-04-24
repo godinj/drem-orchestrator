@@ -16,6 +16,7 @@ type ProfileConfig struct {
 	Reviewer   AgentConfig `toml:"reviewer"`
 	Fixer      AgentConfig `toml:"fixer"`
 	Researcher AgentConfig `toml:"researcher"`
+	Merger     AgentConfig `toml:"merger"`
 }
 
 // ForAgentTypeWithProfile resolves an AgentCLIConfig for the given agent type
@@ -74,6 +75,8 @@ func profileAgentConfig(p ProfileConfig, at model.AgentType) AgentConfig {
 		return p.Fixer
 	case model.AgentResearcher:
 		return p.Researcher
+	case model.AgentMerger:
+		return p.Merger
 	default:
 		return AgentConfig{}
 	}

@@ -126,6 +126,7 @@ const (
 	AgentFixer        AgentType = "fixer"
 	AgentClassifier   AgentType = "classifier"
 	AgentPrep         AgentType = "prep"
+	AgentMerger       AgentType = "merger"
 )
 
 // allAgentTypes lists every valid AgentType value for parsing.
@@ -138,6 +139,7 @@ var allAgentTypes = []AgentType{
 	AgentFixer,
 	AgentClassifier,
 	AgentPrep,
+	AgentMerger,
 }
 
 // String returns the string representation of an AgentType.

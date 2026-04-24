@@ -162,6 +162,7 @@ func TestLoadConfigClassifierEndpoint(t *testing.T) {
 func TestAgentsConfigForAgentType(t *testing.T) {
 	cfg := DefaultConfig()
 	cfg.Agents.Planner = AgentConfig{Model: "claude-opus-4-6", Effort: "high"}
+	cfg.Agents.Merger = AgentConfig{Provider: "sglang-direct", Model: "gemma4-26b", Effort: "medium"}
 
 	got := cfg.Agents.ForAgentType(model.AgentPlanner)
 	if got.Model != "claude-opus-4-6" || got.Effort != "high" {
@@ -171,6 +172,29 @@ func TestAgentsConfigForAgentType(t *testing.T) {
 	got = cfg.Agents.ForAgentType(model.AgentCoder)
 	if got.Model != "" || got.Effort != "medium" {
 		t.Errorf("ForAgentType(Coder) = %+v, want {Model: Effort:medium}", got)
+	}
+
+	got = cfg.Agents.ForAgentType(model.AgentMerger)
+	if got.Provider != model.ProviderSGLangDirect || got.Model != "gemma4-26b" || got.Effort != "medium" {
+		t.Errorf("ForAgentType(Merger) = %+v, want sglang-direct/gemma4-26b/medium", got)
+	}
+}
+
+func TestBuildDirectToolAgentConfigEnabledByMerger(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agents.Merger = AgentConfig{Provider: string(model.ProviderSGLangDirect), Model: "gemma4-26b"}
+	cfg.DirectToolAgent.Endpoint = "http://gq:8090/v1/chat/completions"
+	cfg.DirectToolAgent.Model = "gemma4-26b"
+
+	got := buildDirectToolAgentConfig(cfg)
+	if got == nil {
+		t.Fatal("buildDirectToolAgentConfig returned nil")
+	}
+	if got.Endpoint != "http://gq:8090/v1/chat/completions" {
+		t.Errorf("Endpoint = %q", got.Endpoint)
+	}
+	if got.Model != "gemma4-26b" {
+		t.Errorf("Model = %q", got.Model)
 	}
 }
 

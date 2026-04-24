@@ -590,7 +590,7 @@ func envOr(key, def string) string {
 //
 // The direct path is enabled when either:
 //  1. [direct_tool_agent].enabled is set to true in drem.toml, or
-//  2. any of the coder/reviewer/fixer agents have provider = "sglang-direct".
+//  2. any of the coder/reviewer/fixer/merger agents have provider = "sglang-direct".
 //
 // TOML values in [direct_tool_agent] override the defaults from
 // agent.DefaultDirectToolAgentConfig(). The per-role agent Model is NOT
@@ -599,7 +599,8 @@ func envOr(key, def string) string {
 func buildDirectToolAgentConfig(cfg Config) *agent.DirectToolAgentConfig {
 	roleDirect := cfg.Agents.Coder.Provider == string(model.ProviderSGLangDirect) ||
 		cfg.Agents.Reviewer.Provider == string(model.ProviderSGLangDirect) ||
-		cfg.Agents.Fixer.Provider == string(model.ProviderSGLangDirect)
+		cfg.Agents.Fixer.Provider == string(model.ProviderSGLangDirect) ||
+		cfg.Agents.Merger.Provider == string(model.ProviderSGLangDirect)
 	if !cfg.DirectToolAgent.Enabled && !roleDirect {
 		return nil
 	}

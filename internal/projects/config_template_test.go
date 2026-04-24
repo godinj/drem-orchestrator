@@ -109,6 +109,33 @@ func TestRenderConfig_PlannerPinsCodex(t *testing.T) {
 	require.Equal(t, "high", parsed.Agents.Planner.Effort)
 }
 
+func TestRenderConfig_MergerPinsSGLangGemma(t *testing.T) {
+	data := projects.TemplateData{
+		ProjectName:  "drem-orchestrator",
+		Language:     projects.LanguageGo,
+		BareRepoPath: "/home/dev/git/drem-orchestrator.git",
+	}
+	out, err := projects.RenderConfig(data)
+	require.NoError(t, err)
+	s := string(out)
+
+	require.Contains(t, s, "[agents.merger]")
+	require.Contains(t, s, `provider = "sglang-direct"`)
+	require.Contains(t, s, `model    = "gemma4-26b"`)
+
+	var parsed struct {
+		Agents struct {
+			Merger struct {
+				Provider string `toml:"provider"`
+				Model    string `toml:"model"`
+			} `toml:"merger"`
+		} `toml:"agents"`
+	}
+	require.NoError(t, toml.Unmarshal(out, &parsed))
+	require.Equal(t, "sglang-direct", parsed.Agents.Merger.Provider)
+	require.Equal(t, "gemma4-26b", parsed.Agents.Merger.Model)
+}
+
 // TestRenderConfig_RequiresBareRepoPath asserts the nil-guard on the
 // one field the template cannot safely default.
 func TestRenderConfig_RequiresBareRepoPath(t *testing.T) {
