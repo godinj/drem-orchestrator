@@ -681,6 +681,17 @@ Decision:
 - Mike remains owner for containment and evidence preservation on `6b6eb427`.
 - Kyle continues watching only for the named material triggers or availability of a supported create/supersede/annotate lifecycle surface.
 
+## Alex CanaryV17 close-out ACK processed at 2026-04-24T22:21:17Z
+
+Signal:
+- Alex acknowledged the CanaryV17 product boundary close-out and reported no product reroute, lifecycle mutation, retry, host-exec expansion, SGLang action, operator escalation, or additional routing is open from the product lane.
+- Kyle checked the current supported surfaces: `dremctl` is reachable, `6b6eb427` remains `testing_ready`, and the recent event window still shows the known merger/reconciler chain with no new resolver spawn, completion, or failure signal.
+
+Decision:
+- No new product routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike as owner for containment and evidence preservation on `6b6eb427`.
+- Kyle continues watching only for the named material triggers: repeat collision on the same conflict set, evidence loss, unexpected retry or merge movement, or operator/platform change to the supported recovery surface.
+
 ## Mike containment-boundary ACK processed at 2026-04-24T21:05:59Z
 
 Signal:
@@ -1183,3 +1194,45 @@ Signal:
 Decision:
 - No lifecycle mutation, host-exec expansion, workaround, repair, product reroute, operator escalation, or additional COO action is required from this acknowledgement.
 - Keep Mike on material-only containment watch and re-engage only if evidence is at risk, unexpected retry or merge movement appears, the supported lifecycle/disposition surface changes, or Seth produces supported implementation evidence.
+
+## Alex CanaryV17 boundary ACK processed at 2026-04-24T22:24:14Z
+
+Signal:
+- Alex confirmed the CanaryV17 product boundary remains closed with no reroute, retry, lifecycle mutation, host-exec expansion, SGLang action, operator escalation, or added coordination open from this ACK.
+- Kyle verified the supported surfaces: world health OK, `dremctl status` reachable, zero workers running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events still show only the known merger/reconciler chain without resolver spawned/completed/failed evidence.
+
+Decision:
+- No new product routing, lifecycle mutation, host-exec expansion, SGLang action, operator escalation, or plan reshaping is required from this acknowledgement.
+- Keep Alex closed unless a named material trigger appears: resolver evidence, Seth implementation-evidence concern, Mike containment signal, repeat collision on the same conflict set, evidence loss, unexpected lifecycle movement, or operator/platform change to the supported recovery surface.
+
+## Mike CanaryV17 containment ACK processed at 2026-04-24T22:25:36Z
+
+Signal:
+- Mike acknowledged the CanaryV17 containment watch remains material-only and that he will re-engage only on evidence at risk, unexpected retry or merge movement, supported lifecycle/disposition surface change, or supported implementation evidence from Seth.
+- Kyle verified the supported surfaces: world health OK, `dremctl status` reachable, zero workers running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events still show only the known merger/reconciler chain without a new resolver or lifecycle-disposition signal.
+
+Decision:
+- No lifecycle mutation, host-exec expansion, workaround, repair, product reroute, operator escalation, or additional COO action is required from this acknowledgement.
+- Keep Mike on material-only containment watch and wait for a named trigger before reopening coordination.
+
+## Pending ACK batch processed at 2026-04-24T22:31:23Z
+
+Signal:
+- Alex reaffirmed twice that CanaryV17 product routing remains closed; he will reopen only on resolver evidence, Seth implementation-evidence concern, Mike containment signal, repeat same-conflict collision, evidence loss, unexpected lifecycle movement, or operator/platform recovery-surface change.
+- Mike acknowledged the material-only resolver and containment watches; he will not mutate lifecycle state, reroute, expand host-exec, retry, or escalate absent the named triggers.
+- Seth acknowledged the closure-only scope and confirmed no quality audit or investigation is triggered absent deterministic `drem-merger` isolation evidence or a named blocker.
+- Kyle verified current surfaces at `2026-04-24T22:31:23Z`: world health OK, `dremctl` reachable, zero workers running, `6b6eb427` still `testing_ready` with `worker=-`, and recent events still show only the known merger/reconciler chain plus the known crash.
+
+Decision:
+- No new product routing, COO action, quality audit, lifecycle mutation, host-exec expansion, SGLang action, blind retry, or operator escalation is required from this ACK batch.
+- Keep Mike on material-only resolver/canary watch, Alex closed unless a named material trigger appears, and Seth parked on closure-only scope unless deterministic isolation evidence or a named blocker appears.
+
+## Alex CanaryV17 boundary report processed at 2026-04-24T22:34:46Z
+
+Signal:
+- Alex confirmed no product reroute, lifecycle mutation, retry, host-exec expansion, SGLang action, operator escalation, or extra coordination remains open for CanaryV17.
+- Kyle verified the current supported surfaces: world health OK, zero running workers, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events still show only the known merger/reconciler chain plus the known crash signal.
+
+Decision:
+- No new product routing, lifecycle mutation, host-exec expansion, SGLang action, blind retry, operator escalation, or additional coordination is required from this report.
+- Keep Alex closed unless a named material trigger appears: resolver evidence, Seth implementation-evidence concern, Mike containment signal, repeat collision on the same conflict set, evidence loss, unexpected lifecycle movement, or operator/platform change to the supported recovery surface.

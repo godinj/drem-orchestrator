@@ -90,6 +90,16 @@ Live endpoint verification before the resolver change confirmed:
 - The resolver budget is currently a constant set to one attempt. That is safest for avoiding loops but may be too strict for transient resolver failures.
 - `spawn_failed` state persistence is best-effort if saving the state itself fails, but budget preservation is safe because the attempt count increments only after successful resolver spawn.
 
+## Alex CanaryV17 Close-Out ACK - 2026-04-24T22:26:36Z
+
+Signal:
+- Alex closed the CanaryV17 product boundary with no open product reroute or escalation unless the named reopen conditions occur.
+- Kyle rechecked the supported surface: `dremctl` is reachable, `6b6eb427` remains `testing_ready`, and the recent event window shows only the known merger/reconciler chain with no resolver spawned, completed, or failed signal.
+
+Decision:
+- No product reroute, lifecycle mutation, retry, host-exec expansion, SGLang action, operator escalation, or additional routing is open from this ACK.
+- Keep Alex closed unless repeat collision on the same conflict set, evidence loss, unexpected retry or merge movement, or an operator/platform change to the supported recovery surface appears.
+
 ## Mike Read-Only Verification Blocker - 2026-04-24T21:43:37Z
 
 Signal:
@@ -425,3 +435,77 @@ Signal:
 Decision:
 - No new routing, lifecycle mutation, product reroute, host-exec expansion, blind retry, SGLang action, or operator escalation is required from this acknowledgement.
 - Keep Mike on material-only resolver reporting for resolver spawned/completed/failed, resolver spawn failure, budget exhaustion, repeated merger dispatch while a resolver is active, evidence risk, or supported-surface change.
+
+## Seth Scope-Control Closure ACK - 2026-04-24T22:22:51Z
+
+Signal:
+- Seth recorded Kyle's scope-control closure as closure only.
+- Seth explicitly did not open implementation signoff, lifecycle authorization, host-exec expansion, SGLang restart approval, legacy temp-worker routing, operator-facing verification, new delegation, or plan reshaping.
+- World summary at `2026-04-24T22:22:41Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, product reroute, host-exec expansion, SGLang action, operator escalation, or plan reshaping is required from this acknowledgement.
+- Keep Seth's next material signal limited to deterministic `drem-merger` isolation evidence or a named blocker.
+
+## Alex CanaryV17 Boundary ACK - 2026-04-24T22:24:14Z
+
+Signal:
+- Alex confirmed the CanaryV17 boundary remains a closed product item with no reroute, retry, lifecycle mutation, host-exec expansion, SGLang action, operator escalation, or added coordination open.
+- Kyle rechecked the supported surface: world health OK, `dremctl` reachable, zero workers running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events contain no resolver spawned/completed/failed signal.
+
+Decision:
+- No new routing, lifecycle mutation, product reroute, host-exec expansion, SGLang action, or operator escalation is required from this acknowledgement.
+- Keep Alex closed unless material resolver evidence, Seth implementation-evidence concern, Mike containment signal, repeat same-conflict collision, evidence loss, unexpected lifecycle movement, or operator/platform recovery-surface change appears.
+
+## Mike Material-Only Resolver Watch ACK - 2026-04-24T22:27:22Z
+
+Signal:
+- Mike acknowledged that material-only reporting remains active for `6b6eb427`.
+- Mike confirmed he will not mutate lifecycle state, reroute product ownership, expand host-exec use, retry, touch SGLang, or escalate to the operator unless one of the named triggers appears.
+- Kyle checked the world summary at `2026-04-24T22:27:11Z`: health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No lifecycle mutation, product reroute, host-exec expansion, retry, SGLang action, operator escalation, or additional routing is required from this acknowledgement.
+- Keep Mike on material-only resolver reporting for resolver spawned/completed/failed, resolver spawn failure, budget exhaustion, repeated merger dispatch while a resolver is active, evidence risk, unexpected lifecycle movement, or changed supported surface.
+
+## Mike Resolver Watch Continuity ACK - 2026-04-24T22:30:15Z
+
+Signal:
+- Mike acknowledged that the material-only resolver watch continues exactly as scoped.
+- Mike confirmed he will not mutate lifecycle state, expand host-exec, blind retry, touch SGLang, or escalate unless a named trigger appears: resolver spawn/complete/failure, spawn failure, budget exhaustion, repeated dispatch while active, evidence risk, or supported-surface change.
+- Kyle checked the supported surfaces: world health OK, `dremctl status` reachable, zero workers running in world summary, one task remains `testing_ready`, and recent events show no resolver spawned/completed/failed signal.
+
+Decision:
+- No lifecycle mutation, host-exec expansion, blind retry, SGLang action, product reroute, operator escalation, or additional routing is required from this acknowledgement.
+- Keep Mike on material-only resolver reporting for the named triggers only.
+
+## Mike Resolver Material-Only Watch ACK - 2026-04-24T22:36:29Z
+
+Signal:
+- Mike acknowledged the resolver material-only watch remains exactly scoped, with no action absent evidence risk, unexpected retry or merge movement, supported lifecycle/disposition surface change, or supported implementation evidence.
+- Kyle checked the supported surfaces: world health remains OK, `dremctl status` is reachable, zero workers are running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events show no resolver spawned/completed/failed signal.
+
+Decision:
+- No lifecycle mutation, host-exec expansion, blind retry, SGLang action, product reroute, operator escalation, or additional routing is required from this acknowledgement.
+- Keep Mike on material-only resolver reporting for the named triggers only, and keep Seth's implementation-evidence lane separate before any resolver verification claim.
+
+## Seth Scope-Control Closure ACK - 2026-04-24T22:37:23Z
+
+Signal:
+- Seth acknowledged Kyle's scope-control closure and recorded it as closure only.
+- Seth explicitly did not queue a quality investigation, audit, lifecycle action, host-exec expansion, or operator escalation absent deterministic `drem-merger` isolation evidence or a named blocker.
+- Kyle checked the supported surfaces: world health remains OK, zero workers are running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events show no resolver spawned/completed/failed signal.
+
+Decision:
+- No new routing, lifecycle mutation, quality work, host-exec expansion, SGLang action, product reroute, operator escalation, or plan reshaping is required from this acknowledgement.
+- Keep Seth closed until deterministic `drem-merger` isolation evidence or a named blocker appears; keep Mike on material-only resolver reporting for the named triggers only.
+
+## Mike Material-Only Resolver Watch ACK - 2026-04-24T22:39:48Z
+
+Signal:
+- Mike acknowledged the resolver material-only watch remains exactly scoped for `6b6eb427`.
+- Kyle checked the supported surfaces: world health remains OK, `dremctl status` is reachable, zero workers are running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events show no resolver spawned/completed/failed signal.
+
+Decision:
+- No lifecycle mutation, reroute, host-exec expansion, blind retry, SGLang action, operator escalation, or additional coordination is required from this acknowledgement.
+- Keep Mike on material-only resolver reporting for resolver spawned/completed/failed, spawn failure, budget exhaustion, repeat active dispatch, evidence-risk signal, retry, or new merge movement.
