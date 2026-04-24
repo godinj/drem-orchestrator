@@ -53,7 +53,9 @@ RUN apt-get update \
 # The merger clones / pushes against a bare repo bind-mounted from the host
 # (operator UID) into this root-owned container. Git 2.35+ blocks cross-UID
 # repository access unless safe.directory lists it. See orch.Dockerfile.
-RUN git config --system --add safe.directory '*'
+RUN git config --system --add safe.directory '*' \
+    && git config --system user.name "${DREM_GIT_USER_NAME:-drem-merger}" \
+    && git config --system user.email "${DREM_GIT_USER_EMAIL:-drem-merger@localhost}"
 
 COPY --from=build /out/drem-merger /usr/local/bin/drem-merger
 

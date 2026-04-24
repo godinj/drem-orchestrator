@@ -240,7 +240,7 @@ func (r *httpReporter) Report(ctx context.Context, project, taskID string, res m
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if r.token != "" {
-		req.Header.Set("Authorization", "Bearer "+r.token)
+		req.Header.Set("X-Drem-Agentmon-Token", r.token)
 	}
 
 	resp, err := r.client.Do(req)
