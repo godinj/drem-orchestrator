@@ -446,6 +446,33 @@ func TestExecuteMerge_ConflictBudgetExhaustedFailsTerminally(t *testing.T) {
 	}
 }
 
+func TestExecuteMerge_ResolverSpawnFailureDoesNotConsumeBudget(t *testing.T) {
+	merger := &stubMerger{results: []stubMergeResult{
+		{result: &MergeResult{Success: false, FailureReason: "conflict", Conflicts: []string{"main.go"}}, err: nil},
+	}}
+	o, db, projectID := setupMergeTest(t, merger)
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+
+	err := o.executeMerge(task)
+	if err == nil {
+		t.Fatal("executeMerge: expected resolver spawn error")
+	}
+
+	var updated model.Task
+	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if got := mergeConflictResolverAttemptCount(&updated); got != 0 {
+		t.Fatalf("resolver attempt count = %d, want 0 when spawn fails", got)
+	}
+	if got, _ := updated.Context[contextKeyMergeConflictResolverState].(string); got != "spawn_failed" {
+		t.Fatalf("resolver state = %q, want spawn_failed", got)
+	}
+	if _, ok := updated.Context[contextKeyTerminalMergerFailureReason]; ok {
+		t.Fatal("terminal merger failure reason should not be set when resolver spawn fails")
+	}
+}
+
 func TestExecuteMerge_ActiveResolverSkipsMergeDispatch(t *testing.T) {
 	merger := &stubMerger{results: []stubMergeResult{
 		{result: &MergeResult{Success: true, MergeCommit: "should-not-run"}, err: nil},

@@ -382,12 +382,13 @@ func (o *Orchestrator) maybeSpawnMergeConflictResolver(task *model.Task, result 
 	task.Context["failure_diagnosis"] = fmt.Sprintf("Merge conflict while merging %s into %s.", task.WorktreeBranch, integrationBranch)
 	task.Context["suggested_fix"] = "Resolve the listed merge conflicts, commit the resolution, and leave the task in MERGING for the merger to retry."
 	task.Context[contextKeyMergeConflictResolverState] = "spawning"
-	task.Context[contextKeyMergeConflictResolverAttemptCount] = attempts + 1
 	if err := o.db.Save(task).Error; err != nil {
 		return false, fmt.Errorf("spawn merge conflict resolver: save context: %w", err)
 	}
 
 	if _, err := o.SpawnFixerSession(task.ID); err != nil {
+		task.Context[contextKeyMergeConflictResolverState] = "spawn_failed"
+		_ = o.db.Save(task).Error
 		return false, fmt.Errorf("spawn merge conflict resolver: %w", err)
 	}
 
@@ -401,6 +402,7 @@ func (o *Orchestrator) maybeSpawnMergeConflictResolver(task *model.Task, result 
 	if reloaded.AssignedAgentID != nil {
 		reloaded.Context[contextKeyMergeConflictResolverAgentID] = reloaded.AssignedAgentID.String()
 	}
+	reloaded.Context[contextKeyMergeConflictResolverAttemptCount] = attempts + 1
 	reloaded.Context[contextKeyMergeConflictResolverState] = "running"
 	if err := o.db.Save(&reloaded).Error; err != nil {
 		return false, fmt.Errorf("spawn merge conflict resolver: save agent id: %w", err)
