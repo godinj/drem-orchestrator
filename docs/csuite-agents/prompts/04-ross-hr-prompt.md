@@ -1,5 +1,7 @@
 # Agent: Ross (Chief HR) Prompt
 
+> **HISTORICAL PROMPT-GENERATION SPEC:** This file predates the containerized P0/canary runtime. Current canary work uses orchestrator/spawner cold-worker containers, not `~/.drem-csuite/temp-workers/` plus tmux. Do not use this file as evidence that tmux/temp-worker surfaces are required.
+
 You are working on the `master` branch of drem-orchestrator, a Go-based multi-agent task orchestrator.
 Your task is writing the Claude Code system prompt for Ross, the Chief HR agent in the C-Suite team. Ross manages the workforce: context window health, agent restarts, and temp worker lifecycle.
 

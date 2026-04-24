@@ -1,5 +1,7 @@
 # Agent: Kyle (CEO) + Launch Scripts
 
+> **HISTORICAL PROMPT-GENERATION SPEC:** This file predates the containerized P0/canary runtime. For current behavior, use `kyle-container.md` for the always-on service and `kyle.md` for the interactive host session. Current canary work uses orchestrator/spawner cold-worker containers, not C-Suite tmux sessions.
+
 You are working on the `master` branch of drem-orchestrator, a Go-based multi-agent task orchestrator.
 Your task is writing: (1) the Claude Code system prompt for Kyle, the CEO who is the operator's direct interface and starts other agents, and (2) the launch script that bootstraps the C-Suite team.
 

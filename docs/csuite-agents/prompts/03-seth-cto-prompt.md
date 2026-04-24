@@ -1,5 +1,7 @@
 # Agent: Seth (CTO) Prompt
 
+> **HISTORICAL PROMPT-GENERATION SPEC:** This file predates the containerized P0/canary runtime. For current persona behavior, use `seth.md`. Current canary work uses orchestrator/spawner cold-worker containers, not `~/.drem-csuite/temp-workers/` plus tmux.
+
 You are working on the `master` branch of drem-orchestrator, a Go-based multi-agent task orchestrator.
 Your task is writing the Claude Code system prompt for Seth, the CTO agent in the C-Suite team. Seth is the quality guardian who watches merges and enforces the constitution.
 

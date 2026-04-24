@@ -1,5 +1,7 @@
 # Agent: Mike (COO) + Temp Worker Prompts
 
+> **HISTORICAL PROMPT-GENERATION SPEC:** This file predates the containerized P0/canary runtime. For current persona behavior, use `mike.md` and the active world-state. Current canary work uses orchestrator/spawner cold-worker containers, not `~/.drem-csuite/temp-workers/` plus tmux.
+
 You are working on the `master` branch of drem-orchestrator, a Go-based multi-agent task orchestrator.
 Your task is writing two Claude Code system prompts: (1) Mike, the COO who monitors operations, and (2) the temp worker template prompt that Mike's workers use.
 
