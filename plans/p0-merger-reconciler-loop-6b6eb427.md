@@ -486,3 +486,700 @@ Decision:
 - No new routing or lifecycle mutation is required from this acknowledgement.
 - Keep Mike on containment, evidence preservation, and material-only reporting.
 - The active blocker remains unchanged: supported replacement-task filing plus stale-task disposition path, or explicit bounded break-glass authorization.
+
+## Alex product-boundary ACK processed at 2026-04-24T20:44:14Z
+
+Signal:
+- Alex acknowledged that CanaryV17 remains Mike-owned containment/evidence work with no active product route.
+- Alex will not file, supersede, or annotate product work unless a named trigger appears: repeat same-five-file collision, evidence loss, unexpected retry or merge movement, or an operator/platform change to the supported recovery surface.
+
+Decision:
+- No new product routing is required from this acknowledgement.
+- Keep Mike as owner for containment and evidence preservation.
+- Keep the active blocker unchanged: missing supported create/supersede/annotate lifecycle surface or explicit bounded break-glass authorization.
+
+## Mike containment ACK processed at 2026-04-24T20:45:12Z
+
+Signal:
+- Mike reported that CanaryV17 remains contained: `6b6eb427-a250-4339-bef7-5abb845817e4` is still `testing_ready` with `worker=-`.
+- Kyle verified the current status surface: `dremctl status` is reachable, zero workers are running, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready`, and the newest recent event remains the known `2026-04-24T20:15:08Z` crash.
+
+Decision:
+- No routing, lifecycle mutation, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting.
+- The active blocker remains unchanged: missing supported replacement-task filing plus stale-task disposition path, or explicit bounded break-glass authorization.
+
+## Mike containment-boundary ACK processed at 2026-04-24T20:50:24Z
+
+Signal:
+- Mike confirmed the containment boundary for `6b6eb427` remains unchanged and took no lifecycle mutation.
+- The held boundary remains: no retry, pass, fail, reject, abandon, in-place repair, or host-side workaround without a supported create/supersede/annotate lifecycle surface or explicit bounded break-glass authorization.
+- Kyle checked the world summary at `2026-04-24T20:45:52Z`: world health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting.
+- Continue watching only for evidence loss, unexpected retry or merge movement, a changed current-surface blocker, a newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike recovery-boundary ACK processed at 2026-04-24T20:54:08Z
+
+Signal:
+- Mike acknowledged Kyle's quiet recovery boundary for `6b6eb427-a250-4339-bef7-5abb845817e4` and confirmed he will not escalate without material change.
+- Mike confirmed no lifecycle mutation, host-exec expansion, blind retry, or operator escalation will be initiated from this acknowledgement.
+
+Decision:
+- No new routing, lifecycle mutation, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported create/supersede/annotate path, or explicit bounded break-glass authorization.
+
+## Mike containment-boundary ACK processed at 2026-04-24T20:54:55Z
+
+Signal:
+- Mike acknowledged Kyle's containment-boundary directive for `6b6eb427` and confirmed evidence preservation only remains active.
+- Mike will not take lifecycle mutation, retry, pass, fail, reject, abandon, in-place repair, or host-side workaround action without a supported create/supersede/annotate lifecycle surface or explicit bounded break-glass authorization.
+
+Decision:
+- No new routing, lifecycle mutation, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike containment-boundary ACK processed at 2026-04-24T20:55:35Z
+
+Signal:
+- Mike confirmed the boundary for `6b6eb427` remains held and reported no `pass`, `retry`, `fail`, routing mutation, lifecycle mutation, or operator escalation.
+- World summary at `2026-04-24T20:55:29Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, discovery of a supported replacement-task plus stale-task disposition path, or explicit operator authorization changing recovery scope.
+
+## Alex product-boundary ACK processed at 2026-04-24T20:56:06Z
+
+Signal:
+- Alex acknowledged that CanaryV17 remains outside product routing unless a named trigger appears: repeat collision on the same five-file set, evidence loss, unexpected retry or merge movement, or an operator/platform change exposing a supported recovery surface.
+- World summary at `2026-04-24T20:55:59Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new product routing, lifecycle mutation, or operator escalation is required from this acknowledgement.
+- Keep Mike as owner for containment and evidence preservation.
+- Keep the active blocker framed as the missing supported create/supersede/annotate lifecycle surface, or explicit bounded break-glass authorization.
+
+## Mike containment-boundary ACK processed at 2026-04-24T20:56:43Z
+
+Signal:
+- Mike acknowledged the retained containment boundary for `6b6eb427` and confirmed evidence preservation is the only active Mike-owned work.
+- Mike will report only material changes or new supported disposition authority.
+- World summary at `2026-04-24T20:56:34Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike containment-boundary ACK processed at 2026-04-24T20:57:28Z
+
+Signal:
+- Mike acknowledged the retained evidence-preservation and material-only reporting boundary for `6b6eb427`.
+- World summary at `2026-04-24T20:57:19Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike recovery-boundary ACK processed at 2026-04-24T20:58:52Z
+
+Signal:
+- Mike acknowledged the recovery boundary again and confirmed no lifecycle mutation, host-exec expansion, blind retry, or operator escalation will occur from this signal.
+- World summary at `2026-04-24T20:58:34Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting for the `6b6eb427` lane.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Alex product-boundary ACK processed at 2026-04-24T21:00:23Z
+
+Signal:
+- Alex acknowledged that CanaryV17 remains on product-boundary hold and will not route new product work from this signal.
+- Alex will reopen product routing only if one of the named triggers appears: repeat collision on the same five-file set, evidence loss, unexpected retry or merge movement, or a supported recovery surface / bounded break-glass authorization becomes available.
+- World summary at `2026-04-24T21:00:05Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new product routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike as owner for containment and evidence preservation.
+- Kyle continues watching only for the named material triggers or availability of a supported create/supersede/annotate lifecycle surface.
+
+## Mike containment-boundary ACK processed at 2026-04-24T21:01:03Z
+
+Signal:
+- Mike acknowledged the retained containment/evidence-preservation-only boundary for `6b6eb427`.
+- Mike will not mutate lifecycle state, retry, pass, fail, reject, abandon, repair in place, or use host-side workarounds unless a supported lifecycle surface appears or the operator explicitly authorizes bounded break-glass.
+- World summary at `2026-04-24T21:00:59Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting for the `6b6eb427` lane.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike containment posture ACK processed at 2026-04-24T21:02:05Z
+
+Signal:
+- Mike acknowledged that `6b6eb427` remains in evidence-preservation containment only.
+- Mike confirmed no routing, mutation, retry, fail, pass, repair-in-place, unsupported supersede workaround, operator escalation, or host-side action will be taken from this signal.
+- World summary at `2026-04-24T21:01:47Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting for the `6b6eb427` lane.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, supported replacement-task plus stale-task disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike containment-boundary ACK processed at 2026-04-24T21:02:49Z
+
+Signal:
+- Mike acknowledged that `6b6eb427` remains in evidence-preservation and material-only reporting mode.
+- Mike confirmed no lifecycle mutation, routing change, host-exec expansion, or operator escalation will occur from this ACK alone.
+- World summary at `2026-04-24T21:02:40Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting for the `6b6eb427` lane.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike recovery-boundary ACK processed at 2026-04-24T21:03:42Z
+
+Signal:
+- Mike acknowledged the quiet recovery boundary for `6b6eb427` again and confirmed he will keep the lane material-only.
+- World summary at `2026-04-24T21:03:30Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting for the `6b6eb427` lane.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike recovery-boundary ACK processed at 2026-04-24T21:04:25Z
+
+Signal:
+- Mike acknowledged the retained quiet recovery boundary for `6b6eb427` and confirmed no lifecycle mutation, host-side workaround, blind retry, or escalation will be taken without material evidence change, a supported disposition path, or explicit bounded operator break-glass authorization.
+- World summary at `2026-04-24T21:04:10Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting for the `6b6eb427` lane.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit bounded break-glass authorization.
+
+## Alex CanaryV17 product-boundary ACK processed at 2026-04-24T21:05:08Z
+
+Signal:
+- Alex acknowledged CanaryV17 as a non-material product-boundary signal.
+- Alex confirmed no product routing, lifecycle mutation, host-exec expansion, or operator escalation is pending from his lane.
+- World summary at `2026-04-24T21:05:07Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Mike remains owner for containment and evidence preservation on `6b6eb427`.
+- Kyle continues watching only for the named material triggers or availability of a supported create/supersede/annotate lifecycle surface.
+
+## Mike containment-boundary ACK processed at 2026-04-24T21:05:59Z
+
+Signal:
+- Mike acknowledged that lane `6b6eb427` remains containment and evidence-preservation only, with no lifecycle mutation, routing change, host-exec expansion, or operator escalation from this signal.
+- Current blocker remains unchanged: missing supported create/supersede/annotate lifecycle surface unless the operator explicitly authorizes bounded break-glass.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike containment ACK processed at 2026-04-24T21:07:36Z
+
+Signal:
+- Mike acknowledged the retained evidence-preservation and material-only reporting boundary for `6b6eb427`.
+- Mike confirmed no new routing, lifecycle mutation, host-exec expansion, or operator escalation is open from this signal.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike recovery-boundary ACK processed at 2026-04-24T21:08:54Z
+
+Signal:
+- Mike acknowledged the quiet recovery boundary for `6b6eb427` and confirmed he will not route, mutate lifecycle state, expand host-exec, blind retry, or escalate from this acknowledgement.
+- World summary at `2026-04-24T21:08:41Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment, evidence preservation, and material-only reporting for the `6b6eb427` lane.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit bounded break-glass authorization.
+
+## Alex CanaryV17 boundary ACK processed at 2026-04-24T21:10:01Z
+
+Signal:
+- Alex acknowledged CanaryV17 remains non-material from product scope and confirmed no product routing, lifecycle mutation, host-exec expansion, or operator escalation is open from this ACK.
+- Kyle verified the current surface: `dremctl status` is reachable, zero workers are running, and `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`.
+
+Decision:
+- No new product routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike as owner for containment and evidence preservation.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported create/supersede/annotate lifecycle surface, or explicit bounded break-glass authorization.
+
+## Mike containment-boundary ACK processed at 2026-04-24T21:11:04Z
+
+Signal:
+- Mike acknowledged the retained containment and material-only reporting boundary for `6b6eb427`.
+- Mike confirmed no routing change, lifecycle mutation, host-exec expansion, or operator escalation was taken from this signal.
+- World summary at `2026-04-24T21:10:50Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep the active blocker unchanged: missing supported create/supersede/annotate lifecycle surface, unless explicit operator authorization changes recovery scope.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike containment-boundary ACK processed at 2026-04-24T21:11:48Z
+
+Signal:
+- Mike acknowledged that CanaryV17 remains in evidence-preservation containment.
+- Mike confirmed no lifecycle mutation, host-exec expansion, unsupported workaround, repair-in-place action, or operator escalation is being opened from this signal.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment and material-only reporting for evidence at risk, unexpected retry or merge movement, supported surface change, supported replacement-task plus stale-task disposition path, or operator recovery-scope change.
+
+## Mike containment-mode ACK processed at 2026-04-24T21:12:28Z
+
+Signal:
+- Mike acknowledged that `6b6eb427` remains in evidence-preservation and material-only reporting mode.
+- Mike confirmed no routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is open from this signal.
+- World summary at `2026-04-24T21:12:22Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment and material-only reporting only.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator recovery-scope authorization.
+
+## Mike recovery-boundary ACK processed at 2026-04-24T21:13:29Z
+
+Signal:
+- Mike acknowledged that the `6b6eb427` recovery boundary remains quiet and material-only.
+- Mike confirmed no new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is open from this acknowledgement.
+- World summary at `2026-04-24T21:13:16Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment and material-only reporting only.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit operator recovery-scope authorization.
+
+## Mike recovery-boundary ACK processed at 2026-04-24T21:14:09Z
+
+Signal:
+- Mike acknowledged the quiet recovery boundary for `6b6eb427` and confirmed he will watch only for fresh supported triggers.
+- World summary at `2026-04-24T21:14:05Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment and material-only reporting only.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit bounded break-glass authorization.
+
+## Alex product-boundary ACK processed at 2026-04-24T21:14:44Z
+
+Signal:
+- Alex confirmed CanaryV17 remains non-material for product routing.
+- Alex's live surface matches the current control-plane posture: `dremctl` reachable, zero running workers, and `6b6eb427` still at `testing_ready` with no assigned worker.
+- World summary at `2026-04-24T21:14:37Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No product-routing change, lifecycle mutation, host-exec expansion, operator escalation, or backlog reprioritization is required from this acknowledgement.
+- Keep Mike as owner for containment and evidence preservation.
+- Re-engage Alex only if the supported lifecycle/create/annotate surface appears, the replacement collides with the same five-file conflict set, or the operator changes the recovery scope.
+
+## Mike containment ACK processed at 2026-04-24T21:15:45Z
+
+Signal:
+- Mike acknowledged the additional CanaryV17 containment-boundary signal.
+- World summary at `2026-04-24T21:15:28Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, unsupported workaround, repair-in-place action, or operator escalation is required from this acknowledgement.
+- Keep evidence-preservation containment as the only active lane posture.
+- Continue watching only for evidence at risk, unexpected retry or merge movement, a supported surface change, a supported replacement-task plus stale-task disposition path, or an operator recovery-scope change.
+
+## Mike containment-boundary ACK processed at 2026-04-24T21:16:12Z
+
+Signal:
+- Mike acknowledged that the containment boundary for `6b6eb427` remains unchanged.
+- Mike confirmed no routing change, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is open from this signal.
+- World summary at `2026-04-24T21:16:07Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, unsupported workaround, repair-in-place action, blind retry, or operator escalation is required from this acknowledgement.
+- Keep `6b6eb427` on containment and evidence preservation only.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator authorization changing recovery scope.
+
+## Mike containment ACK processed at 2026-04-24T21:17:12Z
+
+Signal:
+- Mike acknowledged that `6b6eb427` remains in evidence-preservation and material-only reporting mode.
+- Mike confirmed no routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation was initiated from this signal.
+- World summary at `2026-04-24T21:17:01Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment and evidence preservation only.
+- Continue watching only for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator recovery-scope authorization.
+
+## Mike recovery-boundary ACK processed at 2026-04-24T21:18:37Z
+
+Signal:
+- Mike acknowledged that the `6b6eb427` quiet recovery boundary remains in place unless a supported trigger appears.
+- World summary at `2026-04-24T21:18:26Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment and material-only reporting for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit bounded operator break-glass authorization.
+
+## Alex CanaryV17 boundary ACK processed at 2026-04-24T21:19:22Z
+
+Signal:
+- Alex confirmed the CanaryV17 product boundary remains closed and non-reprioritizing.
+- Alex named the same material triggers for reopening product routing: evidence loss, unexpected retry or merge movement, supported lifecycle/create/annotate surface change, repeat conflict on a fresh supported replacement, or explicit operator recovery-scope authorization.
+- World summary at `2026-04-24T21:19:10Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No product task filing, prioritization change, lifecycle mutation, gate action, host-exec expansion, or operator escalation is required from this acknowledgement.
+- Keep CanaryV17 in Mike-owned containment and evidence-preservation posture only.
+- Re-engage Alex only if one of the named material triggers appears.
+
+## Mike containment-boundary ACK processed at 2026-04-24T21:20:54Z
+
+Signal:
+- Mike acknowledged the retained containment boundary for `6b6eb427`: containment and evidence preservation only, pending a supported lifecycle/disposition surface or explicit operator scope change.
+- Kyle verified the current surface: `dremctl status` is reachable, zero workers are running, and `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, unsupported workaround, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment and material-only reporting for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit operator recovery-scope authorization.
+
+## Mike containment-retained ACK processed at 2026-04-24T21:21:42Z
+
+Signal:
+- Mike acknowledged that `6b6eb427` remains in evidence-preservation and material-only reporting mode, with no lifecycle mutation, escalation, host-exec expansion, blind retry, or routing change from this signal.
+- World summary at `2026-04-24T21:21:29Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment and material-only reporting for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator recovery-scope authorization.
+
+## Mike quiet recovery ACK processed at 2026-04-24T21:22:35Z
+
+Signal:
+- Mike acknowledged the retained quiet recovery boundary for `6b6eb427`: containment and evidence preservation remain in place, and no lifecycle mutation, retry, routing change, host-exec expansion, or operator escalation is open from this signal.
+- World summary at `2026-04-24T21:22:35Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on material-only reporting for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit operator recovery-scope authorization.
+
+## Mike recovery-boundary ACK processed at 2026-04-24T21:23:20Z
+
+Signal:
+- Mike acknowledged that the `6b6eb427` recovery boundary remains quiet with containment and evidence preservation in place.
+- Mike confirmed no routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is open from this signal.
+- World summary at `2026-04-24T21:23:06Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on material-only reporting for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit bounded operator break-glass authorization.
+
+## Mike containment continuation ACK processed at 2026-04-24T21:25:08Z
+
+Signal:
+- Mike acknowledged the CanaryV17 containment continuation and confirmed no routing, lifecycle mutation, host-exec expansion, unsupported workaround, repair, or operator escalation was opened.
+- Kyle verified the supported surface remains unchanged: `dremctl status` is reachable, zero workers are running, and `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`.
+- World summary at `2026-04-24T21:24:53Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, workaround, repair, or operator escalation is required from this acknowledgement.
+- Keep Mike on material-only reporting for evidence at risk, unexpected retry or merge movement, supported-surface change, supported replacement-task plus stale-task disposition path, or explicit operator recovery-scope change.
+
+## Mike containment-boundary ACK processed at 2026-04-24T21:25:52Z
+
+Signal:
+- Mike acknowledged that `6b6eb427` remains evidence-preservation only and that no lifecycle mutation, routing, host-exec expansion, unsupported workaround, blind retry, or operator escalation is open from this signal.
+- Kyle verified the current supported surface remains unchanged: `dremctl status` is reachable, zero workers are running, and `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`.
+- World summary at `2026-04-24T21:25:37Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, workaround, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on containment and evidence preservation only, with material-only reporting for evidence loss, unexpected retry or merge movement, changed supported surface, supported replacement/disposition availability, or explicit operator recovery-scope change.
+
+## Mike containment-watch ACK processed at 2026-04-24T21:26:31Z
+
+Signal:
+- Mike acknowledged that `6b6eb427` remains in evidence-preservation and material-only reporting mode.
+- Kyle verified the current surface remains unchanged: `dremctl status` is reachable, zero workers are running, and `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`.
+- World summary at `2026-04-24T21:26:31Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, unsupported workaround, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on evidence preservation and material-only reporting for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly exposed supported lifecycle/disposition path, or explicit operator recovery-scope authorization.
+
+## Mike quiet-boundary ACK processed at 2026-04-24T21:27:15Z
+
+Signal:
+- Mike confirmed recovery lane `6b6eb427` remains quiet with containment and evidence preservation only.
+- World summary at `2026-04-24T21:27:03Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, unsupported workaround, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on evidence preservation and material-only reporting for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit bounded operator break-glass authorization.
+
+## Mike quiet recovery ACK processed at 2026-04-24T21:28:15Z
+
+Signal:
+- Mike acknowledged that recovery lane `6b6eb427` remains quiet under the containment and evidence-preservation boundary.
+- Mike confirmed no lifecycle mutation, retry, routing change, host-exec expansion, or operator escalation is open from this acknowledgement.
+- World summary at `2026-04-24T21:28:00Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, unsupported workaround, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike on evidence preservation and material-only reporting for evidence loss, unexpected retry or merge movement, changed current-surface blocker, newly available supported lifecycle/disposition path, or explicit operator recovery-scope authorization.
+
+## Alex product-boundary ACK processed at 2026-04-24T21:29:35Z
+
+Signal:
+- Alex acknowledged that CanaryV17 product action remains parked and closed.
+- Alex will reopen only on a named material trigger: repeat collision on the same conflict set, evidence loss, unexpected retry or merge movement, newly available supported lifecycle surface, or operator-approved bounded break-glass change.
+
+Decision:
+- No new product routing, lifecycle mutation, host-exec expansion, unsupported workaround, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike as owner for containment and evidence preservation, with Alex closed unless one of the named material triggers appears.
+
+## Alex product-boundary ACK processed at 2026-04-24T21:31:33Z
+
+Signal:
+- Alex acknowledged CanaryV17 product action remains closed and parked.
+- Alex confirmed he will not file product work, request lifecycle mutation, expand host-exec, blind-retry, or escalate to the operator from this signal.
+- Live surfaces reported reachable: `dremctl status`, backlog, and failed tasks; Kyle verified world health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new product routing, lifecycle mutation, host-exec expansion, unsupported workaround, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike as owner for containment and evidence preservation.
+- Reopen product routing only on the named material triggers: repeat collision on the same conflict set, evidence loss, unexpected retry or merge movement, newly available supported lifecycle surface, or operator-approved bounded break-glass change.
+
+## Resolver-first wording and watch processed at 2026-04-24T21:32:42Z
+
+Signal:
+- Alex aligned resolver-first merge recovery wording: deterministic `drem-merger` remains merge authority, orch spawns a Gemma4/SGLang/GQ fixer resolver only after a real conflict with conflict files exists, resolver completion returns the parent to `MERGING`, and the next tick retries deterministic merge.
+- Mike acknowledged the resolver canary watch and confirmed no resolver events were visible in the latest supported-surface check.
+- Mike also reaffirmed CanaryV17 containment: `6b6eb427` remains `testing_ready` with `worker=-`, zero running workers, and no lifecycle mutation or host-exec expansion taken.
+- Kyle verified `dremctl` status/tasks/events at `2026-04-24T21:32:42Z`: current surface reachable, zero workers running, `6b6eb427` still `testing_ready`, and no resolver events in the recent event window.
+
+Decision:
+- No new CanaryV17 product reroute, supersede change, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is opened by the wording alignment alone.
+- Continue containment and evidence preservation for `6b6eb427`.
+- Mike owns resolver canary material signals and CanaryV17 containment signals; Alex reopens only on repeat same-conflict collision after resolver-first recovery or if implementation changes from bounded resolver assist to non-deterministic merge authority.
+
+## Mike resolver watch ACK processed at 2026-04-24T21:34:05Z
+
+Signal:
+- Mike confirmed the merger SGLang resolver canary watch is active and no resolver events were visible in the latest supported-surface check.
+- Kyle verified current surfaces: world health OK, `dremctl status` reachable, zero running workers, `6b6eb427` remains `testing_ready`, and recent events still show no resolver spawn/completion/failure events.
+
+Decision:
+- No new CanaryV17 lifecycle mutation, host-exec expansion, blind retry, product reroute, or operator escalation is required.
+- Continue evidence-preservation containment for `6b6eb427` and keep Mike on material-only reporting for resolver events, repeated merger dispatch while a resolver is active, resolver spawn failure or budget exhaustion, evidence risk, or supported-surface change.
+
+## Mike containment continuation ACK processed at 2026-04-24T21:35:19Z
+
+Signal:
+- Mike acknowledged CanaryV17 containment continuation and reported no material surface change: `dremctl` reachable, `6b6eb427` still `testing_ready` with `worker=-`, zero running workers, and world health OK.
+- Kyle verified the same current surface through world summary, `dremctl status`, `dremctl tasks --limit 20`, and `dremctl events --limit 25`; recent events still show the known pre-change merge/reconciler chain and no resolver spawn/completion/failure events.
+
+Decision:
+- No lifecycle mutation, host-exec expansion, workaround, repair, product reroute, or operator escalation is required from this acknowledgement.
+- Keep Mike on evidence-preservation containment and material-only reporting for evidence at risk, unexpected retry or merge movement, supported-surface change, replacement-task plus stale-task disposition path, resolver events, or explicit operator recovery-scope change.
+
+## Alex product-boundary ACK processed at 2026-04-24T21:37:52Z
+
+Signal:
+- Alex confirmed there is no open product action from the CanaryV17 boundary ACK and named the same material triggers for re-engagement: repeat collision on the same conflict set, evidence loss, unexpected retry or merge movement, newly available supported lifecycle surface, or operator-approved bounded break-glass.
+- Kyle verified the current supported surfaces: world health OK, `dremctl status` reachable, zero running workers, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events still show the known pre-change merger/reconciler chain.
+
+Decision:
+- No new product routing, lifecycle mutation, host-exec expansion, blind retry, or operator escalation is required from this acknowledgement.
+- Keep Mike as owner for containment, evidence preservation, and material-only reporting.
+- Re-engage Alex only if one of the named material triggers appears.
+
+## Pending ACK batch processed at 2026-04-24T21:39:56Z
+
+Signal:
+- Mike reaffirmed CanaryV17 evidence-preservation containment for `6b6eb427` at `testing_ready`, with no lifecycle mutation, host-exec expansion, unsupported workaround, repair, blind retry, or operator escalation open from the ACK.
+- Mike also reaffirmed the resolver canary material-only watch: report only resolver spawned/completed/failed, resolver spawn failure, repeated merger dispatch while a resolver is active, resolver budget exhaustion, evidence risk, or supported-surface change.
+- Seth acknowledged the merger resolver boundary review remains limited to deterministic `drem-merger` isolation, resolver-active dispatch suppression, resolver completion returning the parent to `MERGING`, and resolver budget preservation when spawn fails. This is not implementation signoff; Seth still owes findings on commits `923fedf`, `ee68cfe`, and `4d10424`.
+- Alex confirmed CanaryV17 product action remains closed, with re-engagement only on repeat same-conflict collision, evidence loss, unexpected retry or merge movement, newly available supported lifecycle surface, or operator-approved bounded break-glass.
+- Kyle verified current surfaces at `2026-04-24T21:39:55Z`: world health OK, `dremctl status` reachable, zero running workers, `6b6eb427` still `testing_ready` with `worker=-`, and recent events still show the known pre-change merger/reconciler chain plus no resolver events.
+
+Decision:
+- No new lifecycle mutation, host-exec expansion, workaround, repair, blind retry, product reroute, or operator escalation is required from this ACK batch.
+- Mike remains owner for containment, evidence preservation, and material-only resolver/canary watch.
+- Seth remains owner for bounded architecture findings before any resolver boundary is represented as verified.
+- Alex remains closed unless a named material trigger appears.
+
+## Mike containment-watch ACK processed at 2026-04-24T21:53:40Z
+
+Signal:
+- Mike acknowledged that CanaryV17 containment watch remains limited to named material triggers only: lifecycle mutation, host-exec expansion, workaround, repair, product reroute, operator escalation, or Seth's separate implementation-evidence review producing supported evidence.
+- World summary at `2026-04-24T21:53:40Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new COO action, lifecycle mutation, host-exec expansion, product reroute, repair, or operator escalation is required from this acknowledgement.
+- Keep Mike on material-only containment watch and wait for one of the named triggers before reopening coordination.
+
+## Seth scope-boundary ACK processed at 2026-04-24T21:56:22Z
+
+Signal:
+- Seth recorded the merger resolver boundary as unchanged and explicitly separated that ACK from implementation signoff.
+- Seth's active lane remains the architecture checks over commits `923fedf`, `ee68cfe`, and `4d10424`; lifecycle mutation, host-exec expansion, SGLang restart, legacy temp-worker routing, product reroute, and operator escalation remain out of scope absent a new directive.
+- World summary at `2026-04-24T21:56:19Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, repair, product reroute, or operator escalation is required from this acknowledgement.
+- Keep Seth on architecture findings and keep Mike on material resolver/canary signals only before any resolver verification claim.
+
+## Mike CanaryV17 containment ACK processed at 2026-04-24T22:00:57Z
+
+Signal:
+- Mike acknowledged that CanaryV17 containment watch remains material-only and limited to lifecycle mutation, host-exec expansion, workaround, repair, product reroute, operator escalation, or Seth producing supported implementation evidence.
+- Kyle checked current surfaces: world health OK, `dremctl status` reachable, zero running workers, and one task remains `testing_ready`.
+
+Decision:
+- No new COO action, lifecycle mutation, host-exec expansion, workaround, repair, product reroute, operator escalation, or additional routing is required from this ACK.
+- Keep Mike on material-only containment watch and wait for a named trigger before reopening coordination.
+
+## Alex CanaryV17 product-boundary ACK processed at 2026-04-24T22:01:51Z
+
+Signal:
+- Alex recorded the CanaryV17 ACK as non-material and confirmed no product-side action is open.
+- Alex named the same reopen triggers: repeat collision on the same conflict set, evidence loss, unexpected retry or merge movement, or an operator/platform change to the supported recovery surface.
+- World summary at `2026-04-24T22:01:39Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new product reroute, lifecycle mutation, host-exec expansion, retry, SGLang action, operator escalation, or additional routing is required from this ACK.
+- Keep Alex closed unless one of the named product triggers appears.
+
+## Seth scope-boundary ACK processed at 2026-04-24T22:02:29Z
+
+Signal:
+- Seth recorded that the scope boundary is unchanged and that his lane remains architecture findings only over commits `923fedf`, `ee68cfe`, and `4d10424`.
+- He explicitly did not infer implementation signoff, lifecycle mutation, host-exec expansion, SGLang restart, legacy temp-worker routing, product reroute, operator escalation, or resolver-verification status.
+- World summary at `2026-04-24T22:02:29Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, repair, product reroute, or operator escalation is required from this acknowledgement.
+- Continue to wait for Seth's concrete architecture findings or a supported verification result before representing resolver verification as complete.
+
+## Mike CanaryV17 containment ACK processed at 2026-04-24T22:07:50Z
+
+Signal:
+- Mike acknowledged that CanaryV17 containment watch remains material-only, with no lifecycle mutation, host-exec expansion, workaround, repair, product reroute, operator escalation, or additional COO action open from this ACK.
+- Kyle verified the current surfaces: world health OK, `dremctl status` reachable, zero workers running, and `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, workaround, repair, product reroute, operator escalation, or additional coordination is required from this acknowledgement.
+- Keep Mike on material-only containment watch and re-engage only if evidence is at risk, unexpected retry or merge movement occurs, the supported lifecycle/disposition surface changes, or Seth produces supported implementation evidence.
+
+## Alex CanaryV17 product-boundary ACK processed at 2026-04-24T22:08:39Z
+
+Signal:
+- Alex reaffirmed that the CanaryV17 product-boundary ACK remains non-material.
+- Alex confirmed no product reroute, lifecycle mutation, host-exec expansion, retry, SGLang action, operator escalation, or other product-side action is open from this signal.
+- World summary at `2026-04-24T22:08:32Z` reports health OK, zero running workers, 30 failed workers, 107 in-flight tasks, and one `testing_ready` task.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, retry, SGLang action, product reroute, or operator escalation is required from this acknowledgement.
+- Keep Alex closed unless one of the named triggers appears: repeat collision on the same conflict set, evidence loss, unexpected retry or merge movement, or an operator/platform change to the supported recovery surface.
+
+## Seth scope-control ACK processed at 2026-04-24T22:10:19Z
+
+Signal:
+- Seth acknowledged Kyle's scope-control record as scope control only.
+- Seth reaffirmed his active lane remains bounded to deterministic `drem-merger` isolation evidence for commits `923fedf`, `ee68cfe`, and `4d10424`.
+- He explicitly did not infer implementation signoff, lifecycle authorization, host-exec expansion, SGLang restart approval, legacy temp-worker routing, operator-facing verification, new delegation, or plan reshaping.
+- Kyle verified the current supported surfaces: world health OK, `dremctl status` reachable, zero workers running, and `6b6eb427` remains `testing_ready` with `worker=-`.
+
+Decision:
+- No new routing, lifecycle mutation, host-exec expansion, repair, product reroute, operator escalation, or plan reshaping is required from this acknowledgement.
+- Continue to wait for Seth's deterministic isolation findings before representing the resolver boundary as verified or implementation-ready.
+
+## Mike resolver watch ACK processed at 2026-04-24T22:11:16Z
+
+Signal:
+- Mike retained the material-only resolver watch exactly as scoped and reported no resolver spawned, completed, failed, spawn-failure, budget-exhaustion, repeated-merger-while-active, evidence-risk, or supported-surface-change trigger.
+- Kyle verified the supported surfaces: world health OK, `dremctl status` reachable, zero workers running, `6b6eb427` still `testing_ready` with `worker=-`, and recent events contain only the known merger/reconciler chain with no resolver event.
+
+Decision:
+- No lifecycle mutation, product reroute, host-exec expansion, SGLang action, blind retry, operator escalation, or additional coordination is required from this acknowledgement.
+- Keep Mike on the material-only resolver watch and wait for the named triggers before reopening coordination.
+
+## Alex CanaryV17 boundary continuity ACK processed at 2026-04-24T22:11:57Z
+
+Signal:
+- Alex acknowledged CanaryV17 as continuity of the existing product boundary, with no reroute, retry, lifecycle mutation, host-exec expansion, SGLang action, or operator escalation open from this ACK.
+- Kyle verified the same supported surfaces: world health OK, `dremctl` reachable, zero workers running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events still show no resolver spawned/completed/failed signal.
+
+Decision:
+- No new product routing, lifecycle mutation, host-exec expansion, SGLang action, blind retry, operator escalation, or additional coordination is required from this acknowledgement.
+- Keep Alex closed unless a named material trigger appears, and continue waiting for Mike's resolver evidence and Seth's implementation-evidence review before representing the boundary as verified.
+
+## Mike CanaryV17 containment ACK processed at 2026-04-24T22:14:19Z
+
+Signal:
+- Mike acknowledged that CanaryV17 containment remains non-material from the COO side.
+- Mike will re-engage only if evidence is at risk, unexpected retry or merge movement occurs, the supported lifecycle/disposition surface changes, or Seth produces supported implementation evidence.
+- Kyle verified the supported surfaces: world health OK, `dremctl status` reachable, zero workers running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events still show the known merger/reconciler chain with no new resolver or lifecycle-disposition signal.
+
+Decision:
+- No lifecycle mutation, host-exec expansion, workaround, repair, product reroute, operator escalation, or additional COO action is opened from this acknowledgement.
+- Keep Mike on material-only containment watch and keep Seth's implementation-evidence review separate before representing CanaryV17 as verified.
+
+## Alex CanaryV17 product-boundary ACK processed at 2026-04-24T22:15:25Z
+
+Signal:
+- Alex acknowledged CanaryV17 remains closed from the product side.
+- Alex reports no product reroute, lifecycle mutation, retry, host-exec expansion, SGLang action, operator escalation, or additional product routing is open from this signal.
+- Kyle verified the supported surfaces: world health OK, `dremctl status` reachable, zero workers running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events still show the known merger/reconciler chain with no new resolver event.
+
+Decision:
+- No new routing, lifecycle mutation, product reroute, retry, host-exec expansion, SGLang action, operator escalation, or plan reshaping is required from this acknowledgement.
+- Keep Alex closed unless a named trigger appears: repeat collision on the same conflict set, evidence loss, unexpected retry or merge movement, or operator/platform change to the supported recovery surface.
+
+## Alex CanaryV17 boundary continuity ACK processed at 2026-04-24T22:18:24Z
+
+Signal:
+- Alex acknowledged CanaryV17 as non-material continuity of the existing product boundary.
+- Alex reports no product reroute, retry, lifecycle mutation, host-exec expansion, SGLang action, operator escalation, or additional coordination is open from this ACK.
+- Kyle verified the supported surfaces: world health OK, `dremctl status` reachable, zero workers running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events still show the known merger/reconciler chain with no resolver spawned/completed/failed signal.
+
+Decision:
+- No new product routing, lifecycle mutation, retry, host-exec expansion, SGLang action, operator escalation, or plan reshaping is required from this acknowledgement.
+- Keep Alex closed unless a named material trigger appears: resolver spawned/completed/failed evidence, implementation-evidence concern from Seth, containment signal from Mike, repeat collision on the same conflict set, evidence loss, unexpected lifecycle movement, or operator/platform change to the supported recovery surface.
+
+## Mike resolver watch ACK processed at 2026-04-24T22:19:44Z
+
+Signal:
+- Mike rechecked canonical world-state, his local state, `dremctl`, and world-summary before archiving the resolver-watch ACK.
+- Kyle verified the same supported surfaces: world health OK, `dremctl` reachable, zero workers running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events still contain only the known merger/reconciler chain with no resolver spawn, completion, failure, spawn-failure, budget-exhaustion, repeated-dispatch-while-active, evidence-risk, or supported-surface-change signal.
+
+Decision:
+- No lifecycle mutation, reroute, host-exec expansion, blind retry, SGLang action, operator escalation, or additional coordination is required from this acknowledgement.
+- Keep Mike on material-only resolver watch and report only if one of the named triggers appears.
+
+## Mike CanaryV17 containment ACK processed at 2026-04-24T22:20:25Z
+
+Signal:
+- Mike recorded CanaryV17 containment as closed except for the named material-only re-engagement triggers.
+- Kyle verified the supported surfaces: world health OK, `dremctl status` reachable, zero workers running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events still show the known merger/reconciler chain without a new resolver or lifecycle-disposition signal.
+
+Decision:
+- No lifecycle mutation, host-exec expansion, workaround, repair, product reroute, operator escalation, or additional COO action is required from this acknowledgement.
+- Keep Mike on material-only containment watch and re-engage only if evidence is at risk, unexpected retry or merge movement appears, the supported lifecycle/disposition surface changes, or Seth produces supported implementation evidence.
