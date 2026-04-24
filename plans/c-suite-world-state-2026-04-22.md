@@ -115,6 +115,40 @@ The pre-pivot worktree model is gone. Every worker/agent operation happens insid
 - **Layer 1 (primary):** `git config rerere` auto-merge for known-resolved conflicts.
 - **Layer 2+:** additional heuristics to be added as empirical data accumulates (file-count, specific git-status states, etc.). Do not over-engineer in Pod 1.
 
+### §2i. C-Suite container control surface (operator correction 2026-04-24)
+
+The normal operational surface inside C-Suite persona containers is now
+`dremctl`, the HTTP-only orchestrator CLI. It talks to
+`${DREM_ORCH_URL:-http://orch:8080}` and does not require a repo checkout,
+direct SQLite access, `tmux`, or host-side `drem`.
+
+Required persona commands:
+- `dremctl status`
+- `dremctl tasks [--status STATUS] [--limit N] [--offset N]`
+- `dremctl workers`
+- `dremctl worker <worker-id>`
+- `dremctl history <worker-id>`
+- `dremctl events [--limit N] [--since RFC3339]`
+- `dremctl logs --container <container-name> [--since RFC3339]`
+- `dremctl approve/reject/pass/fail/answer/retry <task-id-prefix>`
+
+Current canary path:
+`dremctl` task lifecycle mutation/status -> orchestrator -> spawner ->
+cold-worker container -> watchdog -> orchestrator transition ->
+watcher/audit visibility.
+
+Implications:
+- Missing or broken `dremctl` is a real runtime/tooling blocker.
+- Broken `host-exec drem cli ...`, missing direct DB files, missing `tmux`,
+  missing `~/.drem-csuite/temp-workers/`, missing repo checkout, and missing
+  `docs/csuite-agents/prompts/temp-worker.md` are NOT blockers for the active
+  P0/canary path.
+- `host-exec` is break-glass only for approved host-side `git`/`docker` or
+  diagnostic actions that `dremctl` and orchestrator HTTP cannot perform.
+- Personas must not report `host-exec drem cli` failures as canary launch
+  blockers unless `dremctl` itself is unavailable or the required orchestrator
+  HTTP endpoint does not exist.
+
 ---
 
 ## §3. C-Suite agency — who decides what
@@ -251,6 +285,7 @@ Estimated Q2 deliverable: ~35 stories full-close, ~12 stories PARTIAL→BUILT, o
 | operator approves gate | csuite auto-approves on criteria + operator post-hoc reviews | §3c |
 | OpenCode harness | retired (Pod 1); Claude CLI is the current stateful-worker harness | §2a |
 | drem-bridge as event router | drem-bridge is a read API; ops-relay is the event router (to be built) | §2b |
+| host-exec drem CLI for persona ops | `dremctl` inside the persona container | §2i |
 
 ---
 
