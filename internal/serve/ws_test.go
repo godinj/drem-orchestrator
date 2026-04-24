@@ -108,6 +108,27 @@ func TestWS_ConnectReceivesWelcome(t *testing.T) {
 	}
 }
 
+// TestWS_AliasConnectReceivesWelcome verifies the PRD-compatible /ws alias
+// stays mounted alongside the existing /api/ws endpoint.
+func TestWS_AliasConnectReceivesWelcome(t *testing.T) {
+	_, baseURL, token, _ := startTestServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := fmt.Sprintf("ws://%s/ws?token=%s&agent=operator",
+		baseURL[len("http://"):], token)
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws alias: %v", err)
+	}
+	t.Cleanup(func() { conn.CloseNow() })
+
+	evt := readEvent(t, conn)
+	if evt.Type != "connected" {
+		t.Errorf("event type = %q, want \"connected\"", evt.Type)
+	}
+}
+
 // TestWS_UnauthorizedRejected verifies that connecting without a valid token
 // returns 401 (connection refused).
 func TestWS_UnauthorizedRejected(t *testing.T) {
@@ -206,6 +227,51 @@ func TestWS_SendMessageBroadcasts(t *testing.T) {
 	}
 	if msgs[0].Subject != "ws test" {
 		t.Errorf("persisted subject = %q, want \"ws test\"", msgs[0].Subject)
+	}
+}
+
+// TestWS_SendCompactEvent verifies the original mobile PRD event shape:
+// {"type":"send","to":"kyle","body":"status"}.
+func TestWS_SendCompactEvent(t *testing.T) {
+	_, baseURL, token, store := startTestServer(t)
+	conn := dialWS(t, baseURL, token, "operator")
+	readEvent(t, conn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Write(ctx, websocket.MessageText, []byte(`{"type":"send","to":"kyle","body":"status"}`)); err != nil {
+		t.Fatalf("write compact send: %v", err)
+	}
+
+	evt := readEvent(t, conn)
+	if evt.Type != "new_message" {
+		t.Fatalf("event type = %q, want \"new_message\"", evt.Type)
+	}
+
+	var msg messageResponse
+	if err := json.Unmarshal(evt.Data, &msg); err != nil {
+		t.Fatalf("unmarshal message: %v", err)
+	}
+	if msg.FromAgent != "operator" {
+		t.Errorf("from_agent = %q, want \"operator\"", msg.FromAgent)
+	}
+	if msg.ToAgent != "kyle" {
+		t.Errorf("to_agent = %q, want \"kyle\"", msg.ToAgent)
+	}
+	if msg.Body != "status" {
+		t.Errorf("body = %q, want \"status\"", msg.Body)
+	}
+	if msg.Type != string(csuite.MessageTypeRequest) {
+		t.Errorf("type = %q, want %q", msg.Type, csuite.MessageTypeRequest)
+	}
+
+	msgs, err := store.GetMessagesBetween("operator", "kyle", 10, [16]byte{})
+	if err != nil {
+		t.Fatalf("GetMessagesBetween: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("persisted messages = %d, want 1", len(msgs))
 	}
 }
 

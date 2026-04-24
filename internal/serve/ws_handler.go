@@ -26,6 +26,7 @@ import (
 // Inbound event types:
 //
 //	send_message — creates a new message and broadcasts it
+//	send         — PRD-compatible shorthand: {"type":"send","to":"kyle","body":"status"}
 //	ping         — responds with {"type":"pong"}
 func wsHandler(hub *Hub, store dashboardStore, token string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +89,8 @@ func wsHandler(hub *Hub, store dashboardStore, token string) http.Handler {
 			switch evt.Type {
 			case "send_message":
 				handleWsSendMessage(ctx, hub, store, conn, evt.Data)
+			case "send":
+				handleWsSend(ctx, hub, store, conn, data, evt.Data)
 			case "ping":
 				pong, _ := json.Marshal(wsEvent{Type: "pong"})
 				conn.Write(ctx, websocket.MessageText, pong) //nolint:errcheck
@@ -110,6 +113,66 @@ func handleWsSendMessage(ctx context.Context, hub *Hub, store dashboardStore, co
 	}
 
 	msg, err := createMessageFromRequest(req, store)
+	if err != nil {
+		errData, _ := json.Marshal(err.Error())
+		errMsg, _ := json.Marshal(wsEvent{Type: "error", Data: errData})
+		conn.Write(ctx, websocket.MessageText, errMsg) //nolint:errcheck
+		return
+	}
+
+	broadcastNewMessage(hub, *msg)
+}
+
+// handleWsSend processes the PRD's original compact event shape:
+//
+//	{"type":"send","to":"kyle","body":"status"}
+//
+// It also accepts a nested data payload with the same fields. Messages default
+// to operator -> <to>, subject "chat", normal priority, and request type.
+func handleWsSend(ctx context.Context, hub *Hub, store dashboardStore, conn *websocket.Conn, full json.RawMessage, nested json.RawMessage) {
+	var req struct {
+		FromAgent string `json:"from_agent"`
+		ToAgent   string `json:"to_agent"`
+		To        string `json:"to"`
+		Subject   string `json:"subject"`
+		Body      string `json:"body"`
+		Priority  string `json:"priority"`
+	}
+	payload := full
+	if len(nested) > 0 {
+		payload = nested
+	}
+	if err := json.Unmarshal(payload, &req); err != nil {
+		errMsg, _ := json.Marshal(wsEvent{Type: "error", Data: json.RawMessage(`"invalid send data"`)})
+		conn.Write(ctx, websocket.MessageText, errMsg) //nolint:errcheck
+		return
+	}
+
+	from := req.FromAgent
+	if from == "" {
+		from = "operator"
+	}
+	to := req.ToAgent
+	if to == "" {
+		to = req.To
+	}
+	subject := req.Subject
+	if subject == "" {
+		subject = "chat"
+	}
+	priority := req.Priority
+	if priority == "" {
+		priority = "normal"
+	}
+
+	msg, err := createMessageFromRequest(sendMessageRequest{
+		FromAgent: from,
+		ToAgent:   to,
+		Subject:   subject,
+		Body:      req.Body,
+		Priority:  priority,
+		Type:      "request",
+	}, store)
 	if err != nil {
 		errData, _ := json.Marshal(err.Error())
 		errMsg, _ := json.Marshal(wsEvent{Type: "error", Data: errData})

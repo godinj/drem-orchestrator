@@ -31,6 +31,7 @@ type messageResponse struct {
 type sendMessageRequest struct {
 	FromAgent string `json:"from_agent"`
 	ToAgent   string `json:"to_agent"`
+	To        string `json:"to"`
 	Subject   string `json:"subject"`
 	Body      string `json:"body"`
 	Priority  string `json:"priority"`
@@ -40,6 +41,7 @@ type sendMessageRequest struct {
 // messagesHandler returns a handler for GET and POST /api/messages.
 //
 // GET  /api/messages?from=<agent>&to=<agent>[&limit=N][&before_id=<uuid>]
+// GET  /api/messages?agent=<agent>[&limit=N][&before=<uuid>]
 //
 //	Returns cursor-paginated messages between two agents (newest first).
 //	Defaults to 50 messages per page. Pass before_id to fetch the next page.
@@ -66,8 +68,12 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request, s dashboardStore)
 	q := r.URL.Query()
 	agent1 := q.Get("from")
 	agent2 := q.Get("to")
+	if agent1 == "" && agent2 == "" && q.Get("agent") != "" {
+		agent1 = "operator"
+		agent2 = q.Get("agent")
+	}
 	if agent1 == "" || agent2 == "" {
-		writeJSONError(w, http.StatusBadRequest, "from and to query parameters are required")
+		writeJSONError(w, http.StatusBadRequest, "from and to query parameters or agent query parameter are required")
 		return
 	}
 
@@ -86,6 +92,13 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request, s dashboardStore)
 		id, err := uuid.Parse(bid)
 		if err != nil {
 			writeJSONError(w, http.StatusBadRequest, "before_id must be a valid UUID")
+			return
+		}
+		beforeID = id
+	} else if bid := q.Get("before"); bid != "" {
+		id, err := uuid.Parse(bid)
+		if err != nil {
+			writeJSONError(w, http.StatusBadRequest, "before must be a valid UUID")
 			return
 		}
 		beforeID = id
@@ -132,6 +145,8 @@ func handlePostMessage(w http.ResponseWriter, r *http.Request, s dashboardStore,
 // createMessageFromRequest validates the request, persists the message, and
 // returns it. Shared between the REST handler and the WebSocket handler.
 func createMessageFromRequest(req sendMessageRequest, s dashboardStore) (*csuite.CsuiteInboxMessage, error) {
+	req = normalizeSendMessageRequest(req)
+
 	priority := csuite.PriorityNormal
 	if req.Priority != "" {
 		p, err := csuite.ParseInboxPriority(req.Priority)
@@ -141,7 +156,7 @@ func createMessageFromRequest(req sendMessageRequest, s dashboardStore) (*csuite
 		priority = p
 	}
 
-	msgType := csuite.MessageTypeStatus
+	msgType := csuite.MessageTypeRequest
 	if req.Type != "" {
 		t, err := csuite.ParseInboxMessageType(req.Type)
 		if err != nil {
@@ -169,6 +184,25 @@ func createMessageFromRequest(req sendMessageRequest, s dashboardStore) (*csuite
 	touchSignalFile(req.ToAgent)
 
 	return msg, nil
+}
+
+func normalizeSendMessageRequest(req sendMessageRequest) sendMessageRequest {
+	if req.FromAgent == "" {
+		req.FromAgent = "operator"
+	}
+	if req.ToAgent == "" {
+		req.ToAgent = req.To
+	}
+	if req.Subject == "" {
+		req.Subject = "chat"
+	}
+	if req.Priority == "" {
+		req.Priority = "normal"
+	}
+	if req.Type == "" {
+		req.Type = "request"
+	}
+	return req
 }
 
 // writeInboxFile writes a .md file to the recipient's disk inbox in the same

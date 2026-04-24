@@ -82,6 +82,54 @@ func TestGetMessages_ReturnsBetweenAgents(t *testing.T) {
 	}
 }
 
+// TestGetMessages_AgentAliasReturnsOperatorConversation verifies the mobile PRD
+// shorthand: /api/messages?agent=<name> means operator <-> that agent.
+func TestGetMessages_AgentAliasReturnsOperatorConversation(t *testing.T) {
+	store := testutil.NewTestStore(t)
+	for _, msg := range []*csuite.CsuiteInboxMessage{
+		{
+			FromAgent: "operator",
+			ToAgent:   "kyle",
+			Subject:   "chat",
+			Body:      "status?",
+			Priority:  csuite.PriorityNormal,
+			Type:      csuite.MessageTypeRequest,
+		},
+		{
+			FromAgent: "alex",
+			ToAgent:   "operator",
+			Subject:   "noise",
+			Body:      "not this thread",
+			Priority:  csuite.PriorityNormal,
+			Type:      csuite.MessageTypeStatus,
+		},
+	} {
+		if err := store.CreateMessage(msg); err != nil {
+			t.Fatalf("CreateMessage: %v", err)
+		}
+	}
+
+	h := messagesHandler(store, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/messages?agent=kyle", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var msgs []messageResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &msgs); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("len(msgs) = %d, want 1", len(msgs))
+	}
+	if msgs[0].ToAgent != "kyle" {
+		t.Errorf("to_agent = %q, want \"kyle\"", msgs[0].ToAgent)
+	}
+}
+
 // TestGetMessages_EmptyResult verifies that GET returns an empty array (not null)
 // when no messages match.
 func TestGetMessages_EmptyResult(t *testing.T) {
@@ -154,6 +202,43 @@ func TestPostMessage_Success(t *testing.T) {
 	}
 	if msg.Subject != "hello" {
 		t.Errorf("subject = %q, want \"hello\"", msg.Subject)
+	}
+	if msg.Type != string(csuite.MessageTypeRequest) {
+		t.Errorf("type = %q, want %q", msg.Type, csuite.MessageTypeRequest)
+	}
+}
+
+// TestPostMessage_CompactMobileShape verifies the mobile-friendly send payload:
+// {"to":"kyle","body":"status"}. Defaults fill operator/chat/normal/request.
+func TestPostMessage_CompactMobileShape(t *testing.T) {
+	store := testutil.NewTestStore(t)
+	h := messagesHandler(store, nil)
+
+	body := `{"to":"kyle","body":"status"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", w.Code, w.Body.String())
+	}
+
+	var msg messageResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &msg); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if msg.FromAgent != "operator" {
+		t.Errorf("from_agent = %q, want \"operator\"", msg.FromAgent)
+	}
+	if msg.ToAgent != "kyle" {
+		t.Errorf("to_agent = %q, want \"kyle\"", msg.ToAgent)
+	}
+	if msg.Subject != "chat" {
+		t.Errorf("subject = %q, want \"chat\"", msg.Subject)
+	}
+	if msg.Type != string(csuite.MessageTypeRequest) {
+		t.Errorf("type = %q, want %q", msg.Type, csuite.MessageTypeRequest)
 	}
 }
 

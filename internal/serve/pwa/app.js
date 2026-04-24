@@ -12,9 +12,13 @@
   let agents = []; // [{name, status, context_percent, current_activity, unread_count}]
   let activeAgent = localStorage.getItem('csuite_active_agent') || '';
   let messages = []; // current agent's messages [{id, from_agent, to_agent, subject, body, created_at}]
+  let messagesByAgent = {}; // agent name -> oldest-first message array
+  let lastSeenByAgent = readJSON('csuite_last_seen', {});
+  let hasMoreByAgent = {};
   let loading = false;
   let oldestMessageId = null; // cursor for scroll-back pagination
   let ws = null; // WebSocket connection
+  let wsRetryTimer = null;
   let wsRetryDelay = 1000;
   const wsMaxRetry = 30000;
   const POLL_INTERVAL = 5000; // REST fallback poll interval (ms)
@@ -28,11 +32,15 @@
   ];
 
   function getQuickActions() {
+    return readJSON('csuite_quick_actions', DEFAULT_QUICK_ACTIONS);
+  }
+
+  function readJSON(key, fallback) {
     try {
-      const stored = localStorage.getItem('csuite_quick_actions');
+      const stored = localStorage.getItem(key);
       if (stored) return JSON.parse(stored);
     } catch (_) { /* ignore */ }
-    return DEFAULT_QUICK_ACTIONS;
+    return fallback;
   }
 
   // -------------------------------------------------------------------------
@@ -129,6 +137,7 @@
       }
       renderAgentTabs();
       await loadMessages();
+      refreshAllAgentMessages();
     }
     renderQuickActions();
     connectWs();
@@ -165,11 +174,13 @@
       // Name
       btn.appendChild(document.createTextNode(a.name));
 
-      // Unread badge
-      if (a.unread_count > 0) {
+      // Unread badge is tracked locally per browser. Server unread_count is
+      // agent-inbox oriented and does not represent the operator's seen state.
+      const unread = unreadCountForAgent(a.name);
+      if (unread > 0) {
         const badge = document.createElement('span');
         badge.className = 'badge';
-        badge.textContent = a.unread_count > 99 ? '99+' : a.unread_count;
+        badge.textContent = unread > 99 ? '99+' : unread;
         btn.appendChild(badge);
       }
 
@@ -182,9 +193,11 @@
     if (name === activeAgent) return;
     activeAgent = name;
     localStorage.setItem('csuite_active_agent', name);
+    messages = messagesByAgent[name] || [];
+    oldestMessageId = messages[0] ? messages[0].id : null;
+    renderMessages(true);
+    markAgentSeen(name);
     renderAgentTabs();
-    messages = [];
-    oldestMessageId = null;
     await loadMessages();
   }
 
@@ -194,6 +207,7 @@
 
   async function loadMessages(beforeId) {
     if (!activeAgent || loading) return;
+    if (beforeId && hasMoreByAgent[activeAgent] === false) return;
     loading = true;
     renderLoading(true);
 
@@ -204,14 +218,18 @@
       const resp = await apiFetch(url);
       if (resp.ok) {
         const batch = await resp.json();
+        if (Array.isArray(batch)) {
+          hasMoreByAgent[activeAgent] = batch.length === 50;
+        }
         if (Array.isArray(batch) && batch.length > 0) {
+          const oldestFirst = batch.slice().reverse();
+          const existing = messagesByAgent[activeAgent] || [];
           if (beforeId) {
-            // Prepend older messages (they come newest-first from API)
-            messages = batch.reverse().concat(messages);
+            messages = mergeMessages(oldestFirst, existing);
           } else {
-            // Initial load — reverse so oldest is first
-            messages = batch.reverse();
+            messages = mergeMessages(existing, oldestFirst);
           }
+          messagesByAgent[activeAgent] = messages;
           oldestMessageId = messages[0] ? messages[0].id : null;
         }
       }
@@ -220,6 +238,80 @@
     loading = false;
     renderLoading(false);
     renderMessages(!beforeId); // scroll to bottom only on initial load
+    markAgentSeen(activeAgent);
+    renderAgentTabs();
+  }
+
+  async function refreshAgentMessages(agentName) {
+    if (!agentName) return;
+    try {
+      const url = '/api/messages?from=operator&to=' + encodeURIComponent(agentName) + '&limit=50';
+      const resp = await apiFetch(url);
+      if (!resp.ok) return;
+      const batch = await resp.json();
+      if (!Array.isArray(batch)) return;
+      const incoming = batch.slice().reverse();
+      messagesByAgent[agentName] = mergeMessages(messagesByAgent[agentName] || [], incoming);
+      hasMoreByAgent[agentName] = batch.length === 50;
+      if (agentName === activeAgent) {
+        messages = messagesByAgent[agentName];
+        oldestMessageId = messages[0] ? messages[0].id : null;
+        renderMessages(false);
+        markAgentSeen(agentName);
+      }
+      renderAgentTabs();
+    } catch (_) { /* offline */ }
+  }
+
+  function refreshAllAgentMessages() {
+    agents.forEach(a => {
+      refreshAgentMessages(a.name);
+    });
+  }
+
+  function mergeMessages(existing, incoming) {
+    const byKey = new Map();
+    existing.concat(incoming).forEach(msg => {
+      byKey.set(messageKey(msg), msg);
+    });
+    return Array.from(byKey.values()).sort((a, b) => {
+      const at = Date.parse(a.created_at || '');
+      const bt = Date.parse(b.created_at || '');
+      if (!Number.isNaN(at) && !Number.isNaN(bt) && at !== bt) return at - bt;
+      return messageKey(a).localeCompare(messageKey(b));
+    });
+  }
+
+  function messageKey(msg) {
+    if (msg.id) return msg.id;
+    return [msg.created_at, msg.from_agent, msg.to_agent, msg.body].join('\u0000');
+  }
+
+  function unreadCountForAgent(agentName) {
+    const list = messagesByAgent[agentName] || [];
+    const lastSeenID = lastSeenByAgent[agentName] || '';
+    let count = 0;
+    let afterSeen = lastSeenID === '';
+
+    list.forEach(msg => {
+      if (lastSeenID && msg.id === lastSeenID) {
+        afterSeen = true;
+        return;
+      }
+      if (afterSeen && msg.from_agent === agentName && msg.to_agent === 'operator') {
+        count++;
+      }
+    });
+    return count;
+  }
+
+  function markAgentSeen(agentName) {
+    const list = messagesByAgent[agentName] || [];
+    if (list.length === 0) return;
+    const latest = list[list.length - 1];
+    if (!latest.id) return;
+    lastSeenByAgent[agentName] = latest.id;
+    localStorage.setItem('csuite_last_seen', JSON.stringify(lastSeenByAgent));
   }
 
   function renderMessages(scrollToBottom) {
@@ -330,16 +422,25 @@
   }
 
   function appendMessage(msg) {
-    // Avoid duplicates
-    if (messages.find(m => m.id === msg.id)) return;
-    // Only append if it belongs to the active conversation
-    if (
-      (msg.from_agent === 'operator' && msg.to_agent === activeAgent) ||
-      (msg.from_agent === activeAgent && msg.to_agent === 'operator')
-    ) {
-      messages.push(msg);
+    const agentName = agentForMessage(msg);
+    if (!agentName) return;
+
+    const existing = messagesByAgent[agentName] || [];
+    if (existing.find(m => messageKey(m) === messageKey(msg))) return;
+
+    messagesByAgent[agentName] = mergeMessages(existing, [msg]);
+    if (agentName === activeAgent) {
+      messages = messagesByAgent[agentName];
       renderMessages(true);
+      markAgentSeen(agentName);
     }
+    renderAgentTabs();
+  }
+
+  function agentForMessage(msg) {
+    if (msg.from_agent === 'operator') return msg.to_agent;
+    if (msg.to_agent === 'operator') return msg.from_agent;
+    return '';
   }
 
   // -------------------------------------------------------------------------
@@ -546,6 +647,7 @@
     ws.onopen = () => {
       wsRetryDelay = 1000;
       setConnectionStatus('connected');
+      refreshAllAgentMessages();
     };
 
     ws.onclose = () => {
@@ -566,6 +668,10 @@
   }
 
   function closeWs() {
+    if (wsRetryTimer) {
+      clearTimeout(wsRetryTimer);
+      wsRetryTimer = null;
+    }
     if (ws) {
       ws.onclose = null;
       ws.onerror = null;
@@ -575,7 +681,9 @@
   }
 
   function scheduleWsRetry() {
-    setTimeout(() => {
+    if (wsRetryTimer) return;
+    wsRetryTimer = setTimeout(() => {
+      wsRetryTimer = null;
       if (token) connectWs();
     }, wsRetryDelay);
     wsRetryDelay = Math.min(wsRetryDelay * 2, wsMaxRetry);
@@ -584,9 +692,16 @@
   function handleWsEvent(evt) {
     switch (evt.type) {
       case 'new_message':
+      case 'message':
         if (evt.data) appendMessage(evt.data);
-        // Refresh agent tabs to update unread counts
+        // Refresh agent metadata; unread badges are computed locally.
         loadAgents();
+        break;
+      case 'agents':
+        if (Array.isArray(evt.data)) {
+          agents = evt.data;
+          renderAgentTabs();
+        }
         break;
       case 'connected':
         // Welcome event — no action needed.
@@ -611,6 +726,7 @@
     stopPoll();
     pollTimer = setInterval(() => {
       loadAgents();
+      refreshAllAgentMessages();
     }, POLL_INTERVAL);
   }
 

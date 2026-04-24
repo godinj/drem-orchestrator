@@ -98,6 +98,9 @@ func (s *Server) buildMux() *http.ServeMux {
 	// WebSocket endpoint handles its own auth (token via query param or header)
 	// because browsers cannot set custom headers on WebSocket upgrade requests.
 	mux.Handle("/api/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token))
+	// PRD-compatible alias for the mobile client. Keep /api/ws for existing
+	// csuite-chat clients.
+	mux.Handle("/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token))
 	// Outbox-routing endpoints. /healthz (unauth liveness), /deliver
 	// (X-Csuite-Token auth), and /rescan (X-Csuite-Token auth) are
 	// all provided by the optional DeliverHandler. Registering them

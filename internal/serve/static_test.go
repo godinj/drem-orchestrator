@@ -193,6 +193,12 @@ func TestPWA_AppJS(t *testing.T) {
 	if !strings.Contains(body, "serviceWorker") {
 		t.Error("GET /app.js does not reference serviceWorker registration")
 	}
+	if !strings.Contains(body, "csuite_last_seen") {
+		t.Error("GET /app.js does not persist local last-seen state")
+	}
+	if !strings.Contains(body, "refreshAllAgentMessages") {
+		t.Error("GET /app.js does not refresh missed messages")
+	}
 }
 
 // ---------------------------------------------------------------------------
