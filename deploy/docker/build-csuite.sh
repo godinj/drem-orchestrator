@@ -111,6 +111,20 @@ CGO_ENABLED=0 GOOS=linux go build \
     -o deploy/docker/context/csuite-persona \
     ./cmd/csuite-persona
 
+# Pre-build the HTTP-only persona operator CLI. This gives C-Suite
+# containers a stable in-container control surface for orchestrator reads
+# and gate mutations without requiring host-exec, tmux, repo checkouts, or
+# direct SQLite access.
+if [[ ! -d cmd/dremctl ]]; then
+    echo "error: cmd/dremctl is missing; land the HTTP-only persona CLI before building C-Suite images" >&2
+    exit 1
+fi
+echo ">> building dremctl -> deploy/docker/context/dremctl"
+CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath -ldflags="-s -w" \
+    -o deploy/docker/context/dremctl \
+    ./cmd/dremctl
+
 # ---- build images --------------------------------------------------------
 cd deploy/docker
 

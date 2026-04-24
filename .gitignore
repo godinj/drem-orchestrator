@@ -60,6 +60,8 @@ bench/results/*.log
 # already-checked-in sources and must not be committed.
 deploy/docker/context/drem-watchdog
 deploy/docker/context/csuite-persona
+deploy/docker/context/dremctl
+deploy/docker/context/csuite-proto.sh
 deploy/docker/context/csuite-prompts/
 
 # Stray repo-root Go binaries left by `go build` without `-o`. All are

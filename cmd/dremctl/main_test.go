@@ -1,0 +1,489 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+)
+
+const testTaskID = "12345678-1234-1234-1234-123456789abc"
+
+type recordedRequest struct {
+	Method string
+	Path   string
+	Query  string
+	Body   string
+}
+
+func TestEnvDefaultsAndFlagOverride(t *testing.T) {
+	var got recordedRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = recordRequest(t, r)
+		writeJSONResponse(t, w, []map[string]any{})
+	}))
+	defer ts.Close()
+
+	env := mapEnv(map[string]string{
+		"DREM_ORCH_URL": "http://wrong.invalid",
+		"DREM_PROJECT":  "wrong-project",
+	})
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"--orch-url", ts.URL, "--project", "right-project", "tasks", "--limit", "2"}, env, &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if got.Path != "/projects/right-project/tasks" {
+		t.Fatalf("path used env instead of flag override: %s", got.Path)
+	}
+	if got.Query != "limit=2" {
+		t.Fatalf("unexpected query: %q", got.Query)
+	}
+}
+
+func TestMissingURLError(t *testing.T) {
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"projects"}, mapEnv(nil), &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "DREM_ORCH_URL") {
+		t.Fatalf("expected missing URL error, got %v", err)
+	}
+}
+
+func TestMissingProjectError(t *testing.T) {
+	ts := httptest.NewServer(http.NotFoundHandler())
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"tasks"}, mapEnv(map[string]string{"DREM_ORCH_URL": ts.URL}), &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "DREM_PROJECT") {
+		t.Fatalf("expected missing project error, got %v", err)
+	}
+}
+
+func TestReadCommandsHitExpectedPaths(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		response  any
+		wantPath  string
+		wantQuery []string
+		wantOut   string
+	}{
+		{
+			name:     "projects",
+			args:     []string{"projects"},
+			response: []map[string]any{{"name": "canvas", "language": "go", "orch_url": "http://orch:8080", "worker_count": 2}},
+			wantPath: "/projects",
+			wantOut:  "canvas",
+		},
+		{
+			name:      "tasks",
+			args:      []string{"tasks", "--status", "failed", "--limit", "5", "--offset", "10"},
+			response:  []map[string]any{{"id": testTaskID, "title": "Fix it", "status": "failed", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z"), "assigned_worker": "w1"}},
+			wantPath:  "/projects/canvas/tasks",
+			wantQuery: []string{"status=failed", "limit=5", "offset=10"},
+			wantOut:   "Fix it",
+		},
+		{
+			name:     "workers",
+			args:     []string{"workers"},
+			response: []map[string]any{{"id": "worker-1", "project": "canvas", "agent_type": "coder", "status": "running", "branch": "b", "started_at": rfc3339("2026-04-24T10:00:00Z"), "last_heartbeat": rfc3339("2026-04-24T10:02:00Z"), "current_task": testTaskID}},
+			wantPath: "/projects/canvas/workers",
+			wantOut:  "running",
+		},
+		{
+			name:     "worker",
+			args:     []string{"worker", "worker-1"},
+			response: map[string]any{"id": "worker-1", "project": "canvas", "agent_type": "coder", "status": "running", "started_at": rfc3339("2026-04-24T10:00:00Z"), "last_heartbeat": rfc3339("2026-04-24T10:02:00Z")},
+			wantPath: "/workers/worker-1",
+			wantOut:  "worker-1",
+		},
+		{
+			name:     "history",
+			args:     []string{"history", "worker-1"},
+			response: map[string]any{"worker_id": "worker-1", "events": []map[string]any{{"timestamp": rfc3339("2026-04-24T10:00:00Z"), "kind": "exit", "detail": "done", "exit_code": 0}}},
+			wantPath: "/workers/worker-1/history",
+			wantOut:  "done",
+		},
+		{
+			name:      "events",
+			args:      []string{"events", "--since", "2026-04-24T10:00:00Z", "--limit", "3"},
+			response:  []map[string]any{{"timestamp": rfc3339("2026-04-24T10:01:00Z"), "type": "worker.exit", "payload": map[string]any{"id": "w1"}}},
+			wantPath:  "/events",
+			wantQuery: []string{"since=2026-04-24T10%3A00%3A00Z", "limit=3"},
+			wantOut:   "worker.exit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got recordedRequest
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = recordRequest(t, r)
+				writeJSONResponse(t, w, tt.response)
+			}))
+			defer ts.Close()
+
+			var out, errOut bytes.Buffer
+			err := run(t.Context(), tt.args, mapEnv(map[string]string{
+				"DREM_ORCH_URL": ts.URL,
+				"DREM_PROJECT":  "canvas",
+			}), &out, &errOut)
+			if err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			if got.Path != tt.wantPath {
+				t.Fatalf("path = %s, want %s", got.Path, tt.wantPath)
+			}
+			for _, fragment := range tt.wantQuery {
+				if !strings.Contains(got.Query, fragment) {
+					t.Fatalf("query %q missing %q", got.Query, fragment)
+				}
+			}
+			if !strings.Contains(out.String(), tt.wantOut) {
+				t.Fatalf("output %q missing %q", out.String(), tt.wantOut)
+			}
+		})
+	}
+}
+
+func TestLogsStreamsRawBody(t *testing.T) {
+	var got recordedRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = recordRequest(t, r)
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, "line one\nline two\n")
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"logs", "--container", "worker-a", "--follow", "--since", "2026-04-24T10:00:00Z"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if got.Path != "/logs" {
+		t.Fatalf("path = %s, want /logs", got.Path)
+	}
+	for _, fragment := range []string{"container=worker-a", "follow=true", "since=2026-04-24T10%3A00%3A00Z"} {
+		if !strings.Contains(got.Query, fragment) {
+			t.Fatalf("query %q missing %q", got.Query, fragment)
+		}
+	}
+	if out.String() != "line one\nline two\n" {
+		t.Fatalf("unexpected log output: %q", out.String())
+	}
+}
+
+func TestStatusHitsCompositeEndpoints(t *testing.T) {
+	var got []recordedRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, recordRequest(t, r))
+		switch r.URL.Path {
+		case "/projects":
+			writeJSONResponse(t, w, []map[string]any{{"name": "canvas", "language": "go", "orch_url": "http://orch:8080", "worker_count": 1}})
+		case "/projects/canvas/tasks":
+			writeJSONResponse(t, w, []map[string]any{
+				{"id": testTaskID, "title": "A", "status": "failed", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")},
+				{"id": "abcdef12-1234-1234-1234-123456789abc", "title": "B", "status": "backlog", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")},
+			})
+		case "/projects/canvas/workers":
+			writeJSONResponse(t, w, []map[string]any{{"id": "worker-1", "status": "running", "started_at": rfc3339("2026-04-24T10:00:00Z"), "last_heartbeat": rfc3339("2026-04-24T10:02:00Z")}})
+		case "/events":
+			writeJSONResponse(t, w, []map[string]any{{"timestamp": rfc3339("2026-04-24T10:03:00Z"), "type": "worker.heartbeat", "payload": map[string]any{}}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"status"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	wantPaths := []string{"/projects", "/projects/canvas/tasks", "/projects/canvas/workers", "/events"}
+	if len(got) != len(wantPaths) {
+		t.Fatalf("got %d requests, want %d", len(got), len(wantPaths))
+	}
+	for i, want := range wantPaths {
+		if got[i].Path != want {
+			t.Fatalf("request %d path = %s, want %s", i, got[i].Path, want)
+		}
+	}
+	if !strings.Contains(out.String(), "tasks: 2") || !strings.Contains(out.String(), "failed=1") || !strings.Contains(out.String(), "workers: 1") {
+		t.Fatalf("unexpected status output: %q", out.String())
+	}
+	if got[3].Query != "limit=10" {
+		t.Fatalf("events query = %q, want limit=10", got[3].Query)
+	}
+}
+
+func TestStatusPaginatesTasksForCompleteCounts(t *testing.T) {
+	var taskQueries []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/projects":
+			writeJSONResponse(t, w, []map[string]any{{"name": "canvas", "language": "go", "orch_url": "http://orch:8080", "worker_count": 1}})
+		case "/projects/canvas/tasks":
+			taskQueries = append(taskQueries, r.URL.RawQuery)
+			if r.URL.Query().Get("offset") == "500" {
+				writeJSONResponse(t, w, []map[string]any{taskResponse("abcdef12-1234-1234-1234-123456789abc", "failed")})
+				return
+			}
+			tasks := make([]map[string]any, 0, 500)
+			for i := 0; i < 500; i++ {
+				tasks = append(tasks, taskResponse(fmt.Sprintf("%08x-1234-1234-1234-123456789abc", i), "backlog"))
+			}
+			writeJSONResponse(t, w, tasks)
+		case "/projects/canvas/workers":
+			writeJSONResponse(t, w, []map[string]any{})
+		case "/events":
+			writeJSONResponse(t, w, []map[string]any{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"status"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if len(taskQueries) != 2 {
+		t.Fatalf("got %d task page queries, want 2: %#v", len(taskQueries), taskQueries)
+	}
+	if !strings.Contains(taskQueries[0], "limit=500") || strings.Contains(taskQueries[0], "offset=") {
+		t.Fatalf("unexpected first page query: %q", taskQueries[0])
+	}
+	if !strings.Contains(taskQueries[1], "limit=500") || !strings.Contains(taskQueries[1], "offset=500") {
+		t.Fatalf("unexpected second page query: %q", taskQueries[1])
+	}
+	if !strings.Contains(out.String(), "tasks: 501") || !strings.Contains(out.String(), "backlog=500") || !strings.Contains(out.String(), "failed=1") {
+		t.Fatalf("status did not count all task pages: %q", out.String())
+	}
+}
+
+func TestJSONOutput(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResponse(t, w, []map[string]any{{"name": "canvas", "language": "go", "orch_url": "http://orch:8080", "worker_count": 2}})
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"projects", "--json"}, mapEnv(map[string]string{"DREM_ORCH_URL": ts.URL}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	var decoded []map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("output was not JSON: %v\n%s", err, out.String())
+	}
+	if decoded[0]["name"] != "canvas" {
+		t.Fatalf("unexpected decoded output: %#v", decoded)
+	}
+}
+
+func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
+	tests := []struct {
+		name     string
+		args     []string
+		wantPath string
+		wantBody string
+	}{
+		{name: "approve", args: []string{"approve", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/approve"},
+		{name: "reject", args: []string{"reject", "12345678", "--reason", "too vague"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/reject", wantBody: `{"reason":"too vague"}`},
+		{name: "pass", args: []string{"pass", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/pass"},
+		{name: "fail", args: []string{"fail", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/fail"},
+		{name: "answer", args: []string{"answer", "12345678", "--body", "use port 9090"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/answer", wantBody: `{"body":"use port 9090"}`},
+		{name: "retry", args: []string{"retry", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/retry"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var posts []recordedRequest
+			var gets []recordedRequest
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				rec := recordRequest(t, r)
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks":
+					gets = append(gets, rec)
+					writeJSONResponse(t, w, []map[string]any{{"id": testTaskID, "title": "A", "status": "plan_review", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")}})
+				case r.Method == http.MethodPost:
+					posts = append(posts, rec)
+					writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": "A", "status": "in_progress", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer ts.Close()
+
+			var out, errOut bytes.Buffer
+			err := run(t.Context(), tt.args, mapEnv(map[string]string{
+				"DREM_ORCH_URL": ts.URL,
+				"DREM_PROJECT":  "canvas",
+			}), &out, &errOut)
+			if err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			if len(gets) != 1 {
+				t.Fatalf("got %d prefix-resolution GETs, want 1", len(gets))
+			}
+			if len(posts) != 1 {
+				t.Fatalf("got %d POSTs, want 1", len(posts))
+			}
+			if posts[0].Path != tt.wantPath {
+				t.Fatalf("POST path = %s, want %s", posts[0].Path, tt.wantPath)
+			}
+			if strings.TrimSpace(posts[0].Body) != tt.wantBody {
+				t.Fatalf("POST body = %q, want %q", strings.TrimSpace(posts[0].Body), tt.wantBody)
+			}
+			if !strings.Contains(out.String(), "in_progress") {
+				t.Fatalf("mutation output missing status: %q", out.String())
+			}
+		})
+	}
+}
+
+func TestFullUUIDMutationSkipsPrefixResolution(t *testing.T) {
+	var got []recordedRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, recordRequest(t, r))
+		writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": "A", "status": "in_progress", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")})
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"approve", testTaskID}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].Method != http.MethodPost {
+		t.Fatalf("full UUID should skip prefix GET, got %#v", got)
+	}
+}
+
+func TestAnswerRequiresBodyBeforeNetwork(t *testing.T) {
+	called := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"answer", "12345678"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "--body is required") {
+		t.Fatalf("expected body error, got %v", err)
+	}
+	if called {
+		t.Fatal("server was called despite missing --body")
+	}
+}
+
+func TestHTTPErrorRenderingIncludesStatusBody(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "orch unavailable", http.StatusServiceUnavailable)
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"projects"}, mapEnv(map[string]string{"DREM_ORCH_URL": ts.URL}), &out, &errOut)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "503") || !strings.Contains(err.Error(), "orch unavailable") {
+		t.Fatalf("error did not include status/body: %v", err)
+	}
+}
+
+func TestImportDiscipline(t *testing.T) {
+	cmd := exec.Command("go", "list", "-f", `{{range .Imports}}{{.}}{{"\n"}}{{end}}`, ".")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go list failed: %v\n%s", err, out)
+	}
+	forbidden := []string{
+		"github.com/godinj/drem-orchestrator/internal/",
+		"github.com/godinj/drem-orchestrator/cmd/drem",
+		"gorm.io/",
+		"github.com/mattn/go-sqlite3",
+	}
+	for _, imp := range strings.Fields(string(out)) {
+		for _, prefix := range forbidden {
+			if strings.HasPrefix(imp, prefix) {
+				t.Fatalf("forbidden import %q", imp)
+			}
+		}
+	}
+}
+
+func recordRequest(t *testing.T, r *http.Request) recordedRequest {
+	t.Helper()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return recordedRequest{
+		Method: r.Method,
+		Path:   r.URL.Path,
+		Query:  r.URL.RawQuery,
+		Body:   string(body),
+	}
+}
+
+func writeJSONResponse(t *testing.T, w http.ResponseWriter, value any) {
+	t.Helper()
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(value); err != nil {
+		t.Fatalf("encode response: %v", err)
+	}
+}
+
+func mapEnv(values map[string]string) envLookup {
+	return func(key string) string {
+		if values == nil {
+			return ""
+		}
+		return values[key]
+	}
+}
+
+func rfc3339(raw string) time.Time {
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		panic(err)
+	}
+	return t
+}
+
+func taskResponse(id, status string) map[string]any {
+	return map[string]any{
+		"id":              id,
+		"title":           "A",
+		"status":          status,
+		"created_at":      rfc3339("2026-04-24T10:00:00Z"),
+		"updated_at":      rfc3339("2026-04-24T10:01:00Z"),
+		"assigned_worker": "",
+	}
+}

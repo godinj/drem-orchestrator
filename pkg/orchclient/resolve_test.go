@@ -13,6 +13,7 @@ package orchclient_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -124,6 +125,35 @@ func TestResolveTaskIDSingleMatchReturnsFullUUID(t *testing.T) {
 	got, err := c.ResolveTaskID(context.Background(), "canvas", "abcdef01")
 	require.NoError(t, err)
 	require.Equal(t, target, got)
+}
+
+func TestResolveTaskIDPaginatesUntilMatch(t *testing.T) {
+	target := "abcdef01-2222-3333-4444-555555555555"
+	var queries []string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("offset") == "500" {
+			_, _ = io.WriteString(w, listBody(target))
+			return
+		}
+		ids := make([]string, 0, 500)
+		for i := 0; i < 500; i++ {
+			ids = append(ids, fmt.Sprintf("%08x-2222-3333-4444-555555555555", i))
+		}
+		_, _ = io.WriteString(w, listBody(ids...))
+	}))
+	defer ts.Close()
+	c := orchclient.New(ts.URL)
+
+	got, err := c.ResolveTaskID(context.Background(), "canvas", "abcdef01")
+	require.NoError(t, err)
+	require.Equal(t, target, got)
+	require.Len(t, queries, 2)
+	require.Contains(t, queries[0], "limit=500")
+	require.NotContains(t, queries[0], "offset=")
+	require.Contains(t, queries[1], "limit=500")
+	require.Contains(t, queries[1], "offset=500")
 }
 
 // TestResolveTaskIDMultipleMatchesReturnsErrAmbiguousPrefix covers the

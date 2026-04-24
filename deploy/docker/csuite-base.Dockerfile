@@ -10,6 +10,7 @@
 # The base lays down:
 #   - The Claude Code CLI and OpenAI Codex CLI pinned to the same line as
 #     the worker images (deploy/docker/worker-base.Dockerfile).
+#   - dremctl, the HTTP-only orchestrator CLI for persona operations.
 #   - The persona prompt bundle under /opt/csuite/prompts/ (mike.md,
 #     alex.md, seth.md, kyle.md).
 #   - A non-root user `drem` (UID 1000) so file ownership matches the
@@ -25,6 +26,7 @@
 #   - csuite-run.sh (legacy Wave-1 entrypoint; retained in the image so
 #     operators can shell in and exec it for side-by-side debugging).
 #   - csuite-persona (pre-built Go binary staged by build-csuite.sh).
+#   - dremctl (pre-built Go binary staged by build-csuite.sh).
 #   - The docs/csuite-agents/prompts/ directory is pulled from a COPY of
 #     the staged context/csuite-prompts/ dir populated by build-csuite.sh.
 #
@@ -186,6 +188,7 @@ RUN chmod 0755 /opt/csuite/bin/host-exec /opt/csuite/bin/csuite-proto.sh
 # host by build-csuite.sh (CGO_ENABLED=0 → no glibc coupling) so the
 # image stays free of a Go toolchain.
 COPY --chown=root:root csuite-persona /usr/local/bin/csuite-persona
+COPY --chown=root:root dremctl /usr/local/bin/dremctl
 COPY --chown=root:root csuite-entrypoint.sh /usr/local/bin/csuite-entrypoint
 # csuite-run.sh is the legacy Wave-1 entrypoint. We keep it in the
 # image so operators can shell in and exec it when diagnosing a broken
@@ -193,6 +196,7 @@ COPY --chown=root:root csuite-entrypoint.sh /usr/local/bin/csuite-entrypoint
 COPY --chown=root:root csuite-run.sh /usr/local/bin/csuite-run.sh
 RUN chmod 0755 \
         /usr/local/bin/csuite-persona \
+        /usr/local/bin/dremctl \
         /usr/local/bin/csuite-entrypoint \
         /usr/local/bin/csuite-run.sh
 

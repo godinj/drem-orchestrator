@@ -30,6 +30,12 @@ const minPrefixLen = 4
 // expansion, not UUID-well-formedness checks.
 const uuidCanonicalLen = 36
 
+// resolvePageLimit matches the public HTTP API's maximum page size.
+// Prefix resolution must scan every page so older tasks can still be
+// approved/rejected/retried by short ID and ambiguity is detected across
+// the whole project, not just the newest page.
+const resolvePageLimit = 500
+
 // ResolveTaskID expands a short task-ID prefix to the full UUID by
 // calling ListTasks(project) and filtering. A full UUID passed
 // verbatim (36-char canonical form) is returned without a server
@@ -58,16 +64,21 @@ func (c *Client) ResolveTaskID(ctx context.Context, project, prefix string) (str
 		return "", fmt.Errorf("orchclient: prefix %q below minimum length %d", prefix, minPrefixLen)
 	}
 
-	tasks, err := c.ListTasks(ctx, project, TaskFilter{})
-	if err != nil {
-		return "", fmt.Errorf("orchclient: resolve prefix %q: %w", prefix, err)
-	}
-
 	needle := strings.ToLower(prefix)
 	var matches []string
-	for _, t := range tasks {
-		if strings.HasPrefix(strings.ToLower(t.ID), needle) {
-			matches = append(matches, t.ID)
+
+	for offset := 0; ; offset += resolvePageLimit {
+		tasks, err := c.ListTasks(ctx, project, TaskFilter{Limit: resolvePageLimit, Offset: offset})
+		if err != nil {
+			return "", fmt.Errorf("orchclient: resolve prefix %q: %w", prefix, err)
+		}
+		for _, t := range tasks {
+			if strings.HasPrefix(strings.ToLower(t.ID), needle) {
+				matches = append(matches, t.ID)
+			}
+		}
+		if len(tasks) < resolvePageLimit {
+			break
 		}
 	}
 
