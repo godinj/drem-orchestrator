@@ -182,11 +182,15 @@ func (o *Orchestrator) renderAndWritePrompt(
 		worktreePath = o.worktree.BareRepo()
 	}
 
+	diagnosis, suggestedFix, affectedFiles := extractFixerContext(task)
 	rendered := prompt.Generate(prompt.Opts{
-		Task:         task,
-		Project:      project,
-		AgentType:    model.AgentType(agentType),
-		WorktreePath: worktreePath,
+		Task:          task,
+		Project:       project,
+		AgentType:     model.AgentType(agentType),
+		WorktreePath:  worktreePath,
+		Diagnosis:     diagnosis,
+		AffectedFiles: affectedFiles,
+		SuggestedFix:  suggestedFix,
 	})
 	if strings.TrimSpace(rendered) == "" {
 		return "", fmt.Errorf("prompt.Generate produced empty output for agent_type=%q task_id=%s",

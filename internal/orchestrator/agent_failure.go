@@ -86,6 +86,20 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 		return fmt.Errorf("on agent failed: save agent: %w", err)
 	}
 	o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(ag.AgentType), string(model.AgentDead))
+	if ag.AgentType == model.AgentFixer && task.Context != nil {
+		if resolverID, _ := task.Context[contextKeyMergeConflictResolverAgentID].(string); resolverID == ag.ID.String() {
+			if task.AssignedAgentID != nil && *task.AssignedAgentID == ag.ID {
+				task.AssignedAgentID = nil
+			}
+			task.Status = model.StatusMerging
+			task.Context[contextKeyMergeConflictResolverState] = "failed"
+			if err := o.db.Save(task).Error; err != nil {
+				return fmt.Errorf("on agent failed: save resolver task: %w", err)
+			}
+			o.emit("merge_conflict_resolver_failed", map[string]any{"task_id": task.ID, "agent_id": ag.ID})
+			return nil
+		}
+	}
 
 	// Supervisor-powered failure diagnosis.
 	if o.supervisor != nil {

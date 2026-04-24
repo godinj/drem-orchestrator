@@ -364,6 +364,178 @@ func TestExecuteMerge_ConflictFailsImmediately(t *testing.T) {
 	}
 }
 
+func TestExecuteMerge_ConflictFirstAttemptSpawnsResolver(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	o, fake, project, _ := newContainerSessionRig(t, "merge-conflict-resolver")
+	merger := &stubMerger{results: []stubMergeResult{
+		{result: &MergeResult{
+			Success:       false,
+			FailureReason: "conflict",
+			Conflicts:     []string{"main.go", "internal/thing.go"},
+		}, err: nil},
+	}}
+	o.mergeDispatcher = merger
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      project.ID,
+		Title:          "merge conflict resolver",
+		Description:    "task for resolver spawn",
+		Status:         model.StatusMerging,
+		Category:       model.CategoryStandard,
+		WorktreeBranch: "feature/merge-conflict-resolver",
+	}
+	if err := o.db.Create(task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	if err := o.executeMerge(task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+
+	var updated model.Task
+	if err := o.db.First(&updated, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if updated.Status != model.StatusMerging {
+		t.Fatalf("status = %q, want %q", updated.Status, model.StatusMerging)
+	}
+	if _, ok := updated.Context[contextKeyTerminalMergerFailureReason]; ok {
+		t.Fatal("terminal merger failure reason should not be set on first resolver attempt")
+	}
+	if got := mergeConflictResolverAttemptCount(&updated); got != 1 {
+		t.Fatalf("resolver attempt count = %d, want 1", got)
+	}
+	if got, _ := updated.Context[contextKeyMergeConflictResolverState].(string); got != "running" {
+		t.Fatalf("resolver state = %q, want running", got)
+	}
+	if got, _ := updated.Context[contextKeyMergeConflictResolverAgentID].(string); got == "" {
+		t.Fatal("resolver agent id not recorded")
+	}
+	if len(fake.spawnCalls) != 1 {
+		t.Fatalf("spawn calls = %d, want 1", len(fake.spawnCalls))
+	}
+	if fake.spawnCalls[0].AgentType != string(model.AgentFixer) {
+		t.Fatalf("spawn agent type = %q, want fixer", fake.spawnCalls[0].AgentType)
+	}
+}
+
+func TestExecuteMerge_ConflictBudgetExhaustedFailsTerminally(t *testing.T) {
+	merger := &stubMerger{results: []stubMergeResult{
+		{result: &MergeResult{Success: false, FailureReason: "conflict", Conflicts: []string{"main.go"}}, err: nil},
+	}}
+	o, db, projectID := setupMergeTest(t, merger)
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+	task.Context = model.JSONField{contextKeyMergeConflictResolverAttemptCount: maxMergeConflictResolverAttempts}
+	if err := db.Save(task).Error; err != nil {
+		t.Fatalf("save task: %v", err)
+	}
+
+	if err := o.executeMerge(task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+
+	var updated model.Task
+	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if updated.Status != model.StatusFailed {
+		t.Fatalf("status = %q, want %q", updated.Status, model.StatusFailed)
+	}
+	if got, _ := updated.Context[contextKeyTerminalMergerFailureReason].(string); got != terminalMergerFailureConflict {
+		t.Fatalf("terminal merger failure reason = %q, want %q", got, terminalMergerFailureConflict)
+	}
+}
+
+func TestExecuteMerge_ActiveResolverSkipsMergeDispatch(t *testing.T) {
+	merger := &stubMerger{results: []stubMergeResult{
+		{result: &MergeResult{Success: true, MergeCommit: "should-not-run"}, err: nil},
+	}}
+	o, db, projectID := setupMergeTest(t, merger)
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+	agentID := uuid.New()
+	task.Context = model.JSONField{contextKeyMergeConflictResolverAgentID: agentID.String()}
+	if err := db.Save(task).Error; err != nil {
+		t.Fatalf("save task: %v", err)
+	}
+	ag := model.Agent{ID: agentID, ProjectID: projectID, AgentType: model.AgentFixer, Status: model.AgentWorking, CurrentTaskID: &task.ID}
+	if err := db.Create(&ag).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	if err := o.executeMerge(task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+	if merger.calls != 0 {
+		t.Fatalf("merge dispatch calls = %d, want 0", merger.calls)
+	}
+}
+
+func TestOnFixerCompleted_MergeConflictResolverKeepsTaskMerging(t *testing.T) {
+	o, db, projectID := setupMergeTest(t, &stubMerger{})
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+	agentID := uuid.New()
+	task.AssignedAgentID = &agentID
+	task.Context = model.JSONField{
+		contextKeyMergeConflictResolverAgentID: agentID.String(),
+		contextKeyMergeConflictResolverState:   "running",
+	}
+	if err := db.Save(task).Error; err != nil {
+		t.Fatalf("save task: %v", err)
+	}
+	ag := &model.Agent{ID: agentID, ProjectID: projectID, AgentType: model.AgentFixer, Status: model.AgentWorking, CurrentTaskID: &task.ID}
+	if err := db.Create(ag).Error; err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+
+	if err := o.onFixerCompleted(ag, task); err != nil {
+		t.Fatalf("onFixerCompleted: %v", err)
+	}
+
+	var updated model.Task
+	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if updated.Status != model.StatusMerging {
+		t.Fatalf("status = %q, want %q", updated.Status, model.StatusMerging)
+	}
+	if updated.AssignedAgentID != nil {
+		t.Fatalf("assigned agent should be cleared, got %s", updated.AssignedAgentID)
+	}
+	if got, _ := updated.Context[contextKeyMergeConflictResolverState].(string); got != "completed" {
+		t.Fatalf("resolver state = %q, want completed", got)
+	}
+}
+
+func TestSpawnFixerSession_AllowsMergingOnlyWithMergeConflictFiles(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	o, fake, project, _ := newContainerSessionRig(t, "fixer-merging-conflict")
+	task := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      project.ID,
+		Title:          "fixer merging conflict",
+		Description:    "spawn fixer from merging",
+		Status:         model.StatusMerging,
+		WorktreeBranch: "feature/fixer-merging-conflict",
+	}
+	if err := o.db.Create(&task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+	if _, err := o.SpawnFixerSession(task.ID); err == nil {
+		t.Fatal("expected SpawnFixerSession to reject MERGING without merge_conflict_files")
+	}
+
+	task.Context = model.JSONField{contextKeyMergeConflictFiles: []string{"main.go"}}
+	if err := o.db.Save(&task).Error; err != nil {
+		t.Fatalf("save task: %v", err)
+	}
+	if _, err := o.SpawnFixerSession(task.ID); err != nil {
+		t.Fatalf("SpawnFixerSession with merge_conflict_files: %v", err)
+	}
+	if len(fake.spawnCalls) != 1 {
+		t.Fatalf("spawn calls = %d, want 1", len(fake.spawnCalls))
+	}
+}
+
 func TestExecuteMerge_SuccessOnRetry(t *testing.T) {
 	// Merge fails transiently twice, then succeeds on the third attempt.
 	merger := &stubMerger{results: []stubMergeResult{

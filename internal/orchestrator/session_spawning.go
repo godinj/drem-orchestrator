@@ -219,8 +219,12 @@ func (o *Orchestrator) SpawnFixerSession(taskID uuid.UUID) (string, error) {
 	switch task.Status {
 	case model.StatusInProgress, model.StatusFailed, model.StatusTestingReady:
 		// OK
+	case model.StatusMerging:
+		if task.Context == nil || task.Context[contextKeyMergeConflictFiles] == nil {
+			return "", fmt.Errorf("spawn fixer: merging task requires merge_conflict_files context")
+		}
 	default:
-		return "", fmt.Errorf("spawn fixer: task must be in in_progress, failed, or testing_ready, got %s", task.Status)
+		return "", fmt.Errorf("spawn fixer: task must be in in_progress, failed, testing_ready, or merging with merge conflicts, got %s", task.Status)
 	}
 
 	// Resolve integration worktree.
@@ -245,36 +249,12 @@ func (o *Orchestrator) SpawnFixerSession(taskID uuid.UUID) (string, error) {
 	}
 
 	// Extract diagnosis from task context.
-	var diagnosis, suggestedFix string
-	var affectedFiles []string
-	if task.Context != nil {
-		if d, ok := task.Context["failure_diagnosis"].(string); ok {
-			diagnosis = d
-		}
-		if d, ok := task.Context["failure_reason"].(string); ok && diagnosis == "" {
-			diagnosis = d
-		}
-		if sf, ok := task.Context["suggested_fix"].(string); ok {
-			suggestedFix = sf
-		}
-		if af, ok := task.Context["affected_files"].([]any); ok {
-			for _, f := range af {
-				if s, ok := f.(string); ok {
-					affectedFiles = append(affectedFiles, s)
-				}
-			}
-		}
-	}
+	diagnosis, suggestedFix, affectedFiles := extractFixerContext(&task)
 
-	// Container-mode dispatch: when o.Spawner is wired, route the
-	// fixer through spawnFixer. Diagnosis / AffectedFiles /
-	// SuggestedFix plumbing into the container-path prompt is
-	// tracked as plans/phase-3.5-subtask-dispatch-migration.md
-	// §"Open questions" Q2 — ship the dispatch-migration first,
-	// plumb the context fields second. The T3 canary's fixer spawn
-	// scenario only needs the subtask title/description in the
-	// rendered prompt, which buildSpawnContext provides by default.
-	// See plans/phase-3.5-subtask-dispatch-migration.md Commit 4.
+	// Container-mode dispatch: when o.Spawner is wired, route the fixer
+	// through spawnFixer. renderAndWritePrompt pulls the diagnosis,
+	// affected files, and suggested fix from task.Context so container
+	// fixers receive the same context as legacy prompt-based fixers.
 	if o.Spawner != nil {
 		if err := o.spawnFixer(context.Background(), &task); err != nil {
 			return "", fmt.Errorf("spawn fixer via spawner: %w", err)
