@@ -58,6 +58,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     DISABLE_AUTOUPDATER=1 \
+    CSUITE_PROTO_SH=/opt/csuite/bin/csuite-proto.sh \
     PATH=/home/drem/.local/bin:/opt/csuite/bin:/usr/local/bin:/usr/bin:/bin
 
 # ---- base system packages -------------------------------------------------
@@ -96,6 +97,14 @@ RUN set -eux; \
 RUN /usr/sbin/groupadd --gid "${DREM_GID}" drem \
  && /usr/sbin/useradd  --uid "${DREM_UID}" --gid "${DREM_GID}" \
              --create-home --shell /bin/bash drem
+
+# Claude/Codex Bash tools commonly invoke `bash -lc`, and Debian's
+# /etc/profile resets PATH for login shells. Keep /opt/csuite/bin visible
+# there too so wrappers such as host-exec work from model tool calls.
+RUN printf '%s\n' \
+        'export PATH="/home/drem/.local/bin:/opt/csuite/bin:/usr/local/bin:/usr/bin:/bin${PATH:+:$PATH}"' \
+        >/etc/profile.d/csuite-path.sh \
+ && chmod 0644 /etc/profile.d/csuite-path.sh
 
 # ---- Claude Code first-run preseed ----------------------------------------
 # Claude Code gates the first run on three interactive prompts and blocks
@@ -159,7 +168,13 @@ COPY --chown=drem:drem csuite-prompts/ /opt/csuite/prompts/
 # `extra_hosts: host.docker.internal:host-gateway` so the default
 # resolves without an env override.
 COPY --chown=root:root host-exec /opt/csuite/bin/host-exec
-RUN chmod 0755 /opt/csuite/bin/host-exec
+
+# ---- disk protocol helper --------------------------------------------------
+# The persona containers do not bind-mount the full repo, so prompts must not
+# rely on scripts/csuite-proto.sh being present relative to a checkout. The
+# build script stages the canonical helper from scripts/csuite-proto.sh here.
+COPY --chown=root:root csuite-proto.sh /opt/csuite/bin/csuite-proto.sh
+RUN chmod 0755 /opt/csuite/bin/host-exec /opt/csuite/bin/csuite-proto.sh
 
 # ---- Wave-2 persona poller + entrypoint -----------------------------------
 # csuite-persona is the headless inbox-driven poller that replaced the

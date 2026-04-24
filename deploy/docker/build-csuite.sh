@@ -88,6 +88,18 @@ fi
 echo ">> staging host-exec wrapper -> ${HOST_EXEC_DST}"
 install -m 0755 "${HOST_EXEC_SRC}" "${HOST_EXEC_DST}"
 
+# Stage the disk protocol helper into the image. Persona containers only
+# mount their own ~/.drem-csuite/<persona> tree and /home/drem/orch-plans,
+# not the full repo, so the helper needs a stable in-image path.
+CSUITE_PROTO_SRC="scripts/csuite-proto.sh"
+CSUITE_PROTO_DST="deploy/docker/context/csuite-proto.sh"
+if [[ ! -f "${CSUITE_PROTO_SRC}" ]]; then
+    echo "error: ${CSUITE_PROTO_SRC} is missing" >&2
+    exit 1
+fi
+echo ">> staging csuite protocol helper -> ${CSUITE_PROTO_DST}"
+install -m 0755 "${CSUITE_PROTO_SRC}" "${CSUITE_PROTO_DST}"
+
 # Pre-build the csuite-persona Go binary into the build context so the
 # csuite-base Dockerfile can COPY it like worker-base does with
 # drem-watchdog. CGO disabled → static-ish binary that runs cleanly on
