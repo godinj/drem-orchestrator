@@ -64,10 +64,11 @@ type WorkerHistoryDTO struct {
 
 // WorkerHistoryEntry is one row of a worker's transition log.
 type WorkerHistoryEntry struct {
-	Timestamp time.Time `json:"timestamp"`
-	Kind      string    `json:"kind"`
-	Detail    string    `json:"detail"`
-	ExitCode  int       `json:"exit_code"`
+	Timestamp time.Time       `json:"timestamp"`
+	Kind      string          `json:"kind"`
+	Detail    string          `json:"detail"`
+	ExitCode  int             `json:"exit_code"`
+	Details   json.RawMessage `json:"details,omitempty"`
 }
 
 // EventDTO is one structured event emitted by agentmon and surfaced via

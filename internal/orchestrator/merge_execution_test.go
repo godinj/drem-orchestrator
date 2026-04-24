@@ -289,6 +289,9 @@ func TestExecuteMerge_RetriesUpToMaxThenFails(t *testing.T) {
 	if reason == "" {
 		t.Error("failure_reason not set in context")
 	}
+	if got, _ := updated.Context[contextKeyTerminalMergerFailureReason].(string); got != terminalMergerFailureAttemptsExhausted {
+		t.Errorf("terminal merger failure reason = %q, want %q", got, terminalMergerFailureAttemptsExhausted)
+	}
 	wantSubstr := fmt.Sprintf("%d", MaxMergeRetries)
 	if len(reason) > 0 && !containsSubstring(reason, wantSubstr) {
 		t.Errorf("failure_reason %q should mention attempt count %s", reason, wantSubstr)
@@ -347,6 +350,10 @@ func TestExecuteMerge_ConflictFailsImmediately(t *testing.T) {
 	if updated.Status != model.StatusFailed {
 		t.Errorf("status with conflicts = %q, want %q (should fail immediately)",
 			updated.Status, model.StatusFailed)
+	}
+
+	if got, _ := updated.Context[contextKeyTerminalMergerFailureReason].(string); got != terminalMergerFailureConflict {
+		t.Errorf("terminal merger failure reason = %q, want %q", got, terminalMergerFailureConflict)
 	}
 
 	// Should NOT have any retry attempts

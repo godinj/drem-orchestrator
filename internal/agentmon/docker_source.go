@@ -319,7 +319,10 @@ func (s *DockerSource) startTail(parent context.Context, ev container.Event) {
 	s.tails[ev.ContainerID] = cancel
 	s.mu.Unlock()
 
-	workerID := ev.Labels["drem.worker-id"]
+	workerID := ev.Labels["drem.worker_id"]
+	if workerID == "" {
+		workerID = ev.Labels["drem.worker-id"]
+	}
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()

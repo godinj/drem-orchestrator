@@ -182,6 +182,42 @@ func TestLogsStreamsRawBody(t *testing.T) {
 	}
 }
 
+func TestHistoryRendersMergeResultDetails(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/workers/container-1/history" {
+			http.NotFound(w, r)
+			return
+		}
+		writeJSONResponse(t, w, map[string]any{
+			"worker_id": "container-1",
+			"events": []map[string]any{{
+				"timestamp": rfc3339("2026-04-24T10:00:00Z"),
+				"kind":      "merge_result",
+				"detail":    "tests_failed",
+				"details": map[string]any{
+					"success":        false,
+					"failure_reason": "tests_failed",
+					"test_output":    "go test ./...\nFAIL pkg",
+				},
+			}},
+		})
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"history", "container-1"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	for _, want := range []string{"merge_result", "failure_reason=tests_failed", "test_output=go test ./... FAIL pkg"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("history output %q missing %q", out.String(), want)
+		}
+	}
+}
+
 func TestStatusHitsCompositeEndpoints(t *testing.T) {
 	var got []recordedRequest
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -389,7 +389,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		}
 	}
 
-	o.recordSpawnEvent(task, agentType, res.ContainerID, params.Image)
+	o.recordSpawnEventWithWorkerID(task, agentType, res.ContainerID, params.Image, swc.workerID)
 	return nil
 }
 
@@ -674,10 +674,20 @@ func (o *Orchestrator) updateAgentContainer(ag *model.Agent, containerID, image,
 // trail required by user story 49 is always present, regardless of whether
 // the spawn happened through the old worktree path or the new spawner RPC.
 func (o *Orchestrator) recordSpawnEvent(task *model.Task, agentType, containerID, image string) {
+	o.recordSpawnEventWithWorkerID(task, agentType, containerID, image, "")
+}
+
+func (o *Orchestrator) recordSpawnEventWithWorkerID(task *model.Task, agentType, containerID, image, workerID string) {
 	detail := model.JSONField{
 		"agent_type":   agentType,
 		"container_id": containerID,
 		"image":        image,
+	}
+	if workerID != "" {
+		detail["worker_id"] = workerID
+	}
+	if task.AssignedAgentID != nil {
+		detail["agent_id"] = task.AssignedAgentID.String()
 	}
 	evt := &model.TaskEvent{
 		ID:        uuid.New(),

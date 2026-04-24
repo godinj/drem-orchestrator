@@ -1,8 +1,10 @@
 package orchhttp
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -18,15 +20,16 @@ import (
 // internal/extract so agentmon can emit the same strings it already
 // uses internally.
 const (
-	recordTypeCommit     = "commit"
-	recordTypePush       = "push"
-	recordTypeTestResult = "test_result"
-	recordTypeBuildError = "build_error"
-	recordTypeHeartbeat  = "heartbeat"
-	recordTypeCrash      = "crash"
-	recordTypeToolCall   = "tool_call"
-	maxIngestRecords     = 1000
-	maxIngestBodyBytes   = 4 * 1024 * 1024 // 4 MiB guard against misbehaving clients
+	recordTypeCommit      = "commit"
+	recordTypePush        = "push"
+	recordTypeTestResult  = "test_result"
+	recordTypeBuildError  = "build_error"
+	recordTypeHeartbeat   = "heartbeat"
+	recordTypeCrash       = "crash"
+	recordTypeToolCall    = "tool_call"
+	recordTypeMergeResult = "merge_result"
+	maxIngestRecords      = 1000
+	maxIngestBodyBytes    = 4 * 1024 * 1024 // 4 MiB guard against misbehaving clients
 )
 
 // ingestEnvelope captures the common header present on every record
@@ -50,22 +53,27 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxIngestBodyBytes)
 	defer r.Body.Close()
 
-	var req orchdto.IngestRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if len(req.Records) == 0 {
+	records, err := decodeIngestBody(body)
+	if err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(records) == 0 {
 		writeJSON(w, http.StatusAccepted, orchdto.IngestResponse{Accepted: 0})
 		return
 	}
-	if len(req.Records) > maxIngestRecords {
-		http.Error(w, fmt.Sprintf("too many records (%d > %d)", len(req.Records), maxIngestRecords), http.StatusBadRequest)
+	if len(records) > maxIngestRecords {
+		http.Error(w, fmt.Sprintf("too many records (%d > %d)", len(records), maxIngestRecords), http.StatusBadRequest)
 		return
 	}
 
-	rows := make([]model.TaskEvent, 0, len(req.Records))
-	for i, raw := range req.Records {
+	rows := make([]model.TaskEvent, 0, len(records))
+	for i, raw := range records {
 		row, err := decodeIngestRecord(raw)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("record %d: %v", i, err), http.StatusBadRequest)
@@ -78,13 +86,36 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		if len(rows) == 0 {
 			return nil
 		}
-		return tx.Create(&rows).Error
+		if err := tx.Create(&rows).Error; err != nil {
+			return err
+		}
+		for i := range rows {
+			if err := applyIngestSideEffects(tx, rows[i]); err != nil {
+				return err
+			}
+		}
+		return nil
 	}); err != nil {
 		writeDBError(w, err)
 		return
 	}
 
 	writeJSON(w, http.StatusAccepted, orchdto.IngestResponse{Accepted: len(rows)})
+}
+
+func decodeIngestBody(body []byte) ([]json.RawMessage, error) {
+	var req orchdto.IngestRequest
+	if err := json.Unmarshal(body, &req); err == nil && req.Records != nil {
+		return req.Records, nil
+	}
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
+		return nil, fmt.Errorf("empty body")
+	}
+	if trimmed[0] != '{' {
+		return nil, fmt.Errorf("expected object")
+	}
+	return []json.RawMessage{append(json.RawMessage(nil), trimmed...)}, nil
 }
 
 // decodeIngestRecord turns a raw JSON blob into a ready-to-insert
@@ -118,17 +149,30 @@ func decodeIngestRecord(raw []byte) (model.TaskEvent, error) {
 		created = time.Now().UTC()
 	}
 
-	// Actor is stored as the worker UUID string so handleWorkerHistory
-	// can reuse the same column as its filter. When a record does not
-	// name a task (heartbeats, crashes) TaskID stays uuid.Nil so the
-	// row is still valid.
+	taskID := uuid.Nil
+	if rawTaskID := stringField(payload, "task_id"); rawTaskID != "" {
+		parsed, err := uuid.Parse(rawTaskID)
+		if err != nil {
+			return model.TaskEvent{}, fmt.Errorf("invalid task_id %q", rawTaskID)
+		}
+		taskID = parsed
+	}
+
+	actor := env.WorkerID
+	if actor == "" {
+		actor = env.ContainerID
+	}
+	if actor == "" && env.Type == recordTypeMergeResult {
+		actor = "merger"
+	}
+
 	return model.TaskEvent{
 		ID:        uuid.New(),
-		TaskID:    uuid.Nil,
+		TaskID:    taskID,
 		EventType: env.Type,
 		OldValue:  env.ContainerID,
 		NewValue:  detail,
-		Actor:     env.WorkerID,
+		Actor:     actor,
 		Details:   model.JSONField(payload),
 		CreatedAt: created,
 	}, nil
@@ -142,7 +186,7 @@ func isKnownRecordType(t string) bool {
 	switch t {
 	case recordTypeCommit, recordTypePush, recordTypeTestResult,
 		recordTypeBuildError, recordTypeHeartbeat, recordTypeCrash,
-		recordTypeToolCall:
+		recordTypeToolCall, recordTypeMergeResult:
 		return true
 	default:
 		return false
@@ -169,8 +213,62 @@ func ingestDetail(recordType string, payload map[string]any) (string, error) {
 		return stringField(payload, "reason"), nil
 	case recordTypeToolCall:
 		return stringField(payload, "tool") + ":" + stringField(payload, "target"), nil
+	case recordTypeMergeResult:
+		reason := stringField(payload, "failure_reason")
+		if reason == "" {
+			if success, _ := payload["success"].(bool); success {
+				return "success", nil
+			}
+			return "failed", nil
+		}
+		return reason, nil
 	}
 	return "", fmt.Errorf("no detail extractor for %q", recordType)
+}
+
+func applyIngestSideEffects(tx *gorm.DB, row model.TaskEvent) error {
+	if row.EventType != recordTypeMergeResult || row.TaskID == uuid.Nil {
+		return nil
+	}
+	var task model.Task
+	if err := tx.First(&task, "id = ?", row.TaskID).Error; err != nil {
+		return err
+	}
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	if v := stringField(row.Details, "merged_sha"); v != "" {
+		task.Context["merge_commit"] = v
+	}
+	if conflicts, ok := stringSliceField(row.Details, "conflicts"); ok {
+		task.Context["merge_conflicts"] = conflicts
+	}
+	if v := stringField(row.Details, "failure_reason"); v != "" {
+		task.Context["merge_failure_reason"] = v
+	}
+	if v := stringField(row.Details, "test_output"); v != "" {
+		task.Context["merge_test_output"] = v
+	}
+	return tx.Model(&task).Update("context", task.Context).Error
+}
+
+func stringSliceField(m map[string]any, key string) ([]string, bool) {
+	v, ok := m[key]
+	if !ok {
+		return nil, false
+	}
+	raw, ok := v.([]any)
+	if !ok {
+		return nil, false
+	}
+	out := make([]string, 0, len(raw))
+	for _, item := range raw {
+		s, ok := item.(string)
+		if ok {
+			out = append(out, s)
+		}
+	}
+	return out, true
 }
 
 // stringField safely extracts a string value from the raw decoded JSON

@@ -32,6 +32,8 @@ var errMergerSpawnSkippedEmptyTestCmd = errors.New(
 	"merger spawn skipped: project has no test command",
 )
 
+var errMergerPreflightFailed = errors.New("merger preflight failed")
+
 // mergerSpawnSkippedReason is the exact operator-facing reason string
 // written to task.Context["failure_reason"] when the fail-fast guard
 // trips. Kept as a constant so tests can assert on the string without
@@ -153,8 +155,17 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 	if o.Spawner == nil {
 		return nil, fmt.Errorf("dispatchMerge: no Spawner configured")
 	}
+	if task.ID == uuid.Nil {
+		return nil, fmt.Errorf("dispatchMerge: task id is zero UUID")
+	}
 	if task.WorktreeBranch == "" {
-		return nil, fmt.Errorf("dispatchMerge: task %s has no WorktreeBranch", task.ID)
+		err := fmt.Errorf("task %s has no WorktreeBranch", task.ID)
+		markTerminalMergerFailure(task, terminalMergerFailurePreflight)
+		o.recordSpawnFailureEventWithReason(task, "merger", terminalMergerFailurePreflight, err)
+		if failErr := o.failTask(task, "merger preflight failed: task has no WorktreeBranch"); failErr != nil {
+			return nil, fmt.Errorf("dispatchMerge: %w: %v", errMergerPreflightFailed, failErr)
+		}
+		return nil, errMergerPreflightFailed
 	}
 
 	defaultBranch := "main"
@@ -178,9 +189,27 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 	if orchURL == "" {
 		orchURL = os.Getenv("DREM_ORCH_URL")
 	}
+	if strings.TrimSpace(orchURL) == "" {
+		err := fmt.Errorf("orch URL is empty")
+		markTerminalMergerFailure(task, terminalMergerFailurePreflight)
+		o.recordSpawnFailureEventWithReason(task, "merger", terminalMergerFailurePreflight, err)
+		if failErr := o.failTask(task, "merger preflight failed: orch URL is empty"); failErr != nil {
+			return nil, fmt.Errorf("dispatchMerge: %w: %v", errMergerPreflightFailed, failErr)
+		}
+		return nil, errMergerPreflightFailed
+	}
 	agentmonToken := o.agentmonToken
 	if agentmonToken == "" {
 		agentmonToken = os.Getenv("DREM_AGENTMON_TOKEN")
+	}
+	if strings.TrimSpace(agentmonToken) == "" {
+		err := fmt.Errorf("agentmon token is empty")
+		markTerminalMergerFailure(task, terminalMergerFailurePreflight)
+		o.recordSpawnFailureEventWithReason(task, "merger", terminalMergerFailurePreflight, err)
+		if failErr := o.failTask(task, "merger preflight failed: agentmon token is empty"); failErr != nil {
+			return nil, fmt.Errorf("dispatchMerge: %w: %v", errMergerPreflightFailed, failErr)
+		}
+		return nil, errMergerPreflightFailed
 	}
 
 	argv, err := buildMergerArgv(task, o.projectID.String(), defaultBranch, o.testGate.TestCommand, orchURL, agentmonToken)
@@ -191,6 +220,8 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 		// the task API without requiring a container log grep.
 		// See plans/bug-h-merger-crash-on-v17-advance.md (Option A).
 		if errors.Is(err, errMergerSpawnSkippedEmptyTestCmd) {
+			markTerminalMergerFailure(task, terminalMergerFailurePreflight)
+			o.recordSpawnFailureEventWithReason(task, "merger", terminalMergerFailurePreflight, err)
 			if failErr := o.failTask(task, mergerSpawnSkippedReason); failErr != nil {
 				return nil, fmt.Errorf("dispatchMerge: fail-fast: %w (fail transition: %v)", err, failErr)
 			}
@@ -207,6 +238,7 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 		"DREM_TASK_ID":        task.ID.String(),
 		"DREM_FEATURE_BRANCH": task.WorktreeBranch,
 		"DREM_TARGET_BRANCH":  defaultBranch,
+		"DREM_WORKER_ID":      workerID,
 	}
 	// Merger does NOT carry Claude credentials OR a prompt — it is a
 	// Go binary (cmd/drem-merger) that takes argv flags and runs no
@@ -262,7 +294,7 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 	}
 
 	// Record the merger spawn in the audit trail.
-	o.recordSpawnEvent(task, "merger", res.ContainerID, params.Image)
+	o.recordSpawnEventWithWorkerID(task, "merger", res.ContainerID, params.Image, workerID)
 
 	finalState, err := o.awaitMergerExit(dispatchCtx, res.ContainerID)
 	if err != nil {
@@ -274,6 +306,9 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 		ExitCode:      finalState.ExitCode,
 		Success:       finalState.ExitCode == 0 && finalState.Status == string(spawnerStatusExited),
 		FailureReason: failureReasonForExit(finalState.ExitCode),
+	}
+	if err := o.db.First(task, "id = ?", task.ID).Error; err != nil {
+		return nil, fmt.Errorf("dispatchMerge: reload task after merger exit: %w", err)
 	}
 	// Pull any agentmon-populated merge context off the task (merger's
 	// structured output is ingested into task.Context by agentmon during

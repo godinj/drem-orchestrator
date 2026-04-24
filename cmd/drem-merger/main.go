@@ -31,6 +31,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/merger"
+	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -198,39 +199,48 @@ func newHTTPReporter(baseURL, token string, logger *slog.Logger) merger.MergeRep
 // snake_case JSON keys so Kyle can index on them without per-record
 // transformation.
 type mergeLogRecord struct {
-	Type       string    `json:"type"`
-	Project    string    `json:"project"`
-	TaskID     string    `json:"task_id"`
-	Success    bool      `json:"success"`
-	Reason     string    `json:"failure_reason,omitempty"`
-	Conflicts  []string  `json:"conflicts,omitempty"`
-	TestsOK    bool      `json:"tests_passed"`
-	MergedSHA  string    `json:"merged_sha,omitempty"`
-	StartedAt  time.Time `json:"started_at"`
-	FinishedAt time.Time `json:"finished_at"`
-	TestOutput string    `json:"test_output,omitempty"`
+	Type        string    `json:"type"`
+	ContainerID string    `json:"container_id,omitempty"`
+	WorkerID    string    `json:"worker_id,omitempty"`
+	Project     string    `json:"project"`
+	TaskID      string    `json:"task_id"`
+	Success     bool      `json:"success"`
+	Reason      string    `json:"failure_reason,omitempty"`
+	Conflicts   []string  `json:"conflicts,omitempty"`
+	TestsOK     bool      `json:"tests_passed"`
+	MergedSHA   string    `json:"merged_sha,omitempty"`
+	StartedAt   time.Time `json:"started_at"`
+	FinishedAt  time.Time `json:"finished_at"`
+	TestOutput  string    `json:"test_output,omitempty"`
 }
 
 func (r *httpReporter) Report(ctx context.Context, project, taskID string, res merger.MergeResult) error {
 	if r.baseURL == "" {
 		return nil
 	}
+	hostname, _ := os.Hostname()
 	rec := mergeLogRecord{
-		Type:       "merge_result",
-		Project:    project,
-		TaskID:     taskID,
-		Success:    res.Success,
-		Reason:     res.FailureReason,
-		Conflicts:  res.Conflicts,
-		TestsOK:    res.TestsPassed,
-		MergedSHA:  res.MergedSHA,
-		StartedAt:  res.StartedAt,
-		FinishedAt: res.FinishedAt,
-		TestOutput: truncate(res.TestOutput, 64*1024),
+		Type:        "merge_result",
+		ContainerID: hostname,
+		WorkerID:    os.Getenv("DREM_WORKER_ID"),
+		Project:     project,
+		TaskID:      taskID,
+		Success:     res.Success,
+		Reason:      res.FailureReason,
+		Conflicts:   res.Conflicts,
+		TestsOK:     res.TestsPassed,
+		MergedSHA:   res.MergedSHA,
+		StartedAt:   res.StartedAt,
+		FinishedAt:  res.FinishedAt,
+		TestOutput:  truncate(res.TestOutput, 64*1024),
 	}
-	body, err := json.Marshal(rec)
+	raw, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("encode merge_result: %w", err)
+	}
+	body, err := json.Marshal(orchdto.IngestRequest{Records: []json.RawMessage{raw}})
+	if err != nil {
+		return fmt.Errorf("encode merge_result batch: %w", err)
 	}
 
 	url := r.baseURL + "/internal/logs"

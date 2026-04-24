@@ -147,6 +147,12 @@ func (o *Orchestrator) reconcileParentsByPolicy(p parentReconcilePolicy) (int, e
 			continue
 		}
 
+		if p.recover != nil && hasTerminalMergerFailure(parent) {
+			o.logger.Info("reconcile: skipping terminal merger-failed parent",
+				"task_id", parent.ID)
+			continue
+		}
+
 		if p.recover != nil {
 			if err := p.recover(o, parent); err != nil {
 				o.logger.Error("reconcile: recovery transition failed",

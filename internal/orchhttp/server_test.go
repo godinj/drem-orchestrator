@@ -215,6 +215,46 @@ func TestIngestAcceptsKnownRecords(t *testing.T) {
 	require.EqualValues(t, 3, count)
 }
 
+func TestIngestAcceptsMergeResultAndUpdatesTaskContext(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "merge me", model.StatusMerging)
+
+	record := map[string]any{
+		"type":           "merge_result",
+		"container_id":   "container-1",
+		"worker_id":      "merger-worker-1",
+		"task_id":        task.ID.String(),
+		"success":        false,
+		"failure_reason": "conflict",
+		"conflicts":      []string{"README.md"},
+		"test_output":    "merge failed",
+	}
+	body, err := json.Marshal(map[string]any{"records": []any{record}})
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/internal/logs", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("X-Drem-Agentmon-Token", "secret-token")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	var saved model.Task
+	require.NoError(t, srv.DB.First(&saved, "id = ?", task.ID).Error)
+	require.Equal(t, "conflict", saved.Context["merge_failure_reason"])
+	require.Equal(t, "merge failed", saved.Context["merge_test_output"])
+	require.Equal(t, []any{"README.md"}, saved.Context["merge_conflicts"])
+
+	var evt model.TaskEvent
+	require.NoError(t, srv.DB.First(&evt, "event_type = ?", "merge_result").Error)
+	require.Equal(t, task.ID, evt.TaskID)
+	require.Equal(t, "merger-worker-1", evt.Actor)
+	require.Equal(t, "container-1", evt.OldValue)
+}
+
 // TestIngestAcceptsAgentmonHTTPIngestorRoundTrip is the cross-package
 // contract test for the agentmon↔orch authentication path. It drives
 // the real agentmon.HTTPIngestor (the production client) against the
@@ -363,4 +403,50 @@ func TestWorkerHistoryReturnsEvents(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&hist))
 	require.Equal(t, workerID.String(), hist.WorkerID)
 	require.Len(t, hist.Events, 2)
+}
+
+func TestWorkerHistoryResolvesContainerIDToMergeResult(t *testing.T) {
+	srv, ts, _ := setupHTTPTest(t, nil)
+	taskID := uuid.New()
+	containerID := "container-full-id"
+	workerID := "merger-1234-abcd"
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    taskID,
+		EventType: "worker_spawned",
+		NewValue:  "merger",
+		Actor:     "orchestrator",
+		Details: model.JSONField{
+			"container_id": containerID,
+			"worker_id":    workerID,
+		},
+		CreatedAt: time.Now().UTC().Add(-time.Minute),
+	}).Error)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    taskID,
+		EventType: "merge_result",
+		OldValue:  "short-container",
+		NewValue:  "tests_failed",
+		Actor:     workerID,
+		Details: model.JSONField{
+			"task_id":        taskID.String(),
+			"worker_id":      workerID,
+			"failure_reason": "tests_failed",
+			"test_output":    "go test failed",
+		},
+		CreatedAt: time.Now().UTC(),
+	}).Error)
+
+	resp, err := http.Get(ts.URL + "/workers/" + containerID + "/history")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var hist orchdto.WorkerHistoryDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&hist))
+	require.Equal(t, containerID, hist.WorkerID)
+	require.Len(t, hist.Events, 2)
+	require.Equal(t, "merge_result", hist.Events[1].Kind)
+	require.Contains(t, string(hist.Events[1].Details), "go test failed")
 }

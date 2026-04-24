@@ -203,6 +203,49 @@ func TestReconcileFailedParents_SubtaskWithFailedStatus(t *testing.T) {
 	}
 }
 
+func TestReconcileFailedParents_SkipsTerminalMergerFailure(t *testing.T) {
+	orch, db, _ := setupReconcileTest(t)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   orch.projectID,
+		Title:       "terminal-merger-parent",
+		Description: "parent failed from deterministic merger conflict",
+		Status:      model.StatusFailed,
+		Context: model.JSONField{
+			contextKeyTerminalMergerFailureReason: terminalMergerFailureConflict,
+			"failure_reason":                      "merge conflicts (0 trivial, 1 non-trivial)",
+		},
+	}
+	db.Create(&parent)
+
+	for i := 0; i < 2; i++ {
+		db.Create(&model.Task{
+			ID:           uuid.New(),
+			ProjectID:    orch.projectID,
+			ParentTaskID: &parentID,
+			Title:        "done-sub",
+			Description:  "done",
+			Status:       model.StatusDone,
+		})
+	}
+
+	n, err := orch.reconcileFailedParents()
+	if err != nil {
+		t.Fatalf("reconcileFailedParents() error: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 parents recovered for terminal merger failure, got %d", n)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected terminal merger-failed parent to stay failed, got %s", updated.Status)
+	}
+}
+
 func TestReconcileFailedParents_NonConstraintFailure_StillRecovers(t *testing.T) {
 	orch, db, _ := setupReconcileTest(t)
 

@@ -28,7 +28,7 @@ Commands:
   tasks [--status STATUS] [--limit N] [--offset N]
   workers
   worker <worker-id>
-  history <worker-id>
+  history <worker-id|container-id>
   events [--since RFC3339] [--limit N]
   logs --container NAME [--follow] [--since RFC3339]
   status
@@ -196,7 +196,7 @@ func handleWorker(ctx context.Context, client *orchclient.Client, cfg cliConfig,
 
 func handleHistory(ctx context.Context, client *orchclient.Client, cfg cliConfig, args []string, stdout io.Writer) error {
 	if len(args) != 1 {
-		return errors.New("usage: dremctl history <worker-id>")
+		return errors.New("usage: dremctl history <worker-id|container-id>")
 	}
 	history, err := client.WorkerHistory(ctx, args[0])
 	if err != nil {
@@ -481,9 +481,39 @@ func renderHistory(w io.Writer, jsonMode bool, history orchdto.WorkerHistoryDTO)
 	}
 	fmt.Fprintf(w, "worker: %s\n", history.WorkerID)
 	for _, event := range history.Events {
-		fmt.Fprintf(w, "%s\t%s\texit=%d\t%s\n", formatTime(event.Timestamp), event.Kind, event.ExitCode, event.Detail)
+		fmt.Fprintf(w, "%s\t%s\texit=%d\t%s%s\n",
+			formatTime(event.Timestamp), event.Kind, event.ExitCode, event.Detail, formatHistoryDetails(event))
 	}
 	return nil
+}
+
+func formatHistoryDetails(event orchdto.WorkerHistoryEntry) string {
+	if event.Kind != "merge_result" || len(event.Details) == 0 {
+		return ""
+	}
+	var details map[string]any
+	if err := json.Unmarshal(event.Details, &details); err != nil {
+		return ""
+	}
+	var parts []string
+	if success, ok := details["success"].(bool); ok {
+		parts = append(parts, "success="+strconv.FormatBool(success))
+	}
+	for _, key := range []string{"failure_reason", "merged_sha", "container_id", "worker_id"} {
+		if value, ok := details[key].(string); ok && value != "" {
+			parts = append(parts, key+"="+value)
+		}
+	}
+	if conflicts, ok := details["conflicts"].([]any); ok && len(conflicts) > 0 {
+		parts = append(parts, "conflicts="+strconv.Itoa(len(conflicts)))
+	}
+	if output, ok := details["test_output"].(string); ok && strings.TrimSpace(output) != "" {
+		parts = append(parts, "test_output="+singleLine(truncateMiddle(output, 240)))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "\t" + strings.Join(parts, "\t")
 }
 
 func renderEvents(w io.Writer, jsonMode bool, events []orchdto.EventDTO) error {
@@ -573,4 +603,20 @@ func formatTime(t time.Time) string {
 		return "-"
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+func singleLine(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+func truncateMiddle(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	if max < 5 {
+		return s[:max]
+	}
+	head := max / 2
+	tail := max - head - 3
+	return s[:head] + "..." + s[len(s)-tail:]
 }

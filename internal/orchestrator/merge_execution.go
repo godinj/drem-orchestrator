@@ -40,7 +40,7 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 		// is empty and has already transitioned the task to FAILED with
 		// the operator-facing reason. No further state-machine work is
 		// needed here; returning nil avoids a spurious error log.
-		if errors.Is(err, errMergerSpawnSkippedEmptyTestCmd) {
+		if errors.Is(err, errMergerSpawnSkippedEmptyTestCmd) || errors.Is(err, errMergerPreflightFailed) {
 			return nil
 		}
 		return fmt.Errorf("execute merge: %w", err)
@@ -110,6 +110,7 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 			policy := DefaultMergeRetryPolicy()
 			if policy.Exhausted(attemptState.AttemptCount()) {
 				reason := fmt.Sprintf("merge failed after %d attempts", attemptState.AttemptCount())
+				markTerminalMergerFailure(task, terminalMergerFailureAttemptsExhausted)
 				if err := o.failTask(task, reason); err != nil {
 					return err
 				}
@@ -178,6 +179,7 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 						task.Context["merge_conflict_files"] = result.Conflicts
 						task.Context["merge_resolution_hints"] = analysis.ResolutionHints
 						// Fail the task (required state transition) then spawn fixer.
+						markTerminalMergerFailure(task, terminalMergerFailureConflict)
 						if err := o.failTask(task, "merge conflicts — spawning resolver agent"); err != nil {
 							return err
 						}
@@ -208,6 +210,7 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 			"conflicts":          result.Conflicts,
 			"classified_details": result.ClassifiedDetails,
 		}
+		markTerminalMergerFailure(task, terminalMergerFailureConflict)
 		if err := o.failTask(task, reason); err != nil {
 			return err
 		}
@@ -305,6 +308,39 @@ func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
 
 // contextKeyMergeAttemptCount is the task.Context key for merge retry tracking.
 const contextKeyMergeAttemptCount = "merge_attempt_count"
+
+// contextKeyTerminalMergerFailureReason marks a parent failure as terminal for
+// failed-parent reconciliation. These failures must not be recovered by
+// reconcile-failed-parent-all-subtasks-done because retrying the parent would
+// re-enter the same deterministic merger loop.
+const contextKeyTerminalMergerFailureReason = "terminal_merger_failure_reason"
+
+const (
+	terminalMergerFailureConflict          = "conflict"
+	terminalMergerFailureAttemptsExhausted = "merge_failed_after_attempts"
+	terminalMergerFailurePreflight         = "merger_preflight_failed"
+)
+
+func markTerminalMergerFailure(task *model.Task, reason string) {
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context[contextKeyTerminalMergerFailureReason] = reason
+}
+
+func hasTerminalMergerFailure(task *model.Task) bool {
+	if task.Context == nil {
+		return false
+	}
+	if reason, _ := task.Context[contextKeyTerminalMergerFailureReason].(string); reason != "" {
+		return true
+	}
+	failureReason, _ := task.Context["failure_reason"].(string)
+	failureReason = strings.ToLower(failureReason)
+	return strings.Contains(failureReason, "merge conflicts") ||
+		strings.Contains(failureReason, "merge failed after") ||
+		strings.Contains(failureReason, "merger spawn skipped")
+}
 
 // MergeAttemptState provides typed access to merge retry tracking fields
 // stored in task.Context. It reads and writes the merge_attempt_count field,

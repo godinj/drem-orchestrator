@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -215,39 +216,100 @@ func (s *Server) handleGetWorker(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toWorkerDTO(agent, s.Project.Name))
 }
 
-// handleWorkerHistory returns the TaskEvent rows attributable to this
-// worker in chronological order. Agentmon appends structured state
-// records here via POST /internal/logs; Kyle uses the endpoint to answer
-// "what has this worker been doing recently".
+// handleWorkerHistory returns TaskEvent rows attributable to this worker,
+// worker label, or container ID in chronological order. Agentmon records
+// use the drem.worker_id label as Actor, while orchestrator spawn/death
+// events often only know the DB worker UUID or Docker container ID. The
+// two-pass selector expansion below bridges those identifiers so a caller
+// can paste any ID visible in `dremctl events`.
 func (s *Server) handleWorkerHistory(w http.ResponseWriter, r *http.Request) {
-	id, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
 		http.Error(w, "worker not found", http.StatusNotFound)
 		return
 	}
-	// Worker existence is not required to return an empty history — Kyle
-	// may legitimately ask about a worker that has already been reaped.
-	var events []model.TaskEvent
-	if err := s.DB.WithContext(r.Context()).
-		Where("actor = ?", id.String()).
-		Order("created_at ASC").
-		Limit(defaultLimit).
-		Find(&events).Error; err != nil {
+	selectors := map[string]struct{}{id: {}}
+	if parsed, err := uuid.Parse(id); err == nil {
+		var agent model.Agent
+		if err := s.DB.WithContext(r.Context()).First(&agent, "id = ?", parsed).Error; err == nil {
+			addSelector(selectors, agent.TmuxSession)
+			if agent.CurrentTaskID != nil {
+				addSelector(selectors, agent.CurrentTaskID.String())
+			}
+		}
+	}
+
+	events, err := s.historyEventsForSelectors(r.Context(), selectors)
+	if err != nil {
 		writeDBError(w, err)
 		return
 	}
+	expandHistorySelectors(selectors, events)
+	events, err = s.historyEventsForSelectors(r.Context(), selectors)
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+
 	entries := make([]orchdto.WorkerHistoryEntry, 0, len(events))
 	for _, e := range events {
+		details, _ := json.Marshal(e.Details)
 		entries = append(entries, orchdto.WorkerHistoryEntry{
 			Timestamp: e.CreatedAt,
 			Kind:      e.EventType,
 			Detail:    e.NewValue,
+			Details:   details,
 		})
 	}
 	writeJSON(w, http.StatusOK, orchdto.WorkerHistoryDTO{
-		WorkerID: id.String(),
+		WorkerID: id,
 		Events:   entries,
 	})
+}
+
+func (s *Server) historyEventsForSelectors(ctx context.Context, selectors map[string]struct{}) ([]model.TaskEvent, error) {
+	q := s.DB.WithContext(ctx).Order("created_at ASC").Limit(defaultLimit)
+	first := true
+	for selector := range selectors {
+		if strings.TrimSpace(selector) == "" {
+			continue
+		}
+		like := "%" + selector + "%"
+		clause := "actor = ? OR old_value = ? OR task_id = ? OR details LIKE ?"
+		args := []any{selector, selector, selector, like}
+		if first {
+			q = q.Where(clause, args...)
+			first = false
+		} else {
+			q = q.Or(clause, args...)
+		}
+	}
+	if first {
+		return []model.TaskEvent{}, nil
+	}
+	var events []model.TaskEvent
+	if err := q.Find(&events).Error; err != nil {
+		return nil, err
+	}
+	return events, nil
+}
+
+func expandHistorySelectors(selectors map[string]struct{}, events []model.TaskEvent) {
+	for _, e := range events {
+		addSelector(selectors, e.Actor)
+		addSelector(selectors, e.OldValue)
+		addSelector(selectors, stringField(e.Details, "agent_id"))
+		addSelector(selectors, stringField(e.Details, "worker_id"))
+		addSelector(selectors, stringField(e.Details, "container_id"))
+		addSelector(selectors, stringField(e.Details, "task_id"))
+	}
+}
+
+func addSelector(selectors map[string]struct{}, value string) {
+	value = strings.TrimSpace(value)
+	if value != "" {
+		selectors[value] = struct{}{}
+	}
 }
 
 // handleListEvents returns the raw TaskEvent stream, optionally filtered

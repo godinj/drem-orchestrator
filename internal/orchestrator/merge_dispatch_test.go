@@ -85,12 +85,12 @@ func TestDispatchMerge_BuildsRequiredArgv(t *testing.T) {
 	require.NotEmpty(t, cmd, "Cmd must be populated with merger argv")
 
 	want := map[string]string{
-		"--feature-branch":  "feature/argv-test",
-		"--project":         o.projectID.String(),
-		"--task-id":         task.ID.String(),
-		"--test-cmd":        "go test ./...",
-		"--orch-url":        "http://orch:8080",
-		"--agentmon-token":  "test-token-abc",
+		"--feature-branch": "feature/argv-test",
+		"--project":        o.projectID.String(),
+		"--task-id":        task.ID.String(),
+		"--test-cmd":       "go test ./...",
+		"--orch-url":       "http://orch:8080",
+		"--agentmon-token": "test-token-abc",
 	}
 	for flag, expected := range want {
 		got, ok := findFlagValue(cmd, flag)
@@ -258,6 +258,36 @@ func itoaExit(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+func TestDispatchMerge_PreflightEmptyAgentmonTokenDoesNotSpawn(t *testing.T) {
+	o, fake := dispatchMergeTestRig(t)
+	o.agentmonToken = ""
+	t.Setenv("DREM_AGENTMON_TOKEN", "")
+
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "empty token guard",
+		Status:         model.StatusMerging,
+		WorktreeBranch: "feature/no-token",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	res, err := o.dispatchMerge(context.Background(), task)
+	require.Nil(t, res)
+	require.ErrorIs(t, err, errMergerPreflightFailed)
+	require.Empty(t, fake.spawnCalls, "preflight failure must not spawn a merger container")
+
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusFailed, reloaded.Status)
+	require.Equal(t, terminalMergerFailurePreflight, reloaded.Context[contextKeyTerminalMergerFailureReason])
+
+	var events []model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_spawn_failed").Find(&events).Error)
+	require.Len(t, events, 1)
+	require.Equal(t, terminalMergerFailurePreflight, events[0].Details["reason"])
 }
 
 // TestBuildMergerArgv_EmptyTestCmdRejected covers Bug H's fail-close
