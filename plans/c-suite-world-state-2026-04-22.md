@@ -147,7 +147,7 @@ Target state:
 
 ### §3e. Spawn RBAC
 - Spawn/dispose levers: **operator, Kyle, Mike, temp workers**. Alex and Seth are explicitly excluded (operator Q13, 2026-04-22).
-- **Ross has been retired as a csuite persona (2026-04-22).** Spawn/dispose levers: operator, Kyle, Mike, temp workers. Alex and Seth are explicitly excluded.
+- **Ross retirement operator-ratified 2026-04-22; operational teardown in flight via Mike's parallel pass.** Spawn RBAC for the remaining set: operator, Kyle, Mike, temp workers. Alex and Seth explicitly excluded.
 
 ### §3f. Supervisor role — Mike stands in (operator Q14, 2026-04-22)
 - Historically a distinct agent type that no longer exists. For now, **Mike acts in supervisor capacity** for the fail-with-supervisor flow (#31) and any watchdog-consumer recovery actions.

@@ -19,6 +19,7 @@
   let oldestMessageId = null; // cursor for scroll-back pagination
   let ws = null; // WebSocket connection
   let wsRetryTimer = null;
+  let authDisabled = false;
   let wsRetryDelay = 1000;
   const wsMaxRetry = 30000;
   const POLL_INTERVAL = 5000; // REST fallback poll interval (ms)
@@ -64,7 +65,11 @@
   // -------------------------------------------------------------------------
 
   function apiHeaders() {
-    return { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' };
+    const headers = { 'Content-Type': 'application/json' };
+    if (!authDisabled) {
+      headers.Authorization = 'Bearer ' + token;
+    }
+    return headers;
   }
 
   async function apiFetch(path, opts) {
@@ -93,6 +98,7 @@
   }
 
   function logout() {
+    if (authDisabled) return;
     token = '';
     localStorage.removeItem('csuite_token');
     showLogin();
@@ -120,6 +126,15 @@
       $loginError.textContent = 'Connection failed.';
     } finally {
       $loginBtn.disabled = false;
+    }
+  }
+
+  async function detectNoAuthMode() {
+    try {
+      const resp = await fetch('/api/health');
+      return resp.ok;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -631,11 +646,14 @@
   // -------------------------------------------------------------------------
 
   function connectWs() {
-    if (!token) return;
+    if (!authDisabled && !token) return;
     closeWs();
 
     const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = proto + '//' + location.host + '/api/ws?token=' + encodeURIComponent(token);
+    let url = proto + '//' + location.host + '/api/ws';
+    if (!authDisabled) {
+      url += '?token=' + encodeURIComponent(token);
+    }
 
     try {
       ws = new WebSocket(url);
@@ -684,7 +702,7 @@
     if (wsRetryTimer) return;
     wsRetryTimer = setTimeout(() => {
       wsRetryTimer = null;
-      if (token) connectWs();
+      if (authDisabled || token) connectWs();
     }, wsRetryDelay);
     wsRetryDelay = Math.min(wsRetryDelay * 2, wsMaxRetry);
   }
@@ -785,9 +803,12 @@
   // Init
   // -------------------------------------------------------------------------
 
-  if (token) {
-    bootstrap();
-  } else {
-    showLogin();
-  }
+  (async function init() {
+    authDisabled = await detectNoAuthMode();
+    if (authDisabled || token) {
+      bootstrap();
+    } else {
+      showLogin();
+    }
+  })();
 })();

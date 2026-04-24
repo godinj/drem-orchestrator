@@ -199,6 +199,9 @@ func TestPWA_AppJS(t *testing.T) {
 	if !strings.Contains(body, "refreshAllAgentMessages") {
 		t.Error("GET /app.js does not refresh missed messages")
 	}
+	if !strings.Contains(body, "detectNoAuthMode") {
+		t.Error("GET /app.js does not detect disabled auth mode")
+	}
 }
 
 // ---------------------------------------------------------------------------

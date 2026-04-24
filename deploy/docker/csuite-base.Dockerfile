@@ -58,7 +58,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8 \
     DISABLE_AUTOUPDATER=1 \
-    PATH=/home/drem/.local/bin:/usr/local/bin:/usr/bin:/bin
+    PATH=/home/drem/.local/bin:/opt/csuite/bin:/usr/local/bin:/usr/bin:/bin
 
 # ---- base system packages -------------------------------------------------
 # C-Suite agents emit structured messages (JSON/markdown), poke the
@@ -146,6 +146,20 @@ RUN chmod 0644 /home/drem/.claude/settings.json
 RUN mkdir -p /opt/csuite/prompts \
  && chown -R drem:drem /opt/csuite
 COPY --chown=drem:drem csuite-prompts/ /opt/csuite/prompts/
+
+# ---- host-exec wrapper -----------------------------------------------------
+# POST-to-the-host-daemon CLI used by personas to run commands on the
+# host (drem, git, docker, filesystem mutations). Canonical source is
+# plans/host-exec-artifacts/host-exec; build-csuite.sh stages it into
+# the build context. Daemon, allowlist, and security fences are
+# documented in plans/host-exec-daemon-option-a.md. The wrapper reads
+# /etc/drem/host-exec.token (bind-mounted read-only via the per-persona
+# compose block) and POSTs to $HOST_EXEC_URL, which defaults to
+# http://host.docker.internal:8091 — the compose block adds
+# `extra_hosts: host.docker.internal:host-gateway` so the default
+# resolves without an env override.
+COPY --chown=root:root host-exec /opt/csuite/bin/host-exec
+RUN chmod 0755 /opt/csuite/bin/host-exec
 
 # ---- Wave-2 persona poller + entrypoint -----------------------------------
 # csuite-persona is the headless inbox-driven poller that replaced the

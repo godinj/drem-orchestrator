@@ -285,7 +285,19 @@ services:
       # every future CTO synthesis.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
       - {{.CsuiteHomeRoot}}/mike:/home/drem/.drem-csuite/mike:rw
+      # host-exec bearer token (read-only). Enables the baked-in
+      # /opt/csuite/bin/host-exec wrapper (shipped by drem-csuite-base)
+      # to authenticate against the host-side drem-host-exec daemon.
+      # Host uid 1000 maps to container uid 1000 (drem), so mode 0600
+      # on the host file is readable inside the container without any
+      # chown. See plans/host-exec-daemon-option-a.md.
+      - {{.HostExecTokenPath}}:/etc/drem/host-exec.token:ro
     networks: [drem-net]
+    extra_hosts:
+      # Make the wrapper's default URL (http://host.docker.internal:8091)
+      # resolve from inside drem-net, which otherwise isolates the
+      # container from the docker0 bridge's magic DNS entry.
+      - "host.docker.internal:host-gateway"
     labels:
       drem.project: "{{.ProjectName}}"
       drem.agent_type: csuite-mike
@@ -330,7 +342,11 @@ services:
       # every future CTO synthesis.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
       - {{.CsuiteHomeRoot}}/alex:/home/drem/.drem-csuite/alex:rw
+      # host-exec bearer token (read-only). See csuite-mike block.
+      - {{.HostExecTokenPath}}:/etc/drem/host-exec.token:ro
     networks: [drem-net]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     labels:
       drem.project: "{{.ProjectName}}"
       drem.agent_type: csuite-alex
@@ -375,7 +391,11 @@ services:
       # every future CTO synthesis.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
       - {{.CsuiteHomeRoot}}/seth:/home/drem/.drem-csuite/seth:rw
+      # host-exec bearer token (read-only). See csuite-mike block.
+      - {{.HostExecTokenPath}}:/etc/drem/host-exec.token:ro
     networks: [drem-net]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     labels:
       drem.project: "{{.ProjectName}}"
       drem.agent_type: csuite-seth
@@ -429,7 +449,11 @@ services:
       # (Phase 4) spell out how the two Kyles hand off the tree.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:rw
       - {{.CsuiteHomeRoot}}/kyle:/home/drem/.drem-csuite/kyle:rw
+      # host-exec bearer token (read-only). See csuite-mike block.
+      - {{.HostExecTokenPath}}:/etc/drem/host-exec.token:ro
     networks: [drem-net]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     labels:
       drem.project: "{{.ProjectName}}"
       drem.agent_type: csuite-kyle
@@ -462,4 +486,3 @@ services:
     labels:
       drem.project: "{{.ProjectName}}"
       drem.agent_type: merger
-

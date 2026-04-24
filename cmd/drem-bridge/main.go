@@ -1,6 +1,6 @@
 // Package main implements the standalone drem-bridge binary that serves the
-// C-Suite HTTP/WS API backed by csuite.db. It imports only internal/serve and
-// internal/csuite — no orchestrator packages.
+// C-Suite HTTP/WS API backed by the disk C-Suite state tree. It imports only
+// internal/serve and internal/csuite packages — no orchestrator packages.
 package main
 
 import (
@@ -20,6 +20,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
+	"github.com/godinj/drem-orchestrator/internal/csuite/diskstore"
 	"github.com/godinj/drem-orchestrator/internal/serve"
 )
 
@@ -31,42 +32,27 @@ func run(args []string, stderr io.Writer) int {
 	token := fs.String("token", "", "bearer token (env: DREM_BRIDGE_TOKEN)")
 	listen := fs.String("listen", "", "listen address (env: DREM_BRIDGE_ADDR, default :8080)")
 	dbFlag := fs.String("db", "", "csuite.db path (env: CSUITE_DB, default ~/.drem-csuite/csuite.db)")
+	noAuth := fs.Bool("no-auth", false, "disable bearer token authentication (env: DREM_BRIDGE_NO_AUTH=true)")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
 
-	cfg := resolveConfig(*token, *listen, *dbFlag)
-	if cfg.Token == "" {
+	cfg := resolveConfig(*token, *listen, *dbFlag, *noAuth)
+	if cfg.Token == "" && !cfg.NoAuth {
 		fmt.Fprintln(stderr, "error: token is required (set DREM_BRIDGE_TOKEN or --token)")
 		return 1
 	}
-
-	dbPath := expandTilde(cfg.DBPath)
-	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
-		fmt.Fprintf(stderr, "error: create DB directory: %v\n", err)
-		return 1
+	if cfg.NoAuth {
+		fmt.Fprintln(stderr, "warning: authentication disabled; bind only to trusted networks")
 	}
 
-	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000", dbPath)
-	gormLog := logger.New(log.New(stderr, "", 0), logger.Config{LogLevel: logger.Silent})
-	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormLog})
+	srv, cleanup, err := newBridgeServer(cfg, stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "error: open database: %v\n", err)
+		fmt.Fprintf(stderr, "error: %v\n", err)
 		return 1
 	}
-	defer func() {
-		if sqlDB, err := db.DB(); err == nil {
-			sqlDB.Close()
-		}
-	}()
+	defer cleanup()
 
-	if err := db.AutoMigrate(&csuite.CsuiteAgent{}, &csuite.CsuiteInboxMessage{}); err != nil {
-		fmt.Fprintf(stderr, "error: migrate: %v\n", err)
-		return 1
-	}
-
-	store := csuite.NewStore(db)
-	srv := serve.New(serve.Config{Token: cfg.Token, Addr: cfg.Addr, Store: store})
 	if err := srv.Start(); err != nil {
 		fmt.Fprintf(stderr, "error: start server: %v\n", err)
 		return 1
@@ -84,19 +70,67 @@ func run(args []string, stderr io.Writer) int {
 	return 0
 }
 
+func newBridgeServer(cfg bridgeConfig, stderr io.Writer) (*serve.Server, func(), error) {
+	cleanup, err := migrateLegacyDB(cfg.DBPath, stderr)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	diskRoot := expandTilde(cfg.DiskRoot)
+	store := diskstore.New(diskRoot)
+	srv := serve.New(serve.Config{
+		Token:       cfg.Token,
+		DisableAuth: cfg.NoAuth,
+		Addr:        cfg.Addr,
+		Store:       store,
+	})
+	return srv, cleanup, nil
+}
+
+func migrateLegacyDB(dbPath string, stderr io.Writer) (func(), error) {
+	dbPath = expandTilde(dbPath)
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o700); err != nil {
+		return nil, fmt.Errorf("create DB directory: %w", err)
+	}
+
+	dsn := fmt.Sprintf("%s?_journal_mode=WAL&_busy_timeout=5000", dbPath)
+	gormLog := logger.New(log.New(stderr, "", 0), logger.Config{LogLevel: logger.Silent})
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: gormLog})
+	if err != nil {
+		return nil, fmt.Errorf("open database: %w", err)
+	}
+
+	cleanup := func() {
+		if sqlDB, err := db.DB(); err == nil {
+			sqlDB.Close()
+		}
+	}
+
+	if err := db.AutoMigrate(&csuite.CsuiteAgent{}, &csuite.CsuiteInboxMessage{}); err != nil {
+		cleanup()
+		return nil, fmt.Errorf("migrate: %w", err)
+	}
+
+	return cleanup, nil
+}
+
 // bridgeConfig holds resolved configuration values.
 type bridgeConfig struct {
-	Token  string
-	Addr   string
-	DBPath string
+	Token    string
+	Addr     string
+	DBPath   string
+	DiskRoot string
+	NoAuth   bool
 }
 
 // resolveConfig applies flag > env > default precedence.
-func resolveConfig(flagToken, flagListen, flagDB string) bridgeConfig {
+func resolveConfig(flagToken, flagListen, flagDB string, flagNoAuth bool) bridgeConfig {
 	cfg := bridgeConfig{
-		Token:  os.Getenv("DREM_BRIDGE_TOKEN"),
-		Addr:   os.Getenv("DREM_BRIDGE_ADDR"),
-		DBPath: os.Getenv("CSUITE_DB"),
+		Token:    os.Getenv("DREM_BRIDGE_TOKEN"),
+		Addr:     os.Getenv("DREM_BRIDGE_ADDR"),
+		DBPath:   os.Getenv("CSUITE_DB"),
+		DiskRoot: os.Getenv("DREM_CSUITE_ROOT"),
+		NoAuth:   parseBoolEnv(os.Getenv("DREM_BRIDGE_NO_AUTH")),
 	}
 	if flagToken != "" {
 		cfg.Token = flagToken
@@ -107,13 +141,28 @@ func resolveConfig(flagToken, flagListen, flagDB string) bridgeConfig {
 	if flagDB != "" {
 		cfg.DBPath = flagDB
 	}
+	if flagNoAuth {
+		cfg.NoAuth = true
+	}
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
 	}
+	if cfg.DiskRoot == "" {
+		cfg.DiskRoot = "~/.drem-csuite"
+	}
 	if cfg.DBPath == "" {
-		cfg.DBPath = "~/.drem-csuite/csuite.db"
+		cfg.DBPath = filepath.Join(cfg.DiskRoot, "csuite.db")
 	}
 	return cfg
+}
+
+func parseBoolEnv(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func expandTilde(path string) string {

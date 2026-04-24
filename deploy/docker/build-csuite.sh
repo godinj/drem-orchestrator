@@ -75,6 +75,19 @@ if [[ ! -f deploy/docker/context/csuite-entrypoint.sh ]]; then
     exit 1
 fi
 
+# Stage the host-exec wrapper from plans/host-exec-artifacts/ into the
+# build context. The canonical source lives under plans/ (Seth's
+# artifact-production output from plans/host-exec-daemon-option-a.md);
+# the build step copies it so the csuite-base COPY line resolves.
+HOST_EXEC_SRC="plans/host-exec-artifacts/host-exec"
+HOST_EXEC_DST="deploy/docker/context/host-exec"
+if [[ ! -f "${HOST_EXEC_SRC}" ]]; then
+    echo "error: ${HOST_EXEC_SRC} is missing" >&2
+    exit 1
+fi
+echo ">> staging host-exec wrapper -> ${HOST_EXEC_DST}"
+install -m 0755 "${HOST_EXEC_SRC}" "${HOST_EXEC_DST}"
+
 # Pre-build the csuite-persona Go binary into the build context so the
 # csuite-base Dockerfile can COPY it like worker-base does with
 # drem-watchdog. CGO disabled → static-ish binary that runs cleanly on

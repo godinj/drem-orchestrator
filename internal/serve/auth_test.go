@@ -117,6 +117,18 @@ func TestBearerAuth_ValidToken(t *testing.T) {
 	}
 }
 
+func TestServer_DisableAuthAllowsAPIWithoutToken(t *testing.T) {
+	s := New(Config{DisableAuth: true, Store: nil})
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	w := httptest.NewRecorder()
+
+	s.buildMux().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", w.Code)
+	}
+}
+
 // TestBearerAuth_ContentTypeOnRejection verifies that 401 responses set
 // Content-Type: application/json.
 func TestBearerAuth_ContentTypeOnRejection(t *testing.T) {

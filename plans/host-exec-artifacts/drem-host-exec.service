@@ -1,0 +1,25 @@
+[Unit]
+Description=drem host-side HTTP exec daemon for container-Kyle
+After=network.target docker.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=godinj
+EnvironmentFile=/etc/drem/host-exec.env
+ExecStart=/usr/local/bin/drem-host-exec
+Restart=on-failure
+RestartSec=5s
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/godinj /tmp /var/log
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

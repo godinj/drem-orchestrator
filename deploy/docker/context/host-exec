@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# host-exec: container-side wrapper that POSTs a command to the host daemon.
+# Usage: host-exec <command> [args...]
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "usage: host-exec <command> [args...]" >&2
+  exit 2
+fi
+
+URL="${HOST_EXEC_URL:-http://host.docker.internal:8091}"
+
+# Token: env wins over file. If neither, fail clearly.
+TOKEN=""
+if [[ -n "${HOST_EXEC_TOKEN:-}" ]]; then
+  TOKEN="$HOST_EXEC_TOKEN"
+elif [[ -r /etc/drem/host-exec.token ]]; then
+  TOKEN="$(tr -d '[:space:]' < /etc/drem/host-exec.token)"
+else
+  echo "host-exec: no token (set HOST_EXEC_TOKEN or mount /etc/drem/host-exec.token)" >&2
+  exit 127
+fi
+
+# 8-hex corrid.
+if command -v openssl >/dev/null 2>&1; then
+  CORRID="$(openssl rand -hex 4)"
+else
+  CORRID="$(hexdump -n 4 -e '4/1 "%02x"' /dev/urandom)"
+fi
+
+CMD="$1"
+shift
+
+# JSON-encode body with jq (positional args become the args array).
+BODY="$(jq -n --arg cmd "$CMD" --args '{command: $cmd, args: $ARGS.positional}' -- "$@")"
+
+# POST; capture body + HTTP status on separate lines.
+TMP="$(mktemp)"
+trap 'rm -f "$TMP"' EXIT
+HTTP_CODE="$(curl -sS -o "$TMP" -w '%{http_code}' \
+  -X POST \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "X-Corrid: $CORRID" \
+  -H "Content-Type: application/json" \
+  --data-binary "$BODY" \
+  "$URL/exec" 2>/tmp/host-exec-curl.$$.err)" || {
+    echo "host-exec: connection failure to $URL" >&2
+    cat /tmp/host-exec-curl.$$.err >&2 2>/dev/null || true
+    rm -f /tmp/host-exec-curl.$$.err
+    exit 125
+  }
+rm -f /tmp/host-exec-curl.$$.err
+
+case "$HTTP_CODE" in
+  401)
+    echo "host-exec: unauthorized (check token)" >&2
+    exit 127
+    ;;
+  403)
+    jq -r '.error + ": " + (.denied_reason // "")' "$TMP" >&2 || cat "$TMP" >&2
+    exit 126
+    ;;
+  200)
+    ;;
+  *)
+    echo "host-exec: unexpected HTTP $HTTP_CODE" >&2
+    cat "$TMP" >&2
+    exit 125
+    ;;
+esac
+
+# Daemon-signaled timeout.
+ERR_FIELD="$(jq -r '.error // ""' "$TMP")"
+if [[ "$ERR_FIELD" == *timeout* ]]; then
+  jq -r '.stderr // ""' "$TMP" >&2
+  echo "host-exec: command timed out" >&2
+  exit 124
+fi
+
+jq -rj '.stdout // ""' "$TMP"
+jq -rj '.stderr // ""' "$TMP" >&2
+EXIT_CODE="$(jq -r '.exit_code' "$TMP")"
+exit "$EXIT_CODE"

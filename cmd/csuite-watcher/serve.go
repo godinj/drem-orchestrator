@@ -19,6 +19,7 @@ import (
 	"gorm.io/gorm/logger"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
+	"github.com/godinj/drem-orchestrator/internal/csuite/diskstore"
 	"github.com/godinj/drem-orchestrator/internal/deliver"
 	"github.com/godinj/drem-orchestrator/internal/serve"
 )
@@ -233,7 +234,11 @@ func runServe(args []string, stderr io.Writer) int {
 		return 1
 	}
 
-	store := csuite.NewStore(db)
+	csuiteRoot := os.Getenv("DREM_CSUITE_ROOT")
+	if csuiteRoot == "" {
+		csuiteRoot = "/csuite"
+	}
+	store := diskstore.New(csuiteRoot)
 
 	listenAddr := cfg.ListenAddr
 	if listenAddr == "" {

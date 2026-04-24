@@ -1,0 +1,135 @@
+# host-exec allowlist — one pattern per line.
+# Grammar: whitespace-split tokens. Token `*` as the FINAL token matches
+# all remaining args verbatim (no re-parse). A mid-pattern `*` matches
+# exactly one token. Lines starting with `#` are comments. Blank lines OK.
+# Denylist is checked first; deny wins ties. See host-exec-daemon-option-a.md.
+
+# drem CLI — full
+drem *
+
+# git — reads
+git log *
+git status
+git status -s
+git status *
+git diff
+git diff *
+git show *
+git blame *
+git ls-files *
+git ls-remote *
+git remote *
+git config --get *
+git rev-parse *
+git describe *
+
+# git — writes (force-push denylist is enforced below)
+git add *
+git rm *
+git mv *
+git commit *
+git restore *
+git checkout *
+git switch *
+git branch *
+git merge *
+git rebase *
+git stash *
+git reset *
+git clean *
+git push *
+git pull *
+git fetch *
+git tag *
+git cherry-pick *
+git revert *
+git notes *
+git worktree *
+
+# docker / compose
+docker ps *
+docker ps
+docker logs *
+docker inspect *
+docker images *
+docker images
+docker image *
+docker compose *
+docker exec *
+docker restart *
+docker start *
+docker stop *
+docker rm *
+docker rmi *
+docker pull *
+docker build *
+docker network *
+docker volume *
+docker system prune *
+
+# filesystem reads
+ls *
+ls
+cat *
+head *
+tail *
+stat *
+file *
+find *
+wc *
+du *
+df *
+df
+realpath *
+readlink *
+tree *
+
+# filesystem writes
+mkdir *
+touch *
+cp *
+mv *
+rm *
+tee *
+chmod *
+chown *
+ln *
+
+# process / diagnostics
+ps *
+pgrep *
+pidof *
+kill *
+systemctl status *
+systemctl restart drem-*
+systemctl stop drem-*
+systemctl start drem-*
+journalctl *
+
+# build / run
+make *
+go *
+python *
+python3 *
+pip *
+pip3 *
+node *
+npm *
+yarn *
+cargo *
+bun *
+
+# misc
+date
+date *
+uname *
+uname
+hostname
+whoami
+id
+env
+printenv *
+printenv
+which *
+echo *
+sleep *

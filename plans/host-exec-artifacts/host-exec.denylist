@@ -1,0 +1,48 @@
+# host-exec denylist — patterns rejected even if allowlist matches.
+# Grammar: whitespace-split tokens. Token `*` as the FINAL token matches
+# all remaining args verbatim (no re-parse). A mid-pattern `*` matches
+# exactly one token. Lines starting with `#` are comments. Blank lines OK.
+# Denylist is checked first; deny wins ties. See host-exec-daemon-option-a.md.
+
+# privilege escalation — entirely out
+sudo *
+su *
+pkexec *
+doas *
+
+# force-push to main/master — matches CLAUDE.md standing rule
+git push --force origin main
+git push --force origin master
+git push -f origin main
+git push -f origin master
+git push --force-with-lease origin main
+git push --force-with-lease origin master
+
+# destructive root targets
+rm -rf /
+rm -rf /*
+rm -rf /home
+rm -rf /etc
+rm -rf /usr
+rm -rf /var
+chmod -R 777 /
+chown -R * /
+
+# interactive / TTY-required
+vim *
+vi *
+nano *
+emacs *
+less *
+more *
+top
+htop
+ssh *
+telnet *
+
+# bash -c / eval escape hatches — force explicit commands
+bash -c *
+sh -c *
+zsh -c *
+eval *
+exec *

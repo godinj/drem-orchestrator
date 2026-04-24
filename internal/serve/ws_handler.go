@@ -28,20 +28,22 @@ import (
 //	send_message — creates a new message and broadcasts it
 //	send         — PRD-compatible shorthand: {"type":"send","to":"kyle","body":"status"}
 //	ping         — responds with {"type":"pong"}
-func wsHandler(hub *Hub, store dashboardStore, token string) http.Handler {
+func wsHandler(hub *Hub, store dashboardStore, token string, disableAuth bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Authenticate — query param takes precedence, then Authorization header.
-		tok := r.URL.Query().Get("token")
-		if tok == "" {
-			auth := r.Header.Get("Authorization")
-			const prefix = "Bearer "
-			if strings.HasPrefix(auth, prefix) {
-				tok = auth[len(prefix):]
+		if !disableAuth {
+			tok := r.URL.Query().Get("token")
+			if tok == "" {
+				auth := r.Header.Get("Authorization")
+				const prefix = "Bearer "
+				if strings.HasPrefix(auth, prefix) {
+					tok = auth[len(prefix):]
+				}
 			}
-		}
-		if subtle.ConstantTimeCompare([]byte(tok), []byte(token)) != 1 {
-			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
-			return
+			if subtle.ConstantTimeCompare([]byte(tok), []byte(token)) != 1 {
+				writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
 		}
 
 		agent := r.URL.Query().Get("agent")

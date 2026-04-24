@@ -143,6 +143,30 @@ func TestWS_UnauthorizedRejected(t *testing.T) {
 	}
 }
 
+func TestWS_DisableAuthAllowsMissingToken(t *testing.T) {
+	store := testutil.NewTestStore(t)
+	s := New(Config{DisableAuth: true, Addr: "127.0.0.1:0", Store: store})
+	if err := s.Start(); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { s.Stop() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := fmt.Sprintf("ws://%s/api/ws", s.ListenAddr())
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial ws without token: %v", err)
+	}
+	t.Cleanup(func() { conn.CloseNow() })
+
+	evt := readEvent(t, conn)
+	if evt.Type != "connected" {
+		t.Errorf("event type = %q, want \"connected\"", evt.Type)
+	}
+}
+
 // TestWS_PingPong verifies the ping/pong event.
 func TestWS_PingPong(t *testing.T) {
 	_, baseURL, token, _ := startTestServer(t)

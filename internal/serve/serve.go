@@ -25,9 +25,10 @@ type dashboardStore interface {
 
 // Config holds the bridge HTTP server configuration.
 type Config struct {
-	Token string // Bearer token for API authentication
-	Addr  string // TCP address to listen on; defaults to ":8080" when empty
-	Store dashboardStore
+	Token       string // Bearer token for API authentication
+	DisableAuth bool   // When true, API and WebSocket auth checks are bypassed
+	Addr        string // TCP address to listen on; defaults to ":8080" when empty
+	Store       dashboardStore
 
 	// DeliverHandler is an optional http.Handler mounted at /healthz
 	// and /deliver. When non-nil the bridge Server composes the
@@ -92,15 +93,15 @@ func (s *Server) Hub() *Hub {
 
 func (s *Server) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("/api/health", BearerAuth(s.cfg.Token, http.HandlerFunc(healthHandler)))
-	mux.Handle("/api/agents", BearerAuth(s.cfg.Token, agentsHandler(s.cfg.Store)))
-	mux.Handle("/api/messages", BearerAuth(s.cfg.Token, messagesHandler(s.cfg.Store, s.hub)))
+	mux.Handle("/api/health", s.auth(http.HandlerFunc(healthHandler)))
+	mux.Handle("/api/agents", s.auth(agentsHandler(s.cfg.Store)))
+	mux.Handle("/api/messages", s.auth(messagesHandler(s.cfg.Store, s.hub)))
 	// WebSocket endpoint handles its own auth (token via query param or header)
 	// because browsers cannot set custom headers on WebSocket upgrade requests.
-	mux.Handle("/api/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token))
+	mux.Handle("/api/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token, s.cfg.DisableAuth))
 	// PRD-compatible alias for the mobile client. Keep /api/ws for existing
 	// csuite-chat clients.
-	mux.Handle("/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token))
+	mux.Handle("/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token, s.cfg.DisableAuth))
 	// Outbox-routing endpoints. /healthz (unauth liveness), /deliver
 	// (X-Csuite-Token auth), and /rescan (X-Csuite-Token auth) are
 	// all provided by the optional DeliverHandler. Registering them
@@ -123,4 +124,11 @@ func (s *Server) buildMux() *http.ServeMux {
 	// The "/" pattern is a catch-all that serves index.html for unmatched paths.
 	mux.Handle("/", pwaHandler())
 	return mux
+}
+
+func (s *Server) auth(next http.Handler) http.Handler {
+	if s.cfg.DisableAuth {
+		return next
+	}
+	return BearerAuth(s.cfg.Token, next)
 }

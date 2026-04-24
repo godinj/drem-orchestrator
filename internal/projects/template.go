@@ -128,6 +128,16 @@ type TemplateData struct {
 	// time — scoreboard item 33. Defaults to
 	// HostHome/.drem/csuite-watcher.token when empty.
 	CsuiteWatcherTokenPath string
+
+	// HostExecTokenPath is the host path of the bearer token read by
+	// the drem-host-exec daemon. The compose template bind-mounts it
+	// read-only at /etc/drem/host-exec.token into every persona
+	// container so the baked-in /opt/csuite/bin/host-exec wrapper can
+	// authenticate POSTs to the daemon. Install scope is system
+	// (/etc/drem/host-exec.token owned by the operator at mode 0600);
+	// see plans/host-exec-daemon-option-a.md §Addendum. Defaults to
+	// /etc/drem/host-exec.token when empty.
+	HostExecTokenPath string
 }
 
 // Default image tags for the orchestrator.
@@ -229,6 +239,12 @@ func applyDefaults(data *TemplateData) {
 	if data.CsuiteWatcherTokenPath == "" && data.HostHome != "" {
 		data.CsuiteWatcherTokenPath = filepath.Join(
 			data.HostHome, ".drem", "csuite-watcher.token")
+	}
+	// HostExecTokenPath is host-global (daemon is installed
+	// system-scope at /etc/drem/host-exec.token per the Option-A
+	// addendum). Independent of HostHome — the file is under /etc.
+	if data.HostExecTokenPath == "" {
+		data.HostExecTokenPath = "/etc/drem/host-exec.token"
 	}
 }
 
