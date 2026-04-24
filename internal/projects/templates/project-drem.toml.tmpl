@@ -36,24 +36,13 @@ log_path       = "/var/lib/drem/drem.log"
   model    = "gemma4-26b"
 
 # Planner runs as a long-lived warm drem-planner container (see
-# deploy/compose/global.yml) that orch reaches via POST /plan. See
-# plans/warm-planner-pivot.md. Provider=claude enables the HTTP path
-# in processPlanning; any other value (e.g. sglang-direct) falls back
-# to the legacy runner.SpawnAgent path for rollback safety.
+# deploy/compose/global.yml) that orch reaches via POST /plan. Provider=codex
+# enables the HTTP path in processPlanning.
 #
-# Auth is subscription-only: the planner container bind-mounts
-# ~/.claude/.credentials.json from the host read-only. Operator must
-# have run `claude login` on host before `docker compose up`. NO
-# ANTHROPIC_API_KEY passthrough — see plan §1.
-#
-# The same subscription-only policy covers every claude-backed worker
-# (coder/reviewer/fixer/tester/supervisor). Each claude worker gets
-# the creds file bind-mounted into its ephemeral container at
-# /home/drem/.claude/.credentials.json via the DREM_WORKER_CREDS_PATH
-# env var on orch (defined in the compose sibling of this file). One
-# `claude login` on host covers the entire agent fleet. See
-# plans/worker-subscription-auth.md.
+# Auth comes from the operator's Codex login: the planner container
+# bind-mounts ~/.codex/auth.json from the host read-only. Operator must
+# have run `codex login` on host before `docker compose up`.
 [agents.planner]
-  provider = "claude"
-  model    = "claude-opus-4-6"
+  provider = "codex"
+  model    = "gpt-5.5"
   effort   = "high"

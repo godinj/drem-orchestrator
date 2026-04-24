@@ -1,9 +1,9 @@
 // Command csuite-persona is the inbox-driven headless poller that runs
 // inside the four C-Suite persona containers (mike, alex, seth, kyle).
 //
-// It replaces the prior long-lived interactive claude invocation
+// It replaces the prior long-lived interactive model invocation
 // (deploy/docker/context/csuite-run.sh) with a polling loop that scans
-// the persona's inbox, invokes `claude -p` once per message, and writes
+// the persona's inbox, invokes `codex exec` once per message, and writes
 // the reply to the persona's outbox. See internal/csuite/persona for
 // the loop semantics and docs/containerization/install.md for the
 // operator-facing runbook.
@@ -56,7 +56,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	archiveDir := fs.String("archive-dir", "", "Override archive directory (default <inbox-dir>/.archive)")
 	promptFile := fs.String("prompt-file", "", "Override system-prompt file (default /opt/csuite/prompts/<persona>.md)")
 	pollInterval := fs.Duration("poll-interval", persona.DefaultPollInterval, "Interval between inbox scans")
-	claudeTimeout := fs.Duration("claude-timeout", persona.DefaultClaudeTimeout, "Timeout for a single claude -p invocation")
+	claudeTimeout := fs.Duration("claude-timeout", persona.DefaultClaudeTimeout, "Timeout for a single Codex invocation")
 	maxFailures := fs.Int("max-failures", persona.DefaultMaxFailures, "Failure threshold before a message is archived as .failed")
 
 	if err := fs.Parse(args); err != nil {
@@ -139,7 +139,7 @@ func run(args []string, stdout, stderr *os.File) int {
 	}
 	cfg.ApplyDefaults()
 
-	p, err := persona.New(cfg, persona.NewClaudeSpawner())
+	p, err := persona.New(cfg, persona.NewCodexSpawner())
 	if err != nil {
 		fmt.Fprintf(stderr, "csuite-persona: %v\n", err)
 		return 1

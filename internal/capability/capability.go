@@ -40,6 +40,8 @@ var knownModels []modelEntry
 
 func init() {
 	entries := []modelEntry{
+		{"gpt-5", CapabilitySet{ToolCalling: true, ExtendedThinking: true, CodeExecution: true}},
+		{"codex", CapabilitySet{ToolCalling: true, ExtendedThinking: true, CodeExecution: true}},
 		{"claude-opus-4", CapabilitySet{ToolCalling: true, ExtendedThinking: true, CodeExecution: true}},
 		{"claude-sonnet-4", CapabilitySet{ToolCalling: true, ExtendedThinking: true, CodeExecution: true}},
 		{"claude-haiku-4", CapabilitySet{ToolCalling: true, ExtendedThinking: true, CodeExecution: true}},

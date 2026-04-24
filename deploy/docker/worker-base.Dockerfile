@@ -9,7 +9,7 @@
 #
 # This base lays down everything that does not depend on the target language:
 #
-#   - The agent harnesses: @anthropic-ai/claude-code (npm) and opencode (curl).
+#   - The agent harnesses: @anthropic-ai/claude-code, @openai/codex, and opencode.
 #   - The crash-recovery daemon (drem-watchdog, baked in from the build context).
 #   - The worker entrypoint script that clones /bare, starts the watchdog, and
 #     execs the configured harness.
@@ -37,6 +37,7 @@ FROM debian:bookworm-slim
 # sync with deploy/docker/csuite-base.Dockerfile; rebuild both on every
 # bump.
 ARG CLAUDE_CODE_VERSION=2.1.116
+ARG CODEX_VERSION=latest
 # OPENCODE_VERSION: passed through to the opencode install script; accepted
 # forms are documented at https://opencode.ai/install. "latest" is the default
 # of the upstream installer.
@@ -82,7 +83,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends nodejs ; \
     rm -rf /var/lib/apt/lists/*
 
-# ---- claude CLI ------------------------------------------------------------
+# ---- claude CLI + Codex CLI -----------------------------------------------
 # Installed globally so every user (including the non-root `drem` user) can
 # invoke it without PATH massaging.
 RUN set -eux; \
@@ -90,6 +91,11 @@ RUN set -eux; \
         npm install -g @anthropic-ai/claude-code ; \
     else \
         npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" ; \
+    fi ; \
+    if [ "$CODEX_VERSION" = "latest" ]; then \
+        npm install -g @openai/codex ; \
+    else \
+        npm install -g "@openai/codex@${CODEX_VERSION}" ; \
     fi ; \
     npm cache clean --force
 
@@ -102,7 +108,7 @@ RUN /usr/sbin/groupadd --gid "${DREM_GID}" drem \
              --create-home --shell /bin/bash drem \
  && echo 'drem ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/drem \
  && chmod 0440 /etc/sudoers.d/drem \
- && mkdir -p /home/drem/work /home/drem/.claude /home/drem/.drem \
+ && mkdir -p /home/drem/work /home/drem/.claude /home/drem/.codex /home/drem/.drem \
  && chown -R drem:drem /home/drem
 
 # ---- opencode CLI ----------------------------------------------------------

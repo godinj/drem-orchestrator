@@ -1,5 +1,5 @@
 // Package supervisor provides a lightweight LLM-powered decision layer for
-// the orchestrator. It calls `claude -p` synchronously at decision points
+// the orchestrator. It calls an LLM CLI synchronously at decision points
 // (failure diagnosis, feedback integration, merge conflict analysis) and
 // returns structured JSON evaluations.
 package supervisor
@@ -16,10 +16,10 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
-// Supervisor calls Claude in pipe mode for focused evaluations at
+// Supervisor calls the configured CLI in pipe mode for focused evaluations at
 // orchestrator decision points.
 type Supervisor struct {
-	claudeBin string
+	bin       string
 	timeout   time.Duration
 	cliConfig model.AgentCLIConfig
 }
@@ -28,21 +28,28 @@ type Supervisor struct {
 // the Claude CLI invocation.
 func New(claudeBin string, timeout time.Duration, cliConfig model.AgentCLIConfig) *Supervisor {
 	return &Supervisor{
-		claudeBin: claudeBin,
+		bin:       claudeBin,
 		timeout:   timeout,
 		cliConfig: cliConfig,
 	}
 }
 
-// evaluate runs `claude -p --dangerously-skip-permissions` with the given
+// evaluate runs the configured CLI with the given
 // prompt on stdin and returns the raw text response.
 func (s *Supervisor) evaluate(ctx context.Context, prompt string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 
-	args := []string{"-p", "--dangerously-skip-permissions"}
-	args = append(args, s.cliConfig.CLIArgs()...)
-	cmd := exec.CommandContext(ctx, s.claudeBin, args...)
+	var args []string
+	if s.cliConfig.EffectiveProvider() == model.ProviderCodex {
+		args = []string{"exec", "--sandbox", "danger-full-access", "--ask-for-approval", "never"}
+		args = append(args, s.cliConfig.CLIArgs()...)
+		args = append(args, "-")
+	} else {
+		args = []string{"-p", "--dangerously-skip-permissions"}
+		args = append(args, s.cliConfig.CLIArgs()...)
+	}
+	cmd := exec.CommandContext(ctx, s.bin, args...)
 	cmd.Stdin = strings.NewReader(prompt)
 
 	var stdout, stderr bytes.Buffer

@@ -148,8 +148,8 @@ func TestNew(t *testing.T) {
 	if s == nil {
 		t.Fatal("New returned nil")
 	}
-	if s.claudeBin != "claude" {
-		t.Errorf("claudeBin = %q, want %q", s.claudeBin, "claude")
+	if s.bin != "claude" {
+		t.Errorf("bin = %q, want %q", s.bin, "claude")
 	}
 	if s.timeout != 30*time.Second {
 		t.Errorf("timeout = %v, want %v", s.timeout, 30*time.Second)

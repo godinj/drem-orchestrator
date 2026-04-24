@@ -79,6 +79,11 @@ type TemplateData struct {
 	// so a missing file fails closed with a clear error. Defaults to
 	// HostHome/.claude/.credentials.json when empty.
 	WorkerCredsPath string
+	// WorkerCodexAuthPath is the host path of the operator's Codex auth
+	// file, passed to orch via DREM_WORKER_CODEX_AUTH_PATH. Orch forwards
+	// it into codex-backed worker spawns as SpawnWorkerParams.CodexAuthMount.
+	// Defaults to HostHome/.codex/auth.json when empty.
+	WorkerCodexAuthPath string
 	// WorkerPromptRoot is the host directory under which orch writes
 	// per-task prompt files. Passed to orch via DREM_PROMPT_ROOT_HOST
 	// AND bind-mounted read-write into the orch container at the same
@@ -192,6 +197,9 @@ func applyDefaults(data *TemplateData) {
 	}
 	if data.WorkerCredsPath == "" && data.HostHome != "" {
 		data.WorkerCredsPath = filepath.Join(data.HostHome, ".claude", ".credentials.json")
+	}
+	if data.WorkerCodexAuthPath == "" && data.HostHome != "" {
+		data.WorkerCodexAuthPath = filepath.Join(data.HostHome, ".codex", "auth.json")
 	}
 	// WorkerPromptRoot mirrors WorkerCredsPath's derivation pattern but
 	// is per-project (one prompt dir per project, not a shared host

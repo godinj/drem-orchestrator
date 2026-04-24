@@ -72,7 +72,8 @@ func New(cfg Config, spawner Spawner) (*Poller, error) {
 //
 // If ctx is cancelled mid-tick the function returns nil as soon as the
 // current processMessage call returns. The spawner is responsible for
-// honouring its ctx deadline (claudeSpawner uses CommandContext).
+// honouring its ctx deadline (the production subprocess spawner uses
+// CommandContext).
 func (p *Poller) Run(ctx context.Context) error {
 	p.cfg.Logger.Info("persona poller starting",
 		p.personaLabel,
@@ -197,24 +198,27 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 	invocationCtx, cancel := context.WithTimeout(ctx, p.cfg.ClaudeTimeout)
 	defer cancel()
 
-	// Pipe the message body via stdin rather than as a positional
-	// argument to `-p`. Motivation: csuite messages begin with a YAML
-	// frontmatter block (`---\nfrom: kyle\n---\n\n...`) and claude's
-	// CLI flag parser interprets any positional arg that starts with a
-	// dash as a flag, producing "unknown option '---\nfrom: ...'" and
-	// exiting non-zero before any API call. `claude -p` with no body
-	// reads stdin (it's the documented form for long inputs), which
-	// sidesteps the argv-parsing surface entirely.
+	// Pipe the full turn prompt through stdin rather than as a positional
+	// argument. C-Suite messages begin with YAML frontmatter, and stdin
+	// avoids every CLI argv parsing edge around leading dashes.
 	args := []string{
-		"claude",
-		"--dangerously-skip-permissions",
-		"-p",
-		"--system-prompt", p.prompt,
-		"--output-format", "text",
+		"codex",
+		"exec",
+		"--json",
+		"--sandbox", "danger-full-access",
+		"--ask-for-approval", "never",
+		"--cd", "/home/drem",
 	}
+	if model := os.Getenv("DREM_CODEX_MODEL"); model != "" {
+		args = append(args, "--model", model)
+	}
+	if effort := os.Getenv("DREM_CODEX_EFFORT"); effort != "" {
+		args = append(args, "-c", "model_reasoning_effort=\""+effort+"\"")
+	}
+	args = append(args, "-")
 
 	start := p.cfg.Now()
-	stdout, exitCode, spawnErr := p.spawner.Spawn(invocationCtx, args, bytes.NewReader(body))
+	stdout, exitCode, spawnErr := p.spawner.Spawn(invocationCtx, args, bytes.NewReader(p.codexTurnPrompt(body)))
 	duration := p.cfg.Now().Sub(start)
 
 	if spawnErr != nil {
@@ -237,6 +241,15 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 	}
 
 	return p.recordSuccess(name, body, stdout, duration, outboxBefore)
+}
+
+func (p *Poller) codexTurnPrompt(body []byte) []byte {
+	var b bytes.Buffer
+	b.WriteString(p.prompt)
+	b.WriteString("\n\n---\n\n")
+	b.WriteString("Process this C-Suite inbox message. Write any reply as a well-formed markdown file in your persona outbox; do not rely on stdout for delivery.\n\n")
+	b.Write(body)
+	return b.Bytes()
 }
 
 // recordSuccess writes stdout to the outbox (unless Claude already

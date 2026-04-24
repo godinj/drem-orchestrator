@@ -51,6 +51,8 @@ func (r *Runner) contextMonitorLoop(ctx context.Context, agentID uuid.UUID, work
 		var usage *ctxmon.Usage
 		if provider == model.ProviderOpenCode {
 			usage = r.readOpenCodeUsage(worktreePath, agentID)
+		} else if provider == model.ProviderCodex {
+			usage = nil
 		} else {
 			usage = r.readClaudeUsage(worktreePath, agentID)
 		}
@@ -251,8 +253,8 @@ func (r *Runner) monitorAgent(ctx context.Context, agentID uuid.UUID, proc *Agen
 	}
 	r.mu.Unlock()
 
-	if provider == model.ProviderOpenCode {
-		// OpenCode agents: no idle detection — just wait for process exit.
+	if provider == model.ProviderOpenCode || provider == model.ProviderCodex {
+		// OpenCode/Codex agents: no idle detection — just wait for process exit.
 		select {
 		case <-ctx.Done():
 			return
@@ -318,6 +320,8 @@ done:
 			logPath = filepath.Join(worktreePath, ".opencode", "agent-output.jsonl")
 		}
 		enrichOpenCodeCompletion(&comp, logPath)
+	} else if provider == model.ProviderCodex {
+		comp.ExitInfo = &ExitInfo{ExitReason: "process_exit"}
 	} else {
 		homeDir, _ := os.UserHomeDir()
 		if homeDir != "" {

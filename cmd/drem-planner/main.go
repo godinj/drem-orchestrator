@@ -1,23 +1,19 @@
 // Command drem-planner is the warm HTTP server that orch POSTs into when
-// a task reaches PLANNING with provider=claude. See
+// a task reaches PLANNING. See
 // plans/warm-planner-pivot.md for the full design; the HTTP surface is
 // documented in that plan's §5.
 //
 // Flow:
 //
 //  1. Orch issues POST /plan with {task_id, task, project, worktree_path, ...}.
-//  2. The handler invokes the claude CLI in headless mode against Anthropic
-//     Opus via the operator's Claude Max subscription (bind-mounted
-//     credentials).
+//  2. The handler invokes Codex in headless mode via the operator's
+//     bind-mounted Codex auth file.
 //  3. The resulting plan.json is returned inline in the response body;
 //     orch owns the DB write.
 //
-// Auth is subscription-only. No ANTHROPIC_API_KEY fallback — per operator
-// direction 2026-04-20, any Claude-backed role shares the subscription
-// rate-limit pool so local inference (sglang/gemma) handles the rest.
-// The container validates ${HOME}/.claude/.credentials.json at boot and
+// The container validates ${HOME}/.codex/auth.json at boot and
 // exits 1 loud if missing, so a misconfigured host crash-loops in
-// `docker ps` instead of hanging on an Anthropic 401.
+// `docker ps` instead of hanging on an auth failure.
 package main
 
 import (
@@ -56,8 +52,8 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 
 	var cfg config
 	fs.StringVar(&cfg.listenAddr, "listen", envOr("DREM_PLANNER_LISTEN", defaultListenAddr), "HTTP listen address")
-	fs.StringVar(&cfg.credentialsPath, "credentials", envOr("DREM_PLANNER_CREDENTIALS", defaultCredentialsPath()), "Path to Claude subscription credentials file")
-	fs.DurationVar(&cfg.claudeTimeout, "claude-timeout", parseDurationOr("DREM_PLANNER_CLAUDE_TIMEOUT", 5*time.Minute), "Max wall-clock time for a single claude invocation")
+	fs.StringVar(&cfg.credentialsPath, "credentials", envOr("DREM_PLANNER_CREDENTIALS", defaultCredentialsPath()), "Path to Codex auth file")
+	fs.DurationVar(&cfg.claudeTimeout, "claude-timeout", parseDurationOr("DREM_PLANNER_CLAUDE_TIMEOUT", 5*time.Minute), "Max wall-clock time for a single Codex invocation")
 	// Token comes from env only — avoids leaking into `ps` output.
 	cfg.token = os.Getenv("DREM_AGENTMON_TOKEN")
 
@@ -97,28 +93,27 @@ func run(args []string, stderr io.Writer) error {
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	// Boot-time credentials validation per plans/warm-planner-pivot.md §1.
+	// Boot-time credentials validation.
 	// Fail loud on startup when the bind-mount is missing — compose's
 	// restart: unless-stopped then crash-loops the container visibly in
-	// `docker ps` until the operator runs `claude login` on the host.
+	// `docker ps` until the operator runs `codex login` on the host.
 	if err := credentialsProbe(context.Background(), cfg.credentialsPath); err != nil {
-		return fmt.Errorf("credentials validation: %w (run `claude login` on host, then retry)", err)
+		return fmt.Errorf("credentials validation: %w (run `codex login` on host, then retry)", err)
 	}
 	logger.Info("drem-planner: credentials validated", "path", cfg.credentialsPath)
 
 	deps := Deps{
-		// Real claude-CLI subprocess generator. The invoker exec's claude
-		// per request (long-lived container reads fresh creds on each
-		// call so the host's `claude login` refresh stays authoritative).
+		// Real Codex subprocess generator. The invoker execs Codex per
+		// request and reads the bind-mounted host auth file.
 		GeneratePlan: newClaudePlanGen(runRealClaude, cfg.claudeTimeout, DefaultPlannerModel),
 		ProbeHealth: func(ctx context.Context) error {
-			// /healthz validates the credentials file AND that the claude
+			// /healthz validates the credentials file AND that the Codex
 			// binary is in PATH with a working --version. The second check
 			// bounds to 2s so a hung install doesn't block orch dispatch.
 			if err := credentialsProbe(ctx, cfg.credentialsPath); err != nil {
 				return err
 			}
-			return claudeVersionProbe(ctx, 2*time.Second)
+			return codexVersionProbe(ctx, 2*time.Second)
 		},
 	}
 

@@ -37,7 +37,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/csuite/persona"
 )
 
-// TestIntegration_InboxToOutboxRoundTrip builds a trivial `claude` stub
+// TestIntegration_InboxToOutboxRoundTrip builds a trivial `codex` stub
 // binary whose main simply echoes its positional arg, prepends that
 // binary's directory to $PATH, starts the poller, and asserts the
 // inbox-to-outbox flow works end-to-end.
@@ -47,10 +47,12 @@ func TestIntegration_InboxToOutboxRoundTrip(t *testing.T) {
 	}
 
 	root := t.TempDir()
-	inbox := filepath.Join(root, "inbox")
-	outbox := filepath.Join(root, "outbox")
+	t.Setenv("HOME", root)
+	personaRoot := filepath.Join(root, ".drem-csuite", "seth")
+	inbox := filepath.Join(personaRoot, "inbox")
+	outbox := filepath.Join(personaRoot, "outbox")
 	archive := filepath.Join(inbox, ".archive")
-	state := filepath.Join(root, "state.md")
+	state := filepath.Join(personaRoot, "state.md")
 	prompt := filepath.Join(root, "prompts", "seth.md")
 	binDir := filepath.Join(root, "bin")
 
@@ -63,22 +65,22 @@ func TestIntegration_InboxToOutboxRoundTrip(t *testing.T) {
 		t.Fatalf("write prompt: %v", err)
 	}
 
-	// Build the stub `claude` binary. Keeping its source in a child
+	// Build the stub `codex` binary. Keeping its source in a child
 	// tempdir (not binDir) so the compiled binary is the only thing
 	// the PATH prefix exposes.
 	stubSrc := filepath.Join(root, "stub", "main.go")
 	if err := os.MkdirAll(filepath.Dir(stubSrc), 0o755); err != nil {
 		t.Fatalf("mkdir stub src: %v", err)
 	}
-	if err := os.WriteFile(stubSrc, []byte(stubClaudeSource), 0o644); err != nil {
+	if err := os.WriteFile(stubSrc, []byte(stubCodexSource), 0o644); err != nil {
 		t.Fatalf("write stub source: %v", err)
 	}
-	stubBin := filepath.Join(binDir, "claude")
+	stubBin := filepath.Join(binDir, "codex")
 	build := exec.Command("go", "build", "-o", stubBin, stubSrc)
 	build.Stdout = os.Stdout
 	build.Stderr = os.Stderr
 	if err := build.Run(); err != nil {
-		t.Fatalf("build stub claude: %v", err)
+		t.Fatalf("build stub codex: %v", err)
 	}
 
 	// Prepend binDir to PATH for the duration of the test.
@@ -99,7 +101,7 @@ func TestIntegration_InboxToOutboxRoundTrip(t *testing.T) {
 		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 
-	p, err := persona.New(cfg, persona.NewClaudeSpawner())
+	p, err := persona.New(cfg, persona.NewCodexSpawner())
 	if err != nil {
 		t.Fatalf("persona.New: %v", err)
 	}
@@ -195,30 +197,25 @@ func TestIntegration_InboxToOutboxRoundTrip(t *testing.T) {
 	}
 }
 
-// stubClaudeSource is a tiny Go program that mimics the minimum surface
-// of `claude -p` that the poller uses. It reads the user message from
-// stdin (the fix for the frontmatter argv-parsing bug means `-p` no
-// longer takes a positional body), scans os.Args for --system-prompt,
-// and echoes both to stdout before exiting 0. No auth, no network, no
-// dependencies.
-const stubClaudeSource = `package main
+// stubCodexSource is a tiny Go program that mimics the minimum surface
+// of `codex exec -` that the poller uses. It reads the full turn prompt from
+// stdin and writes a well-formed outbox file so the poller suppresses stdout.
+const stubCodexSource = `package main
 
 import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"time"
 )
 
 func main() {
-	args := os.Args[1:]
-	sysPrompt := ""
-	for i := 0; i < len(args); i++ {
-		if args[i] == "--system-prompt" && i+1 < len(args) {
-			sysPrompt = args[i+1]
-			i++
-		}
-	}
 	body, _ := io.ReadAll(os.Stdin)
-	fmt.Printf("stub-claude reply\nuser: %s\nsystem: %s\n", string(body), sysPrompt)
+	out := filepath.Join(os.Getenv("HOME"), ".drem-csuite", "seth", "outbox")
+	_ = os.MkdirAll(out, 0755)
+	name := time.Now().UTC().Format("20060102T150405Z") + "-seth-to-kyle-integration.md"
+	_ = os.WriteFile(filepath.Join(out, name), []byte("---\nfrom: seth\nto: kyle\n---\n\n"+string(body)), 0644)
+	fmt.Println(` + "`" + `{"type":"done"}` + "`" + `)
 }
 `

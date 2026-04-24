@@ -40,10 +40,8 @@ services:
       DREM_CLASSIFIER_URL: "http://drem-classifier:8090/classify"
       # Warm drem-planner endpoint — orch POSTs plan jobs here instead of
       # spawning per-task planner containers. The planner container
-      # bind-mounts the operator's Claude subscription credentials and
-      # shells out to the claude CLI per request. See
-      # plans/warm-planner-pivot.md §§2-4. Subscription-only auth (no
-      # API-key env passthrough anywhere in this generated compose).
+      # bind-mounts the operator's Codex auth file and shells out to
+      # codex exec per request.
       DREM_PLANNER_URL: "http://drem-planner:8090/plan"
       # Host path of the operator's Claude subscription credentials
       # file. Orch forwards this into every claude-backed worker spawn
@@ -52,6 +50,10 @@ services:
       # worker. Subscription-only auth — no API-key fallback. See
       # plans/worker-subscription-auth.md §§1, 6.
       DREM_WORKER_CREDS_PATH: "{{.WorkerCredsPath}}"
+      # Host path of the operator's Codex auth file. Orch forwards this
+      # into codex-backed worker spawn requests as CodexAuthMount; the
+      # spawner bind-mounts it read-only at /home/drem/.codex/auth.json.
+      DREM_WORKER_CODEX_AUTH_PATH: "{{.WorkerCodexAuthPath}}"
       # Host directory where orch atomically writes per-task prompt
       # files. The spawner (a separate container) later bind-mounts the
       # individual file read-only into each worker at
@@ -208,7 +210,7 @@ services:
     depends_on: [orch]
     restart: unless-stopped
 
-  # Each csuite-<persona> service bind-mounts two host paths read-only
+  # Each csuite-<persona> service bind-mounts auth + state paths read-only
   # or read-write so the containerized persona can (a) authenticate
   # against Claude via the operator's subscription credentials file —
   # NEVER an auth token or API key, per the subscription-only directive
@@ -259,13 +261,14 @@ services:
       CSUITE_WATCHER_TOKEN:
       CSUITE_WATCHER_TOKEN_FILE: "/run/secrets/csuite-watcher-token"
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
-      # Extend the poller's per-claude-p timeout from the 5-minute
+      # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CTO-synthesis and deep-analysis tasks
       # don't hit the default ceiling. See csuite-entrypoint.sh for
       # the env-var contract.
       DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      - {{.WorkerCodexAuthPath}}:/home/drem/.codex/auth.json:ro
       # Scoreboard item 33: bind-mount the csuite-watcher shared token
       # file read-only into the container. The persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE (set above) when CSUITE_WATCHER_TOKEN
@@ -303,13 +306,14 @@ services:
       CSUITE_WATCHER_TOKEN:
       CSUITE_WATCHER_TOKEN_FILE: "/run/secrets/csuite-watcher-token"
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
-      # Extend the poller's per-claude-p timeout from the 5-minute
+      # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CTO-synthesis and deep-analysis tasks
       # don't hit the default ceiling. See csuite-entrypoint.sh for
       # the env-var contract.
       DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      - {{.WorkerCodexAuthPath}}:/home/drem/.codex/auth.json:ro
       # Scoreboard item 33: bind-mount the csuite-watcher shared token
       # file read-only into the container. The persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE (set above) when CSUITE_WATCHER_TOKEN
@@ -347,13 +351,14 @@ services:
       CSUITE_WATCHER_TOKEN:
       CSUITE_WATCHER_TOKEN_FILE: "/run/secrets/csuite-watcher-token"
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
-      # Extend the poller's per-claude-p timeout from the 5-minute
+      # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CTO-synthesis and deep-analysis tasks
       # don't hit the default ceiling. See csuite-entrypoint.sh for
       # the env-var contract.
       DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      - {{.WorkerCodexAuthPath}}:/home/drem/.codex/auth.json:ro
       # Scoreboard item 33: bind-mount the csuite-watcher shared token
       # file read-only into the container. The persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE (set above) when CSUITE_WATCHER_TOKEN
@@ -399,13 +404,14 @@ services:
       CSUITE_WATCHER_TOKEN:
       CSUITE_WATCHER_TOKEN_FILE: "/run/secrets/csuite-watcher-token"
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
-      # Extend the poller's per-claude-p timeout from the 5-minute
+      # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CEO-level synthesis and deep-analysis
       # tasks don't hit the default ceiling. Same tuning as the other
       # three personas.
       DREM_CLAUDE_TIMEOUT: "60m"
     volumes:
       - {{.WorkerCredsPath}}:/home/drem/.claude/.credentials.json:ro
+      - {{.WorkerCodexAuthPath}}:/home/drem/.codex/auth.json:ro
       # Scoreboard item 33: bind-mount the csuite-watcher shared token
       # file read-only into the container. The persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE (set above) when CSUITE_WATCHER_TOKEN

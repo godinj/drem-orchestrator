@@ -156,7 +156,7 @@ func TestService_SpawnWorker_BareRepoReadWriteFlipsMount(t *testing.T) {
 
 	// Default (zero value) stays read-only.
 	_, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
-		Project:       "p", AgentType: "merger", WorkerID: "w1", Branch: "b",
+		Project: "p", AgentType: "merger", WorkerID: "w1", Branch: "b",
 		BareRepoMount: "/host/bare",
 	})
 	require.NoError(t, err)
@@ -261,6 +261,39 @@ func TestService_SpawnWorker_CredsMountMissingFileFails(t *testing.T) {
 	for _, c := range fake.Calls() {
 		require.NotEqual(t, "Spawn", c.Op, "runtime must not be called when creds file is missing")
 	}
+}
+
+func TestService_SpawnWorker_CodexAuthMountProducesReadOnlyFileMount(t *testing.T) {
+	fake, client, cleanup := startHarness(t)
+	defer cleanup()
+
+	authPath := filepath.Join(t.TempDir(), "auth.json")
+	require.NoError(t, os.WriteFile(authPath, []byte("{}"), 0o600))
+
+	_, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
+		Project:        "drem-orch",
+		AgentType:      "coder",
+		WorkerID:       "w-1",
+		Branch:         "feature/x",
+		Labels:         map[string]string{"drem.language": "go"},
+		CodexAuthMount: authPath,
+	})
+	require.NoError(t, err)
+
+	var spawn *container.Call
+	for _, c := range fake.Calls() {
+		if c.Op == "Spawn" {
+			call := c
+			spawn = &call
+			break
+		}
+	}
+	require.NotNil(t, spawn, "expected a Spawn call")
+	require.Contains(t, spawn.Spec.Mounts, container.Mount{
+		Source:   authPath,
+		Target:   "/home/drem/.codex/auth.json",
+		ReadOnly: true,
+	})
 }
 
 // TestService_SpawnWorker_PromptMountProducesReadOnlyMountAndEnv verifies

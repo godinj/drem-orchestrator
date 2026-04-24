@@ -7,6 +7,7 @@ max_concurrent_agents = 4
 orch_http_port        = "8080"
 project_language      = "go"
 opencode_bin              = "opencode"
+codex_bin                 = "codex"
 opencode_context_window   = 98304
 llama_server_endpoint     = "http://localhost:8081"
 test_command              = "go test ./..."
@@ -20,8 +21,9 @@ skip_constraint_gate  = false
   direct   = true  # bypass OpenCode, call SGLang API directly
 
 [agents.planner]
-  # model unset → claude CLI uses its configured default (currently Opus 4.7 1M)
-  effort = "medium"
+  provider = "codex"
+  model    = "gpt-5.5"
+  effort   = "high"
 
 [agents.prep]
   provider = "sglang-direct"
@@ -40,10 +42,14 @@ skip_constraint_gate  = false
   model    = "gemma4-26b"
 
 [agents.supervisor]
-  effort = "low"
+  provider = "codex"
+  model    = "gpt-5.5"
+  effort   = "medium"
 
 [agents.interactive_supervisor]
-  effort = "medium"
+  provider = "codex"
+  model    = "gpt-5.5"
+  effort   = "medium"
 
 [direct_tool_agent]
   enabled        = true

@@ -1,12 +1,11 @@
-// Claude CLI subprocess integration for the drem-planner server. Split out
+// Codex CLI subprocess integration for the drem-planner server. Split out
 // of server.go so the handler + validation logic stays readable and so
 // tests can stub exec.Command without touching the HTTP surface.
 //
 // Per plans/warm-planner-pivot.md §2 and §9 question 2, the planner
-// execs `claude` as a subprocess per /plan request with flags:
+// execs `codex` as a subprocess per /plan request with flags:
 //
-//	claude -p --output-format json --model claude-opus-4-6 \
-//	       [--permission-mode dangerously-skip-permissions]
+//	codex exec --json --model gpt-5.5 --output-last-message <tmp> -
 //
 // The prompt is piped on stdin; plan JSON is extracted from the CLI's
 // stdout. We intentionally don't shell-escape anything — exec.Cmd
@@ -19,24 +18,25 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
 )
 
-// DefaultPlannerModel is the Anthropic model the planner invokes by
+// DefaultPlannerModel is the Codex model the planner invokes by
 // default. Matches internal/capability/capability.go and all earlier
 // planner work so a single upgrade ripples everywhere.
-const DefaultPlannerModel = "claude-opus-4-6"
+const DefaultPlannerModel = "gpt-5.5"
 
 // claudeInvoker is the test seam for subprocess execution. The production
 // implementation (runRealClaude below) shells out; unit tests wire a stub
 // that returns pre-canned stdout/stderr/exitCode.
 type claudeInvoker func(ctx context.Context, prompt string, model string) (stdout, stderr []byte, exitCode int, err error)
 
-// runRealClaude is the production claudeInvoker. It launches `claude` with
-// the flag set §2 documents, feeds the prompt on stdin, and returns the
-// captured stdout/stderr plus exit code.
+// runRealClaude is the production planner invoker. It launches `codex exec`,
+// feeds the prompt on stdin, and wraps Codex's last message in the historical
+// planner envelope so the parsing path stays unchanged.
 //
 // The caller (newClaudePlanGen) imposes a timeout via ctx; runRealClaude
 // itself never hangs — the ctx cancel propagates through exec.CommandContext.
@@ -44,22 +44,24 @@ func runRealClaude(ctx context.Context, prompt string, model string) ([]byte, []
 	if model == "" {
 		model = DefaultPlannerModel
 	}
-	// Flag set captured here so it's easy to sync against the CLI's help
-	// output when a new version drops. Tested CLI version: 1.x-beta series
-	// (npm @anthropic-ai/claude-code, 2026-04-20).
-	//
-	// -p / --print         non-interactive mode, exit after first response
-	// --output-format json single JSON envelope on stdout
-	// --model <id>         pin Anthropic model
-	// --dangerously-skip-permissions  bypass per-tool approval prompts
-	//                                 (no human is at the terminal)
-	args := []string{
-		"-p",
-		"--output-format", "json",
-		"--model", model,
-		"--dangerously-skip-permissions",
+	out, err := os.CreateTemp("", "drem-planner-codex-*.txt")
+	if err != nil {
+		return nil, nil, -1, err
 	}
-	cmd := exec.CommandContext(ctx, "claude", args...)
+	outPath := out.Name()
+	_ = out.Close()
+	defer os.Remove(outPath)
+
+	args := []string{
+		"exec",
+		"--json",
+		"--sandbox", "danger-full-access",
+		"--ask-for-approval", "never",
+		"--model", model,
+		"--output-last-message", outPath,
+		"-",
+	}
+	cmd := exec.CommandContext(ctx, "codex", args...)
 	cmd.Stdin = strings.NewReader(prompt)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -69,7 +71,21 @@ func runRealClaude(ctx context.Context, prompt string, model string) ([]byte, []
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
 	}
-	return stdout.Bytes(), stderr.Bytes(), exitCode, runErr
+	if runErr != nil || exitCode != 0 {
+		return stdout.Bytes(), stderr.Bytes(), exitCode, runErr
+	}
+	lastMessage, readErr := os.ReadFile(outPath)
+	if readErr != nil {
+		return stdout.Bytes(), stderr.Bytes(), exitCode, readErr
+	}
+	env, marshalErr := json.Marshal(claudeEnvelope{
+		Result: string(lastMessage),
+		Usage:  claudeUsage{},
+	})
+	if marshalErr != nil {
+		return stdout.Bytes(), stderr.Bytes(), exitCode, marshalErr
+	}
+	return env, stderr.Bytes(), exitCode, nil
 }
 
 // newClaudePlanGen returns a Deps.GeneratePlan wired to the given invoker
@@ -101,10 +117,10 @@ func newClaudePlanGen(invoker claudeInvoker, timeout time.Duration, model string
 			if subCtx.Err() == context.DeadlineExceeded {
 				return nil, context.DeadlineExceeded
 			}
-			return nil, fmt.Errorf("claude subprocess (exit=%d): %w; stderr=%q", exitCode, runErr, truncateStderr(stderr))
+			return nil, fmt.Errorf("codex subprocess (exit=%d): %w; stderr=%q", exitCode, runErr, truncateStderr(stderr))
 		}
 		if exitCode != 0 {
-			return nil, fmt.Errorf("claude subprocess exited %d; stderr=%q", exitCode, truncateStderr(stderr))
+			return nil, fmt.Errorf("codex subprocess exited %d; stderr=%q", exitCode, truncateStderr(stderr))
 		}
 
 		// The CLI emits a JSON envelope on stdout; extract the plan and
@@ -116,7 +132,7 @@ func newClaudePlanGen(invoker claudeInvoker, timeout time.Duration, model string
 		// upstream bug, not a planner bug.
 		plan, tokensIn, tokensOut, parseErr := parseClaudeEnvelope(stdout)
 		if parseErr != nil {
-			return nil, fmt.Errorf("parse claude output: %w; raw=%q", parseErr, truncateStderr(stdout))
+			return nil, fmt.Errorf("parse codex output: %w; raw=%q", parseErr, truncateStderr(stdout))
 		}
 		return &planResult{
 			Plan:      plan,
@@ -155,7 +171,7 @@ func parseClaudeEnvelope(stdout []byte) (map[string]any, int, int, error) {
 		return nil, 0, 0, fmt.Errorf("envelope json: %w", err)
 	}
 	if env.IsError {
-		return nil, env.Usage.InputTokens, env.Usage.OutputTokens, fmt.Errorf("upstream claude CLI reported error: %s", env.Error)
+		return nil, env.Usage.InputTokens, env.Usage.OutputTokens, fmt.Errorf("upstream codex CLI reported error: %s", env.Error)
 	}
 	plan, err := extractPlanFromText(env.Result)
 	if err != nil {
@@ -189,7 +205,7 @@ func extractPlanFromText(text string) (map[string]any, error) {
 	start := strings.Index(trimmed, "{")
 	end := strings.LastIndex(trimmed, "}")
 	if start < 0 || end < 0 || end <= start {
-		return nil, fmt.Errorf("no JSON object found in claude result")
+		return nil, fmt.Errorf("no JSON object found in codex result")
 	}
 	if err := json.Unmarshal([]byte(trimmed[start:end+1]), &plan); err != nil {
 		return nil, fmt.Errorf("plan json: %w", err)
@@ -207,7 +223,7 @@ func truncateStderr(b []byte) string {
 	return string(b[:max]) + "...<truncated>"
 }
 
-// renderPlannerPrompt composes the text prompt the claude CLI is invoked
+// renderPlannerPrompt composes the text prompt the Codex CLI is invoked
 // with. The request body already carries full task + project context;
 // converting it to a prompt here keeps orch out of prompt-assembly
 // concerns and means the planner owns its own conversation shape.
@@ -252,17 +268,17 @@ func readAllBounded(r io.Reader, n int64) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(r, n))
 }
 
-// claudeVersionProbe shells out `claude --version` with a short timeout.
+// codexVersionProbe shells out `codex --version` with a short timeout.
 // /healthz uses this to catch the case where the container booted but the
 // CLI is broken (npm install failed, binary removed, etc.). A running
-// planner without a working claude would silently fail every /plan call
+// planner without a working Codex would silently fail every /plan call
 // at runtime; this probe surfaces it to the caller up front.
-func claudeVersionProbe(ctx context.Context, timeout time.Duration) error {
+func codexVersionProbe(ctx context.Context, timeout time.Duration) error {
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(probeCtx, "claude", "--version")
+	cmd := exec.CommandContext(probeCtx, "codex", "--version")
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("claude --version failed: %w", err)
+		return fmt.Errorf("codex --version failed: %w", err)
 	}
 	return nil
 }

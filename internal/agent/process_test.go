@@ -73,6 +73,38 @@ func TestStartAgentProcess(t *testing.T) {
 	}
 }
 
+func TestStartCodexProcess(t *testing.T) {
+	cwd := t.TempDir()
+	scriptDir := t.TempDir()
+	scriptPath := filepath.Join(scriptDir, "fake-codex")
+	script := "#!/bin/sh\ncat > /dev/null\necho '{\"type\":\"done\"}'\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write script: %v", err)
+	}
+
+	promptPath := filepath.Join(cwd, "prompt.md")
+	if err := os.WriteFile(promptPath, []byte("prompt content\n"), 0o644); err != nil {
+		t.Fatalf("write prompt: %v", err)
+	}
+
+	logDir := filepath.Join(cwd, ".codex", "agents", "agent-1")
+	p, err := StartCodexProcess(context.Background(), scriptPath, promptPath, cwd, []string{"--model", "gpt-5.5"}, logDir)
+	if err != nil {
+		t.Fatalf("StartCodexProcess: %v", err)
+	}
+
+	exitCode, err := p.Wait()
+	if err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0", exitCode)
+	}
+	if p.LogPath() != filepath.Join(logDir, "agent-output.jsonl") {
+		t.Fatalf("LogPath() = %q", p.LogPath())
+	}
+}
+
 func TestAgentProcess_SendExit(t *testing.T) {
 	cwd := t.TempDir()
 	scriptDir := t.TempDir()

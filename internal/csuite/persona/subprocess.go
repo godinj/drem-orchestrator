@@ -17,6 +17,12 @@ import (
 // logs).
 const stderrCaptureLimit = 4 * 1024
 
+// NewCodexSpawner returns a Spawner that launches Codex via
+// os/exec.CommandContext.
+func NewCodexSpawner() Spawner {
+	return SpawnerFunc(spawnCLI)
+}
+
 // NewClaudeSpawner returns a Spawner that launches `claude -p` via
 // os/exec.CommandContext. The returned spawner:
 //
@@ -39,10 +45,14 @@ const stderrCaptureLimit = 4 * 1024
 // The claude CLI picks up credentials from the bind-mounted
 // /home/drem/.claude/.credentials.json file.
 func NewClaudeSpawner() Spawner {
-	return SpawnerFunc(spawnClaude)
+	return SpawnerFunc(spawnCLI)
 }
 
 func spawnClaude(ctx context.Context, args []string, stdin io.Reader) ([]byte, int, error) {
+	return spawnCLI(ctx, args, stdin)
+}
+
+func spawnCLI(ctx context.Context, args []string, stdin io.Reader) ([]byte, int, error) {
 	if len(args) == 0 {
 		return nil, -1, fmt.Errorf("persona: empty spawner argv")
 	}
@@ -76,7 +86,7 @@ func spawnClaude(ctx context.Context, args []string, stdin io.Reader) ([]byte, i
 			// '---\nfrom: alex...'") in logs + state.md.
 			return appendDiagnostic(stdout.Bytes(), trimmed), exitErr.ExitCode(), nil
 		}
-		return stdout.Bytes(), -1, fmt.Errorf("claude -p launch failed: %w: stderr=%q", err, trimmed)
+		return stdout.Bytes(), -1, fmt.Errorf("%s launch failed: %w: stderr=%q", args[0], err, trimmed)
 	}
 	return stdout.Bytes(), 0, nil
 }

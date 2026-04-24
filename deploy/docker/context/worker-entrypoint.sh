@@ -14,14 +14,14 @@
 #      recovery, user stories 17, 18).
 #   3. Spawn drem-watchdog in the background; it auto-commits and pushes
 #      every --interval and immediately after any --test-cmd returns 0.
-#   4. Exec the configured harness (claude or opencode) so the harness
+#   4. Exec the configured harness (claude, opencode, or codex) so the harness
 #      becomes PID 1 from tini's perspective and receives signals directly.
 #
 # Environment contract (set by the spawner in Spec.Env):
 #
 #   DREM_BRANCH          feature branch to clone and push to (required)
 #   DREM_AGENT_ID        agent identifier used in watchdog heartbeats (required)
-#   DREM_AGENT_HARNESS   "claude" (default) or "opencode"
+#   DREM_AGENT_HARNESS   "claude" (default), "opencode", or "codex"
 #   DREM_TEST_CMD        optional test command the watchdog will run on cadence
 #   DREM_PROMPT_PATH     absolute path (inside the container) to the prompt the
 #                        spawner wrote before starting the container
@@ -61,8 +61,8 @@ require_env DREM_AGENT_ID
 
 HARNESS="${DREM_AGENT_HARNESS:-claude}"
 case "${HARNESS}" in
-    claude|opencode) ;;
-    *) die "unsupported DREM_AGENT_HARNESS='${HARNESS}' (expected 'claude' or 'opencode')" ;;
+    claude|opencode|codex) ;;
+    *) die "unsupported DREM_AGENT_HARNESS='${HARNESS}' (expected 'claude', 'opencode', or 'codex')" ;;
 esac
 
 BARE_REPO="${DREM_REMOTE_URL:-/bare}"
@@ -157,5 +157,20 @@ case "${HARNESS}" in
             exec opencode "${oc_args[@]}" "$(cat "${PROMPT_PATH}")"
         fi
         die "opencode requires DREM_PROMPT_PATH (non-interactive harness)"
+        ;;
+
+    codex)
+        codex_args=(exec --json --sandbox danger-full-access --ask-for-approval never --cd "${WORK_DIR}")
+        if [[ -n "${DREM_MODEL:-}" ]]; then
+            codex_args+=(--model "${DREM_MODEL}")
+        fi
+        if [[ -n "${DREM_EFFORT:-}" ]]; then
+            codex_args+=(-c "model_reasoning_effort=\"${DREM_EFFORT}\"")
+        fi
+        if [[ -n "${PROMPT_PATH}" && -f "${PROMPT_PATH}" ]]; then
+            log "execing codex with prompt from ${PROMPT_PATH}"
+            exec codex "${codex_args[@]}" - < "${PROMPT_PATH}"
+        fi
+        die "codex requires DREM_PROMPT_PATH (non-interactive harness)"
         ;;
 esac

@@ -214,6 +214,10 @@ services:
       # from $HOME/.claude/.credentials.json so orch's forwarded
       # CredsMount and spawner's stat hit the same inode.
       - ${HOME}/.claude:${HOME}/.claude:ro
+      # Host-identical Codex auth path for codex-backed workers. The
+      # spawner pre-flights SpawnWorkerParams.CodexAuthMount before asking
+      # Docker to bind-mount the file into /home/drem/.codex/auth.json.
+      - ${HOME}/.codex:${HOME}/.codex:ro
       # Same host-identical pattern for per-project prompts. Orch writes
       # the rendered worker prompt to
       # $HOME/.drem/projects/<project>/prompts/<task-uuid>.md and passes
@@ -303,23 +307,14 @@ services:
       start_period: 10s
 
   # ---------- drem-planner: warm HTTP planner ----------
-  # Serves POST /plan for orch when a task reaches PLANNING with
-  # provider=claude. Single replica, stateless between requests — the
-  # binary execs the `claude` CLI as a subprocess per /plan call and
+  # Serves POST /plan for orch when a task reaches PLANNING. Single
+  # replica, stateless between requests — the binary execs the `codex`
+  # CLI as a subprocess per /plan call and
   # returns the resulting plan.json inline in the HTTP response. See
   # plans/warm-planner-pivot.md for the design.
   #
-  # Auth is subscription-only: ~/.claude/.credentials.json is bind-mounted
-  # read-only from the host operator's home into /home/drem/.claude. Host
-  # operator owns OAuth refresh via `claude login`; the container reads
-  # fresh creds on each /plan call. Planner /healthz validates the file
-  # is readable AND `claude --version` returns in <2s; failures flip the
-  # compose healthcheck to unhealthy so orch dispatch can fail fast on
-  # /healthz probe before eating a 5-minute claude timeout.
-  #
-  # No ANTHROPIC_API_KEY passthrough. Per operator direction 2026-04-20:
-  # subscription-only, so all claude-backed roles share the Max
-  # rate-limit pool.
+  # Auth comes from the host operator's Codex login: ~/.codex/auth.json is
+  # bind-mounted read-only into /home/drem/.codex/auth.json.
   drem-planner:
     build:
       context: ../..
@@ -336,14 +331,10 @@ services:
       # open on missing-token when the env is unset.
       DREM_AGENTMON_TOKEN: "${DREM_AGENTMON_TOKEN:-}"
     volumes:
-      # Read-only bind-mount of the operator's Claude subscription creds.
-      # Mirrors the csuite agents pattern (compose.override.yml in
-      # ~/.drem/projects/drem-orchestrator/). Read-only so the container
-      # can't write refresh tokens the host then has to reconcile — host
-      # claude CLI interactive sessions own refresh; container just reads.
+      # Read-only bind-mount of the operator's Codex auth file.
       - type: bind
-        source: ${HOME}/.claude/.credentials.json
-        target: /home/drem/.claude/.credentials.json
+        source: ${HOME}/.codex/auth.json
+        target: /home/drem/.codex/auth.json
         read_only: true
     labels:
       drem.scope: "global"

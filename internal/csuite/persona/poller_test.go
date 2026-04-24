@@ -219,17 +219,19 @@ func TestPoller_PicksUpInboxFile(t *testing.T) {
 	// the body is fed via stdin. This prevents claude's CLI flag parser
 	// from mistaking a frontmatter `---` for a flag.
 	wantArgv := []string{
-		"claude",
-		"--dangerously-skip-permissions",
-		"-p",
-		"--system-prompt", "Seth system prompt body.",
-		"--output-format", "text",
+		"codex",
+		"exec",
+		"--json",
+		"--sandbox", "danger-full-access",
+		"--ask-for-approval", "never",
+		"--cd", "/home/drem",
+		"-",
 	}
 	if !equalArgv(argv, wantArgv) {
 		t.Fatalf("argv mismatch\nwant: %v\ngot:  %v", wantArgv, argv)
 	}
-	if string(calls[0].stdin) != "hi persona" {
-		t.Fatalf("stdin mismatch\nwant: %q\ngot:  %q", "hi persona", string(calls[0].stdin))
+	if !strings.Contains(string(calls[0].stdin), "hi persona") {
+		t.Fatalf("stdin mismatch: got %q", string(calls[0].stdin))
 	}
 
 	// Outbox must contain exactly one file whose name includes the persona.
@@ -285,11 +287,11 @@ func TestPoller_OrderingByMtime(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 	// After the stdin-pipe fix, the message body is in call.stdin, not argv.
-	if string(calls[0].stdin) != "old" {
+	if !strings.Contains(string(calls[0].stdin), "old") {
 		t.Fatalf("first spawn should carry the older message, got stdin=%q argv=%v",
 			string(calls[0].stdin), calls[0].argv)
 	}
-	if string(calls[1].stdin) != "new" {
+	if !strings.Contains(string(calls[1].stdin), "new") {
 		t.Fatalf("second spawn should carry the newer message, got stdin=%q argv=%v",
 			string(calls[1].stdin), calls[1].argv)
 	}
@@ -349,19 +351,18 @@ func TestPoller_FrontmatterBodyGoesViaStdin(t *testing.T) {
 			t.Fatalf("frontmatter metadata leaked into argv element %q", a)
 		}
 		// `---` is especially diagnostic of the old shape.
-		if strings.HasPrefix(a, "---") && a != "--dangerously-skip-permissions" {
+		if strings.HasPrefix(a, "---") {
 			t.Fatalf("argv element %q starts with --- which claude CLI misparses as a flag", a)
 		}
 	}
 
 	// And must appear verbatim in stdin.
-	if string(call.stdin) != body {
+	if !strings.Contains(string(call.stdin), body) {
 		t.Fatalf("frontmatter body not on stdin\nwant: %q\ngot:  %q", body, string(call.stdin))
 	}
 
-	// Secondary invariant: the argv still carries -p, --system-prompt,
-	// and --output-format so we don't regress the invocation shape.
-	want := []string{"claude", "--dangerously-skip-permissions", "-p", "--system-prompt", "Alex system prompt.", "--output-format", "text"}
+	// Secondary invariant: the argv uses Codex stdin mode.
+	want := []string{"codex", "exec", "--json", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "--cd", "/home/drem", "-"}
 	if !equalArgv(call.argv, want) {
 		t.Fatalf("argv shape regressed\nwant: %v\ngot:  %v", want, call.argv)
 	}

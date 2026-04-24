@@ -204,3 +204,53 @@ func (r *Runner) startOpenCodeAgent(agentID, taskID uuid.UUID, worktreePath, bra
 
 	return nil
 }
+
+// startCodexAgent sets up and starts a Codex CLI agent subprocess. Codex
+// agents use their own per-agent .codex directory and skip Claude hooks,
+// status-line scripts, and compaction signals.
+func (r *Runner) startCodexAgent(agentID, taskID uuid.UUID, worktreePath, branch, sessionName, prompt string, agentType model.AgentType) error {
+	codexDir := filepath.Join(worktreePath, ".codex", "agents", agentID.String())
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		return fmt.Errorf("start codex agent: mkdir .codex/agents: %w", err)
+	}
+
+	promptPath := filepath.Join(codexDir, "agent-prompt.md")
+	if err := os.WriteFile(promptPath, []byte(prompt), 0o644); err != nil {
+		return fmt.Errorf("start codex agent: write prompt: %w", err)
+	}
+
+	if err := writeAgentMetadata(codexDir, agentID, taskID); err != nil {
+		return fmt.Errorf("start codex agent: write agent metadata: %w", err)
+	}
+
+	cliConfig := r.agentConfigs(agentType)
+	proc, err := StartCodexProcess(context.Background(), r.codexBin, promptPath, worktreePath, cliConfig.CLIArgs(), codexDir)
+	if err != nil {
+		return fmt.Errorf("start codex agent: start subprocess: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	ra := &RunningAgent{
+		AgentID:      agentID,
+		TaskID:       taskID,
+		WorktreePath: worktreePath,
+		Branch:       branch,
+		TmuxSession:  sessionName,
+		Process:      proc,
+		LogPath:      proc.LogPath(),
+		Provider:     model.ProviderCodex,
+		StartedAt:    time.Now(),
+		cancel:       cancel,
+	}
+
+	r.mu.Lock()
+	r.running[agentID] = ra
+	r.mu.Unlock()
+
+	go r.monitorAgent(ctx, agentID, proc, worktreePath)
+	go r.heartbeatLoop(ctx, agentID)
+	go r.contextMonitorLoop(ctx, agentID, worktreePath)
+
+	return nil
+}

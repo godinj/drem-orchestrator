@@ -180,6 +180,78 @@ func StartOpenCodeProcess(ctx context.Context, openCodeBin, promptPath, cwd stri
 	return p, nil
 }
 
+// StartCodexProcess starts a Codex CLI subprocess in non-interactive mode.
+// extraArgs carries provider-specific flags like ["--model", "gpt-5.5",
+// "-c", "model_reasoning_effort=\"high\""]. The prompt file is passed on
+// stdin using `codex exec -`; JSONL events are captured to agent-output.jsonl.
+func StartCodexProcess(ctx context.Context, codexBin, promptPath, cwd string, extraArgs []string, logDir string) (*AgentProcess, error) {
+	if logDir == "" {
+		logDir = filepath.Join(cwd, ".codex")
+	}
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		return nil, fmt.Errorf("start codex process: mkdir log dir: %w", err)
+	}
+
+	logPath := filepath.Join(logDir, "agent-output.jsonl")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return nil, fmt.Errorf("start codex process: create log: %w", err)
+	}
+
+	args := []string{"exec", "--json", "--sandbox", "danger-full-access", "--ask-for-approval", "never", "--cd", cwd}
+	args = append(args, extraArgs...)
+	args = append(args, "-")
+	cmd := exec.CommandContext(ctx, codexBin, args...)
+	cmd.Dir = cwd
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		logFile.Close()
+		return nil, fmt.Errorf("start codex process: stdin pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		stdinPipe.Close()
+		logFile.Close()
+		return nil, fmt.Errorf("start codex process: start: %w", err)
+	}
+
+	p := &AgentProcess{
+		cmd:     cmd,
+		logFile: logFile,
+		logPath: logPath,
+		pid:     cmd.Process.Pid,
+		done:    make(chan struct{}),
+	}
+
+	go func() {
+		defer stdinPipe.Close()
+		promptData, err := os.ReadFile(promptPath)
+		if err == nil {
+			_, _ = stdinPipe.Write(promptData)
+		}
+	}()
+
+	go func() {
+		err := cmd.Wait()
+		p.mu.Lock()
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				p.exitCode = exitErr.ExitCode()
+			} else {
+				p.exitCode = -1
+			}
+		}
+		p.mu.Unlock()
+		logFile.Close()
+		close(p.done)
+	}()
+
+	return p, nil
+}
+
 // SendExit sends SIGTERM to the process for graceful shutdown.
 // In -p mode stdin is closed after the prompt is written, so we use a signal
 // rather than writing /exit to stdin.

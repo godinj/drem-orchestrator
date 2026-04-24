@@ -8,8 +8,8 @@
 # top of this base and sets CSUITE_AGENT to select its persona prompt.
 #
 # The base lays down:
-#   - The Claude Code CLI (@anthropic-ai/claude-code) pinned to the same
-#     line as the worker images (deploy/docker/worker-base.Dockerfile).
+#   - The Claude Code CLI and OpenAI Codex CLI pinned to the same line as
+#     the worker images (deploy/docker/worker-base.Dockerfile).
 #   - The persona prompt bundle under /opt/csuite/prompts/ (mike.md,
 #     alex.md, seth.md, kyle.md).
 #   - A non-root user `drem` (UID 1000) so file ownership matches the
@@ -43,6 +43,7 @@ FROM debian:bookworm-slim
 # the host CLI can silently diverge agent behaviour from operator
 # expectations. Rebuild both images on every bump.
 ARG CLAUDE_CODE_VERSION=2.1.116
+ARG CODEX_VERSION=latest
 ARG NODE_MAJOR=20
 ARG DREM_UID=1000
 ARG DREM_GID=1000
@@ -74,7 +75,7 @@ RUN apt-get update \
         tini \
  && rm -rf /var/lib/apt/lists/*
 
-# ---- Node.js + Claude CLI --------------------------------------------------
+# ---- Node.js + Claude/Codex CLI -------------------------------------------
 RUN set -eux; \
     curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash - ; \
     apt-get install -y --no-install-recommends nodejs ; \
@@ -83,6 +84,11 @@ RUN set -eux; \
         npm install -g @anthropic-ai/claude-code ; \
     else \
         npm install -g "@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}" ; \
+    fi ; \
+    if [ "$CODEX_VERSION" = "latest" ]; then \
+        npm install -g @openai/codex ; \
+    else \
+        npm install -g "@openai/codex@${CODEX_VERSION}" ; \
     fi ; \
     npm cache clean --force
 
@@ -126,7 +132,7 @@ RUN /usr/sbin/groupadd --gid "${DREM_GID}" drem \
 # container start; that file-level mount lands as a sibling of
 # settings.json and does not clobber it.
 COPY --chown=drem:drem claude-code-onboarding.json /home/drem/.claude.json
-RUN install -d -o drem -g drem -m 0700 /home/drem/.claude \
+RUN install -d -o drem -g drem -m 0700 /home/drem/.claude /home/drem/.codex \
  && chmod 0600 /home/drem/.claude.json
 COPY --chown=drem:drem claude-code-settings.json /home/drem/.claude/settings.json
 RUN chmod 0644 /home/drem/.claude/settings.json

@@ -6,6 +6,7 @@ type ProviderType string
 const (
 	ProviderClaude       ProviderType = "claude"
 	ProviderOpenCode     ProviderType = "opencode"
+	ProviderCodex        ProviderType = "codex"
 	ProviderSGLangDirect ProviderType = "sglang-direct"
 )
 
@@ -32,6 +33,8 @@ func (c AgentCLIConfig) CLIArgs() []string {
 	switch c.EffectiveProvider() {
 	case ProviderOpenCode:
 		return c.openCodeCLIArgs()
+	case ProviderCodex:
+		return c.codexCLIArgs()
 	case ProviderSGLangDirect:
 		return nil
 	default:
@@ -59,5 +62,16 @@ func (c AgentCLIConfig) openCodeCLIArgs() []string {
 		args = append(args, "--variant", c.Effort)
 	}
 	args = append(args, "--format", "json", "--agent", "build")
+	return args
+}
+
+func (c AgentCLIConfig) codexCLIArgs() []string {
+	var args []string
+	if c.Model != "" {
+		args = append(args, "--model", c.Model)
+	}
+	if c.Effort != "" {
+		args = append(args, "-c", "model_reasoning_effort=\""+c.Effort+"\"")
+	}
 	return args
 }

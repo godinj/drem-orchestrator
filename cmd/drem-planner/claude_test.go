@@ -121,7 +121,7 @@ func TestClaudePlanGen_MalformedEnvelope(t *testing.T) {
 
 	_, err := gen(context.Background(), minimalValidRequest())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "parse claude output")
+	assert.Contains(t, err.Error(), "parse codex output")
 }
 
 // TestExtractPlanFromText_StripsMarkdownFences verifies defensive parsing:

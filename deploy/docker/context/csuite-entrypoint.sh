@@ -4,10 +4,10 @@
 # container images (mike, alex, seth, kyle).
 #
 # Replaces deploy/docker/context/csuite-run.sh (which was the Wave-1
-# "exec claude --print" entrypoint). Instead of launching a long-lived
-# interactive claude process, this wrapper execs the csuite-persona
+# interactive-model entrypoint). Instead of launching a long-lived
+# interactive model process, this wrapper execs the csuite-persona
 # headless poller (cmd/csuite-persona) which polls the persona's inbox
-# and spawns `claude -p` once per message. See
+# and spawns `codex exec` once per message. See
 # plans/csuite-persona-pivot.md and docs/containerization/install.md
 # "C-Suite personas: the persona poller runtime" for the design.
 #
@@ -20,11 +20,9 @@
 #                     the poller itself; available to any claude -p
 #                     invocation for tool-level HTTP calls)
 #
-# Subscription-only auth: this script NEVER sets CLAUDE_CODE_OAUTH_TOKEN,
-# ANTHROPIC_API_KEY, or ANTHROPIC_AUTH_TOKEN. The claude CLI inside each
-# invocation reads /home/drem/.claude/.credentials.json which the compose
-# template bind-mounts read-only. See CLAUDE.md "Authentication:
-# subscription-only".
+# Auth is supplied by bind-mounted CLI state; the compose template mounts
+# /home/drem/.codex/auth.json for Codex and keeps the legacy Claude
+# credential mount for rollback compatibility.
 
 set -euo pipefail
 
@@ -52,11 +50,11 @@ echo "csuite-entrypoint: starting persona=${CSUITE_AGENT} project=${DREM_PROJECT
 # The poller derives these from -persona when the corresponding flags
 # are empty, so we only need to pass -persona here.
 #
-# DREM_CLAUDE_TIMEOUT (optional) overrides the poller's default 5-minute
+# DREM_CLAUDE_TIMEOUT (optional, retained for compatibility) overrides the poller's default 5-minute
 # per-invocation timeout. Accepts any Go duration string (e.g. "30m",
 # "1h", "90m"). Unset falls back to persona.DefaultClaudeTimeout
 # (5 min). Motivation: CTO-synthesis tasks routinely exceed 5 min of
-# claude -p wall-clock; 5 min bounds a single transactional reply but
+# model wall-clock; 5 min bounds a single transactional reply but
 # is too tight for deep analysis passes. Per-persona tuning is done by
 # setting DREM_CLAUDE_TIMEOUT in the project compose template
 # (internal/projects/templates/project-compose.yml.tmpl).

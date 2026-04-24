@@ -82,12 +82,12 @@ func (a AgentsConfig) ForAgentType(at model.AgentType) model.AgentCLIConfig {
 
 // SupervisorCLIConfig returns the AgentCLIConfig for synchronous supervisor calls.
 func (a AgentsConfig) SupervisorCLIConfig() model.AgentCLIConfig {
-	return model.AgentCLIConfig{Model: a.Supervisor.Model, Effort: a.Supervisor.Effort}
+	return model.AgentCLIConfig{Provider: model.ProviderType(a.Supervisor.Provider), Model: a.Supervisor.Model, Effort: a.Supervisor.Effort}
 }
 
 // InteractiveSupervisorCLIConfig returns the AgentCLIConfig for interactive supervisor sessions.
 func (a AgentsConfig) InteractiveSupervisorCLIConfig() model.AgentCLIConfig {
-	return model.AgentCLIConfig{Model: a.InteractiveSupervisor.Model, Effort: a.InteractiveSupervisor.Effort}
+	return model.AgentCLIConfig{Provider: model.ProviderType(a.InteractiveSupervisor.Provider), Model: a.InteractiveSupervisor.Model, Effort: a.InteractiveSupervisor.Effort}
 }
 
 // DirectToolAgentTOMLConfig mirrors the [direct_tool_agent] TOML block used
@@ -112,6 +112,7 @@ type Config struct {
 	DefaultBranch       string        `toml:"default_branch"`
 	ClaudeBin           string        `toml:"claude_bin"`
 	OpenCodeBin         string        `toml:"opencode_bin"`
+	CodexBin            string        `toml:"codex_bin"`
 	MaxConcurrentAgents int           `toml:"max_concurrent_agents"`
 	TickInterval        time.Duration `toml:"tick_interval"`
 	HeartbeatInterval   time.Duration `toml:"heartbeat_interval"`
@@ -200,6 +201,7 @@ func DefaultConfig() Config {
 		DefaultBranch:       "master",
 		ClaudeBin:           "claude",
 		OpenCodeBin:         "opencode",
+		CodexBin:            "codex",
 		MaxConcurrentAgents: 5,
 		TickInterval:        5 * time.Second,
 		HeartbeatInterval:   30 * time.Second,

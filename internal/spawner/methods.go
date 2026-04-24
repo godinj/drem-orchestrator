@@ -25,6 +25,10 @@ const bareRepoMountPath = "/bare"
 // the claude CLI resolves it without CLAUDE_CONFIG_DIR gymnastics.
 const credsMountPath = "/home/drem/.claude/.credentials.json"
 
+// codexAuthMountPath is where the host operator's Codex auth file is
+// bind-mounted inside a codex-harness worker.
+const codexAuthMountPath = "/home/drem/.codex/auth.json"
+
 // promptMountPath is where the orchestrator-rendered task prompt file
 // is bind-mounted inside a claude-harness worker. The value is
 // deterministic at the spawner boundary: the container-side path is
@@ -92,6 +96,18 @@ func (s *Service) SpawnWorker(ctx context.Context, p SpawnWorkerParams) (SpawnWo
 		mounts = append(mounts, container.Mount{
 			Source:   p.CredsMount,
 			Target:   credsMountPath,
+			ReadOnly: true,
+		})
+	}
+	if p.CodexAuthMount != "" {
+		if _, err := os.Stat(p.CodexAuthMount); err != nil {
+			return SpawnWorkerResult{}, fmt.Errorf(
+				"codex auth file not found at %s: run `codex login` on host: %w",
+				p.CodexAuthMount, err)
+		}
+		mounts = append(mounts, container.Mount{
+			Source:   p.CodexAuthMount,
+			Target:   codexAuthMountPath,
 			ReadOnly: true,
 		})
 	}

@@ -57,6 +57,16 @@ func TestAgentCLIConfig_CLIArgs(t *testing.T) {
 			cfg:  AgentCLIConfig{Provider: ProviderOpenCode},
 			want: []string{"--format", "json", "--agent", "build"},
 		},
+		{
+			name: "codex: model and effort maps to reasoning config",
+			cfg:  AgentCLIConfig{Provider: ProviderCodex, Model: "gpt-5.5", Effort: "high"},
+			want: []string{"--model", "gpt-5.5", "-c", "model_reasoning_effort=\"high\""},
+		},
+		{
+			name: "codex: effort only",
+			cfg:  AgentCLIConfig{Provider: ProviderCodex, Effort: "medium"},
+			want: []string{"-c", "model_reasoning_effort=\"medium\""},
+		},
 	}
 
 	for _, tt := range tests {
@@ -83,6 +93,7 @@ func TestAgentCLIConfig_EffectiveProvider(t *testing.T) {
 		{"empty defaults to claude", "", ProviderClaude},
 		{"explicit claude", ProviderClaude, ProviderClaude},
 		{"explicit opencode", ProviderOpenCode, ProviderOpenCode},
+		{"explicit codex", ProviderCodex, ProviderCodex},
 	}
 
 	for _, tt := range tests {

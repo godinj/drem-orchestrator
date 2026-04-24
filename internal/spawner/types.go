@@ -39,8 +39,11 @@ import "time"
 // credentials; the spawner pre-checks the host path exists before
 // creating the container and fails SpawnWorker fast if it does not.
 // Leave empty for agent types that do not run claude (notably merger,
-// which is a Go binary). PromptMount, when non-empty, is a host file
-// path bind-mounted read-only into the worker at /home/drem/.drem/prompt.md;
+// which is a Go binary). CodexAuthMount, when non-empty, is a host
+// ~/.codex/auth.json bind-mounted read-only into the worker at
+// /home/drem/.codex/auth.json for codex-harness workers. PromptMount,
+// when non-empty, is a host file path bind-mounted read-only into the
+// worker at /home/drem/.drem/prompt.md;
 // the spawner also sets DREM_PROMPT_PATH in the worker env to that
 // container-side path deterministically so the entrypoint's claude
 // invocation finds the prompt without per-caller env plumbing. The
@@ -61,6 +64,7 @@ type SpawnWorkerParams struct {
 	BareRepoReadWrite bool              `json:"bare_repo_read_write,omitempty"`
 	Cmd               []string          `json:"cmd,omitempty"`
 	CredsMount        string            `json:"creds_mount,omitempty"`
+	CodexAuthMount    string            `json:"codex_auth_mount,omitempty"`
 	PromptMount       string            `json:"prompt_mount,omitempty"`
 }
 

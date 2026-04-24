@@ -101,6 +101,7 @@ type Runner struct {
 	worktree              WorktreeManager
 	claudeBin             string
 	openCodeBin           string
+	codexBin              string
 	maxConcurrent         int
 	agentConfigs          func(model.AgentType) model.AgentCLIConfig // per-type CLI flags
 	metricsRecorder       MetricsRecorder                            // optional; nil means no time-series recording
@@ -161,11 +162,20 @@ func NewRunner(db *gorm.DB, tm TmuxSessionManager, wt WorktreeManager, claudeBin
 		worktree:        wt,
 		claudeBin:       claudeBin,
 		openCodeBin:     openCodeBin,
+		codexBin:        "codex",
 		maxConcurrent:   maxConcurrent,
 		agentConfigs:    agentConfigs,
 		running:         make(map[uuid.UUID]*RunningAgent),
 		completions:     make(chan Completion, maxConcurrent),
 		semaphore:       make(chan struct{}, maxConcurrent),
+	}
+}
+
+// SetCodexBin overrides the Codex CLI binary path used by provider=codex.
+// Empty values keep the default "codex".
+func (r *Runner) SetCodexBin(codexBin string) {
+	if codexBin != "" {
+		r.codexBin = codexBin
 	}
 }
 
@@ -431,8 +441,11 @@ func (r *Runner) spawnNewAgent(task *model.Task, worktreePath, dbBranch string, 
 // the resolved CLI config for the agent type.
 func (r *Runner) startAgent(agentID, taskID uuid.UUID, worktreePath, branch, sessionName, prompt string, agentType model.AgentType) error {
 	cliConfig := r.agentConfigs(agentType)
-	if cliConfig.EffectiveProvider() == model.ProviderOpenCode {
+	switch cliConfig.EffectiveProvider() {
+	case model.ProviderOpenCode:
 		return r.startOpenCodeAgent(agentID, taskID, worktreePath, branch, sessionName, prompt, agentType)
+	case model.ProviderCodex:
+		return r.startCodexAgent(agentID, taskID, worktreePath, branch, sessionName, prompt, agentType)
 	}
 	return r.startClaudeAgent(agentID, taskID, worktreePath, branch, sessionName, prompt, agentType)
 }
@@ -495,7 +508,7 @@ func (r *Runner) GetAgentOutput(agentID uuid.UUID) (string, error) {
 		if agent.WorktreePath == "" {
 			return "", nil
 		}
-		if agent.Provider == string(model.ProviderOpenCode) {
+		if agent.Provider == string(model.ProviderOpenCode) || agent.Provider == string(model.ProviderCodex) {
 			// Check Config for per-agent log path (stored at spawn time);
 			// fall back to legacy shared path for older agents.
 			if agent.Config != nil {
@@ -504,7 +517,11 @@ func (r *Runner) GetAgentOutput(agentID uuid.UUID) (string, error) {
 				}
 			}
 			if logPath == "" {
-				logPath = filepath.Join(agent.WorktreePath, ".opencode", "agent-output.jsonl")
+				if agent.Provider == string(model.ProviderCodex) {
+					logPath = filepath.Join(agent.WorktreePath, ".codex", "agent-output.jsonl")
+				} else {
+					logPath = filepath.Join(agent.WorktreePath, ".opencode", "agent-output.jsonl")
+				}
 			}
 		} else {
 			logPath = filepath.Join(agent.WorktreePath, ".claude", "agent-output.log")

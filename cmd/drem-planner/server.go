@@ -40,13 +40,13 @@ import (
 // can evolve the shape without forcing a planner rebuild — the planner
 // passes them opaquely into the claude prompt.
 type planRequest struct {
-	TaskID        string         `json:"task_id"`
-	Task          map[string]any `json:"task"`
-	Project       map[string]any `json:"project"`
-	WorktreePath  string         `json:"worktree_path"`
-	Comments      []any          `json:"comments,omitempty"`
-	TargetCoder   targetCoder    `json:"target_coder,omitempty"`
-	Effort        string         `json:"effort,omitempty"`
+	TaskID       string         `json:"task_id"`
+	Task         map[string]any `json:"task"`
+	Project      map[string]any `json:"project"`
+	WorktreePath string         `json:"worktree_path"`
+	Comments     []any          `json:"comments,omitempty"`
+	TargetCoder  targetCoder    `json:"target_coder,omitempty"`
+	Effort       string         `json:"effort,omitempty"`
 }
 
 type targetCoder struct {
@@ -99,10 +99,10 @@ type Server struct {
 	Deps   Deps
 	Logger *slog.Logger
 
-	http               *httpserver.Server
-	tokensIn           *expvar.Int
-	tokensOut          *expvar.Int
-	credentialsOK      *expvar.Int
+	http          *httpserver.Server
+	tokensIn      *expvar.Int
+	tokensOut     *expvar.Int
+	credentialsOK *expvar.Int
 }
 
 // plannerMetricsOnce dedupes planner-specific counters across repeated
@@ -358,25 +358,25 @@ func stubGeneratePlan(ctx context.Context, req planRequest) (*planResult, error)
 // Credentials probe
 // ---------------------------------------------------------------------------
 
-// defaultCredentialsPath returns the standard subscription-auth credentials
-// file path inside the container ($HOME/.claude/.credentials.json). Keeping
+// defaultCredentialsPath returns the standard Codex auth file path inside the
+// container ($HOME/.codex/auth.json). Keeping
 // it as a function (not a constant) lets tests override HOME.
 func defaultCredentialsPath() string {
-	base := os.Getenv("CLAUDE_CONFIG_DIR")
+	base := os.Getenv("CODEX_HOME")
 	if base == "" {
 		home := os.Getenv("HOME")
 		if home == "" {
 			home = "/home/drem"
 		}
-		base = filepath.Join(home, ".claude")
+		base = filepath.Join(home, ".codex")
 	}
-	return filepath.Join(base, ".credentials.json")
+	return filepath.Join(base, "auth.json")
 }
 
 // credentialsProbe returns nil when the credentials file is readable,
-// signalling that the container has a usable subscription token. /healthz
-// gates on this — a failed probe means the operator hasn't run
-// `claude login` on the host or the bind-mount broke.
+// signalling that the container has usable Codex auth. /healthz gates on
+// this — a failed probe means the operator hasn't run `codex login` on the
+// host or the bind-mount broke.
 func credentialsProbe(ctx context.Context, path string) error {
 	f, err := os.Open(path)
 	if err != nil {

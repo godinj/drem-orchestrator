@@ -23,6 +23,11 @@ import (
 // consumed by buildSpawnContext for every claude-backed worker.
 const workerCredsPathEnv = "DREM_WORKER_CREDS_PATH"
 
+// workerCodexAuthPathEnv is the host path of the operator's Codex auth file.
+// It is set by generated compose for codex-backed workers and bind-mounted
+// read-only at /home/drem/.codex/auth.json by the spawner.
+const workerCodexAuthPathEnv = "DREM_WORKER_CODEX_AUTH_PATH"
+
 // workerPromptRootEnv is the environment variable the per-project
 // compose template passes to orch carrying the host directory under
 // which per-task prompt files are written. The spawner later bind-mounts
@@ -81,6 +86,19 @@ func resolveWorkerCredsPath() string {
 		return ""
 	}
 	return filepath.Join(home, ".claude", ".credentials.json")
+}
+
+// resolveWorkerCodexAuthPath returns the host path of the Codex auth file for
+// codex-backed workers.
+func resolveWorkerCodexAuthPath() string {
+	if p := os.Getenv(workerCodexAuthPathEnv); p != "" {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".codex", "auth.json")
 }
 
 // promptRequired reports whether the agent_type runs the claude CLI
@@ -225,6 +243,7 @@ type spawnWorkerContext struct {
 	language    string
 	bareRepo    string
 	credsMount  string
+	codexAuth   string
 	promptMount string
 	envVars     map[string]string
 	extraLabel  map[string]string
@@ -325,6 +344,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		// so the watchdog can function.
 		BareRepoReadWrite: true,
 		CredsMount:        swc.credsMount,
+		CodexAuthMount:    swc.codexAuth,
 		PromptMount:       swc.promptMount,
 	}
 
@@ -410,6 +430,28 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		"DREM_AGENT_ID": workerID,
 	}
 
+	cliConfig := model.AgentCLIConfig{}
+	if o.runner != nil {
+		if at, ok := workerAgentType(agentType); ok {
+			cliConfig = o.runner.AgentConfig(at)
+		}
+	}
+	provider := cliConfig.EffectiveProvider()
+	switch provider {
+	case model.ProviderOpenCode:
+		env["DREM_AGENT_HARNESS"] = "opencode"
+	case model.ProviderCodex:
+		env["DREM_AGENT_HARNESS"] = "codex"
+	default:
+		env["DREM_AGENT_HARNESS"] = "claude"
+	}
+	if cliConfig.Model != "" {
+		env["DREM_MODEL"] = cliConfig.Model
+	}
+	if cliConfig.Effort != "" {
+		env["DREM_EFFORT"] = cliConfig.Effort
+	}
+
 	labels := map[string]string{
 		"drem.task_id": task.ID.String(),
 	}
@@ -426,12 +468,21 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 	// if the role requires it but no host path is available, return an
 	// error so the caller emits a worker_spawn_failed event.
 	credsMount := ""
-	if credsMountRequired(agentType) {
+	if provider == model.ProviderClaude && credsMountRequired(agentType) {
 		credsMount = resolveWorkerCredsPath()
 		if credsMount == "" {
 			return spawnWorkerContext{}, fmt.Errorf(
 				"subscription-auth required for agent_type=%q but %s is unset and $HOME is unresolvable",
 				agentType, workerCredsPathEnv)
+		}
+	}
+	codexAuth := ""
+	if provider == model.ProviderCodex {
+		codexAuth = resolveWorkerCodexAuthPath()
+		if codexAuth == "" {
+			return spawnWorkerContext{}, fmt.Errorf(
+				"codex auth required for agent_type=%q but %s is unset and $HOME is unresolvable",
+				agentType, workerCodexAuthPathEnv)
 		}
 	}
 
@@ -482,10 +533,31 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		branch:      branch,
 		bareRepo:    bareRepo,
 		credsMount:  credsMount,
+		codexAuth:   codexAuth,
 		promptMount: promptMount,
 		envVars:     env,
 		extraLabel:  labels,
 	}, nil
+}
+
+func workerAgentType(agentType string) (model.AgentType, bool) {
+	switch agentType {
+	case string(model.AgentCoder):
+		return model.AgentCoder, true
+	case string(model.AgentReviewer):
+		return model.AgentReviewer, true
+	case string(model.AgentFixer):
+		return model.AgentFixer, true
+	case string(model.AgentResearcher):
+		return model.AgentResearcher, true
+	case string(model.AgentPlanner):
+		return model.AgentPlanner, true
+	case string(model.AgentClassifier):
+		return model.AgentClassifier, true
+	case string(model.AgentPrep):
+		return model.AgentPrep, true
+	}
+	return "", false
 }
 
 // resolveProjectLanguage returns the project language from the Project row,

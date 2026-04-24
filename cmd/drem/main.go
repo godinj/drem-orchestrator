@@ -186,6 +186,7 @@ func main() {
 
 	wt := host.AsInterface()
 	runner := agent.NewRunner(database, nil, host.AsAgentWorktreeManager(), cfg.ClaudeBin, cfg.OpenCodeBin, cfg.MaxConcurrentAgents, cfg.Agents.ForAgentType)
+	runner.SetCodexBin(cfg.CodexBin)
 	runner.SetDispatchLimiter(ratelimit.New(cfg.MaxDispatchRate, cfg.DispatchWindow))
 	runner.SetMetricsRecorder(metrics.NewStore(database))
 	runner.SetOpenCodeContextWindow(cfg.OpenCodeContextWindow)
@@ -200,7 +201,11 @@ func main() {
 
 	var sup *supervisor.Supervisor
 	if cfg.SupervisorEnabled {
-		sup = supervisor.New(cfg.ClaudeBin, cfg.SupervisorTimeout, cfg.Agents.SupervisorCLIConfig())
+		supervisorBin := cfg.ClaudeBin
+		if cfg.Agents.SupervisorCLIConfig().EffectiveProvider() == model.ProviderCodex {
+			supervisorBin = cfg.CodexBin
+		}
+		sup = supervisor.New(supervisorBin, cfg.SupervisorTimeout, cfg.Agents.SupervisorCLIConfig())
 	}
 
 	// Create bug report drop directory and service.

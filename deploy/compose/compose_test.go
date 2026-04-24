@@ -100,7 +100,7 @@ func TestGlobalYAML_DeclaresDremClassifier(t *testing.T) {
 // TestGlobalYAML_DeclaresDremPlanner is the smoke test for
 // plans/warm-planner-pivot.md §§6, 8: the new drem-planner service must be
 // on drem-net, ship a /healthz-shaped healthcheck, and bind-mount the
-// operator's Claude subscription credentials read-only.
+// operator's Codex auth file read-only.
 func TestGlobalYAML_DeclaresDremPlanner(t *testing.T) {
 	data := readGlobalYAML(t)
 	var doc composeDoc
@@ -120,14 +120,12 @@ func TestGlobalYAML_DeclaresDremPlanner(t *testing.T) {
 	require.True(t, ok, "healthcheck must declare a test command")
 	assert.Contains(t, stringifyYAMLNode(testField), "/healthz")
 
-	// Credentials bind-mount must be present AND read-only per
-	// plans/warm-planner-pivot.md §1. A :rw mount would let the container
-	// clobber the host OAuth refresh state.
+	// Codex auth bind-mount must be present AND read-only.
 	foundCreds := false
 	foundReadOnly := false
 	for _, v := range svc.Volumes {
 		s := stringifyYAMLNode(v)
-		if strings.Contains(s, ".claude/.credentials.json") {
+		if strings.Contains(s, ".codex/auth.json") {
 			foundCreds = true
 			// Long-form block: "read_only: true" substring present.
 			// Short-form: trailing ":ro".
@@ -136,8 +134,8 @@ func TestGlobalYAML_DeclaresDremPlanner(t *testing.T) {
 			}
 		}
 	}
-	assert.True(t, foundCreds, "drem-planner must bind-mount ~/.claude/.credentials.json")
-	assert.True(t, foundReadOnly, "credentials bind-mount must be read-only")
+	assert.True(t, foundCreds, "drem-planner must bind-mount ~/.codex/auth.json")
+	assert.True(t, foundReadOnly, "Codex auth bind-mount must be read-only")
 
 	// No ANTHROPIC_API_KEY passthrough — subscription-only auth.
 	_, hasAPIKey := svc.Environment["ANTHROPIC_API_KEY"]

@@ -43,7 +43,7 @@ type PlanResult struct {
 }
 
 // plannerDispatchTimeout bounds how long orch waits for a plan to return
-// over HTTP. Matches the planner's own default claude timeout (5 min) plus
+// over HTTP. Matches the planner's own default model timeout (5 min) plus
 // a small buffer for the HTTP transport.
 const plannerDispatchTimeout = 6 * time.Minute
 
@@ -62,8 +62,8 @@ func (o *Orchestrator) dispatchPlanHTTP(ctx context.Context, task *model.Task, p
 	}
 
 	// Pre-flight: /healthz must return 200 before we POST. Costs ~10ms
-	// and catches the "operator hasn't run claude login" case without
-	// eating a full claude timeout.
+	// and catches the "operator hasn't run codex login" case without
+	// eating a full model timeout.
 	if err := o.probePlannerHealthz(ctx); err != nil {
 		o.logger.Warn("planner /healthz failed; aborting dispatch",
 			"task_id", task.ID, "error", err)
@@ -205,13 +205,13 @@ func derivePlannerHealthURL(planURL string) (string, error) {
 // planContainerRequest is the orch-side view of the planner's POST /plan
 // body. Kept local so the orchestrator doesn't import cmd/drem-planner.
 type planContainerRequest struct {
-	TaskID       string                      `json:"task_id"`
-	Task         map[string]any              `json:"task"`
-	Project      map[string]any              `json:"project"`
-	WorktreePath string                      `json:"worktree_path"`
-	Comments     []any                       `json:"comments,omitempty"`
-	TargetCoder  planContainerTargetCoder    `json:"target_coder,omitempty"`
-	Effort       string                      `json:"effort,omitempty"`
+	TaskID       string                   `json:"task_id"`
+	Task         map[string]any           `json:"task"`
+	Project      map[string]any           `json:"project"`
+	WorktreePath string                   `json:"worktree_path"`
+	Comments     []any                    `json:"comments,omitempty"`
+	TargetCoder  planContainerTargetCoder `json:"target_coder,omitempty"`
+	Effort       string                   `json:"effort,omitempty"`
 	// Prompt is a best-effort pre-rendered planner prompt. The planner
 	// server composes its own prompt from the other fields; Prompt is
 	// retained for forward-compatibility with agents that want to inject
@@ -226,11 +226,11 @@ type planContainerTargetCoder struct {
 
 // planContainerResponse is the orch-side view of the planner's 200 body.
 type planContainerResponse struct {
-	TaskID     string         `json:"task_id"`
+	TaskID     string          `json:"task_id"`
 	Plan       model.JSONField `json:"plan"`
-	TokensIn   int            `json:"tokens_in"`
-	TokensOut  int            `json:"tokens_out"`
-	DurationMS int            `json:"duration_ms"`
+	TokensIn   int             `json:"tokens_in"`
+	TokensOut  int             `json:"tokens_out"`
+	DurationMS int             `json:"duration_ms"`
 }
 
 // ---------------------------------------------------------------------------
@@ -240,9 +240,8 @@ type planContainerResponse struct {
 // shouldDispatchPlanHTTP reports whether processPlanning should route the
 // plan request through the warm drem-planner HTTP endpoint rather than the
 // legacy runner.SpawnAgent path. True iff a planner URL is configured AND
-// the planner's resolved provider is claude. Any other provider (sglang-
-// direct, operator override) falls back to the legacy runner path for
-// rollback safety.
+// the planner's resolved provider is a CLI-backed planner handled by the
+// warm service.
 func (o *Orchestrator) shouldDispatchPlanHTTP() bool {
 	if o.plannerContainerURL == "" {
 		return false
@@ -251,7 +250,12 @@ func (o *Orchestrator) shouldDispatchPlanHTTP() bool {
 		return false
 	}
 	cfg := o.runner.AgentConfig(model.AgentPlanner)
-	return cfg.EffectiveProvider() == model.ProviderClaude
+	switch cfg.EffectiveProvider() {
+	case model.ProviderClaude, model.ProviderCodex:
+		return true
+	default:
+		return false
+	}
 }
 
 // spawnPlannerHTTP drives the HTTP path. Called by processPlanning when

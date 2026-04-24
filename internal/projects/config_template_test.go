@@ -75,13 +75,9 @@ func TestRenderConfig_ContainsWarmClassifierEndpoint(t *testing.T) {
 	require.Contains(t, string(out), `endpoint = "http://drem-classifier:8090/classify"`)
 }
 
-// TestRenderConfig_PlannerPinsOpus asserts the generated drem.toml pins
-// the planner to Anthropic's Opus per the 2026-04-20 operator direction
-// captured in plans/warm-direct-planner.md. A drifted default would
-// silently route planner runs through the legacy OpenCode /
-// sglang-direct paths, which the planner container is not set up to
-// serve.
-func TestRenderConfig_PlannerPinsOpus(t *testing.T) {
+// TestRenderConfig_PlannerPinsCodex asserts the generated drem.toml routes
+// planning through the Codex-backed warm planner container.
+func TestRenderConfig_PlannerPinsCodex(t *testing.T) {
 	data := projects.TemplateData{
 		ProjectName:  "drem-orchestrator",
 		Language:     projects.LanguageGo,
@@ -92,8 +88,8 @@ func TestRenderConfig_PlannerPinsOpus(t *testing.T) {
 	s := string(out)
 
 	require.Contains(t, s, "[agents.planner]")
-	require.Contains(t, s, `provider = "claude"`)
-	require.Contains(t, s, `model    = "claude-opus-4-6"`)
+	require.Contains(t, s, `provider = "codex"`)
+	require.Contains(t, s, `model    = "gpt-5.5"`)
 	require.Contains(t, s, `effort   = "high"`)
 
 	// Round-trip through the TOML parser to catch template-quoting bugs
@@ -108,8 +104,8 @@ func TestRenderConfig_PlannerPinsOpus(t *testing.T) {
 		} `toml:"agents"`
 	}
 	require.NoError(t, toml.Unmarshal(out, &parsed))
-	require.Equal(t, "claude", parsed.Agents.Planner.Provider)
-	require.Equal(t, "claude-opus-4-6", parsed.Agents.Planner.Model)
+	require.Equal(t, "codex", parsed.Agents.Planner.Provider)
+	require.Equal(t, "gpt-5.5", parsed.Agents.Planner.Model)
 	require.Equal(t, "high", parsed.Agents.Planner.Effort)
 }
 
