@@ -2,9 +2,33 @@
 
 Artifact status: active investigation input
 Operator directive corrid: 5b99982e
-Metadata updated: 2026-04-26T18:15:40Z
+Metadata updated: 2026-04-27T03:58:45Z
 Active investigation owner: Mike source-surface provisioning handoff; Seth remains patch/proof owner once a source-capable route exists
 Ops owner: Mike for guardrails and controlled retry only after explicit re-clearance
+Context hygiene: passive ACK, retained-hold, watch-only, closure, and no-action entries in this artifact are audit trail only. Do not admit them as active context unless the entry changes authorization, ownership, blocker state, clearance, or required proof.
+
+## Stale Seth passive quality ACK retained at 2026-04-27T04:00:16Z
+
+Signal:
+- Seth reported at `2026-04-26T18:08:17Z`, replying to `seth-20260426T174547Z-passive-quality-context-ack`, that passive quality context remains retained and no audit, lifecycle/disposition mutation, host-exec expansion, Docker/SGLang action, operator escalation, or additional coordination is open.
+- Kyle rechecked supported surfaces: world health remains OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events still include the known merger/reconciler loop plus the later zero-UUID crash pair from `2026-04-26T18:16:08Z`.
+
+Decision:
+- Retain Seth's ACK as passive quality context only.
+- No audit, lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, product route, quality reroute, operator escalation, worker-lane change, or additional C-Suite coordination is open from this report.
+- This ACK does not supersede the later Mike read-only ops assessment route for the zero-UUID crash pair. The active hold remains deterministic conflict/control-plane proof before Kyle re-clears any targeted Mike lifecycle action.
+
+## Later zero-UUID crash surface routed for Mike read-only assessment at 2026-04-27T03:58:45Z
+
+Signal:
+- Kyle processed Mike's `2026-04-26T17:58:37Z` retained-hold ACK and rechecked supported surfaces.
+- `dremctl status` remains reachable; `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`.
+- `dremctl events --limit 25` now includes two later zero-UUID crash events at `2026-04-26T18:16:08Z` with exit code `128`.
+
+Decision:
+- Treat the later crash pair as a material supported-surface change requiring Mike read-only ops assessment.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, credential change, product route, quality reroute, operator escalation, or worker-lane change is cleared by this signal.
+- Active ownership remains unchanged: deterministic conflict/control-plane proof is still required before Kyle re-clears any targeted Mike lifecycle action.
 
 ## Mike CanaryV17 hold ACK retained at 2026-04-26T18:15:40Z
 

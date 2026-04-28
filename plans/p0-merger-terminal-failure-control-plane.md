@@ -4,9 +4,14 @@ Status: implementation authorized by operator on 2026-04-24
 Scope: merger/reconciler control-plane safety for task `6b6eb427` and future deterministic merge failures
 Artifact status: active investigation input
 Operator directive corrid: 5b99982e
-Metadata updated: 2026-04-26T18:15:40Z
+Metadata updated: 2026-04-27T03:58:45Z
 Active investigation owner: source-capable execution route pending; Seth remains clearance owner once patch/proof exists
 Ops owner: Mike only after explicit re-clearance following resolver/control-plane proof
+Context hygiene: passive ACK, retained-hold, watch-only, closure, and no-action entries in this artifact are audit trail only. Do not admit them as active context unless the entry changes authorization, ownership, blocker state, clearance, or required proof.
+
+## Current Metadata Note
+
+On 2026-04-27T03:58:45Z, while processing Mike's `2026-04-26T17:58:37Z` retained-hold ACK, Kyle rechecked supported surfaces and found two later zero-UUID crash events at `2026-04-26T18:16:08Z` with exit code `128`. `6b6eb427` remains `testing_ready` with `worker=-`, and orchestrator status remains reachable. Kyle routed Mike for read-only ops assessment of whether this is repeated known merger/control-plane evidence or a new supported-surface blocker. This does not clear pass, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, credential change, or any broader C-Suite route.
 
 ## Current Metadata Note
 

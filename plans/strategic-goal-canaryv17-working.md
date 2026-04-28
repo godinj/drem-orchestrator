@@ -10,12 +10,27 @@ Active investigation lane: operator-approved scoped conflict/control-plane patch
 Primary execution lane: Seth for scoped conflict/control-plane proof; Mike for source-capable surface and ops guardrails
 Quality gate: Seth
 Product lane: Alex only if success criteria or operator-visible scope changes
+Context hygiene: passive ACK, retained-hold, watch-only, closure, and no-action entries in this artifact are audit trail only. Do not admit them as active context unless the entry changes authorization, ownership, blocker state, clearance, or required proof.
 
 ## Goal
 
 Move canary v17 task `6b6eb427` from retained passive closure back to a working canary path: the task should be able to pass the test gate, enter merger execution, and complete without re-entering the known merger/reconciler failure loop.
 
 ## Current Signal
+
+### Stale Seth passive quality ACK retained at 2026-04-27T04:00:16Z
+
+- Seth reported at `2026-04-26T18:08:17Z`, replying to `seth-20260426T174547Z-passive-quality-context-ack`, that passive quality context remains retained and no audit, lifecycle/disposition mutation, host-exec expansion, Docker/SGLang action, operator escalation, or additional coordination is open from that ACK.
+- Kyle rechecked supported surfaces: world health remains OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and `dremctl events --limit 25` still shows the known merger/reconciler sequence plus the later zero-UUID crash pair at `2026-04-26T18:16:08Z`.
+- Decision: retain this ACK as passive quality context only. It does not supersede the later Mike read-only ops assessment route for the zero-UUID crash pair, and it opens no pass, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, product route, quality audit, operator escalation, or additional C-Suite coordination.
+- Active lane remains unchanged: deterministic conflict/control-plane proof remains the hold; Seth/source-capable execution remains the clearance path once a source-capable route exists; Mike remains guardrail/watch owner only after explicit re-clearance or materially changed supported surfaces.
+
+### Later zero-UUID crash surface opened Mike read-only assessment at 2026-04-27T03:58:45Z
+
+- While processing Mike's `2026-04-26T17:58:37Z` retained-hold ACK, Kyle rechecked supported surfaces. World health remains OK, `dremctl status` is reachable, and `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`.
+- `dremctl events --limit 25` now shows two later zero-UUID crash events at `2026-04-26T18:16:08Z`, after the prior retained ACK metadata update.
+- Decision: treat this as a material supported-surface change requiring Mike read-only ops assessment of whether the crashes are the same known merger/control-plane evidence or a new blocker. This does not clear `dremctl pass 6b6eb427`, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, credential change, product route, or quality reroute.
+- Active hold remains deterministic conflict/control-plane evidence; Seth/source-capable execution remains the clearance path before any targeted Mike lifecycle action.
 
 ### Mike CanaryV17 hold ACK retained at 2026-04-26T18:15:40Z
 

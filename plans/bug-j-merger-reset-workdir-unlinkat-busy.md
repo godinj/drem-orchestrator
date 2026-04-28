@@ -7,6 +7,7 @@ No longer the active v17 blocker once Seth's proof package is accepted; current 
 **Metadata updated:** 2026-04-26T18:14:31Z.
 **Active investigation owner:** source-capable execution surface pending for scoped post-Bug-J conflict/control-plane path.
 **Ops owner:** Mike for guardrails; no blind controlled retry while deterministic conflicts remain unresolved.
+**Context hygiene:** passive ACK, retained-hold, watch-only, closure, and no-action entries in this artifact are audit trail only. Do not admit them as active context unless the entry changes authorization, ownership, blocker state, clearance, or required proof.
 
 ## Mike late Bug J hold ACK retained 2026-04-26T18:14:31Z
 
