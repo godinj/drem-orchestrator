@@ -951,6 +951,102 @@ func TestTaskLifecycle_TestPassedToMerging(t *testing.T) {
 	}
 }
 
+func TestTaskLifecycle_HappyPathToDone(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	task := createLifecycleTask(t, db, o.projectID, "happy-path", model.StatusBacklog, nil)
+	task.WorktreeBranch = "feature/happy-path"
+	if err := db.Save(&task).Error; err != nil {
+		t.Fatalf("save task worktree branch: %v", err)
+	}
+
+	if err := o.processBacklog(&task); err != nil {
+		t.Fatalf("processBacklog: %v", err)
+	}
+
+	var afterPlanning model.Task
+	if err := db.First(&afterPlanning, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload after backlog: %v", err)
+	}
+	if afterPlanning.Status != model.StatusPlanning {
+		t.Fatalf("expected planning, got %s", afterPlanning.Status)
+	}
+
+	afterPlanning.Plan = makePlan(1)
+	if err := db.Save(&afterPlanning).Error; err != nil {
+		t.Fatalf("save plan: %v", err)
+	}
+	if err := o.processPlanning(&afterPlanning); err != nil {
+		t.Fatalf("processPlanning: %v", err)
+	}
+
+	var afterReview model.Task
+	if err := db.First(&afterReview, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload after planning: %v", err)
+	}
+	if afterReview.Status != model.StatusPlanReview {
+		t.Fatalf("expected plan_review, got %s", afterReview.Status)
+	}
+
+	if err := o.HandlePlanApproved(task.ID); err != nil {
+		t.Fatalf("HandlePlanApproved: %v", err)
+	}
+
+	var afterApprove model.Task
+	if err := db.First(&afterApprove, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload after approval: %v", err)
+	}
+	if afterApprove.Status != model.StatusInProgress {
+		t.Fatalf("expected in_progress, got %s", afterApprove.Status)
+	}
+
+	var subtask model.Task
+	if err := db.Where("parent_task_id = ?", task.ID).First(&subtask).Error; err != nil {
+		t.Fatalf("load subtask: %v", err)
+	}
+	subtask.Status = model.StatusDone
+	if err := db.Save(&subtask).Error; err != nil {
+		t.Fatalf("mark subtask done: %v", err)
+	}
+
+	if err := o.checkFeatureCompletion(&afterApprove); err != nil {
+		t.Fatalf("checkFeatureCompletion: %v", err)
+	}
+
+	var afterTestingReady model.Task
+	if err := db.First(&afterTestingReady, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload after completion check: %v", err)
+	}
+	if afterTestingReady.Status != model.StatusTestingReady {
+		t.Fatalf("expected testing_ready, got %s", afterTestingReady.Status)
+	}
+
+	if err := o.HandleTestPassed(task.ID); err != nil {
+		t.Fatalf("HandleTestPassed: %v", err)
+	}
+
+	var afterMerging model.Task
+	if err := db.First(&afterMerging, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload after test pass: %v", err)
+	}
+	if afterMerging.Status != model.StatusMerging {
+		t.Fatalf("expected merging, got %s", afterMerging.Status)
+	}
+
+	o.SetMergeDispatcher(&stubMerger{results: []stubMergeResult{{result: &MergeResult{Success: true, MergeCommit: "abc123"}, err: nil}}})
+	if err := o.executeMerge(&afterMerging); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+
+	var final model.Task
+	if err := db.First(&final, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload final task: %v", err)
+	}
+	if final.Status != model.StatusDone {
+		t.Fatalf("expected done, got %s", final.Status)
+	}
+}
+
 func TestTaskLifecycle_TestFailedBackToPlanning(t *testing.T) {
 	o, db := setupLifecycleTest(t)
 
