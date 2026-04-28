@@ -95,10 +95,107 @@ func TestListTasksFiltersByStatus(t *testing.T) {
 	}
 }
 
+func TestListTasksHidesCancelledByDefault(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+
+	testutil.CreateTask(t, srv.DB, project.ID, "active", model.StatusBacklog)
+	testutil.CreateTask(t, srv.DB, project.ID, "archived", model.StatusCancelled)
+
+	resp, err := http.Get(ts.URL + "/projects/" + projectName + "/tasks")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got []orchdto.TaskDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	require.Len(t, got, 1)
+	require.Equal(t, "active", got[0].Title)
+
+	resp2, err := http.Get(ts.URL + "/projects/" + projectName + "/tasks?status=cancelled")
+	require.NoError(t, err)
+	defer resp2.Body.Close()
+	require.Equal(t, http.StatusOK, resp2.StatusCode)
+
+	got = nil
+	require.NoError(t, json.NewDecoder(resp2.Body).Decode(&got))
+	require.Len(t, got, 1)
+	require.Equal(t, "archived", got[0].Title)
+}
+
 func TestListTasksUnknownProjectReturns404(t *testing.T) {
 	_, ts, _ := setupHTTPTest(t, nil)
 
 	resp, err := http.Get(ts.URL + "/projects/nope/tasks")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusNotFound, resp.StatusCode)
+}
+
+func TestCreateTaskCreatesClassifyingTask(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+
+	resp, err := http.Post(ts.URL+"/projects/"+projectName+"/tasks", "application/json",
+		strings.NewReader(`{"title":"File supported task","description":"Create through orchestrator HTTP","actor":"kyle"}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&dto))
+	require.Equal(t, "File supported task", dto.Title)
+	require.Equal(t, string(model.StatusClassifying), dto.Status)
+
+	var task model.Task
+	require.NoError(t, srv.DB.First(&task, "id = ?", dto.ID).Error)
+	require.Equal(t, project.ID, task.ProjectID)
+	require.Equal(t, "Create through orchestrator HTTP", task.Description)
+	require.Equal(t, model.StatusClassifying, task.Status)
+	require.Equal(t, model.CategoryStandard, task.Category)
+
+	var event model.TaskEvent
+	require.NoError(t, srv.DB.First(&event, "task_id = ? AND event_type = ?", task.ID, "task_created").Error)
+	require.Equal(t, "kyle", event.Actor)
+	require.Equal(t, string(model.StatusClassifying), event.NewValue)
+}
+
+func TestCreateTaskDefaultsActorToCSuite(t *testing.T) {
+	srv, ts, _ := setupHTTPTest(t, nil)
+
+	resp, err := http.Post(ts.URL+"/projects/"+projectName+"/tasks", "application/json",
+		strings.NewReader(`{"title":"Default actor","description":"No actor supplied"}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&dto))
+
+	var event model.TaskEvent
+	require.NoError(t, srv.DB.First(&event, "task_id = ? AND event_type = ?", dto.ID, "task_created").Error)
+	require.Equal(t, "csuite", event.Actor)
+}
+
+func TestCreateTaskMissingTitleOrDescriptionReturns400(t *testing.T) {
+	_, ts, _ := setupHTTPTest(t, nil)
+
+	resp, err := http.Post(ts.URL+"/projects/"+projectName+"/tasks", "application/json",
+		strings.NewReader(`{"description":"missing title"}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+
+	resp, err = http.Post(ts.URL+"/projects/"+projectName+"/tasks", "application/json",
+		strings.NewReader(`{"title":"missing description"}`))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestCreateTaskWrongProjectReturns404(t *testing.T) {
+	_, ts, _ := setupHTTPTest(t, nil)
+
+	resp, err := http.Post(ts.URL+"/projects/nope/tasks", "application/json",
+		strings.NewReader(`{"title":"x","description":"y"}`))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)

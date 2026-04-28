@@ -166,8 +166,6 @@ Mike signal check completed. Inbox was processed and 2 messages were forwarded.
 3. **Respond, then act.** If a message requires work (worker check, cleanup, etc.), send an immediate ACK with your plan first, then do the work, then send a completion report.
 4. **Delegate all real work.** If a task would take more than a quick health check, ask Mike/Kyle to route it through the current cold-worker/orchestrator path. Do not investigate yourself. Do not read code yourself. Describe the problem and let the execution owner route it.
 
-Passive ACKs are message ACKs only. When you send a passive ACK, set `channel: ack`, include `ack_for:` or `in_reply_to:` for the message being acknowledged, and set both `requires_response: false` and `action_required: false`. If the ACK mentions an artifact, it is only referencing that artifact; it does not mutate artifact metadata, lifecycle, ownership, or contents.
-
 ---
 
 ## Turn Structure

@@ -12,10 +12,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
-	"github.com/godinj/drem-orchestrator/internal/artifactregistry"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
@@ -118,8 +116,7 @@ func (f *fakeWorkerSpawner) InspectWorker(_ context.Context, _ spawner.InspectWo
 // object database.
 func workerSpawnTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner, string) {
 	t.Helper()
-	extraModels := append([]any{&gitref.BranchRef{}}, artifactregistry.Models()...)
-	db := testutil.NewTestDBWithModels(t, extraModels...)
+	db := testutil.NewTestDBWithModels(t, &gitref.BranchRef{})
 	projectID := uuid.New()
 	bareRepo := testutil.SetupBareRepo(t)
 	require.NoError(t, db.Create(&model.Project{
@@ -490,7 +487,7 @@ func TestBuildSpawnContext_MergerOmitsCredsMount(t *testing.T) {
 	}
 	require.NoError(t, o.db.Create(task).Error)
 
-	swc, err := o.buildSpawnContext(context.Background(), task, "merger")
+	swc, err := o.buildSpawnContext(task, "merger")
 	require.NoError(t, err)
 	require.Equal(t, "", swc.credsMount, "merger must never carry a creds mount")
 	require.Equal(t, "", swc.promptMount, "merger must never carry a prompt mount (Go binary, no claude CLI)")
@@ -569,102 +566,6 @@ func TestSpawnCoder_WritesPromptFileBeforeSpawn(t *testing.T) {
 	// The tmp file from the atomic-rename must NOT linger.
 	_, err = os.Stat(p.PromptMount + ".tmp")
 	require.True(t, os.IsNotExist(err), "atomic-rename tmp file must not remain after spawn")
-}
-
-func TestSpawnCoder_RecordsReportOnlyContextAdmissionAndPreservesPromptContent(t *testing.T) {
-	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
-	setWorkerPromptRootEnv(t, t.TempDir())
-
-	o, fake, bareRepo := workerSpawnTestRig(t)
-	task := &model.Task{
-		ID:             uuid.New(),
-		ProjectID:      o.projectID,
-		Title:          "Audit context firewall",
-		Description:    "Record context admission without editing prompts.",
-		Status:         model.StatusInProgress,
-		WorktreeBranch: "feature/context-firewall",
-	}
-	require.NoError(t, o.db.Create(task).Error)
-
-	artifact := &artifactregistry.Artifact{
-		ID:             uuid.New(),
-		ArtifactType:   "operator_note",
-		ContentURI:     "memory://context-firewall-note",
-		Title:          "Do not inject into prompt",
-		ProjectID:      o.projectID.String(),
-		TaskID:         task.ID.String(),
-		Status:         artifactregistry.StatusActive,
-		AuthorityClass: artifactregistry.AuthoritySourceOfTruth,
-		Admissibility:  "admissible",
-		EvidenceTrust:  artifactregistry.TrustHigh,
-	}
-	require.NoError(t, artifactregistry.NewRegistry(o.db).RegisterArtifact(context.Background(), artifact))
-
-	require.NoError(t, o.spawnCoder(context.Background(), task))
-	require.Len(t, fake.spawnCalls, 1)
-
-	var project model.Project
-	require.NoError(t, o.db.First(&project, "id = ?", o.projectID).Error)
-	expectedPrompt := prompt.Generate(prompt.Opts{
-		Task:         task,
-		Project:      &project,
-		AgentType:    model.AgentCoder,
-		WorktreePath: bareRepo,
-	})
-	actualPrompt, err := os.ReadFile(fake.spawnCalls[0].PromptMount)
-	require.NoError(t, err)
-	require.Equal(t, expectedPrompt, string(actualPrompt),
-		"context admission must not alter rendered prompt content")
-
-	var packets []artifactregistry.ContextPacket
-	require.NoError(t, o.db.Where("task_id = ? AND agent_role = ?", task.ID.String(), "coder").Find(&packets).Error)
-	require.Len(t, packets, 1)
-	require.Equal(t, "worker", packets[0].Persona)
-	require.Equal(t, "worker_prompt_generation", packets[0].WorkflowStage)
-
-	var decisions []artifactregistry.ContextAdmissionDecision
-	require.NoError(t, o.db.Where("context_packet_id = ?", packets[0].ID).Find(&decisions).Error)
-	require.Len(t, decisions, 1)
-	require.Equal(t, artifact.ID, decisions[0].ArtifactID)
-	require.Equal(t, artifactregistry.DecisionAdmitMinimal, decisions[0].Decision)
-
-	var evts []model.TaskEvent
-	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_context_admission_reported").Find(&evts).Error)
-	require.Len(t, evts, 1)
-	require.Equal(t, "orchestrator", evts[0].Actor)
-	require.Equal(t, "coder", evts[0].NewValue)
-	require.Equal(t, "completed", evts[0].Details["status"])
-	require.Equal(t, true, evts[0].Details["report_only"])
-	require.Equal(t, packets[0].ID.String(), evts[0].Details["context_packet_id"])
-	require.Equal(t, float64(1), evts[0].Details["decision_count"])
-	require.Equal(t, float64(1), evts[0].Details["admitted_count"])
-}
-
-func TestSpawnCoder_ContextAdmissionFailureDoesNotBlockSpawn(t *testing.T) {
-	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
-	setWorkerPromptRootEnv(t, t.TempDir())
-	o, fake, _ := workerSpawnTestRig(t)
-
-	require.NoError(t, o.db.Migrator().DropTable(&artifactregistry.ContextPacket{}))
-	task := &model.Task{
-		ID:             uuid.New(),
-		ProjectID:      o.projectID,
-		Title:          "Spawn despite audit failure",
-		Description:    "Context admission is report-only.",
-		Status:         model.StatusInProgress,
-		WorktreeBranch: "feature/context-audit-fail-open",
-	}
-	require.NoError(t, o.db.Create(task).Error)
-
-	require.NoError(t, o.spawnCoder(context.Background(), task))
-	require.Len(t, fake.spawnCalls, 1)
-	require.FileExists(t, fake.spawnCalls[0].PromptMount)
-
-	var evts []model.TaskEvent
-	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_context_admission_reported").Find(&evts).Error)
-	require.Len(t, evts, 1)
-	require.Equal(t, "failed", evts[0].Details["status"])
-	require.Contains(t, evts[0].Details["error"], "artifactregistry: AdmitArtifacts: create packet")
 }
 
 // TestSpawnTypedWorker_PromptRootMissingFailsClosed verifies that a

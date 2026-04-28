@@ -400,7 +400,11 @@ func (m *Manager) MergeBranch(sourceBranch, targetWorktree string) (*MergeResult
 		return nil, fmt.Errorf("merge branch: get target branch: %w", err)
 	}
 
-	mergeArgs := []string{"merge", sourceBranch, "--no-edit"}
+	mergeArgs := []string{
+		"-c", "user.name=drem-orchestrator",
+		"-c", "user.email=drem-orchestrator@localhost",
+		"merge", sourceBranch, "--no-edit",
+	}
 	_, mergeErr := RunGit(mergeArgs, targetWorktree)
 	if mergeErr == nil {
 		mergeCommit, err := RunGit([]string{"rev-parse", "HEAD"}, targetWorktree)

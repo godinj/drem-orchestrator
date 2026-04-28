@@ -189,6 +189,9 @@ func answerURL(base, task string) string {
 func retryURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/retry", base, projectName, task)
 }
+func archiveURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/archive", base, projectName, task)
+}
 func commentURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/comments", base, projectName, task)
 }
@@ -688,6 +691,67 @@ func TestCommentTaskEndpoint_UnknownTaskReturns404(t *testing.T) {
 	resp, body := doJSON(t, http.MethodPost, commentURL(base, uuid.NewString()), `{"body":"x"}`)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 	require.Equal(t, "task not found", decodeErr(t, body))
+}
+
+func TestArchiveTaskEndpoint_CancelsFailedTaskAndAudits(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "obsolete", model.StatusFailed)
+
+	resp, body := doJSON(t, http.MethodPost, archiveURL(base, task.ID.String()), `{"actor":"kyle","reason":"superseded","mode":"obsolete"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, task.ID.String(), dto.ID)
+	require.Equal(t, string(model.StatusCancelled), dto.Status)
+
+	var events []model.TaskEvent
+	require.NoError(t, srv.DB.Where("task_id = ? AND event_type = ?", task.ID, "task_archived").Find(&events).Error)
+	require.Len(t, events, 1)
+	require.Equal(t, "kyle", events[0].Actor)
+	require.Equal(t, string(model.StatusFailed), events[0].OldValue)
+	require.Equal(t, string(model.StatusCancelled), events[0].NewValue)
+	require.Equal(t, "superseded", events[0].Details["reason"])
+}
+
+func TestArchiveTaskEndpoint_RejectsAssignedWork(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "assigned", model.StatusFailed)
+	agentID := uuid.New()
+	require.NoError(t, srv.DB.Model(&model.Task{}).Where("id = ?", task.ID).Update("assigned_agent_id", agentID).Error)
+
+	resp, body := doJSON(t, http.MethodPost, archiveURL(base, task.ID.String()), `{"reason":"obsolete"}`)
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), "non-running unassigned")
+
+	var reloaded model.Task
+	require.NoError(t, srv.DB.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusFailed, reloaded.Status)
+}
+
+func TestArchiveTaskEndpoint_IdempotentForCancelled(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "already cancelled", model.StatusCancelled)
+
+	resp, body := doJSON(t, http.MethodPost, archiveURL(base, task.ID.String()), `{"reason":"already obsolete"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, string(model.StatusCancelled), dto.Status)
+
+	var count int64
+	require.NoError(t, srv.DB.Model(&model.TaskEvent{}).Where("task_id = ? AND event_type = ?", task.ID, "task_archived").Count(&count).Error)
+	require.Zero(t, count)
+}
+
+func TestArchiveTaskEndpoint_RequiresReason(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "obsolete", model.StatusFailed)
+
+	resp, body := doJSON(t, http.MethodPost, archiveURL(base, task.ID.String()), `{"reason":"   "}`)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), "reason is required")
 }
 
 // Extra: orch nil should degrade to 503 (safety: don't crash).

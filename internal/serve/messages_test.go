@@ -156,49 +156,6 @@ func TestGetMessages_EmptyResult(t *testing.T) {
 	}
 }
 
-func TestGetAcks_ReturnsEmptyForDBStore(t *testing.T) {
-	store := testutil.NewTestStore(t)
-	msg := &csuite.CsuiteInboxMessage{
-		FromAgent: "alex",
-		ToAgent:   "mike",
-		Subject:   "normal message",
-		Body:      "not an ack",
-		Priority:  csuite.PriorityNormal,
-		Type:      csuite.MessageTypeStatus,
-	}
-	if err := store.CreateMessage(msg); err != nil {
-		t.Fatalf("CreateMessage: %v", err)
-	}
-
-	h := acksHandler(store)
-	req := httptest.NewRequest(http.MethodGet, "/api/acks?agent=mike", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
-	}
-	var acks []messageResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &acks); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(acks) != 0 {
-		t.Fatalf("len = %d, want 0", len(acks))
-	}
-}
-
-func TestGetAcks_RequiresAgent(t *testing.T) {
-	store := testutil.NewTestStore(t)
-	h := acksHandler(store)
-	req := httptest.NewRequest(http.MethodGet, "/api/acks", nil)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400", w.Code)
-	}
-}
-
 // TestGetMessages_MethodNotAllowed verifies that PUT/DELETE etc. return 405.
 func TestGetMessages_MethodNotAllowed(t *testing.T) {
 	store := testutil.NewTestStore(t)

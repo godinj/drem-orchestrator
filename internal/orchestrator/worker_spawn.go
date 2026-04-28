@@ -11,7 +11,6 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/godinj/drem-orchestrator/internal/artifactregistry"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
@@ -289,7 +288,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		return fmt.Errorf("spawn %s: orchestrator has no WorkerSpawner configured", agentType)
 	}
 
-	swc, err := o.buildSpawnContext(ctx, task, agentType)
+	swc, err := o.buildSpawnContext(task, agentType)
 	if err != nil {
 		// Prompt render/write failures are distinguishable from other
 		// spawn-context errors by the "render prompt" / "prompt
@@ -403,7 +402,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 // derivation. Returns an error when an agent type requires a
 // subscription-auth creds mount but no host path is available — in that
 // case spawning must fail-closed rather than produce an unauth'd worker.
-func (o *Orchestrator) buildSpawnContext(ctx context.Context, task *model.Task, agentType string) (spawnWorkerContext, error) {
+func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (spawnWorkerContext, error) {
 	// projectName is the human-readable label; projectID is the stable UUID.
 	// Both are emitted as container labels (drem.project / drem.project_id)
 	// so agentmon's name-based filter and every internal orch UUID filter
@@ -527,7 +526,6 @@ func (o *Orchestrator) buildSpawnContext(ctx context.Context, task *model.Task, 
 				"render prompt for agent_type=%q task_id=%s: %w",
 				agentType, task.ID, err)
 		}
-		o.recordWorkerContextAdmission(ctx, task, agentType)
 		promptMount = written
 	}
 
@@ -544,56 +542,6 @@ func (o *Orchestrator) buildSpawnContext(ctx context.Context, task *model.Task, 
 		envVars:     env,
 		extraLabel:  labels,
 	}, nil
-}
-
-// recordWorkerContextAdmission records that the artifact registry context
-// firewall ran for a worker prompt turn. It is deliberately report-only: the
-// generated prompt is not modified and failures are logged as audit data rather
-// than blocking the worker spawn.
-func (o *Orchestrator) recordWorkerContextAdmission(ctx context.Context, task *model.Task, agentType string) {
-	detail := model.JSONField{
-		"agent_type":     agentType,
-		"persona":        "worker",
-		"workflow_stage": "worker_prompt_generation",
-		"report_only":    true,
-	}
-
-	result, err := artifactregistry.NewRegistry(o.db).AdmitContext(ctx, artifactregistry.AdmissionRequest{
-		ProjectID:              o.projectID.String(),
-		TaskID:                 task.ID.String(),
-		Persona:                "worker",
-		AgentRole:              agentType,
-		WorkflowStage:          "worker_prompt_generation",
-		EvidenceTrustThreshold: artifactregistry.TrustLow,
-		ReportOnly:             true,
-	})
-	if err != nil {
-		detail["status"] = "failed"
-		detail["error"] = err.Error()
-	} else {
-		detail["status"] = "completed"
-		detail["context_packet_id"] = result.Packet.ID.String()
-		detail["decision_count"] = len(result.Decisions)
-		detail["admitted_count"] = len(result.Admitted)
-		detail["excluded_count"] = len(result.Excluded)
-		detail["historical_count"] = len(result.Historical)
-		detail["weak_evidence_count"] = len(result.WeakEvidence)
-		detail["escalation_required"] = result.EscalationRequired
-	}
-
-	evt := &model.TaskEvent{
-		ID:        uuid.New(),
-		TaskID:    task.ID,
-		EventType: "worker_context_admission_reported",
-		OldValue:  "",
-		NewValue:  agentType,
-		Details:   detail,
-		Actor:     "orchestrator",
-		CreatedAt: time.Now(),
-	}
-	if createErr := o.db.Create(evt).Error; createErr != nil {
-		o.logger.Error("record worker context admission", "task_id", task.ID, "error", createErr)
-	}
 }
 
 func workerAgentType(agentType string) (model.AgentType, bool) {

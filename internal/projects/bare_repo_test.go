@@ -42,9 +42,9 @@ func readConfig(t *testing.T, bare, key string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// TestConfigureBareRepo_HappyPath asserts that ConfigureBareRepo sets
-// receive.denyCurrentBranch=ignore on a freshly-initialised bare
-// repo.
+// TestConfigureBareRepo_HappyPath asserts that ConfigureBareRepo sets the
+// receive options required for drem's stale host worktree layout on a freshly
+// initialised bare repo.
 func TestConfigureBareRepo_HappyPath(t *testing.T) {
 	bare := initBareRepo(t)
 
@@ -52,6 +52,7 @@ func TestConfigureBareRepo_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "ignore", readConfig(t, bare, "receive.denyCurrentBranch"))
+	require.Equal(t, "ignore", readConfig(t, bare, "receive.denyDeleteCurrent"))
 }
 
 // TestConfigureBareRepo_Idempotent asserts that calling the helper
@@ -63,6 +64,7 @@ func TestConfigureBareRepo_Idempotent(t *testing.T) {
 	require.NoError(t, ConfigureBareRepo(bare))
 
 	require.Equal(t, "ignore", readConfig(t, bare, "receive.denyCurrentBranch"))
+	require.Equal(t, "ignore", readConfig(t, bare, "receive.denyDeleteCurrent"))
 }
 
 // TestConfigureBareRepo_OverwritesDifferingValue asserts that the
@@ -80,11 +82,17 @@ func TestConfigureBareRepo_OverwritesDifferingValue(t *testing.T) {
 		"receive.denyCurrentBranch", "updateInstead")
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "seed git config failed: %s", out)
+	cmd = exec.Command("git", "--git-dir="+bare, "config",
+		"receive.denyDeleteCurrent", "refuse")
+	out, err = cmd.CombinedOutput()
+	require.NoError(t, err, "seed git config failed: %s", out)
 	require.Equal(t, "updateInstead", readConfig(t, bare, "receive.denyCurrentBranch"))
+	require.Equal(t, "refuse", readConfig(t, bare, "receive.denyDeleteCurrent"))
 
 	require.NoError(t, ConfigureBareRepo(bare))
 
 	require.Equal(t, "ignore", readConfig(t, bare, "receive.denyCurrentBranch"))
+	require.Equal(t, "ignore", readConfig(t, bare, "receive.denyDeleteCurrent"))
 }
 
 // TestConfigureBareRepo_MissingPath asserts that a non-existent path
@@ -124,10 +132,8 @@ func TestConfigureBareRepo_NotAGitRepo(t *testing.T) {
 //
 // Validation:
 //  1. Bare repo accepts the push (exit 0).
-//  2. Bare repo's feature-branch ref advances to the new commit.
-//  3. Host worktree's working-tree files remain at the OLD contents
-//     (staleness confirmed); git status in the worktree reports the
-//     diff between worktree files and the (new) branch tip.
+//  2. Bare repo accepts deletion of that checked-out feature branch.
+//  3. The pushed commit remains available even after deleting the branch ref.
 func TestConfigureBareRepo_PushSemantics(t *testing.T) {
 	// Skip if git is missing (unlikely in CI, but keeps the test
 	// honest as a true integration test).
@@ -212,27 +218,28 @@ func TestConfigureBareRepo_PushSemantics(t *testing.T) {
 	require.NoError(t, pushErr,
 		"push to bare must succeed with ignore: %s", pushOut)
 
-	// 5. Bare ref advanced.
-	bareTipAfter := strings.TrimSpace(string(
-		run(t, bare, "--git-dir="+bare, "rev-parse", "feature/canary")))
-	require.Equal(t, newTip, bareTipAfter,
-		"bare repo's feature/canary must point at the pushed commit")
+	deleteCmd := exec.Command("git", "push", "origin", "--delete", "feature/canary")
+	deleteCmd.Dir = pusher
+	deleteCmd.Env = gitEnv
+	deleteOut, deleteErr := deleteCmd.CombinedOutput()
+	require.NoError(t, deleteErr,
+		"delete from bare must succeed with denyDeleteCurrent=ignore: %s", deleteOut)
 
-	// 6. Worktree's working tree is stale: canary.txt should NOT
-	//    exist in the host worktree (push didn't touch the working
-	//    tree — that's the whole point of `ignore`).
+	// 5. Bare ref was deleted, but the pushed commit remains present.
+	bareTipAfter := strings.TrimSpace(string(
+		run(t, bare, "--git-dir="+bare, "rev-parse", newTip)))
+	require.Equal(t, newTip, bareTipAfter,
+		"pushed commit must remain available after deleting feature/canary")
+	showRefCmd := exec.Command("git", "--git-dir="+bare, "show-ref", "--verify", "refs/heads/feature/canary")
+	showRefCmd.Env = gitEnv
+	showRefOut, showRefErr := showRefCmd.CombinedOutput()
+	require.Error(t, showRefErr, "feature/canary ref should be deleted: %s", showRefOut)
+
+	// 6. Worktree's working tree is stale: canary.txt should NOT exist in the
+	// host worktree. Pushing and deleting the branch ref must not materialise
+	// worker files into stale host worktrees.
 	_, err := os.Stat(filepath.Join(wt, "canary.txt"))
 	require.True(t, os.IsNotExist(err),
 		"host worktree must remain stale: canary.txt should not "+
 			"have been materialised (got err=%v)", err)
-
-	// 7. The worktree's branch ref (shared with the bare repo) HAS
-	//    advanced, so `git -C <wt> status` reports the divergence
-	//    between the old working-tree contents and the new HEAD.
-	//    We assert canary.txt appears in the porcelain status as a
-	//    deletion (HEAD has it, worktree doesn't).
-	statusOut := run(t, wt, "status", "--porcelain")
-	require.Contains(t, string(statusOut), "canary.txt",
-		"git status in stale worktree should report canary.txt "+
-			"as a divergence (HEAD advanced, working tree stale)")
 }

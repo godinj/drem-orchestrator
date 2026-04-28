@@ -148,8 +148,6 @@ type: observation
 Message body in markdown.
 ```
 
-Passive ACK messages are message replies, not task or artifact mutations. A passive ACK MUST use `channel: ack`, MUST include either `ack_for:` or `in_reply_to:` pointing at the message being acknowledged, and MUST set `requires_response: false` and `action_required: false`. If the ACK references an artifact, identify the artifact in the body or frontmatter, but do not treat the ACK as modifying that artifact.
-
 Implementation notes:
 - Use `date -u +%Y%m%d-%H%M%S` for timestamp generation in filenames
 - Use `date -u +%Y-%m-%dT%H:%M:%SZ` for the YAML timestamp field

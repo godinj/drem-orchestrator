@@ -35,6 +35,22 @@ log_path       = "/var/lib/drem/drem.log"
   endpoint = "http://gq:8090/v1/chat/completions"
   model    = "gemma4-26b"
 
+# Coder/reviewer/fixer work uses the GQ-fronted SGLang direct-tool path.
+[agents.coder]
+  provider = "sglang-direct"
+  model    = "gemma4-26b"
+  effort   = "medium"
+
+[agents.reviewer]
+  provider = "sglang-direct"
+  model    = "gemma4-26b"
+  effort   = "medium"
+
+[agents.fixer]
+  provider = "sglang-direct"
+  model    = "gemma4-26b"
+  effort   = "medium"
+
 # Merger is configured as an SGLang/Gemma role so any merger-side agent work
 # uses the same gq-fronted SGLang path as the direct tool agents.
 [agents.merger]

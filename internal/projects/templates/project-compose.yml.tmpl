@@ -151,11 +151,6 @@ services:
       DREM_BEARER_TOKEN: "{{.SharedToken}}"
       DREM_LISTEN_ADDR: ":8090"
       DREM_DB_PATH: "/var/lib/drem/csuite.db"
-      # Compose file used by the allowlisted persona container control API.
-      # The API only accepts csuite persona targets and always uses --no-deps
-      # for start/recreate so global services such as sglang are not touched.
-      DREM_PROJECT_COMPOSE: "{{.HostHome}}/.drem/projects/{{.ProjectName}}/compose.yml"
-      DREM_DOCKER_COMPOSE_CMD: "docker compose"
       # Outbox-routing delivery ledger — SQLite stored under the named
       # volume mounted at /var/lib/watcher below. See
       # plans/csuite-watcher-outbox-routing.md §Failure modes.
@@ -208,13 +203,6 @@ services:
       # cmd/csuite-watcher/serve.go; missing mount → ENOENT → restart
       # loop. See plans/csuite-watcher-audit-token-mount-gap.md.
       - {{.CsuiteWatcherTokenPath}}:/run/secrets/csuite-watcher-token:ro
-      # The allowlisted persona control API shells out to Docker Compose from
-      # inside csuite-watcher. It needs the daemon socket plus a read-only view
-      # of the same generated project compose file at the same absolute path so
-      # Compose preserves the project name and host bind-mount paths.
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /usr/libexec/docker/cli-plugins/docker-compose:/usr/libexec/docker/cli-plugins/docker-compose:ro
-      - {{.HostHome}}/.drem/projects/{{.ProjectName}}/compose.yml:{{.HostHome}}/.drem/projects/{{.ProjectName}}/compose.yml:ro
     networks: [drem-net]
     labels:
       drem.project: "{{.ProjectName}}"

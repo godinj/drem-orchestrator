@@ -15,12 +15,12 @@ import (
 // single config write, so the ceiling is small on purpose.
 const configureBareRepoTimeout = 10 * time.Second
 
-// ConfigureBareRepo sets receive.denyCurrentBranch=ignore on the bare
-// git repository at barePath. This lets the worker watchdog's final
-// `git push origin <feature-branch>` succeed even though our "bare"
-// repo has host worktrees checked out under it — git accepts the
-// push to a currently-checked-out branch instead of rejecting with
-// "refusing to update checked out branch".
+// ConfigureBareRepo sets receive.denyCurrentBranch=ignore and
+// receive.denyDeleteCurrent=ignore on the bare git repository at barePath.
+// The former lets the worker watchdog's final `git push origin
+// <feature-branch>` succeed even though our "bare" repo has host worktrees
+// checked out under it. The latter lets merger delete a merged feature branch
+// even when that branch is still the current branch for a stale host worktree.
 //
 // Why ignore and not updateInstead: the worker pushes from inside a
 // container with the bare repo bind-mounted at /bare. `updateInstead`
@@ -70,12 +70,17 @@ func ConfigureBareRepo(barePath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), configureBareRepoTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "git",
-		"--git-dir="+barePath,
-		"config", "receive.denyCurrentBranch", "ignore")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("projects: ConfigureBareRepo: git config on %q failed: %w (%s)",
-			barePath, err, out)
+	for key, value := range map[string]string{
+		"receive.denyCurrentBranch": "ignore",
+		"receive.denyDeleteCurrent": "ignore",
+	} {
+		cmd := exec.CommandContext(ctx, "git",
+			"--git-dir="+barePath,
+			"config", key, value)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("projects: ConfigureBareRepo: git config %s on %q failed: %w (%s)",
+				key, barePath, err, out)
+		}
 	}
 	return nil
 }

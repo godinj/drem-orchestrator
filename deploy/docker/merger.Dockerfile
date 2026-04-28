@@ -12,9 +12,10 @@
 #     -t localhost:5000/drem-merger:latest .
 #   docker push localhost:5000/drem-merger:latest
 #
-# The runtime image ships git because the binary shells out to it for every
-# clone / fetch / merge / push. ca-certificates is required for HTTPS remotes
-# and for POSTing merge_result records to the orchestrator.
+# The runtime image ships git and Go because the binary shells out to git for
+# every clone / fetch / merge / push, then runs the project's Go test command
+# before pushing. ca-certificates is required for HTTPS remotes and for POSTing
+# merge_result records to the orchestrator.
 
 # ---------- build stage ----------
 #
@@ -42,13 +43,13 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     -o /out/drem-merger ./cmd/drem-merger
 
 # ---------- runtime stage ----------
-FROM debian:bookworm-slim
+FROM golang:1.25-bookworm
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-         git \
-         ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+ENV PATH="/usr/local/go/bin:${PATH}"
+
+RUN useradd --create-home --uid 1000 --shell /bin/bash drem \
+    && mkdir -p /work \
+    && chown -R drem:drem /work
 
 # The merger clones / pushes against a bare repo bind-mounted from the host
 # (operator UID) into this root-owned container. Git 2.35+ blocks cross-UID
@@ -63,5 +64,6 @@ COPY --from=build /out/drem-merger /usr/local/bin/drem-merger
 # repository. The merger pool caller passes these as flag values.
 VOLUME ["/work"]
 WORKDIR /work
+USER drem
 
 ENTRYPOINT ["/usr/local/bin/drem-merger"]

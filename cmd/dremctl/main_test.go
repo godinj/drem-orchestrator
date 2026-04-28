@@ -84,10 +84,10 @@ func TestReadCommandsHitExpectedPaths(t *testing.T) {
 		},
 		{
 			name:      "tasks",
-			args:      []string{"tasks", "--status", "failed", "--limit", "5", "--offset", "10"},
+			args:      []string{"tasks", "--status", "failed", "--limit", "5", "--offset", "10", "--include-archived"},
 			response:  []map[string]any{{"id": testTaskID, "title": "Fix it", "status": "failed", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z"), "assigned_worker": "w1"}},
 			wantPath:  "/projects/canvas/tasks",
-			wantQuery: []string{"status=failed", "limit=5", "offset=10"},
+			wantQuery: []string{"status=failed", "limit=5", "offset=10", "include_archived=true"},
 			wantOut:   "Fix it",
 		},
 		{
@@ -348,6 +348,7 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 		{name: "fail", args: []string{"fail", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/fail", wantOut: "in_progress"},
 		{name: "answer", args: []string{"answer", "12345678", "--body", "use port 9090"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/answer", wantBody: `{"body":"use port 9090"}`, wantOut: "in_progress"},
 		{name: "retry", args: []string{"retry", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/retry", wantOut: "in_progress"},
+		{name: "archive", args: []string{"archive", "12345678", "--reason", "superseded", "--actor", "kyle"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/archive", wantBody: `{"actor":"kyle","reason":"superseded","mode":"obsolete"}`, wantOut: "in_progress"},
 		{name: "comment", args: []string{"comment", "12345678", "--body", "supersede from current base"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/comments", wantBody: `{"body":"supersede from current base"}`, wantOut: "comment"},
 	}
 
@@ -422,6 +423,91 @@ func TestFullUUIDMutationSkipsPrefixResolution(t *testing.T) {
 	}
 }
 
+func TestCreateTaskCommandsPostExpectedBodyAndRenderMutationOutput(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{name: "create", args: []string{"create", "--title", "New task", "--description", "Do the work"}},
+		{name: "create-task", args: []string{"create-task", "--title", "New task", "--description", "Do the work"}},
+		{name: "file-task", args: []string{"file-task", "--title", "New task", "--description", "Do the work"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got []recordedRequest
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				got = append(got, recordRequest(t, r))
+				if r.Method != http.MethodPost || r.URL.Path != "/projects/canvas/tasks" {
+					http.NotFound(w, r)
+					return
+				}
+				writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": "New task", "status": "backlog", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")})
+			}))
+			defer ts.Close()
+
+			var out, errOut bytes.Buffer
+			err := run(t.Context(), tt.args, mapEnv(map[string]string{
+				"DREM_ORCH_URL": ts.URL,
+				"DREM_PROJECT":  "canvas",
+			}), &out, &errOut)
+			if err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			if len(got) != 1 {
+				t.Fatalf("got %d requests, want 1", len(got))
+			}
+			if got[0].Method != http.MethodPost {
+				t.Fatalf("method = %s, want POST", got[0].Method)
+			}
+			if got[0].Path != "/projects/canvas/tasks" {
+				t.Fatalf("path = %s, want /projects/canvas/tasks", got[0].Path)
+			}
+			if strings.TrimSpace(got[0].Body) != `{"title":"New task","description":"Do the work"}` {
+				t.Fatalf("body = %q", strings.TrimSpace(got[0].Body))
+			}
+			if !strings.Contains(out.String(), "task 12345678 -> backlog") {
+				t.Fatalf("unexpected output: %q", out.String())
+			}
+		})
+	}
+}
+
+func TestCreateTaskRequiresTitleAndDescriptionBeforeNetwork(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{name: "title", args: []string{"create", "--description", "Do the work"}, wantErr: "--title is required"},
+		{name: "title alias", args: []string{"create-task", "--description", "Do the work"}, wantErr: "--title is required"},
+		{name: "description", args: []string{"file-task", "--title", "New task"}, wantErr: "--description is required"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			called := false
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				http.NotFound(w, r)
+			}))
+			defer ts.Close()
+
+			var out, errOut bytes.Buffer
+			err := run(t.Context(), tt.args, mapEnv(map[string]string{
+				"DREM_ORCH_URL": ts.URL,
+				"DREM_PROJECT":  "canvas",
+			}), &out, &errOut)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("expected %q error, got %v", tt.wantErr, err)
+			}
+			if called {
+				t.Fatal("server was called despite missing create-task input")
+			}
+		})
+	}
+}
+
 func TestAnswerRequiresBodyBeforeNetwork(t *testing.T) {
 	called := false
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -440,6 +526,27 @@ func TestAnswerRequiresBodyBeforeNetwork(t *testing.T) {
 	}
 	if called {
 		t.Fatal("server was called despite missing --body")
+	}
+}
+
+func TestArchiveRequiresReasonBeforeNetwork(t *testing.T) {
+	called := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		http.NotFound(w, r)
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"archive", "12345678"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err == nil || !strings.Contains(err.Error(), "--reason is required") {
+		t.Fatalf("expected reason error, got %v", err)
+	}
+	if called {
+		t.Fatal("server was called despite missing --reason")
 	}
 }
 

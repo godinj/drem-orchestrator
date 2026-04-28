@@ -180,9 +180,9 @@ func TestAgentsConfigForAgentType(t *testing.T) {
 	}
 }
 
-func TestBuildDirectToolAgentConfigEnabledByMerger(t *testing.T) {
+func TestBuildDirectToolAgentConfigEnabledByCoder(t *testing.T) {
 	cfg := DefaultConfig()
-	cfg.Agents.Merger = AgentConfig{Provider: string(model.ProviderSGLangDirect), Model: "gemma4-26b"}
+	cfg.Agents.Coder = AgentConfig{Provider: string(model.ProviderSGLangDirect), Model: "gemma4-26b"}
 	cfg.DirectToolAgent.Endpoint = "http://gq:8090/v1/chat/completions"
 	cfg.DirectToolAgent.Model = "gemma4-26b"
 
@@ -195,6 +195,15 @@ func TestBuildDirectToolAgentConfigEnabledByMerger(t *testing.T) {
 	}
 	if got.Model != "gemma4-26b" {
 		t.Errorf("Model = %q", got.Model)
+	}
+}
+
+func TestBuildDirectToolAgentConfigNotEnabledByMerger(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.Agents.Merger = AgentConfig{Provider: string(model.ProviderSGLangDirect), Model: "gemma4-26b"}
+
+	if got := buildDirectToolAgentConfig(cfg); got != nil {
+		t.Fatalf("buildDirectToolAgentConfig() = %+v, want nil", got)
 	}
 }
 

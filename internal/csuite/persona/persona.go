@@ -45,8 +45,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/godinj/drem-orchestrator/internal/artifactregistry"
 )
 
 // DefaultPollInterval is the spacing between successive inbox scans.
@@ -108,25 +106,6 @@ type Config struct {
 	// DefaultMaxFailures.
 	MaxFailures int
 
-	// StartupQuietPeriod suppresses inbox processing immediately after boot.
-	StartupQuietPeriod time.Duration
-
-	// StartupDrain moves pending boot-time inbox messages to <InboxDir>/.ignored
-	// without invoking the model.
-	StartupDrain bool
-
-	// MaxMessagesPerScan caps normal scan work when greater than zero.
-	MaxMessagesPerScan int
-
-	// MaxMessagesAtBoot caps the one-time post-quiet boot scan when greater
-	// than zero. When zero, the boot scan is skipped and normal tick scans
-	// handle pending work.
-	MaxMessagesAtBoot int
-
-	// RuntimeStateFile receives machine-readable runtime state. Default:
-	// /home/drem/.drem-csuite/<persona>/runtime.json.
-	RuntimeStateFile string
-
 	// Now returns the current time; override in tests. Default time.Now.
 	Now func() time.Time
 
@@ -150,15 +129,6 @@ type Config struct {
 	// fsync cannot produce a delivery against stale bytes. Default:
 	// os.File.Sync via osFsyncer.
 	Fsyncer Fsyncer
-
-	// ArtifactAdmissionReporter records report-only context-firewall
-	// admission decisions for the assembled persona prompt and active inbox
-	// message. Nil preserves the legacy behavior exactly.
-	ArtifactAdmissionReporter ArtifactAdmissionReporter
-}
-
-type ArtifactAdmissionReporter interface {
-	AdmitArtifacts(context.Context, artifactregistry.AdmissionRequest, []artifactregistry.Artifact) (*artifactregistry.AdmissionResult, error)
 }
 
 // ApplyDefaults fills zero-value fields using Persona-derived defaults
@@ -183,9 +153,6 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.PromptFile == "" {
 		c.PromptFile = filepath.Join("/opt/csuite/prompts", c.Persona+".md")
-	}
-	if c.RuntimeStateFile == "" {
-		c.RuntimeStateFile = filepath.Join(base, "runtime.json")
 	}
 	if c.PollInterval <= 0 {
 		c.PollInterval = DefaultPollInterval
@@ -242,9 +209,6 @@ func (c *Config) Validate() error {
 	// StateFile's parent must exist. The file itself is created lazily.
 	if err := ensureDir(filepath.Dir(c.StateFile)); err != nil {
 		return fmt.Errorf("persona: state dir %q: %w", filepath.Dir(c.StateFile), err)
-	}
-	if err := ensureDir(filepath.Dir(c.RuntimeStateFile)); err != nil {
-		return fmt.Errorf("persona: runtime state dir %q: %w", filepath.Dir(c.RuntimeStateFile), err)
 	}
 	return nil
 }

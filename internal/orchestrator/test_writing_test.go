@@ -191,6 +191,69 @@ func TestProcessTestWriting_AllTestSubtasksDone_TransitionsToTestReview(t *testi
 	}
 }
 
+func TestProcessTestWriting_FutureTestSubtasksDoNotBlockTestReview(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent",
+		Description: "test parent",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	initialTest := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "initial-test",
+		Description:  "initial test subtask",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	db.Create(&initialTest)
+
+	implSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "impl-sub",
+		Description:  "implementation subtask",
+		Status:       model.StatusBacklog,
+		Phase:        "implementation",
+	}
+	db.Create(&implSub)
+
+	futureTest := model.Task{
+		ID:            uuid.New(),
+		ProjectID:     o.projectID,
+		ParentTaskID:  &parentID,
+		Title:         "future-test",
+		Description:   "test subtask after implementation",
+		Status:        model.StatusBacklog,
+		Phase:         "test",
+		DependencyIDs: model.JSONArray{implSub.ID.String()},
+	}
+	db.Create(&futureTest)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusTestReview {
+		t.Errorf("expected parent status test_review, got %s", updated.Status)
+	}
+}
+
 func TestProcessTestWriting_AllTestSubtasksTerminal_SomeFailed(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}

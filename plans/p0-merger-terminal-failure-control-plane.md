@@ -2,58 +2,6 @@
 
 Status: implementation authorized by operator on 2026-04-24
 Scope: merger/reconciler control-plane safety for task `6b6eb427` and future deterministic merge failures
-Artifact status: active investigation input
-Operator directive corrid: 5b99982e
-Metadata updated: 2026-04-27T04:06:31Z
-Active investigation owner: operator/platform source-capable task route required; Seth remains clearance owner once patch/proof exists
-Ops owner: Mike only after explicit re-clearance following resolver/control-plane proof
-Context hygiene: passive ACK, retained-hold, watch-only, closure, and no-action entries in this artifact are audit trail only. Do not admit them as active context unless the entry changes authorization, ownership, blocker state, clearance, or required proof.
-
-## Current Metadata Note
-
-On 2026-04-27T04:06:31Z Mike reaffirmed, replying to `b3d8a6f2`, that the supported Mike-side `dremctl`/orchestrator surface cannot create, spawn, assign, or provision a source-capable worker lane for the scoped conflict/control-plane patch/proof without a lifecycle/disposition mutation. Kyle rechecked live status: orchestrator health is reachable, `6b6eb427` remains `testing_ready` with `worker=-`, no running project worker is visible, and recent events still include zero-UUID exit-128 crash pairs through `2026-04-27T04:01:24Z`. The active blocker is now operator/platform source-capable task creation or another explicitly authorized scoped source route. This metadata update clears no pass, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, credential change, destructive git action, or service restart.
-
-## Current Metadata Note
-
-On 2026-04-27T04:05:10Z Mike reported, replying to `b12f90a4`, that no Mike-controlled supported source-capable route exists for the scoped conflict/control-plane pass. Kyle verified `dremctl --help` exposes no task-create, direct cold-worker spawn, source-shell handoff, or assignment command; it only exposes status/log/history plus gate/lifecycle mutations. Because `dremctl pass 6b6eb427` and retry remain barred until the proof package exists, the remaining blocker is operator/platform task creation or another explicitly authorized source-capable route. Kyle also observed a newer zero-UUID crash pair at `2026-04-27T04:01:24Z` and routed Mike for read-only assessment. No lifecycle mutation, pass, retry, host-exec expansion, Docker/SGLang action, credential change, destructive git action, or service restart was performed.
-
-## Current Metadata Note
-
-On 2026-04-27T03:58:45Z, while processing Mike's `2026-04-26T17:58:37Z` retained-hold ACK, Kyle rechecked supported surfaces and found two later zero-UUID crash events at `2026-04-26T18:16:08Z` with exit code `128`. `6b6eb427` remains `testing_ready` with `worker=-`, and orchestrator status remains reachable. Kyle routed Mike for read-only ops assessment of whether this is repeated known merger/control-plane evidence or a new supported-surface blocker. This does not clear pass, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, credential change, or any broader C-Suite route.
-
-## Current Metadata Note
-
-On 2026-04-26T18:15:40Z Mike reported, replying to `7d94e2a1`, that he remains watch-only and that the deterministic merge-conflict/control-plane evidence is still the active hold for `6b6eb427`. Kyle verified supported status remains stable: world/orchestrator health OK, `6b6eb427` at `testing_ready` with `worker=-`, and recent events still show the known merger/reconciler loop plus zero-UUID crash evidence. This ACK opens no lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, credential change, product route, quality reroute, operator escalation, worker-lane change, or broader C-Suite route; Seth/source-capable execution remains the clearance path.
-
-## Current Metadata Note
-
-On 2026-04-26T18:10:42Z Mike reported, replying to `c8f2a1d4`, that he remains watch-only on `6b6eb427` and requires operator authorization, Kyle re-clearance, and the full conflict/control-plane proof package before any Mike-controlled pass. Kyle verified supported status remains stable: world/orchestrator health OK, `6b6eb427` at `testing_ready` with `worker=-`, project workers zero, and recent events still show the known merger/reconciler loop plus zero-UUID crash evidence. This ACK opens no lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, credential change, operator escalation, or broader C-Suite route.
-
-## Current Metadata Note
-
-On 2026-04-26T18:09:03Z Seth reported, replying to `4c8d2f1a`, that he cannot produce the scoped conflict/control-plane patch/proof from his current persona surface: source is absent, Go is absent, host-exec denies read-only git probing, and orchestrator log streaming is not configured. Kyle verified supported status remains stable: world/orchestrator health OK, `6b6eb427` at `testing_ready` with `worker=-`, and recent events still show the known merger/reconciler loop plus zero-UUID crash evidence. The control-plane acceptance criteria remain unchanged: deterministic conflicts must be terminal/held with `failure_reason=conflict`, conflict file metadata, task-correlated merger evidence, retry-budget terminality, and reconciler non-resurrection. Kyle routed Mike to provide or identify a source-capable cold-worker/orchestrator route and did not clear any lifecycle mutation or pass.
-
-## Current Metadata Note
-
-On 2026-04-26T18:04:35Z Mike reported, replying to `2026-04-26T17:43:08Z-kyle-84407795.md`, that passive resolver-closure remains context only and the active hold stays on deterministic conflict/control-plane clearance. Supported surfaces still show world/orchestrator health OK, zero project workers, and `6b6eb427` at `testing_ready` with `worker=-`; recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence. This ACK opens no lifecycle mutation, controlled pass, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality route, operator escalation, worker-lane change, or additional C-Suite coordination. Mike remains guardrail-only until Seth/Kyle re-clear a targeted action or supported surfaces materially change.
-
-## Current Metadata Note
-
-On 2026-04-26T17:59:22Z Mike reported, replying to `0b56710c`, that closure-passive context remains passive only and no action is open unless Seth/Kyle re-clear a targeted ops path or supported surfaces materially change. Supported surfaces still show `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence. This ACK opens no lifecycle mutation, controlled pass, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination.
-
-## Current Metadata Note
-
-On 2026-04-26T17:56:36Z Mike reported, replying to `e6d4a91b`, that he retained the hold and will not run pass/retry/lifecycle mutation from the late Bug J ACK. Supported surfaces still show `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence. This ACK opens no lifecycle action; Mike remains watch-only until Seth/Kyle re-clear a targeted action or supported surfaces materially change.
-
-## Current Metadata Note
-
-On 2026-04-26T17:55:35Z Seth reported, replying to `c9a4e2b1`, that the late Bug J Option A ACK is retained only as quality coordination context. Bug J `/work` preservation proof remains cleared for the narrow EBUSY blocker, but this does not clear lifecycle action. The active no-pass hold remains deterministic merge-conflict/control-plane evidence from `6b6eb427`, and the terminal-conflict path still needs explicit Seth/Kyle re-clearance or materially changed supported surfaces before Mike runs any controlled pass.
-
-On 2026-04-26T17:50:44Z Seth reported, replying to `b4e9a301`, that the terminal-conflict control-plane patch must precede or travel with the conflict resolution before any Mike `dremctl pass`. This supersedes the earlier allowance for one retry before the terminal-failure patch for the current deterministic conflict case. Minimum scope is conflict result metadata with `failure_reason=conflict` and conflict file list, a terminal/held state that the reconciler will not resurrect via `all subtasks done`, an operator/Mike-visible event, and regression tests for merge-conflict terminality plus reconciler non-resurrection. Kyle routed this as an operator authorization decision and did not clear lifecycle mutation.
-
-On 2026-04-26T17:09:35Z Seth reported under `seth-merger-investigation-20260426` that this control-plane patch remains separate P0 work and is not required before one tightly controlled Bug J validation retry, provided the Option A proof package is present and Mike is watching. It is required before broader no-pass-hold removal or declaring the merger/reconciler path recovered. The retained scope is zero-UUID merger evidence, durable merger attempt metadata, terminal retry-exhaustion handling, and reconciler guards against resurrection after terminal merge failure.
-
-On 2026-04-26T16:51:07Z the operator directed Kyle under `5b99982e` to have Seth investigate the merger issues and adjust artifact metadata to facilitate that work. This artifact is now an active Seth investigation input alongside the Bug J and CanaryV17 recovery artifacts. Seth should treat the terminal-failure control-plane concerns here as part of the merger issue investigation, especially zero-UUID evidence, attempt metadata, deterministic conflict terminality, and reconciler recovery guards. This metadata update does not authorize a canary pass or lifecycle mutation.
 
 ## Problem
 
@@ -111,3 +59,24 @@ The current merger path can cycle a parent task through `testing_ready -> mergin
 - Merger failure evidence is task-correlated and includes enough attempt/log context for Mike/Seth review without relying on container archaeology.
 - Preflight failures are visible as task-correlated blocked/failed evidence and do not launch merger containers.
 - Existing successful merge behavior remains unchanged.
+
+## Seth follow-up: merge-control git identity source scope at 2026-04-28T00:10:38Z
+
+Seth reported that the smallest next source package is deterministic command-local Git identity plus structured agent-merge failure evidence in orchestrator merge-control. This is not a lifecycle mutation and does not reopen CanaryV17, which remains done on supported surfaces.
+
+Implementation scope to route through the source-capable coder lane:
+
+- Confirm exact source filenames by searching for `merge into feature branch failed` because Seth's container has no repo checkout.
+- Ensure merge/commit operations that can create commits in container filesystems use deterministic per-command Git identity, preferably `git -c user.name=drem-orchestrator -c user.email=drem-orchestrator@localhost ...` or command-local environment. Do not use global Git config.
+- Preserve `MergeResult.GitStderr` and conflict details through `handleAgentMergeFailure()` so `Committer identity unknown` becomes a diagnosable failure while preserving the agent branch.
+- Align agent-branch merge-control evidence with supported `merger_attempt_started` / `merger_attempt_finished` style fields: real task ID, attempt, phase, worker/container, branch, command, exit code, stderr or log reference. No zero-UUID-only crash/commit/merge evidence should be accepted as sufficient.
+
+Expected tests remain scoped to `internal/orchestrator` and should use `internal/testutil` Git helpers: command-local identity in repo/container FS with no configured Git identity, agent merge failure normalization with stderr preserved, and supported event-surface correlation to the real task/attempt.
+
+## Kyle source-lane routing accepted at 2026-04-28T00:28:31Z
+
+Kyle accepts Mike's `2026-04-28T00:12:37Z` report replying to operator thread `a916cb6a`: no supported surface currently shows a source-lane task or coder identity for the merge-control Git identity/evidence package, and Mike found no Mike-side `dremctl` task-create or arbitrary spawn route. Mike correctly avoided host-exec, Docker/log break-glass, lifecycle mutation, retry/pass/fail, SGLang action, global Git config, source search, and legacy temp-worker/tmux paths.
+
+Supported-surface recheck at `2026-04-28T00:28:31Z` shows orchestrator health OK, no running workers in the world summary, and recent tasks `3a5cba14`, `d4cb0f44`, `b8147d33`, `cfbf6327`, `91839e84`, and `a629ffe2` all terminal `done`; no visible recent source task is carrying this merge-control package.
+
+Decision: Alex owns filing or designating the source-capable orchestrator/cold-worker lane for deterministic command-local Git identity plus structured agent-merge failure evidence, with Seth's recorded scope as the acceptance bar. Kyle emitted a high-priority routed outbox request to Alex under corrid `0571d4eb` and reported the blocker/status back to the operator thread. No Kyle lifecycle mutation, gate action, retry, credential change, SGLang restart, destructive Docker/git action, unsupported log route, host-exec, or legacy route is opened by this acceptance.

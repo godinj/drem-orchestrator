@@ -36,12 +36,42 @@ func (o *Orchestrator) materializeSubtasks(task *model.Task) (*parsePlanResult, 
 	}
 	subtaskPlans := planResult.Subtasks
 
+	var existingSubtasks []model.Task
+	if err := o.db.Where("parent_task_id = ?", task.ID).
+		Find(&existingSubtasks).Error; err != nil {
+		return nil, nil, fmt.Errorf("materialize subtasks: load existing subtasks: %w", err)
+	}
+	usedExisting := make(map[uuid.UUID]bool, len(existingSubtasks))
+
 	// Auto-generate TDD reverse dependencies from tests_for.
 	merged := MergeTDDDependencies(subtaskPlans)
 
 	// Create subtask records. We need to track created IDs for dependency mapping.
 	createdIDs := make([]uuid.UUID, len(subtaskPlans))
 	for i, sp := range subtaskPlans {
+		var reused *model.Task
+		for j := range existingSubtasks {
+			existing := &existingSubtasks[j]
+			if usedExisting[existing.ID] || existing.Status != model.StatusDone || existing.Title != sp.Title || existing.Phase != sp.Phase {
+				continue
+			}
+			createdIDs[i] = existing.ID
+			usedExisting[existing.ID] = true
+			reused = existing
+			break
+		}
+		if createdIDs[i] != uuid.Nil {
+			for _, duplicate := range existingSubtasks {
+				if duplicate.ID == reused.ID || duplicate.Status == model.StatusDone || duplicate.Title != sp.Title || duplicate.Phase != sp.Phase {
+					continue
+				}
+				if err := o.DeleteSubtask(duplicate.ID); err != nil {
+					return nil, nil, fmt.Errorf("materialize subtasks: delete stale duplicate subtask %s: %w", duplicate.ID, err)
+				}
+			}
+			continue
+		}
+
 		subtaskID := uuid.New()
 		createdIDs[i] = subtaskID
 

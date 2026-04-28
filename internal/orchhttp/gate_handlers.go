@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -57,6 +58,12 @@ type answerRequest struct {
 type commentRequest struct {
 	Author string `json:"author"`
 	Body   string `json:"body"`
+}
+
+type archiveRequest struct {
+	Actor  string `json:"actor"`
+	Reason string `json:"reason"`
+	Mode   string `json:"mode"`
 }
 
 // handleApproveTask dispatches POST /projects/{name}/tasks/{id}/approve to
@@ -299,6 +306,113 @@ func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeUpdatedTask(w, task.ID)
+}
+
+// handleArchiveTask marks obsolete non-running work as cancelled without
+// spawning, retrying, deleting, or otherwise moving it through the lifecycle.
+func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
+	if !s.requireProject(w, r) {
+		return
+	}
+	task, ok := s.loadTaskForMutation(w, r)
+	if !ok {
+		return
+	}
+
+	var req archiveRequest
+	if err := decodeOptionalJSON(r.Body, &req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	req.Actor = strings.TrimSpace(req.Actor)
+	if req.Actor == "" {
+		req.Actor = "operator"
+	}
+	req.Reason = strings.TrimSpace(req.Reason)
+	if req.Reason == "" {
+		writeJSONError(w, http.StatusBadRequest, "reason is required")
+		return
+	}
+
+	if task.Status == model.StatusCancelled {
+		s.writeUpdatedTask(w, task.ID)
+		return
+	}
+	if !archiveAllowedStatus(task.Status) || task.AssignedAgentID != nil {
+		writeJSONError(w, http.StatusConflict,
+			fmt.Sprintf("task in status %q or assigned to a worker; archive requires non-running unassigned work", task.Status))
+		return
+	}
+
+	previousStatus := task.Status
+	previousWorker := ""
+	if task.AssignedAgentID != nil {
+		previousWorker = task.AssignedAgentID.String()
+	}
+	now := time.Now()
+	err := s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&model.Task{}).
+			Where("id = ? AND assigned_agent_id IS NULL AND status IN ?", task.ID, archiveAllowedStatuses()).
+			Updates(map[string]any{
+				"status":     model.StatusCancelled,
+				"updated_at": now,
+			})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return gorm.ErrInvalidTransaction
+		}
+		return tx.Create(&model.TaskEvent{
+			ID:        uuid.New(),
+			TaskID:    task.ID,
+			EventType: "task_archived",
+			OldValue:  string(previousStatus),
+			NewValue:  string(model.StatusCancelled),
+			Details: model.JSONField{
+				"actor":              req.Actor,
+				"reason":             req.Reason,
+				"mode":               req.Mode,
+				"obsolete":           true,
+				"previous_worker_id": previousWorker,
+				"archived_at":        now.UTC().Format(time.RFC3339Nano),
+			},
+			Actor:     req.Actor,
+			CreatedAt: now,
+		}).Error
+	})
+	if errors.Is(err, gorm.ErrInvalidTransaction) {
+		writeJSONError(w, http.StatusConflict, "task changed while archiving; refresh and retry")
+		return
+	}
+	if err != nil {
+		slog.Error("orchhttp: archive failed", "task_id", task.ID, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
+		return
+	}
+	s.writeUpdatedTask(w, task.ID)
+}
+
+func archiveAllowedStatus(status model.TaskStatus) bool {
+	for _, allowed := range archiveAllowedStatuses() {
+		if status == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func archiveAllowedStatuses() []model.TaskStatus {
+	return []model.TaskStatus{
+		model.StatusBacklog,
+		model.StatusPlanning,
+		model.StatusNeedsClarification,
+		model.StatusPlanReview,
+		model.StatusTestReview,
+		model.StatusPaused,
+		model.StatusFailed,
+		model.StatusRejected,
+	}
 }
 
 // handleCommentTask appends an advisory comment to a task. Comments are not a

@@ -54,9 +54,10 @@ func New(baseURL string) *Client {
 // value requests every task for the project; fields are combined with
 // AND semantics at the server.
 type TaskFilter struct {
-	Status string
-	Limit  int
-	Offset int
+	Status          string
+	Limit           int
+	Offset          int
+	IncludeArchived bool
 }
 
 // ListProjects fetches the project records known to this orchestrator.
@@ -83,6 +84,9 @@ func (c *Client) ListTasks(ctx context.Context, project string, filter TaskFilte
 	}
 	if filter.Offset > 0 {
 		q.Set("offset", strconv.Itoa(filter.Offset))
+	}
+	if filter.IncludeArchived {
+		q.Set("include_archived", "true")
 	}
 	var out []orchdto.TaskDTO
 	if err := c.get(ctx, "/projects/"+url.PathEscape(project)+"/tasks", q, &out); err != nil {

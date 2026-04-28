@@ -276,7 +276,7 @@ func TestPWA_APIRoutesStillRequireAuth(t *testing.T) {
 	s := New(Config{Token: "secret", Addr: "127.0.0.1:0", Store: store})
 	mux := s.buildMux()
 
-	apiPaths := []string{"/api/health", "/api/agents", "/api/messages", "/api/acks"}
+	apiPaths := []string{"/api/health", "/api/agents", "/api/messages"}
 	for _, path := range apiPaths {
 		// Without auth header — should get 401.
 		req := httptest.NewRequest(http.MethodGet, path, nil)

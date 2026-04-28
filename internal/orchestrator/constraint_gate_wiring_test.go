@@ -224,6 +224,77 @@ func TestConstraintGateWiring_TestReview_FirstFailure(t *testing.T) {
 	}
 }
 
+// TestConstraintGateWiring_TestReview_PendingImplementationSkipsGate verifies
+// that the initial test_review transition for source-lane work is not failed by
+// stale/no-improvement constraint gate state before implementation runs.
+func TestConstraintGateWiring_TestReview_PendingImplementationSkipsGate(t *testing.T) {
+	bareRepoPath := setupTestRepoWithMainBranch(t)
+	setupMainWorktreeWithConstraints(t, bareRepoPath, "[[max_lines]]\nname = \"file size check\"\nglob = \"*.go\"\nlimit = 5\n")
+	featureName := "gate-test-review-pending-impl"
+	constraintFailWorktree(t, bareRepoPath, featureName, 5)
+
+	db := testutil.NewTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: bareRepoPath}
+	db.Create(&project)
+
+	pastCheck := time.Now().Add(-1 * time.Minute).Format(time.RFC3339)
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      o.projectID,
+		Title:          "parent",
+		Description:    "test parent",
+		Status:         model.StatusTestWriting,
+		WorktreeBranch: "feature/" + featureName,
+		Context: model.JSONField{
+			"baseline_tests_checked":          true,
+			"constraint_gate_retries":         float64(2),
+			"constraint_gate_next_check":      pastCheck,
+			"constraint_gate_previous_failed": float64(1),
+		},
+	}
+	db.Create(&parent)
+
+	testSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-sub",
+		Description:  "test subtask",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	db.Create(&testSub)
+
+	implSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "impl-sub",
+		Description:  "implementation subtask",
+		Status:       model.StatusBacklog,
+		Phase:        "implementation",
+	}
+	db.Create(&implSub)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+
+	if updated.Status != model.StatusTestReview {
+		t.Errorf("expected status test_review, got %s", updated.Status)
+	}
+	if reason, ok := updated.Context["failure_reason"].(string); ok {
+		t.Fatalf("unexpected failure_reason: %s", reason)
+	}
+}
+
 // TestConstraintGateWiring_TestReview_BackoffRespected verifies that when
 // constraint_gate_next_check is in the future, processTestWriting returns
 // immediately without re-evaluating constraints (retries not incremented).

@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	dbpkg "github.com/godinj/drem-orchestrator/internal/db"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
@@ -29,7 +30,8 @@ import (
 func setupContainerClassifyTest(t *testing.T) (*Orchestrator, uuid.UUID) {
 	t.Helper()
 
-	gormDB := testutil.NewTestDB(t)
+	gormDB, err := dbpkg.Init(":memory:")
+	require.NoError(t, err)
 
 	projectID := uuid.New()
 	require.NoError(t, gormDB.Create(&model.Project{
@@ -318,100 +320,4 @@ func TestProcessClassifyingTasksDirect_UsesContainerPath(t *testing.T) {
 	assert.Equal(t, "Refined bug title", reloaded.Title)
 	assert.Equal(t, 3, reloaded.ComplexityScore)
 	assert.Equal(t, model.CategoryQuickFix, reloaded.Category)
-}
-
-// TestProcessClassifyingTasksDirect_PopulatesBacklogPlannerInputSchema drives
-// a representative T2 test-writing task through the warm direct-classifier
-// service path. The resulting BACKLOG task must expose classifier file hints
-// under estimated_files because planner/coder prompts and scheduling code
-// consume that key, not the classifier-native target_files field.
-func TestProcessClassifyingTasksDirect_PopulatesBacklogPlannerInputSchema(t *testing.T) {
-	db := testutil.NewTestDB(t)
-	projectID := uuid.New()
-	require.NoError(t, db.Create(&model.Project{
-		ID:            projectID,
-		Name:          "direct-classifier-backlog-schema",
-		BareRepoPath:  "/tmp/unused",
-		DefaultBranch: "main",
-	}).Error)
-
-	orch := &Orchestrator{
-		db:        db,
-		projectID: projectID,
-		events:    make(chan Event, 16),
-		logger:    slog.Default().With("component", "direct-classifier-backlog-schema"),
-	}
-
-	bareDir := t.TempDir()
-	mainWT := filepath.Join(bareDir, "main")
-	require.NoError(t, os.MkdirAll(mainWT, 0o755))
-	orch.worktree = &FakeWorktreeManager{BarePath: bareDir, Default: "main"}
-
-	task := model.Task{
-		ID:          uuid.New(),
-		ProjectID:   projectID,
-		Title:       "Write test: direct-classifier populates backlog",
-		Description: "Create an integration test for a T2 test-phase task classified by the warm direct-classifier service.",
-		Status:      model.StatusClassifying,
-		Category:    model.CategoryStandard,
-		Phase:       "test",
-		Context: model.JSONField{
-			"prep_complete": true,
-			"prep_failed":   true,
-		},
-	}
-	require.NoError(t, db.Create(&task).Error)
-
-	classifierFiles := []string{
-		"internal/orchestrator/classifying_container_test.go",
-		"internal/orchestrator/classifying.go",
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var req classifyContainerRequest
-		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
-		assert.Equal(t, task.ID.String(), req.TaskID)
-		assert.Equal(t, task.Title, req.Title)
-		assert.Equal(t, true, req.Context["prep_complete"])
-
-		_ = json.NewEncoder(w).Encode(classifyContainerResponse{
-			TaskID:          task.ID.String(),
-			Category:        "standard",
-			ComplexityScore: 6,
-			Title:           "Write direct-classifier backlog integration test",
-			Description:     "Exercise the warm classifier service path and verify the backlog task carries planner-ready file hints.",
-			TargetFiles:     classifierFiles,
-			Rationale:       "T2 test work touches orchestrator integration behavior and classifier persistence schema.",
-			TokensIn:        1240,
-			TokensOut:       180,
-			DurationMS:      1100,
-		})
-	}))
-	defer srv.Close()
-
-	cfg := agent.DefaultDirectClassifierConfig()
-	orch.directClassifierCfg = &cfg
-	orch.SetClassifierContainerEndpoint(srv.URL, "")
-
-	orch.processClassifyingTasksDirect()
-
-	var reloaded model.Task
-	require.NoError(t, db.First(&reloaded, "id = ?", task.ID).Error)
-	assert.Equal(t, model.StatusBacklog, reloaded.Status)
-	assert.Equal(t, model.CategoryStandard, reloaded.Category)
-	assert.Equal(t, 6, reloaded.ComplexityScore)
-	assert.Equal(t, "Write direct-classifier backlog integration test", reloaded.Title)
-
-	require.NotNil(t, reloaded.Context)
-	assert.Equal(t, []any{
-		"internal/orchestrator/classifying_container_test.go",
-		"internal/orchestrator/classifying.go",
-	}, reloaded.Context["target_files"])
-	assert.Equal(t, []any{
-		"internal/orchestrator/classifying_container_test.go",
-		"internal/orchestrator/classifying.go",
-	}, reloaded.Context["estimated_files"], "planner input schema must mirror classifier target_files")
-	assert.Equal(t,
-		"T2 test work touches orchestrator integration behavior and classifier persistence schema.",
-		reloaded.Context["rationale"],
-	)
 }

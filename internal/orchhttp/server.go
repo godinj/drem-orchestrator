@@ -110,9 +110,10 @@ func New(db *gorm.DB, token string, logs LogStreamer, project ProjectInfo) *Serv
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 
-	// Public read endpoints.
+	// Public project endpoints.
 	mux.HandleFunc("GET /projects", s.handleListProjects)
 	mux.HandleFunc("GET /projects/{name}/tasks", s.handleListTasks)
+	mux.HandleFunc("POST /projects/{name}/tasks", s.handleCreateTask)
 	mux.HandleFunc("GET /projects/{name}/workers", s.handleListWorkers)
 	mux.HandleFunc("GET /workers/{id}", s.handleGetWorker)
 	mux.HandleFunc("GET /workers/{id}/history", s.handleWorkerHistory)
@@ -127,6 +128,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/fail", s.handleFailTask)
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/answer", s.handleAnswerTask)
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/retry", s.handleRetryTask)
+	mux.HandleFunc("POST /projects/{name}/tasks/{id}/archive", s.handleArchiveTask)
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/comments", s.handleCommentTask)
 
 	// Internal ingestion endpoint — protected by header auth.

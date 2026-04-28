@@ -434,6 +434,59 @@ func TestHandlePlanApproved(t *testing.T) {
 	}
 }
 
+func TestHandlePlanApproved_ReusesDoneSubtasksOnRetry(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	plan := makePlan(2)
+	parent := createLifecycleTask(t, db, o.projectID, "retry-approve-plan-test", model.StatusPlanReview, plan)
+	existingIDs := make(map[uuid.UUID]bool)
+	for _, title := range []string{"subtask-A", "subtask-B"} {
+		sub := model.Task{
+			ID:           uuid.New(),
+			ProjectID:    o.projectID,
+			ParentTaskID: &parent.ID,
+			Title:        title,
+			Description:  "already completed before parent retry",
+			Status:       model.StatusDone,
+		}
+		if err := db.Create(&sub).Error; err != nil {
+			t.Fatalf("create existing subtask %q: %v", title, err)
+		}
+		existingIDs[sub.ID] = true
+	}
+	staleDuplicate := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parent.ID,
+		Title:        "subtask-A",
+		Description:  "duplicate from a failed previous approval",
+		Status:       model.StatusFailed,
+	}
+	if err := db.Create(&staleDuplicate).Error; err != nil {
+		t.Fatalf("create stale duplicate subtask: %v", err)
+	}
+
+	if err := o.HandlePlanApproved(parent.ID); err != nil {
+		t.Fatalf("HandlePlanApproved: unexpected error: %v", err)
+	}
+
+	var subtasks []model.Task
+	if err := db.Where("parent_task_id = ?", parent.ID).Find(&subtasks).Error; err != nil {
+		t.Fatalf("load subtasks: %v", err)
+	}
+	if len(subtasks) != 2 {
+		t.Fatalf("expected existing 2 subtasks to be reused without duplicates, got %d", len(subtasks))
+	}
+	for _, sub := range subtasks {
+		if !existingIDs[sub.ID] {
+			t.Fatalf("unexpected new subtask created: %s", sub.ID)
+		}
+		if sub.Status != model.StatusDone {
+			t.Fatalf("expected reused subtask %s to remain done, got %s", sub.ID, sub.Status)
+		}
+	}
+}
+
 func TestHandlePlanApproved_WrongStatus(t *testing.T) {
 	o, db := setupLifecycleTest(t)
 

@@ -219,6 +219,40 @@ func TestRejectWrongStatus(t *testing.T) {
 	require.True(t, errors.As(err, &ws), "want *ErrWrongStatus, got %T: %v", err, err)
 }
 
+func TestArchiveHappyPathWithReasonAndActor(t *testing.T) {
+	id := uuid.New()
+	h := &gateHandler{status: http.StatusOK, respBody: sampleDTOJSON(t, id, "cancelled")}
+	c, _ := newGateClient(t, h)
+
+	got, err := c.Archive(context.Background(), "canvas", id, "superseded", "kyle")
+	require.NoError(t, err)
+	require.Equal(t, "cancelled", got.Status)
+	require.Equal(t, "/projects/canvas/tasks/"+id.String()+"/archive", h.path)
+	require.Equal(t, http.MethodPost, h.method)
+	require.Equal(t, "application/json", h.ctype)
+
+	var payload struct {
+		Actor  string `json:"actor"`
+		Reason string `json:"reason"`
+		Mode   string `json:"mode"`
+	}
+	require.NoError(t, json.Unmarshal(h.rawBody, &payload))
+	require.Equal(t, "kyle", payload.Actor)
+	require.Equal(t, "superseded", payload.Reason)
+	require.Equal(t, "obsolete", payload.Mode)
+}
+
+func TestArchiveEmptyReasonReturnsBadRequestWithoutNetwork(t *testing.T) {
+	h := &gateHandler{status: http.StatusOK, respBody: `{}`}
+	c, _ := newGateClient(t, h)
+
+	_, err := c.Archive(context.Background(), "canvas", uuid.New(), "  ", "kyle")
+	require.Error(t, err)
+	var bad *orchclient.ErrBadRequest
+	require.True(t, errors.As(err, &bad), "want *ErrBadRequest, got %T: %v", err, err)
+	require.Equal(t, int32(0), atomic.LoadInt32(&h.calls))
+}
+
 // -- Pass ----------------------------------------------------------------
 
 func TestPassHappyPath(t *testing.T) {
@@ -367,6 +401,52 @@ func TestClient_Retry_BadRequest(t *testing.T) {
 	require.True(t, errors.As(err, &bad), "want *ErrBadRequest, got %T: %v", err, err)
 }
 
+// -- CreateTask ----------------------------------------------------------
+
+func TestClient_CreateTask_Success(t *testing.T) {
+	id := uuid.New()
+	h := &gateHandler{status: http.StatusCreated, respBody: sampleDTOJSON(t, id, "backlog")}
+	c, _ := newGateClient(t, h)
+
+	got, err := c.CreateTask(context.Background(), "my-project", "Add thing", "Build the thing")
+	require.NoError(t, err)
+	require.Equal(t, id.String(), got.ID)
+	require.Equal(t, "backlog", got.Status)
+	require.Equal(t, "/projects/my-project/tasks", h.path)
+	require.Equal(t, http.MethodPost, h.method)
+	require.Equal(t, "application/json", h.ctype)
+
+	var payload struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+	}
+	require.NoError(t, json.Unmarshal(h.rawBody, &payload))
+	require.Equal(t, "Add thing", payload.Title)
+	require.Equal(t, "Build the thing", payload.Description)
+}
+
+func TestClient_CreateTask_EmptyTitleGuardsNetwork(t *testing.T) {
+	h := &gateHandler{status: http.StatusOK, respBody: `{}`}
+	c, _ := newGateClient(t, h)
+
+	_, err := c.CreateTask(context.Background(), "canvas", " ", "description")
+	require.Error(t, err)
+	var bad *orchclient.ErrBadRequest
+	require.True(t, errors.As(err, &bad), "want *ErrBadRequest, got %T: %v", err, err)
+	require.Equal(t, int32(0), atomic.LoadInt32(&h.calls), "expected no network call for empty title")
+}
+
+func TestClient_CreateTask_EmptyDescriptionGuardsNetwork(t *testing.T) {
+	h := &gateHandler{status: http.StatusOK, respBody: `{}`}
+	c, _ := newGateClient(t, h)
+
+	_, err := c.CreateTask(context.Background(), "canvas", "title", "\t")
+	require.Error(t, err)
+	var bad *orchclient.ErrBadRequest
+	require.True(t, errors.As(err, &bad), "want *ErrBadRequest, got %T: %v", err, err)
+	require.Equal(t, int32(0), atomic.LoadInt32(&h.calls), "expected no network call for empty description")
+}
+
 // -- Comment -------------------------------------------------------------
 
 func TestClient_Comment_Success(t *testing.T) {
@@ -435,6 +515,10 @@ func TestGateMethodsSendJSONContentTypeWhenBody(t *testing.T) {
 			_, err := c.Answer(context.Background(), "p", id, "ok")
 			return err
 		}, true, "application/json"},
+		{"archive", func(c *orchclient.Client, id uuid.UUID) error {
+			_, err := c.Archive(context.Background(), "p", id, "obsolete", "kyle")
+			return err
+		}, true, "application/json"},
 	}
 	for _, tcase := range cases {
 		t.Run(tcase.name, func(t *testing.T) {
@@ -460,6 +544,10 @@ func TestGateMethodsAllUsePOST(t *testing.T) {
 		{"pass", func(c *orchclient.Client) error { _, err := c.Pass(context.Background(), "p", id); return err }},
 		{"fail", func(c *orchclient.Client) error { _, err := c.Fail(context.Background(), "p", id); return err }},
 		{"answer", func(c *orchclient.Client) error { _, err := c.Answer(context.Background(), "p", id, "x"); return err }},
+		{"archive", func(c *orchclient.Client) error {
+			_, err := c.Archive(context.Background(), "p", id, "obsolete", "kyle")
+			return err
+		}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -499,6 +587,10 @@ func TestGateMethodsURLPathShape(t *testing.T) {
 			_, err := c.Answer(context.Background(), "my-proj", id, "b")
 			return err
 		}, "/projects/my-proj/tasks/" + id.String() + "/answer"},
+		{"archive", "archive", func(c *orchclient.Client) error {
+			_, err := c.Archive(context.Background(), "my-proj", id, "obsolete", "kyle")
+			return err
+		}, "/projects/my-proj/tasks/" + id.String() + "/archive"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -536,6 +628,10 @@ func TestGateMethodsHonorContextCancel(t *testing.T) {
 		}},
 		{"answer", func(c *orchclient.Client, ctx context.Context) error {
 			_, err := c.Answer(ctx, "p", id, "body")
+			return err
+		}},
+		{"archive", func(c *orchclient.Client, ctx context.Context) error {
+			_, err := c.Archive(ctx, "p", id, "obsolete", "kyle")
 			return err
 		}},
 	}

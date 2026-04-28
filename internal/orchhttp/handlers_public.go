@@ -124,6 +124,8 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		Limit(limit).Offset(offset)
 	if status := r.URL.Query().Get("status"); status != "" {
 		q = q.Where("status = ?", status)
+	} else if r.URL.Query().Get("include_archived") != "true" {
+		q = q.Where("status <> ?", model.StatusCancelled)
 	}
 	var tasks []model.Task
 	if err := q.Find(&tasks).Error; err != nil {
@@ -139,6 +141,82 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		out = append(out, toTaskDTO(t))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name != s.Project.Name {
+		writeJSONError(w, http.StatusNotFound, "project not found")
+		return
+	}
+
+	var req struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+		Actor       string `json:"actor"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	req.Title = strings.TrimSpace(req.Title)
+	req.Description = strings.TrimSpace(req.Description)
+	req.Actor = strings.TrimSpace(req.Actor)
+	if req.Title == "" {
+		writeJSONError(w, http.StatusBadRequest, "title is required")
+		return
+	}
+	if req.Description == "" {
+		writeJSONError(w, http.StatusBadRequest, "description is required")
+		return
+	}
+	if req.Actor == "" {
+		req.Actor = "csuite"
+	}
+
+	var task model.Task
+	err := s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
+		var project model.Project
+		if err := tx.Where("name = ?", name).First(&project).Error; err != nil {
+			return err
+		}
+
+		now := time.Now()
+		task = model.Task{
+			ID:          uuid.New(),
+			ProjectID:   project.ID,
+			Title:       req.Title,
+			Description: req.Description,
+			Status:      model.StatusClassifying,
+			Category:    model.CategoryStandard,
+		}
+		if err := tx.Create(&task).Error; err != nil {
+			return err
+		}
+
+		return tx.Create(&model.TaskEvent{
+			ID:        uuid.New(),
+			TaskID:    task.ID,
+			EventType: "task_created",
+			NewValue:  string(model.StatusClassifying),
+			Details: model.JSONField{
+				"title":       req.Title,
+				"description": req.Description,
+			},
+			Actor:     req.Actor,
+			CreatedAt: now,
+		}).Error
+	})
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		writeJSONError(w, http.StatusNotFound, "project not found")
+		return
+	}
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, toTaskDTO(task))
 }
 
 // writeTasksTimeout surfaces a /tasks DB timeout as 503 + Retry-After: 1

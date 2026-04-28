@@ -45,6 +45,11 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 				Endpoint string `toml:"endpoint"`
 				Model    string `toml:"model"`
 			} `toml:"classifier"`
+			Coder struct {
+				Provider string `toml:"provider"`
+				Model    string `toml:"model"`
+				Effort   string `toml:"effort"`
+			} `toml:"coder"`
 		} `toml:"agents"`
 		DirectToolAgent struct {
 			Endpoint string `toml:"endpoint"`
@@ -55,6 +60,8 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 	require.Equal(t, "/home/dev/git/drem-orchestrator.git", parsed.BareRepoPath)
 	require.Equal(t, "go", parsed.Project.Language)
 	require.True(t, parsed.Agents.Classifier.Direct)
+	require.Equal(t, "sglang-direct", parsed.Agents.Coder.Provider)
+	require.Equal(t, "gemma4-26b", parsed.Agents.Coder.Model)
 	require.Equal(t, "http://gq:8090/v1/chat/completions", parsed.DirectToolAgent.Endpoint)
 	// The warm-classifier endpoint must round-trip so orch picks it up on
 	// startup without needing DREM_CLASSIFIER_URL also set. See
@@ -134,6 +141,46 @@ func TestRenderConfig_MergerPinsSGLangGemma(t *testing.T) {
 	require.NoError(t, toml.Unmarshal(out, &parsed))
 	require.Equal(t, "sglang-direct", parsed.Agents.Merger.Provider)
 	require.Equal(t, "gemma4-26b", parsed.Agents.Merger.Model)
+}
+
+func TestRenderConfig_WorkerRolesPinSGLangGemma(t *testing.T) {
+	data := projects.TemplateData{
+		ProjectName:  "drem-orchestrator",
+		Language:     projects.LanguageGo,
+		BareRepoPath: "/home/dev/git/drem-orchestrator.git",
+	}
+	out, err := projects.RenderConfig(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Agents struct {
+			Coder struct {
+				Provider string `toml:"provider"`
+				Model    string `toml:"model"`
+			} `toml:"coder"`
+			Reviewer struct {
+				Provider string `toml:"provider"`
+				Model    string `toml:"model"`
+			} `toml:"reviewer"`
+			Fixer struct {
+				Provider string `toml:"provider"`
+				Model    string `toml:"model"`
+			} `toml:"fixer"`
+		} `toml:"agents"`
+	}
+	require.NoError(t, toml.Unmarshal(out, &parsed))
+
+	for name, role := range map[string]struct {
+		Provider string
+		Model    string
+	}{
+		"coder":    {parsed.Agents.Coder.Provider, parsed.Agents.Coder.Model},
+		"reviewer": {parsed.Agents.Reviewer.Provider, parsed.Agents.Reviewer.Model},
+		"fixer":    {parsed.Agents.Fixer.Provider, parsed.Agents.Fixer.Model},
+	} {
+		require.Equal(t, "sglang-direct", role.Provider, name)
+		require.Equal(t, "gemma4-26b", role.Model, name)
+	}
 }
 
 // TestRenderConfig_RequiresBareRepoPath asserts the nil-guard on the

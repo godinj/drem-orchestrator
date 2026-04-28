@@ -54,8 +54,7 @@ func (s *Store) Root() string { return s.root }
 
 // AgentDashboard returns one row per known persona. UnreadCount mirrors
 // the inbox file count from DiskSnapshotSource. LatestInbox is the max
-// mtime across <root>/<persona>/inbox/*.md and the .archive sibling. ACKs
-// are reported separately from inbox counts.
+// mtime across <root>/<persona>/inbox/*.md and the .archive sibling.
 func (s *Store) AgentDashboard() ([]csuite.AgentDashboardRow, error) {
 	summaries, err := s.source.AgentSummaries()
 	if err != nil {
@@ -70,12 +69,6 @@ func (s *Store) AgentDashboard() ([]csuite.AgentDashboardRow, error) {
 		if t := s.latestInboxMtime(sum.Name); !t.IsZero() {
 			ts := t
 			row.LatestInbox = &ts
-		}
-		acks := s.readAcks(sum.Name)
-		row.AckCount = len(acks)
-		if len(acks) > 0 {
-			ts := acks[0].CreatedAt
-			row.LatestAck = &ts
 		}
 		rows[i] = row
 	}
@@ -166,82 +159,12 @@ func (s *Store) acceptsTo(to string) bool {
 	if to == "operator" {
 		return true
 	}
-	return s.isKnownPersona(to)
-}
-
-func (s *Store) isKnownPersona(agent string) bool {
 	for _, p := range knownPersonas {
-		if p == agent {
+		if p == to {
 			return true
 		}
 	}
 	return false
-}
-
-// ListInboxQueue returns live inbox files for a managed persona, oldest first.
-// Archived and ignored files are not included by default.
-func (s *Store) ListInboxQueue(agent string, limit int) ([]csuite.InboxQueueItem, error) {
-	if !s.isKnownPersona(agent) {
-		return nil, csuite.ErrUnknownPersona
-	}
-	entries, err := listInboxEntries(filepath.Join(s.root, agent, "inbox"))
-	if err != nil {
-		return nil, fmt.Errorf("diskstore: list inbox queue: %w", err)
-	}
-	if limit > 0 && len(entries) > limit {
-		entries = entries[:limit]
-	}
-	items := make([]csuite.InboxQueueItem, 0, len(entries))
-	for _, e := range entries {
-		msg := entryToMessage(e, agent)
-		items = append(items, csuite.InboxQueueItem{
-			ID:        msg.ID,
-			Filename:  filepath.Base(e.Path),
-			FromAgent: msg.FromAgent,
-			ToAgent:   msg.ToAgent,
-			Subject:   msg.Subject,
-			Body:      msg.Body,
-			CreatedAt: msg.CreatedAt,
-			UpdatedAt: msg.UpdatedAt,
-		})
-	}
-	return items, nil
-}
-
-// ArchiveInboxItem moves the selected live inbox file to inbox/.archive/.
-func (s *Store) ArchiveInboxItem(agent, id, reason string) error {
-	return s.moveLiveInboxItem(agent, id, ".archive")
-}
-
-// IgnoreInboxItem moves the selected live inbox file to inbox/.ignored/.
-func (s *Store) IgnoreInboxItem(agent, id, reason string) error {
-	return s.moveLiveInboxItem(agent, id, ".ignored")
-}
-
-func (s *Store) moveLiveInboxItem(agent, id, destDirName string) error {
-	if !s.isKnownPersona(agent) {
-		return csuite.ErrUnknownPersona
-	}
-	entries, err := listInboxEntries(filepath.Join(s.root, agent, "inbox"))
-	if err != nil {
-		return fmt.Errorf("diskstore: list live inbox: %w", err)
-	}
-	for _, e := range entries {
-		msg := entryToMessage(e, agent)
-		if msg.ID.String() != id {
-			continue
-		}
-		destDir := filepath.Join(s.root, agent, "inbox", destDirName)
-		if err := os.MkdirAll(destDir, 0o755); err != nil {
-			return fmt.Errorf("diskstore: create %s: %w", destDirName, err)
-		}
-		dest := filepath.Join(destDir, filepath.Base(e.Path))
-		if err := os.Rename(e.Path, dest); err != nil {
-			return fmt.Errorf("diskstore: move inbox item: %w", err)
-		}
-		return nil
-	}
-	return csuite.ErrInboxItemNotFound
 }
 
 // GetMessagesBetween returns the merged conversation between agent1 and
@@ -314,38 +237,6 @@ func (s *Store) GetMessagesBetween(agent1, agent2 string, limit int, beforeID uu
 		msgs = msgs[:limit]
 	}
 	return msgs, nil
-}
-
-// GetAcksByAgent returns ACKs delivered to <root>/<agent>/acks/, newest-first.
-// ACKs are intentionally separate from GetMessagesBetween so normal inbox
-// conversations and message counts remain unchanged.
-func (s *Store) GetAcksByAgent(agent string, limit int) ([]csuite.CsuiteInboxMessage, error) {
-	if agent == "" {
-		return nil, fmt.Errorf("diskstore: agent must not be empty")
-	}
-	acks := s.readAcks(agent)
-	if limit > 0 && len(acks) > limit {
-		acks = acks[:limit]
-	}
-	return acks, nil
-}
-
-func (s *Store) readAcks(agent string) []csuite.CsuiteInboxMessage {
-	entries, err := listInboxEntries(filepath.Join(s.root, agent, "acks"))
-	if err != nil {
-		return nil
-	}
-	acks := make([]csuite.CsuiteInboxMessage, 0, len(entries))
-	for _, e := range entries {
-		acks = append(acks, entryToMessage(e, agent))
-	}
-	sort.SliceStable(acks, func(i, j int) bool {
-		if acks[i].CreatedAt.Equal(acks[j].CreatedAt) {
-			return acks[i].ID.String() > acks[j].ID.String()
-		}
-		return acks[i].CreatedAt.After(acks[j].CreatedAt)
-	})
-	return acks
 }
 
 // readPersonaInbox returns all messages in <root>/<inboxOwner>/inbox/

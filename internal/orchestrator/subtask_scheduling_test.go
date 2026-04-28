@@ -75,6 +75,46 @@ func TestDispatchPendingSubtasks_SkipsTerminalParents(t *testing.T) {
 	assert.Equal(t, model.StatusBacklog, reloaded.Status)
 }
 
+func TestDispatchPendingSubtasks_SkipsHumanGateParents(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/bare", "master")
+
+	for _, status := range []model.TaskStatus{
+		model.StatusPlanReview,
+		model.StatusTestReview,
+		model.StatusTestingReady,
+		model.StatusNeedsClarification,
+	} {
+		t.Run(status.String(), func(t *testing.T) {
+			parent := testutil.CreateTask(t, db, project.ID, "gated parent", status)
+
+			parentID := parent.ID
+			subtask := model.Task{
+				ID:           uuid.New(),
+				ProjectID:    project.ID,
+				ParentTaskID: &parentID,
+				Title:        "child subtask",
+				Description:  "child subtask",
+				Status:       model.StatusBacklog,
+			}
+			require.NoError(t, db.Create(&subtask).Error)
+
+			o := &Orchestrator{
+				db:        db,
+				projectID: project.ID,
+				logger:    slog.Default(),
+				events:    make(chan Event, 100),
+			}
+
+			o.dispatchPendingSubtasks()
+
+			var reloaded model.Task
+			require.NoError(t, db.First(&reloaded, "id = ?", subtask.ID).Error)
+			assert.Equal(t, model.StatusBacklog, reloaded.Status)
+		})
+	}
+}
+
 // TestOrderCandidatesByExperimentPriority_NilScheduler verifies that when
 // experimentScheduler is nil the candidates are returned unchanged.
 func TestOrderCandidatesByExperimentPriority_NilScheduler(t *testing.T) {

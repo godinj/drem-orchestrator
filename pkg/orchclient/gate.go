@@ -119,6 +119,48 @@ func (c *Client) Retry(ctx context.Context, project string, taskID uuid.UUID) (o
 	return out, nil
 }
 
+// CreateTask files a new task for the named project. title and description
+// must both be non-empty; empty values are rejected client-side so callers do
+// not spend a request on input the server is expected to reject.
+func (c *Client) CreateTask(ctx context.Context, project, title, description string) (orchdto.TaskDTO, error) {
+	if strings.TrimSpace(title) == "" {
+		return orchdto.TaskDTO{}, &ErrBadRequest{Message: "task title is required"}
+	}
+	if strings.TrimSpace(description) == "" {
+		return orchdto.TaskDTO{}, &ErrBadRequest{Message: "task description is required"}
+	}
+	payload := struct {
+		Title       string `json:"title"`
+		Description string `json:"description"`
+	}{Title: title, Description: description}
+	var out orchdto.TaskDTO
+	path := "/projects/" + url.PathEscape(project) + "/tasks"
+	if err := c.postGate(ctx, path, payload, &out); err != nil {
+		return orchdto.TaskDTO{}, err
+	}
+	return out, nil
+}
+
+// Archive marks obsolete non-running work as cancelled through the
+// orchestrator's no-spawn archival endpoint. reason is required by the server;
+// actor is optional and defaults server-side when empty.
+func (c *Client) Archive(ctx context.Context, project string, taskID uuid.UUID, reason, actor string) (orchdto.TaskDTO, error) {
+	if strings.TrimSpace(reason) == "" {
+		return orchdto.TaskDTO{}, &ErrBadRequest{Message: "archive reason is required"}
+	}
+	payload := struct {
+		Actor  string `json:"actor"`
+		Reason string `json:"reason"`
+		Mode   string `json:"mode"`
+	}{Actor: actor, Reason: reason, Mode: "obsolete"}
+	var out orchdto.TaskDTO
+	path := gatePath(project, taskID, "archive")
+	if err := c.postGate(ctx, path, payload, &out); err != nil {
+		return orchdto.TaskDTO{}, err
+	}
+	return out, nil
+}
+
 // Comment appends a C-Suite advisory comment to a task. Comments are accepted
 // for tasks in any status and are included in future agent prompts.
 func (c *Client) Comment(ctx context.Context, project string, taskID uuid.UUID, body string) (orchdto.TaskCommentDTO, error) {
@@ -143,9 +185,9 @@ func gatePath(project string, taskID uuid.UUID, verb string) string {
 	return "/projects/" + url.PathEscape(project) + "/tasks/" + taskID.String() + "/" + verb
 }
 
-// postGate is the shared POST helper for the five gate mutations. It
-// marshals body (nil omits the body entirely), POSTs to path, and
-// decodes either a 200 success body into out or a non-2xx error body
+// postGate is the shared POST helper for task mutations. It marshals body
+// (nil omits the body entirely), POSTs to path, and decodes either a 2xx
+// success body into out or a non-2xx error body
 // into the appropriate typed error defined in errors.go.
 //
 // The helper centralises three concerns: Content-Type is set only when
@@ -181,7 +223,7 @@ func (c *Client) postGate(ctx context.Context, path string, body any, out any) e
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusOK {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
 

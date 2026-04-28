@@ -119,46 +119,6 @@ func handleGetMessages(w http.ResponseWriter, r *http.Request, s dashboardStore)
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
-func acksHandler(s dashboardStore) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			writeJSONError(w, http.StatusMethodNotAllowed, "method not allowed")
-			return
-		}
-
-		q := r.URL.Query()
-		agent := q.Get("agent")
-		if agent == "" {
-			writeJSONError(w, http.StatusBadRequest, "agent query parameter is required")
-			return
-		}
-
-		limit := 0
-		if ls := q.Get("limit"); ls != "" {
-			n, err := strconv.Atoi(ls)
-			if err != nil || n < 0 {
-				writeJSONError(w, http.StatusBadRequest, "limit must be a non-negative integer")
-				return
-			}
-			limit = n
-		}
-
-		acks, err := s.GetAcksByAgent(agent, limit)
-		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, "store unavailable")
-			return
-		}
-
-		resp := make([]messageResponse, len(acks))
-		for i, m := range acks {
-			resp[i] = toMessageResponse(m)
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(resp) //nolint:errcheck
-	})
-}
-
 func handlePostMessage(w http.ResponseWriter, r *http.Request, s dashboardStore, hub *Hub) {
 	var req sendMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

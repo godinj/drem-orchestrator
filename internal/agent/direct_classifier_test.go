@@ -198,33 +198,28 @@ func TestClassify_ContextCancelled(t *testing.T) {
 // working.
 func TestRunDirectClassifier_WritesOutputFile(t *testing.T) {
 	payload := `{"category":"standard","complexity_score":7,"title":"refactor","description":"split module","target_files":["a.go"],"rationale":"done"}`
-	srv := newFakeSGLangServer(t, payload, 100, 50)
+	srv := newFakeSGLangServer(t, payload, 200, 80)
 	defer srv.Close()
 
-	tmpDir, err := os.MkdirTemp("", "classifier-test-*")
-	require.NoError(t, err)
-	defer os.RemoveAll(tmpDir)
-
-	taskID := uuid.New()
 	cfg := DirectClassifierConfig{
 		Endpoint: srv.URL,
 		Model:    "gemma4-26b",
 		Timeout:  5 * time.Second,
 	}
 
-	result, err := RunDirectClassifier(cfg, taskID, "refactor", "split module", nil, tmpDir)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-
-	expectedPath := filepath.Join(tmpDir, fmt.Sprintf("classification-%s.json", taskID))
-	assert.Equal(t, expectedPath, result.OutputPath)
-
-	// Verify file content matches the payload
-	content, err := os.ReadFile(expectedPath)
+	outDir := t.TempDir()
+	taskID := uuid.New()
+	result, err := RunDirectClassifier(cfg, taskID, "refactor", "split module", nil, outDir)
 	require.NoError(t, err)
 
+	expected := filepath.Join(outDir, fmt.Sprintf("classification-%s.json", taskID))
+	assert.Equal(t, expected, result.OutputPath)
+	assert.Equal(t, 200, result.TokensIn)
+	assert.Equal(t, 80, result.TokensOut)
+
+	data, err := os.ReadFile(expected)
+	require.NoError(t, err)
 	var parsed map[string]any
-	require.NoError(t, json.Unmarshal(content, &parsed))
+	require.NoError(t, json.Unmarshal(data, &parsed))
 	assert.Equal(t, "standard", parsed["category"])
-	assert.EqualValues(t, 7, parsed["complexity_score"])
 }

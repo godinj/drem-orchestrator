@@ -758,31 +758,6 @@ func TestRender_CsuiteWatcherRoutingMountsAreWired(t *testing.T) {
 		"top-level volumes block must declare the watcher-data named volume")
 }
 
-func TestRender_CsuiteWatcherPersonaControlDockerAccessIsWired(t *testing.T) {
-	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
-	data.HostHome = "/home/operator"
-	out, err := projects.Render(data)
-	require.NoError(t, err)
-
-	var parsed struct {
-		Services map[string]struct {
-			Environment map[string]string `yaml:"environment"`
-			Volumes     []string          `yaml:"volumes"`
-		} `yaml:"services"`
-	}
-	require.NoError(t, yaml.Unmarshal(out, &parsed))
-
-	watcher := parsed.Services["csuite-watcher"]
-	require.Equal(t, "/home/operator/.drem/projects/drem-orchestrator/compose.yml",
-		watcher.Environment["DREM_PROJECT_COMPOSE"])
-	require.Equal(t, "docker compose", watcher.Environment["DREM_DOCKER_COMPOSE_CMD"])
-	require.Contains(t, watcher.Volumes, "/var/run/docker.sock:/var/run/docker.sock")
-	require.Contains(t, watcher.Volumes,
-		"/usr/libexec/docker/cli-plugins/docker-compose:/usr/libexec/docker/cli-plugins/docker-compose:ro")
-	require.Contains(t, watcher.Volumes,
-		"/home/operator/.drem/projects/drem-orchestrator/compose.yml:/home/operator/.drem/projects/drem-orchestrator/compose.yml:ro")
-}
-
 // TestRender_CsuiteWatcherTokenEnvIsDeclared asserts the compose
 // template declares CSUITE_WATCHER_TOKEN as an env key on the
 // watcher service (value unset, inherits from host shell at compose

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -39,6 +41,59 @@ func TestArtifactRegistryValidateRendersWarnings(t *testing.T) {
 	}
 	if !strings.Contains(out, "active authoritative artifact has no directive link") {
 		t.Fatalf("expected issue detail, got:\n%s", out)
+	}
+}
+
+func TestArtifactRegistrySeedPersonaContextUpdatesChangedArtifacts(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, artifactregistry.Models()...)
+	repo := t.TempDir()
+	t.Chdir(repo)
+	requireWriteFile(t, filepath.Join(repo, "CLAUDE.md"), "first guidance\n")
+
+	var buf bytes.Buffer
+	err := Run(db, []string{"artifact-registry", "seed-persona-context"}, &buf, false, nil, "")
+	if err != nil {
+		t.Fatalf("seed should succeed: %v", err)
+	}
+
+	registry := artifactregistry.NewRegistry(db)
+	first, err := registry.FindArtifactByURI(context.Background(), "repo:CLAUDE.md")
+	if err != nil {
+		t.Fatalf("find seeded artifact: %v", err)
+	}
+	if first.ContentHash == "" || first.LastSeenAt == nil || first.LastValidatedAt == nil {
+		t.Fatalf("expected content hash and validation timestamps, got %#v", first)
+	}
+
+	requireWriteFile(t, filepath.Join(repo, "CLAUDE.md"), "second guidance\n")
+	buf.Reset()
+	err = Run(db, []string{"artifact-registry", "seed-persona-context"}, &buf, false, nil, "")
+	if err != nil {
+		t.Fatalf("second seed should succeed: %v", err)
+	}
+
+	second, err := registry.FindArtifactByURI(context.Background(), "repo:CLAUDE.md")
+	if err != nil {
+		t.Fatalf("find updated artifact: %v", err)
+	}
+	if first.ID != second.ID {
+		t.Fatalf("artifact should be updated in place, got %s then %s", first.ID, second.ID)
+	}
+	if first.ContentHash == second.ContentHash {
+		t.Fatalf("content hash should change when artifact body changes")
+	}
+	if !second.UpdatedAt.After(first.UpdatedAt) && second.LastSeenAt.Equal(*first.LastSeenAt) {
+		t.Fatalf("metadata timestamps should be refreshed on reseed")
+	}
+}
+
+func requireWriteFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", path, err)
 	}
 }
 

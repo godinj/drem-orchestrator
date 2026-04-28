@@ -214,33 +214,3 @@ func TestRun_AllowsEmptyBothForDisabledSignaling(t *testing.T) {
 		t.Errorf("item-33 diagnostic should NOT fire when both endpoint and token are empty; stderr=%q", body)
 	}
 }
-
-func TestRun_RejectsInvalidRestartControlEnv(t *testing.T) {
-	restore := envSnapshot("DREM_CSUITE_MAX_MESSAGES_PER_SCAN")
-	defer restore()
-	_ = os.Setenv("DREM_CSUITE_MAX_MESSAGES_PER_SCAN", "not-an-int")
-
-	stdoutR, stdoutW, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe stdout: %v", err)
-	}
-	defer stdoutR.Close()
-	stderrR, stderrW, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("pipe stderr: %v", err)
-	}
-	defer stderrR.Close()
-
-	code := run([]string{"-persona", "seth"}, stdoutW, stderrW)
-	stdoutW.Close()
-	stderrW.Close()
-
-	if code != 2 {
-		t.Fatalf("exit code = %d, want 2", code)
-	}
-	var stderrBuf bytes.Buffer
-	_, _ = stderrBuf.ReadFrom(stderrR)
-	if !strings.Contains(stderrBuf.String(), "DREM_CSUITE_MAX_MESSAGES_PER_SCAN") {
-		t.Fatalf("stderr missing env diagnostic: %q", stderrBuf.String())
-	}
-}

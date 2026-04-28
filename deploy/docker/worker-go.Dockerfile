@@ -21,6 +21,15 @@ ARG GOLANGCI_LINT_VERSION=1.60.3
 
 USER root
 
+# ---- cgo toolchain ---------------------------------------------------------
+# Repo-wide Go tests use go-sqlite3. Install a C compiler so `bash -lc go test
+# ./...` runs with cgo enabled instead of compiling sqlite as a stub.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+         gcc \
+         libc6-dev \
+    && rm -rf /var/lib/apt/lists/*
+
 # ---- Go toolchain ---------------------------------------------------------
 # Download from the canonical go.dev/dl URL and verify against the pinned
 # SHA256. The tarball extracts to /usr/local/go; PATH already includes
@@ -39,6 +48,8 @@ RUN set -eux; \
     fi; \
     tar -C /usr/local -xzf /tmp/go.tgz; \
     rm -f /tmp/go.tgz; \
+    ln -sf /usr/local/go/bin/go /usr/local/bin/go; \
+    ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt; \
     /usr/local/go/bin/go version
 
 # ---- golangci-lint --------------------------------------------------------

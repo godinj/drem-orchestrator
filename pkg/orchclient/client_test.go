@@ -69,15 +69,17 @@ func TestListTasksEncodesFilter(t *testing.T) {
 	c, _ := newClient(t, h)
 
 	_, err := c.ListTasks(context.Background(), "myproj", orchclient.TaskFilter{
-		Status: "backlog",
-		Limit:  10,
-		Offset: 5,
+		Status:          "backlog",
+		Limit:           10,
+		Offset:          5,
+		IncludeArchived: true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, "/projects/myproj/tasks", h.lastPath)
 	require.Contains(t, h.lastRaw, "status=backlog")
 	require.Contains(t, h.lastRaw, "limit=10")
 	require.Contains(t, h.lastRaw, "offset=5")
+	require.Contains(t, h.lastRaw, "include_archived=true")
 }
 
 func TestListTasksNoFilterOmitsQuery(t *testing.T) {

@@ -19,8 +19,6 @@ package persona_test
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -32,9 +30,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/godinj/drem-orchestrator/internal/artifactregistry"
 	"github.com/godinj/drem-orchestrator/internal/csuite/persona"
-	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -62,11 +58,10 @@ func newTestFS(t *testing.T, promptBody string) testFS {
 	inbox := filepath.Join(root, "inbox")
 	outbox := filepath.Join(root, "outbox")
 	archive := filepath.Join(inbox, ".archive")
-	ignored := filepath.Join(inbox, ".ignored")
 	state := filepath.Join(root, "state.md")
 	prompt := filepath.Join(root, "prompts", "seth.md")
 
-	for _, d := range []string{inbox, outbox, archive, ignored, filepath.Dir(prompt)} {
+	for _, d := range []string{inbox, outbox, archive, filepath.Dir(prompt)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)
 		}
@@ -156,12 +151,6 @@ func recorderSpawner(calls *[]spawnCall, mu *sync.Mutex, handler func(call spawn
 	})
 }
 
-type failingAdmissionReporter struct{}
-
-func (failingAdmissionReporter) AdmitArtifacts(context.Context, artifactregistry.AdmissionRequest, []artifactregistry.Artifact) (*artifactregistry.AdmissionResult, error) {
-	return nil, errors.New("admission reporter unavailable")
-}
-
 // runPollerUntil launches p.Run in a goroutine and cancels ctx when cond
 // returns true or after timeout expires. It returns the timeout error so
 // callers can t.Fatal with a useful message.
@@ -188,27 +177,6 @@ func runPollerUntil(t *testing.T, p *persona.Poller, cond func() bool, timeout t
 	cancel()
 	<-done
 	return fmt.Errorf("condition not met within %s", timeout)
-}
-
-func runtimeStatus(t *testing.T, path string) string {
-	t.Helper()
-	return fmt.Sprint(runtimeStateMap(t, path)["status"])
-}
-
-func runtimeStateMap(t *testing.T, path string) map[string]any {
-	t.Helper()
-	body, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return map[string]any{}
-	}
-	if err != nil {
-		t.Fatalf("read runtime state: %v", err)
-	}
-	var state map[string]any
-	if err := json.Unmarshal(body, &state); err != nil {
-		t.Fatalf("decode runtime state: %v", err)
-	}
-	return state
 }
 
 // ---------------------------------------------------------------------------
@@ -342,191 +310,6 @@ func TestPoller_OrderingByMtime(t *testing.T) {
 	}
 }
 
-func TestPoller_StartupQuietPeriodSuppressesImmediateProcessing(t *testing.T) {
-	fs := newTestFS(t, "prompt")
-	cfg := baseConfig(fs)
-	cfg.StartupQuietPeriod = time.Hour
-	cfg.RuntimeStateFile = filepath.Join(fs.root, "runtime.json")
-
-	var calls []spawnCall
-	var mu sync.Mutex
-	p, err := persona.New(cfg, recorderSpawner(&calls, &mu, nil))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	writeInboxMessage(t, fs, "quiet.md", "wait", time.Now())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		_ = p.Run(ctx)
-		close(done)
-	}()
-
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if runtimeStatus(t, cfg.RuntimeStateFile) == "boot_quiet" {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	if got := runtimeStatus(t, cfg.RuntimeStateFile); got != "boot_quiet" {
-		t.Fatalf("runtime status = %q, want boot_quiet", got)
-	}
-	time.Sleep(50 * time.Millisecond)
-	cancel()
-	<-done
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(calls) != 0 {
-		t.Fatalf("startup quiet period should suppress spawns, got %d", len(calls))
-	}
-}
-
-func TestPoller_MaxMessagesAtBootLimitsFirstScan(t *testing.T) {
-	fs := newTestFS(t, "prompt")
-	cfg := baseConfig(fs)
-	cfg.PollInterval = time.Hour
-	cfg.MaxMessagesAtBoot = 1
-
-	var calls []spawnCall
-	var mu sync.Mutex
-	p, err := persona.New(cfg, recorderSpawner(&calls, &mu, nil))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	writeInboxMessage(t, fs, "001.md", "one", time.Now().Add(-time.Minute))
-	writeInboxMessage(t, fs, "002.md", "two", time.Now())
-
-	err = runPollerUntil(t, p, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(calls) >= 1
-	}, 2*time.Second)
-	if err != nil {
-		t.Fatalf("waiting for boot spawn: %v", err)
-	}
-	time.Sleep(50 * time.Millisecond)
-	mu.Lock()
-	defer mu.Unlock()
-	if len(calls) != 1 {
-		t.Fatalf("boot scan should process one message, got %d", len(calls))
-	}
-	if got := visibleInboxFiles(t, fs.inboxDir); len(got) != 1 || got[0] != "002.md" {
-		t.Fatalf("remaining inbox = %v, want [002.md]", got)
-	}
-}
-
-func TestPoller_MaxMessagesPerScanLimitsLaterScans(t *testing.T) {
-	fs := newTestFS(t, "prompt")
-	cfg := baseConfig(fs)
-	cfg.PollInterval = 20 * time.Millisecond
-	cfg.MaxMessagesAtBoot = 0
-	cfg.MaxMessagesPerScan = 1
-
-	var calls []spawnCall
-	var mu sync.Mutex
-	p, err := persona.New(cfg, recorderSpawner(&calls, &mu, nil))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	writeInboxMessage(t, fs, "001.md", "one", time.Now().Add(-time.Minute))
-	writeInboxMessage(t, fs, "002.md", "two", time.Now())
-
-	err = runPollerUntil(t, p, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(calls) >= 1
-	}, 2*time.Second)
-	if err != nil {
-		t.Fatalf("waiting for scan spawn: %v", err)
-	}
-	mu.Lock()
-	gotCalls := len(calls)
-	mu.Unlock()
-	if gotCalls != 1 {
-		t.Fatalf("first normal scan should process one message, got %d", gotCalls)
-	}
-	if got := visibleInboxFiles(t, fs.inboxDir); len(got) != 1 || got[0] != "002.md" {
-		t.Fatalf("remaining inbox = %v, want [002.md]", got)
-	}
-}
-
-func TestPoller_StartupDrainMovesFilesWithoutSpawning(t *testing.T) {
-	fs := newTestFS(t, "prompt")
-	cfg := baseConfig(fs)
-	cfg.PollInterval = time.Hour
-	cfg.StartupDrain = true
-
-	var calls []spawnCall
-	var mu sync.Mutex
-	p, err := persona.New(cfg, recorderSpawner(&calls, &mu, nil))
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	writeInboxMessage(t, fs, "drain.md", "ignore me", time.Now())
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		_ = p.Run(ctx)
-		close(done)
-	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if entries := dirEntries(t, filepath.Join(fs.inboxDir, ".ignored")); len(entries) == 1 {
-			break
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	cancel()
-	<-done
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(calls) != 0 {
-		t.Fatalf("startup drain should not spawn, got %d", len(calls))
-	}
-	if got := dirEntries(t, filepath.Join(fs.inboxDir, ".ignored")); len(got) != 1 || got[0] != "drain.md" {
-		t.Fatalf("ignored dir = %v, want [drain.md]", got)
-	}
-}
-
-func TestPoller_RuntimeStateProcessingAndIdle(t *testing.T) {
-	fs := newTestFS(t, "prompt")
-	cfg := baseConfig(fs)
-	cfg.RuntimeStateFile = filepath.Join(fs.root, "runtime.json")
-	cfg.MaxMessagesAtBoot = 1
-	processingSeen := make(chan struct{}, 1)
-
-	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
-		if st := runtimeStateMap(t, cfg.RuntimeStateFile); st["status"] == "processing" && st["current_inbox_filename"] == "state.md" {
-			processingSeen <- struct{}{}
-		}
-		return []byte("ok"), 0, nil
-	})
-	p, err := persona.New(cfg, spawner)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	writeInboxMessage(t, fs, "state.md", "body", time.Now())
-
-	err = runPollerUntil(t, p, func() bool { return runtimeStatus(t, cfg.RuntimeStateFile) == "idle" }, 2*time.Second)
-	if err != nil {
-		t.Fatalf("waiting for idle runtime state: %v", err)
-	}
-	select {
-	case <-processingSeen:
-	default:
-		t.Fatal("spawner did not observe processing runtime state")
-	}
-	st := runtimeStateMap(t, cfg.RuntimeStateFile)
-	if st["last_processed_filename"] != "state.md" {
-		t.Fatalf("last_processed_filename = %v, want state.md", st["last_processed_filename"])
-	}
-}
-
 // TestPoller_FrontmatterBodyGoesInFinalOpenCodeArg asserts that the
 // frontmatter-bearing message body is isolated to OpenCode's final prompt
 // argument and never appears in the flag prefix.
@@ -585,112 +368,6 @@ func TestPoller_FrontmatterBodyGoesInFinalOpenCodeArg(t *testing.T) {
 	want := []string{"opencode", "run", "--format", "json", "--agent", "build", "--dir", "/home/drem", "--model", "openai/gpt-5.5", "--variant", "high"}
 	if len(call.argv) != len(want)+1 || !equalArgv(call.argv[:len(want)], want) {
 		t.Fatalf("argv shape regressed\nwant: %v\ngot:  %v", want, call.argv)
-	}
-}
-
-func TestPoller_ReportOnlyAdmissionRecordsPromptAndInboxCandidates(t *testing.T) {
-	fs := newTestFS(t, "Seth system prompt body.")
-	db := testutil.NewTestDBWithModels(t, artifactregistry.Models()...)
-	cfg := baseConfig(fs)
-	cfg.ArtifactAdmissionReporter = artifactregistry.NewRegistry(db)
-
-	var calls []spawnCall
-	var mu sync.Mutex
-	spawner := recorderSpawner(&calls, &mu, func(_ spawnCall) ([]byte, int, error) {
-		return []byte("ok"), 0, nil
-	})
-	p, err := persona.New(cfg, spawner)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	writeInboxMessage(t, fs, "001-ping.md", "hi persona", time.Now())
-
-	err = runPollerUntil(t, p, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(calls) >= 1
-	}, 2*time.Second)
-	if err != nil {
-		t.Fatalf("waiting for spawn: %v", err)
-	}
-
-	mu.Lock()
-	if len(calls) != 1 {
-		mu.Unlock()
-		t.Fatalf("want 1 spawn, got %d", len(calls))
-	}
-	promptArg := calls[0].promptArg()
-	mu.Unlock()
-	if !strings.Contains(promptArg, "Seth system prompt body.") || !strings.Contains(promptArg, "hi persona") {
-		t.Fatalf("spawn prompt content changed unexpectedly: %q", promptArg)
-	}
-
-	var packets []artifactregistry.ContextPacket
-	if err := db.Find(&packets).Error; err != nil {
-		t.Fatalf("load packets: %v", err)
-	}
-	if len(packets) != 1 {
-		t.Fatalf("want one admission packet, got %d", len(packets))
-	}
-	if packets[0].Persona != "seth" || packets[0].AgentRole != "csuite_persona" || packets[0].WorkflowStage != "persona_turn_prompt_assembly" {
-		t.Fatalf("unexpected packet: %#v", packets[0])
-	}
-	if packets[0].Metadata["report_only"] != true {
-		t.Fatalf("packet must be report-only, got metadata %#v", packets[0].Metadata)
-	}
-
-	var decisions []artifactregistry.ContextAdmissionDecision
-	if err := db.Order("created_at ASC").Find(&decisions).Error; err != nil {
-		t.Fatalf("load decisions: %v", err)
-	}
-	if len(decisions) != 2 {
-		t.Fatalf("want two decisions, got %d (%#v)", len(decisions), decisions)
-	}
-	for _, decision := range decisions {
-		if decision.ContextPacketID != packets[0].ID {
-			t.Fatalf("decision packet id mismatch: %#v", decision)
-		}
-		if decision.Decision != artifactregistry.DecisionExcludeInadmissible {
-			t.Fatalf("candidate should be report-only inadmissible, got %#v", decision)
-		}
-		if decision.Metadata["report_only"] != true || decision.Metadata["content_uri"] == "" {
-			t.Fatalf("decision must carry report-only candidate metadata, got %#v", decision.Metadata)
-		}
-	}
-
-	if got := visibleInboxFiles(t, fs.inboxDir); len(got) != 0 {
-		t.Fatalf("inbox want empty after report-only admission, got %v", got)
-	}
-}
-
-func TestPoller_ReportOnlyAdmissionFailureDoesNotBlockTurn(t *testing.T) {
-	fs := newTestFS(t, "prompt")
-	cfg := baseConfig(fs)
-	cfg.ArtifactAdmissionReporter = failingAdmissionReporter{}
-
-	var calls []spawnCall
-	var mu sync.Mutex
-	spawner := recorderSpawner(&calls, &mu, func(_ spawnCall) ([]byte, int, error) {
-		return []byte("ok"), 0, nil
-	})
-	p, err := persona.New(cfg, spawner)
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	writeInboxMessage(t, fs, "001-ping.md", "hi persona", time.Now())
-
-	err = runPollerUntil(t, p, func() bool {
-		mu.Lock()
-		defer mu.Unlock()
-		return len(calls) >= 1
-	}, 2*time.Second)
-	if err != nil {
-		t.Fatalf("waiting for spawn: %v", err)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(calls) != 1 {
-		t.Fatalf("admission report failure must not block spawn, got %d calls", len(calls))
 	}
 }
 
@@ -895,9 +572,6 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	}
 	if cfg.ArchiveDir != "/home/drem/.drem-csuite/mike/inbox/.archive" {
 		t.Errorf("ArchiveDir = %q", cfg.ArchiveDir)
-	}
-	if cfg.RuntimeStateFile != "/home/drem/.drem-csuite/mike/runtime.json" {
-		t.Errorf("RuntimeStateFile = %q", cfg.RuntimeStateFile)
 	}
 	if cfg.PromptFile != "/opt/csuite/prompts/mike.md" {
 		t.Errorf("PromptFile = %q", cfg.PromptFile)

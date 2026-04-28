@@ -25,19 +25,23 @@ HTTP-only C-Suite persona CLI. Defaults come from DREM_ORCH_URL and DREM_PROJECT
 
 Commands:
   projects
-  tasks [--status STATUS] [--limit N] [--offset N]
+  tasks [--status STATUS] [--limit N] [--offset N] [--include-archived]
   workers
   worker <worker-id>
   history <worker-id|container-id>
   events [--since RFC3339] [--limit N]
   logs --container NAME [--follow] [--since RFC3339]
   status
+  create --title TEXT --description TEXT
+  create-task --title TEXT --description TEXT
+  file-task --title TEXT --description TEXT
   approve <task-id-prefix>
   reject <task-id-prefix> [--reason TEXT]
   pass <task-id-prefix>
   fail <task-id-prefix>
   answer <task-id-prefix> --body TEXT
   retry <task-id-prefix>
+  archive <task-id-prefix> --reason TEXT [--actor TEXT]
   comment <task-id-prefix> --body TEXT
 `
 
@@ -111,7 +115,12 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 			return err
 		}
 		return handleStatus(ctx, client, cfg, stdout)
-	case "approve", "reject", "pass", "fail", "answer", "retry", "comment":
+	case "create", "create-task", "file-task":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleCreateTask(ctx, client, cfg, command, commandArgs, stdout)
+	case "approve", "reject", "pass", "fail", "answer", "retry", "archive", "comment":
 		if err := requireProject(cfg); err != nil {
 			return err
 		}
@@ -167,16 +176,18 @@ func handleTasks(ctx context.Context, client *orchclient.Client, cfg cliConfig, 
 	status := fs.String("status", "", "task status filter")
 	limit := fs.Int("limit", 0, "result limit")
 	offset := fs.Int("offset", 0, "result offset")
+	includeArchived := fs.Bool("include-archived", false, "include archived/cancelled tasks in unfiltered lists")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: dremctl tasks [--status STATUS] [--limit N] [--offset N]")
+		return errors.New("usage: dremctl tasks [--status STATUS] [--limit N] [--offset N] [--include-archived]")
 	}
 	tasks, err := client.ListTasks(ctx, cfg.project, orchclient.TaskFilter{
-		Status: *status,
-		Limit:  *limit,
-		Offset: *offset,
+		Status:          *status,
+		Limit:           *limit,
+		Offset:          *offset,
+		IncludeArchived: *includeArchived,
 	})
 	if err != nil {
 		return err
@@ -308,15 +319,50 @@ func listAllTasks(ctx context.Context, client *orchclient.Client, project string
 	}
 }
 
+func handleCreateTask(ctx context.Context, client *orchclient.Client, cfg cliConfig, command string, args []string, stdout io.Writer) error {
+	title, args, err := parseStringOption(args, "title")
+	if err != nil {
+		return err
+	}
+	description, args, err := parseStringOption(args, "description")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(title) == "" {
+		return errors.New("--title is required")
+	}
+	if strings.TrimSpace(description) == "" {
+		return errors.New("--description is required")
+	}
+	if len(args) != 0 {
+		return fmt.Errorf("usage: dremctl %s", mutationUsage(command))
+	}
+	dto, err := client.CreateTask(ctx, cfg.project, title, description)
+	if err != nil {
+		return err
+	}
+	return renderMutatedTask(stdout, cfg.json, dto)
+}
+
 func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfig, command string, args []string, stdout io.Writer) error {
 	reason := ""
+	actor := ""
 	body := ""
 	var err error
 
-	if command == "reject" {
+	if command == "reject" || command == "archive" {
 		reason, args, err = parseStringOption(args, "reason")
 		if err != nil {
 			return err
+		}
+	}
+	if command == "archive" {
+		actor, args, err = parseStringOption(args, "actor")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(reason) == "" {
+			return errors.New("--reason is required")
 		}
 	}
 	if command == "answer" || command == "comment" {
@@ -351,6 +397,8 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 		dto, err = client.Answer(ctx, cfg.project, taskID, body)
 	case "retry":
 		dto, err = client.Retry(ctx, cfg.project, taskID)
+	case "archive":
+		dto, err = client.Archive(ctx, cfg.project, taskID, reason, actor)
 	case "comment":
 		comment, err := client.Comment(ctx, cfg.project, taskID, body)
 		if err != nil {
@@ -370,8 +418,12 @@ func mutationUsage(command string) string {
 	switch command {
 	case "reject":
 		return "reject <task-id-prefix> [--reason TEXT]"
+	case "archive":
+		return "archive <task-id-prefix> --reason TEXT [--actor TEXT]"
 	case "answer", "comment":
 		return command + " <task-id-prefix> --body TEXT"
+	case "create", "file-task":
+		return command + " --title TEXT --description TEXT"
 	default:
 		return command + " <task-id-prefix>"
 	}

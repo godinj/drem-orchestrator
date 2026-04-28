@@ -56,7 +56,9 @@ Workers are ephemeral-per-task containers spawned by
 ## Bare-repo config
 
 Registered projects' bare git repos must have
-`receive.denyCurrentBranch=ignore` (see `internal/projects/bare_repo.go`
-and `plans/bare-repo-denyCurrentBranch.md`). `drem project register`
-and `--update` set it automatically; back-fill on existing
+`receive.denyCurrentBranch=ignore` and
+`receive.denyDeleteCurrent=ignore` (see
+`internal/projects/bare_repo.go` and
+`plans/bare-repo-denyCurrentBranch.md`). `drem project register`
+and `--update` set them automatically; back-fill on existing
 pre-pivot repos with a direct `git config`.

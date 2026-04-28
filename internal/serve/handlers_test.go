@@ -240,7 +240,7 @@ func TestAgentsHandler_RequiredFields(t *testing.T) {
 	}
 	row := rows[0]
 
-	for _, field := range []string{"name", "status", "context_percent", "current_activity", "unread_count", "ack_count"} {
+	for _, field := range []string{"name", "status", "context_percent", "current_activity", "unread_count"} {
 		if _, ok := row[field]; !ok {
 			t.Errorf("row missing required field %q", field)
 		}

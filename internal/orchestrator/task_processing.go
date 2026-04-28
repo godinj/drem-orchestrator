@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -177,9 +180,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 		}
 	}
 	if totalSpawns >= MaxTotalPlannerSpawns {
-		return o.failTask(task, fmt.Sprintf(
-			"planner spawn cap reached (%d/%d) — task needs human review",
-			totalSpawns, MaxTotalPlannerSpawns))
+		return o.blockPlannerCapacityExhausted(task, totalSpawns)
 	}
 
 	if !o.runner.CanSpawn() {
@@ -272,6 +273,52 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 	o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(model.AgentPlanner), string(model.AgentWorking))
 	o.logger.Info("planner spawned", "task_id", task.ID, "agent_id", ag.ID,
 		"total_planner_spawns", totalSpawns+1)
+	return nil
+}
+
+func (o *Orchestrator) blockPlannerCapacityExhausted(task *model.Task, totalSpawns int) error {
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	alreadyBlocked, _ := task.Context["planner_capacity_exhausted"].(bool)
+	task.Context["planner_capacity_exhausted"] = true
+	task.Context["planner_capacity_reason"] = "planner_capacity_exhausted"
+	task.Context["planner_capacity_message"] = fmt.Sprintf(
+		"planner spawn cap reached (%d/%d); task remains in planning for recoverable backpressure",
+		totalSpawns, MaxTotalPlannerSpawns)
+	task.Context["planner_capacity_total_spawns"] = float64(totalSpawns)
+	task.Context["planner_capacity_max_spawns"] = float64(MaxTotalPlannerSpawns)
+	if err := o.db.Save(task).Error; err != nil {
+		return fmt.Errorf("process planning: save planner capacity block: %w", err)
+	}
+	if alreadyBlocked {
+		return nil
+	}
+	now := time.Now()
+	if err := o.db.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    task.ID,
+		EventType: "planner_capacity_exhausted",
+		OldValue:  string(model.StatusPlanning),
+		NewValue:  string(model.StatusPlanning),
+		Details: model.JSONField{
+			"reason":        "planner_capacity_exhausted",
+			"total_spawns":  totalSpawns,
+			"max_spawns":    MaxTotalPlannerSpawns,
+			"recovery_hint": "wait for planner capacity or operator recovery; do not mark task failed for admission backpressure",
+		},
+		Actor:     "orchestrator",
+		CreatedAt: now,
+	}).Error; err != nil {
+		return fmt.Errorf("process planning: save planner capacity event: %w", err)
+	}
+	o.emit("planner_capacity_exhausted", map[string]any{
+		"task_id":      task.ID,
+		"total_spawns": totalSpawns,
+		"max_spawns":   MaxTotalPlannerSpawns,
+	})
+	o.logger.Warn("planner capacity exhausted; task remains in planning",
+		"task_id", task.ID, "total_spawns", totalSpawns, "max_spawns", MaxTotalPlannerSpawns)
 	return nil
 }
 

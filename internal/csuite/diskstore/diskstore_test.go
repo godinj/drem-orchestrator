@@ -75,8 +75,6 @@ func TestStore_AgentDashboard_PopulatedInboxes(t *testing.T) {
 		frontmatterFile("operator", "mike", "second", "again", "bbbbbbbb", t2))
 	seedFile(t, root, "alex", "inbox", "20260101T000200Z-operator-to-alex-cccccccc.md",
 		frontmatterFile("operator", "alex", "alex topic", "yo", "cccccccc", t1))
-	seedFile(t, root, "mike", "acks", "20260101T000300Z-alex-eeeeeeee.md",
-		frontmatterFile("alex", "mike", "ack", "seen", "eeeeeeee", t2.Add(time.Minute)))
 
 	// Adjust mtimes so latestInbox check is meaningful.
 	mikePath := filepath.Join(root, "mike", "inbox", "20260101T000100Z-operator-to-mike-bbbbbbbb.md")
@@ -100,12 +98,6 @@ func TestStore_AgentDashboard_PopulatedInboxes(t *testing.T) {
 
 	if got := byName["mike"].UnreadCount; got != 2 {
 		t.Errorf("mike UnreadCount: want 2, got %d", got)
-	}
-	if got := byName["mike"].AckCount; got != 1 {
-		t.Errorf("mike AckCount: want 1, got %d", got)
-	}
-	if byName["mike"].LatestAck == nil {
-		t.Errorf("mike LatestAck: want non-nil")
 	}
 	if got := byName["alex"].UnreadCount; got != 1 {
 		t.Errorf("alex UnreadCount: want 1, got %d", got)
@@ -141,12 +133,6 @@ func TestStore_AgentDashboard_EmptyTree(t *testing.T) {
 		}
 		if rows[i].LatestInbox != nil {
 			t.Errorf("row %d LatestInbox: want nil, got %v", i, rows[i].LatestInbox)
-		}
-		if rows[i].AckCount != 0 {
-			t.Errorf("row %d AckCount: want 0, got %d", i, rows[i].AckCount)
-		}
-		if rows[i].LatestAck != nil {
-			t.Errorf("row %d LatestAck: want nil, got %v", i, rows[i].LatestAck)
 		}
 	}
 }
@@ -272,88 +258,6 @@ func TestStore_CreateMessage_RejectEmptyFields(t *testing.T) {
 				t.Fatalf("want error, got nil")
 			}
 		})
-	}
-}
-
-func TestStore_ListInboxQueue_ExcludesArchivedAndIgnored(t *testing.T) {
-	root := t.TempDir()
-	now := time.Now().UTC()
-	seedFile(t, root, "mike", "inbox", "20260101T000000Z-operator-to-mike-aaaaaaaa.md",
-		frontmatterFile("operator", "mike", "live", "live body", "aaaaaaaa", now.Add(-2*time.Minute)))
-	seedFile(t, root, "mike", filepath.Join("inbox", ".archive"), "20260101T000100Z-operator-to-mike-bbbbbbbb.md",
-		frontmatterFile("operator", "mike", "archived", "archived body", "bbbbbbbb", now.Add(-1*time.Minute)))
-	seedFile(t, root, "mike", filepath.Join("inbox", ".ignored"), "20260101T000200Z-operator-to-mike-cccccccc.md",
-		frontmatterFile("operator", "mike", "ignored", "ignored body", "cccccccc", now))
-
-	items, err := New(root).ListInboxQueue("mike", 0)
-	if err != nil {
-		t.Fatalf("ListInboxQueue: %v", err)
-	}
-	if len(items) != 1 {
-		t.Fatalf("len = %d, want 1", len(items))
-	}
-	if items[0].Subject != "live" || items[0].Filename == "" {
-		t.Fatalf("unexpected item: %+v", items[0])
-	}
-}
-
-func TestStore_ArchiveAndIgnoreInboxItem_MoveOnlySelectedLiveFile(t *testing.T) {
-	root := t.TempDir()
-	now := time.Now().UTC()
-	archiveName := "20260101T000000Z-operator-to-mike-aaaaaaaa.md"
-	ignoreName := "20260101T000100Z-operator-to-mike-bbbbbbbb.md"
-	seedFile(t, root, "mike", "inbox", archiveName,
-		frontmatterFile("operator", "mike", "archive me", "body", "aaaaaaaa", now.Add(-2*time.Minute)))
-	seedFile(t, root, "mike", "inbox", ignoreName,
-		frontmatterFile("operator", "mike", "ignore me", "body", "bbbbbbbb", now.Add(-1*time.Minute)))
-
-	store := New(root)
-	items, err := store.ListInboxQueue("mike", 0)
-	if err != nil {
-		t.Fatalf("ListInboxQueue: %v", err)
-	}
-	ids := map[string]string{}
-	for _, item := range items {
-		ids[item.Subject] = item.ID.String()
-	}
-
-	if err := store.ArchiveInboxItem("mike", ids["archive me"], "operator restart review"); err != nil {
-		t.Fatalf("ArchiveInboxItem: %v", err)
-	}
-	if err := store.IgnoreInboxItem("mike", ids["ignore me"], "operator restart review"); err != nil {
-		t.Fatalf("IgnoreInboxItem: %v", err)
-	}
-
-	if _, err := os.Stat(filepath.Join(root, "mike", "inbox", ".archive", archiveName)); err != nil {
-		t.Fatalf("archived file not moved: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "mike", "inbox", ".ignored", ignoreName)); err != nil {
-		t.Fatalf("ignored file not moved: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(root, "mike", "inbox", archiveName)); !os.IsNotExist(err) {
-		t.Fatalf("archive source still exists or unexpected error: %v", err)
-	}
-
-	remaining, err := store.ListInboxQueue("mike", 0)
-	if err != nil {
-		t.Fatalf("ListInboxQueue after moves: %v", err)
-	}
-	if len(remaining) != 0 {
-		t.Fatalf("remaining live items = %d, want 0", len(remaining))
-	}
-}
-
-func TestStore_InboxQueue_RejectsUnknownPersonaAndID(t *testing.T) {
-	root := t.TempDir()
-	store := New(root)
-	if _, err := store.ListInboxQueue("ross", 0); err == nil {
-		t.Fatalf("ListInboxQueue unknown persona: want error")
-	}
-	if err := store.ArchiveInboxItem("ross", uuid.NewString(), ""); err == nil {
-		t.Fatalf("ArchiveInboxItem unknown persona: want error")
-	}
-	if err := store.IgnoreInboxItem("mike", uuid.NewString(), ""); err == nil {
-		t.Fatalf("IgnoreInboxItem unknown id: want error")
 	}
 }
 
@@ -542,8 +446,6 @@ func TestStore_GetMessageCountByAgent(t *testing.T) {
 	// Operator inbox should not affect mike's count.
 	seedFile(t, root, "operator", "inbox", "20260101T000300Z-mike-to-operator-dddddddd.md",
 		frontmatterFile("mike", "operator", "t4", "b", "dddddddd", now))
-	seedFile(t, root, "mike", "acks", "20260101T000400Z-alex-to-mike-eeeeeeee.md",
-		frontmatterFile("alex", "mike", "ack", "seen", "eeeeeeee", now))
 
 	store := New(root)
 	count, err := store.GetMessageCountByAgent("mike")
@@ -559,29 +461,6 @@ func TestStore_GetMessageCountByAgent(t *testing.T) {
 	}
 	if opCount != 1 {
 		t.Errorf("operator count: want 1, got %d", opCount)
-	}
-}
-
-func TestStore_GetAcksByAgent(t *testing.T) {
-	root := t.TempDir()
-	now := time.Now().UTC().Truncate(time.Second)
-	seedFile(t, root, "mike", "acks", "20260101T000000Z-alex-to-mike-aaaaaaaa.md",
-		frontmatterFile("alex", "mike", "ack old", "old ack", "aaaaaaaa", now.Add(-time.Minute)))
-	seedFile(t, root, "mike", "acks", "20260101T000100Z-seth-to-mike-bbbbbbbb.md",
-		frontmatterFile("seth", "mike", "ack new", "new ack", "bbbbbbbb", now))
-	seedFile(t, root, "mike", "inbox", "20260101T000200Z-operator-to-mike-cccccccc.md",
-		frontmatterFile("operator", "mike", "normal", "not an ack", "cccccccc", now.Add(time.Minute)))
-
-	store := New(root)
-	acks, err := store.GetAcksByAgent("mike", 1)
-	if err != nil {
-		t.Fatalf("GetAcksByAgent: %v", err)
-	}
-	if len(acks) != 1 {
-		t.Fatalf("len = %d, want 1", len(acks))
-	}
-	if acks[0].Subject != "ack new" || acks[0].Body != "new ack\n" {
-		t.Errorf("unexpected ack: %#v", acks[0])
 	}
 }
 

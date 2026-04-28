@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"text/tabwriter"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -184,6 +185,7 @@ func seedArtifactFromFile(item personaSeedArtifact) (artifactregistry.Artifact, 
 		return artifactregistry.Artifact{}, false, fmt.Errorf("read seed artifact %s: %w", item.Path, err)
 	}
 	sum := sha256.Sum256(contents)
+	now := time.Now().UTC()
 	return artifactregistry.Artifact{
 		ID:               uuid.NewSHA1(uuid.NameSpaceURL, []byte("drem:artifact:repo:"+filepath.ToSlash(path))),
 		ArtifactType:     item.ArtifactType,
@@ -199,6 +201,14 @@ func seedArtifactFromFile(item personaSeedArtifact) (artifactregistry.Artifact, 
 		EvidenceTrust:    item.EvidenceTrust,
 		Confidence:       artifactregistry.TrustHigh,
 		VisibilityScope:  item.PersonaScope,
+		LastSeenAt:       &now,
+		LastValidatedAt:  &now,
 		ValidationStatus: artifactregistry.ValidationValid,
+		Metadata: map[string]any{
+			"path":          filepath.ToSlash(path),
+			"size_bytes":    len(contents),
+			"seeded_by":     "artifact-registry seed-persona-context",
+			"seeded_at_utc": now.Format(time.RFC3339),
+		},
 	}, true, nil
 }

@@ -135,7 +135,11 @@ func CommitUnstagedChanges(ctx context.Context, dir, message string) (bool, erro
 		return false, nil
 	}
 
-	if _, err := RunGit(ctx, dir, "commit", "-m", message); err != nil {
+	if _, err := RunGit(ctx, dir,
+		"-c", "user.name=drem-orchestrator",
+		"-c", "user.email=drem-orchestrator@localhost",
+		"commit", "-m", message,
+	); err != nil {
 		return false, fmt.Errorf("commit unstaged: commit: %w", err)
 	}
 	return true, nil
@@ -160,7 +164,11 @@ func UntrackEphemeralFiles(ctx context.Context, dir string) (bool, error) {
 	if !untracked {
 		return false, nil
 	}
-	if _, err := RunGit(ctx, dir, "commit", "-m", "chore: untrack ephemeral files before merge"); err != nil {
+	if _, err := RunGit(ctx, dir,
+		"-c", "user.name=drem-orchestrator",
+		"-c", "user.email=drem-orchestrator@localhost",
+		"commit", "-m", "chore: untrack ephemeral files before merge",
+	); err != nil {
 		return false, fmt.Errorf("commit ephemeral file removal: %w", err)
 	}
 	return true, nil

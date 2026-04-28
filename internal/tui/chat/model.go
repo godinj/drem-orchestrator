@@ -1,7 +1,6 @@
 package chat
 
 import (
-	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -15,20 +14,9 @@ import (
 
 const (
 	messagesPerPage    = 50
-	inboxQueueLimit    = 50
 	agentRefreshRate   = 5 * time.Second
 	messageRefreshRate = 5 * time.Second
 	maxBackoff         = 30 * time.Second
-)
-
-var errNoActivePersona = errors.New("no active persona loaded yet")
-
-type viewMode int
-
-const (
-	modeChat viewMode = iota
-	modeInboxQueue
-	modePersonaControl
 )
 
 type connState int
@@ -72,22 +60,6 @@ type Model struct {
 	oldestID map[string]string
 	hasMore  map[string]bool
 	loaded   map[string]bool
-
-	// Inbox queue review.
-	mode               viewMode
-	inboxQueueAgent    string
-	inboxQueue         []bridgeclient.InboxQueueItem
-	inboxQueueCursor   int
-	inboxPendingAction string
-	inboxPendingItemID string
-
-	// Persona container control.
-	personaContainers    []bridgeclient.PersonaContainer
-	personaControlCursor int
-	personaControlReady  bool
-	personaControlReason string
-	controlPendingAction string
-	controlPendingTarget string
 
 	// UI components.
 	viewport viewport.Model
@@ -178,56 +150,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messagesErrMsg:
 		m.err = msg.err
 
-	case inboxQueueLoadedMsg:
-		m.inboxQueueAgent = msg.agent
-		m.inboxQueue = msg.items
-		if m.inboxQueueCursor >= len(m.inboxQueue) {
-			m.inboxQueueCursor = len(m.inboxQueue) - 1
-		}
-		if m.inboxQueueCursor < 0 {
-			m.inboxQueueCursor = 0
-		}
-		m.clearInboxPendingAction()
-		m.err = nil
-		m.rebuildViewport()
-
-	case inboxQueueErrMsg:
-		m.err = msg.err
-
-	case inboxQueueActionDoneMsg:
-		m.clearInboxPendingAction()
-		cmds = append(cmds, fetchInboxQueue(m.client, msg.agent, inboxQueueLimit))
-
-	case inboxQueueActionErrMsg:
-		m.clearInboxPendingAction()
-		m.err = msg.err
-
-	case personaContainersLoadedMsg:
-		m.personaControlReady = msg.available
-		m.personaControlReason = msg.reason
-		m.personaContainers = withAllPersonaTarget(msg.items)
-		if m.personaControlCursor >= len(m.personaContainers) {
-			m.personaControlCursor = len(m.personaContainers) - 1
-		}
-		if m.personaControlCursor < 0 {
-			m.personaControlCursor = 0
-		}
-		m.clearControlPendingAction()
-		m.err = nil
-		m.rebuildViewport()
-
-	case personaContainersErrMsg:
-		m.err = msg.err
-
-	case personaControlDoneMsg:
-		m.clearControlPendingAction()
-		cmds = append(cmds, fetchPersonaContainers(m.client))
-
-	case personaControlErrMsg:
-		m.clearControlPendingAction()
-		m.err = msg.err
-		m.rebuildViewport()
-
 	case messageSentMsg:
 		// The WebSocket broadcast will deliver this back to us as a
 		// new_message event, so we don't append here to avoid duplicates.
@@ -270,15 +192,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, tickRefreshAgents(agentRefreshRate))
 
 	case tickRefreshMessagesMsg:
-		if m.mode == modeChat {
-			if name := m.activeAgentName(); name != "" {
-				cmds = append(cmds, fetchMessages(m.client, name, messagesPerPage, "", false))
-			}
-		} else if m.mode == modePersonaControl {
-			cmds = append(cmds, fetchPersonaContainers(m.client))
-		} else if m.inboxQueueAgent != "" {
-			cmds = append(cmds, fetchInboxQueue(m.client, m.inboxQueueAgent, inboxQueueLimit))
-		} else if name := m.activeAgentName(); name != "" {
+		if name := m.activeAgentName(); name != "" {
 			cmds = append(cmds, fetchMessages(m.client, name, messagesPerPage, "", false))
 		}
 		cmds = append(cmds, tickRefreshMessages(messageRefreshRate))
@@ -300,20 +214,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.ws.Close() //nolint:errcheck
 		}
 		return m, tea.Quit
-	}
-
-	if m.mode == modeInboxQueue {
-		return m.handleInboxQueueKey(msg)
-	}
-	if m.mode == modePersonaControl {
-		return m.handlePersonaControlKey(msg)
-	}
-
-	if isOpenInboxKey(msg) {
-		return m.openInboxQueue()
-	}
-	if isOpenControlKey(msg) {
-		return m.openPersonaControl()
 	}
 
 	if key.Matches(msg, keys.NextTab) {
@@ -343,14 +243,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if key.Matches(msg, keys.Send) {
 		text := strings.TrimSpace(m.input.Value())
-		switch text {
-		case "/inbox":
-			m.input.SetValue("")
-			return m.openInboxQueue()
-		case "/control":
-			m.input.SetValue("")
-			return m.openPersonaControl()
-		}
 		if text != "" && len(m.agents) > 0 {
 			m.input.SetValue("")
 			return m, sendMessage(m.client, bridgeclient.SendRequest{
@@ -395,94 +287,6 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
-}
-
-func (m Model) handleInboxQueueKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if key.Matches(msg, keys.Cancel) {
-		m.mode = modeChat
-		m.clearInboxPendingAction()
-		m.rebuildViewport()
-		m.viewport.GotoBottom()
-		return m, nil
-	}
-	if key.Matches(msg, keys.Refresh) {
-		m.clearInboxPendingAction()
-		return m, fetchInboxQueue(m.client, m.inboxQueueAgent, inboxQueueLimit)
-	}
-	if key.Matches(msg, keys.LineUp) {
-		if m.inboxQueueCursor > 0 {
-			m.inboxQueueCursor--
-			m.clearInboxPendingAction()
-			m.rebuildViewport()
-		}
-		return m, nil
-	}
-	if key.Matches(msg, keys.LineDown) {
-		if m.inboxQueueCursor < len(m.inboxQueue)-1 {
-			m.inboxQueueCursor++
-			m.clearInboxPendingAction()
-			m.rebuildViewport()
-		}
-		return m, nil
-	}
-	if key.Matches(msg, keys.Archive) {
-		return m.confirmOrRunInboxAction("archive")
-	}
-	if key.Matches(msg, keys.Ignore) {
-		return m.confirmOrRunInboxAction("ignore")
-	}
-	return m, nil
-}
-
-func (m Model) handlePersonaControlKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if key.Matches(msg, keys.Cancel) {
-		m.mode = modeChat
-		m.clearControlPendingAction()
-		m.rebuildViewport()
-		m.viewport.GotoBottom()
-		return m, nil
-	}
-	if key.Matches(msg, keys.Refresh) {
-		m.clearControlPendingAction()
-		return m, fetchPersonaContainers(m.client)
-	}
-	if key.Matches(msg, keys.LineUp) {
-		if m.personaControlCursor > 0 {
-			m.personaControlCursor--
-			m.clearControlPendingAction()
-			m.rebuildViewport()
-		}
-		return m, nil
-	}
-	if key.Matches(msg, keys.LineDown) {
-		if m.personaControlCursor < len(m.personaContainers)-1 {
-			m.personaControlCursor++
-			m.clearControlPendingAction()
-			m.rebuildViewport()
-		}
-		return m, nil
-	}
-	if key.Matches(msg, keys.SelectAllControl) {
-		for i, item := range m.personaContainers {
-			if item.Target == "all" {
-				m.personaControlCursor = i
-				m.clearControlPendingAction()
-				m.rebuildViewport()
-				break
-			}
-		}
-		return m, nil
-	}
-	if key.Matches(msg, keys.StopPersona) {
-		return m.confirmOrRunControlAction("stop")
-	}
-	if key.Matches(msg, keys.StartPersona) {
-		return m.confirmOrRunControlAction("start")
-	}
-	if key.Matches(msg, keys.RecreatePersona) {
-		return m.confirmOrRunControlAction("recreate")
-	}
-	return m, nil
 }
 
 // --- Helpers ---
@@ -567,98 +371,6 @@ func (m Model) switchTab(idx int) (tea.Model, tea.Cmd) {
 	m.rebuildViewport()
 	m.viewport.GotoBottom()
 	return m, fetchMessages(m.client, name, messagesPerPage, "", false)
-}
-
-func (m Model) openInboxQueue() (tea.Model, tea.Cmd) {
-	agent := m.activeAgentName()
-	if agent == "" {
-		m.err = errNoActivePersona
-		return m, nil
-	}
-	m.mode = modeInboxQueue
-	m.inboxQueueAgent = agent
-	m.inboxQueueCursor = 0
-	m.clearInboxPendingAction()
-	m.rebuildViewport()
-	return m, fetchInboxQueue(m.client, agent, inboxQueueLimit)
-}
-
-func isOpenInboxKey(msg tea.KeyMsg) bool {
-	return msg.Type == tea.KeyCtrlS || msg.Type == tea.KeyF6 || key.Matches(msg, keys.OpenInbox)
-}
-
-func isOpenControlKey(msg tea.KeyMsg) bool {
-	return msg.Type == tea.KeyCtrlD || msg.Type == tea.KeyF7 || key.Matches(msg, keys.OpenControl)
-}
-
-func (m Model) openPersonaControl() (tea.Model, tea.Cmd) {
-	m.mode = modePersonaControl
-	m.personaControlCursor = 0
-	m.clearControlPendingAction()
-	m.rebuildViewport()
-	return m, fetchPersonaContainers(m.client)
-}
-
-func (m Model) confirmOrRunInboxAction(action string) (tea.Model, tea.Cmd) {
-	if len(m.inboxQueue) == 0 || m.inboxQueueCursor < 0 || m.inboxQueueCursor >= len(m.inboxQueue) {
-		m.clearInboxPendingAction()
-		return m, nil
-	}
-	item := m.inboxQueue[m.inboxQueueCursor]
-	if m.inboxPendingAction != action || m.inboxPendingItemID != item.ID {
-		m.inboxPendingAction = action
-		m.inboxPendingItemID = item.ID
-		m.rebuildViewport()
-		return m, nil
-	}
-	m.clearInboxPendingAction()
-	if action == "archive" {
-		return m, archiveInboxItem(m.client, m.inboxQueueAgent, item.ID)
-	}
-	return m, ignoreInboxItem(m.client, m.inboxQueueAgent, item.ID)
-}
-
-func (m *Model) clearInboxPendingAction() {
-	m.inboxPendingAction = ""
-	m.inboxPendingItemID = ""
-}
-
-func (m Model) confirmOrRunControlAction(action string) (tea.Model, tea.Cmd) {
-	if len(m.personaContainers) == 0 || m.personaControlCursor < 0 || m.personaControlCursor >= len(m.personaContainers) {
-		m.clearControlPendingAction()
-		return m, nil
-	}
-	target := m.personaContainers[m.personaControlCursor].Target
-	if target == "" || !m.personaControlReady {
-		m.clearControlPendingAction()
-		return m, nil
-	}
-	if m.controlPendingAction != action || m.controlPendingTarget != target {
-		m.controlPendingAction = action
-		m.controlPendingTarget = target
-		m.rebuildViewport()
-		return m, nil
-	}
-	m.clearControlPendingAction()
-	return m, controlPersonaContainer(m.client, target, action)
-}
-
-func (m *Model) clearControlPendingAction() {
-	m.controlPendingAction = ""
-	m.controlPendingTarget = ""
-}
-
-func withAllPersonaTarget(items []bridgeclient.PersonaContainer) []bridgeclient.PersonaContainer {
-	result := append([]bridgeclient.PersonaContainer(nil), items...)
-	for _, item := range result {
-		if item.Target == "all" {
-			return result
-		}
-	}
-	if len(result) > 0 {
-		result = append(result, bridgeclient.PersonaContainer{Target: "all", Service: "csuite-*", Status: "multiple"})
-	}
-	return result
 }
 
 func (m Model) switchTabCmd(idx int) tea.Cmd {

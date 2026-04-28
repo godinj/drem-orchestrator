@@ -18,7 +18,8 @@ import (
 
 func TestMaxTotalPlannerSpawns_BlocksAtCap(t *testing.T) {
 	// A task that has reached MaxTotalPlannerSpawns must NOT spawn another
-	// planner; processPlanning should fail the task instead.
+	// planner; processPlanning should leave the task in planning with a
+	// recoverable capacity signal instead of terminally failing it.
 	db := testutil.NewSharedTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
@@ -46,8 +47,18 @@ func TestMaxTotalPlannerSpawns_BlocksAtCap(t *testing.T) {
 	var updated model.Task
 	db.First(&updated, "id = ?", task.ID)
 
-	if updated.Status != model.StatusFailed {
-		t.Errorf("expected task to be failed when at spawn cap, got %s", updated.Status)
+	if updated.Status != model.StatusPlanning {
+		t.Errorf("expected task to remain planning when at spawn cap, got %s", updated.Status)
+	}
+	if blocked, ok := updated.Context["planner_capacity_exhausted"].(bool); !ok || !blocked {
+		t.Errorf("expected planner_capacity_exhausted context, got %#v", updated.Context)
+	}
+	var events []model.TaskEvent
+	if err := db.Where("task_id = ? AND event_type = ?", task.ID, "planner_capacity_exhausted").Find(&events).Error; err != nil {
+		t.Fatalf("load planner capacity events: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 planner capacity event, got %d", len(events))
 	}
 }
 
@@ -80,8 +91,49 @@ func TestMaxTotalPlannerSpawns_BlocksAboveCap(t *testing.T) {
 
 	var updated model.Task
 	db.First(&updated, "id = ?", task.ID)
-	if updated.Status != model.StatusFailed {
-		t.Errorf("expected task to be failed when above spawn cap, got %s", updated.Status)
+	if updated.Status != model.StatusPlanning {
+		t.Errorf("expected task to remain planning when above spawn cap, got %s", updated.Status)
+	}
+	if blocked, ok := updated.Context["planner_capacity_exhausted"].(bool); !ok || !blocked {
+		t.Errorf("expected planner_capacity_exhausted context, got %#v", updated.Context)
+	}
+}
+
+func TestMaxTotalPlannerSpawns_DoesNotEmitRepeatedCapacityEvents(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	task := model.Task{
+		ID:          uuid.New(),
+		ProjectID:   o.projectID,
+		Title:       "spawn-cap-repeat",
+		Description: "task at planner spawn cap",
+		Status:      model.StatusPlanning,
+		Context: model.JSONField{
+			"total_planner_spawns": float64(MaxTotalPlannerSpawns),
+		},
+	}
+	db.Create(&task)
+
+	if err := o.processPlanning(&task); err != nil {
+		t.Fatalf("first processPlanning returned unexpected error: %v", err)
+	}
+	var updated model.Task
+	db.First(&updated, "id = ?", task.ID)
+	if err := o.processPlanning(&updated); err != nil {
+		t.Fatalf("second processPlanning returned unexpected error: %v", err)
+	}
+
+	var count int64
+	if err := db.Model(&model.TaskEvent{}).Where("task_id = ? AND event_type = ?", task.ID, "planner_capacity_exhausted").Count(&count).Error; err != nil {
+		t.Fatalf("count planner capacity events: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("expected one capacity event across repeated ticks, got %d", count)
 	}
 }
 

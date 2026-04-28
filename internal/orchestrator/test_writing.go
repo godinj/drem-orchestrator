@@ -139,6 +139,18 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		case model.StatusFailed, model.StatusRejected:
 			anyFailed = true
 			allDone = false
+		case model.StatusBacklog:
+			// Future test subtasks may depend on implementation subtasks.
+			// Those cannot run during test_writing, so they should not block
+			// the initial test-review gate. Runnable backlog tests still block.
+			depsMet, err := DependenciesMet(o.db, sub.DependencyIDs)
+			if err != nil {
+				return fmt.Errorf("process test writing: check test subtask dependencies: %w", err)
+			}
+			if depsMet {
+				allTerminal = false
+				allDone = false
+			}
 		default:
 			allTerminal = false
 			allDone = false
@@ -151,9 +163,15 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		delete(parent.Context, "baseline_tests_failed")
 		delete(parent.Context, "needs_human_review")
 
-		// Run full constraint evaluation on the integration worktree before
-		// allowing transition to test_review, with retry/backoff gating.
-		if parent.WorktreeBranch != "" && !o.skipConstraintGate {
+		pendingSourceLane, err := o.hasPendingSourceLaneSubtasks(parent.ID)
+		if err != nil {
+			return fmt.Errorf("process test writing: check pending source subtasks: %w", err)
+		}
+
+		// Run full constraint evaluation before test_review only when there is no
+		// pending source-lane implementation work. Source-lane tasks get the full
+		// constraint gate later at testing_ready, after implementation has run.
+		if parent.WorktreeBranch != "" && !o.skipConstraintGate && !pendingSourceLane {
 			blocked, err := o.evaluateConstraintGate(parent)
 			if err != nil {
 				return err
@@ -191,6 +209,19 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 	}
 
 	return nil
+}
+
+func (o *Orchestrator) hasPendingSourceLaneSubtasks(parentID uuid.UUID) (bool, error) {
+	var count int64
+	if err := o.db.Model(&model.Task{}).
+		Where("parent_task_id = ? AND phase IN ? AND status NOT IN ?",
+			parentID,
+			[]string{"implementation", "integration"},
+			[]model.TaskStatus{model.StatusDone, model.StatusFailed, model.StatusRejected, model.StatusCancelled}).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 func (o *Orchestrator) spawnDiagnosticAgent(parent *model.Task) error {

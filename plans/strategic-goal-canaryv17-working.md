@@ -2,12 +2,12 @@
 
 Created: 2026-04-26T15:56:34Z
 Owner: Kyle
-Artifact status: active
+Artifact status: closed
 Operator directive corrid: 5b99982e
-Latest operator approval corrid: 1beec4c9
-Metadata updated: 2026-04-27T04:06:31Z
-Active investigation lane: operator/platform source-capable task route required for scoped conflict/control-plane patch/proof
-Primary execution lane: blocked on task creation/source-capable execution surface; Seth remains proof owner once source exists, Mike remains ops guardrail/watch owner
+Latest operator closure corrid: operator-canaryv17-final-proof-20260427T215500Z
+Metadata updated: 2026-04-27T21:56:07Z
+Active investigation lane: closed; supported surfaces show `6b6eb427` is `done` after reconciler proved the merged SHA was already on default
+Primary execution lane: no open CanaryV17 action remains for Kyle, Mike, Alex, or Seth; future work should be opened as a new lane if a fresh supported-surface regression appears
 Quality gate: Seth
 Product lane: Alex only if success criteria or operator-visible scope changes
 Context hygiene: passive ACK, retained-hold, watch-only, closure, and no-action entries in this artifact are audit trail only. Do not admit them as active context unless the entry changes authorization, ownership, blocker state, clearance, or required proof.
@@ -17,6 +17,123 @@ Context hygiene: passive ACK, retained-hold, watch-only, closure, and no-action 
 Move canary v17 task `6b6eb427` from retained passive closure back to a working canary path: the task should be able to pass the test gate, enter merger execution, and complete without re-entering the known merger/reconciler failure loop.
 
 ## Current Signal
+
+### CanaryV17 closed from Kyle side at 2026-04-27T21:56:07Z
+
+- Operator reported final proof under `operator-canaryv17-final-proof-20260427T215500Z`: scoped runtime/source fixes landed, targeted orchestrator/model tests passed, only `orch` and the merger image were rebuilt/recreated, `drem-sglang` was not touched, and the live task completed after the authorized retry/approve/test-approve/pass sequence.
+- Kyle rechecked supported surfaces: Kyle world API health is OK; world summary reports drem-orchestrator health OK with zero running project workers; `dremctl status` is reachable; `dremctl tasks --limit 30` shows `6b6eb427` as `done` with `worker=-`; and `dremctl events --limit 12` shows the terminal sequence.
+- Terminal proof on supported surfaces: merger `merger-6b6e-5991` in container `04f800689a89` produced `merged_sha=bb2e6c558d6e89be938095a3575a32c0bfdde18b`, `tests_passed=true`, then reported `failure_reason=push_failed`; the reconciler then moved `6b6eb427` from `failed` to `done` at `2026-04-27T21:53:36Z` with reason `reconcile-already-merged-to-default`.
+- Decision: CanaryV17 is closed from Kyle's side. No additional Mike ops action, Seth quality action, Alex product route, gate mutation, retry, Docker/SGLang action, credential change, destructive git action, or service restart is open from this lane.
+
+### Mike targeted retry consumed; task held at plan_review at 2026-04-27T21:24:16Z
+
+- Mike reported under operator thread `a7f4d29c` that he ran exactly one cleared command, `dremctl retry 6b6eb427`, at `2026-04-27T21:22:22Z`; the mutation result was `task 6b6eb427 -> backlog`.
+- Kyle rechecked supported surfaces: world/orchestrator health is OK; `dremctl status` is reachable; `dremctl tasks --limit 30` shows `6b6eb427` as `plan_review` with `worker=-`; project status shows zero running workers; and recent events show only `failed -> backlog` at `2026-04-27T21:22:24Z`, then `backlog -> planning -> plan_review` at `2026-04-27T21:22:26Z` after the retry.
+- No post-retry `worker_spawned`, `merger_attempt_started`, `merge_result`, `merger_attempt_finished`, fixer spawn, or fixer result event is visible on supported surfaces. The latest merger proof remains the pre-retry terminal conflict at `2026-04-27T21:06:24Z`.
+- Decision: the retry action is complete but did not exercise the operator's branch-clean proof through the merge path because the task stopped at the `plan_review` human gate. Mike has no further cleared action. Hold remains on pass, fail, second retry, broad lifecycle mutation, Docker/SGLang action, credential change, destructive git action, service restart, product reroute, or quality reroute unless the operator explicitly clears the next gate action or supported surfaces materially change.
+
+### Operator branch cleanup accepted; one targeted retry cleared at 2026-04-27T21:21:18Z
+
+- Operator reported under `operator-canaryv17-branch-clean-20260427T212500Z` that the post-fixer image mapping issue is historical after the spawner rebuild; live task `6b6eb427-a250-4339-bef7-5abb845817e4` terminalized as `failed` with `terminal_merger_failure_reason=conflict` instead of re-entering the unbounded merger/fixer loop; and the remaining blocker was stale feature-branch conflict material.
+- Operator also reported a clean branch repair: `feature/6b6eb427-add-canaryv17marker-type-to-internal-mod` now has HEAD `40c189d9f5cf3228381bcdf55f25cefe87147007`, differs from `master` only by `internal/model/canary_v17.go` and `internal/model/canary_v17_test.go`, has a clean `git merge-tree master ...` result, and passed `go test ./internal/model` in a detached test worktree.
+- Kyle rechecked supported surfaces: world/orchestrator health is OK; `dremctl status` is reachable; `dremctl tasks --limit 30` shows `6b6eb427` as `failed` with worker `88f60821-62a3-432f-927f-3293aba06fd5`; project workers show zero running by status; and latest events show task-correlated `merger_attempt_finished` with `failure_reason=conflict`, followed by `status_change` from `merging` to `failed` at `2026-04-27T21:06:24Z`.
+- Decision: accept the gate as satisfied for one targeted next action. Kyle routed Mike to run exactly one `dremctl retry 6b6eb427` and bounded watch/report against supported surfaces. Hold remains on pass, fail, second retry, broad lifecycle mutation, Docker/SGLang action, credential change, destructive git action, service restart, product reroute, or quality reroute unless the retry outcome creates a new supported trigger.
+
+### Mike read-only fixer watch accepted at 2026-04-27T21:05:03Z
+
+- Mike reported under `904af2b9` that `6b6eb427` remains `merging` with fixer worker `88f60821-62a3-432f-927f-3293aba06fd5` working, and no post-`2026-04-27T21:01:14Z` missing fixer image mapping recurrence was visible in sampled events.
+- Kyle rechecked supported surfaces: world/orchestrator health is OK; `dremctl status` is reachable; `dremctl tasks --limit 20` still shows `6b6eb427` as `merging` with worker `88f60821-62a3-432f-927f-3293aba06fd5`; `dremctl worker` shows the fixer still `working`; events since `2026-04-27T21:01:14Z` show only the fixer spawn/context/heartbeat signals.
+- Decision: accept the report as correct read-only guardrail evidence. The canary is not recovered yet because there is no terminal `done` or `failed` outcome. Mike continues watch-only ownership for terminal completion/failure, post-`21:01:14Z` missing fixer image recurrence, or an unbounded merger/fixer loop signal. No retry, pass, fail, lifecycle mutation, Docker/SGLang action, credential change, destructive git action, service restart, product reroute, or blind recovery is cleared.
+
+### Operator source/deploy update accepted; active fixer running at 2026-04-27T21:02:39Z
+
+- Operator reported under `operator-canaryv17-loop-fix-20260427T210430Z` that `internal/orchestrator/merge_execution.go` now treats merge conflict resolver spawn failure as terminal/bounded, records `merge_conflict_resolver_attempt_count`, sets `terminal_merger_failure_reason=merge_conflict_resolver_spawn_failed`, fails visibly on fixer spawn failure, and emits `merge_conflict_resolver_spawn_failed`; targeted orchestrator and image/spawner tests passed.
+- Operator also reported a scoped deploy: rebuilt and recreated only project `orch` and global `spawner` with `--no-deps`; `drem-sglang` was not touched.
+- Kyle rechecked supported surfaces: world/orchestrator health is OK; `dremctl status` is reachable; `dremctl tasks --limit 10` shows `6b6eb427` still `merging` with worker `88f60821-62a3-432f-927f-3293aba06fd5`; world summary reports one running fixer; latest events show a successful `worker_spawned` event for `agent_type=fixer` on `6b6eb427-a250-4339-bef7-5abb845817e4` at `2026-04-27T21:01:14Z`, followed by a fixer heartbeat.
+- The earlier `rpc SpawnWorker: code=-32000 no image mapping for agent_type="fixer"` events are retained as historical pre-spawner-rebuild evidence. They are no longer the current live signal unless they recur after the successful fixer spawn.
+- Decision: the active loop is bounded for now by the running fixer assignment. Hold extra lifecycle actions. Do not clear retry, pass, fail, broad lifecycle mutation, Docker/SGLang action, credential change, destructive git action, or service restart. Watch for the fixer outcome, then take only a targeted next step if the supported surface shows clean completion, terminal conflict/fixer failure, or renewed looping.
+
+### Mike guardrail watch confirms live loop still active at 2026-04-27T20:52:31Z
+
+- Mike reported, and Kyle rechecked, that `6b6eb427` is still `merging` with `worker=-` while the orchestrator repeats merger attempts about every five seconds.
+- Recent events continue to show attempt `8` repeated, stable merge conflicts in the seven known files, `failure_reason=conflict`, merger exit code `2`, and a failed fixer spawn: `rpc SpawnWorker: code=-32000 no image mapping for agent_type="fixer"`.
+- World/orchestrator health remains OK and no running workers are visible, so the immediate issue is not a global outage; it is an unbounded task-correlated merger/fixer control-plane loop.
+- Supported surfaces still do not expose task detail, deploy/image-map metadata, version, or config/env state, so runtime diagnosis cannot distinguish stale deploy/config from source regression through `dremctl` alone.
+- Decision: retain the P0 hold. No pass, fail, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, credential change, destructive git action, service restart, or blind recovery is cleared. The next movement must be a source-capable fix route that terminalizes deterministic conflict/fixer-spawn failure and restores or removes the invalid fixer path.
+
+### Controlled pass produced live conflict loop at 2026-04-27T20:47:10Z
+
+- Mike reported that he ran exactly one cleared mutation, `dremctl pass 6b6eb427`; the task moved to `merging` and remained non-terminal after bounded monitoring.
+- Kyle rechecked supported surfaces: world summary reports orchestrator health OK with one `merging` task; `dremctl tasks --limit 20` shows `6b6eb427` as `merging` with `worker=-`; `dremctl events --limit 30` shows repeated task-correlated `merge_result` conflicts and `merger_attempt_started`/`merger_attempt_finished` events for real task `6b6eb427-a250-4339-bef7-5abb845817e4`.
+- The deterministic conflict file set is now visible on supported surfaces: `cmd/drem/orchhttp_server.go`, `cmd/drem/orchhttp_server_test.go`, `internal/orchestrator/worker_spawn.go`, `internal/orchhttp/server_test.go`, `internal/projects/template.go`, `internal/projects/template_test.go`, and `internal/spawner/types.go`.
+- After each conflict, the orchestrator attempts a fixer lane and the spawner rejects it with `rpc SpawnWorker: code=-32000 no image mapping for agent_type="fixer"`.
+- Decision: treat this as a new material quality/control-plane signal, not a recovered path. Kyle routed Seth to assess why deterministic conflicts remain non-terminal/repeating and why fixer image resolution is failing despite the historical Bug F closure. Mike remains stopped; no retry, second pass, lifecycle mutation, host-exec, Docker/SGLang action, credential change, destructive git action, or service restart is cleared by this signal.
+
+### Operator requested Mike check on last canary17 run at 2026-04-27T20:19:51Z
+
+- Operator asked Kyle under `a5ef197f` to check with Mike on the last canary17 run.
+- Kyle rechecked supported surfaces before routing: world summary reports drem-orchestrator health OK; `dremctl status` is reachable; `dremctl tasks --limit 20` still shows `6b6eb427` as `testing_ready` with `worker=-`; `dremctl events --limit 40` shows no post-rebuild canary17 status change or merger attempt after the historical 2026-04-24 loop and no newer crash after 2026-04-27T04:01:24Z plus the 2026-04-27T17:26:39Z heartbeat.
+- Action: Kyle routed Mike a high-priority request under `c17a5f02` for the last-run package: whether the previously cleared single pass actually ran, timestamps/command, worker or merger spawn evidence, final task state, failure/success evidence, and any blocker. No second pass, retry, lifecycle mutation, Docker/SGLang action, credential change, or destructive git action is authorized by this check-in.
+
+### Readiness check for GQ/SGLang/G4/canary17 at 2026-04-27T20:03:05Z
+
+- Operator asked whether GQ, SGLang, and the G4 workers are ready to go given the canary17 state.
+- Live checks: Kyle world summary reports drem-orchestrator health OK; `dremctl status` is reachable; `dremctl tasks --limit 20` still shows `6b6eb427` as `testing_ready` with `worker=-`; `dremctl events --limit 40` shows no newer crash after the reported orchestrator rebuild, only historical zero-UUID crash events through `2026-04-27T04:01:24Z` plus a heartbeat at `2026-04-27T17:26:39Z`.
+- Model-serving checks: `http://gq:8090/v1/models`, `http://drem-gq:8090/v1/models`, `http://sglang:8081/v1/models`, and `http://drem-sglang:8081/v1/models` all return `gemma4-26b` with `max_model_len=131072`. Tiny chat probes through both GQ and direct SGLang returned `READY.`.
+- Worker signal: current project worker count is zero running and no worker is assigned to `6b6eb427`. That is acceptable before the controlled pass, but it means G4 worker readiness is not yet proven by an active spawned worker. It must be verified during Mike's already-cleared single pass by observing spawn, task correlation, and outcome.
+- Decision: GQ and SGLang are inference-ready; the canary17 lane is ready for exactly one controlled Mike pass; the whole path is not yet declared recovered until that pass reports success or a clean terminal failure package.
+
+### Kyle accepted source-side proof and re-cleared Mike at 2026-04-27T19:58:49Z
+
+- Kyle rechecked supported live surfaces against the new `orch` runtime: world/orchestrator health OK, `dremctl status` reachable, `GET /projects` works, `dremctl tasks --limit 20` shows `6b6eb427` still `testing_ready` with `worker=-`, no active project worker is visible, and recent events show no newer crash after the reported rebuild.
+- Decision: accept the operator-authorized host OpenCode source proof as sufficient for the next controlled ops action. The source-surface blocker is retired for this lane, while the older zero-UUID crash evidence remains historical pre-patch evidence.
+- Action: Kyle routed Mike to run exactly one `dremctl pass 6b6eb427`, watch supported surfaces, and report the result. This does not clear an automatic retry, broad lifecycle mutation, host-exec expansion, Docker/SGLang action, credential change, destructive git action, service restart, product reroute, or whole-path recovered claim before the pass outcome is observed.
+
+### Host-side source route produced control-plane proof at 2026-04-27T19:58:15Z
+
+- Operator authorized OpenCode to communicate with Kyle and do host-side work necessary for canary17 eventual success.
+- Source patch/proof was produced directly in the host checkout because Seth's current persona surface is not source-capable.
+- `internal/orchestrator/merge_dispatch.go` now records task-correlated `merger_attempt_started` and `merger_attempt_finished` events around merger container execution. The evidence includes real `task_id`, attempt number, worker ID, container ID, exit code, failure reason, and log reference.
+- Regression coverage in `internal/orchestrator/merge_dispatch_test.go` proves merger exit `128` evidence records against the real task rather than relying on zero-UUID crash archaeology.
+- Targeted verification passed: `go test ./internal/orchestrator -run 'TestDispatchMerge|TestExecuteMerge|TestReconcileFailedParents'` after gofmt.
+- Runtime action: rebuilt `localhost:5000/drem-orch:latest` and recreated only the project `orch` service with `docker compose ... up -d --no-deps orch`. `drem-sglang` and global services were not touched.
+- Current live status after deploy: orchestrator health is healthy, `GET /projects` works, and `6b6eb427` remains `testing_ready` with no assigned worker. No `dremctl pass`, retry, fail, lifecycle mutation, credential change, destructive git action, or service restart beyond the scoped `orch` recreate was run.
+- Kyle was notified via C-suite inbox with the proof/deploy summary and asked to recheck live surfaces and re-clear the next targeted Mike/Seth action if sufficient.
+
+### Seth source-surface blocker reaffirmed at 2026-04-27T19:29:57Z
+
+- Seth reported under `seth-20260427T192854Z-canaryv17-source-blocker`, replying to Kyle's scoped request `9f4a2b6c`, that he still cannot produce the conflict/control-plane patch/proof from his persona surface: no source checkout, no Go toolchain, host-exec denied, `dremctl logs` returns 503, and `dremctl` exposes no source task creation/spawn/assignment command.
+- Kyle rechecked supported surfaces: world/orchestrator health is OK; `dremctl status` is reachable; `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`; recent events still include zero-UUID exit-128 crash evidence through `2026-04-27T04:01:24Z` plus the older merger/reconciler resurrection loop.
+- Decision: accept Seth's blocker as current. Do not ask Seth for a false closure package from a non-source surface. Escalate to operator/platform for a source-capable normal orchestrator/cold-worker task route or equivalent explicitly authorized source execution surface.
+- Hold retained: no `dremctl pass 6b6eb427`, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, credential change, destructive git action, or service restart is cleared. Once a source-capable route exists, Seth owns the scoped patch/proof; Mike remains guardrail/watch owner only after Kyle re-clearance.
+
+### Seth gap-closure delegation at 2026-04-27T19:27:18Z
+
+- Operator asked under `b6271781` to tell Seth what needs to be done to address the gaps on his side.
+- Kyle routed Seth a high-priority request under `9f4a2b6c`: close the deterministic conflict/control-plane proof gap for `6b6eb427`, not the already proof-cleared narrow Bug J `/work` EBUSY blocker.
+- Required Seth-side package remains terminal/held deterministic conflicts with visible `failure_reason=conflict`, persisted conflict-file metadata, real task-correlated merger attempt evidence, retry-budget terminality, reconciler non-resurrection, regression coverage, and confirmation that Bug J Option A invariants still hold.
+- No lifecycle mutation, `dremctl pass`, retry, Docker/SGLang action, credential change, destructive git action, or service restart is cleared by this delegation.
+
+### Operator gap/metadata question answered at 2026-04-27T19:13:00Z
+
+- Operator asked under `a44953b9` how to address the remaining gaps and whether artifact metadata needs updating.
+- Kyle rechecked supported surfaces: world health is OK; `dremctl status` is reachable; `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`; recent events still include zero-UUID exit-128 crash pairs through `2026-04-27T04:01:24Z` plus the older merger/reconciler resurrection loop.
+- Decision: address the gaps with one source-capable scoped patch/proof lane, not by passing or retrying the canary. The patch must make deterministic conflicts terminal/held with `failure_reason=conflict`, persist conflict file metadata, record merger attempt evidence against the real task ID, make retry-budget exhaustion terminal, and block reconciler resurrection after terminal merge failure.
+- Artifact metadata action: keep `strategic-goal-canaryv17-working.md`, `p0-merger-terminal-failure-control-plane.md`, `p0-merger-reconciler-loop-6b6eb427.md`, and `bug-j-merger-reset-workdir-unlinkat-busy.md` active/admissible for this lane; treat passive ACK/no-action/watch-only history as audit trail only. No lifecycle mutation, `dremctl pass`, retry, Docker/SGLang action, credential change, destructive git action, or service restart is cleared by this answer.
+
+### Operator merger/SGLang/master question answered at 2026-04-27T17:24:38Z
+
+- Operator asked under `daba0403` whether the merger changes that call SGLang are on master, and whether that covers the conflict/control-plane work Kyle has been referring to.
+- Kyle could not directly git-confirm master from this container because the repo checkout is not mounted, but the accessible durable plan/runtime surfaces show the landed/runtime merger work as separate from the unresolved conflict/control-plane scope. Landed/runtime evidence includes merger spawn-on-demand wiring, Bug H merger argv/test-command fixes, and Bug J `/work` EBUSY proof clearance; SGLang/Gemma container work is model-serving infrastructure, not the terminal merge-failure control plane.
+- Decision: those landed/runtime merger/SGLang-related changes do not cover the active conflict/control-plane hold. The missing scope remains deterministic conflict terminality, visible `failure_reason=conflict` and conflict file metadata, task-correlated merger evidence instead of zero-UUID-only crashes, retry-budget terminality, and reconciler non-resurrection after terminal merge failure.
+- Current supported status remains unchanged: world health OK; `dremctl status` reachable; `6b6eb427` remains `testing_ready` with `worker=-`; recent events still include zero-UUID exit-128 crash pairs through `2026-04-27T04:01:24Z`. No `dremctl pass`, retry, lifecycle mutation, Docker/SGLang action, credential change, destructive git action, or service restart is cleared by this answer.
+
+### Operator next-step question answered at 2026-04-27T17:19:20Z
+
+- Operator asked under `6339d9cf` what needs to happen next to get the canary resolved.
+- Kyle rechecked supported surfaces: world health is OK; `dremctl status` is reachable; `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`; `dremctl workers` shows no active project worker for the task; recent events still show the zero-UUID exit-128 crash pairs through `2026-04-27T04:01:24Z` plus the older merger/reconciler loop.
+- Decision: the next required action remains a source-capable execution route for the scoped conflict/control-plane patch/proof, not `dremctl pass`, retry, lifecycle mutation, Docker/SGLang action, credential change, destructive git action, or service restart.
+- Required sequence: provide a normal orchestrator/cold-worker source task or explicitly scoped source route; Seth uses it to produce the patch/proof; Kyle rechecks and re-clears one targeted Mike action; Mike then runs a controlled pass only if the proof and live surfaces are clean.
 
 ### Mike source-capable route blocker reaffirmed at 2026-04-27T04:06:31Z
 

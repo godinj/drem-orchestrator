@@ -463,8 +463,9 @@ func (o *Orchestrator) dispatchPendingSubtasks() {
 			continue
 		}
 
-		// Skip terminal or paused parents — their subtasks should not be dispatched.
-		if isTerminal(parent.Status) || parent.Status == model.StatusPaused {
+		// Skip terminal, paused, and human-gated parents — their subtasks
+		// should not be dispatched until the gate is explicitly advanced.
+		if isTerminal(parent.Status) || parent.Status == model.StatusPaused || parent.Status.IsHumanGate() {
 			continue
 		}
 

@@ -29,6 +29,8 @@ Principle (Kyle pivot §): nothing new enters drem. Existing in-flight drains to
 
 ## Stuck plan_review (17 tasks — FREEZE all, individual disposition)
 
+2026-04-27 containment update: Mike verified that there is no supported `dremctl` or HTTP `archive`, `remove`, or `cancel` mutation for this obsolete set. The 17 obsolete IDs in this section are now terminal `failed` after planner spawn-cap failure, with no project workers assigned. Do not `retry`, `approve`, or otherwise revive these IDs. True archive/remove/hide semantics require a supported no-spawn task cancellation/archive mutation; do not use direct DB cleanup as a workaround.
+
 | ID | Title | Disposition | Reason |
 |---|---|---|---|
 | 4bfa2460 | touchTask helper + audit-trail integrity | DROP-from-drem / RESCOPE | cd83396a (commit 2e832c4) already landed a narrow `touchTask(task)` helper. 9-site audit + richer `touchTask(task, eventType, reason, details)` API unimplemented. Do NOT land via drem. Move remaining scope (site audit + richer event typing) to new-arch orchestrator-HTTP-API module scope — DB observer contract needs it anyway. See §cd83396a-diff below. |
