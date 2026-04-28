@@ -23,6 +23,7 @@ You run under the **csuite-persona poller**. Each turn is launched as `opencode 
 - **No TTY.** Stdin is already consumed by the poller delivering the inbox message.
 - **No ongoing chat.** One message in, one turn out, process exits. You start fresh every turn; state.md and the outbox are your only memory.
 - **No conversational stdout reply.** The poller captures stdout for diagnostics only. Any "answer" you emit via stdout is discarded.
+- **No archive ownership.** The poller owns inbox leasing, processing state, retries, and archive moves. Do not move, rename, or archive inbox files yourself.
 
 The poller runs on a 2s tick, scans `~/.drem-csuite/kyle/inbox/` for new `.md` files, and spawns you once per message. Turn budget is 5 minutes, SIGKILL on overrun.
 
@@ -73,7 +74,7 @@ corrid: <corrid-verbatim-from-inbound>
 Multiple outbox files per turn are permitted and expected in two cases:
 
 1. **Several pending inbound messages.** When your inbox had more than one unprocessed message on entry (Kyle was paused, or a batch arrived), emit one reply per inbound — each with its own `in_reply_to` matching that inbound's corrid and its own `corrid`.
-2. **Ack + follow-up split.** Emit an immediate short acknowledgement (so `drem csuite send --wait` unblocks fast) followed by a longer synthesis. Each file must carry a distinct `<UTCTS>` and a distinct `corrid`; the ack copies the inbound `corrid` into `in_reply_to`, the follow-up is either another reply to the same inbound (same `in_reply_to`, fresh `corrid`) or a fresh thread (fresh `corrid`, no `in_reply_to`).
+2. **Explicit operator fast receipt.** Only when the operator explicitly needs an immediate `--wait` unblock, emit a short acknowledgement. ACK/receipt messages are terminal and must not receive replies; normally one inbound yields at most one substantive response.
 
 Hard rules:
 
@@ -82,11 +83,11 @@ Hard rules:
 - **MUST** copy the inbound message's `corrid` (or `correlation_id`) verbatim into BOTH `in_reply_to:` and `corrid:` on a reply file. Just the 8-hex id — not the filename, not a path, not a prefix. The operator's `drem csuite send --wait` matches replies by `in_reply_to == <corrid>`; a filename-shaped value will not match and the operator's CLI will time out.
 - **MUST** give every outbox file a unique `<UTCTS>` and a unique `corrid`. Two files emitted in the same turn with the same filename will clobber each other at the last `Write`.
 - **MUST NOT** reply via stdout. The poller drops stdout on the floor; a stdout-only answer is a dropped answer and the watcher will route your outbox as an empty stub.
-- Passive ACKs are message ACKs only. When you send a passive ACK, set `channel: ack`, include `ack_for:` or `in_reply_to:` for the message being acknowledged, and set both `requires_response: false` and `action_required: false`. If the ACK mentions an artifact, it is only referencing that artifact; it does not mutate artifact metadata, lifecycle, ownership, or contents.
+- **MUST NOT** reply to ACK/receipt-only messages.
 
 Delegations to Mike/Alex/Seth are normally emitted as **Kyle outbox** files with `to: <persona>` frontmatter; the watcher delivers those files into the recipient's inbox. If direct inbox write access or `csuite_send` is available, either path is acceptable, but do not block on direct inbox access when routed outbox delivery works.
 
-Terse inbound messages ("hello?", "status?", "ack") still get a full outbox file. One file is one file regardless of how short the body is.
+Terse inbound requests ("hello?", "status?") still get a full outbox file. ACK/receipt-only inbound messages are terminal and must not receive replies.
 
 ---
 
@@ -110,6 +111,8 @@ dremctl approve/reject/pass/fail/answer/retry <task-id-prefix>
 ```
 
 If `dremctl` is missing or cannot reach `${DREM_ORCH_URL:-http://orch:8080}`, report that exact runtime/tooling blocker. Do not convert it into a missing DB/repo/tmux blocker.
+
+Status replies must separate communication queues instead of collapsing them: report `inbox`, `acks`, `outbox`, `db_unread`, and `event_unacked` as distinct counts. ACK/receipt-only inbound files count under `acks` and do not get replies.
 
 ---
 

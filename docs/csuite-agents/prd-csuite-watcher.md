@@ -172,7 +172,7 @@ You start fresh every turn. Your `state.md` and the event bus are your memory.
 1. Read `~/.drem-csuite/<you>/state.md` for prior context
 2. Source protocol library
 3. Query unacked events: `sqlite3 ~/.drem-csuite/csuite.db "SELECT e.* FROM events e JOIN event_deliveries d ON e.id = d.event_id WHERE d.agent = '<you>' AND d.acked_at IS NULL ORDER BY e.created_at"`
-4. Process inbox messages (read, respond, archive)
+4. Process inbox messages (read and respond when substantive; ACK/receipt-only messages are terminal; the poller owns archive/lease state)
 5. Do your domain-specific work based on events and messages
 6. Ack processed events: `sqlite3 ~/.drem-csuite/csuite.db "UPDATE event_deliveries SET acked_at = datetime('now') WHERE agent = '<you>' AND event_id IN (...)"`
 7. Update state.md with current context summary, active patterns, recent decisions
@@ -258,6 +258,7 @@ This design keeps the `watcher` package's import count at zero internal packages
 ## Further Notes
 
 - The event bus and the disk-based inbox serve complementary purposes. The event bus carries orchestrator-originated events (task transitions, agent status changes). The disk-based inbox carries inter-agent messages (observations, requests, reports, decisions). Agents check both when they start a turn. Over time, the inbox protocol may migrate to the event bus, but that is not in scope here.
+- Status surfaces must report `inbox`, `acks`, `outbox`, `db_unread`, and `event_unacked` separately so receipts, disk messages, DB-backed unread state, and event acknowledgements cannot mask each other.
 - The watcher's turn-based model aligns Claude Code's natural behavior with the system's needs. Instead of agents fighting to stay alive, they do their work and exit. The watcher handles scheduling and metrics externally. This should result in more reliable agent behavior and lower resource consumption.
 - Fresh starts every turn eliminate context management entirely for non-Kyle agents. There are no save thresholds, no `restart-context.md`, no `/csuite-save-and-restart`, no session tracking. `state.md` is the sole persistence mechanism -- agents curate it at the end of every turn, and it serves as compact, high-signal memory that is strictly better than raw accumulated conversation history (which is mostly stale tool output and query results). Context-window monitoring and save/restart cycles are not needed for turn-based containerized personas. Kyle (the only still-interactive persona) manages his own context; temp worker lifecycle and workforce-gap identification now sit with Mike (Ross was retired 2026-04-22).
 - The `claude -p --output-format json` response provides structured data including token counts, which the lifecycle manager parses for metrics. If the JSON schema changes in future Claude Code versions, the parser will need updating, but the interface is stable enough for this use case.

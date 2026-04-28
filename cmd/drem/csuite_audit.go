@@ -14,6 +14,7 @@ package main
 // order.
 
 import (
+	"database/sql"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -22,9 +23,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // defaultAuditTokenPath is the operator-facing default token
@@ -52,17 +56,19 @@ const defaultListLimit = 50
 // 0 success, 1 generic error, 2 token file missing/unreadable.
 func runCsuiteAudit(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: drem csuite audit <list|queue> [flags]")
+		fmt.Fprintln(stderr, "usage: drem csuite audit <list|queue|backlog> [flags]")
 		return 1
 	}
 	switch args[0] {
+	case "backlog":
+		return runCsuiteAuditBacklog(args[1:], stdout, stderr)
 	case "list":
 		return runCsuiteAuditList(args[1:], stdout, stderr)
 	case "queue":
 		return runCsuiteAuditQueue(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown audit subcommand %q\n", args[0])
-		fmt.Fprintln(stderr, "subcommands: list, queue")
+		fmt.Fprintln(stderr, "subcommands: list, queue, backlog")
 		return 1
 	}
 }
@@ -314,6 +320,255 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+var csuiteAuditBacklogPersonas = []string{"kyle", "mike", "alex", "seth"}
+
+type csuiteBacklogRow struct {
+	Persona                       string `json:"persona"`
+	FilesystemInboxMarkdownCount  int    `json:"filesystem_inbox_markdown_count"`
+	FilesystemAcksMarkdownCount   int    `json:"filesystem_acks_markdown_count"`
+	FilesystemOutboxMarkdownCount int    `json:"filesystem_outbox_markdown_count"`
+	DBCsuiteInboxUnreadCount      *int   `json:"db_csuite_inbox_messages_unread_count"`
+	DBEventDeliveriesUnackedCount *int   `json:"db_event_deliveries_unacked_count"`
+}
+
+// runCsuiteAuditBacklog implements `drem csuite audit backlog`. It reads local
+// disk and SQLite state directly so backlog visibility still works when watcher
+// HTTP endpoints or DB tables are absent.
+func runCsuiteAuditBacklog(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("backlog", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	csuiteDir := fs.String("csuite-dir", "", "C-Suite home root (default CSUITE_DIR, DREM_CSUITE_HOME, or ~/.drem-csuite)")
+	dbPath := fs.String("db", "", "SQLite DB path (default <csuite-dir>/csuite.db)")
+	format := fs.String("format", "", "output format: table or json (default table on TTY, json otherwise)")
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	root, err := resolveBacklogCsuiteDir(*csuiteDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "error: resolve csuite dir: %v\n", err)
+		return 1
+	}
+	if *dbPath == "" {
+		*dbPath = filepath.Join(root, "csuite.db")
+	}
+
+	rows := collectCsuiteBacklog(root, *dbPath)
+	return renderCsuiteBacklog(rows, pickFormat(*format, stdout), stdout, stderr)
+}
+
+func resolveBacklogCsuiteDir(explicit string) (string, error) {
+	if explicit != "" {
+		return expandTildePath(explicit), nil
+	}
+	if env := os.Getenv("CSUITE_DIR"); env != "" {
+		return expandTildePath(env), nil
+	}
+	if env := os.Getenv("DREM_CSUITE_HOME"); env != "" {
+		return expandTildePath(env), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".drem-csuite"), nil
+}
+
+func collectCsuiteBacklog(root, dbPath string) []csuiteBacklogRow {
+	dbCounts := readBacklogDBCounts(dbPath)
+	rows := make([]csuiteBacklogRow, 0, len(csuiteAuditBacklogPersonas))
+	for _, persona := range csuiteAuditBacklogPersonas {
+		rows = append(rows, csuiteBacklogRow{
+			Persona:                       persona,
+			FilesystemInboxMarkdownCount:  countMarkdownFiles(filepath.Join(root, persona, "inbox")),
+			FilesystemAcksMarkdownCount:   countMarkdownFiles(filepath.Join(root, persona, "acks")),
+			FilesystemOutboxMarkdownCount: countMarkdownFiles(filepath.Join(root, persona, "outbox")),
+			DBCsuiteInboxUnreadCount:      dbCounts.inboxUnread[persona],
+			DBEventDeliveriesUnackedCount: dbCounts.eventUnacked[persona],
+		})
+	}
+	return rows
+}
+
+func countMarkdownFiles(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.EqualFold(filepath.Ext(entry.Name()), ".md") {
+			count++
+		}
+	}
+	return count
+}
+
+type backlogDBCounts struct {
+	inboxUnread  map[string]*int
+	eventUnacked map[string]*int
+}
+
+func readBacklogDBCounts(dbPath string) backlogDBCounts {
+	counts := backlogDBCounts{
+		inboxUnread:  map[string]*int{},
+		eventUnacked: map[string]*int{},
+	}
+	if _, err := os.Stat(dbPath); err != nil {
+		return counts
+	}
+
+	abs, err := filepath.Abs(dbPath)
+	if err != nil {
+		return counts
+	}
+	u := url.URL{Scheme: "file", Path: abs, RawQuery: "mode=ro&_busy_timeout=5000"}
+	db, err := sql.Open("sqlite3", u.String())
+	if err != nil {
+		return counts
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return counts
+	}
+
+	counts.inboxUnread = queryInboxUnreadCounts(db)
+	counts.eventUnacked = queryEventUnackedCounts(db)
+	return counts
+}
+
+func queryInboxUnreadCounts(db *sql.DB) map[string]*int {
+	out := map[string]*int{}
+	cols := tableColumns(db, "csuite_inbox_messages")
+	if len(cols) == 0 {
+		return out
+	}
+	personaCol := firstColumn(cols, "persona", "agent", "to_agent", "recipient", "recipient_agent")
+	if personaCol == "" {
+		return out
+	}
+
+	condition := ""
+	switch {
+	case cols["read_at"]:
+		condition = "read_at IS NULL"
+	case cols["unread"]:
+		condition = "unread = 1"
+	case cols["status"]:
+		condition = "status = 'unread'"
+	default:
+		return out
+	}
+
+	query := fmt.Sprintf("SELECT %s, COUNT(*) FROM csuite_inbox_messages WHERE %s GROUP BY %s", quoteIdent(personaCol), condition, quoteIdent(personaCol))
+	return queryPersonaCounts(db, query)
+}
+
+func queryEventUnackedCounts(db *sql.DB) map[string]*int {
+	cols := tableColumns(db, "event_deliveries")
+	if !cols["agent"] || !cols["acked_at"] {
+		return map[string]*int{}
+	}
+	return queryPersonaCounts(db, "SELECT agent, COUNT(*) FROM event_deliveries WHERE acked_at IS NULL GROUP BY agent")
+}
+
+func tableColumns(db *sql.DB, table string) map[string]bool {
+	rows, err := db.Query("PRAGMA table_info(" + quoteIdent(table) + ")")
+	if err != nil {
+		return map[string]bool{}
+	}
+	defer rows.Close()
+
+	cols := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return map[string]bool{}
+		}
+		cols[name] = true
+	}
+	return cols
+}
+
+func firstColumn(cols map[string]bool, candidates ...string) string {
+	for _, candidate := range candidates {
+		if cols[candidate] {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func queryPersonaCounts(db *sql.DB, query string) map[string]*int {
+	out := map[string]*int{}
+	rows, err := db.Query(query)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+
+	valid := map[string]bool{}
+	for _, persona := range csuiteAuditBacklogPersonas {
+		valid[persona] = true
+	}
+	for rows.Next() {
+		var persona string
+		var count int
+		if err := rows.Scan(&persona, &count); err != nil {
+			return map[string]*int{}
+		}
+		if valid[persona] {
+			c := count
+			out[persona] = &c
+		}
+	}
+	return out
+}
+
+func quoteIdent(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
+func renderCsuiteBacklog(rows []csuiteBacklogRow, format string, stdout, stderr io.Writer) int {
+	if format == "json" {
+		enc := json.NewEncoder(stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(rows); err != nil {
+			fmt.Fprintf(stderr, "error: encode backlog json: %v\n", err)
+			return 1
+		}
+		return 0
+	}
+
+	sort.SliceStable(rows, func(i, j int) bool {
+		return rows[i].Persona < rows[j].Persona
+	})
+	fmt.Fprintln(stdout, "PERSONA FILESYSTEM_INBOX_MD_COUNT FILESYSTEM_ACKS_MD_COUNT FILESYSTEM_OUTBOX_MD_COUNT DB_CSUITE_INBOX_MESSAGES_UNREAD_COUNT DB_EVENT_DELIVERIES_UNACKED_COUNT")
+	for _, row := range rows {
+		fmt.Fprintf(stdout, "%s %d %d %d %s %s\n",
+			row.Persona,
+			row.FilesystemInboxMarkdownCount,
+			row.FilesystemAcksMarkdownCount,
+			row.FilesystemOutboxMarkdownCount,
+			optionalInt(row.DBCsuiteInboxUnreadCount),
+			optionalInt(row.DBEventDeliveriesUnackedCount),
+		)
+	}
+	return 0
+}
+
+func optionalInt(v *int) string {
+	if v == nil {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%d", *v)
 }
 
 // runCsuiteAuditQueue implements `drem csuite audit queue`. The

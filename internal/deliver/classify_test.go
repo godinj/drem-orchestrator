@@ -120,33 +120,36 @@ func TestClassifyBytes_Operator(t *testing.T) {
 	}
 }
 
-func TestClassifyBytes_UnambiguousAck(t *testing.T) {
-	body := []byte("---\nfrom: alex\nto: mike\nchannel: ack\nack_for: msg-123\nrequires_response: false\naction_required: false\n---\n\nack\n")
-	got, err := classifyBytes(body)
-	if err != nil {
-		t.Fatalf("classifyBytes: %v", err)
+func TestClassifyBytes_ACKMessagesSuppress(t *testing.T) {
+	cases := []struct {
+		name string
+		body []byte
+	}{
+		{
+			name: "semantic class",
+			body: []byte("---\nfrom: mike\nto: alex\nsemantic_class: ack\n---\n\nThanks\n"),
+		},
+		{
+			name: "type",
+			body: []byte("---\nfrom: mike\nto: alex\ntype: ACK\n---\n\nreceived\n"),
+		},
+		{
+			name: "subject marker",
+			body: []byte("---\nfrom: mike\nto: alex\nsubject: ACK\n---\n\nloop guard\n"),
+		},
+		{
+			name: "body marker",
+			body: []byte("---\nfrom: mike\nto: alex\n---\n\nAcknowledged.\n"),
+		},
 	}
-	if got.Class != ClassPersona || got.Dest != "mike" || !got.Ack {
-		t.Errorf("got %+v, want persona dest=mike ack=true", got)
-	}
-}
-
-func TestClassifyBytes_AmbiguousAckRoutesNormally(t *testing.T) {
-	cases := map[string]string{
-		"missing correlation": "---\nfrom: alex\nto: mike\nchannel: ack\nrequires_response: false\naction_required: false\n---\n\nack\n",
-		"requires response":   "---\nfrom: alex\nto: mike\nchannel: ack\nack_for: msg-123\nrequires_response: true\naction_required: false\n---\n\nack\n",
-		"missing flag":        "---\nfrom: alex\nto: mike\nchannel: ack\nack_for: msg-123\nrequires_response: false\n---\n\nack\n",
-		"string false flag":   "---\nfrom: alex\nto: mike\nchannel: ack\nack_for: msg-123\nrequires_response: \"false\"\naction_required: false\n---\n\nack\n",
-	}
-	for name, body := range cases {
-		name, body := name, body
-		t.Run(name, func(t *testing.T) {
-			got, err := classifyBytes([]byte(body))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := classifyBytes(tc.body)
 			if err != nil {
 				t.Fatalf("classifyBytes: %v", err)
 			}
-			if got.Class != ClassPersona || got.Dest != "mike" || got.Ack {
-				t.Errorf("got %+v, want normal persona route", got)
+			if got.Class != ClassSuppress {
+				t.Fatalf("class = %q, want suppress (got %+v)", got.Class, got)
 			}
 		})
 	}
@@ -268,6 +271,34 @@ func TestDeliver_QuarantineClass_WritesFileAndReturns202(t *testing.T) {
 	}
 	if d.DestPath != "/csuite/quarantine/alex/q1.md" {
 		t.Errorf("ledger dest_path = %q, want /csuite/quarantine/alex/q1.md", d.DestPath)
+	}
+}
+
+func TestDeliver_ACKClass_SuppressesWithoutInboxDelivery(t *testing.T) {
+	root := newCsuiteTree(t)
+	body := []byte("---\nfrom: alex\nto: mike\nsemantic_class: ack\n---\n\nAcknowledged.\n")
+	_, sha := stageOutbox(t, root, "alex", "ack.md", body)
+
+	l := openTestLedger(t)
+	h := Handler(Config{Token: "secret", Ledger: l})
+
+	w := post(t, h, "secret", buildBody(t, "alex", "/csuite/alex/outbox/ack.md", sha))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%q", w.Code, w.Body.String())
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "mike", "inbox"))
+	if err != nil {
+		t.Fatalf("read mike inbox: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("mike inbox entries = %d, want 0", len(entries))
+	}
+	d, found, err := l.Lookup(sha)
+	if err != nil || !found {
+		t.Fatalf("Lookup: found=%v err=%v", found, err)
+	}
+	if d.Dest != ClassSuppress {
+		t.Fatalf("ledger dest = %q, want suppress", d.Dest)
 	}
 }
 

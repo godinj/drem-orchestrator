@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -31,6 +32,7 @@ const (
 	ClassPersona    = "persona"
 	ClassOperator   = "operator"
 	ClassQuarantine = "quarantine"
+	ClassSuppress   = "suppress"
 )
 
 // Classification is the result of reading and classifying an outbox
@@ -38,9 +40,8 @@ const (
 // persona class; it is the literal "operator" for the operator class
 // and empty for the quarantine class.
 type Classification struct {
-	Class  string // ClassPersona | ClassOperator | ClassQuarantine
-	Dest   string // destination persona (for ClassPersona / ClassOperator), empty (for ClassQuarantine)
-	Ack    bool   // true when frontmatter unambiguously marks a no-response ACK
+	Class  string // ClassPersona | ClassOperator | ClassQuarantine | ClassSuppress
+	Dest   string // destination persona (for ClassPersona / ClassOperator), empty otherwise
 	Reason string // diagnostic reason when Class == ClassQuarantine
 }
 
@@ -80,7 +81,7 @@ func ClassifyFile(path string) (Classification, error) {
 // classifyBytes is the pure classification kernel extracted for test
 // coverage without hitting disk.
 func classifyBytes(data []byte) (Classification, error) {
-	body, ok := extractFrontmatter(data)
+	fm, body, ok := extractFrontmatter(data)
 	if !ok {
 		return Classification{Class: ClassQuarantine, Reason: "no frontmatter delimiters"}, nil
 	}
@@ -90,8 +91,11 @@ func classifyBytes(data []byte) (Classification, error) {
 	// committing to a specific struct shape. The plan tolerates
 	// unknown keys — only "to:" matters for routing.
 	var root yaml.Node
-	if err := yaml.Unmarshal(body, &root); err != nil {
+	if err := yaml.Unmarshal(fm, &root); err != nil {
 		return Classification{Class: ClassQuarantine, Reason: "unparseable frontmatter: " + err.Error()}, nil
+	}
+	if isAckMessage(&root, body) {
+		return Classification{Class: ClassSuppress, Reason: "ack message"}, nil
 	}
 
 	toNode, found := findToNode(&root)
@@ -104,15 +108,14 @@ func classifyBytes(data []byte) (Classification, error) {
 		return Classification{}, ErrMultiRecipient
 	case yaml.ScalarNode:
 		dest := toNode.Value
-		ack := isUnambiguousAck(&root)
 		switch dest {
 		case "mike", "alex", "seth", "kyle":
-			return Classification{Class: ClassPersona, Dest: dest, Ack: ack}, nil
+			return Classification{Class: ClassPersona, Dest: dest}, nil
 		case "operator":
 			// Persona → operator reply. Routes into the operator
 			// pseudo-persona's inbox at /csuite/operator/inbox/.
 			// See plans/drem-csuite-send-cli.md §Phase 1.
-			return Classification{Class: ClassOperator, Dest: "operator", Ack: ack}, nil
+			return Classification{Class: ClassOperator, Dest: "operator"}, nil
 		case "":
 			return Classification{Class: ClassQuarantine, Reason: "empty 'to' field"}, nil
 		default:
@@ -136,16 +139,20 @@ var (
 // extractFrontmatter returns the bytes between the leading "---\n"
 // and the next "\n---" delimiter. The second return is false if the
 // input has no valid frontmatter block.
-func extractFrontmatter(data []byte) ([]byte, bool) {
+func extractFrontmatter(data []byte) ([]byte, []byte, bool) {
 	if !bytes.HasPrefix(data, frontmatterOpen) {
-		return nil, false
+		return nil, nil, false
 	}
 	rest := data[len(frontmatterOpen):]
 	end := bytes.Index(rest, frontmatterClose)
 	if end < 0 {
-		return nil, false
+		return nil, nil, false
 	}
-	return rest[:end], true
+	bodyStart := end + len(frontmatterClose)
+	if bodyStart < len(rest) && rest[bodyStart] == '\n' {
+		bodyStart++
+	}
+	return rest[:end], rest[bodyStart:], true
 }
 
 // findToNode walks the root yaml.Node tree looking for a
@@ -153,11 +160,10 @@ func extractFrontmatter(data []byte) ([]byte, bool) {
 // Case-sensitive — the csuite message format pins lowercase field
 // names.
 func findToNode(root *yaml.Node) (*yaml.Node, bool) {
-	return findFieldNode(root, "to")
+	return findTopLevelNode(root, "to")
 }
 
-// findFieldNode walks the root yaml.Node tree looking for a top-level key.
-func findFieldNode(root *yaml.Node, name string) (*yaml.Node, bool) {
+func findTopLevelNode(root *yaml.Node, field string) (*yaml.Node, bool) {
 	if root == nil {
 		return nil, false
 	}
@@ -174,40 +180,33 @@ func findFieldNode(root *yaml.Node, name string) (*yaml.Node, bool) {
 	for i := 0; i+1 < len(doc.Content); i += 2 {
 		key := doc.Content[i]
 		val := doc.Content[i+1]
-		if key.Kind == yaml.ScalarNode && key.Value == name {
+		if key.Kind == yaml.ScalarNode && key.Value == field {
 			return val, true
 		}
 	}
 	return nil, false
 }
 
-// isUnambiguousAck returns true only for complete ACK metadata:
-// channel: ack, ack_for or in_reply_to, and both response flags set to false.
-// Incomplete or malformed ACK-looking frontmatter remains a normal inbox route.
-func isUnambiguousAck(root *yaml.Node) bool {
-	channel, found := findFieldNode(root, "channel")
-	if !found || channel.Kind != yaml.ScalarNode || channel.Value != "ack" {
-		return false
+func isAckMessage(root *yaml.Node, body []byte) bool {
+	for _, field := range []string{"semantic_class", "type"} {
+		if node, ok := findTopLevelNode(root, field); ok && node.Kind == yaml.ScalarNode && strings.EqualFold(strings.TrimSpace(node.Value), "ack") {
+			return true
+		}
 	}
-	if !hasNonEmptyScalar(root, "ack_for") && !hasNonEmptyScalar(root, "in_reply_to") {
-		return false
+	if node, ok := findTopLevelNode(root, "subject"); ok && node.Kind == yaml.ScalarNode && looksLikeAckMarker(node.Value) {
+		return true
 	}
-	return isBoolFalse(root, "requires_response") && isBoolFalse(root, "action_required")
+	return looksLikeAckMarker(string(body))
 }
 
-func hasNonEmptyScalar(root *yaml.Node, name string) bool {
-	n, found := findFieldNode(root, name)
-	return found && n.Kind == yaml.ScalarNode && n.Value != ""
-}
-
-func isBoolFalse(root *yaml.Node, name string) bool {
-	n, found := findFieldNode(root, name)
-	if !found || n.Kind != yaml.ScalarNode || n.Tag != "!!bool" {
-		return false
+func looksLikeAckMarker(s string) bool {
+	s = strings.TrimSpace(strings.ToLower(s))
+	s = strings.Trim(s, ".!:-")
+	s = strings.TrimSpace(s)
+	switch s {
+	case "ack", "acked", "acknowledged", "received", "receipt", "noted", "ok", "okay":
+		return true
+	default:
+		return strings.HasPrefix(s, "ack: ") || strings.HasPrefix(s, "ack - ") || strings.HasPrefix(s, "acknowledged: ") || strings.HasPrefix(s, "received: ")
 	}
-	var b bool
-	if err := n.Decode(&b); err != nil {
-		return false
-	}
-	return !b
 }

@@ -92,6 +92,11 @@ type Config struct {
 	//
 	// See plans/csuite-audit-cli.md §Auth flow.
 	AuditToken string
+
+	// MaxRescanFilesPerPersona bounds how many outbox files a single
+	// /rescan pass will process for one source persona. Zero uses the
+	// package default; negative disables the bound for tests only.
+	MaxRescanFilesPerPersona int
 }
 
 // Handler returns an http.Handler that dispatches /deliver, /rescan,
@@ -208,6 +213,24 @@ func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 	}
 
 	switch class.Class {
+	case ClassSuppress:
+		h.logger().Printf("deliver: suppressed source=%s reason=%q sha=%s", req.SourcePersona, class.Reason, req.SHA256)
+		if err := h.cfg.Ledger.Insert(Delivery{
+			SHA256:        req.SHA256,
+			SourcePersona: req.SourcePersona,
+			Dest:          ClassSuppress,
+			SourcePath:    req.OutboxPath,
+			DestPath:      "",
+			DeliveredAt:   time.Now().UTC(),
+		}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
+			h.logger().Printf("deliver: suppress ledger insert failed: %v", err)
+			writeJSONError(w, http.StatusInternalServerError, "ledger insert failed")
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": req.SHA256})
+		return
 	case ClassQuarantine:
 		h.logger().Printf("deliver: quarantine: source=%s reason=%q sha=%s", req.SourcePersona, class.Reason, req.SHA256)
 		dest := quarantinePath(req.SourcePersona, req.OutboxPath)
@@ -322,9 +345,9 @@ func writeJSONError(w http.ResponseWriter, code int, msg string) {
 
 // deliverToInbox is the real-delivery code path for persona and kyle
 // classes. It serialises per-destination via destMutexes, copies the
-// source file into the destination inbox (or acks directory for ACKs)
-// with an atomic rename, inserts the ledger row, and then moves the
-// source into its outbox/delivered/ tree. The ordering matters: ledger
+// source file into the destination inbox with an atomic rename,
+// inserts the ledger row, and then moves the source into the
+// source's outbox/delivered/ tree. The ordering matters: ledger
 // commit happens AFTER the inbox write but BEFORE the source move,
 // so a crash between inbox-write and ledger-insert causes a rescan
 // replay (good — idempotent) and a crash between ledger-insert and
@@ -343,11 +366,7 @@ func (h *handler) deliverToInbox(req DeliverRequest, class Classification) (stri
 		sha8 = sha8[:8]
 	}
 	filename := fmt.Sprintf("%s-%s-%s.md", now.Format(time.RFC3339), req.SourcePersona, sha8)
-	dir := "inbox"
-	if class.Ack {
-		dir = "acks"
-	}
-	destPath := fmt.Sprintf("/csuite/%s/%s/%s", class.Dest, dir, filename)
+	destPath := fmt.Sprintf("/csuite/%s/inbox/%s", class.Dest, filename)
 
 	if err := atomicCopyFile(req.OutboxPath, destPath); err != nil {
 		return "", fmt.Errorf("copy to inbox: %w", err)

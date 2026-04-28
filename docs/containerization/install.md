@@ -484,6 +484,13 @@ Structured logs go to stdout via slog's JSON handler, which means
 `docker logs csuite-<persona>` is machine-parseable without extra
 formatting.
 
+Protocol invariants: personas must not manually move, rename, or archive
+inbox files; the poller owns archive, lease, retry, and processing state.
+ACK/receipt messages are terminal and must not receive replies. One
+inbound normally yields at most one substantive response. Status output
+must report `inbox`, `acks`, `outbox`, `db_unread`, and `event_unacked`
+as separate counts.
+
 ### Directory layout inside the container
 
 ```

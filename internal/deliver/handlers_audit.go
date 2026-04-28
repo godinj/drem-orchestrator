@@ -280,7 +280,7 @@ func readFrontmatter(path string) (frontmatterFields, error) {
 	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
 		return frontmatterFields{}, err
 	}
-	body, ok := extractFrontmatter(buf[:n])
+	body, _, ok := extractFrontmatter(buf[:n])
 	if !ok {
 		return frontmatterFields{}, errNoFrontmatter
 	}

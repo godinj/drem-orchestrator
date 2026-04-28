@@ -26,12 +26,15 @@ import (
 // cadence as mike/alex/seth.
 var rescanPersonas = []string{"mike", "alex", "seth", "kyle"}
 
+const defaultMaxRescanFilesPerPersona = 25
+
 // RescanResult is the JSON body returned by POST /rescan. The field
 // names are stable — tooling may parse them.
 type RescanResult struct {
 	Scanned     int      `json:"scanned"`
 	Delivered   int      `json:"delivered"`
 	Skipped     int      `json:"skipped"`
+	Suppressed  int      `json:"suppressed"`
 	Quarantined int      `json:"quarantined"`
 	Errors      []string `json:"errors"`
 }
@@ -112,6 +115,9 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 		}
 		return cands[i].name < cands[j].name
 	})
+	if limit := h.maxRescanFilesPerPersona(); limit >= 0 && len(cands) > limit {
+		cands = cands[:limit]
+	}
 
 	for _, c := range cands {
 		res.Scanned++
@@ -166,6 +172,21 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 		}
 
 		switch class.Class {
+		case ClassSuppress:
+			if err := h.cfg.Ledger.Insert(Delivery{
+				SHA256:        req.SHA256,
+				SourcePersona: req.SourcePersona,
+				Dest:          ClassSuppress,
+				SourcePath:    req.OutboxPath,
+				DestPath:      "",
+				DeliveredAt:   time.Now().UTC(),
+			}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
+				res.Errors = append(res.Errors,
+					fmt.Sprintf("%s: suppress ledger %s: %v", src, c.name, err))
+				continue
+			}
+			res.Suppressed++
+			h.logger().Printf("rescan: suppressed %s/%s reason=%q", src, c.name, class.Reason)
 		case ClassQuarantine:
 			dest := quarantinePath(req.SourcePersona, req.OutboxPath)
 			if err := atomicCopyFile(req.OutboxPath, dest); err != nil {
@@ -245,6 +266,16 @@ func RescanOnce(cfg Config) RescanResult {
 	logger.Printf("rescan: scanned=%d delivered=%d skipped=%d quarantined=%d errors=%d",
 		res.Scanned, res.Delivered, res.Skipped, res.Quarantined, len(res.Errors))
 	return res
+}
+
+func (h *handler) maxRescanFilesPerPersona() int {
+	if h.cfg.MaxRescanFilesPerPersona < 0 {
+		return -1
+	}
+	if h.cfg.MaxRescanFilesPerPersona == 0 {
+		return defaultMaxRescanFilesPerPersona
+	}
+	return h.cfg.MaxRescanFilesPerPersona
 }
 
 // rescanBasename returns the final path component of a protocol path

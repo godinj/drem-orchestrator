@@ -53,6 +53,68 @@ func TestRescan_PicksUpUnledgeredFile(t *testing.T) {
 	}
 }
 
+func TestRescan_SuppressesACKWithoutInboxDelivery(t *testing.T) {
+	root := newCsuiteTree(t)
+	body := []byte("---\nfrom: alex\nto: mike\ntype: ack\n---\n\nreceived\n")
+	_, sha := stageOutbox(t, root, "alex", "ack.md", body)
+
+	l := openTestLedger(t)
+	h := &handler{cfg: Config{Token: "secret", Ledger: l}, clock: time.Now}
+
+	res := h.Rescan()
+	if res.Suppressed != 1 {
+		t.Fatalf("suppressed = %d, want 1 (got %+v)", res.Suppressed, res)
+	}
+	if res.Delivered != 0 {
+		t.Fatalf("delivered = %d, want 0 (got %+v)", res.Delivered, res)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "mike", "inbox"))
+	if err != nil {
+		t.Fatalf("read mike inbox: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("mike inbox entries = %d, want 0", len(entries))
+	}
+	d, found, err := l.Lookup(sha)
+	if err != nil || !found {
+		t.Fatalf("Lookup: found=%v err=%v", found, err)
+	}
+	if d.Dest != ClassSuppress {
+		t.Fatalf("ledger dest = %q, want suppress", d.Dest)
+	}
+}
+
+func TestRescan_BoundsFilesPerPersona(t *testing.T) {
+	root := newCsuiteTree(t)
+	base := time.Date(2026, 4, 21, 16, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		body := []byte(fmt.Sprintf("---\nfrom: alex\nto: mike\n---\n\nmsg %d\n", i))
+		path, _ := stageOutbox(t, root, "alex", fmt.Sprintf("m%d.md", i), body)
+		at := base.Add(time.Duration(i) * time.Second)
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+	}
+
+	l := openTestLedger(t)
+	h := &handler{cfg: Config{Token: "secret", Ledger: l, MaxRescanFilesPerPersona: 2}, clock: time.Now}
+
+	res := h.Rescan()
+	if res.Scanned != 2 {
+		t.Fatalf("scanned = %d, want 2 (got %+v)", res.Scanned, res)
+	}
+	if res.Delivered != 2 {
+		t.Fatalf("delivered = %d, want 2 (got %+v)", res.Delivered, res)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "mike", "inbox"))
+	if err != nil {
+		t.Fatalf("read mike inbox: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("mike inbox entries = %d, want 2", len(entries))
+	}
+}
+
 // TestRescan_SkipsAlreadyDelivered verifies the skip-BEFORE-deliver
 // contract — a file whose sha is already in the ledger must not be
 // re-delivered. This matters when the /deliver path committed the
