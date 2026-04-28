@@ -24,11 +24,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -45,6 +47,26 @@ func main() {
 func run(args []string, stdout, stderr *os.File) int {
 	fs := flag.NewFlagSet("csuite-persona", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	startupQuietPeriod, err := envDuration("DREM_CSUITE_STARTUP_QUIET_PERIOD", 0)
+	if err != nil {
+		fmt.Fprintf(stderr, "csuite-persona: %v\n", err)
+		return 2
+	}
+	startupDrain, err := envBool("DREM_CSUITE_STARTUP_DRAIN", false)
+	if err != nil {
+		fmt.Fprintf(stderr, "csuite-persona: %v\n", err)
+		return 2
+	}
+	maxMessagesPerScan, err := envInt("DREM_CSUITE_MAX_MESSAGES_PER_SCAN", 0)
+	if err != nil {
+		fmt.Fprintf(stderr, "csuite-persona: %v\n", err)
+		return 2
+	}
+	maxMessagesAtBoot, err := envInt("DREM_CSUITE_MAX_MESSAGES_AT_BOOT", 0)
+	if err != nil {
+		fmt.Fprintf(stderr, "csuite-persona: %v\n", err)
+		return 2
+	}
 
 	personaName := fs.String("persona", "", "Persona name: mike, alex, seth, or kyle (required)")
 	inboxDir := fs.String("inbox-dir", "", "Override inbox directory (default /home/drem/.drem-csuite/<persona>/inbox)")
@@ -55,6 +77,11 @@ func run(args []string, stdout, stderr *os.File) int {
 	pollInterval := fs.Duration("poll-interval", persona.DefaultPollInterval, "Interval between inbox scans")
 	claudeTimeout := fs.Duration("claude-timeout", persona.DefaultClaudeTimeout, "Timeout for a single Codex invocation")
 	maxFailures := fs.Int("max-failures", persona.DefaultMaxFailures, "Failure threshold before a message is archived as .failed")
+	startupQuiet := fs.Duration("startup-quiet-period", startupQuietPeriod, "Suppress inbox processing for this duration after boot")
+	startupDrainFlag := fs.Bool("startup-drain", startupDrain, "Move boot-time inbox messages to .ignored without invoking the model")
+	maxPerScan := fs.Int("max-messages-per-scan", maxMessagesPerScan, "Maximum messages processed per normal scan (0 means unlimited)")
+	maxAtBoot := fs.Int("max-messages-at-boot", maxMessagesAtBoot, "Maximum messages processed in the post-quiet boot scan (0 skips boot scan)")
+	runtimeStateFile := fs.String("runtime-state-file", os.Getenv("DREM_CSUITE_RUNTIME_STATE_FILE"), "Runtime JSON state file (default /home/drem/.drem-csuite/<persona>/runtime.json)")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -121,18 +148,23 @@ func run(args []string, stdout, stderr *os.File) int {
 	signaler := persona.NewHTTPSignaler(signalCfg, logger)
 
 	cfg := persona.Config{
-		Persona:       *personaName,
-		InboxDir:      *inboxDir,
-		OutboxDir:     *outboxDir,
-		StateFile:     *stateFile,
-		ArchiveDir:    *archiveDir,
-		PromptFile:    *promptFile,
-		PollInterval:  *pollInterval,
-		ClaudeTimeout: *claudeTimeout,
-		MaxFailures:   *maxFailures,
-		Logger:        logger,
-		Now:           time.Now,
-		Signaler:      signaler,
+		Persona:            *personaName,
+		InboxDir:           *inboxDir,
+		OutboxDir:          *outboxDir,
+		StateFile:          *stateFile,
+		ArchiveDir:         *archiveDir,
+		PromptFile:         *promptFile,
+		PollInterval:       *pollInterval,
+		ClaudeTimeout:      *claudeTimeout,
+		MaxFailures:        *maxFailures,
+		StartupQuietPeriod: *startupQuiet,
+		StartupDrain:       *startupDrainFlag,
+		MaxMessagesPerScan: *maxPerScan,
+		MaxMessagesAtBoot:  *maxAtBoot,
+		RuntimeStateFile:   *runtimeStateFile,
+		Logger:             logger,
+		Now:                time.Now,
+		Signaler:           signaler,
 	}
 	cfg.ApplyDefaults()
 
@@ -159,4 +191,43 @@ func run(args []string, stdout, stderr *os.File) int {
 		return 1
 	}
 	return 0
+}
+
+func envDuration(name string, fallback time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s=%q is not a valid duration: %w", name, value, err)
+	}
+	return d, nil
+}
+
+func envBool(name string, fallback bool) (bool, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	b, err := strconv.ParseBool(value)
+	if err != nil {
+		return false, fmt.Errorf("%s=%q is not a valid bool: %w", name, value, err)
+	}
+	return b, nil
+}
+
+func envInt(name string, fallback int) (int, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, fmt.Errorf("%s=%q is not a valid integer: %w", name, value, err)
+	}
+	if n < 0 {
+		return 0, errors.New(name + " must be >= 0")
+	}
+	return n, nil
 }

@@ -275,6 +275,88 @@ func TestStore_CreateMessage_RejectEmptyFields(t *testing.T) {
 	}
 }
 
+func TestStore_ListInboxQueue_ExcludesArchivedAndIgnored(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now().UTC()
+	seedFile(t, root, "mike", "inbox", "20260101T000000Z-operator-to-mike-aaaaaaaa.md",
+		frontmatterFile("operator", "mike", "live", "live body", "aaaaaaaa", now.Add(-2*time.Minute)))
+	seedFile(t, root, "mike", filepath.Join("inbox", ".archive"), "20260101T000100Z-operator-to-mike-bbbbbbbb.md",
+		frontmatterFile("operator", "mike", "archived", "archived body", "bbbbbbbb", now.Add(-1*time.Minute)))
+	seedFile(t, root, "mike", filepath.Join("inbox", ".ignored"), "20260101T000200Z-operator-to-mike-cccccccc.md",
+		frontmatterFile("operator", "mike", "ignored", "ignored body", "cccccccc", now))
+
+	items, err := New(root).ListInboxQueue("mike", 0)
+	if err != nil {
+		t.Fatalf("ListInboxQueue: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("len = %d, want 1", len(items))
+	}
+	if items[0].Subject != "live" || items[0].Filename == "" {
+		t.Fatalf("unexpected item: %+v", items[0])
+	}
+}
+
+func TestStore_ArchiveAndIgnoreInboxItem_MoveOnlySelectedLiveFile(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now().UTC()
+	archiveName := "20260101T000000Z-operator-to-mike-aaaaaaaa.md"
+	ignoreName := "20260101T000100Z-operator-to-mike-bbbbbbbb.md"
+	seedFile(t, root, "mike", "inbox", archiveName,
+		frontmatterFile("operator", "mike", "archive me", "body", "aaaaaaaa", now.Add(-2*time.Minute)))
+	seedFile(t, root, "mike", "inbox", ignoreName,
+		frontmatterFile("operator", "mike", "ignore me", "body", "bbbbbbbb", now.Add(-1*time.Minute)))
+
+	store := New(root)
+	items, err := store.ListInboxQueue("mike", 0)
+	if err != nil {
+		t.Fatalf("ListInboxQueue: %v", err)
+	}
+	ids := map[string]string{}
+	for _, item := range items {
+		ids[item.Subject] = item.ID.String()
+	}
+
+	if err := store.ArchiveInboxItem("mike", ids["archive me"], "operator restart review"); err != nil {
+		t.Fatalf("ArchiveInboxItem: %v", err)
+	}
+	if err := store.IgnoreInboxItem("mike", ids["ignore me"], "operator restart review"); err != nil {
+		t.Fatalf("IgnoreInboxItem: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(root, "mike", "inbox", ".archive", archiveName)); err != nil {
+		t.Fatalf("archived file not moved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "mike", "inbox", ".ignored", ignoreName)); err != nil {
+		t.Fatalf("ignored file not moved: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "mike", "inbox", archiveName)); !os.IsNotExist(err) {
+		t.Fatalf("archive source still exists or unexpected error: %v", err)
+	}
+
+	remaining, err := store.ListInboxQueue("mike", 0)
+	if err != nil {
+		t.Fatalf("ListInboxQueue after moves: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Fatalf("remaining live items = %d, want 0", len(remaining))
+	}
+}
+
+func TestStore_InboxQueue_RejectsUnknownPersonaAndID(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+	if _, err := store.ListInboxQueue("ross", 0); err == nil {
+		t.Fatalf("ListInboxQueue unknown persona: want error")
+	}
+	if err := store.ArchiveInboxItem("ross", uuid.NewString(), ""); err == nil {
+		t.Fatalf("ArchiveInboxItem unknown persona: want error")
+	}
+	if err := store.IgnoreInboxItem("mike", uuid.NewString(), ""); err == nil {
+		t.Fatalf("IgnoreInboxItem unknown id: want error")
+	}
+}
+
 func TestStore_GetMessagesBetween_OperatorPersona_BothDirections(t *testing.T) {
 	root := t.TempDir()
 	now := time.Now().UTC()

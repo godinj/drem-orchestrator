@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -34,10 +35,18 @@ func sha256Bytes(data []byte) string {
 // cancelled and finishes any in-flight model invocation before
 // returning so SIGTERM does not abandon work mid-turn.
 type Poller struct {
-	cfg          Config
-	spawner      Spawner
-	prompt       string
-	personaLabel slog.Attr
+	cfg                Config
+	spawner            Spawner
+	prompt             string
+	personaLabel       slog.Attr
+	bootID             string
+	startedAt          time.Time
+	quietUntil         time.Time
+	currentInbox       string
+	currentTurnStarted time.Time
+	lastProcessed      string
+	lastExitCode       int
+	lastError          string
 }
 
 // New validates cfg, loads the persona prompt once, and returns a
@@ -54,12 +63,19 @@ func New(cfg Config, spawner Spawner) (*Poller, error) {
 	if err != nil {
 		return nil, fmt.Errorf("persona: read prompt %q: %w", cfg.PromptFile, err)
 	}
-	return &Poller{
+	startedAt := cfg.Now().UTC()
+	p := &Poller{
 		cfg:          cfg,
 		spawner:      spawner,
 		prompt:       string(body),
 		personaLabel: slog.String("persona", cfg.Persona),
-	}, nil
+		bootID:       uuid.NewString(),
+		startedAt:    startedAt,
+	}
+	if cfg.StartupQuietPeriod > 0 {
+		p.quietUntil = startedAt.Add(cfg.StartupQuietPeriod)
+	}
+	return p, nil
 }
 
 // Run executes the poll loop until ctx is cancelled.
@@ -85,15 +101,24 @@ func (p *Poller) Run(ctx context.Context) error {
 		slog.String("outbox", p.cfg.OutboxDir),
 		slog.Duration("poll_interval", p.cfg.PollInterval),
 		slog.Duration("claude_timeout", p.cfg.ClaudeTimeout),
+		slog.Duration("startup_quiet_period", p.cfg.StartupQuietPeriod),
+		slog.Bool("startup_drain", p.cfg.StartupDrain),
+		slog.Int("max_messages_per_scan", p.cfg.MaxMessagesPerScan),
+		slog.Int("max_messages_at_boot", p.cfg.MaxMessagesAtBoot),
 	)
 
-	// Process once immediately so the first tick is not delayed by
-	// PollInterval on container startup; this also makes tests faster.
-	if err := p.scanOnce(ctx); err != nil {
+	if err := p.writeRuntimeState("starting"); err != nil {
+		p.cfg.Logger.Warn("write runtime state", p.personaLabel, slog.Any("err", err))
+	}
+	if err := p.handleStartup(ctx); err != nil {
 		if ctx.Err() != nil {
 			return nil
 		}
-		p.cfg.Logger.Error("scan failed", p.personaLabel, slog.Any("err", err))
+		p.lastError = err.Error()
+		_ = p.writeRuntimeState("error")
+		p.cfg.Logger.Error("startup handling failed", p.personaLabel, slog.Any("err", err))
+	} else if err := p.writeRuntimeState("idle"); err != nil {
+		p.cfg.Logger.Warn("write runtime state", p.personaLabel, slog.Any("err", err))
 	}
 
 	ticker := time.NewTicker(p.cfg.PollInterval)
@@ -101,23 +126,48 @@ func (p *Poller) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			_ = p.writeRuntimeState("stopping")
 			p.cfg.Logger.Info("persona poller stopping", p.personaLabel)
 			return nil
 		case <-ticker.C:
-			if err := p.scanOnce(ctx); err != nil {
+			if err := p.scanOnce(ctx, p.cfg.MaxMessagesPerScan); err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}
+				p.lastError = err.Error()
+				_ = p.writeRuntimeState("error")
 				p.cfg.Logger.Error("scan failed", p.personaLabel, slog.Any("err", err))
 			}
 		}
 	}
 }
 
+func (p *Poller) handleStartup(ctx context.Context) error {
+	if p.cfg.StartupQuietPeriod > 0 {
+		if err := p.writeRuntimeState("boot_quiet"); err != nil {
+			p.cfg.Logger.Warn("write runtime state", p.personaLabel, slog.Any("err", err))
+		}
+		timer := time.NewTimer(p.cfg.StartupQuietPeriod)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-timer.C:
+		}
+	}
+	if p.cfg.StartupDrain {
+		return p.drainStartupInbox()
+	}
+	if p.cfg.MaxMessagesAtBoot > 0 {
+		return p.scanOnce(ctx, p.cfg.MaxMessagesAtBoot)
+	}
+	return nil
+}
+
 // scanOnce lists the inbox, orders by mtime ascending, and processes
 // each message sequentially. Errors from processMessage are logged but
 // do not abort the tick — the next file still gets its chance.
-func (p *Poller) scanOnce(ctx context.Context) error {
+func (p *Poller) scanOnce(ctx context.Context, limit int) error {
 	entries, err := os.ReadDir(p.cfg.InboxDir)
 	if err != nil {
 		return fmt.Errorf("read inbox %q: %w", p.cfg.InboxDir, err)
@@ -154,7 +204,10 @@ func (p *Poller) scanOnce(ctx context.Context) error {
 		return files[i].name < files[j].name
 	})
 
-	for _, f := range files {
+	for i, f := range files {
+		if limit > 0 && i >= limit {
+			break
+		}
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -164,6 +217,30 @@ func (p *Poller) scanOnce(ctx context.Context) error {
 				slog.String("file", f.name),
 				slog.Any("err", err))
 		}
+	}
+	return nil
+}
+
+func (p *Poller) drainStartupInbox() error {
+	ignoredDir := filepath.Join(p.cfg.InboxDir, ".ignored")
+	if err := os.MkdirAll(ignoredDir, 0o755); err != nil {
+		return fmt.Errorf("create ignored dir %q: %w", ignoredDir, err)
+	}
+	entries, err := os.ReadDir(p.cfg.InboxDir)
+	if err != nil {
+		return fmt.Errorf("read inbox %q: %w", p.cfg.InboxDir, err)
+	}
+	for _, ent := range entries {
+		if ent.IsDir() || !strings.HasSuffix(ent.Name(), ".md") {
+			continue
+		}
+		src := filepath.Join(p.cfg.InboxDir, ent.Name())
+		dst := filepath.Join(ignoredDir, ent.Name())
+		if err := os.Rename(src, dst); err != nil {
+			return fmt.Errorf("drain inbox %q: %w", ent.Name(), err)
+		}
+		_ = os.Remove(failuresPath(p.cfg.InboxDir, ent.Name()))
+		p.lastProcessed = ent.Name()
 	}
 	return nil
 }
@@ -207,6 +284,16 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 	// bind-mounted /home/drem/.codex/auth.json file.
 	turnPrompt := p.codexTurnPrompt(body)
 	p.reportPromptAdmission(ctx, name, body)
+	p.currentInbox = name
+	p.currentTurnStarted = p.cfg.Now().UTC()
+	p.lastError = ""
+	if err := p.writeRuntimeState("processing"); err != nil {
+		p.cfg.Logger.Warn("write runtime state", p.personaLabel, slog.Any("err", err))
+	}
+	defer func() {
+		p.currentInbox = ""
+		p.currentTurnStarted = time.Time{}
+	}()
 
 	args := []string{
 		"opencode",
@@ -237,7 +324,11 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		return p.recordFailure(name, spawnErr.Error(), -1, duration)
+		p.lastExitCode = -1
+		p.lastError = spawnErr.Error()
+		err := p.recordFailure(name, spawnErr.Error(), -1, duration)
+		_ = p.writeRuntimeState("error")
+		return err
 	}
 
 	if exitCode != 0 {
@@ -245,10 +336,84 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 		if reason == "" {
 			reason = "non-zero exit"
 		}
-		return p.recordFailure(name, reason, exitCode, duration)
+		p.lastExitCode = exitCode
+		p.lastError = reason
+		err := p.recordFailure(name, reason, exitCode, duration)
+		_ = p.writeRuntimeState("error")
+		return err
 	}
 
-	return p.recordSuccess(name, body, stdout, duration, outboxBefore)
+	p.lastExitCode = 0
+	p.lastError = ""
+	err = p.recordSuccess(name, body, stdout, duration, outboxBefore)
+	if err != nil {
+		p.lastError = err.Error()
+		_ = p.writeRuntimeState("error")
+		return err
+	}
+	p.lastProcessed = name
+	_ = p.writeRuntimeState("idle")
+	return nil
+}
+
+type runtimeState struct {
+	Persona               string `json:"persona"`
+	Status                string `json:"status"`
+	BootID                string `json:"boot_id"`
+	StartedAt             string `json:"started_at"`
+	QuietUntil            string `json:"quiet_until,omitempty"`
+	CurrentInboxFilename  string `json:"current_inbox_filename,omitempty"`
+	CurrentTurnStartedAt  string `json:"current_turn_started_at,omitempty"`
+	LastProcessedFilename string `json:"last_processed_filename,omitempty"`
+	LastExitCode          int    `json:"last_exit_code"`
+	LastError             string `json:"last_error,omitempty"`
+}
+
+func (p *Poller) writeRuntimeState(status string) error {
+	if p.cfg.RuntimeStateFile == "" {
+		return nil
+	}
+	state := runtimeState{
+		Persona:               p.cfg.Persona,
+		Status:                status,
+		BootID:                p.bootID,
+		StartedAt:             p.startedAt.UTC().Format(time.RFC3339),
+		CurrentInboxFilename:  p.currentInbox,
+		LastProcessedFilename: p.lastProcessed,
+		LastExitCode:          p.lastExitCode,
+		LastError:             p.lastError,
+	}
+	if !p.quietUntil.IsZero() {
+		state.QuietUntil = p.quietUntil.UTC().Format(time.RFC3339)
+	}
+	if !p.currentTurnStarted.IsZero() {
+		state.CurrentTurnStartedAt = p.currentTurnStarted.UTC().Format(time.RFC3339)
+	}
+	body, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+	body = append(body, '\n')
+	dir := filepath.Dir(p.cfg.RuntimeStateFile)
+	tmp, err := os.CreateTemp(dir, ".runtime-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("create runtime state tempfile: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(body); err != nil {
+		tmp.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write runtime state tempfile: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close runtime state tempfile: %w", err)
+	}
+	if err := os.Rename(tmpPath, p.cfg.RuntimeStateFile); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename runtime state tempfile: %w", err)
+	}
+	return nil
 }
 
 func (p *Poller) reportPromptAdmission(ctx context.Context, inboxName string, body []byte) {

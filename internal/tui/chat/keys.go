@@ -3,21 +3,31 @@ package chat
 import "github.com/charmbracelet/bubbles/key"
 
 type keyMap struct {
-	Quit       key.Binding
-	Send       key.Binding
-	NextTab    key.Binding
-	PrevTab    key.Binding
-	Tab1       key.Binding
-	Tab2       key.Binding
-	Tab3       key.Binding
-	Tab4       key.Binding
-	Quick1     key.Binding
-	Quick2     key.Binding
-	Quick3     key.Binding
-	ScrollUp   key.Binding
-	ScrollDown key.Binding
-	LineUp     key.Binding
-	LineDown   key.Binding
+	Quit             key.Binding
+	Send             key.Binding
+	NextTab          key.Binding
+	PrevTab          key.Binding
+	Tab1             key.Binding
+	Tab2             key.Binding
+	Tab3             key.Binding
+	Tab4             key.Binding
+	Quick1           key.Binding
+	Quick2           key.Binding
+	Quick3           key.Binding
+	OpenInbox        key.Binding
+	OpenControl      key.Binding
+	Refresh          key.Binding
+	Archive          key.Binding
+	Ignore           key.Binding
+	StopPersona      key.Binding
+	StartPersona     key.Binding
+	RecreatePersona  key.Binding
+	SelectAllControl key.Binding
+	Cancel           key.Binding
+	ScrollUp         key.Binding
+	ScrollDown       key.Binding
+	LineUp           key.Binding
+	LineDown         key.Binding
 }
 
 var keys = keyMap{
@@ -52,6 +62,46 @@ var keys = keyMap{
 	Quick3: key.NewBinding(
 		key.WithKeys("f3"),
 		key.WithHelp("F3", "yes"),
+	),
+	OpenInbox: key.NewBinding(
+		key.WithKeys("i"),
+		key.WithHelp("i", "inbox"),
+	),
+	OpenControl: key.NewBinding(
+		key.WithKeys("c"),
+		key.WithHelp("c", "control"),
+	),
+	Refresh: key.NewBinding(
+		key.WithKeys("r"),
+		key.WithHelp("r", "refresh"),
+	),
+	Archive: key.NewBinding(
+		key.WithKeys("a"),
+		key.WithHelp("a", "archive"),
+	),
+	Ignore: key.NewBinding(
+		key.WithKeys("x"),
+		key.WithHelp("x", "ignore"),
+	),
+	StopPersona: key.NewBinding(
+		key.WithKeys("s"),
+		key.WithHelp("s", "stop"),
+	),
+	StartPersona: key.NewBinding(
+		key.WithKeys("S"),
+		key.WithHelp("S", "start"),
+	),
+	RecreatePersona: key.NewBinding(
+		key.WithKeys("R"),
+		key.WithHelp("R", "recreate"),
+	),
+	SelectAllControl: key.NewBinding(
+		key.WithKeys("A"),
+		key.WithHelp("A", "all"),
+	),
+	Cancel: key.NewBinding(
+		key.WithKeys("esc"),
+		key.WithHelp("esc", "back"),
 	),
 	ScrollUp: key.NewBinding(
 		key.WithKeys("pgup"),

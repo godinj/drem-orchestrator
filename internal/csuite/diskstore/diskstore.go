@@ -166,12 +166,82 @@ func (s *Store) acceptsTo(to string) bool {
 	if to == "operator" {
 		return true
 	}
+	return s.isKnownPersona(to)
+}
+
+func (s *Store) isKnownPersona(agent string) bool {
 	for _, p := range knownPersonas {
-		if p == to {
+		if p == agent {
 			return true
 		}
 	}
 	return false
+}
+
+// ListInboxQueue returns live inbox files for a managed persona, oldest first.
+// Archived and ignored files are not included by default.
+func (s *Store) ListInboxQueue(agent string, limit int) ([]csuite.InboxQueueItem, error) {
+	if !s.isKnownPersona(agent) {
+		return nil, csuite.ErrUnknownPersona
+	}
+	entries, err := listInboxEntries(filepath.Join(s.root, agent, "inbox"))
+	if err != nil {
+		return nil, fmt.Errorf("diskstore: list inbox queue: %w", err)
+	}
+	if limit > 0 && len(entries) > limit {
+		entries = entries[:limit]
+	}
+	items := make([]csuite.InboxQueueItem, 0, len(entries))
+	for _, e := range entries {
+		msg := entryToMessage(e, agent)
+		items = append(items, csuite.InboxQueueItem{
+			ID:        msg.ID,
+			Filename:  filepath.Base(e.Path),
+			FromAgent: msg.FromAgent,
+			ToAgent:   msg.ToAgent,
+			Subject:   msg.Subject,
+			Body:      msg.Body,
+			CreatedAt: msg.CreatedAt,
+			UpdatedAt: msg.UpdatedAt,
+		})
+	}
+	return items, nil
+}
+
+// ArchiveInboxItem moves the selected live inbox file to inbox/.archive/.
+func (s *Store) ArchiveInboxItem(agent, id, reason string) error {
+	return s.moveLiveInboxItem(agent, id, ".archive")
+}
+
+// IgnoreInboxItem moves the selected live inbox file to inbox/.ignored/.
+func (s *Store) IgnoreInboxItem(agent, id, reason string) error {
+	return s.moveLiveInboxItem(agent, id, ".ignored")
+}
+
+func (s *Store) moveLiveInboxItem(agent, id, destDirName string) error {
+	if !s.isKnownPersona(agent) {
+		return csuite.ErrUnknownPersona
+	}
+	entries, err := listInboxEntries(filepath.Join(s.root, agent, "inbox"))
+	if err != nil {
+		return fmt.Errorf("diskstore: list live inbox: %w", err)
+	}
+	for _, e := range entries {
+		msg := entryToMessage(e, agent)
+		if msg.ID.String() != id {
+			continue
+		}
+		destDir := filepath.Join(s.root, agent, "inbox", destDirName)
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			return fmt.Errorf("diskstore: create %s: %w", destDirName, err)
+		}
+		dest := filepath.Join(destDir, filepath.Base(e.Path))
+		if err := os.Rename(e.Path, dest); err != nil {
+			return fmt.Errorf("diskstore: move inbox item: %w", err)
+		}
+		return nil
+	}
+	return csuite.ErrInboxItemNotFound
 }
 
 // GetMessagesBetween returns the merged conversation between agent1 and

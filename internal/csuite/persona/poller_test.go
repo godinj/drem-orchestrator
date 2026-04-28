@@ -19,6 +19,7 @@ package persona_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -61,10 +62,11 @@ func newTestFS(t *testing.T, promptBody string) testFS {
 	inbox := filepath.Join(root, "inbox")
 	outbox := filepath.Join(root, "outbox")
 	archive := filepath.Join(inbox, ".archive")
+	ignored := filepath.Join(inbox, ".ignored")
 	state := filepath.Join(root, "state.md")
 	prompt := filepath.Join(root, "prompts", "seth.md")
 
-	for _, d := range []string{inbox, outbox, archive, filepath.Dir(prompt)} {
+	for _, d := range []string{inbox, outbox, archive, ignored, filepath.Dir(prompt)} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			t.Fatalf("mkdir %s: %v", d, err)
 		}
@@ -186,6 +188,27 @@ func runPollerUntil(t *testing.T, p *persona.Poller, cond func() bool, timeout t
 	cancel()
 	<-done
 	return fmt.Errorf("condition not met within %s", timeout)
+}
+
+func runtimeStatus(t *testing.T, path string) string {
+	t.Helper()
+	return fmt.Sprint(runtimeStateMap(t, path)["status"])
+}
+
+func runtimeStateMap(t *testing.T, path string) map[string]any {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return map[string]any{}
+	}
+	if err != nil {
+		t.Fatalf("read runtime state: %v", err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(body, &state); err != nil {
+		t.Fatalf("decode runtime state: %v", err)
+	}
+	return state
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +339,191 @@ func TestPoller_OrderingByMtime(t *testing.T) {
 	if !strings.Contains(calls[1].promptArg(), "new") {
 		t.Fatalf("second spawn should carry the newer message, got prompt=%q argv=%v",
 			calls[1].promptArg(), calls[1].argv)
+	}
+}
+
+func TestPoller_StartupQuietPeriodSuppressesImmediateProcessing(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.StartupQuietPeriod = time.Hour
+	cfg.RuntimeStateFile = filepath.Join(fs.root, "runtime.json")
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	p, err := persona.New(cfg, recorderSpawner(&calls, &mu, nil))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "quiet.md", "wait", time.Now())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_ = p.Run(ctx)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if runtimeStatus(t, cfg.RuntimeStateFile) == "boot_quiet" {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := runtimeStatus(t, cfg.RuntimeStateFile); got != "boot_quiet" {
+		t.Fatalf("runtime status = %q, want boot_quiet", got)
+	}
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 0 {
+		t.Fatalf("startup quiet period should suppress spawns, got %d", len(calls))
+	}
+}
+
+func TestPoller_MaxMessagesAtBootLimitsFirstScan(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.PollInterval = time.Hour
+	cfg.MaxMessagesAtBoot = 1
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	p, err := persona.New(cfg, recorderSpawner(&calls, &mu, nil))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "001.md", "one", time.Now().Add(-time.Minute))
+	writeInboxMessage(t, fs, "002.md", "two", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) >= 1
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for boot spawn: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("boot scan should process one message, got %d", len(calls))
+	}
+	if got := visibleInboxFiles(t, fs.inboxDir); len(got) != 1 || got[0] != "002.md" {
+		t.Fatalf("remaining inbox = %v, want [002.md]", got)
+	}
+}
+
+func TestPoller_MaxMessagesPerScanLimitsLaterScans(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.PollInterval = 20 * time.Millisecond
+	cfg.MaxMessagesAtBoot = 0
+	cfg.MaxMessagesPerScan = 1
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	p, err := persona.New(cfg, recorderSpawner(&calls, &mu, nil))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "001.md", "one", time.Now().Add(-time.Minute))
+	writeInboxMessage(t, fs, "002.md", "two", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) >= 1
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for scan spawn: %v", err)
+	}
+	mu.Lock()
+	gotCalls := len(calls)
+	mu.Unlock()
+	if gotCalls != 1 {
+		t.Fatalf("first normal scan should process one message, got %d", gotCalls)
+	}
+	if got := visibleInboxFiles(t, fs.inboxDir); len(got) != 1 || got[0] != "002.md" {
+		t.Fatalf("remaining inbox = %v, want [002.md]", got)
+	}
+}
+
+func TestPoller_StartupDrainMovesFilesWithoutSpawning(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.PollInterval = time.Hour
+	cfg.StartupDrain = true
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	p, err := persona.New(cfg, recorderSpawner(&calls, &mu, nil))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "drain.md", "ignore me", time.Now())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		_ = p.Run(ctx)
+		close(done)
+	}()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if entries := dirEntries(t, filepath.Join(fs.inboxDir, ".ignored")); len(entries) == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 0 {
+		t.Fatalf("startup drain should not spawn, got %d", len(calls))
+	}
+	if got := dirEntries(t, filepath.Join(fs.inboxDir, ".ignored")); len(got) != 1 || got[0] != "drain.md" {
+		t.Fatalf("ignored dir = %v, want [drain.md]", got)
+	}
+}
+
+func TestPoller_RuntimeStateProcessingAndIdle(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.RuntimeStateFile = filepath.Join(fs.root, "runtime.json")
+	cfg.MaxMessagesAtBoot = 1
+	processingSeen := make(chan struct{}, 1)
+
+	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
+		if st := runtimeStateMap(t, cfg.RuntimeStateFile); st["status"] == "processing" && st["current_inbox_filename"] == "state.md" {
+			processingSeen <- struct{}{}
+		}
+		return []byte("ok"), 0, nil
+	})
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "state.md", "body", time.Now())
+
+	err = runPollerUntil(t, p, func() bool { return runtimeStatus(t, cfg.RuntimeStateFile) == "idle" }, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for idle runtime state: %v", err)
+	}
+	select {
+	case <-processingSeen:
+	default:
+		t.Fatal("spawner did not observe processing runtime state")
+	}
+	st := runtimeStateMap(t, cfg.RuntimeStateFile)
+	if st["last_processed_filename"] != "state.md" {
+		t.Fatalf("last_processed_filename = %v, want state.md", st["last_processed_filename"])
 	}
 }
 
@@ -687,6 +895,9 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	}
 	if cfg.ArchiveDir != "/home/drem/.drem-csuite/mike/inbox/.archive" {
 		t.Errorf("ArchiveDir = %q", cfg.ArchiveDir)
+	}
+	if cfg.RuntimeStateFile != "/home/drem/.drem-csuite/mike/runtime.json" {
+		t.Errorf("RuntimeStateFile = %q", cfg.RuntimeStateFile)
 	}
 	if cfg.PromptFile != "/opt/csuite/prompts/mike.md" {
 		t.Errorf("PromptFile = %q", cfg.PromptFile)

@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
+	"github.com/godinj/drem-orchestrator/internal/personacontrol"
 	"github.com/google/uuid"
 )
 
@@ -26,10 +27,11 @@ type dashboardStore interface {
 
 // Config holds the bridge HTTP server configuration.
 type Config struct {
-	Token       string // Bearer token for API authentication
-	DisableAuth bool   // When true, API and WebSocket auth checks are bypassed
-	Addr        string // TCP address to listen on; defaults to ":8080" when empty
-	Store       dashboardStore
+	Token          string // Bearer token for API authentication
+	DisableAuth    bool   // When true, API and WebSocket auth checks are bypassed
+	Addr           string // TCP address to listen on; defaults to ":8080" when empty
+	Store          dashboardStore
+	PersonaControl *personacontrol.Controller
 
 	// DeliverHandler is an optional http.Handler mounted at /healthz
 	// and /deliver. When non-nil the bridge Server composes the
@@ -52,6 +54,9 @@ type Server struct {
 func New(cfg Config) *Server {
 	if cfg.Addr == "" {
 		cfg.Addr = defaultAddr
+	}
+	if cfg.PersonaControl == nil {
+		cfg.PersonaControl = personacontrol.NewFromEnv(nil)
 	}
 	return &Server{cfg: cfg, hub: NewHub()}
 }
@@ -96,6 +101,11 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.Handle("/api/health", s.auth(http.HandlerFunc(healthHandler)))
 	mux.Handle("/api/agents", s.auth(agentsHandler(s.cfg.Store)))
+	mux.Handle("/api/inbox", s.auth(inboxQueueHandler(s.cfg.Store)))
+	mux.Handle("/api/inbox/archive", s.auth(inboxQueueActionHandler(s.cfg.Store, inboxQueueActionArchive)))
+	mux.Handle("/api/inbox/ignore", s.auth(inboxQueueActionHandler(s.cfg.Store, inboxQueueActionIgnore)))
+	mux.Handle("/api/personas/containers", s.auth(personaContainersHandler(s.cfg.PersonaControl)))
+	mux.Handle("/api/personas/control", s.auth(personaControlHandler(s.cfg.PersonaControl)))
 	mux.Handle("/api/messages", s.auth(messagesHandler(s.cfg.Store, s.hub)))
 	mux.Handle("/api/acks", s.auth(acksHandler(s.cfg.Store)))
 	// WebSocket endpoint handles its own auth (token via query param or header)
