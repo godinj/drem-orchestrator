@@ -377,4 +377,3 @@ func resetWorkDir(workDir string) error {
 	}
 	return nil
 }
-
