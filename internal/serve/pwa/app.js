@@ -189,6 +189,13 @@
       // Name
       btn.appendChild(document.createTextNode(a.name));
 
+      if (a.ack_count > 0) {
+        const ack = document.createElement('span');
+        ack.className = 'ack-count';
+        ack.textContent = 'ack:' + a.ack_count;
+        btn.appendChild(ack);
+      }
+
       // Unread badge is tracked locally per browser. Server unread_count is
       // agent-inbox oriented and does not represent the operator's seen state.
       const unread = unreadCountForAgent(a.name);

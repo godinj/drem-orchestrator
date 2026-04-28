@@ -120,6 +120,38 @@ func TestClassifyBytes_Operator(t *testing.T) {
 	}
 }
 
+func TestClassifyBytes_UnambiguousAck(t *testing.T) {
+	body := []byte("---\nfrom: alex\nto: mike\nchannel: ack\nack_for: msg-123\nrequires_response: false\naction_required: false\n---\n\nack\n")
+	got, err := classifyBytes(body)
+	if err != nil {
+		t.Fatalf("classifyBytes: %v", err)
+	}
+	if got.Class != ClassPersona || got.Dest != "mike" || !got.Ack {
+		t.Errorf("got %+v, want persona dest=mike ack=true", got)
+	}
+}
+
+func TestClassifyBytes_AmbiguousAckRoutesNormally(t *testing.T) {
+	cases := map[string]string{
+		"missing correlation": "---\nfrom: alex\nto: mike\nchannel: ack\nrequires_response: false\naction_required: false\n---\n\nack\n",
+		"requires response":   "---\nfrom: alex\nto: mike\nchannel: ack\nack_for: msg-123\nrequires_response: true\naction_required: false\n---\n\nack\n",
+		"missing flag":        "---\nfrom: alex\nto: mike\nchannel: ack\nack_for: msg-123\nrequires_response: false\n---\n\nack\n",
+		"string false flag":   "---\nfrom: alex\nto: mike\nchannel: ack\nack_for: msg-123\nrequires_response: \"false\"\naction_required: false\n---\n\nack\n",
+	}
+	for name, body := range cases {
+		name, body := name, body
+		t.Run(name, func(t *testing.T) {
+			got, err := classifyBytes([]byte(body))
+			if err != nil {
+				t.Fatalf("classifyBytes: %v", err)
+			}
+			if got.Class != ClassPersona || got.Dest != "mike" || got.Ack {
+				t.Errorf("got %+v, want normal persona route", got)
+			}
+		})
+	}
+}
+
 // TestClassifyBytes_MultiRecipientRejected verifies a YAML sequence
 // "to:" produces ErrMultiRecipient.
 func TestClassifyBytes_MultiRecipientRejected(t *testing.T) {

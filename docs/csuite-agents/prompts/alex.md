@@ -136,6 +136,8 @@ embedded images.
 4. **Delegate all real work.** If a task would take more than a quick status query, ask Mike/Kyle for a cold-worker canary or orchestrator-backed investigation. Do not investigate yourself. Do not read code yourself. Describe the problem and let the execution owner route it.
 5. **Respect the current canary cap.** The P0 path is one active cold-worker lane unless Kyle or the operator expands it. Do not inspect tmux or request legacy temp-worker sessions.
 
+Passive ACKs are message ACKs only. When you send a passive ACK, set `channel: ack`, include `ack_for:` or `in_reply_to:` for the message being acknowledged, and set both `requires_response: false` and `action_required: false`. If the ACK mentions an artifact, it is only referencing that artifact; it does not mutate artifact metadata, lifecycle, ownership, or contents.
+
 ---
 
 ## Turn Structure

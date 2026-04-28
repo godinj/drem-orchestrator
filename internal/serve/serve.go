@@ -20,6 +20,7 @@ type dashboardStore interface {
 	AgentDashboard() ([]csuite.AgentDashboardRow, error)
 	CreateMessage(msg *csuite.CsuiteInboxMessage) error
 	GetMessagesBetween(agent1, agent2 string, limit int, beforeID uuid.UUID) ([]csuite.CsuiteInboxMessage, error)
+	GetAcksByAgent(agent string, limit int) ([]csuite.CsuiteInboxMessage, error)
 	GetMessageCountByAgent(scopedTo string) (int, error)
 }
 
@@ -96,6 +97,7 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux.Handle("/api/health", s.auth(http.HandlerFunc(healthHandler)))
 	mux.Handle("/api/agents", s.auth(agentsHandler(s.cfg.Store)))
 	mux.Handle("/api/messages", s.auth(messagesHandler(s.cfg.Store, s.hub)))
+	mux.Handle("/api/acks", s.auth(acksHandler(s.cfg.Store)))
 	// WebSocket endpoint handles its own auth (token via query param or header)
 	// because browsers cannot set custom headers on WebSocket upgrade requests.
 	mux.Handle("/api/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token, s.cfg.DisableAuth))

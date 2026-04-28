@@ -322,9 +322,9 @@ func writeJSONError(w http.ResponseWriter, code int, msg string) {
 
 // deliverToInbox is the real-delivery code path for persona and kyle
 // classes. It serialises per-destination via destMutexes, copies the
-// source file into the destination inbox with an atomic rename,
-// inserts the ledger row, and then moves the source into the
-// source's outbox/delivered/ tree. The ordering matters: ledger
+// source file into the destination inbox (or acks directory for ACKs)
+// with an atomic rename, inserts the ledger row, and then moves the
+// source into its outbox/delivered/ tree. The ordering matters: ledger
 // commit happens AFTER the inbox write but BEFORE the source move,
 // so a crash between inbox-write and ledger-insert causes a rescan
 // replay (good — idempotent) and a crash between ledger-insert and
@@ -343,7 +343,11 @@ func (h *handler) deliverToInbox(req DeliverRequest, class Classification) (stri
 		sha8 = sha8[:8]
 	}
 	filename := fmt.Sprintf("%s-%s-%s.md", now.Format(time.RFC3339), req.SourcePersona, sha8)
-	destPath := fmt.Sprintf("/csuite/%s/inbox/%s", class.Dest, filename)
+	dir := "inbox"
+	if class.Ack {
+		dir = "acks"
+	}
+	destPath := fmt.Sprintf("/csuite/%s/%s/%s", class.Dest, dir, filename)
 
 	if err := atomicCopyFile(req.OutboxPath, destPath); err != nil {
 		return "", fmt.Errorf("copy to inbox: %w", err)

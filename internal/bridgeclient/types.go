@@ -12,6 +12,8 @@ type Agent struct {
 	CurrentActivity string `json:"current_activity"`
 	UnreadCount     int    `json:"unread_count"`
 	LatestInbox     string `json:"latest_inbox,omitempty"`
+	AckCount        int    `json:"ack_count"`
+	LatestAck       string `json:"latest_ack,omitempty"`
 }
 
 // Message is the JSON shape for a single inbox message.

@@ -75,6 +75,9 @@ func (m *Model) renderTabs() string {
 	var tabs []string
 	for i, agent := range m.agents {
 		label := agent.Name
+		if agent.AckCount > 0 {
+			label += styleTimestamp.Render(fmt.Sprintf(" ack:%d", agent.AckCount))
+		}
 		if count := m.unread[agent.Name]; count > 0 {
 			label += styleTabBadge.Render(fmt.Sprintf("(%d)", count))
 		}

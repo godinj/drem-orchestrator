@@ -40,6 +40,7 @@ const (
 type Classification struct {
 	Class  string // ClassPersona | ClassOperator | ClassQuarantine
 	Dest   string // destination persona (for ClassPersona / ClassOperator), empty (for ClassQuarantine)
+	Ack    bool   // true when frontmatter unambiguously marks a no-response ACK
 	Reason string // diagnostic reason when Class == ClassQuarantine
 }
 
@@ -103,14 +104,15 @@ func classifyBytes(data []byte) (Classification, error) {
 		return Classification{}, ErrMultiRecipient
 	case yaml.ScalarNode:
 		dest := toNode.Value
+		ack := isUnambiguousAck(&root)
 		switch dest {
 		case "mike", "alex", "seth", "kyle":
-			return Classification{Class: ClassPersona, Dest: dest}, nil
+			return Classification{Class: ClassPersona, Dest: dest, Ack: ack}, nil
 		case "operator":
 			// Persona → operator reply. Routes into the operator
 			// pseudo-persona's inbox at /csuite/operator/inbox/.
 			// See plans/drem-csuite-send-cli.md §Phase 1.
-			return Classification{Class: ClassOperator, Dest: "operator"}, nil
+			return Classification{Class: ClassOperator, Dest: "operator", Ack: ack}, nil
 		case "":
 			return Classification{Class: ClassQuarantine, Reason: "empty 'to' field"}, nil
 		default:
@@ -151,6 +153,11 @@ func extractFrontmatter(data []byte) ([]byte, bool) {
 // Case-sensitive — the csuite message format pins lowercase field
 // names.
 func findToNode(root *yaml.Node) (*yaml.Node, bool) {
+	return findFieldNode(root, "to")
+}
+
+// findFieldNode walks the root yaml.Node tree looking for a top-level key.
+func findFieldNode(root *yaml.Node, name string) (*yaml.Node, bool) {
 	if root == nil {
 		return nil, false
 	}
@@ -167,9 +174,40 @@ func findToNode(root *yaml.Node) (*yaml.Node, bool) {
 	for i := 0; i+1 < len(doc.Content); i += 2 {
 		key := doc.Content[i]
 		val := doc.Content[i+1]
-		if key.Kind == yaml.ScalarNode && key.Value == "to" {
+		if key.Kind == yaml.ScalarNode && key.Value == name {
 			return val, true
 		}
 	}
 	return nil, false
+}
+
+// isUnambiguousAck returns true only for complete ACK metadata:
+// channel: ack, ack_for or in_reply_to, and both response flags set to false.
+// Incomplete or malformed ACK-looking frontmatter remains a normal inbox route.
+func isUnambiguousAck(root *yaml.Node) bool {
+	channel, found := findFieldNode(root, "channel")
+	if !found || channel.Kind != yaml.ScalarNode || channel.Value != "ack" {
+		return false
+	}
+	if !hasNonEmptyScalar(root, "ack_for") && !hasNonEmptyScalar(root, "in_reply_to") {
+		return false
+	}
+	return isBoolFalse(root, "requires_response") && isBoolFalse(root, "action_required")
+}
+
+func hasNonEmptyScalar(root *yaml.Node, name string) bool {
+	n, found := findFieldNode(root, name)
+	return found && n.Kind == yaml.ScalarNode && n.Value != ""
+}
+
+func isBoolFalse(root *yaml.Node, name string) bool {
+	n, found := findFieldNode(root, name)
+	if !found || n.Kind != yaml.ScalarNode || n.Tag != "!!bool" {
+		return false
+	}
+	var b bool
+	if err := n.Decode(&b); err != nil {
+		return false
+	}
+	return !b
 }

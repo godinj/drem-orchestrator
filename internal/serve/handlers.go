@@ -14,6 +14,8 @@ type agentResponse struct {
 	CurrentActivity string     `json:"current_activity"`
 	UnreadCount     int        `json:"unread_count"`
 	LatestInbox     *time.Time `json:"latest_inbox,omitempty"`
+	AckCount        int        `json:"ack_count"`
+	LatestAck       *time.Time `json:"latest_ack,omitempty"`
 }
 
 // healthHandler serves GET /api/health.
@@ -44,6 +46,8 @@ func agentsHandler(s dashboardStore) http.Handler {
 				CurrentActivity: row.Agent.CurrentActivity,
 				UnreadCount:     row.UnreadCount,
 				LatestInbox:     row.LatestInbox,
+				AckCount:        row.AckCount,
+				LatestAck:       row.LatestAck,
 			}
 		}
 

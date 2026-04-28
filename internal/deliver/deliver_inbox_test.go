@@ -165,6 +165,69 @@ func TestDeliver_HappyPath_Kyle(t *testing.T) {
 	}
 }
 
+func TestDeliver_UnambiguousAckRoutesToAcks(t *testing.T) {
+	root := newCsuiteTree(t)
+	body := []byte("---\nfrom: alex\nto: mike\nchannel: ack\nin_reply_to: msg-123\nrequires_response: false\naction_required: false\n---\n\nack\n")
+	_, sha := stageOutbox(t, root, "alex", "ack1.md", body)
+
+	l := openTestLedger(t)
+	h := Handler(Config{Token: "secret", Ledger: l})
+
+	w := post(t, h, "secret", buildBody(t, "alex", "/csuite/alex/outbox/ack1.md", sha))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%q", w.Code, w.Body.String())
+	}
+
+	ackDir := filepath.Join(root, "mike", "acks")
+	ackEntries, err := os.ReadDir(ackDir)
+	if err != nil {
+		t.Fatalf("readdir acks: %v", err)
+	}
+	if len(ackEntries) != 1 {
+		t.Fatalf("mike acks: got %d files, want 1", len(ackEntries))
+	}
+	inboxEntries, err := os.ReadDir(filepath.Join(root, "mike", "inbox"))
+	if err != nil {
+		t.Fatalf("readdir inbox: %v", err)
+	}
+	if len(inboxEntries) != 0 {
+		t.Fatalf("mike inbox: got %d files, want 0", len(inboxEntries))
+	}
+
+	d, found, err := l.Lookup(sha)
+	if err != nil || !found {
+		t.Fatalf("Lookup: found=%v err=%v", found, err)
+	}
+	if d.DestPath != "/csuite/mike/acks/"+ackEntries[0].Name() {
+		t.Errorf("ledger dest_path = %q, want /csuite/mike/acks/%s", d.DestPath, ackEntries[0].Name())
+	}
+}
+
+func TestDeliver_AmbiguousAckRoutesToInbox(t *testing.T) {
+	root := newCsuiteTree(t)
+	body := []byte("---\nfrom: alex\nto: mike\nchannel: ack\nin_reply_to: msg-123\nrequires_response: false\n---\n\nack missing action_required\n")
+	_, sha := stageOutbox(t, root, "alex", "ambiguous-ack.md", body)
+
+	l := openTestLedger(t)
+	h := Handler(Config{Token: "secret", Ledger: l})
+
+	w := post(t, h, "secret", buildBody(t, "alex", "/csuite/alex/outbox/ambiguous-ack.md", sha))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%q", w.Code, w.Body.String())
+	}
+
+	inboxEntries, err := os.ReadDir(filepath.Join(root, "mike", "inbox"))
+	if err != nil {
+		t.Fatalf("readdir inbox: %v", err)
+	}
+	if len(inboxEntries) != 1 {
+		t.Fatalf("mike inbox: got %d files, want 1", len(inboxEntries))
+	}
+	if _, err := os.Stat(filepath.Join(root, "mike", "acks")); !os.IsNotExist(err) {
+		t.Fatalf("ambiguous ACK should not create acks dir: %v", err)
+	}
+}
+
 // TestDeliver_HappyPath_Operator verifies the full happy path for a
 // persona → operator reply. Mike writes a "to: operator" outbox file,
 // the watcher classifies it as ClassOperator (class.Dest =

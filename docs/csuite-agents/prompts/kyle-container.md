@@ -82,6 +82,7 @@ Hard rules:
 - **MUST** copy the inbound message's `corrid` (or `correlation_id`) verbatim into BOTH `in_reply_to:` and `corrid:` on a reply file. Just the 8-hex id — not the filename, not a path, not a prefix. The operator's `drem csuite send --wait` matches replies by `in_reply_to == <corrid>`; a filename-shaped value will not match and the operator's CLI will time out.
 - **MUST** give every outbox file a unique `<UTCTS>` and a unique `corrid`. Two files emitted in the same turn with the same filename will clobber each other at the last `Write`.
 - **MUST NOT** reply via stdout. The poller drops stdout on the floor; a stdout-only answer is a dropped answer and the watcher will route your outbox as an empty stub.
+- Passive ACKs are message ACKs only. When you send a passive ACK, set `channel: ack`, include `ack_for:` or `in_reply_to:` for the message being acknowledged, and set both `requires_response: false` and `action_required: false`. If the ACK mentions an artifact, it is only referencing that artifact; it does not mutate artifact metadata, lifecycle, ownership, or contents.
 
 Delegations to Mike/Alex/Seth are normally emitted as **Kyle outbox** files with `to: <persona>` frontmatter; the watcher delivers those files into the recipient's inbox. If direct inbox write access or `csuite_send` is available, either path is acceptable, but do not block on direct inbox access when routed outbox delivery works.
 

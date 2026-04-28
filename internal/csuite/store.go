@@ -29,6 +29,8 @@ type AgentDashboardRow struct {
 	Agent       CsuiteAgent
 	UnreadCount int
 	LatestInbox *time.Time // most recent inbound message CreatedAt, nil if none
+	AckCount    int
+	LatestAck   *time.Time // most recent ACK CreatedAt, nil if none
 }
 
 // Store provides CRUD and query operations for csuite models.
@@ -271,6 +273,12 @@ func (s *Store) GetMessageCountByAgent(scopedTo string) (int, error) {
 		return 0, fmt.Errorf("message count for agent %q: %w", scopedTo, err)
 	}
 	return int(count), nil
+}
+
+// GetAcksByAgent returns ACKs addressed to agent. The DB-backed store predates
+// the disk ACK channel, so there is no persisted ACK table to query here.
+func (s *Store) GetAcksByAgent(agent string, limit int) ([]CsuiteInboxMessage, error) {
+	return []CsuiteInboxMessage{}, nil
 }
 
 // ---------------------------------------------------------------------------
