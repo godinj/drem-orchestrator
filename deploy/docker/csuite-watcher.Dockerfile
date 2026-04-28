@@ -62,6 +62,7 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          ca-certificates \
+         docker.io \
          gosu \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 1000 drem \

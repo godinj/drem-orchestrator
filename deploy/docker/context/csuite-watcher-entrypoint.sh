@@ -40,6 +40,19 @@ fi
 # user cannot create SQLite files under a root-owned parent.
 chown -R drem:drem /var/lib/watcher /var/lib/drem 2>/dev/null || true
 
+# If the Docker socket is mounted for persona controls, add drem to the
+# socket's host group before dropping privileges. The socket is usually
+# root:docker 0660, and the host docker gid is not portable across machines.
+if [ -S /var/run/docker.sock ]; then
+    docker_gid="$(stat -c %g /var/run/docker.sock 2>/dev/null || true)"
+    if [ -n "$docker_gid" ]; then
+        if ! getent group "$docker_gid" >/dev/null 2>&1; then
+            groupadd --gid "$docker_gid" docker-host >/dev/null 2>&1 || true
+        fi
+        usermod -aG "$docker_gid" drem >/dev/null 2>&1 || true
+    fi
+fi
+
 # /csuite/ is a bind-mount of the operator's host tree — we do NOT
 # chown it here. The persona containers are already uid 1000 and so
 # is the host operator, so ownership is already correct; recursively

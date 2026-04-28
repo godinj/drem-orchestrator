@@ -35,6 +35,19 @@ func TestCSuiteWatcherDockerfileBuildsExistingCommand(t *testing.T) {
 	}
 }
 
+func TestCSuiteWatcherDockerfileInstallsDockerCLI(t *testing.T) {
+	root := repoRoot(t)
+	dockerfile := filepath.Join(root, "deploy", "docker", "csuite-watcher.Dockerfile")
+	data, err := os.ReadFile(dockerfile)
+	if err != nil {
+		t.Fatalf("read Dockerfile: %v", err)
+	}
+
+	if !strings.Contains(string(data), "docker.io") {
+		t.Fatalf("csuite-watcher image must install the Docker CLI for persona controls")
+	}
+}
+
 func TestCSuitePersonaBuildContractUsesOpenCode(t *testing.T) {
 	root := repoRoot(t)
 	baseDockerfile := filepath.Join(root, "deploy", "docker", "csuite-base.Dockerfile")

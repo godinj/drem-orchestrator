@@ -81,6 +81,17 @@ func TestBuildArgvRequiresComposePath(t *testing.T) {
 	}
 }
 
+func TestBuildArgvAllowsAlternateComposeCommand(t *testing.T) {
+	got, _, err := BuildArgvWithCommand([]string{"docker-compose"}, "compose.yml", "mike", "stop")
+	if err != nil {
+		t.Fatalf("BuildArgvWithCommand: %v", err)
+	}
+	want := []string{"docker-compose", "-f", "compose.yml", "stop", "csuite-mike"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("argv = %#v, want %#v", got, want)
+	}
+}
+
 func TestControllerUsesExecutor(t *testing.T) {
 	exec := &recordingExecutor{}
 	controller := New("compose.yml", exec)
@@ -98,6 +109,41 @@ func TestControllerUsesExecutor(t *testing.T) {
 	}
 }
 
+func TestControllerUsesConfiguredComposeCommand(t *testing.T) {
+	exec := &recordingExecutor{}
+	controller := NewWithCommand("compose.yml", []string{"docker-compose"}, exec)
+
+	_, err := controller.Control(context.Background(), "mike", "stop")
+	if err != nil {
+		t.Fatalf("Control: %v", err)
+	}
+	want := []string{"docker-compose", "-f", "compose.yml", "stop", "csuite-mike"}
+	if !reflect.DeepEqual(exec.argv, want) {
+		t.Fatalf("executor argv = %#v, want %#v", exec.argv, want)
+	}
+}
+
+func TestListContainersReadsComposeStatuses(t *testing.T) {
+	exec := &outputRecordingExecutor{
+		output: []byte(`{"Service":"csuite-mike","State":"running","Status":"Up 2 minutes"}
+{"Service":"csuite-alex","State":"exited","Status":"Exited (0) 1 hour ago"}
+`),
+	}
+	controller := NewWithCommand("compose.yml", []string{"docker", "compose"}, exec)
+
+	got := controller.ListContainers()
+	if !got.Available {
+		t.Fatalf("ListContainers available = false, reason=%q", got.Reason)
+	}
+	wantArgv := []string{"docker", "compose", "-f", "compose.yml", "ps", "-a", "--format", "json", "csuite-mike", "csuite-alex", "csuite-seth", "csuite-kyle"}
+	if !reflect.DeepEqual(exec.argv, wantArgv) {
+		t.Fatalf("executor argv = %#v, want %#v", exec.argv, wantArgv)
+	}
+	if got.Items[0].Status != "running" || got.Items[1].Status != "exited" {
+		t.Fatalf("statuses = %+v", got.Items)
+	}
+}
+
 type recordingExecutor struct {
 	argv []string
 }
@@ -105,4 +151,19 @@ type recordingExecutor struct {
 func (e *recordingExecutor) Run(_ context.Context, argv []string) error {
 	e.argv = append([]string(nil), argv...)
 	return nil
+}
+
+type outputRecordingExecutor struct {
+	argv   []string
+	output []byte
+}
+
+func (e *outputRecordingExecutor) Run(_ context.Context, argv []string) error {
+	e.argv = append([]string(nil), argv...)
+	return nil
+}
+
+func (e *outputRecordingExecutor) RunOutput(_ context.Context, argv []string) ([]byte, error) {
+	e.argv = append([]string(nil), argv...)
+	return append([]byte(nil), e.output...), nil
 }
