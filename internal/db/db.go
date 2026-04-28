@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 
+	"github.com/godinj/drem-orchestrator/internal/artifactregistry"
 	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/metrics"
@@ -70,7 +71,7 @@ func Init(dbPath string, logPath ...string) (*gorm.DB, error) {
 // AutoMigrate creates or updates all database tables to match the current
 // model definitions.
 func AutoMigrate(db *gorm.DB) error {
-	return db.AutoMigrate(
+	models := []any{
 		&model.Project{},
 		&model.Task{},
 		&model.Agent{},
@@ -83,7 +84,9 @@ func AutoMigrate(db *gorm.DB) error {
 		&csuite.CsuiteAgent{},
 		&csuite.CsuiteInboxMessage{},
 		&gitref.BranchRef{},
-	)
+	}
+	models = append(models, artifactregistry.Models()...)
+	return db.AutoMigrate(models...)
 }
 
 // registerUUIDCallback registers a single GORM callback that generates UUIDs
