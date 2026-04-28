@@ -54,15 +54,54 @@ type TaskCommentDTO struct {
 // current task, and liveness timestamps. Returned by /workers/:id and
 // /projects/:name/workers.
 type WorkerDTO struct {
-	ID            string    `json:"id"`
-	ContainerID   string    `json:"container_id"`
-	Project       string    `json:"project"`
-	AgentType     string    `json:"agent_type"`
-	Branch        string    `json:"branch"`
-	Status        string    `json:"status"`
-	StartedAt     time.Time `json:"started_at"`
-	LastHeartbeat time.Time `json:"last_heartbeat"`
-	CurrentTask   string    `json:"current_task"`
+	ID                   string     `json:"id"`
+	ContainerID          string     `json:"container_id"`
+	Project              string     `json:"project"`
+	AgentType            string     `json:"agent_type"`
+	Branch               string     `json:"branch"`
+	Status               string     `json:"status"`
+	StartedAt            time.Time  `json:"started_at"`
+	LastHeartbeat        time.Time  `json:"last_heartbeat"`
+	CurrentTask          string     `json:"current_task"`
+	Provider             string     `json:"provider"`
+	ModelID              string     `json:"model_id"`
+	Effort               string     `json:"effort"`
+	CompletedAt          *time.Time `json:"completed_at"`
+	ExitReason           string     `json:"exit_reason"`
+	TotalCostUSD         float64    `json:"total_cost_usd"`
+	FinalContextPct      int        `json:"final_context_pct"`
+	TokensIn             int        `json:"tokens_in"`
+	TokensOut            int        `json:"tokens_out"`
+	ConstraintViolations int        `json:"constraint_violations"`
+}
+
+// WorkerAttemptDTO is the public projection of a task execution attempt
+// attributed to a worker/container. It is derived from existing Agent rows
+// and TaskEvent spawn records rather than a dedicated attempts table.
+type WorkerAttemptDTO struct {
+	AttemptID             string     `json:"attempt_id"`
+	TaskID                string     `json:"task_id"`
+	WorkerID              string     `json:"worker_id"`
+	AgentID               string     `json:"agent_id"`
+	ContainerID           string     `json:"container_id"`
+	WorkerLabel           string     `json:"worker_label"`
+	AgentType             string     `json:"agent_type"`
+	Branch                string     `json:"branch"`
+	Provider              string     `json:"provider"`
+	ModelID               string     `json:"model_id"`
+	Effort                string     `json:"effort"`
+	Status                string     `json:"status"`
+	StartedAt             time.Time  `json:"started_at"`
+	CompletedAt           *time.Time `json:"completed_at"`
+	LastHeartbeat         time.Time  `json:"last_heartbeat"`
+	ExitReason            string     `json:"exit_reason"`
+	FailureClassification string     `json:"failure_classification"`
+	FirstError            string     `json:"first_error"`
+	TokensIn              int        `json:"tokens_in"`
+	TokensOut             int        `json:"tokens_out"`
+	TotalCostUSD          float64    `json:"total_cost_usd"`
+	FinalContextPct       int        `json:"final_context_pct"`
+	ConstraintViolations  int        `json:"constraint_violations"`
 }
 
 // WorkerHistoryDTO wraps a worker's recent state transitions and exit

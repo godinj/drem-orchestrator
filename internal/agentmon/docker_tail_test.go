@@ -156,6 +156,23 @@ func TestRunTailFlushesOnStreamClose(t *testing.T) {
 	require.Equal(t, 1, ing.TotalRecords(), "trailing line must flush on EOF")
 }
 
+func TestRunTailAddsTaskIDFromContainerLabel(t *testing.T) {
+	var buf bytes.Buffer
+	buf.Write(framedLine("[master abc1234] labeled\n"))
+	r := &eofReader{Reader: &buf}
+
+	ing := newCaptureIngestor()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	require.NoError(t, runTail(ctx, r, ing, "c1", "w1", "task-123", time.Now))
+
+	batches := ing.Batches()
+	require.Len(t, batches, 1)
+	require.Len(t, batches[0], 1)
+	require.Equal(t, "task-123", batches[0][0].Payload["task_id"])
+}
+
 // TestDockerDemuxReaderStripsHeader is a focused test on the frame
 // parser so the Docker-specific concern is isolated from the rest of
 // the tail loop.
@@ -182,7 +199,7 @@ func TestDockerDemuxReaderStripsHeader(t *testing.T) {
 // runTail so tests do not depend on the production clock seam. The
 // real production entry point (tailContainer) calls time.Now directly.
 func tailRunWithReader(ctx context.Context, r io.Reader, ing Ingestor, cid, wid string) error {
-	return runTail(ctx, r, ing, cid, wid, time.Now)
+	return runTail(ctx, r, ing, cid, wid, "", time.Now)
 }
 
 // eofReader wraps an io.Reader so that once it is drained the next Read

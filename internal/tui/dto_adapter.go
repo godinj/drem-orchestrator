@@ -52,11 +52,24 @@ func TasksFromDTOs(in []orchdto.TaskDTO) []model.Task {
 // without forcing a rename across hundreds of test callers.
 func AgentFromDTO(d orchdto.WorkerDTO) model.Agent {
 	a := model.Agent{
-		AgentType: model.AgentType(d.AgentType),
-		Name:      d.ContainerID,
-		Status:    model.AgentStatus(d.Status),
-		CreatedAt: d.StartedAt,
-		UpdatedAt: d.LastHeartbeat,
+		AgentType:            model.AgentType(d.AgentType),
+		Name:                 d.ContainerID,
+		Status:               model.AgentStatus(d.Status),
+		Provider:             d.Provider,
+		ModelID:              d.ModelID,
+		Effort:               d.Effort,
+		CompletedAt:          d.CompletedAt,
+		ExitReason:           d.ExitReason,
+		TotalCostUSD:         d.TotalCostUSD,
+		FinalContextPct:      d.FinalContextPct,
+		TokensIn:             d.TokensIn,
+		TokensOut:            d.TokensOut,
+		ConstraintViolations: d.ConstraintViolations,
+		CreatedAt:            d.StartedAt,
+		UpdatedAt:            d.LastHeartbeat,
+	}
+	if d.FinalContextPct != 0 {
+		a.Config = model.JSONField{"context_used_pct": float64(d.FinalContextPct)}
 	}
 	if id, err := uuid.Parse(d.ID); err == nil {
 		a.ID = id

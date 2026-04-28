@@ -36,7 +36,7 @@ func newLiveFakeRuntime() *liveFakeRuntime {
 	}
 }
 
-func (f *liveFakeRuntime) StreamLogs(_ context.Context, id string) (io.ReadCloser, error) {
+func (f *liveFakeRuntime) StreamLogs(_ context.Context, id string, _ container.LogOptions) (io.ReadCloser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	pr, pw := io.Pipe()

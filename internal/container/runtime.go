@@ -88,6 +88,13 @@ type State struct {
 	OOMKilled  bool
 }
 
+// LogOptions controls the bounded/tailing behavior of StreamLogs.
+// A zero value returns the container's currently available logs and closes.
+type LogOptions struct {
+	Since  time.Time
+	Follow bool
+}
+
 // EventFilter restricts SubscribeEvents to containers whose labels are a
 // superset of the filter's labels. An empty filter matches every container.
 type EventFilter struct {
@@ -123,11 +130,12 @@ type Runtime interface {
 	Inspect(ctx context.Context, id string) (State, error)
 
 	// StreamLogs returns a reader over the container's multiplexed stdout
-	// and stderr stream, following as new output arrives. Callers are
+	// and stderr stream. When opts.Follow is true, it follows as new output
+	// arrives; otherwise it returns currently available logs and closes. Callers are
 	// responsible for demultiplexing the Docker stream header if they need
 	// split stdout and stderr; the agentmon consumer does this downstream.
 	// The returned ReadCloser must be closed by the caller.
-	StreamLogs(ctx context.Context, id string) (io.ReadCloser, error)
+	StreamLogs(ctx context.Context, id string, opts LogOptions) (io.ReadCloser, error)
 
 	// SubscribeEvents returns a channel that receives lifecycle events for
 	// containers whose labels are a superset of filter.Labels. The channel

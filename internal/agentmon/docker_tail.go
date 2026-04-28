@@ -44,14 +44,14 @@ const (
 // whether to restart (current policy: no restart until EventStart is
 // seen again).
 func tailContainer(ctx context.Context, rt container.Runtime, ing Ingestor,
-	containerID, workerID string, _ map[string]string) error {
-	rc, err := rt.StreamLogs(ctx, containerID)
+	containerID, workerID string, labels map[string]string) error {
+	rc, err := rt.StreamLogs(ctx, containerID, container.LogOptions{Follow: true})
 	if err != nil {
 		return fmt.Errorf("agentmon tail %s: stream logs: %w", containerID, err)
 	}
 	defer rc.Close()
 
-	return runTail(ctx, rc, ing, containerID, workerID, time.Now)
+	return runTail(ctx, rc, ing, containerID, workerID, labels["drem.task_id"], time.Now)
 }
 
 // runTail is the testable core of tailContainer. It takes an arbitrary
@@ -60,7 +60,7 @@ func tailContainer(ctx context.Context, rt container.Runtime, ing Ingestor,
 // clock function is injected so tests can advance time without
 // depending on wall-clock sleeps.
 func runTail(ctx context.Context, r io.Reader, ing Ingestor,
-	containerID, workerID string, now func() time.Time) error {
+	containerID, workerID, taskID string, now func() time.Time) error {
 	// Demux Docker's 8-byte frame header into a plain byte stream. The
 	// demux reader returns the concatenated stdout+stderr payload; we
 	// lose the per-frame stream tag but agentmon does not currently
@@ -104,6 +104,9 @@ func runTail(ctx context.Context, r io.Reader, ing Ingestor,
 		rec := toIngestRecord(containerID, workerID, ev)
 		if rec.Type == "" {
 			return
+		}
+		if taskID != "" {
+			rec.Payload["task_id"] = taskID
 		}
 		batch = append(batch, rec)
 		if len(batch) >= tailBatchMax {

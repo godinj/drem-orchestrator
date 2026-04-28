@@ -114,6 +114,15 @@ func (c *Client) GetWorker(ctx context.Context, id string) (orchdto.WorkerDTO, e
 	return out, nil
 }
 
+// TaskAttempts fetches the worker/container attempts attributed to a task.
+func (c *Client) TaskAttempts(ctx context.Context, taskID string) ([]orchdto.WorkerAttemptDTO, error) {
+	var out []orchdto.WorkerAttemptDTO
+	if err := c.get(ctx, "/tasks/"+url.PathEscape(taskID)+"/attempts", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WorkerHistory fetches a worker's transition log.
 func (c *Client) WorkerHistory(ctx context.Context, id string) (orchdto.WorkerHistoryDTO, error) {
 	var out orchdto.WorkerHistoryDTO
@@ -154,7 +163,7 @@ func (c *Client) StreamLogs(ctx context.Context, container string, since time.Ti
 	q := url.Values{}
 	q.Set("container", container)
 	if !since.IsZero() {
-		q.Set("since", since.UTC().Format(time.RFC3339))
+		q.Set("since", since.UTC().Format(time.RFC3339Nano))
 	}
 	if follow {
 		q.Set("follow", "true")

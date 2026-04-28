@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/pkg/orchclient"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
@@ -28,8 +29,12 @@ type fakeDataSource struct {
 	// forceErr, if non-nil, is returned from every method.
 	forceErr error
 
-	taskCalls   int
-	workerCalls int
+	taskCalls    int
+	workerCalls  int
+	historyCalls int
+	streamCalls  int
+	historyID    string
+	streamID     string
 }
 
 func (f *fakeDataSource) ListTasks(_ context.Context, _ orchclient.TaskFilter) ([]orchdto.TaskDTO, error) {
@@ -55,14 +60,18 @@ func (f *fakeDataSource) Events(_ context.Context, _ time.Time) ([]orchdto.Event
 	return f.events, nil
 }
 
-func (f *fakeDataSource) WorkerHistory(_ context.Context, _ string) (orchdto.WorkerHistoryDTO, error) {
+func (f *fakeDataSource) WorkerHistory(_ context.Context, id string) (orchdto.WorkerHistoryDTO, error) {
+	f.historyCalls++
+	f.historyID = id
 	if f.forceErr != nil {
 		return orchdto.WorkerHistoryDTO{}, f.forceErr
 	}
 	return f.history, nil
 }
 
-func (f *fakeDataSource) StreamLogs(_ context.Context, _ string) (io.ReadCloser, error) {
+func (f *fakeDataSource) StreamLogs(_ context.Context, id string) (io.ReadCloser, error) {
+	f.streamCalls++
+	f.streamID = id
 	if f.forceErr != nil {
 		return nil, f.forceErr
 	}
@@ -70,6 +79,67 @@ func (f *fakeDataSource) StreamLogs(_ context.Context, _ string) (io.ReadCloser,
 		return io.NopCloser(strings.NewReader("")), nil
 	}
 	return f.logReader, nil
+}
+
+func TestHandleLog_UsesDataSourceHistoryAndLogs(t *testing.T) {
+	taskID := uuid.New()
+	workerID := uuid.New()
+	ds := &fakeDataSource{
+		history: orchdto.WorkerHistoryDTO{
+			WorkerID: workerID.String(),
+			Events: []orchdto.WorkerHistoryEntry{{
+				Timestamp: time.Date(2026, 4, 28, 12, 0, 0, 0, time.UTC),
+				Kind:      "start",
+				Detail:    "worker started",
+			}},
+		},
+		logReader: io.NopCloser(strings.NewReader("hello from container")),
+	}
+	mock := &mockOrchestrator{agentOutput: "legacy output"}
+	m := newMockModel(t, mock)
+	m.dataSource = ds
+	m.board.tasks = []model.Task{{ID: taskID, Title: "task", Status: model.StatusInProgress}}
+	m.board.cursor = 0
+	m.detail.agent = &model.Agent{ID: workerID, Name: "container-1"}
+
+	_, cmd := m.handleLog()
+	require.NotNil(t, cmd)
+	msg, ok := cmd().(logCapturedMsg)
+	require.True(t, ok, "expected logCapturedMsg, got %T", msg)
+
+	require.NoError(t, msg.err)
+	require.Equal(t, taskID, msg.forTaskID)
+	require.Contains(t, msg.text, "Worker history:")
+	require.Contains(t, msg.text, "start: worker started")
+	require.Contains(t, msg.text, "hello from container")
+	require.Equal(t, 1, ds.historyCalls)
+	require.Equal(t, 1, ds.streamCalls)
+	require.Equal(t, workerID.String(), ds.historyID)
+	require.Equal(t, "container-1", ds.streamID)
+	require.Equal(t, 0, mock.callCount("GetAgentOutput"))
+}
+
+func TestHandleLog_FallsBackWithoutDataSourceIdentifiers(t *testing.T) {
+	taskID := uuid.New()
+	workerID := uuid.New()
+	ds := &fakeDataSource{logReader: io.NopCloser(strings.NewReader("http output"))}
+	mock := &mockOrchestrator{agentOutput: "legacy output"}
+	m := newMockModel(t, mock)
+	m.dataSource = ds
+	m.board.tasks = []model.Task{{ID: taskID, Title: "task", Status: model.StatusInProgress}}
+	m.board.cursor = 0
+	m.detail.agent = &model.Agent{ID: workerID}
+
+	_, cmd := m.handleLog()
+	require.NotNil(t, cmd)
+	msg, ok := cmd().(logCapturedMsg)
+	require.True(t, ok, "expected logCapturedMsg, got %T", msg)
+
+	require.NoError(t, msg.err)
+	require.Equal(t, "legacy output", msg.text)
+	require.Equal(t, 0, ds.historyCalls)
+	require.Equal(t, 0, ds.streamCalls)
+	require.Equal(t, 1, mock.callCount("GetAgentOutput"))
 }
 
 // TestLoadTasks_FromFakeDataSource verifies that the tasks loader goes
@@ -99,9 +169,25 @@ func TestLoadTasks_FromFakeDataSource(t *testing.T) {
 // for the workers endpoint.
 func TestLoadAgents_FromFakeDataSource(t *testing.T) {
 	id := uuid.New()
+	completedAt := time.Date(2026, 4, 28, 12, 30, 0, 0, time.UTC)
 	ds := &fakeDataSource{
 		workers: []orchdto.WorkerDTO{
-			{ID: id.String(), ContainerID: "c-1", AgentType: "coder", Status: "working"},
+			{
+				ID:                   id.String(),
+				ContainerID:          "c-1",
+				AgentType:            "coder",
+				Status:               "working",
+				Provider:             "claude",
+				ModelID:              "claude-opus-4",
+				Effort:               "high",
+				CompletedAt:          &completedAt,
+				ExitReason:           "completed",
+				TotalCostUSD:         1.23,
+				FinalContextPct:      72,
+				TokensIn:             12400,
+				TokensOut:            3100,
+				ConstraintViolations: 2,
+			},
 		},
 	}
 	m := Model{dataSource: ds}
@@ -115,7 +201,30 @@ func TestLoadAgents_FromFakeDataSource(t *testing.T) {
 	require.Equal(t, id, loaded.agents[0].ID)
 	require.Equal(t, "coder", string(loaded.agents[0].AgentType))
 	require.Equal(t, "working", string(loaded.agents[0].Status))
+	require.Equal(t, "claude", loaded.agents[0].Provider)
+	require.Equal(t, "claude-opus-4", loaded.agents[0].ModelID)
+	require.Equal(t, "high", loaded.agents[0].Effort)
+	require.Equal(t, &completedAt, loaded.agents[0].CompletedAt)
+	require.Equal(t, "completed", loaded.agents[0].ExitReason)
+	require.Equal(t, 1.23, loaded.agents[0].TotalCostUSD)
+	require.Equal(t, 72, loaded.agents[0].FinalContextPct)
+	require.Equal(t, 12400, loaded.agents[0].TokensIn)
+	require.Equal(t, 3100, loaded.agents[0].TokensOut)
+	require.Equal(t, 2, loaded.agents[0].ConstraintViolations)
+	require.Equal(t, float64(72), loaded.agents[0].Config["context_used_pct"])
 	require.Equal(t, 1, ds.workerCalls)
+
+	view := AgentsModel{agents: loaded.agents, width: 120, height: 40, autoFilter: true}.View()
+	require.Contains(t, view, "model: claude-opus-4")
+	require.Contains(t, view, "tokens: 12.4k↑ 3.1k↓")
+	require.Contains(t, view, "ctx: 72%")
+}
+
+func TestAgentFromDTO_DoesNotInferZeroFinalContext(t *testing.T) {
+	agent := AgentFromDTO(orchdto.WorkerDTO{})
+
+	require.Zero(t, agent.FinalContextPct)
+	require.Nil(t, agent.Config)
 }
 
 // TestLoadTasks_ErrorReturnsDataErrMsg asserts that a DataSource failure

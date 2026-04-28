@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
@@ -213,10 +214,18 @@ func TestSpawnCoder_BuildsExpectedParams(t *testing.T) {
 		"workers need /bare mounted rw so the watchdog can push commits")
 }
 
-func TestSpawnCoder_RecordsContainerIDAndImageOnAgent(t *testing.T) {
+func TestSpawnCoder_RecordsContainerIDAndModelMetadataOnAgent(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
 	setWorkerPromptRootEnv(t, t.TempDir())
 	o, fake, _ := workerSpawnTestRig(t)
+	o.runner = agent.NewRunner(o.db, nil, nil, "/bin/false", "", 1, func(at model.AgentType) model.AgentCLIConfig {
+		require.Equal(t, model.AgentCoder, at)
+		return model.AgentCLIConfig{
+			Provider: model.ProviderOpenCode,
+			Model:    "ollama/qwen3-coder",
+			Effort:   "minimal",
+		}
+	})
 
 	task := &model.Task{
 		ID:             uuid.New(),
@@ -241,9 +250,13 @@ func TestSpawnCoder_RecordsContainerIDAndImageOnAgent(t *testing.T) {
 	var ag model.Agent
 	require.NoError(t, o.db.First(&ag, "id = ?", task.AssignedAgentID).Error)
 	require.Equal(t, "container-xyz", ag.TmuxSession)
-	// ModelID carries the image when the spawner returned one; with the
-	// default fake path Image is empty string, so the field is left blank.
+	require.Equal(t, "opencode", ag.Provider)
+	require.Equal(t, "ollama/qwen3-coder", ag.ModelID)
+	require.Equal(t, "minimal", ag.Effort)
 	require.Equal(t, model.AgentCoder, ag.AgentType)
+	require.Equal(t, "opencode", fake.spawnCalls[0].Env["DREM_AGENT_HARNESS"])
+	require.Equal(t, "ollama/qwen3-coder", fake.spawnCalls[0].Env["DREM_MODEL"])
+	require.Equal(t, "minimal", fake.spawnCalls[0].Env["DREM_EFFORT"])
 }
 
 func TestSpawnCoder_OnSpawnFailureReturnsError(t *testing.T) {
@@ -794,6 +807,23 @@ func TestRecordContainerOnAgent_UpdatePathPopulatesBranchAndTask(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
 	setWorkerPromptRootEnv(t, t.TempDir())
 	o, fake, _ := workerSpawnTestRig(t)
+	o.runner = agent.NewRunner(o.db, nil, nil, "/bin/false", "", 1, func(at model.AgentType) model.AgentCLIConfig {
+		require.Equal(t, model.AgentCoder, at)
+		return model.AgentCLIConfig{
+			Provider: model.ProviderCodex,
+			Model:    "gpt-5.5",
+			Effort:   "high",
+		}
+	})
+	prevCodexAuth, codexAuthWasSet := os.LookupEnv(workerCodexAuthPathEnv)
+	require.NoError(t, os.Setenv(workerCodexAuthPathEnv, "/host/.codex/auth.json"))
+	t.Cleanup(func() {
+		if codexAuthWasSet {
+			_ = os.Setenv(workerCodexAuthPathEnv, prevCodexAuth)
+		} else {
+			_ = os.Unsetenv(workerCodexAuthPathEnv)
+		}
+	})
 
 	task := &model.Task{
 		ID:             uuid.New(),
@@ -834,6 +864,9 @@ func TestRecordContainerOnAgent_UpdatePathPopulatesBranchAndTask(t *testing.T) {
 		"update path must populate CurrentTaskID on the pre-existing agent row")
 	require.Equal(t, task.ID, *ag.CurrentTaskID)
 	require.Equal(t, "c-update-path", ag.TmuxSession)
+	require.Equal(t, "codex", ag.Provider)
+	require.Equal(t, "gpt-5.5", ag.ModelID)
+	require.Equal(t, "high", ag.Effort)
 }
 
 // TestSpawnTypedWorker_SubtaskWithMissingParentBranchFailsClosed

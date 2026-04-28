@@ -91,7 +91,7 @@ func TestFakeRuntime_StreamLogsReturnsWrittenBytes(t *testing.T) {
 	f.WriteLog(h.ID, []byte("line one\n"))
 	f.WriteLog(h.ID, []byte("line two\n"))
 
-	rc, err := f.StreamLogs(ctx, h.ID)
+	rc, err := f.StreamLogs(ctx, h.ID, LogOptions{})
 	require.NoError(t, err)
 	defer rc.Close()
 

@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"io"
 	"net"
+	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,8 +15,19 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agentmon"
+	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/orchhttp"
 )
+
+type fakeStartupLogStreamer struct {
+	calls atomic.Int32
+}
+
+func (f *fakeStartupLogStreamer) StreamLogs(_ context.Context, _ string, _ container.LogOptions) (io.ReadCloser, error) {
+	f.calls.Add(1)
+	return io.NopCloser(strings.NewReader("startup logs\n")), nil
+}
 
 // TestEffectiveAgentmonTokenPrefersConfig verifies that when drem.toml
 // sets agentmon_token, the TOML value wins over the env-var fallback.
@@ -156,6 +171,41 @@ func TestStartOrchHTTPRejectsWrongTokenFromEnv(t *testing.T) {
 	require.Contains(t, err.Error(), "status 401")
 }
 
+func TestStartOrchHTTPConfiguresDockerLogs(t *testing.T) {
+	orig := newDockerLogStreamer
+	fakeLogs := &fakeStartupLogStreamer{}
+	var closed atomic.Bool
+	newDockerLogStreamer = func() (orchhttp.LogStreamer, func() error, error) {
+		return fakeLogs, func() error {
+			closed.Store(true)
+			return nil
+		}, nil
+	}
+	t.Cleanup(func() { newDockerLogStreamer = orig })
+
+	db := newOrchHTTPTestDB(t)
+	port := freePort(t)
+	cfg := Config{OrchHTTPPort: port, ProjectLanguage: "go"}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop := startOrchHTTP(ctx, cfg, db, "test-project", nil)
+	waitForListener(t, "127.0.0.1:"+port)
+
+	resp, err := http.Get("http://127.0.0.1:" + port + "/logs?container=c1")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "startup logs\n", string(body))
+	require.EqualValues(t, 1, fakeLogs.calls.Load())
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer shutdownCancel()
+	require.NoError(t, stop(shutdownCtx))
+	require.True(t, closed.Load())
+}
+
 // newOrchHTTPTestDB returns an in-memory SQLite DB with just the
 // tables handleIngest reads and writes. Kept local to this test file
 // so we do not pull internal/testutil's full fixture surface into a
@@ -207,4 +257,3 @@ func waitForListener(t *testing.T, addr string) {
 	}
 	t.Fatalf("orch HTTP listener at %s did not come up within deadline", addr)
 }
-

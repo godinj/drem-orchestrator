@@ -124,6 +124,20 @@ func TestGetWorkerNotFoundSurfacesError(t *testing.T) {
 	require.Contains(t, err.Error(), "404")
 }
 
+func TestTaskAttemptsPathAndDecode(t *testing.T) {
+	attempts := []orchdto.WorkerAttemptDTO{{AttemptID: "attempt-1", TaskID: "task-1", WorkerID: "worker-1", ContainerID: "container-1"}}
+	body, _ := json.Marshal(attempts)
+	h := &recordingHandler{status: http.StatusOK, body: string(body)}
+	c, _ := newClient(t, h)
+
+	got, err := c.TaskAttempts(context.Background(), "task-1")
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, "attempt-1", got[0].AttemptID)
+	require.Equal(t, "worker-1", got[0].WorkerID)
+	require.Equal(t, "/tasks/task-1/attempts", h.lastPath)
+}
+
 func TestWorkerHistoryDecodes(t *testing.T) {
 	hist := orchdto.WorkerHistoryDTO{WorkerID: "w1", Events: []orchdto.WorkerHistoryEntry{{Kind: "commit", Detail: "wip"}}}
 	body, _ := json.Marshal(hist)
@@ -154,8 +168,9 @@ func TestEventsEncodesSinceAndLimit(t *testing.T) {
 func TestStreamLogsReturnsRawBody(t *testing.T) {
 	h := &recordingHandler{status: http.StatusOK, body: "line1\nline2\n", ctype: "text/plain"}
 	c, _ := newClient(t, h)
+	since := time.Date(2026, 4, 19, 12, 0, 0, 123, time.UTC)
 
-	rc, err := c.StreamLogs(context.Background(), "abc", time.Time{}, true)
+	rc, err := c.StreamLogs(context.Background(), "abc", since, true)
 	require.NoError(t, err)
 	defer rc.Close()
 	data, err := io.ReadAll(rc)
@@ -163,6 +178,7 @@ func TestStreamLogsReturnsRawBody(t *testing.T) {
 	require.Equal(t, "line1\nline2\n", string(data))
 	require.Equal(t, "/logs", h.lastPath)
 	require.Contains(t, h.lastRaw, "container=abc")
+	require.Contains(t, h.lastRaw, "since=2026-04-19T12%3A00%3A00.000000123Z")
 	require.Contains(t, h.lastRaw, "follow=true")
 }
 

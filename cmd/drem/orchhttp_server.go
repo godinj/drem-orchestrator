@@ -10,6 +10,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/orchhttp"
 )
 
@@ -42,6 +43,14 @@ func effectiveAgentmonToken(cfg Config) string {
 // interface here keeps this file decoupled from the concrete type.
 type gateOrch = orchhttp.GateOrchestrator
 
+var newDockerLogStreamer = func() (orchhttp.LogStreamer, func() error, error) {
+	rt, err := container.NewDockerRuntime()
+	if err != nil {
+		return nil, nil, err
+	}
+	return rt, rt.Close, nil
+}
+
 // startOrchHTTP launches the orchestrator's public HTTP API on
 // cfg.OrchHTTPPort in a background goroutine cancellable via ctx. It is
 // a no-op when the port is empty, so pre-containerization dev setups do
@@ -67,7 +76,11 @@ func startOrchHTTP(ctx context.Context, cfg Config, db *gorm.DB, project string,
 			"hint", "set DREM_AGENTMON_TOKEN on the orch container env or agentmon_token in drem.toml",
 		)
 	}
-	srv := orchhttp.New(db, token, nil, orchhttp.ProjectInfo{
+	logs, closeLogs, err := newDockerLogStreamer()
+	if err != nil {
+		slog.Warn("orchhttp: docker log streaming not configured", "err", err)
+	}
+	srv := orchhttp.New(db, token, logs, orchhttp.ProjectInfo{
 		Name:     project,
 		Language: cfg.ProjectLanguage,
 		OrchURL:  "http://localhost:" + cfg.OrchHTTPPort,
@@ -88,11 +101,20 @@ func startOrchHTTP(ctx context.Context, cfg Config, db *gorm.DB, project string,
 			slog.Error("orchestrator HTTP API failed", "err", err)
 		}
 	}()
+	shutdown := func(ctx context.Context) error {
+		err := httpSrv.Shutdown(ctx)
+		if closeLogs != nil {
+			if closeErr := closeLogs(); err == nil {
+				err = closeErr
+			}
+		}
+		return err
+	}
 	go func() {
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		_ = httpSrv.Shutdown(shutdownCtx)
+		_ = shutdown(shutdownCtx)
 	}()
-	return httpSrv.Shutdown
+	return shutdown
 }

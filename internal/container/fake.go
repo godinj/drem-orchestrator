@@ -25,9 +25,10 @@ type FakeRuntime struct {
 // of the method ("Spawn", "Inspect", "Destroy", "StreamLogs", "SubscribeEvents").
 // Spec is populated for Spawn; ID is populated for any per-container call.
 type Call struct {
-	Op   string
-	Spec *Spec
-	ID   string
+	Op         string
+	Spec       *Spec
+	ID         string
+	LogOptions LogOptions
 }
 
 // fakeContainer is the in-memory bookkeeping entry for a spawned container.
@@ -95,10 +96,10 @@ func (f *FakeRuntime) Inspect(_ context.Context, id string) (State, error) {
 // StreamLogs returns a reader over the per-container byte buffer. Tests push
 // bytes into the buffer via WriteLog. The returned reader is a snapshot
 // copy — subsequent WriteLog calls do not appear in already-issued readers.
-func (f *FakeRuntime) StreamLogs(_ context.Context, id string) (io.ReadCloser, error) {
+func (f *FakeRuntime) StreamLogs(_ context.Context, id string, opts LogOptions) (io.ReadCloser, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, Call{Op: "StreamLogs", ID: id})
+	f.calls = append(f.calls, Call{Op: "StreamLogs", ID: id, LogOptions: opts})
 	c, ok := f.containers[id]
 	if !ok {
 		return nil, fmt.Errorf("fake runtime: stream logs unknown id %q", id)

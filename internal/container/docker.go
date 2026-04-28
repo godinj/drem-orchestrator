@@ -90,16 +90,19 @@ func (r *DockerRuntime) Inspect(ctx context.Context, id string) (State, error) {
 	}, nil
 }
 
-// StreamLogs returns a multiplexed stdout+stderr stream that follows the
-// container. Demultiplexing (splitting stdout from stderr using Docker's
-// 8-byte stream header) is the caller's responsibility — agentmon handles
-// this downstream.
-func (r *DockerRuntime) StreamLogs(ctx context.Context, id string) (io.ReadCloser, error) {
-	rc, err := r.cli.ContainerLogs(ctx, id, dockercontainer.LogsOptions{
+// StreamLogs returns a multiplexed stdout+stderr stream for the container.
+// Demultiplexing (splitting stdout from stderr using Docker's 8-byte stream
+// header) is the caller's responsibility — agentmon handles this downstream.
+func (r *DockerRuntime) StreamLogs(ctx context.Context, id string, opts LogOptions) (io.ReadCloser, error) {
+	dockerOpts := dockercontainer.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
-		Follow:     true,
-	})
+		Follow:     opts.Follow,
+	}
+	if !opts.Since.IsZero() {
+		dockerOpts.Since = opts.Since.UTC().Format(time.RFC3339Nano)
+	}
+	rc, err := r.cli.ContainerLogs(ctx, id, dockerOpts)
 	if err != nil {
 		return nil, fmt.Errorf("container logs: %w", err)
 	}

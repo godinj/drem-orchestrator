@@ -86,6 +86,9 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		if len(rows) == 0 {
 			return nil
 		}
+		if err := enrichIngestTaskIDs(tx, rows); err != nil {
+			return err
+		}
 		if err := tx.Create(&rows).Error; err != nil {
 			return err
 		}
@@ -176,6 +179,82 @@ func decodeIngestRecord(raw []byte) (model.TaskEvent, error) {
 		Details:   model.JSONField(payload),
 		CreatedAt: created,
 	}, nil
+}
+
+func enrichIngestTaskIDs(tx *gorm.DB, rows []model.TaskEvent) error {
+	for i := range rows {
+		if rows[i].TaskID != uuid.Nil {
+			continue
+		}
+		taskID, err := currentTaskIDForIngestEvent(tx, rows[i])
+		if err != nil {
+			return err
+		}
+		if taskID != uuid.Nil {
+			rows[i].TaskID = taskID
+		}
+	}
+	return nil
+}
+
+func currentTaskIDForIngestEvent(tx *gorm.DB, row model.TaskEvent) (uuid.UUID, error) {
+	if taskID, err := currentTaskIDForAgent(tx, stringField(row.Details, "agent_id")); err != nil || taskID != uuid.Nil {
+		return taskID, err
+	}
+
+	selectors := []string{
+		stringField(row.Details, "worker_id"),
+		stringField(row.Details, "container_id"),
+		row.Actor,
+		row.OldValue,
+	}
+	seen := map[string]struct{}{}
+	for _, selector := range selectors {
+		if selector == "" {
+			continue
+		}
+		if _, ok := seen[selector]; ok {
+			continue
+		}
+		seen[selector] = struct{}{}
+
+		var spawns []model.TaskEvent
+		if err := tx.Where("event_type = ? AND details LIKE ?", "worker_spawned", "%"+selector+"%").
+			Order("created_at DESC").
+			Limit(10).
+			Find(&spawns).Error; err != nil {
+			return uuid.Nil, err
+		}
+		for _, spawn := range spawns {
+			if stringField(spawn.Details, "worker_id") != selector && stringField(spawn.Details, "container_id") != selector {
+				continue
+			}
+			if taskID, err := currentTaskIDForAgent(tx, stringField(spawn.Details, "agent_id")); err != nil || taskID != uuid.Nil {
+				return taskID, err
+			}
+		}
+	}
+
+	return uuid.Nil, nil
+}
+
+func currentTaskIDForAgent(tx *gorm.DB, rawAgentID string) (uuid.UUID, error) {
+	agentID, err := uuid.Parse(rawAgentID)
+	if err != nil {
+		return uuid.Nil, nil
+	}
+
+	var agent model.Agent
+	if err := tx.First(&agent, "id = ?", agentID).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return uuid.Nil, nil
+		}
+		return uuid.Nil, err
+	}
+	if agent.CurrentTaskID == nil {
+		return uuid.Nil, nil
+	}
+	return *agent.CurrentTaskID, nil
 }
 
 // isKnownRecordType reports whether t is one of the discriminated union

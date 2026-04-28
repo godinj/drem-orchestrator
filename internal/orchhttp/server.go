@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/logging"
 )
 
@@ -29,7 +30,7 @@ import (
 // returns a deterministic in-memory reader so no Docker daemon is
 // required.
 type LogStreamer interface {
-	StreamLogs(ctx context.Context, containerID string) (io.ReadCloser, error)
+	StreamLogs(ctx context.Context, containerID string, opts container.LogOptions) (io.ReadCloser, error)
 }
 
 // GateOrchestrator is the minimum orchestrator surface the gate mutation
@@ -115,6 +116,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /projects/{name}/tasks", s.handleListTasks)
 	mux.HandleFunc("POST /projects/{name}/tasks", s.handleCreateTask)
 	mux.HandleFunc("GET /projects/{name}/workers", s.handleListWorkers)
+	mux.HandleFunc("GET /tasks/{id}/attempts", s.handleTaskAttempts)
 	mux.HandleFunc("GET /workers/{id}", s.handleGetWorker)
 	mux.HandleFunc("GET /workers/{id}/history", s.handleWorkerHistory)
 	mux.HandleFunc("GET /events", s.handleListEvents)

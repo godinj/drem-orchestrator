@@ -16,11 +16,14 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/godinj/drem-orchestrator/internal/agentmon"
+	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchhttp"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
+
+var _ orchhttp.LogStreamer = (*container.DockerRuntime)(nil)
 
 // fakeLogStreamer satisfies orchhttp.LogStreamer. It counts how many
 // times StreamLogs is called and returns a deterministic reader built
@@ -29,12 +32,14 @@ import (
 type fakeLogStreamer struct {
 	payload string
 	lastID  atomic.Value // string
+	lastOpt atomic.Value // container.LogOptions
 	calls   atomic.Int32
 }
 
-func (f *fakeLogStreamer) StreamLogs(_ context.Context, id string) (io.ReadCloser, error) {
+func (f *fakeLogStreamer) StreamLogs(_ context.Context, id string, opts container.LogOptions) (io.ReadCloser, error) {
 	f.calls.Add(1)
 	f.lastID.Store(id)
+	f.lastOpt.Store(opts)
 	return io.NopCloser(strings.NewReader(f.payload)), nil
 }
 
@@ -205,9 +210,22 @@ func TestGetWorkerKnownAndUnknown(t *testing.T) {
 	srv, ts, project := setupHTTPTest(t, nil)
 
 	ag := testutil.CreateAgent(t, srv.DB, uuid.Nil, model.AgentCoder, model.AgentWorking)
+	completedAt := time.Date(2026, 4, 28, 12, 30, 0, 0, time.UTC)
 	// Attach the agent to the project so list endpoints would find it;
 	// not strictly required for GetWorker but makes the fixture realistic.
-	require.NoError(t, srv.DB.Model(&ag).Update("project_id", project.ID).Error)
+	require.NoError(t, srv.DB.Model(&ag).Updates(map[string]any{
+		"project_id":            project.ID,
+		"provider":              "codex",
+		"model_id":              "gpt-5.5",
+		"effort":                "high",
+		"completed_at":          completedAt,
+		"exit_reason":           "completed",
+		"total_cost_usd":        1.23,
+		"final_context_pct":     72,
+		"tokens_in":             1000,
+		"tokens_out":            250,
+		"constraint_violations": 2,
+	}).Error)
 
 	// Known.
 	resp, err := http.Get(ts.URL + "/workers/" + ag.ID.String())
@@ -215,10 +233,32 @@ func TestGetWorkerKnownAndUnknown(t *testing.T) {
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(body, &raw))
+	for _, key := range []string{
+		"provider", "model_id", "effort", "completed_at", "exit_reason", "total_cost_usd",
+		"final_context_pct", "tokens_in", "tokens_out", "constraint_violations",
+	} {
+		require.Contains(t, raw, key)
+	}
+
 	var got orchdto.WorkerDTO
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	require.NoError(t, json.Unmarshal(body, &got))
 	require.Equal(t, ag.ID.String(), got.ID)
 	require.Equal(t, string(model.AgentCoder), got.AgentType)
+	require.Equal(t, "codex", got.Provider)
+	require.Equal(t, "gpt-5.5", got.ModelID)
+	require.Equal(t, "high", got.Effort)
+	require.NotNil(t, got.CompletedAt)
+	require.Equal(t, completedAt, got.CompletedAt.UTC())
+	require.Equal(t, "completed", got.ExitReason)
+	require.Equal(t, 1.23, got.TotalCostUSD)
+	require.Equal(t, 72, got.FinalContextPct)
+	require.Equal(t, 1000, got.TokensIn)
+	require.Equal(t, 250, got.TokensOut)
+	require.Equal(t, 2, got.ConstraintViolations)
 
 	// Unknown.
 	resp2, err := http.Get(ts.URL + "/workers/" + uuid.NewString())
@@ -232,7 +272,15 @@ func TestListWorkersForProject(t *testing.T) {
 
 	ag1 := testutil.CreateAgent(t, srv.DB, uuid.Nil, model.AgentCoder, model.AgentWorking)
 	ag2 := testutil.CreateAgent(t, srv.DB, uuid.Nil, model.AgentPlanner, model.AgentIdle)
-	require.NoError(t, srv.DB.Model(&ag1).Update("project_id", project.ID).Error)
+	require.NoError(t, srv.DB.Model(&ag1).Updates(map[string]any{
+		"project_id":        project.ID,
+		"provider":          "sglang-direct",
+		"model_id":          "qwen-coder",
+		"tokens_in":         321,
+		"tokens_out":        123,
+		"total_cost_usd":    0.45,
+		"final_context_pct": 64,
+	}).Error)
 	require.NoError(t, srv.DB.Model(&ag2).Update("project_id", project.ID).Error)
 
 	resp, err := http.Get(ts.URL + "/projects/" + projectName + "/workers")
@@ -243,13 +291,197 @@ func TestListWorkersForProject(t *testing.T) {
 	var got []orchdto.WorkerDTO
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
 	require.Len(t, got, 2)
+	workersByID := map[string]orchdto.WorkerDTO{}
+	for _, worker := range got {
+		workersByID[worker.ID] = worker
+	}
+	require.Equal(t, "sglang-direct", workersByID[ag1.ID.String()].Provider)
+	require.Equal(t, "qwen-coder", workersByID[ag1.ID.String()].ModelID)
+	require.Equal(t, 321, workersByID[ag1.ID.String()].TokensIn)
+	require.Equal(t, 123, workersByID[ag1.ID.String()].TokensOut)
+	require.Equal(t, 0.45, workersByID[ag1.ID.String()].TotalCostUSD)
+	require.Equal(t, 64, workersByID[ag1.ID.String()].FinalContextPct)
+}
+
+func TestTaskAttemptsReturnsOnlyAttemptsForTask(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "target", model.StatusInProgress)
+	otherTask := testutil.CreateTask(t, srv.DB, project.ID, "other", model.StatusInProgress)
+
+	started := time.Now().UTC().Add(-10 * time.Minute)
+	heartbeat := started.Add(5 * time.Minute)
+	completed := started.Add(9 * time.Minute)
+	ag := testutil.CreateAgent(t, srv.DB, task.ID, model.AgentCoder, model.AgentDead)
+	require.NoError(t, srv.DB.Model(&ag).Updates(map[string]any{
+		"name":                  "coder-worker",
+		"project_id":            project.ID,
+		"tmux_session":          "container-target",
+		"worktree_branch":       "feature/target",
+		"provider":              "codex",
+		"model_id":              "gpt-5.5",
+		"effort":                "high",
+		"heartbeat_at":          heartbeat,
+		"completed_at":          completed,
+		"exit_reason":           "success",
+		"tokens_in":             100,
+		"tokens_out":            20,
+		"total_cost_usd":        0.12,
+		"final_context_pct":     61,
+		"constraint_violations": 1,
+		"created_at":            started,
+	}).Error)
+
+	assigned := testutil.CreateAgent(t, srv.DB, uuid.Nil, model.AgentReviewer, model.AgentWorking)
+	require.NoError(t, srv.DB.Model(&assigned).Updates(map[string]any{
+		"project_id":      project.ID,
+		"tmux_session":    "assigned-container",
+		"worktree_branch": "feature/review",
+	}).Error)
+	require.NoError(t, srv.DB.Model(&task).Update("assigned_agent_id", assigned.ID).Error)
+
+	stale := testutil.CreateAgent(t, srv.DB, otherTask.ID, model.AgentCoder, model.AgentDead)
+	require.NoError(t, srv.DB.Model(&stale).Updates(map[string]any{
+		"project_id":   project.ID,
+		"tmux_session": "stale-container",
+	}).Error)
+
+	spawnID := uuid.New()
+	retrySpawnID := uuid.New()
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        spawnID,
+		TaskID:    task.ID,
+		EventType: "worker_spawned",
+		NewValue:  string(model.AgentCoder),
+		Actor:     "orchestrator",
+		Details: model.JSONField{
+			"agent_id":     ag.ID.String(),
+			"worker_id":    "worker-label-1",
+			"container_id": "container-target",
+			"agent_type":   string(model.AgentCoder),
+		},
+		CreatedAt: started,
+	}).Error)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        retrySpawnID,
+		TaskID:    task.ID,
+		EventType: "worker_spawned",
+		NewValue:  string(model.AgentCoder),
+		Actor:     "orchestrator",
+		Details: model.JSONField{
+			"worker_id":    "worker-label-retry",
+			"container_id": "container-retry",
+			"agent_type":   string(model.AgentCoder),
+		},
+		CreatedAt: started.Add(time.Minute),
+	}).Error)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    otherTask.ID,
+		EventType: "worker_spawned",
+		NewValue:  string(model.AgentCoder),
+		Actor:     "orchestrator",
+		Details: model.JSONField{
+			"agent_id":     stale.ID.String(),
+			"worker_id":    "stale-worker",
+			"container_id": "stale-container",
+		},
+	}).Error)
+
+	resp, err := http.Get(ts.URL + "/tasks/" + task.ID.String() + "/attempts")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got []orchdto.WorkerAttemptDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	require.Len(t, got, 3)
+
+	byContainer := map[string]orchdto.WorkerAttemptDTO{}
+	for _, attempt := range got {
+		require.Equal(t, task.ID.String(), attempt.TaskID)
+		require.NotEqual(t, stale.ID.String(), attempt.AgentID)
+		byContainer[attempt.ContainerID] = attempt
+	}
+
+	spawnAttempt := byContainer["container-target"]
+	require.Equal(t, spawnID.String(), spawnAttempt.AttemptID)
+	require.Equal(t, ag.ID.String(), spawnAttempt.AgentID)
+	require.Equal(t, "worker-label-1", spawnAttempt.WorkerID)
+	require.Equal(t, "feature/target", spawnAttempt.Branch)
+	require.Equal(t, "codex", spawnAttempt.Provider)
+	require.Equal(t, "gpt-5.5", spawnAttempt.ModelID)
+	require.Equal(t, "high", spawnAttempt.Effort)
+	require.Equal(t, string(model.AgentDead), spawnAttempt.Status)
+	require.Equal(t, heartbeat, spawnAttempt.LastHeartbeat.UTC())
+	require.NotNil(t, spawnAttempt.CompletedAt)
+	require.Equal(t, completed, spawnAttempt.CompletedAt.UTC())
+	require.Equal(t, "success", spawnAttempt.ExitReason)
+	require.Equal(t, 100, spawnAttempt.TokensIn)
+	require.Equal(t, 20, spawnAttempt.TokensOut)
+	require.Equal(t, 0.12, spawnAttempt.TotalCostUSD)
+	require.Equal(t, 61, spawnAttempt.FinalContextPct)
+	require.Equal(t, 1, spawnAttempt.ConstraintViolations)
+
+	require.Equal(t, retrySpawnID.String(), byContainer["container-retry"].AttemptID)
+	require.Equal(t, assigned.ID.String(), byContainer["assigned-container"].AttemptID)
+	require.NotContains(t, byContainer, "stale-container")
+}
+
+func TestTaskAttemptsIncludesBoundedFailureEvidence(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "attempt failure", model.StatusFailed)
+	agent := testutil.CreateAgent(t, srv.DB, task.ID, model.AgentCoder, model.AgentDead)
+	containerID := "container-failure"
+	require.NoError(t, srv.DB.Model(&agent).Updates(map[string]any{
+		"project_id":   project.ID,
+		"tmux_session": containerID,
+		"exit_reason":  "error",
+	}).Error)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    task.ID,
+		EventType: "worker_spawned",
+		Actor:     "orchestrator",
+		Details: model.JSONField{
+			"agent_id":     agent.ID.String(),
+			"worker_id":    "worker-failure",
+			"container_id": containerID,
+		},
+	}).Error)
+	longMessage := "build failed DREM_TOKEN=super-secret " + strings.Repeat("x", 700)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    task.ID,
+		EventType: "build_error",
+		Actor:     "worker-failure",
+		OldValue:  containerID,
+		NewValue:  longMessage,
+		Details: model.JSONField{
+			"container_id": containerID,
+			"message":      longMessage,
+		},
+	}).Error)
+
+	resp, err := http.Get(ts.URL + "/tasks/" + task.ID.String() + "/attempts")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got []orchdto.WorkerAttemptDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	require.Len(t, got, 1)
+	require.Equal(t, "build_error", got[0].FailureClassification)
+	require.LessOrEqual(t, len(got[0].FirstError), 512)
+	require.Contains(t, got[0].FirstError, "DREM_TOKEN=[REDACTED]")
+	require.NotContains(t, got[0].FirstError, "super-secret")
 }
 
 func TestGetLogsInvokesStreamer(t *testing.T) {
 	streamer := &fakeLogStreamer{payload: "hello logs\n"}
 	_, ts, _ := setupHTTPTest(t, streamer)
+	since := time.Date(2026, 4, 19, 12, 30, 0, 123, time.UTC)
 
-	resp, err := http.Get(ts.URL + "/logs?container=abc")
+	resp, err := http.Get(ts.URL + "/logs?container=abc&follow=true&since=" + since.Format(time.RFC3339Nano))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusOK, resp.StatusCode)
@@ -259,6 +491,23 @@ func TestGetLogsInvokesStreamer(t *testing.T) {
 	require.Equal(t, "hello logs\n", string(body))
 	require.EqualValues(t, 1, streamer.calls.Load())
 	require.Equal(t, "abc", streamer.lastID.Load())
+	opts := streamer.lastOpt.Load().(container.LogOptions)
+	require.True(t, opts.Follow)
+	require.True(t, since.Equal(opts.Since))
+}
+
+func TestGetLogsDefaultsToBoundedLogs(t *testing.T) {
+	streamer := &fakeLogStreamer{payload: "hello logs\n"}
+	_, ts, _ := setupHTTPTest(t, streamer)
+
+	resp, err := http.Get(ts.URL + "/logs?container=abc")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	opts := streamer.lastOpt.Load().(container.LogOptions)
+	require.False(t, opts.Follow)
+	require.True(t, opts.Since.IsZero())
 }
 
 func TestGetLogsRequiresContainer(t *testing.T) {
@@ -310,6 +559,88 @@ func TestIngestAcceptsKnownRecords(t *testing.T) {
 	var count int64
 	require.NoError(t, srv.DB.Model(&model.TaskEvent{}).Count(&count).Error)
 	require.EqualValues(t, 3, count)
+}
+
+func TestIngestAttributesMissingTaskIDFromCurrentAgent(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "current task", model.StatusInProgress)
+	agentID := uuid.New()
+	workerID := "worker-label-1"
+	containerID := "container-1"
+	require.NoError(t, srv.DB.Create(&model.Agent{
+		ID:            agentID,
+		ProjectID:     project.ID,
+		AgentType:     model.AgentCoder,
+		Name:          "coder-1",
+		Status:        model.AgentWorking,
+		CurrentTaskID: &task.ID,
+	}).Error)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    task.ID,
+		EventType: "worker_spawned",
+		Actor:     workerID,
+		OldValue:  containerID,
+		Details: model.JSONField{
+			"agent_id":     agentID.String(),
+			"worker_id":    workerID,
+			"container_id": containerID,
+		},
+		CreatedAt: time.Now().UTC().Add(-time.Minute),
+	}).Error)
+
+	records := []map[string]any{
+		{"type": "heartbeat", "agent_id": agentID.String(), "timestamp": time.Now().UTC()},
+		{"type": "tool_call", "worker_id": workerID, "timestamp": time.Now().UTC(), "tool": "Read", "target": "main.go"},
+		{"type": "crash", "container_id": containerID, "timestamp": time.Now().UTC(), "reason": "exited"},
+	}
+	body, err := json.Marshal(map[string]any{"records": records})
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/internal/logs", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("X-Drem-Agentmon-Token", "secret-token")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	var events []model.TaskEvent
+	require.NoError(t, srv.DB.Where("event_type IN ?", []string{"heartbeat", "tool_call", "crash"}).Order("event_type ASC").Find(&events).Error)
+	require.Len(t, events, 3)
+	for _, event := range events {
+		require.Equal(t, task.ID, event.TaskID)
+	}
+}
+
+func TestIngestLeavesUnmatchedMissingTaskIDUnattributed(t *testing.T) {
+	srv, ts, _ := setupHTTPTest(t, nil)
+
+	record := map[string]any{
+		"type":         "heartbeat",
+		"container_id": "unknown-container",
+		"worker_id":    "unknown-worker",
+		"agent_id":     uuid.NewString(),
+		"timestamp":    time.Now().UTC(),
+	}
+	body, err := json.Marshal(map[string]any{"records": []any{record}})
+	require.NoError(t, err)
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/internal/logs", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("X-Drem-Agentmon-Token", "secret-token")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+
+	var event model.TaskEvent
+	require.NoError(t, srv.DB.First(&event, "event_type = ?", "heartbeat").Error)
+	require.Equal(t, uuid.Nil, event.TaskID)
 }
 
 func TestIngestAcceptsMergeResultAndUpdatesTaskContext(t *testing.T) {
@@ -546,4 +877,62 @@ func TestWorkerHistoryResolvesContainerIDToMergeResult(t *testing.T) {
 	require.Len(t, hist.Events, 2)
 	require.Equal(t, "merge_result", hist.Events[1].Kind)
 	require.Contains(t, string(hist.Events[1].Details), "go test failed")
+}
+
+func TestWorkerHistoryExcludesStaleFuzzyRowsAndIncludesCurrentAttributedRows(t *testing.T) {
+	srv, ts, _ := setupHTTPTest(t, nil)
+	taskID := uuid.New()
+	containerID := "container-current"
+	workerID := "worker-current"
+	staleTime := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    uuid.New(),
+		EventType: "commit",
+		Actor:     "unrelated-worker",
+		NewValue:  "mentions " + containerID + " but is not this worker",
+		Details: model.JSONField{
+			"message": "old fuzzy mention of " + containerID,
+		},
+		CreatedAt: staleTime,
+	}).Error)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    taskID,
+		EventType: "worker_spawned",
+		Actor:     "orchestrator",
+		Details: model.JSONField{
+			"worker_id":    workerID,
+			"container_id": containerID,
+		},
+		CreatedAt: time.Now().UTC().Add(-time.Minute),
+	}).Error)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    taskID,
+		EventType: "test_result",
+		Actor:     workerID,
+		OldValue:  containerID,
+		NewValue:  "tests failed",
+		Details: model.JSONField{
+			"worker_id":    workerID,
+			"container_id": containerID,
+			"summary":      "tests failed",
+		},
+		CreatedAt: time.Now().UTC(),
+	}).Error)
+
+	resp, err := http.Get(ts.URL + "/workers/" + containerID + "/history")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var hist orchdto.WorkerHistoryDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&hist))
+	kinds := make([]string, 0, len(hist.Events))
+	for _, event := range hist.Events {
+		kinds = append(kinds, event.Kind)
+		require.NotEqual(t, "commit", event.Kind)
+	}
+	require.ElementsMatch(t, []string{"worker_spawned", "test_result"}, kinds)
 }

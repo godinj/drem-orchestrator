@@ -249,6 +249,9 @@ type spawnWorkerContext struct {
 	credsMount  string
 	codexAuth   string
 	promptMount string
+	provider    string
+	modelID     string
+	effort      string
 	envVars     map[string]string
 	extraLabel  map[string]string
 }
@@ -358,7 +361,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		return fmt.Errorf("spawn %s worker: %w", agentType, spawnErr)
 	}
 
-	// Record container ID and image identity on the agent row so the audit
+	// Record container ID and model identity on the agent row so the audit
 	// trail in user story 49 has a single join from task → agent → container.
 	//
 	// params.Branch (not task.WorktreeBranch) is the canonical branch
@@ -369,7 +372,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 	// DREM_BRANCH env var and drem.branch label, so the reconciler's
 	// commit-check finds the right ref regardless of which branch
 	// source the spawner used.
-	if err := o.recordContainerOnAgent(task, res.ContainerID, params.Image, agentType, params.Branch); err != nil {
+	if err := o.recordContainerOnAgent(task, res.ContainerID, swc.provider, swc.modelID, swc.effort, agentType, params.Branch); err != nil {
 		o.logger.Error("spawn worker: record agent container", "task_id", task.ID, "error", err)
 	}
 
@@ -539,6 +542,9 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		credsMount:  credsMount,
 		codexAuth:   codexAuth,
 		promptMount: promptMount,
+		provider:    string(provider),
+		modelID:     cliConfig.Model,
+		effort:      cliConfig.Effort,
 		envVars:     env,
 		extraLabel:  labels,
 	}, nil
@@ -579,7 +585,7 @@ func (o *Orchestrator) resolveProjectLanguage() string {
 	return "go"
 }
 
-// recordContainerOnAgent writes the container ID, image, and
+// recordContainerOnAgent writes the container ID, provider/model/effort, and
 // task/branch coupling onto the assigned agent row. When no agent is
 // assigned yet, a synthetic one is created and attached so the audit
 // trail is complete (user story 49).
@@ -598,7 +604,7 @@ func (o *Orchestrator) resolveProjectLanguage() string {
 //
 // See plans/container-agent-branch-persistence.md for the full symptom
 // and fix narrative.
-func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, image, agentType, branch string) error {
+func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, provider, modelID, effort, agentType, branch string) error {
 	if containerID == "" {
 		return nil
 	}
@@ -607,7 +613,7 @@ func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, ima
 	var ag model.Agent
 	if task.AssignedAgentID != nil {
 		if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err == nil {
-			return o.updateAgentContainer(&ag, containerID, image, agentType, branch, task.ID, now)
+			return o.updateAgentContainer(&ag, containerID, provider, modelID, effort, agentType, branch, task.ID, now)
 		}
 	}
 
@@ -627,7 +633,9 @@ func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, ima
 		CurrentTaskID:  &task.ID,
 		WorktreeBranch: branch,
 		TmuxSession:    containerID, // re-use TmuxSession as the container handle
-		ModelID:        image,
+		Provider:       provider,
+		ModelID:        modelID,
+		Effort:         effort,
 		HeartbeatAt:    &now,
 	}
 	if err := o.db.Create(&ag).Error; err != nil {
@@ -647,7 +655,8 @@ func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, ima
 // producing the v13 canary symptom (agent row with correct container
 // ID but empty worktree_branch). The post-fix version writes the same
 // set of fields the create-synthetic path does, so both entry points
-// leave an Agent row in a shape the reconciler can reason about.
+// leave an Agent row in a shape the reconciler can reason about. ModelID is
+// the CLI model identifier from the spawn config, not the Docker image.
 //
 // branch is the feature branch the spawner cloned into the container
 // (buildSpawnContext.branch). It is written unconditionally — an empty
@@ -657,11 +666,11 @@ func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, ima
 // rewritten on every update because a pre-existing agent row could
 // carry stale values from a prior assignment on a different task /
 // branch (e.g. after a retry that recycles the same row).
-func (o *Orchestrator) updateAgentContainer(ag *model.Agent, containerID, image, agentType, branch string, taskID uuid.UUID, now time.Time) error {
+func (o *Orchestrator) updateAgentContainer(ag *model.Agent, containerID, provider, modelID, effort, agentType, branch string, taskID uuid.UUID, now time.Time) error {
 	ag.TmuxSession = containerID
-	if image != "" {
-		ag.ModelID = image
-	}
+	ag.Provider = provider
+	ag.ModelID = modelID
+	ag.Effort = effort
 	if agentType != "" {
 		ag.AgentType = model.AgentType(agentType)
 	}

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/logging"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
@@ -32,6 +34,14 @@ var tasksTimeoutLogSampler = logging.NewSampler(logging.EveryD(time.Second))
 // incident — a handler slower than its TUI client's retry timeout is
 // never useful, so we fast-fail with 503 instead.
 const defaultTasksQueryTimeout = 5 * time.Second
+
+const maxWorkerAttemptFirstErrorLen = 512
+
+var secretEvidencePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Z0-9_]*\s*=\s*)\S+`),
+	regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9._~+/=-]+`),
+	regexp.MustCompile(`(?i)([?&](?:token|secret|api_key|access_key)=)[^&\s]+`),
+}
 
 // envTasksQueryTimeoutMs tunes the /tasks DB-query ceiling at runtime.
 // Unset, empty, or "0" means defaultTasksQueryTimeout. Values are parsed
@@ -294,6 +304,83 @@ func (s *Server) handleGetWorker(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toWorkerDTO(agent, s.Project.Name))
 }
 
+// handleTaskAttempts returns worker/container attempts attributable to a task.
+// Spawn events are attempt boundaries when present; older rows without spawn
+// events are represented by their Agent row so pre-containerization history is
+// still visible without adding a new attempts table.
+func (s *Server) handleTaskAttempts(w http.ResponseWriter, r *http.Request) {
+	taskID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+
+	var task model.Task
+	err = s.DB.WithContext(r.Context()).First(&task, "id = ?", taskID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		http.Error(w, "task not found", http.StatusNotFound)
+		return
+	}
+	if err != nil {
+		writeDBError(w, err)
+		return
+	}
+
+	var agents []model.Agent
+	agentQuery := s.DB.WithContext(r.Context()).Where("current_task_id = ?", taskID)
+	if task.AssignedAgentID != nil {
+		agentQuery = agentQuery.Or("id = ?", *task.AssignedAgentID)
+	}
+	if err := agentQuery.Order("created_at ASC").Find(&agents).Error; err != nil {
+		writeDBError(w, err)
+		return
+	}
+
+	agentsByID := make(map[string]model.Agent, len(agents))
+	for _, a := range agents {
+		agentsByID[a.ID.String()] = a
+	}
+
+	var spawns []model.TaskEvent
+	if err := s.DB.WithContext(r.Context()).
+		Where("task_id = ? AND event_type = ?", taskID, "worker_spawned").
+		Order("created_at ASC").
+		Find(&spawns).Error; err != nil {
+		writeDBError(w, err)
+		return
+	}
+
+	out := make([]orchdto.WorkerAttemptDTO, 0, len(spawns)+len(agents))
+	coveredAgents := map[string]struct{}{}
+	for _, e := range spawns {
+		agentID := stringField(e.Details, "agent_id")
+		agent, ok := agentsByID[agentID]
+		if agentID != "" {
+			coveredAgents[agentID] = struct{}{}
+		}
+		out = append(out, toWorkerAttemptDTOFromSpawn(e, agent, ok))
+	}
+	for _, a := range agents {
+		if _, ok := coveredAgents[a.ID.String()]; ok {
+			continue
+		}
+		out = append(out, toWorkerAttemptDTOFromAgent(taskID, a))
+	}
+	if len(out) > 0 {
+		var failureEvents []model.TaskEvent
+		if err := s.DB.WithContext(r.Context()).
+			Where("task_id = ? AND event_type IN ?", taskID, []string{recordTypeCrash, recordTypeBuildError, recordTypeTestResult}).
+			Order("created_at ASC").
+			Find(&failureEvents).Error; err != nil {
+			writeDBError(w, err)
+			return
+		}
+		applyFailureEvidence(out, failureEvents, task)
+	}
+
+	writeJSON(w, http.StatusOK, out)
+}
+
 // handleWorkerHistory returns TaskEvent rows attributable to this worker,
 // worker label, or container ID in chronological order. Agentmon records
 // use the drem.worker_id label as Actor, while orchestrator spawn/death
@@ -306,24 +393,12 @@ func (s *Server) handleWorkerHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "worker not found", http.StatusNotFound)
 		return
 	}
-	selectors := map[string]struct{}{id: {}}
-	if parsed, err := uuid.Parse(id); err == nil {
-		var agent model.Agent
-		if err := s.DB.WithContext(r.Context()).First(&agent, "id = ?", parsed).Error; err == nil {
-			addSelector(selectors, agent.TmuxSession)
-			if agent.CurrentTaskID != nil {
-				addSelector(selectors, agent.CurrentTaskID.String())
-			}
-		}
-	}
-
-	events, err := s.historyEventsForSelectors(r.Context(), selectors)
+	scope, err := s.historyScopeForWorker(r.Context(), id)
 	if err != nil {
 		writeDBError(w, err)
 		return
 	}
-	expandHistorySelectors(selectors, events)
-	events, err = s.historyEventsForSelectors(r.Context(), selectors)
+	events, err := s.historyEventsForScope(r.Context(), scope)
 	if err != nil {
 		writeDBError(w, err)
 		return
@@ -345,42 +420,79 @@ func (s *Server) handleWorkerHistory(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) historyEventsForSelectors(ctx context.Context, selectors map[string]struct{}) ([]model.TaskEvent, error) {
-	q := s.DB.WithContext(ctx).Order("created_at ASC").Limit(defaultLimit)
-	first := true
-	for selector := range selectors {
-		if strings.TrimSpace(selector) == "" {
-			continue
-		}
-		like := "%" + selector + "%"
-		clause := "actor = ? OR old_value = ? OR task_id = ? OR details LIKE ?"
-		args := []any{selector, selector, selector, like}
-		if first {
-			q = q.Where(clause, args...)
-			first = false
-		} else {
-			q = q.Or(clause, args...)
-		}
-	}
-	if first {
-		return []model.TaskEvent{}, nil
-	}
-	var events []model.TaskEvent
-	if err := q.Find(&events).Error; err != nil {
-		return nil, err
-	}
-	return events, nil
+type workerHistoryScope struct {
+	selectors map[string]struct{}
+	taskIDs   map[uuid.UUID]struct{}
 }
 
-func expandHistorySelectors(selectors map[string]struct{}, events []model.TaskEvent) {
-	for _, e := range events {
-		addSelector(selectors, e.Actor)
-		addSelector(selectors, e.OldValue)
-		addSelector(selectors, stringField(e.Details, "agent_id"))
-		addSelector(selectors, stringField(e.Details, "worker_id"))
-		addSelector(selectors, stringField(e.Details, "container_id"))
-		addSelector(selectors, stringField(e.Details, "task_id"))
+func (s *Server) historyScopeForWorker(ctx context.Context, id string) (workerHistoryScope, error) {
+	scope := workerHistoryScope{selectors: map[string]struct{}{}, taskIDs: map[uuid.UUID]struct{}{}}
+	addSelector(scope.selectors, id)
+	if parsed, err := uuid.Parse(id); err == nil {
+		var agent model.Agent
+		if err := s.DB.WithContext(ctx).First(&agent, "id = ?", parsed).Error; err == nil {
+			addSelector(scope.selectors, agent.ID.String())
+			addSelector(scope.selectors, agent.Name)
+			addSelector(scope.selectors, agent.TmuxSession)
+			if agent.CurrentTaskID != nil {
+				scope.taskIDs[*agent.CurrentTaskID] = struct{}{}
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return scope, err
+		}
 	}
+
+	var spawns []model.TaskEvent
+	if err := s.DB.WithContext(ctx).
+		Where("event_type = ? AND details LIKE ?", "worker_spawned", "%"+id+"%").
+		Order("created_at DESC").
+		Limit(defaultLimit).
+		Find(&spawns).Error; err != nil {
+		return scope, err
+	}
+	for _, spawn := range spawns {
+		if !eventMatchesSelectors(spawn, map[string]struct{}{id: {}}) {
+			continue
+		}
+		addSelector(scope.selectors, spawn.Actor)
+		addSelector(scope.selectors, spawn.OldValue)
+		addSelector(scope.selectors, stringField(spawn.Details, "agent_id"))
+		addSelector(scope.selectors, stringField(spawn.Details, "worker_id"))
+		addSelector(scope.selectors, stringField(spawn.Details, "container_id"))
+		if spawn.TaskID != uuid.Nil {
+			scope.taskIDs[spawn.TaskID] = struct{}{}
+		}
+	}
+	return scope, nil
+}
+
+func (s *Server) historyEventsForScope(ctx context.Context, scope workerHistoryScope) ([]model.TaskEvent, error) {
+	q := s.DB.WithContext(ctx).Order("created_at ASC").Limit(defaultLimit)
+	selectorList := mapKeys(scope.selectors)
+	taskIDList := uuidMapKeys(scope.taskIDs)
+	if len(selectorList) == 0 && len(taskIDList) == 0 {
+		return []model.TaskEvent{}, nil
+	}
+	if len(selectorList) > 0 && len(taskIDList) > 0 {
+		q = q.Where("actor IN ? OR old_value IN ? OR task_id IN ?", selectorList, selectorList, taskIDList)
+	} else if len(selectorList) > 0 {
+		q = q.Where("actor IN ? OR old_value IN ?", selectorList, selectorList)
+	} else {
+		q = q.Where("task_id IN ?", taskIDList)
+	}
+
+	var candidates []model.TaskEvent
+	if err := q.Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+	events := make([]model.TaskEvent, 0, len(candidates))
+	for _, e := range candidates {
+		_, taskScoped := scope.taskIDs[e.TaskID]
+		if eventMatchesSelectors(e, scope.selectors) || (taskScoped && e.EventType == "worker_spawned") {
+			events = append(events, e)
+		}
+	}
+	return events, nil
 }
 
 func addSelector(selectors map[string]struct{}, value string) {
@@ -441,12 +553,22 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "log streaming not configured", http.StatusServiceUnavailable)
 		return
 	}
-	container := r.URL.Query().Get("container")
-	if container == "" {
+	containerID := r.URL.Query().Get("container")
+	if containerID == "" {
 		http.Error(w, "container is required", http.StatusBadRequest)
 		return
 	}
-	rc, err := s.DockerLogs.StreamLogs(r.Context(), container)
+	follow, err := parseBoolQuery(r, "follow")
+	if err != nil {
+		http.Error(w, "follow must be a boolean", http.StatusBadRequest)
+		return
+	}
+	since, err := parseTimeQuery(r, "since")
+	if err != nil {
+		http.Error(w, "since must be RFC3339", http.StatusBadRequest)
+		return
+	}
+	rc, err := s.DockerLogs.StreamLogs(r.Context(), containerID, container.LogOptions{Since: since, Follow: follow})
 	if err != nil {
 		http.Error(w, "stream logs: "+err.Error(), http.StatusBadGateway)
 		return
@@ -459,6 +581,22 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	// Best-effort copy — we want partial output to reach the client even
 	// if the upstream reader later errors, so errors here are ignored.
 	_, _ = io.Copy(flushingWriter{w}, rc)
+}
+
+func parseBoolQuery(r *http.Request, key string) (bool, error) {
+	raw := r.URL.Query().Get(key)
+	if raw == "" {
+		return false, nil
+	}
+	return strconv.ParseBool(raw)
+}
+
+func parseTimeQuery(r *http.Request, key string) (time.Time, error) {
+	raw := r.URL.Query().Get(key)
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	return time.Parse(time.RFC3339Nano, raw)
 }
 
 // flushingWriter wraps an http.ResponseWriter and calls Flush after each
@@ -543,16 +681,208 @@ func toWorkerDTO(a model.Agent, project string) orchdto.WorkerDTO {
 		hb = *a.HeartbeatAt
 	}
 	return orchdto.WorkerDTO{
-		ID:            a.ID.String(),
-		ContainerID:   a.TmuxSession, // repurposed: post-containerization this holds the container ID
-		Project:       project,
-		AgentType:     string(a.AgentType),
-		Branch:        a.WorktreeBranch,
-		Status:        string(a.Status),
-		StartedAt:     a.CreatedAt,
-		LastHeartbeat: hb,
-		CurrentTask:   current,
+		ID:                   a.ID.String(),
+		ContainerID:          a.TmuxSession, // repurposed: post-containerization this holds the container ID
+		Project:              project,
+		AgentType:            string(a.AgentType),
+		Branch:               a.WorktreeBranch,
+		Status:               string(a.Status),
+		StartedAt:            a.CreatedAt,
+		LastHeartbeat:        hb,
+		CurrentTask:          current,
+		Provider:             a.Provider,
+		ModelID:              a.ModelID,
+		Effort:               a.Effort,
+		CompletedAt:          a.CompletedAt,
+		ExitReason:           a.ExitReason,
+		TotalCostUSD:         a.TotalCostUSD,
+		FinalContextPct:      a.FinalContextPct,
+		TokensIn:             a.TokensIn,
+		TokensOut:            a.TokensOut,
+		ConstraintViolations: a.ConstraintViolations,
 	}
+}
+
+func toWorkerAttemptDTOFromAgent(taskID uuid.UUID, a model.Agent) orchdto.WorkerAttemptDTO {
+	hb := time.Time{}
+	if a.HeartbeatAt != nil {
+		hb = *a.HeartbeatAt
+	}
+	return orchdto.WorkerAttemptDTO{
+		AttemptID:            a.ID.String(),
+		TaskID:               taskID.String(),
+		WorkerID:             a.ID.String(),
+		AgentID:              a.ID.String(),
+		ContainerID:          a.TmuxSession,
+		WorkerLabel:          a.Name,
+		AgentType:            string(a.AgentType),
+		Branch:               a.WorktreeBranch,
+		Provider:             a.Provider,
+		ModelID:              a.ModelID,
+		Effort:               a.Effort,
+		Status:               string(a.Status),
+		StartedAt:            a.CreatedAt,
+		CompletedAt:          a.CompletedAt,
+		LastHeartbeat:        hb,
+		ExitReason:           a.ExitReason,
+		TokensIn:             a.TokensIn,
+		TokensOut:            a.TokensOut,
+		TotalCostUSD:         a.TotalCostUSD,
+		FinalContextPct:      a.FinalContextPct,
+		ConstraintViolations: a.ConstraintViolations,
+	}
+}
+
+func toWorkerAttemptDTOFromSpawn(e model.TaskEvent, a model.Agent, hasAgent bool) orchdto.WorkerAttemptDTO {
+	d := orchdto.WorkerAttemptDTO{
+		AttemptID:   e.ID.String(),
+		TaskID:      e.TaskID.String(),
+		WorkerID:    firstNonEmpty(stringField(e.Details, "worker_id"), stringField(e.Details, "agent_id")),
+		AgentID:     stringField(e.Details, "agent_id"),
+		ContainerID: stringField(e.Details, "container_id"),
+		WorkerLabel: firstNonEmpty(stringField(e.Details, "worker_label"), stringField(e.Details, "worker_id")),
+		AgentType:   firstNonEmpty(stringField(e.Details, "agent_type"), e.NewValue),
+		StartedAt:   e.CreatedAt,
+	}
+	if hasAgent {
+		fromAgent := toWorkerAttemptDTOFromAgent(e.TaskID, a)
+		fromAgent.AttemptID = d.AttemptID
+		fromAgent.WorkerID = firstNonEmpty(d.WorkerID, fromAgent.WorkerID)
+		fromAgent.AgentID = firstNonEmpty(d.AgentID, fromAgent.AgentID)
+		fromAgent.ContainerID = firstNonEmpty(d.ContainerID, fromAgent.ContainerID)
+		fromAgent.WorkerLabel = firstNonEmpty(d.WorkerLabel, fromAgent.WorkerLabel)
+		fromAgent.AgentType = firstNonEmpty(d.AgentType, fromAgent.AgentType)
+		fromAgent.StartedAt = d.StartedAt
+		return fromAgent
+	}
+	return d
+}
+
+func applyFailureEvidence(attempts []orchdto.WorkerAttemptDTO, events []model.TaskEvent, task model.Task) {
+	taskFailure := stringField(task.Context, "failure_reason")
+	for i := range attempts {
+		if classification, firstError := evidenceFromExitReason(attempts[i].ExitReason); classification != "" {
+			attempts[i].FailureClassification = classification
+			attempts[i].FirstError = boundFailureEvidence(firstError)
+		}
+		for _, e := range events {
+			if len(attempts) > 1 && !attemptMatchesEvent(attempts[i], e) {
+				continue
+			}
+			classification, firstError := evidenceFromEvent(e)
+			if classification == "" {
+				continue
+			}
+			attempts[i].FailureClassification = classification
+			attempts[i].FirstError = boundFailureEvidence(firstError)
+			break
+		}
+		if attempts[i].FailureClassification == "" && taskFailure != "" {
+			attempts[i].FailureClassification = "task_failure"
+			attempts[i].FirstError = boundFailureEvidence(taskFailure)
+		}
+	}
+}
+
+func evidenceFromExitReason(reason string) (string, string) {
+	reason = strings.TrimSpace(reason)
+	if reason == "" || reason == "success" || reason == "completed" {
+		return "", ""
+	}
+	return "exit_reason", reason
+}
+
+func evidenceFromEvent(e model.TaskEvent) (string, string) {
+	switch e.EventType {
+	case recordTypeCrash:
+		return "crash", firstNonEmpty(stringField(e.Details, "reason"), e.NewValue)
+	case recordTypeBuildError:
+		return "build_error", firstNonEmpty(stringField(e.Details, "message"), e.NewValue)
+	case recordTypeTestResult:
+		if success, ok := boolField(e.Details, "success"); ok && success {
+			return "", ""
+		}
+		return "test_failure", firstNonEmpty(stringField(e.Details, "summary"), e.NewValue)
+	}
+	return "", ""
+}
+
+func attemptMatchesEvent(a orchdto.WorkerAttemptDTO, e model.TaskEvent) bool {
+	selectors := map[string]struct{}{}
+	addSelector(selectors, a.WorkerID)
+	addSelector(selectors, a.AgentID)
+	addSelector(selectors, a.ContainerID)
+	addSelector(selectors, a.WorkerLabel)
+	return eventMatchesSelectors(e, selectors)
+}
+
+func eventMatchesSelectors(e model.TaskEvent, selectors map[string]struct{}) bool {
+	if len(selectors) == 0 {
+		return false
+	}
+	if _, ok := selectors[e.Actor]; ok && e.Actor != "" {
+		return true
+	}
+	if _, ok := selectors[e.OldValue]; ok && e.OldValue != "" {
+		return true
+	}
+	for _, key := range []string{"agent_id", "worker_id", "container_id", "worker_label"} {
+		if v := stringField(e.Details, key); v != "" {
+			if _, ok := selectors[v]; ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func boundFailureEvidence(s string) string {
+	s = strings.TrimSpace(s)
+	for _, pattern := range secretEvidencePatterns {
+		s = pattern.ReplaceAllString(s, `${1}[REDACTED]`)
+	}
+	if len(s) <= maxWorkerAttemptFirstErrorLen {
+		return s
+	}
+	return s[:maxWorkerAttemptFirstErrorLen]
+}
+
+func boolField(m map[string]any, key string) (bool, bool) {
+	v, ok := m[key]
+	if !ok {
+		return false, false
+	}
+	b, ok := v.(bool)
+	return b, ok
+}
+
+func mapKeys(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		if strings.TrimSpace(k) != "" {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func uuidMapKeys(m map[uuid.UUID]struct{}) []uuid.UUID {
+	out := make([]uuid.UUID, 0, len(m))
+	for k := range m {
+		if k != uuid.Nil {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // writeJSON marshals v, sets the Content-Type header, and writes the

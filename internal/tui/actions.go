@@ -1,13 +1,17 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
 
 // handleApprove initiates the confirmation dialog for approving a gate task.
@@ -185,12 +189,60 @@ func (m Model) handleLog() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	taskID := selected.ID
-	agentID := m.detail.agent.ID
+	agent := *m.detail.agent
+	if m.dataSource != nil && agent.ID != uuid.Nil && agent.Name != "" {
+		ds := m.dataSource
+		workerID := agent.ID.String()
+		containerID := agent.Name
+		return m, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), dataFetchTimeout)
+			defer cancel()
+
+			history, err := ds.WorkerHistory(ctx, workerID)
+			if err != nil {
+				return logCapturedMsg{forTaskID: taskID, err: err}
+			}
+			rc, err := ds.StreamLogs(ctx, containerID)
+			if err != nil {
+				return logCapturedMsg{forTaskID: taskID, err: err}
+			}
+			defer rc.Close()
+			data, err := io.ReadAll(rc)
+			if err != nil && ctx.Err() == nil {
+				return logCapturedMsg{forTaskID: taskID, err: err}
+			}
+			return logCapturedMsg{forTaskID: taskID, text: formatWorkerHistoryAndLogs(history, string(data))}
+		}
+	}
+	agentID := agent.ID
 	orch := m.orch
 	return m, func() tea.Msg {
 		text, err := orch.GetAgentOutput(agentID)
 		return logCapturedMsg{forTaskID: taskID, text: text, err: err}
 	}
+}
+
+func formatWorkerHistoryAndLogs(history orchdto.WorkerHistoryDTO, logs string) string {
+	var b strings.Builder
+	if len(history.Events) > 0 {
+		b.WriteString("Worker history:\n")
+		for _, event := range history.Events {
+			when := event.Timestamp.Format("2006-01-02 15:04:05")
+			line := strings.TrimSpace(event.Detail)
+			if line == "" {
+				line = event.Kind
+			} else if event.Kind != "" {
+				line = event.Kind + ": " + line
+			}
+			if event.ExitCode != 0 {
+				line = fmt.Sprintf("%s (exit %d)", line, event.ExitCode)
+			}
+			b.WriteString(fmt.Sprintf("%s  %s\n", when, line))
+		}
+		b.WriteString("\nLogs:\n")
+	}
+	b.WriteString(logs)
+	return b.String()
 }
 
 // handleOrchLog reads the tail of the orchestrator log file.
