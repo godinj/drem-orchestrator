@@ -111,7 +111,7 @@ func TestOpenInboxQueueFetchesActiveAgentQueue(t *testing.T) {
 	m.height = 24
 	m.recalcLayout()
 
-	next, cmd := m.Update(keyRunes('i'))
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlS})
 	m = next.(Model)
 	if m.mode != modeInboxQueue {
 		t.Fatalf("mode = %v, want inbox queue", m.mode)
@@ -123,6 +123,75 @@ func TestOpenInboxQueueFetchesActiveAgentQueue(t *testing.T) {
 	m = next.(Model)
 	if got := len(m.inboxQueue); got != 1 {
 		t.Fatalf("inbox queue length = %d, want 1", got)
+	}
+}
+
+func TestOpenInboxQueueF6FallbackFetchesActiveAgentQueue(t *testing.T) {
+	client, closeServer := testInboxClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/inbox" {
+			t.Fatalf("request = %s %s, want GET /api/inbox", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode([]bridgeclient.InboxQueueItem{})
+	})
+	defer closeServer()
+
+	m := New(client, "")
+	m.agents = []bridgeclient.Agent{{Name: "mike"}}
+	m.width = 80
+	m.height = 24
+	m.recalcLayout()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyF6})
+	m = next.(Model)
+	if m.mode != modeInboxQueue {
+		t.Fatalf("mode = %v, want inbox queue", m.mode)
+	}
+	if cmd == nil {
+		t.Fatal("F6 returned nil command, want queue fetch")
+	}
+}
+
+func TestSlashInboxOpensActiveAgentQueue(t *testing.T) {
+	client, closeServer := testInboxClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/inbox" {
+			t.Fatalf("request = %s %s, want GET /api/inbox", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode([]bridgeclient.InboxQueueItem{})
+	})
+	defer closeServer()
+
+	m := New(client, "")
+	m.agents = []bridgeclient.Agent{{Name: "mike"}}
+	m.input.SetValue("/inbox")
+	m.width = 80
+	m.height = 24
+	m.recalcLayout()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.mode != modeInboxQueue {
+		t.Fatalf("mode = %v, want inbox queue", m.mode)
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("input value = %q, want empty", m.input.Value())
+	}
+	if cmd == nil {
+		t.Fatal("/inbox returned nil command, want queue fetch")
+	}
+}
+
+func TestOpenInboxQueueWithoutActivePersonaSurfacesError(t *testing.T) {
+	m := New(nil, "")
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyF6})
+	m = next.(Model)
+	if cmd != nil {
+		t.Fatal("open inbox without active persona returned command, want nil")
+	}
+	if m.mode != modeChat {
+		t.Fatalf("mode = %v, want chat", m.mode)
+	}
+	if m.err == nil || !strings.Contains(m.err.Error(), "no active persona") {
+		t.Fatalf("err = %v, want no active persona", m.err)
 	}
 }
 
@@ -227,7 +296,7 @@ func TestOpenPersonaControlFetchesContainers(t *testing.T) {
 	m.height = 24
 	m.recalcLayout()
 
-	next, cmd := m.Update(keyRunes('c'))
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
 	m = next.(Model)
 	if m.mode != modePersonaControl {
 		t.Fatalf("mode = %v, want persona control", m.mode)
@@ -242,6 +311,58 @@ func TestOpenPersonaControlFetchesContainers(t *testing.T) {
 	}
 	if m.personaContainers[0].Status != "running" {
 		t.Fatalf("container status = %q, want running", m.personaContainers[0].Status)
+	}
+}
+
+func TestOpenPersonaControlF7FallbackFetchesContainers(t *testing.T) {
+	client, closeServer := testInboxClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/personas/containers" {
+			t.Fatalf("request = %s %s, want GET /api/personas/containers", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(bridgeclient.PersonaContainersResponse{Available: true})
+	})
+	defer closeServer()
+
+	m := New(client, "")
+	m.width = 80
+	m.height = 24
+	m.recalcLayout()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyF7})
+	m = next.(Model)
+	if m.mode != modePersonaControl {
+		t.Fatalf("mode = %v, want persona control", m.mode)
+	}
+	if cmd == nil {
+		t.Fatal("F7 returned nil command, want container fetch")
+	}
+}
+
+func TestSlashControlOpensPersonaControl(t *testing.T) {
+	client, closeServer := testInboxClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/personas/containers" {
+			t.Fatalf("request = %s %s, want GET /api/personas/containers", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(bridgeclient.PersonaContainersResponse{Available: true})
+	})
+	defer closeServer()
+
+	m := New(client, "")
+	m.input.SetValue("/control")
+	m.width = 80
+	m.height = 24
+	m.recalcLayout()
+
+	next, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = next.(Model)
+	if m.mode != modePersonaControl {
+		t.Fatalf("mode = %v, want persona control", m.mode)
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("input value = %q, want empty", m.input.Value())
+	}
+	if cmd == nil {
+		t.Fatal("/control returned nil command, want container fetch")
 	}
 }
 

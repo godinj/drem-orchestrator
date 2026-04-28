@@ -64,12 +64,12 @@ var keys = keyMap{
 		key.WithHelp("F3", "yes"),
 	),
 	OpenInbox: key.NewBinding(
-		key.WithKeys("i"),
-		key.WithHelp("i", "inbox"),
+		key.WithKeys("ctrl+s", "f6"),
+		key.WithHelp("ctrl+s/F6", "inbox"),
 	),
 	OpenControl: key.NewBinding(
-		key.WithKeys("c"),
-		key.WithHelp("c", "control"),
+		key.WithKeys("ctrl+d", "f7"),
+		key.WithHelp("ctrl+d/F7", "control"),
 	),
 	Refresh: key.NewBinding(
 		key.WithKeys("r"),

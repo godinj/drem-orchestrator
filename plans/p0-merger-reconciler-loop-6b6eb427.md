@@ -2,10 +2,34 @@
 
 Artifact status: active investigation input
 Operator directive corrid: 5b99982e
-Metadata updated: 2026-04-27T03:58:45Z
-Active investigation owner: Mike source-surface provisioning handoff; Seth remains patch/proof owner once a source-capable route exists
+Metadata updated: 2026-04-27T04:06:31Z
+Active investigation owner: operator/platform source-capable task route required; Seth remains patch/proof owner once a source-capable route exists
 Ops owner: Mike for guardrails and controlled retry only after explicit re-clearance
 Context hygiene: passive ACK, retained-hold, watch-only, closure, and no-action entries in this artifact are audit trail only. Do not admit them as active context unless the entry changes authorization, ownership, blocker state, clearance, or required proof.
+
+## Mike source-capable route blocker reaffirmed at 2026-04-27T04:06:31Z
+
+Signal:
+- Mike reported at `2026-04-26T18:14:30Z`, replying to `b3d8a6f2`, that his supported `dremctl`/orchestrator surface still cannot open a source-capable patch/proof lane for CanaryV17 without a lifecycle/disposition mutation.
+- Kyle rechecked live supported status: orchestrator health is reachable, `6b6eb427` remains `testing_ready` with `worker=-`, world/project workers remain zero running, and recent events retain the known zero-UUID exit-128 crash evidence including the `2026-04-27T04:01:24Z` pair.
+
+Decision:
+- Accept this as the current active blocker, not a Mike execution miss. The available Mike surface can watch and apply explicitly cleared lifecycle/gate commands, but cannot create a normal source-capable cold-worker lane.
+- Escalate to operator/platform for a supported task/lane creation surface or explicitly scoped source-capable route. Do not run or request lifecycle mutation, `dremctl pass`, retry, host-exec expansion, Docker/SGLang action, credential change, destructive git action, service restart, product route, or quality reroute from this report.
+- Once source exists, Seth owns the conflict/control-plane patch/proof; Mike remains watch/guardrail owner only after Kyle re-clearance.
+
+## Mike source-capable route blocker accepted at 2026-04-27T04:05:10Z
+
+Signal:
+- Mike reported at `2026-04-26T18:10:54Z`, replying to `b12f90a4`, that his supported surface cannot create the normal orchestrator task needed to reach a cold source-capable worker and cannot directly spawn, assign, or hand off source work.
+- Kyle verified `dremctl --help` and found no task-create, direct cold-worker spawn, source-shell handoff, or assign-Seth/resolver command. Existing exposed mutations are gate/lifecycle commands only: `approve`, `reject`, `pass`, `fail`, `answer`, and `retry`.
+- `dremctl pass 6b6eb427` and retry remain barred for this lane because the deterministic conflict/control-plane proof package is not present.
+- Supported status remains reachable and the task remains `testing_ready` with `worker=-`. A later zero-UUID crash pair appeared at `2026-04-27T04:01:24Z`; Kyle routed Mike for read-only ops assessment of that newer surface.
+
+Decision:
+- Accept Mike's blocker as exact for his supported surface.
+- Do not run or request lifecycle mutation, `dremctl pass`, retry, host-exec expansion, Docker/SGLang action, credential change, destructive git action, service restart, product route, or quality reroute from this report.
+- Active blocker shifts to operator/platform source-capable task creation or an explicitly authorized source-capable execution route. Once source exists, Seth owns the scoped conflict/control-plane patch/proof and Mike remains watch/guardrail owner only after Kyle re-clearance.
 
 ## Stale Seth passive quality ACK retained at 2026-04-27T04:00:16Z
 

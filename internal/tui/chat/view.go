@@ -112,6 +112,11 @@ func (m *Model) renderQuickActions() string {
 		label := fmt.Sprintf("%s:%s", qa.key.Help().Key, qa.label)
 		parts = append(parts, styleQuickAction.Render(label))
 	}
+	parts = append(parts,
+		styleQuickAction.Render("ctrl+s/F6:inbox"),
+		styleQuickAction.Render("ctrl+d/F7:control"),
+		styleQuickAction.Render("/inbox /control"),
+	)
 
 	line := strings.Join(parts, " ")
 

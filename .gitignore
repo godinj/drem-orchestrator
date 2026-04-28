@@ -73,3 +73,4 @@ deploy/docker/context/csuite-prompts/
 /drem-docker-query-proxy
 /drem-classifier
 /drem-planner
+/csuite-chat

@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ const (
 	messageRefreshRate = 5 * time.Second
 	maxBackoff         = 30 * time.Second
 )
+
+var errNoActivePersona = errors.New("no active persona loaded yet")
 
 type viewMode int
 
@@ -306,10 +309,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handlePersonaControlKey(msg)
 	}
 
-	if key.Matches(msg, keys.OpenInbox) {
+	if isOpenInboxKey(msg) {
 		return m.openInboxQueue()
 	}
-	if key.Matches(msg, keys.OpenControl) {
+	if isOpenControlKey(msg) {
 		return m.openPersonaControl()
 	}
 
@@ -340,6 +343,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if key.Matches(msg, keys.Send) {
 		text := strings.TrimSpace(m.input.Value())
+		switch text {
+		case "/inbox":
+			m.input.SetValue("")
+			return m.openInboxQueue()
+		case "/control":
+			m.input.SetValue("")
+			return m.openPersonaControl()
+		}
 		if text != "" && len(m.agents) > 0 {
 			m.input.SetValue("")
 			return m, sendMessage(m.client, bridgeclient.SendRequest{
@@ -561,6 +572,7 @@ func (m Model) switchTab(idx int) (tea.Model, tea.Cmd) {
 func (m Model) openInboxQueue() (tea.Model, tea.Cmd) {
 	agent := m.activeAgentName()
 	if agent == "" {
+		m.err = errNoActivePersona
 		return m, nil
 	}
 	m.mode = modeInboxQueue
@@ -569,6 +581,14 @@ func (m Model) openInboxQueue() (tea.Model, tea.Cmd) {
 	m.clearInboxPendingAction()
 	m.rebuildViewport()
 	return m, fetchInboxQueue(m.client, agent, inboxQueueLimit)
+}
+
+func isOpenInboxKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeyCtrlS || msg.Type == tea.KeyF6 || key.Matches(msg, keys.OpenInbox)
+}
+
+func isOpenControlKey(msg tea.KeyMsg) bool {
+	return msg.Type == tea.KeyCtrlD || msg.Type == tea.KeyF7 || key.Matches(msg, keys.OpenControl)
 }
 
 func (m Model) openPersonaControl() (tea.Model, tea.Cmd) {

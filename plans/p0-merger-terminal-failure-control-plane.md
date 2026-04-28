@@ -4,10 +4,18 @@ Status: implementation authorized by operator on 2026-04-24
 Scope: merger/reconciler control-plane safety for task `6b6eb427` and future deterministic merge failures
 Artifact status: active investigation input
 Operator directive corrid: 5b99982e
-Metadata updated: 2026-04-27T03:58:45Z
-Active investigation owner: source-capable execution route pending; Seth remains clearance owner once patch/proof exists
+Metadata updated: 2026-04-27T04:06:31Z
+Active investigation owner: operator/platform source-capable task route required; Seth remains clearance owner once patch/proof exists
 Ops owner: Mike only after explicit re-clearance following resolver/control-plane proof
 Context hygiene: passive ACK, retained-hold, watch-only, closure, and no-action entries in this artifact are audit trail only. Do not admit them as active context unless the entry changes authorization, ownership, blocker state, clearance, or required proof.
+
+## Current Metadata Note
+
+On 2026-04-27T04:06:31Z Mike reaffirmed, replying to `b3d8a6f2`, that the supported Mike-side `dremctl`/orchestrator surface cannot create, spawn, assign, or provision a source-capable worker lane for the scoped conflict/control-plane patch/proof without a lifecycle/disposition mutation. Kyle rechecked live status: orchestrator health is reachable, `6b6eb427` remains `testing_ready` with `worker=-`, no running project worker is visible, and recent events still include zero-UUID exit-128 crash pairs through `2026-04-27T04:01:24Z`. The active blocker is now operator/platform source-capable task creation or another explicitly authorized scoped source route. This metadata update clears no pass, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, credential change, destructive git action, or service restart.
+
+## Current Metadata Note
+
+On 2026-04-27T04:05:10Z Mike reported, replying to `b12f90a4`, that no Mike-controlled supported source-capable route exists for the scoped conflict/control-plane pass. Kyle verified `dremctl --help` exposes no task-create, direct cold-worker spawn, source-shell handoff, or assignment command; it only exposes status/log/history plus gate/lifecycle mutations. Because `dremctl pass 6b6eb427` and retry remain barred until the proof package exists, the remaining blocker is operator/platform task creation or another explicitly authorized source-capable route. Kyle also observed a newer zero-UUID crash pair at `2026-04-27T04:01:24Z` and routed Mike for read-only assessment. No lifecycle mutation, pass, retry, host-exec expansion, Docker/SGLang action, credential change, destructive git action, or service restart was performed.
 
 ## Current Metadata Note
 

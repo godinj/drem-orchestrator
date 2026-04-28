@@ -5,9 +5,9 @@ Owner: Kyle
 Artifact status: active
 Operator directive corrid: 5b99982e
 Latest operator approval corrid: 1beec4c9
-Metadata updated: 2026-04-26T18:15:40Z
-Active investigation lane: operator-approved scoped conflict/control-plane patch/proof with artifact metadata updates as needed
-Primary execution lane: Seth for scoped conflict/control-plane proof; Mike for source-capable surface and ops guardrails
+Metadata updated: 2026-04-27T04:06:31Z
+Active investigation lane: operator/platform source-capable task route required for scoped conflict/control-plane patch/proof
+Primary execution lane: blocked on task creation/source-capable execution surface; Seth remains proof owner once source exists, Mike remains ops guardrail/watch owner
 Quality gate: Seth
 Product lane: Alex only if success criteria or operator-visible scope changes
 Context hygiene: passive ACK, retained-hold, watch-only, closure, and no-action entries in this artifact are audit trail only. Do not admit them as active context unless the entry changes authorization, ownership, blocker state, clearance, or required proof.
@@ -17,6 +17,21 @@ Context hygiene: passive ACK, retained-hold, watch-only, closure, and no-action 
 Move canary v17 task `6b6eb427` from retained passive closure back to a working canary path: the task should be able to pass the test gate, enter merger execution, and complete without re-entering the known merger/reconciler failure loop.
 
 ## Current Signal
+
+### Mike source-capable route blocker reaffirmed at 2026-04-27T04:06:31Z
+
+- Mike reported at `2026-04-26T18:14:30Z`, replying to operator thread `b3d8a6f2`, that no supported Mike-side `dremctl`/orchestrator surface can provision a source-capable worker lane for the scoped CanaryV17 conflict/control-plane work without a lifecycle/disposition mutation.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and current workers show no active project worker for the task. Recent events still include the known zero-UUID exit-128 crash pairs, including the later `2026-04-27T04:01:24Z` pair.
+- Decision: accept the blocker as current and escalate to the operator/platform for a source-capable task/lane creation route or an explicitly authorized scoped source route. This report does not clear `dremctl pass 6b6eb427`, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, credential change, destructive git action, or service restart.
+- Ownership remains unchanged: Seth owns the scoped conflict/control-plane patch/proof once source exists; Mike remains guardrail/watch owner only after explicit re-clearance.
+
+### Mike source-capable route blocker accepted at 2026-04-27T04:05:10Z
+
+- Mike reported at `2026-04-26T18:10:54Z`, replying to `b12f90a4`, that no usable Mike-controlled source-capable route exists on supported surfaces. `dremctl` provides status/log/history plus gate and lifecycle commands only; it has no task-create, direct cold-worker spawn, source-shell handoff, or assign-Seth/resolver command.
+- Kyle verified the command surface with `dremctl --help`: available commands are projects, tasks, workers, worker, history, events, logs, status, approve, reject, pass, fail, answer, and retry. No task creation or direct spawn surface is exposed.
+- Supported status remains reachable: world health OK, `dremctl status` works, and `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`. `dremctl events --limit 25` now also shows a later zero-UUID crash pair at `2026-04-27T04:01:24Z`, after Mike's report, so Kyle routed Mike for read-only assessment of whether it is the same known merger/control-plane evidence or a new blocker.
+- Decision: retain the no-pass hold. Do not run or request `dremctl pass 6b6eb427`, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, credential change, destructive git action, or service restart from this report.
+- Active blocker: the scoped conflict/control-plane patch/proof needs an operator/platform source-capable execution route, such as a new normal orchestrator task that reaches a cold coder/fixer/tester worker with repo/container FS and Go toolchain, or another explicitly authorized source-capable route outside Mike's current supported surface.
 
 ### Stale Seth passive quality ACK retained at 2026-04-27T04:00:16Z
 
