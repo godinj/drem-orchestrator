@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
+	"github.com/godinj/drem-orchestrator/internal/personacontrol"
 	"github.com/google/uuid"
 )
 
@@ -36,6 +37,10 @@ type Config struct {
 	// (e.g. in host-mode integration tests) the bridge operates without
 	// routing support. See internal/deliver for the handler factory.
 	DeliverHandler http.Handler
+
+	// PersonaControl optionally exposes Docker Compose persona lifecycle
+	// controls for restart/recreate operations from the bridge UI.
+	PersonaControl *personacontrol.Controller
 }
 
 // Server is the bridge HTTP server. Zero value is not usable; use New.
@@ -96,6 +101,13 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux.Handle("/api/health", s.auth(http.HandlerFunc(healthHandler)))
 	mux.Handle("/api/agents", s.auth(agentsHandler(s.cfg.Store)))
 	mux.Handle("/api/messages", s.auth(messagesHandler(s.cfg.Store, s.hub)))
+	mux.Handle("/api/inbox", s.auth(inboxQueueHandler(s.cfg.Store)))
+	mux.Handle("/api/inbox/archive", s.auth(inboxQueueActionHandler(s.cfg.Store, inboxQueueActionArchive)))
+	mux.Handle("/api/inbox/ignore", s.auth(inboxQueueActionHandler(s.cfg.Store, inboxQueueActionIgnore)))
+	if s.cfg.PersonaControl != nil {
+		mux.Handle("/api/personas/containers", s.auth(personaContainersHandler(s.cfg.PersonaControl)))
+		mux.Handle("/api/personas/control", s.auth(personaControlHandler(s.cfg.PersonaControl)))
+	}
 	// WebSocket endpoint handles its own auth (token via query param or header)
 	// because browsers cannot set custom headers on WebSocket upgrade requests.
 	mux.Handle("/api/ws", wsHandler(s.hub, s.cfg.Store, s.cfg.Token, s.cfg.DisableAuth))

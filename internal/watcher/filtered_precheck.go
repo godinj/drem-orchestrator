@@ -54,8 +54,9 @@ func NewFilteredPrecheck(inboxBaseDir string, bus FilteredEventBus) *FilteredPre
 }
 
 // HasWork returns true if the agent has unarchived inbox messages or unacked
-// event bus deliveries of a relevant type. Non-relevant unacked events are
-// auto-acked so they do not accumulate.
+// event bus deliveries of a relevant type. Events are acked when this precheck
+// consumes them as work, keeping the poller from hiding event-only wakeups.
+// Non-relevant unacked events are auto-acked so they do not accumulate.
 func (p *FilteredPrecheck) HasWork(agent string) bool {
 	// Check inbox first (fast filesystem check).
 	if HasInboxMessages(p.inboxBaseDir, agent) {
@@ -70,7 +71,11 @@ func (p *FilteredPrecheck) HasWork(agent string) bool {
 			log.Printf("precheck: event bus query for %s: %v", agent, err)
 			return true // err on the side of running
 		}
-		return len(allUnacked) > 0
+		if len(allUnacked) == 0 {
+			return false
+		}
+		p.ackEvents(agent, allUnacked, "events")
+		return true
 	}
 
 	// Check for relevant unacked events.
@@ -83,7 +88,24 @@ func (p *FilteredPrecheck) HasWork(agent string) bool {
 	// Auto-ack non-relevant events so they don't pile up.
 	p.autoAckNonRelevant(agent, relevantTypes)
 
-	return len(relevant) > 0
+	if len(relevant) == 0 {
+		return false
+	}
+	p.ackEvents(agent, relevant, "relevant events")
+	return true
+}
+
+func (p *FilteredPrecheck) ackEvents(agent string, events []EventInfo, label string) {
+	ids := make([]string, 0, len(events))
+	for _, ev := range events {
+		ids = append(ids, ev.ID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+	if err := p.bus.Ack(agent, ids); err != nil {
+		log.Printf("precheck: ack %s for %s: %v", label, agent, err)
+	}
 }
 
 // autoAckNonRelevant acks all unacked deliveries for the agent that are NOT

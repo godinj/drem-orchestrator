@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -154,6 +156,7 @@ func loadAuditToken(path string) (string, error) {
 //	DREM_BEARER_TOKEN → cfg.BearerToken
 //	DREM_LISTEN_ADDR  → cfg.ListenAddr
 //	DREM_DB_PATH      → cfg.DBPath
+//
 // parseRescanInterval parses DREM_WATCHER_RESCAN_INTERVAL. Empty or
 // malformed values fall back to the 5-minute default. A non-positive
 // value (e.g. "0s") disables the periodic rescan entirely — useful in
@@ -172,6 +175,18 @@ func parseRescanInterval(env string) time.Duration {
 		return 0
 	}
 	return d
+}
+
+func parseMaxRescanFilesPerPersona(env string) int {
+	fallback := deliver.DefaultMaxRescanFilesPerPersona
+	if env == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(env)
+	if err != nil || n <= 0 {
+		return fallback
+	}
+	return n
 }
 
 func applyServeEnvOverrides(cfg *serveTomlConfig) {
@@ -295,9 +310,10 @@ func runServe(args []string, stderr io.Writer) int {
 	}
 
 	deliverCfg := deliver.Config{
-		Token:      deliverToken,
-		Ledger:     ledger,
-		AuditToken: auditToken,
+		Token:                    deliverToken,
+		Ledger:                   ledger,
+		AuditToken:               auditToken,
+		MaxRescanFilesPerPersona: parseMaxRescanFilesPerPersona(os.Getenv("DREM_WATCHER_MAX_RESCAN_FILES_PER_PERSONA")),
 	}
 	deliverHandler := deliver.Handler(deliverCfg)
 
@@ -323,8 +339,7 @@ func runServe(args []string, stderr io.Writer) int {
 	// the main shutdown-watcher select below.
 	go func() {
 		res := deliver.RescanOnce(deliverCfg)
-		fmt.Fprintf(stderr, "csuite-watcher: startup rescan: scanned=%d delivered=%d skipped=%d quarantined=%d errors=%d\n",
-			res.Scanned, res.Delivered, res.Skipped, res.Quarantined, len(res.Errors))
+		logRescanResult(stderr, "startup", res)
 	}()
 
 	// Periodic rescan. Scoreboard item 5: a signal that silently drops
@@ -347,8 +362,7 @@ func runServe(args []string, stderr io.Writer) int {
 					return
 				case <-ticker.C:
 					res := deliver.RescanOnce(deliverCfg)
-					fmt.Fprintf(stderr, "csuite-watcher: periodic rescan: scanned=%d delivered=%d skipped=%d quarantined=%d errors=%d\n",
-						res.Scanned, res.Delivered, res.Skipped, res.Quarantined, len(res.Errors))
+					logRescanResult(stderr, "periodic", res)
 				}
 			}
 		}()
@@ -362,4 +376,19 @@ func runServe(args []string, stderr io.Writer) int {
 	}
 
 	return 0
+}
+
+func logRescanResult(w io.Writer, label string, res deliver.RescanResult) {
+	fmt.Fprintf(w, "csuite-watcher: %s rescan: scanned=%d delivered=%d skipped=%d quarantined=%d errors=%d\n",
+		label, res.Scanned, res.Delivered, res.Skipped, res.Quarantined, len(res.Errors))
+	personas := make([]string, 0, len(res.Personas))
+	for persona := range res.Personas {
+		personas = append(personas, persona)
+	}
+	sort.Strings(personas)
+	for _, persona := range personas {
+		p := res.Personas[persona]
+		fmt.Fprintf(w, "csuite-watcher: %s rescan: persona=%s scanned=%d delivered=%d skipped=%d quarantined=%d errors=%d oldest_pending_age_seconds=%d\n",
+			label, persona, p.Scanned, p.Delivered, p.Skipped, p.Quarantined, p.Errors, p.OldestPendingAgeSeconds)
+	}
 }

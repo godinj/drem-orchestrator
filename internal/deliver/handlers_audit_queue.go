@@ -30,7 +30,7 @@ type queueRow struct {
 // queueAgents is the closed set of recipients the watcher aggregates
 // for /v1/queue. Kept explicit so stray dirs never leak into the
 // response. The quarantine scope is reported per source persona.
-var queueAgents = []string{"alex", "mike", "seth", "kyle"}
+var queueAgents = []string{"alex", "mike", "seth", "kyle", "operator"}
 
 // queueScopes is the closed set of scopes. "inbox" and "outbox" map
 // to /csuite/<agent>/<scope>; "quarantine" maps to

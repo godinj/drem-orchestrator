@@ -205,6 +205,42 @@ func TestQueue_AgentFilter(t *testing.T) {
 	}
 }
 
+func TestQueue_IncludesOperatorInbox(t *testing.T) {
+	useTempCsuiteRoot(t)
+	oldest := time.Date(2026, 4, 23, 6, 33, 59, 0, time.UTC)
+	newest := time.Date(2026, 4, 28, 1, 3, 6, 0, time.UTC)
+	seedQueueFile(t, "operator", "inbox", "first.md", oldest)
+	seedQueueFile(t, "operator", "inbox", "latest.md", newest)
+
+	h, _ := auditHandler(t, "audit-secret")
+	req := httptest.NewRequest(http.MethodGet, "/v1/queue?agent=operator&scope=inbox", nil)
+	req.Header.Set("Authorization", "Bearer audit-secret")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", w.Code, w.Body.String())
+	}
+	var rows []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("len = %d, want 1", len(rows))
+	}
+	if rows[0]["agent"] != "operator" || rows[0]["scope"] != "inbox" {
+		t.Fatalf("row = %+v, want operator/inbox", rows[0])
+	}
+	if int(rows[0]["count"].(float64)) != 2 {
+		t.Errorf("count = %v, want 2", rows[0]["count"])
+	}
+	if rows[0]["oldest"] != oldest.Format(time.RFC3339) {
+		t.Errorf("oldest = %v, want %s", rows[0]["oldest"], oldest.Format(time.RFC3339))
+	}
+	if rows[0]["newest"] != newest.Format(time.RFC3339) {
+		t.Errorf("newest = %v, want %s", rows[0]["newest"], newest.Format(time.RFC3339))
+	}
+}
+
 // TestQueue_ScopeFilter verifies the `scope` query param filters to
 // a single scope (e.g. inbox or quarantine).
 func TestQueue_ScopeFilter(t *testing.T) {

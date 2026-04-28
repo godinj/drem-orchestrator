@@ -237,43 +237,54 @@ func TestEventDeliveryTrigger_EmptyList(t *testing.T) {
 	}
 }
 
-// TestEventDeliveryTrigger_Sequential verifies that EventDeliveryTrigger
-// processes notifications sequentially: the second notification is not
-// consumed until all agents in the first notification have been triggered.
-func TestEventDeliveryTrigger_Sequential(t *testing.T) {
+// TestEventDeliveryTrigger_FansOutNotification verifies that one slow agent
+// trigger does not block other recipients from the same notification.
+func TestEventDeliveryTrigger_FansOutNotification(t *testing.T) {
 	mock := newMockAgentTriggerer()
 
-	// Block alice's TriggerAgent call so notification 1 stalls.
+	// Block alice's TriggerAgent call so fanout would stall if recipients were
+	// processed serially.
 	started, release := mock.prepareTrigger("alice")
 	defer release()
 
-	ch := make(chan []string, 2) // buffered so both sends don't block
+	ch := make(chan []string, 1)
 	trigger := watcher.NewEventDeliveryTrigger(ch, mock)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	startTrigger(ctx, trigger)
 
-	// Send notification 1 (will block in alice's TriggerAgent).
-	ch <- []string{"alice"}
-
-	// Wait for alice's TriggerAgent to begin.
+	ch <- []string{"alice", "bob"}
 	mustTriggerStart(t, started)
 
-	// Send notification 2 while notification 1 is still being processed.
+	// Bob should not wait for alice to finish.
+	waitUntil(t, func() bool { return mock.wasTriggered("bob") }, time.Second)
+}
+
+// TestEventDeliveryTrigger_BlockedRecipientTimesOut verifies that a blocked
+// recipient cannot stall later notification batches forever.
+func TestEventDeliveryTrigger_BlockedRecipientTimesOut(t *testing.T) {
+	mock := newMockAgentTriggerer()
+
+	started, release := mock.prepareTrigger("alice")
+	defer release()
+
+	ch := make(chan []string, 2)
+	trigger := watcher.NewEventDeliveryTrigger(ch, mock)
+	trigger.SetRecipientTimeout(20 * time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	startTrigger(ctx, trigger)
+
+	ch <- []string{"alice"}
+	mustTriggerStart(t, started)
 	ch <- []string{"bob"}
 
-	// Bob must NOT be triggered while alice is blocked.
-	time.Sleep(20 * time.Millisecond)
-	if mock.wasTriggered("bob") {
-		t.Fatal("bob was triggered before alice completed — processing is not sequential")
-	}
-
-	// Release alice — notification 1 completes.
-	release()
-
-	// Now bob should be triggered.
 	waitUntil(t, func() bool { return mock.wasTriggered("bob") }, time.Second)
+	if mock.wasTriggered("alice") {
+		t.Fatal("alice should still be blocked; later batch should proceed after timeout")
+	}
 }
 
 // TestEventDeliveryTrigger_ContextCancelled verifies that Run blocks until the

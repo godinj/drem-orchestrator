@@ -265,6 +265,71 @@ func (s *Store) readPersonaInbox(inboxOwner, fromFilter string) []csuite.CsuiteI
 	return out
 }
 
+// ListInboxQueue returns live, unarchived inbox items for restart review.
+func (s *Store) ListInboxQueue(agent string, limit int) ([]csuite.InboxQueueItem, error) {
+	if !s.acceptsTo(agent) {
+		return nil, csuite.ErrUnknownPersona
+	}
+	entries, err := listInboxEntries(filepath.Join(s.root, agent, "inbox"))
+	if err != nil {
+		return nil, err
+	}
+	items := make([]csuite.InboxQueueItem, 0, len(entries))
+	for _, entry := range entries {
+		msg := entryToMessage(entry, agent)
+		items = append(items, csuite.InboxQueueItem{
+			ID:        msg.ID,
+			Filename:  filepath.Base(entry.Path),
+			FromAgent: msg.FromAgent,
+			ToAgent:   msg.ToAgent,
+			Subject:   msg.Subject,
+			Body:      msg.Body,
+			CreatedAt: msg.CreatedAt,
+			UpdatedAt: msg.UpdatedAt,
+		})
+	}
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+// ArchiveInboxItem moves a live inbox item into inbox/.archive.
+func (s *Store) ArchiveInboxItem(agent, id, reason string) error {
+	return s.moveInboxItem(agent, id, ".archive")
+}
+
+// IgnoreInboxItem moves a live inbox item into inbox/.ignored.
+func (s *Store) IgnoreInboxItem(agent, id, reason string) error {
+	return s.moveInboxItem(agent, id, ".ignored")
+}
+
+func (s *Store) moveInboxItem(agent, id, destDirName string) error {
+	if !s.acceptsTo(agent) {
+		return csuite.ErrUnknownPersona
+	}
+	wantID, err := uuid.Parse(id)
+	if err != nil {
+		return csuite.ErrInboxItemNotFound
+	}
+	inboxDir := filepath.Join(s.root, agent, "inbox")
+	entries, err := listInboxEntries(inboxDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entryToMessage(entry, agent).ID != wantID {
+			continue
+		}
+		destDir := filepath.Join(inboxDir, destDirName)
+		if err := os.MkdirAll(destDir, 0o755); err != nil {
+			return err
+		}
+		return os.Rename(entry.Path, filepath.Join(destDir, filepath.Base(entry.Path)))
+	}
+	return csuite.ErrInboxItemNotFound
+}
+
 // GetMessageCountByAgent returns the number of inbox files (live +
 // .archive) under <root>/<scopedTo>/inbox/. Outbox files are NOT
 // counted to avoid double-counting with the recipient's inbox copy.

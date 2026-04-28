@@ -8,6 +8,18 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/watcher"
 )
 
+func waitForLifecycleRunCount(t *testing.T, runner *lifecycleMockRunner, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if runner.runCount() >= want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timeout waiting for %d lifecycle runs; got %d", want, runner.runCount())
+}
+
 // TestCooldown_TriggerDuringRunning verifies that triggers received while a
 // turn is running return Queued (not Cooldown). Cooldown only applies
 // BETWEEN turns (after a turn ends), not while one is still running.
@@ -84,6 +96,66 @@ func TestCooldown_AfterTurnEnds(t *testing.T) {
 	r2 := lm.TriggerAgent("mike")
 	if r2 != watcher.TriggerCooldown {
 		t.Errorf("trigger during cooldown: got %v, want Cooldown (%v)", r2, watcher.TriggerCooldown)
+	}
+}
+
+// TestCooldown_IdleTriggerDuringCooldownEventuallyRuns verifies that a trigger
+// after a turn has completed, but before cooldown expires, is not lost.
+func TestCooldown_IdleTriggerDuringCooldownEventuallyRuns(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
+	runner := &lifecycleMockRunner{output: claudeJSON(100, 50)}
+	cfg := watcher.Config{
+		AllowedAgents: []string{"mike"},
+		TurnCooldown:  200 * time.Millisecond,
+	}
+	lm := watcher.NewLifecycleManager(db, cfg, runner)
+	defer lm.Close()
+
+	if r := lm.TriggerAgent("mike"); r != watcher.TriggerStarted {
+		t.Fatalf("first trigger: got %v, want TriggerStarted", r)
+	}
+	waitForLifecycleRunCount(t, runner, 1)
+	time.Sleep(20 * time.Millisecond)
+
+	if r := lm.TriggerAgent("mike"); r != watcher.TriggerCooldown {
+		t.Fatalf("cooldown trigger: got %v, want TriggerCooldown", r)
+	}
+
+	waitForLifecycleRunCount(t, runner, 2)
+}
+
+// TestCooldown_IdleCooldownTriggersDedup verifies that repeated triggers while
+// a delayed cooldown turn is already scheduled coalesce into that one turn.
+func TestCooldown_IdleCooldownTriggersDedup(t *testing.T) {
+	db := testutil.NewTestDBWithModels(t, &watcher.TurnMetric{})
+	runner := &lifecycleMockRunner{output: claudeJSON(100, 50)}
+	cfg := watcher.Config{
+		AllowedAgents: []string{"mike"},
+		TurnCooldown:  150 * time.Millisecond,
+	}
+	lm := watcher.NewLifecycleManager(db, cfg, runner)
+	defer lm.Close()
+
+	if r := lm.TriggerAgent("mike"); r != watcher.TriggerStarted {
+		t.Fatalf("first trigger: got %v, want TriggerStarted", r)
+	}
+	waitForLifecycleRunCount(t, runner, 1)
+	time.Sleep(20 * time.Millisecond)
+
+	if r := lm.TriggerAgent("mike"); r != watcher.TriggerCooldown {
+		t.Fatalf("first cooldown trigger: got %v, want TriggerCooldown", r)
+	}
+	if r := lm.TriggerAgent("mike"); r != watcher.TriggerCooldown {
+		t.Fatalf("second cooldown trigger: got %v, want TriggerCooldown", r)
+	}
+	if r := lm.TriggerAgent("mike"); r != watcher.TriggerCooldown {
+		t.Fatalf("third cooldown trigger: got %v, want TriggerCooldown", r)
+	}
+
+	waitForLifecycleRunCount(t, runner, 2)
+	time.Sleep(250 * time.Millisecond)
+	if got := runner.runCount(); got != 2 {
+		t.Fatalf("cooldown triggers should coalesce into one delayed run; got %d runs", got)
 	}
 }
 

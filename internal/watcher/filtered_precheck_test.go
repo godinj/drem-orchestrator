@@ -40,6 +40,9 @@ func TestFilteredPrecheck_RelevantEventReturnsTrue(t *testing.T) {
 	if !fp.HasWork("mike") {
 		t.Error("HasWork(mike) = false, want true (relevant event exists)")
 	}
+	if len(bus.ackedIDs) != 1 || bus.ackedIDs[0] != "e1" {
+		t.Fatalf("acked IDs = %v, want [e1]", bus.ackedIDs)
+	}
 }
 
 // TestFilteredPrecheck_IrrelevantEventReturnsFalse verifies that HasWork
@@ -118,6 +121,9 @@ func TestFilteredPrecheck_UnknownAgentChecksAllEvents(t *testing.T) {
 	if !fp.HasWork("unknown-agent") {
 		t.Error("HasWork(unknown-agent) = false, want true (fallback to all events)")
 	}
+	if len(bus.ackedIDs) != 1 || bus.ackedIDs[0] != "e1" {
+		t.Fatalf("acked IDs = %v, want [e1]", bus.ackedIDs)
+	}
 }
 
 // TestFilteredPrecheck_UnknownAgentNoEventsReturnsFalse verifies that an
@@ -149,9 +155,10 @@ func TestFilteredPrecheck_NoEventsNoInbox(t *testing.T) {
 	}
 }
 
-// TestFilteredPrecheck_DoesNotAckRelevantEvents verifies that relevant
-// events are NOT auto-acked (only non-relevant ones are).
-func TestFilteredPrecheck_DoesNotAckRelevantEvents(t *testing.T) {
+// TestFilteredPrecheck_AcksRelevantAndNonRelevantEvents verifies that relevant
+// events are acked when consumed as work, while non-relevant events are still
+// auto-acked to avoid pileups.
+func TestFilteredPrecheck_AcksRelevantAndNonRelevantEvents(t *testing.T) {
 	base := t.TempDir()
 	bus := &mockFilteredBus{
 		filteredUnacked: []watcher.EventInfo{{ID: "e1", Type: "task_status_changed"}},
@@ -164,11 +171,14 @@ func TestFilteredPrecheck_DoesNotAckRelevantEvents(t *testing.T) {
 	fp := watcher.NewFilteredPrecheck(base, bus)
 	fp.HasWork("mike")
 
-	// Only e2 should be auto-acked, not e1
-	if len(bus.ackedIDs) != 1 {
-		t.Fatalf("auto-acked %d events, want 1", len(bus.ackedIDs))
+	if len(bus.ackedIDs) != 2 {
+		t.Fatalf("acked %d events, want 2", len(bus.ackedIDs))
 	}
-	if bus.ackedIDs[0] != "e2" {
-		t.Errorf("auto-acked %q, want e2", bus.ackedIDs[0])
+	acked := make(map[string]bool)
+	for _, id := range bus.ackedIDs {
+		acked[id] = true
+	}
+	if !acked["e1"] || !acked["e2"] {
+		t.Errorf("acked IDs = %v, want e1 and e2", bus.ackedIDs)
 	}
 }

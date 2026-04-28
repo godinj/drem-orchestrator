@@ -387,10 +387,9 @@ func (r *claudeCommandRunner) Run(ctx context.Context, agent string) ([]byte, in
 // cancelled.
 //
 // For each allowed agent, it calls bus.UnackedDeliveries. If there are unacked
-// events, it collects the agent name and acks the events so they are not
-// re-delivered on the next poll cycle. After checking all agents, if any had
-// pending deliveries, the collected agent names are sent as a single
-// notification batch.
+// events, it collects the agent name. Acking is intentionally left to the
+// precheck that consumes those events as actionable work, so notification alone
+// cannot hide event-only work from the turn gate.
 func pollDeliveries(ctx context.Context, bus *eventbus.Bus, allowedAgents []string, notifications chan<- []string) {
 	const pollInterval = 2 * time.Second
 
@@ -410,16 +409,6 @@ func pollDeliveries(ctx context.Context, bus *eventbus.Bus, allowedAgents []stri
 					continue
 				}
 				if len(unacked) == 0 {
-					continue
-				}
-
-				// Collect event IDs for acking.
-				ids := make([]string, len(unacked))
-				for i, ev := range unacked {
-					ids[i] = ev.ID
-				}
-				if err := bus.Ack(agent, ids); err != nil {
-					log.Printf("watcher: ack deliveries for %s: %v", agent, err)
 					continue
 				}
 

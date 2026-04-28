@@ -26,17 +26,30 @@ import (
 // cadence as mike/alex/seth.
 var rescanPersonas = []string{"mike", "alex", "seth", "kyle"}
 
-const defaultMaxRescanFilesPerPersona = 25
+// DefaultMaxRescanFilesPerPersona is the safe bounded-drain default for rescan.
+const DefaultMaxRescanFilesPerPersona = 25
 
 // RescanResult is the JSON body returned by POST /rescan. The field
 // names are stable — tooling may parse them.
 type RescanResult struct {
-	Scanned     int      `json:"scanned"`
-	Delivered   int      `json:"delivered"`
-	Skipped     int      `json:"skipped"`
-	Suppressed  int      `json:"suppressed"`
-	Quarantined int      `json:"quarantined"`
-	Errors      []string `json:"errors"`
+	Scanned     int                            `json:"scanned"`
+	Delivered   int                            `json:"delivered"`
+	Skipped     int                            `json:"skipped"`
+	Suppressed  int                            `json:"suppressed"`
+	Quarantined int                            `json:"quarantined"`
+	Errors      []string                       `json:"errors"`
+	Personas    map[string]RescanPersonaResult `json:"personas,omitempty"`
+}
+
+// RescanPersonaResult is additive per-source detail for rescan observability.
+type RescanPersonaResult struct {
+	Scanned                 int   `json:"scanned"`
+	Delivered               int   `json:"delivered"`
+	Skipped                 int   `json:"skipped"`
+	Suppressed              int   `json:"suppressed"`
+	Quarantined             int   `json:"quarantined"`
+	Errors                  int   `json:"errors"`
+	OldestPendingAgeSeconds int64 `json:"oldest_pending_age_seconds"`
 }
 
 // Rescan walks each /csuite/<persona>/outbox/ directory and, for
@@ -58,7 +71,7 @@ type RescanResult struct {
 // Errors from individual files are collected into result.Errors and
 // do not abort the walk.
 func (h *handler) Rescan() RescanResult {
-	var res RescanResult
+	res := RescanResult{Personas: make(map[string]RescanPersonaResult, len(rescanPersonas))}
 	if h.cfg.Ledger == nil {
 		res.Errors = append(res.Errors, "rescan aborted: no ledger configured")
 		return res
@@ -73,6 +86,15 @@ func (h *handler) Rescan() RescanResult {
 // unledgered files. Errors are recorded in res.Errors; the walk
 // continues.
 func (h *handler) rescanPersona(src string, res *RescanResult) {
+	persona := RescanPersonaResult{}
+	defer func() {
+		res.Personas[src] = persona
+	}()
+	recordErr := func(format string, args ...any) {
+		res.Errors = append(res.Errors, fmt.Sprintf(format, args...))
+		persona.Errors++
+	}
+
 	outboxDir := resolveCsuitePath("/csuite/" + src + "/outbox")
 	entries, err := os.ReadDir(outboxDir)
 	if err != nil {
@@ -82,7 +104,7 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 			// persona.
 			return
 		}
-		res.Errors = append(res.Errors, fmt.Sprintf("%s: read outbox: %v", src, err))
+		recordErr("%s: read outbox: %v", src, err)
 		return
 	}
 
@@ -103,8 +125,7 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 		}
 		info, err := ent.Info()
 		if err != nil {
-			res.Errors = append(res.Errors,
-				fmt.Sprintf("%s/%s: stat: %v", src, name, err))
+			recordErr("%s/%s: stat: %v", src, name, err)
 			continue
 		}
 		cands = append(cands, candidate{name: name, mtime: info.ModTime()})
@@ -115,19 +136,30 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 		}
 		return cands[i].name < cands[j].name
 	})
+	if len(cands) > 0 {
+		now := time.Now()
+		if h.clock != nil {
+			now = h.clock()
+		}
+		age := now.Sub(cands[0].mtime)
+		if age < 0 {
+			age = 0
+		}
+		persona.OldestPendingAgeSeconds = int64(age.Seconds())
+	}
 	if limit := h.maxRescanFilesPerPersona(); limit >= 0 && len(cands) > limit {
 		cands = cands[:limit]
 	}
 
 	for _, c := range cands {
 		res.Scanned++
+		persona.Scanned++
 		protocolPath := "/csuite/" + src + "/outbox/" + c.name
 		realPath := resolveCsuitePath(protocolPath)
 
 		data, err := os.ReadFile(realPath) //nolint:gosec // walk-scoped path
 		if err != nil {
-			res.Errors = append(res.Errors,
-				fmt.Sprintf("%s: read %s: %v", src, c.name, err))
+			recordErr("%s: read %s: %v", src, c.name, err)
 			continue
 		}
 		sum := sha256.Sum256(data)
@@ -138,11 +170,11 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 		// delivered/ may have failed, but the ledger is
 		// authoritative.
 		if _, found, err := h.cfg.Ledger.Lookup(sha); err != nil {
-			res.Errors = append(res.Errors,
-				fmt.Sprintf("%s: ledger lookup %s: %v", src, c.name, err))
+			recordErr("%s: ledger lookup %s: %v", src, c.name, err)
 			continue
 		} else if found {
 			res.Skipped++
+			persona.Skipped++
 			h.logger().Printf("rescan: skip (ledger hit) %s/%s sha=%s", src, c.name, sha)
 			continue
 		}
@@ -155,19 +187,18 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 			EmittedAt:     emittedAt,
 		}
 		if err := ValidateRequest(&req); err != nil {
-			res.Errors = append(res.Errors,
-				fmt.Sprintf("%s: validate %s: %v", src, c.name, err))
+			recordErr("%s: validate %s: %v", src, c.name, err)
 			continue
 		}
 		class, err := ClassifyFile(protocolPath)
 		if errors.Is(err, ErrMultiRecipient) {
 			res.Quarantined++
+			persona.Quarantined++
 			h.logger().Printf("rescan: multi-recipient rejected %s/%s", src, c.name)
 			continue
 		}
 		if err != nil {
-			res.Errors = append(res.Errors,
-				fmt.Sprintf("%s: classify %s: %v", src, c.name, err))
+			recordErr("%s: classify %s: %v", src, c.name, err)
 			continue
 		}
 
@@ -181,17 +212,16 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 				DestPath:      "",
 				DeliveredAt:   time.Now().UTC(),
 			}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
-				res.Errors = append(res.Errors,
-					fmt.Sprintf("%s: suppress ledger %s: %v", src, c.name, err))
+				recordErr("%s: suppress ledger %s: %v", src, c.name, err)
 				continue
 			}
 			res.Suppressed++
+			persona.Suppressed++
 			h.logger().Printf("rescan: suppressed %s/%s reason=%q", src, c.name, class.Reason)
 		case ClassQuarantine:
 			dest := quarantinePath(req.SourcePersona, req.OutboxPath)
 			if err := atomicCopyFile(req.OutboxPath, dest); err != nil {
-				res.Errors = append(res.Errors,
-					fmt.Sprintf("%s: quarantine write %s: %v", src, c.name, err))
+				recordErr("%s: quarantine write %s: %v", src, c.name, err)
 				continue
 			}
 			if err := h.cfg.Ledger.Insert(Delivery{
@@ -202,11 +232,11 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 				DestPath:      dest,
 				DeliveredAt:   time.Now().UTC(),
 			}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
-				res.Errors = append(res.Errors,
-					fmt.Sprintf("%s: quarantine ledger %s: %v", src, c.name, err))
+				recordErr("%s: quarantine ledger %s: %v", src, c.name, err)
 				continue
 			}
 			res.Quarantined++
+			persona.Quarantined++
 			h.logger().Printf("rescan: quarantine %s/%s reason=%q", src, c.name, class.Reason)
 		case ClassPersona, ClassOperator:
 			// ClassOperator is destination-only: a persona wrote a
@@ -218,16 +248,15 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 			// from. See plans/drem-csuite-send-cli.md §Phase 1.
 			destPath, err := h.deliverToInbox(req, class)
 			if err != nil {
-				res.Errors = append(res.Errors,
-					fmt.Sprintf("%s: deliver %s: %v", src, c.name, err))
+				recordErr("%s: deliver %s: %v", src, c.name, err)
 				continue
 			}
 			res.Delivered++
+			persona.Delivered++
 			h.logger().Printf("rescan: delivered source=%s dest=%s sha=%s dest_path=%s",
 				src, class.Dest, sha, destPath)
 		default:
-			res.Errors = append(res.Errors,
-				fmt.Sprintf("%s: unknown class %q for %s", src, class.Class, c.name))
+			recordErr("%s: unknown class %q for %s", src, class.Class, c.name)
 		}
 	}
 }
@@ -265,6 +294,11 @@ func RescanOnce(cfg Config) RescanResult {
 	}
 	logger.Printf("rescan: scanned=%d delivered=%d skipped=%d quarantined=%d errors=%d",
 		res.Scanned, res.Delivered, res.Skipped, res.Quarantined, len(res.Errors))
+	for _, src := range rescanPersonas {
+		p := res.Personas[src]
+		logger.Printf("rescan: persona=%s scanned=%d delivered=%d skipped=%d quarantined=%d errors=%d oldest_pending_age_seconds=%d",
+			src, p.Scanned, p.Delivered, p.Skipped, p.Quarantined, p.Errors, p.OldestPendingAgeSeconds)
+	}
 	return res
 }
 
@@ -273,7 +307,7 @@ func (h *handler) maxRescanFilesPerPersona() int {
 		return -1
 	}
 	if h.cfg.MaxRescanFilesPerPersona == 0 {
-		return defaultMaxRescanFilesPerPersona
+		return DefaultMaxRescanFilesPerPersona
 	}
 	return h.cfg.MaxRescanFilesPerPersona
 }

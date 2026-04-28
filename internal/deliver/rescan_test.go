@@ -113,6 +113,34 @@ func TestRescan_BoundsFilesPerPersona(t *testing.T) {
 	if len(entries) != 2 {
 		t.Fatalf("mike inbox entries = %d, want 2", len(entries))
 	}
+	if got := res.Personas["alex"].Scanned; got != 2 {
+		t.Fatalf("alex scanned = %d, want 2 (got %+v)", got, res.Personas["alex"])
+	}
+}
+
+func TestRescan_DefaultBoundsFilesPerPersona(t *testing.T) {
+	root := newCsuiteTree(t)
+	base := time.Date(2026, 4, 21, 16, 0, 0, 0, time.UTC)
+	for i := 0; i < DefaultMaxRescanFilesPerPersona+1; i++ {
+		body := []byte(fmt.Sprintf("---\nfrom: alex\nto: mike\n---\n\nmsg %d\n", i))
+		path, _ := stageOutbox(t, root, "alex", fmt.Sprintf("m%02d.md", i), body)
+		at := base.Add(time.Duration(i) * time.Second)
+		if err := os.Chtimes(path, at, at); err != nil {
+			t.Fatalf("chtimes: %v", err)
+		}
+	}
+
+	l := openTestLedger(t)
+	h := &handler{cfg: Config{Token: "secret", Ledger: l}, clock: func() time.Time { return base.Add(time.Hour) }}
+
+	res := h.Rescan()
+	if res.Scanned != DefaultMaxRescanFilesPerPersona {
+		t.Fatalf("scanned = %d, want default cap %d (got %+v)", res.Scanned, DefaultMaxRescanFilesPerPersona, res)
+	}
+	if res.Personas["alex"].OldestPendingAgeSeconds != int64(time.Hour.Seconds()) {
+		t.Fatalf("alex oldest age = %d, want %d",
+			res.Personas["alex"].OldestPendingAgeSeconds, int64(time.Hour.Seconds()))
+	}
 }
 
 // TestRescan_SkipsAlreadyDelivered verifies the skip-BEFORE-deliver
@@ -428,6 +456,9 @@ func TestRescanEndpoint_HappyPathJSON(t *testing.T) {
 	if res.Scanned != 1 || res.Delivered != 1 {
 		t.Errorf("res = %+v, want scanned=1 delivered=1", res)
 	}
+	if res.Personas["alex"].Scanned != 1 || res.Personas["alex"].Delivered != 1 {
+		t.Errorf("alex res = %+v, want scanned=1 delivered=1", res.Personas["alex"])
+	}
 }
 
 // TestRescanEndpoint_WrongMethod rejects GET with 405.
@@ -545,6 +576,9 @@ func TestRescanOnce_LogsResult(t *testing.T) {
 	// Log line should reference the outcome.
 	if !strings.Contains(buf.String(), "rescan:") {
 		t.Errorf("log missing rescan prefix: %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "persona=alex") || !strings.Contains(buf.String(), "oldest_pending_age_seconds=") {
+		t.Errorf("log missing per-persona detail: %q", buf.String())
 	}
 }
 

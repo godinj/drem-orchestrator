@@ -250,3 +250,25 @@ func TestParseRescanInterval(t *testing.T) {
 		})
 	}
 }
+
+func TestParseMaxRescanFilesPerPersona(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want int
+	}{
+		{"empty falls back to safe default", "", 25},
+		{"malformed falls back to safe default", "many", 25},
+		{"zero falls back to safe default", "0", 25},
+		{"negative falls back to safe default", "-1", 25},
+		{"positive override", "7", 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := parseMaxRescanFilesPerPersona(tt.env)
+			if got != tt.want {
+				t.Errorf("parseMaxRescanFilesPerPersona(%q) = %d, want %d", tt.env, got, tt.want)
+			}
+		})
+	}
+}

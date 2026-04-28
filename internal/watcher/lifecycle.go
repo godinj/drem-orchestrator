@@ -44,6 +44,7 @@ type LifecycleManager struct {
 	mu      sync.Mutex
 	running map[string]bool
 	queued  map[string]bool
+	delayed map[string]bool
 	wg      sync.WaitGroup
 	ctx     context.Context
 	cancel  context.CancelFunc
@@ -158,6 +159,7 @@ func NewLifecycleManager(db *gorm.DB, cfg Config, runner CommandRunner) *Lifecyc
 		runner:      runner,
 		running:     make(map[string]bool),
 		queued:      make(map[string]bool),
+		delayed:     make(map[string]bool),
 		ctx:         ctx,
 		cancel:      cancel,
 		lastTurnEnd: make(map[string]time.Time),
@@ -178,20 +180,20 @@ func (m *LifecycleManager) TriggerAgent(name string) TriggerResult {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check if agent is in cooldown period
-	if m.cfg.TurnCooldown != 0 {
-		if lastEnd, ok := m.lastTurnEnd[name]; ok {
-			cooldownDuration := m.cooldownDuration()
-			if time.Since(lastEnd) < cooldownDuration {
-				// Agent is in cooldown period
-				return Cooldown
-			}
-		}
-	}
-
 	if m.running[name] {
+		if m.delayed[name] {
+			return Cooldown
+		}
 		m.queued[name] = true
 		return Queued
+	}
+
+	if remaining := m.remainingCooldownLocked(name); remaining > 0 {
+		m.running[name] = true
+		m.delayed[name] = true
+		m.wg.Add(1)
+		go m.runTurnAfterDelay(name, remaining)
+		return Cooldown
 	}
 
 	m.running[name] = true
@@ -284,9 +286,10 @@ func (m *LifecycleManager) drainQueue(agent string) {
 			m.lastTurnEnd[agent] = time.Now()
 
 			// Schedule the delayed turn
+			m.delayed[agent] = true
 			m.wg.Add(1)
 			m.mu.Unlock()
-			go m.runTurnAfterDelay(agent)
+			go m.runTurnAfterDelay(agent, m.cooldownDuration())
 		} else {
 			// No cooldown - proceed immediately
 			m.wg.Add(1)
@@ -305,24 +308,44 @@ func (m *LifecycleManager) drainQueue(agent string) {
 
 // runTurnAfterDelay waits for the cooldown period to expire and then runs the turn.
 // It is responsible for handling the cooldown delay between agent turns.
-func (m *LifecycleManager) runTurnAfterDelay(agent string) {
-	defer m.wg.Done()
-
-	cooldownDuration := m.cooldownDuration()
-
+func (m *LifecycleManager) runTurnAfterDelay(agent string, delay time.Duration) {
 	// Wait for the cooldown period to expire or context to be cancelled
-	timer := time.NewTimer(cooldownDuration)
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
 	select {
 	case <-timer.C:
 		// Time is up, run the turn
+		m.mu.Lock()
+		delete(m.delayed, agent)
+		m.mu.Unlock()
 		m.runTurnAsync(agent)
 	case <-m.ctx.Done():
 		// Context cancelled, probably due to Close() being called
-		// We don't need to do anything special here, just return
+		m.mu.Lock()
+		delete(m.queued, agent)
+		delete(m.delayed, agent)
+		delete(m.running, agent)
+		m.mu.Unlock()
+		m.wg.Done()
 		return
 	}
+}
+
+// remainingCooldownLocked returns the cooldown left for agent. m.mu must be held.
+func (m *LifecycleManager) remainingCooldownLocked(agent string) time.Duration {
+	if m.cfg.TurnCooldown == 0 {
+		return 0
+	}
+	lastEnd, ok := m.lastTurnEnd[agent]
+	if !ok {
+		return 0
+	}
+	remaining := m.cooldownDuration() - time.Since(lastEnd)
+	if remaining <= 0 {
+		return 0
+	}
+	return remaining
 }
 
 // cooldownDuration returns the cooldown duration to use for the turn.
