@@ -82,6 +82,7 @@ func (p *Poller) Run(ctx context.Context) error {
 		slog.Duration("poll_interval", p.cfg.PollInterval),
 		slog.Duration("claude_timeout", p.cfg.ClaudeTimeout),
 	)
+	p.writeHeartbeat()
 
 	// Process once immediately so the first tick is not delayed by
 	// PollInterval on container startup; this also makes tests faster.
@@ -100,6 +101,7 @@ func (p *Poller) Run(ctx context.Context) error {
 			p.cfg.Logger.Info("persona poller stopping", p.personaLabel)
 			return nil
 		case <-ticker.C:
+			p.writeHeartbeat()
 			if err := p.scanOnce(ctx); err != nil {
 				if ctx.Err() != nil {
 					return nil
@@ -107,6 +109,14 @@ func (p *Poller) Run(ctx context.Context) error {
 				p.cfg.Logger.Error("scan failed", p.personaLabel, slog.Any("err", err))
 			}
 		}
+	}
+}
+
+func (p *Poller) writeHeartbeat() {
+	path := filepath.Join(filepath.Dir(p.cfg.StateFile), "heartbeat")
+	stamp := p.cfg.Now().UTC().Format(time.RFC3339) + "\n"
+	if err := os.WriteFile(path, []byte(stamp), 0o644); err != nil {
+		p.cfg.Logger.Warn("write heartbeat", p.personaLabel, slog.Any("err", err))
 	}
 }
 
@@ -177,6 +187,11 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 		// (another hand touched it); log and let the next tick re-scan.
 		return fmt.Errorf("read %q: %w", inboxPath, err)
 	}
+	if err := p.writeState(name, "processing", 0, 0); err != nil {
+		p.cfg.Logger.Warn("write processing state", p.personaLabel,
+			slog.String("file", name),
+			slog.Any("err", err))
+	}
 
 	// Snapshot the outbox BEFORE Claude runs. The diff after Claude
 	// returns tells us whether Claude used its Write tool to emit a
@@ -208,7 +223,7 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 		"--agent", "build",
 		"--dir", "/home/drem",
 	}
-	model := firstNonEmpty(os.Getenv("DREM_OPENCODE_MODEL"), os.Getenv("DREM_CODEX_MODEL"), "openai/gpt-5.4-mini")
+	model := p.resolveModel()
 	if model != "" {
 		args = append(args, "--model", model)
 	}

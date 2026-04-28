@@ -11,7 +11,7 @@ import (
 )
 
 // knownAgents is the fixed set of C-Suite agents to monitor.
-var knownAgents = []string{"kyle", "mike", "alex", "seth"}
+var knownAgents = KnownPersonas
 
 // Heartbeat freshness thresholds for deriving AgentMonStatus.
 const (
@@ -81,13 +81,19 @@ func (d *DiskSnapshotSource) readAgent(name string, now time.Time) CsuiteAgent {
 		return agent
 	}
 
-	fm := parseFrontmatter(string(data))
+	fm := parseStateFields(string(data))
 	if fm == nil {
 		return agent
 	}
 
-	if hbStr, ok := fm["last_heartbeat"]; ok {
+	if hbStr, ok := firstStateValue(fm, "last_heartbeat", "updated_at"); ok {
 		if t, err := time.Parse(time.RFC3339, hbStr); err == nil {
+			agent.HeartbeatAt = &t
+			agent.Status = statusFromHeartbeat(t, now)
+		}
+	}
+	if t, ok := d.heartbeatFileTime(name); ok {
+		if agent.HeartbeatAt == nil || t.After(*agent.HeartbeatAt) {
 			agent.HeartbeatAt = &t
 			agent.Status = statusFromHeartbeat(t, now)
 		}
@@ -101,9 +107,56 @@ func (d *DiskSnapshotSource) readAgent(name string, now time.Time) CsuiteAgent {
 
 	if act, ok := fm["current_activity"]; ok {
 		agent.CurrentActivity = act
+	} else {
+		agent.CurrentActivity = activityFromPollerState(fm)
 	}
 
 	return agent
+}
+
+func (d *DiskSnapshotSource) heartbeatFileTime(name string) (time.Time, bool) {
+	path := filepath.Join(d.dir, name, "heartbeat")
+	data, readErr := os.ReadFile(path)
+	if readErr == nil {
+		if t, err := time.Parse(time.RFC3339, strings.TrimSpace(string(data))); err == nil {
+			return t, true
+		}
+	}
+	info, statErr := os.Stat(path)
+	if statErr != nil {
+		return time.Time{}, false
+	}
+	return info.ModTime(), true
+}
+
+func firstStateValue(fields map[string]string, keys ...string) (string, bool) {
+	for _, key := range keys {
+		if val, ok := fields[key]; ok {
+			return val, true
+		}
+	}
+	return "", false
+}
+
+func activityFromPollerState(fields map[string]string) string {
+	status := fields["last_status"]
+	file := fields["last_processed"]
+	if status == "processing" {
+		if file != "" {
+			return "replying to " + file
+		}
+		return "replying"
+	}
+	if status == "retrying" || status == "exhausted" {
+		if file != "" {
+			return status + " " + file
+		}
+		return status
+	}
+	if file != "" {
+		return "last processed " + file
+	}
+	return ""
 }
 
 // countInbox counts .md files (not .md.signal, not subdirectories) in the
@@ -166,6 +219,32 @@ func parseFrontmatter(content string) map[string]string {
 		}
 	}
 
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func parseStateFields(content string) map[string]string {
+	if fm := parseFrontmatter(content); fm != nil {
+		return fm
+	}
+	result := make(map[string]string)
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		idx := strings.Index(trimmed, ":")
+		if idx < 0 {
+			continue
+		}
+		key := strings.TrimSpace(trimmed[:idx])
+		val := strings.TrimSpace(trimmed[idx+1:])
+		if key != "" {
+			result[key] = val
+		}
+	}
 	if len(result) == 0 {
 		return nil
 	}

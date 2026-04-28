@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
+	"github.com/godinj/drem-orchestrator/internal/csuite/diskstore"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
@@ -239,6 +242,31 @@ func TestPostMessage_CompactMobileShape(t *testing.T) {
 	}
 	if msg.Type != string(csuite.MessageTypeRequest) {
 		t.Errorf("type = %q, want %q", msg.Type, csuite.MessageTypeRequest)
+	}
+}
+
+func TestPostMessage_DiskStoreWritesSingleInboxFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	store := diskstore.New(filepath.Join(home, ".drem-csuite"))
+	h := messagesHandler(store, nil)
+
+	body := `{"from_agent":"operator","to_agent":"kyle","subject":"chat","body":"status"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/messages", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201; body: %s", w.Code, w.Body.String())
+	}
+
+	entries, err := filepath.Glob(filepath.Join(home, ".drem-csuite", "kyle", "inbox", "*.md"))
+	if err != nil {
+		t.Fatalf("glob inbox: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("inbox files = %d (%s), want 1", len(entries), strings.Join(entries, ","))
 	}
 }
 

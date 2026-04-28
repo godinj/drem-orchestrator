@@ -21,6 +21,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/csuite"
 	"github.com/godinj/drem-orchestrator/internal/csuite/diskstore"
+	"github.com/godinj/drem-orchestrator/internal/personacontrol"
 	"github.com/godinj/drem-orchestrator/internal/serve"
 )
 
@@ -79,10 +80,11 @@ func newBridgeServer(cfg bridgeConfig, stderr io.Writer) (*serve.Server, func(),
 	diskRoot := expandTilde(cfg.DiskRoot)
 	store := diskstore.New(diskRoot)
 	srv := serve.New(serve.Config{
-		Token:       cfg.Token,
-		DisableAuth: cfg.NoAuth,
-		Addr:        cfg.Addr,
-		Store:       store,
+		Token:          cfg.Token,
+		DisableAuth:    cfg.NoAuth,
+		Addr:           cfg.Addr,
+		Store:          store,
+		PersonaControl: personacontrol.NewFromEnv(nil),
 	})
 	return srv, cleanup, nil
 }

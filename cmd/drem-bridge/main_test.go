@@ -381,6 +381,62 @@ hello kyle
 	}
 }
 
+func TestBridgeServerMountsPersonaControl(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	t.Setenv("DREM_PROJECT_COMPOSE", "")
+	t.Setenv("DREM_DOCKER_COMPOSE_CMD", "")
+
+	var stderr bytes.Buffer
+	srv, cleanup, err := newBridgeServer(bridgeConfig{
+		Token:    "test-secret",
+		Addr:     "127.0.0.1:0",
+		DBPath:   dbPath,
+		DiskRoot: root,
+	}, &stderr)
+	if err != nil {
+		t.Fatalf("newBridgeServer: %v; stderr: %s", err, stderr.String())
+	}
+	t.Cleanup(cleanup)
+
+	if err := srv.Start(); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	t.Cleanup(func() { srv.Stop() })
+
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s/api/personas/containers", srv.ListenAddr()), nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer test-secret")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET /api/personas/containers: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var body struct {
+		Available bool `json:"available"`
+		Items     []struct {
+			Target string `json:"target"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Available {
+		t.Fatal("available = true, want false without DREM_PROJECT_COMPOSE")
+	}
+	if len(body.Items) != 4 {
+		t.Fatalf("items len = %d, want 4", len(body.Items))
+	}
+}
+
 func writeDiskFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

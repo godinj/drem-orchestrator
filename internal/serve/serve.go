@@ -104,6 +104,8 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux.Handle("/api/inbox", s.auth(inboxQueueHandler(s.cfg.Store)))
 	mux.Handle("/api/inbox/archive", s.auth(inboxQueueActionHandler(s.cfg.Store, inboxQueueActionArchive)))
 	mux.Handle("/api/inbox/ignore", s.auth(inboxQueueActionHandler(s.cfg.Store, inboxQueueActionIgnore)))
+	mux.Handle("/api/personas/models", s.auth(personaModelsHandler(s.cfg.Store)))
+	mux.Handle("/api/personas/model", s.auth(personaModelHandler(s.cfg.Store)))
 	if s.cfg.PersonaControl != nil {
 		mux.Handle("/api/personas/containers", s.auth(personaContainersHandler(s.cfg.PersonaControl)))
 		mux.Handle("/api/personas/control", s.auth(personaControlHandler(s.cfg.PersonaControl)))

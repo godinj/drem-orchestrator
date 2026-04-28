@@ -48,6 +48,13 @@ func (m *Model) renderView() string {
 
 func (m *Model) renderHeader() string {
 	title := styleHeader.Render("C-Suite Chat")
+	if m.mode == modeInboxQueue {
+		title = styleHeader.Render(fmt.Sprintf("C-Suite Chat / Inbox: %s", m.inboxQueueAgent))
+	} else if m.mode == modePersonaControl {
+		title = styleHeader.Render("C-Suite Chat / Control")
+	} else if m.mode == modeModelSelector {
+		title = styleHeader.Render(fmt.Sprintf("C-Suite Chat / Model: %s", m.activeAgentName()))
+	}
 
 	var status string
 	switch m.connState {
@@ -59,12 +66,27 @@ func (m *Model) renderHeader() string {
 		status = styleDisconnected.Render("WS:--")
 	}
 
+	status = m.renderModelStatus() + " " + status
+
 	gap := m.width - lipgloss.Width(title) - lipgloss.Width(status)
 	if gap < 1 {
 		gap = 1
 	}
 
 	return title + strings.Repeat(" ", gap) + status
+}
+
+func (m *Model) renderModelStatus() string {
+	if len(m.agents) == 0 {
+		return styleTimestamp.Render("model:-")
+	}
+	if m.modelSetting {
+		return styleConnecting.Render("model:saving")
+	}
+	if m.modelsLoading {
+		return styleConnecting.Render("model:...")
+	}
+	return styleTimestamp.Render("model:" + personaModelLabel(m.activePersonaModel()))
 }
 
 func (m *Model) renderTabs() string {
@@ -74,7 +96,10 @@ func (m *Model) renderTabs() string {
 
 	var tabs []string
 	for i, agent := range m.agents {
-		label := agent.Name
+		label := agent.Name + agentStatusSuffix(agent)
+		if agent.AckCount > 0 {
+			label += styleTimestamp.Render(fmt.Sprintf(" ack:%d", agent.AckCount))
+		}
 		if count := m.unread[agent.Name]; count > 0 {
 			label += styleTabBadge.Render(fmt.Sprintf("(%d)", count))
 		}
@@ -87,16 +112,45 @@ func (m *Model) renderTabs() string {
 	return strings.Join(tabs, " ")
 }
 
+func agentStatusSuffix(agent bridgeclient.Agent) string {
+	if strings.Contains(strings.ToLower(agent.CurrentActivity), "replying") || strings.Contains(strings.ToLower(agent.CurrentActivity), "processing") {
+		return styleConnecting.Render(" replying")
+	}
+	switch agent.Status {
+	case "online":
+		return styleConnected.Render(" online")
+	case "stale":
+		return styleConnecting.Render(" stale")
+	case "offline":
+		return styleDisconnected.Render(" offline")
+	default:
+		return ""
+	}
+}
+
 func (m *Model) renderHRule() string {
 	return styleHRule.Render(strings.Repeat("─", m.width))
 }
 
 func (m *Model) renderQuickActions() string {
+	if m.mode == modeInboxQueue {
+		return m.renderInboxQueueActions()
+	}
+	if m.mode == modePersonaControl {
+		return m.renderPersonaControlActions()
+	}
+
 	var parts []string
 	for _, qa := range m.quickActions {
 		label := fmt.Sprintf("%s:%s", qa.key.Help().Key, qa.label)
 		parts = append(parts, styleQuickAction.Render(label))
 	}
+	parts = append(parts,
+		styleQuickAction.Render("ctrl+s/F6:inbox"),
+		styleQuickAction.Render("ctrl+d/F7:control"),
+		styleQuickAction.Render("F8:model"),
+		styleQuickAction.Render("/inbox /control /model"),
+	)
 
 	line := strings.Join(parts, " ")
 
@@ -108,9 +162,78 @@ func (m *Model) renderQuickActions() string {
 	return line
 }
 
+func (m *Model) renderPersonaControlActions() string {
+	parts := []string{
+		styleQuickAction.Render("r:refresh"),
+		styleQuickAction.Render("↑/↓:select"),
+		styleQuickAction.Render("s:stop"),
+		styleQuickAction.Render("S:start"),
+		styleQuickAction.Render("R:recreate"),
+		styleQuickAction.Render("A:all"),
+		styleQuickAction.Render("esc:chat"),
+	}
+	line := strings.Join(parts, " ")
+	if m.controlPendingAction != "" {
+		line += lipgloss.NewStyle().Foreground(colorYellow).Render(fmt.Sprintf(" press %s again to confirm", m.controlPendingActionKey()))
+	}
+	if m.err != nil {
+		line += lipgloss.NewStyle().Foreground(colorRed).Render(fmt.Sprintf(" err: %s", truncate(m.err.Error(), 40)))
+	}
+	return line
+}
+
+func (m *Model) controlPendingActionKey() string {
+	switch m.controlPendingAction {
+	case "start":
+		return "S"
+	case "recreate":
+		return "R"
+	default:
+		return "s"
+	}
+}
+
+func (m *Model) renderInboxQueueActions() string {
+	parts := []string{
+		styleQuickAction.Render("r:refresh"),
+		styleQuickAction.Render("↑/↓:select"),
+		styleQuickAction.Render("a:archive"),
+		styleQuickAction.Render("x:ignore"),
+		styleQuickAction.Render("esc:chat"),
+	}
+	line := strings.Join(parts, " ")
+	if m.inboxPendingAction != "" {
+		line += lipgloss.NewStyle().Foreground(colorYellow).Render(fmt.Sprintf(" press %s again to confirm", m.inboxPendingActionKey()))
+	}
+	if m.err != nil {
+		line += lipgloss.NewStyle().Foreground(colorRed).Render(fmt.Sprintf(" err: %s", truncate(m.err.Error(), 40)))
+	}
+	return line
+}
+
+func (m *Model) inboxPendingActionKey() string {
+	if m.inboxPendingAction == "ignore" {
+		return "x"
+	}
+	return "a"
+}
+
 // rebuildViewport reconstructs the viewport content from the current agent's
 // messages.
 func (m *Model) rebuildViewport() {
+	if m.mode == modeInboxQueue {
+		m.rebuildInboxQueueViewport()
+		return
+	}
+	if m.mode == modePersonaControl {
+		m.rebuildPersonaControlViewport()
+		return
+	}
+	if m.mode == modeModelSelector {
+		m.rebuildModelSelectorViewport()
+		return
+	}
+
 	name := m.activeAgentName()
 	msgs := m.messages[name]
 	if len(msgs) == 0 {
@@ -124,6 +247,154 @@ func (m *Model) rebuildViewport() {
 		b.WriteByte('\n')
 	}
 
+	m.viewport.SetContent(b.String())
+}
+
+func (m *Model) rebuildInboxQueueViewport() {
+	var b strings.Builder
+	fmt.Fprintf(&b, "  %s pending: %d\n\n", m.inboxQueueAgent, len(m.inboxQueue))
+	if len(m.inboxQueue) == 0 {
+		b.WriteString(styleTimestamp.Render("  (no pending inbox items)"))
+		m.viewport.SetContent(b.String())
+		return
+	}
+
+	for i, item := range m.inboxQueue {
+		cursor := "  "
+		if i == m.inboxQueueCursor {
+			cursor = "> "
+		}
+		createdAt := item.CreatedAt
+		if createdAt == "" {
+			createdAt = item.UpdatedAt
+		}
+		from := item.FromAgent
+		if from == "" {
+			from = "unknown"
+		}
+		subject := item.Subject
+		if subject == "" {
+			subject = "(no subject)"
+		}
+
+		line := fmt.Sprintf("%s%s  from:%s  subject:%s  file:%s  id:%s",
+			cursor,
+			styleTimestamp.Render(formatTime(createdAt)),
+			from,
+			truncate(subject, 40),
+			truncate(item.Filename, 36),
+			truncate(item.ID, 18),
+		)
+		if i == m.inboxQueueCursor {
+			line = styleTabActive.Render(line)
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+
+		preview := strings.Join(strings.Fields(item.Body), " ")
+		if preview == "" {
+			preview = "(empty body)"
+		}
+		b.WriteString("    ")
+		b.WriteString(truncate(preview, max(m.width-6, 20)))
+		b.WriteByte('\n')
+		if m.inboxPendingAction != "" && m.inboxPendingItemID == item.ID {
+			b.WriteString(lipgloss.NewStyle().Foreground(colorYellow).Render(fmt.Sprintf("    press %s again to %s this item", m.inboxPendingActionKey(), m.inboxPendingAction)))
+			b.WriteByte('\n')
+		}
+	}
+
+	m.viewport.SetContent(b.String())
+}
+
+func (m *Model) rebuildPersonaControlViewport() {
+	var b strings.Builder
+	status := "available"
+	if !m.personaControlReady {
+		status = "unavailable"
+	}
+	fmt.Fprintf(&b, "  persona container control: %s", status)
+	if m.personaControlReason != "" {
+		fmt.Fprintf(&b, " (%s)", m.personaControlReason)
+	}
+	b.WriteString("\n\n")
+
+	if len(m.personaContainers) == 0 {
+		b.WriteString(styleTimestamp.Render("  (no persona containers returned)"))
+		m.viewport.SetContent(b.String())
+		return
+	}
+
+	for i, item := range m.personaContainers {
+		cursor := "  "
+		if i == m.personaControlCursor {
+			cursor = "> "
+		}
+		service := item.Service
+		if service == "" {
+			service = "unknown"
+		}
+		status := item.Status
+		if status == "" {
+			status = "unknown"
+		}
+
+		line := fmt.Sprintf("%s%-6s  status:%-10s service:%s", cursor, item.Target, status, service)
+		if item.Target == "all" {
+			line += "  target:all-personas"
+		}
+		if i == m.personaControlCursor {
+			line = styleTabActive.Render(line)
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+
+		if item.Target != "all" && (status == "running" || status == "restarting" || status == "unknown") {
+			b.WriteString(lipgloss.NewStyle().Foreground(colorYellow).Render("    stop/recreate may kill an in-flight turn"))
+			b.WriteByte('\n')
+		}
+		if m.controlPendingAction != "" && m.controlPendingTarget == item.Target {
+			b.WriteString(lipgloss.NewStyle().Foreground(colorYellow).Render(fmt.Sprintf("    press %s again to %s %s", m.controlPendingActionKey(), m.controlPendingAction, item.Target)))
+			b.WriteByte('\n')
+		}
+	}
+
+	m.viewport.SetContent(b.String())
+}
+
+func (m *Model) rebuildModelSelectorViewport() {
+	var b strings.Builder
+	agent := m.activeAgentName()
+	fmt.Fprintf(&b, "  select model for %s\n", agent)
+	if m.modelsLoading {
+		b.WriteString(styleConnecting.Render("  loading current model..."))
+		b.WriteString("\n")
+	}
+	b.WriteString(styleTimestamp.Render("  enter selects, esc cancels, r refreshes, up/down moves"))
+	b.WriteString("\n\n")
+
+	current := m.activePersonaModel()
+	for i, option := range personaModelOptions {
+		cursor := "  "
+		if i == m.modelSelectorIndex {
+			cursor = "> "
+		}
+		suffix := ""
+		if option.value == current {
+			suffix = "  current"
+		}
+		line := fmt.Sprintf("%s%d. %s (%s)%s", cursor, i+1, option.label, option.value, suffix)
+		if i == m.modelSelectorIndex {
+			line = styleTabActive.Render(line)
+		} else {
+			line = styleTabInactive.Render(line)
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	if m.modelSetting {
+		b.WriteString(styleConnecting.Render("\n  saving..."))
+	}
 	m.viewport.SetContent(b.String())
 }
 

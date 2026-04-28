@@ -229,7 +229,7 @@ func TestPoller_PicksUpInboxFile(t *testing.T) {
 		"--format", "json",
 		"--agent", "build",
 		"--dir", "/home/drem",
-		"--model", "openai/gpt-5.4-mini",
+		"--model", "openai/gpt-5.5",
 		"--variant", "high",
 	}
 	if len(argv) != len(wantArgv)+1 || !equalArgv(argv[:len(wantArgv)], wantArgv) {
@@ -365,10 +365,83 @@ func TestPoller_FrontmatterBodyGoesInFinalOpenCodeArg(t *testing.T) {
 
 	// Secondary invariant: the argv uses OpenCode build mode and keeps
 	// the large prompt as the final argument.
-	want := []string{"opencode", "run", "--format", "json", "--agent", "build", "--dir", "/home/drem", "--model", "openai/gpt-5.4-mini", "--variant", "high"}
+	want := []string{"opencode", "run", "--format", "json", "--agent", "build", "--dir", "/home/drem", "--model", "openai/gpt-5.5", "--variant", "high"}
 	if len(call.argv) != len(want)+1 || !equalArgv(call.argv[:len(want)], want) {
 		t.Fatalf("argv shape regressed\nwant: %v\ngot:  %v", want, call.argv)
 	}
+}
+
+func TestPoller_ModelConfigOverridesEnvironment(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	t.Setenv("DREM_OPENCODE_MODEL", "openai/gpt-5.4-mini")
+	if err := os.WriteFile(filepath.Join(fs.root, "config.json"), []byte(`{"model":"openai/gpt-5.5"}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	spawner := recorderSpawner(&calls, &mu, nil)
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "msg.md", "hello", time.Now())
+
+	if err := runPollerUntil(t, p, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) >= 1
+	}, 2*time.Second); err != nil {
+		t.Fatalf("waiting for spawn: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got := argvFlagValue(calls[0].argv, "--model"); got != "openai/gpt-5.5" {
+		t.Fatalf("--model = %q, want openai/gpt-5.5; argv=%v", got, calls[0].argv)
+	}
+}
+
+func TestPoller_InvalidModelConfigFallsBackToEnvironment(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	t.Setenv("DREM_OPENCODE_MODEL", "openai/gpt-5.5")
+	if err := os.WriteFile(filepath.Join(fs.root, "config.json"), []byte(`{"model":"not-real"}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	spawner := recorderSpawner(&calls, &mu, nil)
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "msg.md", "hello", time.Now())
+
+	if err := runPollerUntil(t, p, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) >= 1
+	}, 2*time.Second); err != nil {
+		t.Fatalf("waiting for spawn: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if got := argvFlagValue(calls[0].argv, "--model"); got != "openai/gpt-5.5" {
+		t.Fatalf("--model = %q, want env fallback openai/gpt-5.5; argv=%v", got, calls[0].argv)
+	}
+}
+
+func argvFlagValue(argv []string, flag string) string {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == flag {
+			return argv[i+1]
+		}
+	}
+	return ""
 }
 
 // TestPoller_StateFileAtomicUpdate writes a poison state file, then triggers

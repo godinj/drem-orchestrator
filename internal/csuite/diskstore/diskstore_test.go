@@ -137,6 +137,51 @@ func TestStore_AgentDashboard_EmptyTree(t *testing.T) {
 	}
 }
 
+func TestStore_PersonaModelConfig(t *testing.T) {
+	root := t.TempDir()
+	store := New(root)
+
+	model, err := store.PersonaModel("seth")
+	if err != nil {
+		t.Fatalf("PersonaModel missing config: %v", err)
+	}
+	if model != csuite.DefaultPersonaModel {
+		t.Fatalf("missing config model = %q, want %q", model, csuite.DefaultPersonaModel)
+	}
+
+	if err := store.SetPersonaModel("seth", csuite.PersonaModelGPT55); err != nil {
+		t.Fatalf("SetPersonaModel: %v", err)
+	}
+	model, err = store.PersonaModel("seth")
+	if err != nil {
+		t.Fatalf("PersonaModel after write: %v", err)
+	}
+	if model != csuite.PersonaModelGPT55 {
+		t.Fatalf("model = %q, want %q", model, csuite.PersonaModelGPT55)
+	}
+
+	raw, err := os.ReadFile(filepath.Join(root, "seth", "config.json"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(raw), `"model": "openai/gpt-5.5"`) {
+		t.Fatalf("config did not contain model: %s", raw)
+	}
+}
+
+func TestStore_PersonaModelsInvalidConfigFallsBack(t *testing.T) {
+	root := t.TempDir()
+	seedFile(t, root, "seth", "", "config.json", `{"model":"not-real"}`)
+
+	models, err := New(root).PersonaModels()
+	if err != nil {
+		t.Fatalf("PersonaModels: %v", err)
+	}
+	if models["seth"] != csuite.DefaultPersonaModel {
+		t.Fatalf("seth model = %q, want fallback %q", models["seth"], csuite.DefaultPersonaModel)
+	}
+}
+
 func TestStore_CreateMessage_OperatorToPersona(t *testing.T) {
 	root := t.TempDir()
 	store := New(root)

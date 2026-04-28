@@ -468,8 +468,11 @@ each file, oldest-first by mtime:
 2. Invokes `opencode run --format json --agent build --dir /home/drem`
    as a subprocess with a 5-minute default timeout (configurable via
    `-claude-timeout`, a legacy flag name retained for compatibility).
-   The poller embeds the persona prompt and inbox body into OpenCode's
-   final positional prompt argument.
+   The poller resolves the model immediately before each invocation from
+   `~/.drem-csuite/<persona>/config.json`, then `DREM_OPENCODE_MODEL`,
+   then `DREM_CODEX_MODEL`, falling back to `openai/gpt-5.5`. The
+   poller embeds the persona prompt and inbox body into OpenCode's final
+   positional prompt argument.
 3. On exit 0: signals any well-formed outbox files the persona wrote,
    suppresses malformed stdout stubs, atomically replaces
    `~/.drem-csuite/<persona>/state.md` with a structured record of the
@@ -507,6 +510,7 @@ as separate counts.
 │       │   └── .archive/       # processed and failed messages
 │       ├── outbox/
 │       │   └── <ts>-<persona>-reply-<shortid>.md
+│       ├── config.json         # optional model override
 │       └── state.md            # last-processed record
 
 /opt/csuite/prompts/
@@ -519,6 +523,15 @@ The whole `.drem-csuite/<persona>/` tree is bind-mounted from the host
 at `~/.drem-csuite/<persona>/` (Wave 1, commit `7fa9e85`) so an operator
 running `ls ~/.drem-csuite/seth/outbox/` on the host sees the replies
 without `docker cp`.
+
+### Persona model selection
+
+`csuite-chat` can switch the active persona between `GPT 5.5`
+(`openai/gpt-5.5`) and `GPT 5.4 Mini` (`openai/gpt-5.4-mini`) without
+restarting containers. Press `F8` in the chat TUI, choose the model, and
+confirm with Enter. The bridge writes the selected model to
+`~/.drem-csuite/<persona>/config.json`; the persona poller applies it on
+the next `opencode run`, not to any turn already in flight.
 
 ### Authentication — subscription-only
 

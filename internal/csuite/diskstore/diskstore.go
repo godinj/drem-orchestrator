@@ -8,6 +8,8 @@ package diskstore
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +24,11 @@ import (
 // knownPersonas is the fixed set of C-Suite agents whose inbox tree
 // the bridge serves. Mirrors internal/csuite/disk_source.go's
 // knownAgents to keep the AgentDashboard ordering stable.
-var knownPersonas = []string{"kyle", "mike", "alex", "seth"}
+var knownPersonas = csuite.KnownPersonas
+
+type personaConfig struct {
+	Model string `json:"model,omitempty"`
+}
 
 // Store implements internal/serve.dashboardStore against the on-disk
 // csuite tree. It composes DiskSnapshotSource for AgentDashboard and
@@ -51,6 +57,93 @@ func New(root string) *Store {
 // Root returns the absolute root directory the Store reads from. Useful
 // for test diagnostics.
 func (s *Store) Root() string { return s.root }
+
+// PersonaModels returns each known persona's configured model. Missing or
+// invalid config falls back to csuite.DefaultPersonaModel so the bridge stays
+// readable even if an operator edits config.json by hand.
+func (s *Store) PersonaModels() (map[string]string, error) {
+	models := make(map[string]string, len(knownPersonas))
+	for _, persona := range knownPersonas {
+		model, err := s.PersonaModel(persona)
+		if err != nil && !errors.Is(err, csuite.ErrInvalidPersonaModel) {
+			return nil, err
+		}
+		models[persona] = model
+	}
+	return models, nil
+}
+
+// PersonaModel reads <root>/<persona>/config.json and returns its model. A
+// missing config or empty model falls back to csuite.DefaultPersonaModel.
+func (s *Store) PersonaModel(persona string) (string, error) {
+	if !csuite.IsKnownPersona(persona) {
+		return "", csuite.ErrUnknownPersona
+	}
+	data, err := os.ReadFile(s.personaConfigPath(persona))
+	if errors.Is(err, os.ErrNotExist) {
+		return csuite.DefaultPersonaModel, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("diskstore: read persona config: %w", err)
+	}
+	var cfg personaConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return csuite.DefaultPersonaModel, fmt.Errorf("diskstore: parse persona config: %w", err)
+	}
+	if strings.TrimSpace(cfg.Model) == "" {
+		return csuite.DefaultPersonaModel, nil
+	}
+	model, err := csuite.NormalizePersonaModel(cfg.Model)
+	if err != nil {
+		return csuite.DefaultPersonaModel, err
+	}
+	return model, nil
+}
+
+// SetPersonaModel writes <root>/<persona>/config.json atomically.
+func (s *Store) SetPersonaModel(persona, model string) error {
+	if !csuite.IsKnownPersona(persona) {
+		return csuite.ErrUnknownPersona
+	}
+	model, err := csuite.NormalizePersonaModel(model)
+	if err != nil {
+		return err
+	}
+	path := s.personaConfigPath(persona)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("diskstore: create persona config dir: %w", err)
+	}
+	data, err := json.MarshalIndent(personaConfig{Model: model}, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("diskstore: create persona config temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) //nolint:errcheck
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close() //nolint:errcheck
+		return fmt.Errorf("diskstore: write persona config temp: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close() //nolint:errcheck
+		return fmt.Errorf("diskstore: fsync persona config temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("diskstore: close persona config temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("diskstore: replace persona config: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) personaConfigPath(persona string) string {
+	return filepath.Join(s.root, persona, "config.json")
+}
 
 // AgentDashboard returns one row per known persona. UnreadCount mirrors
 // the inbox file count from DiskSnapshotSource. LatestInbox is the max

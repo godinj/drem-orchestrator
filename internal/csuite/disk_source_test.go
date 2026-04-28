@@ -100,6 +100,63 @@ func TestDiskSnapshotSource_AgentSummaries_AllOnline(t *testing.T) {
 	}
 }
 
+func TestDiskSnapshotSource_AgentSummaries_PollerStateFormat(t *testing.T) {
+	now := time.Now().UTC()
+	root := setupDiskDir(t, map[string]string{
+		"kyle": "# kyle persona state\n\nlast_processed: msg.md\nlast_status: processing\nlast_exit_code: 0\nlast_duration_ms: 0\nupdated_at: " + now.Format(time.RFC3339) + "\n",
+		"mike": "",
+		"alex": "",
+		"seth": "",
+	}, nil)
+
+	src := csuite.NewDiskSnapshotSource(root)
+	summaries, err := src.AgentSummaries()
+	if err != nil {
+		t.Fatalf("AgentSummaries() error: %v", err)
+	}
+
+	byName := make(map[string]csuite.AgentSummary)
+	for _, s := range summaries {
+		byName[s.Name] = s
+	}
+
+	kyle := byName["kyle"]
+	if kyle.Status != csuite.AgentMonOnline {
+		t.Fatalf("kyle status = %s, want online", kyle.Status)
+	}
+	if kyle.CurrentActivity != "replying to msg.md" {
+		t.Fatalf("kyle activity = %q, want replying to msg.md", kyle.CurrentActivity)
+	}
+}
+
+func TestDiskSnapshotSource_AgentSummaries_HeartbeatFileOverridesOldState(t *testing.T) {
+	now := time.Now().UTC()
+	old := now.Add(-2 * time.Hour).Format(time.RFC3339)
+	root := setupDiskDir(t, map[string]string{
+		"kyle": "# kyle persona state\n\nlast_processed: msg.md\nlast_status: ok\nupdated_at: " + old + "\n",
+		"mike": "",
+		"alex": "",
+		"seth": "",
+	}, nil)
+	if err := os.WriteFile(filepath.Join(root, "kyle", "heartbeat"), []byte(now.Format(time.RFC3339)+"\n"), 0o644); err != nil {
+		t.Fatalf("write heartbeat: %v", err)
+	}
+
+	src := csuite.NewDiskSnapshotSource(root)
+	summaries, err := src.AgentSummaries()
+	if err != nil {
+		t.Fatalf("AgentSummaries() error: %v", err)
+	}
+
+	byName := make(map[string]csuite.AgentSummary)
+	for _, s := range summaries {
+		byName[s.Name] = s
+	}
+	if byName["kyle"].Status != csuite.AgentMonOnline {
+		t.Fatalf("kyle status = %s, want online", byName["kyle"].Status)
+	}
+}
+
 func TestDiskSnapshotSource_AgentSummaries_StaleHeartbeat(t *testing.T) {
 	stale := time.Now().UTC().Add(-10 * time.Minute).Format(time.RFC3339)
 

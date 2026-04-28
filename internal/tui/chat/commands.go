@@ -21,6 +21,31 @@ type messagesLoadedMsg struct {
 }
 type messagesErrMsg struct{ err error }
 
+type inboxQueueLoadedMsg struct {
+	agent string
+	items []bridgeclient.InboxQueueItem
+}
+type inboxQueueErrMsg struct{ err error }
+type inboxQueueActionDoneMsg struct{ agent string }
+type inboxQueueActionErrMsg struct{ err error }
+
+type personaContainersLoadedMsg struct {
+	available bool
+	reason    string
+	items     []bridgeclient.PersonaContainer
+}
+type personaContainersErrMsg struct{ err error }
+type personaControlDoneMsg struct{}
+type personaControlErrMsg struct{ err error }
+
+type personaModelsLoadedMsg struct{ models map[string]string }
+type personaModelsErrMsg struct{ err error }
+type personaModelSetMsg struct {
+	agent string
+	model string
+}
+type personaModelSetErrMsg struct{ err error }
+
 type messageSentMsg struct{ msg bridgeclient.Message }
 type messageSendErrMsg struct{ err error }
 
@@ -60,6 +85,80 @@ func sendMessage(client *bridgeclient.Client, req bridgeclient.SendRequest) tea.
 			return messageSendErrMsg{err}
 		}
 		return messageSentMsg{*msg}
+	}
+}
+
+func fetchInboxQueue(client *bridgeclient.Client, agent string, limit int) tea.Cmd {
+	return func() tea.Msg {
+		items, err := client.GetInboxQueue(context.Background(), agent, limit)
+		if err != nil {
+			return inboxQueueErrMsg{err}
+		}
+		return inboxQueueLoadedMsg{agent: agent, items: items}
+	}
+}
+
+func archiveInboxItem(client *bridgeclient.Client, agent, id string) tea.Cmd {
+	return func() tea.Msg {
+		if err := client.ArchiveInboxItem(context.Background(), agent, id, "operator restart review"); err != nil {
+			return inboxQueueActionErrMsg{err}
+		}
+		return inboxQueueActionDoneMsg{agent: agent}
+	}
+}
+
+func ignoreInboxItem(client *bridgeclient.Client, agent, id string) tea.Cmd {
+	return func() tea.Msg {
+		if err := client.IgnoreInboxItem(context.Background(), agent, id, "operator restart review"); err != nil {
+			return inboxQueueActionErrMsg{err}
+		}
+		return inboxQueueActionDoneMsg{agent: agent}
+	}
+}
+
+func fetchPersonaContainers(client *bridgeclient.Client) tea.Cmd {
+	return func() tea.Msg {
+		containers, err := client.GetPersonaContainers(context.Background())
+		if err != nil {
+			return personaContainersErrMsg{err}
+		}
+		return personaContainersLoadedMsg{
+			available: containers.Available,
+			reason:    containers.Reason,
+			items:     containers.Items,
+		}
+	}
+}
+
+func controlPersonaContainer(client *bridgeclient.Client, target, action string) tea.Cmd {
+	return func() tea.Msg {
+		_, err := client.ControlPersonaContainer(context.Background(), bridgeclient.PersonaControlRequest{
+			Target: target,
+			Action: action,
+		})
+		if err != nil {
+			return personaControlErrMsg{err}
+		}
+		return personaControlDoneMsg{}
+	}
+}
+
+func fetchPersonaModels(client *bridgeclient.Client) tea.Cmd {
+	return func() tea.Msg {
+		models, err := client.GetPersonaModels(context.Background())
+		if err != nil {
+			return personaModelsErrMsg{err}
+		}
+		return personaModelsLoadedMsg{models: models}
+	}
+}
+
+func setPersonaModel(client *bridgeclient.Client, agent, model string) tea.Cmd {
+	return func() tea.Msg {
+		if err := client.SetPersonaModel(context.Background(), agent, model); err != nil {
+			return personaModelSetErrMsg{err}
+		}
+		return personaModelSetMsg{agent: agent, model: model}
 	}
 }
 

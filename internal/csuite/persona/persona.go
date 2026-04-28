@@ -45,6 +45,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/godinj/drem-orchestrator/internal/csuite"
 )
 
 // DefaultPollInterval is the spacing between successive inbox scans.
@@ -64,7 +66,7 @@ const DefaultMaxFailures = 3
 // but with a per-project :rw bind-mount on the orch-plans tree (the
 // compose template enforces that difference, not this package). See
 // plans/container-kyle-transition.md.
-var AllowedPersonas = []string{"mike", "alex", "seth", "kyle"}
+var AllowedPersonas = csuite.KnownPersonas
 
 // Config carries every runtime knob for the poller. Zero values mean
 // "derive from Persona" where applicable.
