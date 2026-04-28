@@ -471,6 +471,7 @@ func (o *Orchestrator) applyClassification(task *model.Task, output *ClassifierO
 		files[i] = f
 	}
 	task.Context["target_files"] = files
+	task.Context["estimated_files"] = files
 	task.Context["rationale"] = output.Rationale
 
 	event, err := state.TransitionTask(task, model.StatusBacklog, "classifier", nil)

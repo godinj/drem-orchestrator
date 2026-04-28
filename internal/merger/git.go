@@ -82,6 +82,18 @@ func cloneBranch(ctx context.Context, bareRepo, branch, workDir string) error {
 	return nil
 }
 
+// configureMergeIdentity pins a local identity in the disposable merger clone
+// so merge commits do not depend on the container's global git config.
+func configureMergeIdentity(ctx context.Context, workDir string) error {
+	if out := runGit(ctx, workDir, "config", "user.email", "drem-merger@local"); out.Err != nil {
+		return fmt.Errorf("git config user.email: %w: %s", out.Err, out.Combined())
+	}
+	if out := runGit(ctx, workDir, "config", "user.name", "Drem Merger"); out.Err != nil {
+		return fmt.Errorf("git config user.name: %w: %s", out.Err, out.Combined())
+	}
+	return nil
+}
+
 // fetchBranch fetches `origin <branch>:<branch>` into workDir, making the
 // feature branch locally available so we can merge it.
 func fetchBranch(ctx context.Context, workDir, branch string) error {

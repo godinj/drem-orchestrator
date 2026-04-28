@@ -151,6 +151,10 @@ func (m *Merger) Merge(ctx context.Context, req MergeRequest) (*MergeResult, err
 		result.FailureReason = "other"
 		return result, fmt.Errorf("merger: clone integration: %w", err)
 	}
+	if err := configureMergeIdentity(ctx, m.WorkDir); err != nil {
+		result.FailureReason = "other"
+		return result, fmt.Errorf("merger: configure git identity: %w", err)
+	}
 
 	// Idempotency: if the feature branch is already gone on origin, a prior
 	// merger invocation succeeded. Return success without re-merging.
