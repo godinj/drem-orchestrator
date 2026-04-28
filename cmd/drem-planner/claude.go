@@ -5,7 +5,7 @@
 // Per plans/warm-planner-pivot.md §2 and §9 question 2, the planner
 // execs `codex` as a subprocess per /plan request with flags:
 //
-//	codex exec --json --model gpt-5.5 --output-last-message <tmp> -
+//	codex exec --json --model gpt-5.3-codex-spark --output-last-message <tmp> -
 //
 // The prompt is piped on stdin; plan JSON is extracted from the CLI's
 // stdout. We intentionally don't shell-escape anything — exec.Cmd
@@ -25,9 +25,8 @@ import (
 )
 
 // DefaultPlannerModel is the Codex model the planner invokes by
-// default. Matches internal/capability/capability.go and all earlier
-// planner work so a single upgrade ripples everywhere.
-const DefaultPlannerModel = "gpt-5.5"
+// default. Keep this aligned with generated project drem.toml planner config.
+const DefaultPlannerModel = "gpt-5.3-codex-spark"
 
 // claudeInvoker is the test seam for subprocess execution. The production
 // implementation (runRealClaude below) shells out; unit tests wire a stub

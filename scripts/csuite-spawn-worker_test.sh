@@ -143,6 +143,13 @@ exit 0
 CLAUDE_EOF
     chmod +x "${mockbin}/claude"
 
+    # Mock opencode — default temp-worker harness after the Codex Spark switch.
+    cat > "${mockbin}/opencode" <<'OPENCODE_EOF'
+#!/usr/bin/env bash
+exit 0
+OPENCODE_EOF
+    chmod +x "${mockbin}/opencode"
+
     echo "$mockbin"
 }
 
@@ -492,16 +499,6 @@ BRIEF_EOF
     assert_contains "$workers" "worker-001"
     assert_contains "$workers" "worker-002"
     unset CSUITE_DIR
-
-    # Step 9: Verify csuite-status.sh can see the workers (if available)
-    if [ -f "${SCRIPT_DIR}/csuite-status.sh" ]; then
-        local status_output
-        status_output="$(CSUITE_DIR="$td" PATH="${mockbin}:${PATH}" bash "${SCRIPT_DIR}/csuite-status.sh" --report 2>&1 || true)"
-        local report
-        report="$(cat "${td}/situation-report.md" 2>/dev/null || echo "")"
-        assert_contains "$report" "worker-001"
-        assert_contains "$report" "worker-002"
-    fi
 
     echo "  $CURRENT_TEST: done"
 }

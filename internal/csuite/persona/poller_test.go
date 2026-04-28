@@ -229,7 +229,7 @@ func TestPoller_PicksUpInboxFile(t *testing.T) {
 		"--format", "json",
 		"--agent", "build",
 		"--dir", "/home/drem",
-		"--model", "openai/gpt-5.5",
+		"--model", "openai/gpt-5.3-codex-spark",
 		"--variant", "high",
 	}
 	if len(argv) != len(wantArgv)+1 || !equalArgv(argv[:len(wantArgv)], wantArgv) {
@@ -365,7 +365,7 @@ func TestPoller_FrontmatterBodyGoesInFinalOpenCodeArg(t *testing.T) {
 
 	// Secondary invariant: the argv uses OpenCode build mode and keeps
 	// the large prompt as the final argument.
-	want := []string{"opencode", "run", "--format", "json", "--agent", "build", "--dir", "/home/drem", "--model", "openai/gpt-5.5", "--variant", "high"}
+	want := []string{"opencode", "run", "--format", "json", "--agent", "build", "--dir", "/home/drem", "--model", "openai/gpt-5.3-codex-spark", "--variant", "high"}
 	if len(call.argv) != len(want)+1 || !equalArgv(call.argv[:len(want)], want) {
 		t.Fatalf("argv shape regressed\nwant: %v\ngot:  %v", want, call.argv)
 	}

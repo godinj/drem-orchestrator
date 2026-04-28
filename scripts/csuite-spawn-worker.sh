@@ -16,9 +16,8 @@ set -euo pipefail
 #
 # Options:
 #   --worker-id <id>  Override the auto-assigned worker ID (e.g. worker-042).
-#   --harness <name>  Harness CLI to use: "claude" (default) or "opencode".
-#   --model <model>   Model override (e.g. llamacpp/qwen35-27b-iq4xs-128k).
-#                     For opencode this is required; for claude it is optional.
+#   --harness <name>  Harness CLI to use: "opencode" (default) or "claude".
+#   --model <model>   Model override (default: openai/gpt-5.3-codex-spark).
 #   --dry-run         Print what would happen without creating anything.
 #   --help            Show this help message.
 #
@@ -30,12 +29,12 @@ set -euo pipefail
 #
 # Environment:
 #   CSUITE_DIR        Base directory for agent state (default: ~/.drem-csuite)
-#   CSUITE_HARNESS    Harness CLI: "claude" or "opencode" (default: claude).
+#   CSUITE_HARNESS    Harness CLI: "claude" or "opencode" (default: opencode).
 #                     Overridden by --harness flag.
 #   CSUITE_MODEL      Model name for the harness. Overridden by --model flag.
 #
 # Examples:
-#   # Auto-assign next worker ID (uses claude by default):
+#   # Auto-assign next worker ID (uses OpenCode + Codex Spark by default):
 #   bash scripts/csuite-spawn-worker.sh /tmp/task-brief.md
 #
 #   # Specify a worker ID:
@@ -70,8 +69,8 @@ TEMP_WORKER_PROMPT="docs/csuite-agents/prompts/temp-worker.md"
 DRY_RUN=false
 
 # Harness configuration: env vars provide defaults, flags override.
-HARNESS="${CSUITE_HARNESS:-claude}"
-MODEL="${CSUITE_MODEL:-}"
+HARNESS="${CSUITE_HARNESS:-opencode}"
+MODEL="${CSUITE_MODEL:-openai/gpt-5.3-codex-spark}"
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -94,13 +93,13 @@ while [ $# -gt 0 ]; do
             echo ""
             echo "Options:"
             echo "  --worker-id <id>    Override auto-assigned worker ID (e.g. worker-042)"
-            echo "  --harness <name>    Harness CLI: \"claude\" (default) or \"opencode\""
-            echo "  --model <model>     Model override (e.g. llamacpp/qwen35-27b-iq4xs-128k)"
+            echo "  --harness <name>    Harness CLI: \"opencode\" (default) or \"claude\""
+            echo "  --model <model>     Model override (default: openai/gpt-5.3-codex-spark)"
             echo "  --dry-run           Print actions without executing them"
             echo "  --help              Show this help message"
             echo ""
             echo "Environment variables:"
-            echo "  CSUITE_HARNESS      Harness CLI (default: claude). Overridden by --harness."
+            echo "  CSUITE_HARNESS      Harness CLI (default: opencode). Overridden by --harness."
             echo "  CSUITE_MODEL        Model name. Overridden by --model."
             exit 0
             ;;
@@ -174,24 +173,8 @@ case "$HARNESS" in
         ;;
 esac
 
-if ! command -v tmux &>/dev/null; then
-    echo "error: tmux is not installed or not on PATH." >&2
-    exit 1
-fi
-
 if ! command -v "$HARNESS" &>/dev/null; then
     echo "error: $HARNESS CLI is not installed or not on PATH." >&2
-    exit 1
-fi
-
-# ---------------------------------------------------------------------------
-# Enforce global temp worker cap (operator directive: max 5)
-# ---------------------------------------------------------------------------
-
-MAX_TEMP_WORKERS=5
-ACTIVE_WORKERS=$(tmux -L "$TMUX_SOCKET" list-sessions 2>/dev/null | grep -c "csuite-worker" || true)
-if [ "$ACTIVE_WORKERS" -ge "$MAX_TEMP_WORKERS" ] && [ "$DRY_RUN" = false ]; then
-    echo "error: $ACTIVE_WORKERS temp workers already running (cap: $MAX_TEMP_WORKERS). Queue this request." >&2
     exit 1
 fi
 
@@ -238,6 +221,22 @@ if [ "$DRY_RUN" = true ]; then
     echo "  Tmux session: $SESSION_NAME (socket: $TMUX_SOCKET)"
     echo "  Notify:       mike via csuite_send"
     exit 0
+fi
+
+if ! command -v tmux &>/dev/null; then
+    echo "error: tmux is not installed or not on PATH." >&2
+    exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# Enforce global temp worker cap (operator directive: max 5)
+# ---------------------------------------------------------------------------
+
+MAX_TEMP_WORKERS=5
+ACTIVE_WORKERS=$(tmux -L "$TMUX_SOCKET" list-sessions 2>/dev/null | grep -c "csuite-worker" || true)
+if [ "$ACTIVE_WORKERS" -ge "$MAX_TEMP_WORKERS" ]; then
+    echo "error: $ACTIVE_WORKERS temp workers already running (cap: $MAX_TEMP_WORKERS). Queue this request." >&2
+    exit 1
 fi
 
 # ---------------------------------------------------------------------------
