@@ -2,6 +2,45 @@
 
 Status: implementation authorized by operator on 2026-04-24
 Scope: merger/reconciler control-plane safety for task `6b6eb427` and future deterministic merge failures
+Artifact status: active investigation input
+Operator directive corrid: 5b99982e
+Metadata updated: 2026-04-26T18:15:40Z
+Active investigation owner: source-capable execution route pending; Seth remains clearance owner once patch/proof exists
+Ops owner: Mike only after explicit re-clearance following resolver/control-plane proof
+
+## Current Metadata Note
+
+On 2026-04-26T18:15:40Z Mike reported, replying to `7d94e2a1`, that he remains watch-only and that the deterministic merge-conflict/control-plane evidence is still the active hold for `6b6eb427`. Kyle verified supported status remains stable: world/orchestrator health OK, `6b6eb427` at `testing_ready` with `worker=-`, and recent events still show the known merger/reconciler loop plus zero-UUID crash evidence. This ACK opens no lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, credential change, product route, quality reroute, operator escalation, worker-lane change, or broader C-Suite route; Seth/source-capable execution remains the clearance path.
+
+## Current Metadata Note
+
+On 2026-04-26T18:10:42Z Mike reported, replying to `c8f2a1d4`, that he remains watch-only on `6b6eb427` and requires operator authorization, Kyle re-clearance, and the full conflict/control-plane proof package before any Mike-controlled pass. Kyle verified supported status remains stable: world/orchestrator health OK, `6b6eb427` at `testing_ready` with `worker=-`, project workers zero, and recent events still show the known merger/reconciler loop plus zero-UUID crash evidence. This ACK opens no lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, credential change, operator escalation, or broader C-Suite route.
+
+## Current Metadata Note
+
+On 2026-04-26T18:09:03Z Seth reported, replying to `4c8d2f1a`, that he cannot produce the scoped conflict/control-plane patch/proof from his current persona surface: source is absent, Go is absent, host-exec denies read-only git probing, and orchestrator log streaming is not configured. Kyle verified supported status remains stable: world/orchestrator health OK, `6b6eb427` at `testing_ready` with `worker=-`, and recent events still show the known merger/reconciler loop plus zero-UUID crash evidence. The control-plane acceptance criteria remain unchanged: deterministic conflicts must be terminal/held with `failure_reason=conflict`, conflict file metadata, task-correlated merger evidence, retry-budget terminality, and reconciler non-resurrection. Kyle routed Mike to provide or identify a source-capable cold-worker/orchestrator route and did not clear any lifecycle mutation or pass.
+
+## Current Metadata Note
+
+On 2026-04-26T18:04:35Z Mike reported, replying to `2026-04-26T17:43:08Z-kyle-84407795.md`, that passive resolver-closure remains context only and the active hold stays on deterministic conflict/control-plane clearance. Supported surfaces still show world/orchestrator health OK, zero project workers, and `6b6eb427` at `testing_ready` with `worker=-`; recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence. This ACK opens no lifecycle mutation, controlled pass, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality route, operator escalation, worker-lane change, or additional C-Suite coordination. Mike remains guardrail-only until Seth/Kyle re-clear a targeted action or supported surfaces materially change.
+
+## Current Metadata Note
+
+On 2026-04-26T17:59:22Z Mike reported, replying to `0b56710c`, that closure-passive context remains passive only and no action is open unless Seth/Kyle re-clear a targeted ops path or supported surfaces materially change. Supported surfaces still show `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence. This ACK opens no lifecycle mutation, controlled pass, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination.
+
+## Current Metadata Note
+
+On 2026-04-26T17:56:36Z Mike reported, replying to `e6d4a91b`, that he retained the hold and will not run pass/retry/lifecycle mutation from the late Bug J ACK. Supported surfaces still show `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence. This ACK opens no lifecycle action; Mike remains watch-only until Seth/Kyle re-clear a targeted action or supported surfaces materially change.
+
+## Current Metadata Note
+
+On 2026-04-26T17:55:35Z Seth reported, replying to `c9a4e2b1`, that the late Bug J Option A ACK is retained only as quality coordination context. Bug J `/work` preservation proof remains cleared for the narrow EBUSY blocker, but this does not clear lifecycle action. The active no-pass hold remains deterministic merge-conflict/control-plane evidence from `6b6eb427`, and the terminal-conflict path still needs explicit Seth/Kyle re-clearance or materially changed supported surfaces before Mike runs any controlled pass.
+
+On 2026-04-26T17:50:44Z Seth reported, replying to `b4e9a301`, that the terminal-conflict control-plane patch must precede or travel with the conflict resolution before any Mike `dremctl pass`. This supersedes the earlier allowance for one retry before the terminal-failure patch for the current deterministic conflict case. Minimum scope is conflict result metadata with `failure_reason=conflict` and conflict file list, a terminal/held state that the reconciler will not resurrect via `all subtasks done`, an operator/Mike-visible event, and regression tests for merge-conflict terminality plus reconciler non-resurrection. Kyle routed this as an operator authorization decision and did not clear lifecycle mutation.
+
+On 2026-04-26T17:09:35Z Seth reported under `seth-merger-investigation-20260426` that this control-plane patch remains separate P0 work and is not required before one tightly controlled Bug J validation retry, provided the Option A proof package is present and Mike is watching. It is required before broader no-pass-hold removal or declaring the merger/reconciler path recovered. The retained scope is zero-UUID merger evidence, durable merger attempt metadata, terminal retry-exhaustion handling, and reconciler guards against resurrection after terminal merge failure.
+
+On 2026-04-26T16:51:07Z the operator directed Kyle under `5b99982e` to have Seth investigate the merger issues and adjust artifact metadata to facilitate that work. This artifact is now an active Seth investigation input alongside the Bug J and CanaryV17 recovery artifacts. Seth should treat the terminal-failure control-plane concerns here as part of the merger issue investigation, especially zero-UUID evidence, attempt metadata, deterministic conflict terminality, and reconciler recovery guards. This metadata update does not authorize a canary pass or lifecycle mutation.
 
 ## Problem
 

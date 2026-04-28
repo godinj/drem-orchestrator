@@ -1,5 +1,959 @@
 # P0: Merger/reconciler loop on task 6b6eb427
 
+Artifact status: active investigation input
+Operator directive corrid: 5b99982e
+Metadata updated: 2026-04-26T18:15:40Z
+Active investigation owner: Mike source-surface provisioning handoff; Seth remains patch/proof owner once a source-capable route exists
+Ops owner: Mike for guardrails and controlled retry only after explicit re-clearance
+
+## Mike CanaryV17 hold ACK retained at 2026-04-26T18:15:40Z
+
+Signal:
+- Mike reported at `2026-04-26T17:58:37Z`, replying to `7d94e2a1`, that the deterministic merge-conflict/control-plane evidence remains the active hold for `6b6eb427`; Seth owns the next clearance path; Mike remains watch-only until Seth/Kyle explicitly re-clear one targeted action or a material supported-surface change appears.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Mike's ACK as correct ops guardrail context only.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, credential change, product route, quality reroute, operator escalation, worker-lane change, or additional C-Suite coordination is open from this report.
+- Active ownership remains unchanged: Seth/source-capable execution must produce the scoped deterministic conflict/control-plane proof package before Kyle re-clears any targeted Mike action.
+
+## Mike late Bug J hold ACK retained at 2026-04-26T18:14:31Z
+
+Signal:
+- Mike reported at `2026-04-26T17:57:53Z`, replying to `e6d4a91b`, that Bug J `/work` EBUSY remains cleared only for the narrow blocker while conflict/control-plane evidence remains the active hold.
+- Mike stayed read-only and watch-only: no pass, retry, lifecycle mutation, host-exec expansion, Docker/SGLang action, operator escalation, or additional C-Suite route.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, project workers remain effectively inactive for the task, and recent events remain the known merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Mike's ACK as correct ops guardrail context only.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, credential change, product route, quality reroute, operator escalation, or additional C-Suite coordination is open from this report.
+- Active ownership remains unchanged: Seth/source-capable execution must produce the deterministic conflict/control-plane proof package before Kyle re-clears any targeted Mike action.
+
+## Mike Bug J guardrail ACK retained at 2026-04-26T18:11:54Z
+
+Signal:
+- Mike reported at `2026-04-26T17:52:48Z`, replying to `e1e038b7`, that Bug J `/work` EBUSY remains accepted only for that narrow blocker while deterministic merge-conflict/control-plane handling remains the active hold on `6b6eb427`.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, project workers remain zero, and recent events remain the known merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Mike's ACK as correct ops guardrail context only.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, credential change, operator escalation, product route, quality reroute, or additional C-Suite coordination is open from this report.
+- Active ownership remains unchanged: Bug J `/work` EBUSY is proof-cleared only for that blocker; deterministic conflict resolution plus terminal-conflict control-plane proof remains the hold; Mike stays watch-only until Seth/Kyle re-clear a targeted action or a material supported-surface change appears.
+
+## Mike conflict/control-plane hold ACK retained at 2026-04-26T18:10:42Z
+
+Signal:
+- Mike reported at `2026-04-26T17:52:02Z`, replying to `c8f2a1d4`, that he remains watch-only on `6b6eb427` and will not run pass, retry, lifecycle mutation, destructive git/Docker action, credential change, or SGLang restart without operator authorization, the conflict/control-plane proof package, and Kyle re-clearance.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, project workers remain zero, and recent events remain the known merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Mike's ACK as correct ops guardrail context only.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, credential change, operator escalation, product route, quality reroute, or additional C-Suite coordination is open from this report.
+- Active ownership remains unchanged: Bug J `/work` EBUSY is proof-cleared only for that blocker; deterministic conflict resolution plus terminal-conflict control-plane proof remains the hold; Mike stays watch-only until operator authorization, proof package, and Kyle re-clearance are all present.
+
+## Seth source-surface blocker accepted at 2026-04-26T18:09:03Z
+
+Signal:
+- Seth reported at `2026-04-26T17:51:57Z`, replying to `4c8d2f1a`, that he cannot honestly return a completed conflict/control-plane patch/proof package from his persona surface because source is not mounted, Go is absent, host-exec denies a read-only git probe, and `dremctl logs` returns 503 for orchestrator logs.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known `testing_ready -> merging -> failed -> in_progress/testing_ready` loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain the no-pass hold. Do not run or request `dremctl pass`, retry lifecycle state, Docker/SGLang mutation, credential change, destructive git action, or service restart from this report.
+- Bug J Option A remains proof-cleared only for the `/work` EBUSY blocker; the active blocker remains deterministic conflict/control-plane handling.
+- Kyle routed Mike to identify or provide a source-capable execution surface through the current cold-worker/orchestrator model, scoped to the five conflict files, direct CanaryV17 payload if needed, and minimal merger/orchestrator/reconciler files/tests needed for terminal, visible, non-resurrectable conflict outcomes.
+
+## Seth passive quality context ACK retained at 2026-04-26T18:07:01Z
+
+Signal:
+- Seth reported at `2026-04-26T17:45:47Z`, replying to `seth-20260426T172418Z-passive-quality-retained-ack`, that the Bug J Option A `/work` EBUSY proof correction remains accepted and that his posture remains passive absent a named quality trigger, supported lifecycle/disposition movement, or concrete C-Suite request.
+- Supported surfaces remain stable: world health is OK, `dremctl status` is reachable, project workers remain zero, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Seth's ACK as passive quality context only.
+- No audit, lifecycle mutation, disposition mutation, host-exec expansion, Docker/SGLang action, operator escalation, or additional C-Suite coordination is open from this ACK.
+- Active ownership remains unchanged: Bug J `/work` EBUSY proof remains accepted only for that blocker, deterministic conflict/control-plane evidence remains the hold, Seth stays passive absent a named quality trigger or re-clearance, and Mike owns ops guardrails only after Seth/Kyle re-clear a targeted action or supported surfaces materially change.
+
+## Seth passive quality closure ACK retained at 2026-04-26T18:05:53Z
+
+Signal:
+- Seth reported at `2026-04-26T17:44:20Z`, replying to `seth-20260426T172343Z-passive-quality-closure-ack`, that `b0c7e3a9` remains closure-only, the later Bug J Option A proof package remains accepted for the `/work` EBUSY blocker, and the active CanaryV17 hold remains deterministic merge-conflict/control-plane evidence.
+- Supported surfaces remain stable: world health is OK, `dremctl status` is reachable, project workers remain zero, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Seth's ACK as passive quality closure context only.
+- No audit, recovery action, lifecycle mutation, host-exec expansion, escalation, controlled pass, retry, or additional C-Suite coordination is open from this ACK.
+- Active ownership remains unchanged: Bug J `/work` EBUSY proof remains accepted only for that blocker, deterministic conflict/control-plane evidence remains the hold, Seth stays passive absent a named quality trigger or re-clearance, and Mike owns ops guardrails only after Seth/Kyle re-clear a targeted action or supported surfaces materially change.
+
+## Mike passive resolver-closure ACK retained at 2026-04-26T18:04:35Z
+
+Signal:
+- Mike reported at `2026-04-26T17:43:41Z`, replying to `2026-04-26T17:43:08Z-kyle-84407795.md`, that passive resolver-closure remains context only and that the active hold stays on deterministic conflict/control-plane clearance.
+- Supported surfaces remain stable: world health is OK, `dremctl status` is reachable, project workers remain zero, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Mike's ACK as passive ops context only.
+- No lifecycle mutation, controlled pass, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality route, operator escalation, worker-lane change, or additional C-Suite coordination is open from this ACK.
+- Active ownership remains unchanged: deterministic merge-conflict/control-plane evidence remains the hold, Seth owns quality/control-plane clearance, and Mike owns ops guardrails only after Seth/Kyle re-clear a targeted action or supported surfaces materially change.
+
+## Alex CanaryV17 product ACK retained at 2026-04-26T18:03:41Z
+
+Signal:
+- Alex reported at `2026-04-26T17:40:41Z`, replying to `93f7a2c1`, that CanaryV17 remains passive product context only and no product route, lifecycle mutation, recovery action, reroute, operator escalation, or additional C-Suite coordination is open from Alex.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, project workers remain at zero by status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Alex's ACK as passive product context only.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, operator escalation, product route, quality reroute, ops reroute, or additional C-Suite coordination is open from this ACK.
+- Active ownership remains unchanged: Bug J `/work` EBUSY proof is accepted, deterministic merge-conflict/control-plane evidence remains the unresolved hold, Seth owns that quality/control-plane path, and Mike owns ops guardrails only after Seth/Kyle re-clear a targeted action or supported surfaces materially change.
+
+## Seth Bug J direct-fix ACK retained at 2026-04-26T18:02:29Z
+
+Signal:
+- Seth reported at `2026-04-26T17:40:08Z`, replying to `a7d4c2e9`, that the earlier Bug J Option A direct-fix ACK stands, the accepted `/work` EBUSY proof package remains accepted, and raw proof-pending is not reopened.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Seth's ACK as passive quality context only.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, operator escalation, product route, ops reroute, quality audit, or additional C-Suite coordination is open from this ACK.
+- The active hold remains deterministic merge-conflict/control-plane evidence. Seth stays passive until Kyle/operator explicitly re-clear a targeted next action or supported surfaces materially change.
+
+## Seth passive quality closure ACK retained at 2026-04-26T18:01:34Z
+
+Signal:
+- Seth reported at `2026-04-26T17:38:29Z`, replying to `733442a8`, that Kyle's ACK is retained as passive quality closure only and that no quality action is open absent concrete merger proof or a named quality trigger.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Seth's ACK as passive quality context only.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, operator escalation, product route, ops reroute, quality audit, or additional C-Suite coordination is open from this ACK.
+- The active hold remains deterministic merge-conflict/control-plane evidence. Seth stays passive until concrete merger proof, a named quality trigger, explicit Kyle/operator request, or supported-surface change appears.
+
+## Seth passive quality closure ACK retained at 2026-04-26T18:00:16Z
+
+Signal:
+- Seth reported at `2026-04-26T17:37:25Z`, replying to `a3f91c7d`, that passive quality closure is retained and no Seth-side quality action is open without concrete merger proof or a named quality trigger.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Seth's ACK as passive quality context only.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, operator escalation, product route, ops reroute, quality audit, or additional C-Suite coordination is open from this ACK.
+- The active hold remains deterministic merge-conflict/control-plane evidence. Seth stays passive until concrete merger proof, a named quality trigger, explicit Kyle/operator request, or supported-surface change appears.
+
+## Alex passive product context retained at 2026-04-26T17:58:37Z
+
+Signal:
+- Alex reported at `2026-04-26T17:36:11Z`, replying to `4f9c2a61`, that CanaryV17 product context remains passive and no product reroute, prioritization change, or lifecycle mutation is open from his lane.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Alex's ACK as passive product context only.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, operator escalation, product route, quality reroute, ops reroute, or additional C-Suite coordination is open from this ACK.
+- Active ownership remains unchanged: Seth owns the post-Bug-J deterministic merge-conflict/control-plane clearance path, and Mike remains ops guardrails only after Seth/Kyle re-clear a targeted retry or supported surfaces materially change.
+
+## Mike CanaryV17 hold ACK retained at 2026-04-26T17:57:53Z
+
+Signal:
+- Mike reported at `2026-04-26T17:34:53Z`, replying to `7d94e2a1`, that the CanaryV17 hold remains retained and he took no lifecycle action, controlled pass, retry, host-exec, Docker/SGLang action, or operator escalation.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Mike's ACK as correct ops guardrail context.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, operator escalation, product route, quality reroute, or additional C-Suite coordination is open from this ACK.
+- Mike remains watch-only until Seth/Kyle explicitly re-clear one targeted next action or a material supported-surface change appears.
+
+## Mike late Bug J hold ACK retained at 2026-04-26T17:56:36Z
+
+Signal:
+- Mike reported at `2026-04-26T17:32:53Z`, replying to `e6d4a91b`, that he retained the hold and will not run `dremctl pass 6b6eb427`, retry, or make any lifecycle mutation from that message.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Mike's ACK as correct ops guardrail context. Bug J `/work` EBUSY remains cleared only for the narrow blocker; it is not the active gate.
+- The active no-pass hold remains deterministic merge-conflict/control-plane evidence. No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, operator escalation, product route, quality reroute, or additional C-Suite coordination is open from this ACK.
+- Mike remains watch-only until Seth/Kyle re-clear a targeted action or supported surfaces materially change. If a later cleared pass fails, Mike should report the supported-surface blocker and stop without blind retry.
+
+## Seth late Bug J Option A ACK retained at 2026-04-26T17:55:35Z
+
+Signal:
+- Seth reported at `2026-04-26T17:34:00Z`, replying to `c9a4e2b1`, that he retains quality ownership for the merge-conflict/control-plane clearance path and agrees that Bug J Option A `/work` preservation proof no longer blocks the active `6b6eb427` lane.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Seth's ACK as correct quality coordination context. It does not reopen the raw Bug J `/work` EBUSY proof gate and does not clear a pass or retry.
+- No lifecycle mutation, Mike ops action, host-exec expansion, Docker/SGLang action, operator escalation, product route, additional delegation, or broader clearance is open from this ACK.
+- The active hold remains deterministic merge-conflict/control-plane evidence, with Seth owning the next clearance step and Mike watch-only until explicit Seth/Kyle re-clearance or materially changed supported-surface evidence.
+
+## Seth historical standby ACK retained at 2026-04-26T17:54:17Z
+
+Signal:
+- Seth reported at `2026-04-26T17:31:38Z`, replying to `a7f3c9d2`, that the historical standby ACK is retained only as passive context and does not reopen the earlier Bug J no-pass condition.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Seth's ACK as passive historical quality context only. It does not reopen the raw Bug J `/work` EBUSY proof gate.
+- The active lane remains the post-Bug-J deterministic merge-conflict/control-plane path for `6b6eb427`.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, operator escalation, product route, quality reroute, or additional C-Suite coordination is open from this ACK.
+
+## Mike Seth-clearance watch ACK retained at 2026-04-26T17:53:17Z
+
+Signal:
+- Mike reported at `2026-04-26T17:32:03Z`, replying to `e3b91a6c`, that Bug J Option A remains cleared only for the specific `/work` EBUSY blocker and that the active hold remains deterministic merge conflicts plus terminal-conflict control-plane behavior.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Mike's ACK as correct ops coordination context. It does not reopen the raw Bug J `/work` proof gate.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, worker-lane change, operator escalation, product route, quality reroute, or additional C-Suite coordination is open from this ACK.
+- Mike remains watch-only until Seth/Kyle re-clear a targeted action or a material supported-surface change appears.
+
+## Mike guardrail ACK retained at 2026-04-26T17:52:02Z
+
+Signal:
+- Mike reported at `2026-04-26T17:31:16Z`, replying to `3f9a2c7b`, that he now records Seth's later Bug J `/work` proof as accepted while retaining no-blind-pass guardrails on `6b6eb427`.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop plus zero-UUID crash evidence.
+
+Decision:
+- Retain Mike's ACK as correct ops coordination context. It does not reopen the raw Bug J `/work` EBUSY proof gate.
+- Do not run or request `dremctl pass`, retry, host-exec expansion, Docker/SGLang action, product route, quality reroute, operator escalation, or additional C-Suite coordination from this ACK.
+- Mike remains watch-only until Seth/Kyle explicitly re-clear one targeted next action; if a later cleared pass fails, Mike should stop after one attempt and report the named supported-surface blocker.
+
+## Seth terminal-conflict ordering accepted for operator decision at 2026-04-26T17:50:44Z
+
+Signal:
+- Seth reported at `2026-04-26T17:30:15Z`, replying to `b4e9a301`, that `6b6eb427` remains `testing_ready` with no worker and that no lifecycle mutation was performed.
+- The five conflict files are treated as stale control-plane/template overlap, not CanaryV17 payload: `cmd/drem/orchhttp_server.go`, `cmd/drem/orchhttp_server_test.go`, `internal/projects/template.go`, `internal/projects/template_test.go`, and `internal/spawner/types.go`.
+- Seth recommends resolving those to current master except for any proven direct CanaryV17 template line, preserving/reapplying only the CanaryV17 model file/type and direct test if present.
+- The terminal-conflict control-plane patch must precede or travel with conflict resolution before any Mike pass, so deterministic conflicts become terminal/held with `failure_reason=conflict`, visible events, conflict file metadata, and reconciler non-resurrection coverage.
+
+Decision:
+- Route the scoped authorization ask to the operator. Existing Bug J Option A authorization does not cover direct conflict resolution of `6b6eb427` or the terminal-conflict control-plane patch.
+- Keep Mike watch-only. Do not run or request `dremctl pass`, retry, destructive git/Docker action, credential change, or SGLang restart from this report.
+- If authorized, the resolver/control-plane pass may modify only the five conflict files as described, direct CanaryV17 model/test payload if needed, and minimal merger/orchestrator/reconciler files/tests needed to make conflict failures terminal and visible. Verification must include non-destructive read/dry-run git checks, gofmt on touched files, targeted Go tests, and constraint checks.
+
+## Mike controlled-pass recommendation accepted at 2026-04-26T17:49:13Z
+
+Signal:
+- Mike reported at `2026-04-26T17:29:35Z`, replying to operator thread `a7f1c9d2`, that a pass before the conflict/control-plane patch would only re-prove the known deterministic conflict/control-plane blocker and risk another reconciler loop.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, project workers remain effectively inactive for this task, and recent events still show the known `testing_ready -> merging -> failed -> in_progress/testing_ready` loop plus zero-UUID crash evidence.
+
+Decision:
+- Accept Mike's recommendation. Do not run `dremctl pass 6b6eb427` now.
+- Route the active next step to Seth: return the smallest safe deterministic conflict/control-plane patch or proof package, including targeted tests, and explicitly confirm Bug J Option A remains intact before any retry is re-cleared.
+- Mike remains watch-only. Kyle may re-clear exactly one controlled `dremctl pass 6b6eb427` only after Seth reports the conflict/control-plane patch/proof and pre-pass surfaces still show `testing_ready`, `worker=-`, no active project worker, and no newer unrelated failure signal.
+
+## Stale Mike passive resolver-watch ACK retained at 2026-04-26T17:48:10Z
+
+Signal:
+- Mike reported at `2026-04-26T17:27:10Z`, replying to `c57e4efa`, that he retained passive resolver-watch posture and would not pass `6b6eb427` without Bug J Option A evidence plus Seth/Kyle clearance.
+- Supported surfaces remain stable: world health is OK, `dremctl status` is reachable, and `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`.
+
+Decision:
+- Retain Mike's ACK as passive send-time ops context only. No lifecycle mutation, controlled pass, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality reroute, worker-lane request, operator escalation, or additional C-Suite coordination is open from it.
+- Do not reopen the raw Bug J Option A proof-pending gate from this stale ACK. The accepted Bug J Option A proof still clears the `/work` EBUSY blocker; the active hold remains deterministic merge-conflict/control-plane evidence, so Mike stays watch-only until Seth/Kyle re-clear a targeted action or supported surfaces materially change.
+
+## Stale Mike Bug J no-pass ACK retained at 2026-04-26T17:46:52Z
+
+Signal:
+- Mike reported at `2026-04-26T17:26:01Z`, replying to `a8d4f2c9`, that he retained the `6b6eb427` no-pass hold and would make no lifecycle mutation until visible Bug J Option A proof and Seth/Kyle clearance.
+- Supported surfaces remain stable: world health is OK, `dremctl status` is reachable, and `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`.
+
+Decision:
+- Retain Mike's ACK as passive send-time ops context only. No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, product route, quality reroute, operator escalation, or additional C-Suite coordination is open from it.
+- Do not reopen the raw Bug J Option A proof-pending gate from this stale ACK. The accepted Bug J Option A proof still clears the `/work` EBUSY blocker; the active hold remains deterministic merge-conflict/control-plane evidence, so Mike stays watch-only until Seth/Kyle re-clear a targeted action or supported surfaces materially change.
+
+## Stale Seth Bug J Option A hold ACK retained at 2026-04-26T17:45:45Z
+
+Signal:
+- Seth reported at `2026-04-26T17:23:44Z`, replying to `2026-04-26T17:23:07Z-kyle-58681280.md`, that the Bug J Option A hold remains retained and no controlled pass or retry is cleared until Mike returns proof that the regression proves `/work` mount-point preservation.
+- Supported surfaces remain stable: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler sequence.
+
+Decision:
+- Retain Seth's ACK as passive send-time quality context only. Do not open audit, lifecycle mutation, disposition mutation, cold-worker request, controlled pass, retry, recovery action, host-exec expansion, Docker/SGLang action, operator escalation, or additional C-Suite coordination from it.
+- Do not reopen the raw Bug J `/work` proof-pending gate from this stale ACK. The accepted Bug J Option A proof still clears the `/work` EBUSY blocker; the current hold remains deterministic merge-conflict/control-plane evidence, so Mike stays on ops guardrails until Seth/Kyle re-clear a targeted next action or supported surfaces materially change.
+
+## Late Seth proof package retained at 2026-04-26T17:40:40Z
+
+Signal:
+- Seth reported at `2026-04-26T17:21:27Z`, replying to `8f4a2c9b`, that Bug J Option A is proven in source, regression coverage, targeted merger tests, and the active merger image/container.
+- Supported surfaces remain stable: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler sequence.
+
+Decision:
+- Retain Seth's proof package as confirming that `/work` EBUSY is no longer the active blocker.
+- Do not run or request `dremctl pass`, retry lifecycle state, Docker/SGLang action, or a blind completion attempt from this report. The active blocker remains deterministic merge conflict/control-plane handling.
+
+## Seth passive quality closure ACK retained at 2026-04-26T17:36:44Z
+
+Signal:
+- Seth reported at `2026-04-26T17:17:30Z`, replying to `a3f91c7d`, that passive quality closure remains accepted and no Seth action is open absent concrete merger proof or a quality trigger.
+- Kyle rechecked supported surfaces at `2026-04-26T17:36:44Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Retain Seth's ACK as passive quality closure context only. No audit, lifecycle mutation, disposition mutation, cold-worker request, recovery action, host-exec expansion, Docker/SGLang action, operator escalation, or additional C-Suite coordination is open from this report.
+- The active hold remains deterministic merge-conflict/control-plane evidence after Bug J `/work` EBUSY proof clearance. Seth remains passive until concrete merger proof or a named quality trigger appears.
+
+## Late Seth direct-ownership ACK retained at 2026-04-26T17:38:32Z
+
+Signal:
+- Seth reported at `2026-04-26T17:19:14Z`, replying to `8f4a2c9b`, that he was taking direct ownership of the operator-authorized Bug J Option A implementation path and would not run `dremctl pass` or retry lifecycle state.
+- Kyle rechecked supported surfaces at `2026-04-26T17:38:32Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler sequence.
+
+Decision:
+- Retain Seth's ACK as correct for the direct-fix lane at send time, but do not reopen the raw Bug J Option A proof-pending gate because the later accepted proof package already cleared the `/work` EBUSY blocker.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, operator escalation, or additional C-Suite coordination is open from this ACK.
+- The active hold remains deterministic merge-conflict/control-plane evidence; Mike stays on ops guardrails until Seth/Kyle re-clear a targeted next action or supported surfaces materially change.
+
+## Mike closure-passive ACK retained at 2026-04-26T17:35:53Z
+
+Signal:
+- Mike reported at `2026-04-26T17:16:52Z`, replying to `2026-04-26T17:16:06Z-kyle-25a28f36.md` with no explicit inbound `corrid`, that closure-passive context is retained and no C-Suite coordination, lifecycle mutation, canary action, recovery action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional Mike action is open from this ACK.
+- Kyle rechecked supported surfaces at `2026-04-26T17:35:53Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler sequence.
+
+Decision:
+- Retain Mike's ACK as passive closure context only. No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, product route, operator escalation, or additional C-Suite coordination is open from this message.
+- Do not reopen the raw Bug J `/work` proof-pending gate from this ACK; the accepted Bug J Option A proof remains cleared for the EBUSY blocker. The current hold remains deterministic merge-conflict/control-plane evidence, so Mike stays on ops guardrails until Seth/Kyle re-clear a targeted next action or supported surfaces materially change.
+
+## Late Mike proof-pending hold ACK retained at 2026-04-26T17:34:05Z
+
+Signal:
+- Mike reported at `2026-04-26T17:14:40Z`, replying to `7d94e2a1` with no explicit inbound `corrid`, that the CanaryV17 no-pass hold remains active and he will take no action until Seth clears source, targeted regression, standard-check, and active merger image/container proof, or a material supported-surface change appears.
+- Kyle rechecked supported surfaces at `2026-04-26T17:34:05Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler sequence.
+
+Decision:
+- Retain Mike's no-action posture as safe ops guardrail context, but do not reopen the old raw Bug J proof-pending gate from this stale ACK.
+- The accepted Bug J Option A proof still clears the `/work` EBUSY blocker. The current hold remains deterministic merge-conflict/control-plane evidence, so Mike should wait for Seth/Kyle re-clearance or a material supported-surface change before any controlled retry.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, worker-lane change, operator escalation, or additional C-Suite coordination is open from this ACK.
+
+## Bug J proof accepted; deterministic conflict blocker opened at 2026-04-26T17:27:45Z
+
+Signal:
+- Operator's `yes` under `21a75e17` is treated as confirmation for the active Seth-owned Bug J Option A path.
+- Seth returned a critical proof package showing Bug J Option A is present in source, covered by targeted regressions, passes targeted merger checks, and is present in the active merger image/container path.
+- Latest active merger evidence got past `/work` reset/clone and failed on deterministic conflicts, not `/work` EBUSY.
+
+Decision:
+- Accept Bug J Option A as cleared for the specific `/work` EBUSY blocker.
+- Keep `6b6eb427` at `testing_ready`; do not run a blind controlled pass for completion while deterministic conflicts remain unresolved and terminal-conflict control-plane behavior is still a known P0 gap.
+- Kyle routed Mike to maintain ops guardrails and Seth to return the smallest safe merge-conflict/control-plane path.
+
+## Late Seth proof-pending ACK retained at 2026-04-26T17:32:49Z
+
+Signal:
+- Seth reported at `2026-04-26T17:13:28Z`, replying to `c9a4e2b1`, that the no-pass hold remains active until full Bug J Option A proof is visible and Seth/Kyle clearance is explicit.
+- Kyle rechecked supported surfaces at `2026-04-26T17:32:49Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler sequence.
+
+Decision:
+- Retain Seth's ACK as correct for the evidence visible when sent, but do not reopen the raw Bug J `/work` proof-pending gate because the later accepted proof package cleared that blocker.
+- The active hold remains deterministic merge-conflict/control-plane evidence. No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, worker-lane change, operator escalation, or additional C-Suite coordination is open from this ACK.
+- Mike stays on ops guardrails until Seth/Kyle explicitly re-clear a targeted next action or supported surfaces materially change.
+
+## Mike Seth-clearance watch ACK retained at 2026-04-26T17:31:11Z
+
+Signal:
+- Mike reported at `2026-04-26T17:12:09Z`, replying to `c4f0a9d3`, that he remains watch-only with no lifecycle mutation, retry, host-exec, Docker/SGLang action, pass/fail action, worker-lane change, operator escalation, or added C-Suite coordination open from the ACK.
+- Kyle rechecked supported surfaces at `2026-04-26T17:31:11Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained coordination context only. No lifecycle mutation, retry, host-exec expansion, Docker/SGLang action, pass/fail action, worker-lane change, operator escalation, or additional C-Suite coordination is open from this ACK.
+- The active hold remains the deterministic merge-conflict/control-plane gate recorded above, not a blind return to the raw Bug J `/work` EBUSY proof gate. Mike remains ops guardrail owner and should wait for Seth/Kyle re-clearance or a material supported-surface change before any controlled retry.
+
+## Late Mike proof-pending ACK retained at 2026-04-26T17:31:56Z
+
+Signal:
+- Mike reported at `2026-04-26T17:12:12Z`, replying to `af1fcd15`, that he kept `6b6eb427` blocked until Seth clears the full Bug J Option A proof package.
+- Kyle rechecked supported surfaces at `2026-04-26T17:31:55Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Retain Mike's no-pass action as correct for the evidence available when sent, but do not reopen the raw Bug J proof-pending gate from this stale ACK.
+- Seth's later proof package remains accepted for the `/work` EBUSY blocker. The active hold is deterministic merge-conflict/control-plane evidence, so Mike remains on ops guardrails and should wait for Seth/Kyle re-clearance or a material supported-surface change before any controlled retry.
+- No lifecycle mutation, controlled pass, retry, host-exec expansion, Docker/SGLang action, worker-lane change, operator escalation, or additional C-Suite coordination is open from this ACK.
+
+## Late Mike pre-proof hold ACK retained at 2026-04-26T17:30:09Z
+
+Signal:
+- Mike reported at `2026-04-26T17:11:04Z`, replying to `3f9a2c7b`, that he kept `6b6eb427` held and ran no pass while Bug J proof was still absent from his supported ops surfaces.
+- Kyle rechecked supported surfaces at `2026-04-26T17:30:09Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Retain Mike's no-pass action as correct for the evidence he had, but treat the proof-pending gate as superseded by Seth's later accepted proof package.
+- The current hold is no longer the raw Bug J `/work` EBUSY proof gate. It is the deterministic merge-conflict/control-plane gate, so Mike should maintain ops guardrails and avoid any blind `dremctl pass` until Seth/Kyle re-clear a targeted next action.
+
+## Mike passive resolver-watch ACK retained at 2026-04-26T17:26:05Z
+
+Signal:
+- Mike reported at `2026-04-26T17:08:10Z`, replying to `c57e4efa`, that passive resolver-watch context is recorded only and the active `6b6eb427` no-pass hold remains unchanged.
+- Kyle rechecked supported surfaces at `2026-04-26T17:26:05Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as passive resolver-watch context only. No lifecycle mutation, controlled pass, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination is open from this ACK.
+- The active hold remains unchanged: Bug J Option A source/regression/check/image proof and Seth/Kyle quality clearance remain required before Mike runs at most one controlled pass.
+
+## Mike no-pass hold ACK retained at 2026-04-26T17:24:57Z
+
+Signal:
+- Mike reported at `2026-04-26T17:06:40Z`, replying to `7f2a9c31`, that `6b6eb427` remains held in `testing_ready`, with no implementation commit, changed-file set, source/test proof, or active merger image/container evidence visible from supported ops surfaces.
+- Kyle rechecked supported surfaces at `2026-04-26T17:24:57Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Retain the no-pass hold. No lifecycle mutation, retry, host-exec, Docker/SGLang action, operator escalation, product route, quality reroute, or additional C-Suite coordination is open from this ACK.
+- Mike remains ops owner for at most one controlled `dremctl pass 6b6eb427` only after Seth clears visible Bug J Option A source, regression, standard-check, and active merger image/container proof.
+
+## Seth Bug J hold ACK retained at 2026-04-26T17:22:38Z
+
+Signal:
+- Seth reported at `2026-04-26T17:04:50Z`, replying to `3f8a6c2b`, that the Bug J Option A gate remains held and no controlled pass is cleared until Mike returns an implementation/proof package showing regression proof for `/work` mount-point preservation rather than only post-reset existence.
+- Kyle rechecked supported surfaces at `2026-04-26T17:22:38Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Retain the no-pass hold. No lifecycle mutation, retry, recovery action, host-exec expansion, Docker/SGLang action, operator escalation, or additional C-Suite coordination is open from this ACK.
+- Mike remains ops owner only after the full Bug J Option A proof package exists and Seth clears it.
+
+## Mike passive resolver-closure ACK retained at 2026-04-26T17:21:24Z
+
+Signal:
+- Mike reported at `2026-04-26T17:03:38Z`, replying to `c3a1d620`, that passive resolver-closure remains retained and no lifecycle mutation, retry, recovery action, worker-lane change, host-exec, Docker, SGLang, product route, quality route, operator escalation, or added C-Suite coordination was taken.
+- Kyle rechecked supported surfaces at `2026-04-26T17:21:24Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, project workers remain `0`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as passive resolver-closure context only. No lifecycle mutation, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination is open from this ACK.
+- The active `6b6eb427` hold remains unchanged: Bug J Option A must be fixed or designed, proven present in source/regressions/checks and the active merger image/container, then quality-cleared before Mike runs at most one controlled pass.
+
+## Alex passive product ACK retained at 2026-04-26T17:20:30Z
+
+Signal:
+- Alex reported at `2026-04-26T17:02:45Z`, replying to `93f7a2c1`, that CanaryV17 product posture remains passive and no product route, lifecycle mutation, recovery action, escalation, or additional coordination is open from his lane.
+- Kyle rechecked supported surfaces at `2026-04-26T17:20:30Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, project workers remain `0`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as passive product context only. No lifecycle mutation, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality reroute, worker-lane request, operator escalation, or additional C-Suite coordination is open from this ACK.
+- The active `6b6eb427` hold remains unchanged: Bug J Option A proof/design or scoped implementation clearance is required before Seth clearance and before any controlled Mike retry.
+
+## Seth passive quality closure ACK retained at 2026-04-26T17:19:23Z
+
+Signal:
+- Seth reported at `2026-04-26T17:01:48Z`, replying to `950e4224`, that passive closure-only context for `b0c7e3a9` is retained and the active CanaryV17/Bug J hold on `6b6eb427` remains unchanged.
+- Kyle rechecked supported surfaces at `2026-04-26T17:19:23Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, project workers remain `0`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as passive closure-only quality context. No lifecycle mutation, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality reroute, operator escalation, or additional C-Suite coordination is open from this ACK.
+- The active `6b6eb427` hold remains unchanged: Bug J Option A proof is required before Seth clearance and before any controlled Mike retry.
+
+## Seth passive quality closure ACK retained at 2026-04-26T17:17:10Z
+
+Signal:
+- Seth reported at `2026-04-26T16:59:45Z`, replying to `b9df1b34`, that the `c6a1f3d8` closure remains passive quality context only and no quality audit, lifecycle mutation, recovery action, escalation, or C-Suite coordination is open from Kyle's report.
+- Kyle rechecked supported surfaces at `2026-04-26T17:17:10Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, project workers remain `0`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as passive quality context only. No lifecycle mutation, retry, recovery action, host-exec expansion, Docker/SGLang action, product route, quality reroute, operator escalation, or additional C-Suite coordination is open from this ACK.
+- The `6b6eb427` quality boundary remains unchanged: visible Bug J Option A proof is required before Seth clearance and before any controlled Mike retry.
+
+## Mike closure-passive context ACK retained at 2026-04-26T17:15:24Z
+
+Signal:
+- Mike reported at `2026-04-26T16:57:55Z`, replying to `a6d4f2c8`, that the closure-passive context remains retained and no ops action is open until Seth satisfies the CanaryV17 merger investigation/proof gate.
+- Kyle rechecked supported surfaces at `2026-04-26T17:15:24Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, project workers remain `0`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as passive closure context only. No lifecycle mutation, retry, canary action, recovery action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination is open from this ACK.
+- Seth remains active owner for the current merger proof gate. Mike remains ops owner for at most one controlled pass only after that gate is satisfied or a new directive changes the lane.
+
+## Mike duplicate hold ACK retained at 2026-04-26T17:13:21Z
+
+Signal:
+- Mike reported at `2026-04-26T16:56:22Z`, replying to `b6c3f912`, that the CanaryV17 hold remains retained and no lifecycle mutation was performed.
+- Kyle rechecked supported surfaces at `2026-04-26T17:13:21Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained coordination context only. No lifecycle mutation, retry, host-exec, Docker/SGLang action, pass/fail action, worker-lane change, operator escalation, or additional C-Suite coordination is open from this ACK.
+- Seth remains active owner for Bug J Option A proof-package clearance. Mike remains ops owner for at most one controlled pass only after that clearance exists or supported surfaces materially change.
+
+## Seth Bug J Option A quality ACK retained at 2026-04-26T17:12:30Z
+
+Signal:
+- Seth reported at `2026-04-26T16:55:18Z`, replying to `c9a4e2b1`, that Bug J Option A remains the controlling quality gate and aligns with Mike's no-pass ops hold.
+- Kyle rechecked supported surfaces at `2026-04-26T17:12:30Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained quality-gate confirmation only. No lifecycle mutation, retry, host-exec, Docker/SGLang action, pass/fail action, worker-lane change, operator escalation, or additional C-Suite coordination is open from this ACK.
+- The no-pass hold remains active until source, targeted regression coverage, standard checks, and active merger image/container proof exist for Option A.
+- Bug J-b remains separate observability debt unless missing merger result-log upload blocks post-fix analysis.
+
+## Mike Bug J Option A hold ACK retained at 2026-04-26T17:11:34Z
+
+Signal:
+- Mike reported at `2026-04-26T16:54:22Z`, replying to `af1fcd15`, that he is retaining the hold on `6b6eb427` and made no lifecycle mutation.
+- Kyle rechecked supported surfaces at `2026-04-26T17:11:34Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained coordination context only. No lifecycle mutation, retry, host-exec, Docker/SGLang action, pass/fail action, worker-lane change, operator escalation, or additional C-Suite coordination is open from this ACK.
+- Seth remains active owner for source, targeted regression, standard-check, and active merger image/container proof clearance. Mike remains ops owner for at most one controlled pass only after that clearance exists.
+- Bug J-b remains separate observability debt unless post-fix failure analysis becomes impossible without merger result-log upload.
+
+## Mike Seth-clearance watch ACK retained at 2026-04-26T17:10:58Z
+
+Signal:
+- Mike reported at `2026-04-26T16:53:24Z`, replying to `c4f0a9d3`, that the no-pass hold remains retained for `6b6eb427` and he will wait for Seth clearance or a material supported-status change.
+- Kyle rechecked supported surfaces at `2026-04-26T17:10:58Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained coordination context only. No lifecycle mutation, retry, host-exec, Docker/SGLang action, pass/fail action, worker-lane change, operator escalation, or additional C-Suite coordination is open from this ACK.
+- Seth remains active owner for current merger fix-path analysis/proof clearance. Mike remains watch/ops owner only after Seth clearance or a material supported-status change.
+
+## Seth merger investigation result accepted at 2026-04-26T17:09:35Z
+
+Signal:
+- Seth reported under `seth-merger-investigation-20260426` that Option A remains sufficient for the `/work` mount blocker but does not by itself make the merger control plane healthy.
+- The remaining P0 control-plane gaps are zero-UUID merger crash evidence, missing or weak merger attempt metadata, retry-exhaustion terminality, and reconciler resurrection behavior.
+- Kyle rechecked supported surfaces: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 loop.
+
+Decision:
+- Retain the no-pass hold until the Bug J Option A proof package exists: source shape preserving `/work`, regression proof that would fail on delete/recreate, stale child cleanup including dotfiles/nested dirs, clone/populate into the existing directory, relevant merger tests/gofmt/constitution checks, and active merger image/container proof.
+- Once that proof exists, Mike is cleared for at most one controlled `dremctl pass 6b6eb427` with pre/post `dremctl status`, task state, and events captured. Any failure becomes a named blocker; no repeated pass loop.
+- Do not require the metadata/terminal-failure patch before that one validation retry, but do require it before broader no-pass-hold removal or claiming the merger/reconciler path recovered.
+- Keep Bug J-b (`/internal/logs` 401) as observability debt unless reporter failure becomes fatal or prevents evidence capture.
+
+## Mike Bug J Option A ops handoff ACK retained at 2026-04-26T17:05:12Z
+
+Signal:
+- Mike reported at `2026-04-26T16:48:41Z`, replying to `5a8c1d7e`, that the tightened Bug J Option A gate is now recorded in his state and durable handoff note.
+- Kyle rechecked supported surfaces at `2026-04-26T17:05:12Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+- No implementation commit, changed-file set, source/test evidence, or active merger image/container evidence is visible on the supported ops surfaces yet.
+
+Decision:
+- Retain the no-pass hold. No lifecycle mutation, controlled pass, operator escalation, host-exec, Docker/SGLang action, or additional C-Suite coordination is open from this ACK.
+- Mike remains ops owner for evidence return and any single controlled retry only after Seth clears the proof package.
+- Seth remains the quality gate owner for source shape, regression proof, standard checks, and active merger image/container evidence.
+
+## Seth proof-gate ACK retained at 2026-04-26T17:03:38Z
+
+Signal:
+- Seth reported at `2026-04-26T16:48:25Z`, replying to `seth-bug-j-option-a-gate-20260426`, that he will not clear a controlled `dremctl pass 6b6eb427` until Mike returns the Bug J Option A proof package.
+- The gate remains the tightened shape: preserve the `/work` mount point, populate the existing directory, and require a regression that would fail if the implementation deletes/recreates `/work` instead of only removing children.
+- Kyle rechecked supported surfaces at `2026-04-26T17:03:38Z`: world health is OK, `dremctl status` is reachable, `6b6eb427` remains `testing_ready` with `worker=-`, supported workers show no active project execution, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Retain the no-pass hold. No lifecycle mutation, retry, operator escalation, host-exec, Docker/SGLang action, or additional C-Suite coordination is open from this ACK.
+- Mike remains responsible for returning implementation/proof evidence. Seth remains responsible for clear/reject before any controlled pass.
+
+## Mike retained no-pass hold ACK at 2026-04-26T16:55:10Z
+
+Signal:
+- Mike reported under `b6c3f912`, replying to `af1fcd15`, that he retained the CanaryV17 hold and will keep `6b6eb427` blocked at `testing_ready` until Bug J Option A is fixed, covered, and proven present in the active merger image/container.
+- Kyle rechecked supported surfaces at `2026-04-26T16:55:10Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Retain the no-pass hold. No lifecycle mutation was run and none is authorized from this ACK.
+- Seth proof-package request remains outstanding. Mike should act only after the full proof package exists or supported surfaces materially change.
+
+## Seth accepted-gate ACK retained at 2026-04-26T16:54:13Z
+
+Signal:
+- Seth reported under `c9a4e2b1`, replying to the accepted Bug J Option A gate, that the gate is controlling and that there is no quality objection.
+- The retained gate remains: preserve `/work` as the mount point, remove only children inside `/work`, clone/populate into the existing workdir, require targeted regression coverage plus standard checks, and require active merger image/container proof before retry.
+- Kyle rechecked supported surfaces at `2026-04-26T16:54:13Z`: world health is OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Retain the no-pass hold. Do not run `dremctl pass 6b6eb427` until active merger proof exists for the Option A fix plus required regression and standard-check evidence.
+- Seth has no additional quality objection from this ACK. Mike remains ops owner only for the controlled retry after the proof package exists.
+- Bug J-b (`/internal/logs` 401) remains separate observability debt unless missing merger result-log upload blocks post-fix analysis.
+
+## Mike Bug J Option A gate hold retained at 2026-04-26T16:53:02Z
+
+Signal:
+- Mike reported under `af1fcd15`, replying to Kyle's `d4a9c7e2` handoff, that he accepted the Bug J Option A gate and will not run `dremctl pass 6b6eb427` yet.
+- Mike's supported-surface read matches Kyle's verification at `2026-04-26T16:53:02Z`: world health remains OK, `dremctl status` is reachable, supported workers show no active project worker, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent supported events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Retain the no-pass hold. Do not run `dremctl pass 6b6eb427` until Bug J Option A is proven in source, targeted regressions, standard checks, and the active merger image/container runtime.
+- Seth remains active investigation owner for the current merger fix/proof package. Mike remains ops owner only for one controlled pass after that proof is present.
+- If the single controlled pass fails after proof, Mike should report the new blocker from supported surfaces and must not retry blindly.
+- Bug J-b (`/internal/logs` 401) remains separate observability debt unless post-fix failure analysis becomes impossible without merger result-log upload.
+
+## Operator-directed Seth merger investigation opened at 2026-04-26T16:51:07Z
+
+Signal:
+- Operator directed Kyle under `5b99982e` to have Seth investigate the merger issues and adjust artifact metadata to facilitate that work.
+- Kyle marked this artifact, `strategic-goal-canaryv17-working.md`, `bug-j-merger-reset-workdir-unlinkat-busy.md`, and `p0-merger-terminal-failure-control-plane.md` as active Seth investigation inputs.
+
+Decision:
+- Seth is now the active investigation owner for the merger issue cluster: Bug J `/work` reset failure, the `6b6eb427` merger/reconciler loop, zero-UUID merger crash evidence, merger attempt metadata gaps, and Bug J-b `/internal/logs` 401 only if it materially affects investigation quality.
+- Mike remains ops owner only for evidence-preserving status checks and any controlled retry after Seth clears the fix/proof shape.
+- The no-pass hold remains active. Do not run `dremctl pass 6b6eb427` from this metadata change alone.
+
+## Mike redirection ACK retained at 2026-04-26T16:52:33Z
+
+Signal:
+- Mike reported at `2026-04-26T16:39:11Z` that the operator's newer directive to have Seth figure out the current merger fix path was routed from Mike's outbox because direct recipient inbox mounts are read-only from Mike's container.
+- Mike made no lifecycle mutation, retry, host-exec, Docker/SGLang action, or worker-lane change.
+- Kyle rechecked supported surfaces at `2026-04-26T16:52:33Z`: world health remains OK, `dremctl status` is reachable, supported workers show no active project worker, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events remain the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat Mike's report as retained coordination context only.
+- Seth remains active investigation owner for the current merger issue cluster and likely fix-path analysis.
+- Mike remains ops owner only after Seth returns fix/proof clearance or if supported status surfaces materially change.
+- Keep the no-pass hold active. Do not run `dremctl pass 6b6eb427` from this ACK.
+
+## Mike passive resolver-watch ACK retained at 2026-04-26T16:48:29Z
+
+Signal:
+- Mike reported at `2026-04-26T16:36:18Z`, replying to `b64d9a20` and with no explicit inbound `corrid`, that passive resolver-watch context remains retained and no lifecycle, recovery, canary, host-exec, Docker/SGLang, product, quality, worker-lane, operator-escalation, or added coordination action was taken.
+- Kyle rechecked supported surfaces at `2026-04-26T16:48:29Z`: world health remains OK, `dremctl status` is reachable, supported workers show no running project workers, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained passive resolver-watch context only.
+- No lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep this passive context separate from the active Mike-owned CanaryV17 recovery lane in `strategic-goal-canaryv17-working.md`.
+
+## Seth Bug J Option A gate tightened at 2026-04-26T16:47:09Z
+
+Signal:
+- Seth reported under `seth-bug-j-option-a-gate-20260426` that CanaryV17 pass remains blocked until Bug J Option A preserves the `/work` mount point, populates the existing directory, and includes a regression that would fail on delete/recreate.
+- Kyle rechecked supported surfaces at `2026-04-26T16:47:09Z`: world health remains OK, `dremctl status` is reachable, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Retain the no-pass hold. Do not run `dremctl pass 6b6eb427` until the source fix and regression prove `/work` itself is preserved, clone/populate targets the existing directory, and the active merger image/container includes the fix.
+- Treat same device/inode before/after reset or a real bind-mount harness as the preferred regression proof. Existence-only tests are insufficient.
+- Keep Bug J-b (`/internal/logs` 401) separate observability debt unless reporter failure becomes fatal.
+
+Action:
+- Kyle routed the tightened criteria to Mike under `5a8c1d7e` and asked for the implementation commit or changed-file set to send back to Seth for gate clearance.
+
+## Alex passive CanaryV17 product ACK retained at 2026-04-26T16:45:31Z
+
+Signal:
+- Alex reported at `2026-04-26T16:33:47Z`, replying to `a4c9d2f8`, that the CanaryV17 product lane remains passive and supported status shows no new lifecycle evidence requiring product action.
+- Kyle rechecked supported surfaces at `2026-04-26T16:45:31Z`: world health remains OK, `dremctl status` is reachable, supported status reports zero running project workers, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained passive CanaryV17 product posture only.
+- No Alex product route, lifecycle or disposition mutation, retry or recovery action, host-exec expansion, SGLang action, ops or quality reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Alex passive unless supported lifecycle or disposition evidence changes, evidence is lost, unexpected CanaryV17/product movement appears, or Kyle/operator explicitly redirects the lane.
+- This passive product posture does not supersede or dilute the active Mike-owned CanaryV17 recovery context in `strategic-goal-canaryv17-working.md`.
+
+## Seth passive closure-only ACK retained at 2026-04-26T16:43:58Z
+
+Signal:
+- Seth reported at `2026-04-26T16:30:20Z`, replying to `9f4a2c7d`, that he remains passive on the `b0c7e3a9` closure-only quality lane until a concrete supported trigger appears.
+- Kyle rechecked supported surfaces at `2026-04-26T16:43:58Z`: world health remains OK, `dremctl status` is reachable, supported status reports zero running project workers, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained passive closure-only quality posture only.
+- No Seth audit, lifecycle or disposition mutation, cold-worker request, recovery action, host-exec expansion, SGLang action, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Seth passive unless a concrete quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+- This passive quality ACK does not supersede or dilute the active Mike-owned CanaryV17 recovery context in `strategic-goal-canaryv17-working.md`.
+
+## Seth passive quality closure retained at 2026-04-26T16:42:34Z
+
+Signal:
+- Seth reported at `2026-04-26T16:29:14Z`, replying to `c27e4b91`, that passive quality closure remains retained and no Seth action is open.
+- Kyle rechecked supported surfaces at `2026-04-26T16:42:34Z`: world health remains OK, `dremctl status` is reachable, supported status reports zero running project workers, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained passive quality closure only.
+- No Seth audit, lifecycle or disposition mutation, cold-worker request, recovery action, host-exec expansion, SGLang action, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Seth passive unless a named quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+- This passive quality ACK does not supersede or dilute the active Mike-owned CanaryV17 recovery context in `strategic-goal-canaryv17-working.md`.
+
+## Alex CanaryV17 passive product closure retained at 2026-04-26T16:41:10Z
+
+Signal:
+- Alex reported at `2026-04-26T16:28:10Z`, replying to `770b1ff5`, that CanaryV17 passive product closure remains retained and no product action is open unless product scope, success criteria, operator-visible behavior, supported lifecycle evidence, or Kyle/operator direction changes.
+- Kyle rechecked supported surfaces at `2026-04-26T16:41:10Z`: world health remains OK, `dremctl status` is reachable, supported status reports zero running project workers, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained passive CanaryV17 product closure only.
+- No Alex product route, lifecycle or disposition mutation, retry or recovery action, host-exec expansion, SGLang action, ops or quality reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- This passive product posture does not supersede or dilute the active Mike-owned CanaryV17 recovery context in `strategic-goal-canaryv17-working.md`.
+
+## Mike operational hold ACK retained at 2026-04-26T16:40:11Z
+
+Signal:
+- Mike reported under `af1fcd15` that the no-pass hold on `6b6eb427` is recorded on his side and that he remains ops owner for the canary retry after Bug J Option A is fixed and Seth clears the gate.
+- Kyle rechecked supported surfaces at `2026-04-26T16:40:11Z`: `dremctl status` is reachable and healthy, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, supported worker surfaces show no active project workers, and recent events still show only the known merger/reconciler loop.
+
+Decision:
+- Retain the no-pass hold. Do not run `dremctl pass 6b6eb427` until Bug J Option A is fixed, covered, and proven present in the active merger image/container.
+- Mike remains ops owner for the controlled retry after proof is present; this ACK does not require a new delegation or operator escalation.
+
+## Bug J Option A quality gate accepted at 2026-04-26T16:38:52Z
+
+Signal:
+- Seth reported under `c9a4e2b1` that Option A is the right quality-gate shape for Bug J: reset removes children under `/work` while preserving `/work`, and clone/populate targets the already-existing directory.
+- Kyle rechecked supported surfaces at `2026-04-26T16:38:52Z`: world health is OK, `dremctl status` is reachable, `6b6eb427` remains `testing_ready`, and recent supported events still show the known 2026-04-24 merger/reconciler loop with no newer lifecycle movement.
+
+Decision:
+- Accept Option A as the Bug J quality gate and keep `dremctl pass 6b6eb427` blocked until the fix is proven present in the active merger image/container with targeted regression coverage.
+- Do not accept variants that delete/recreate `/work`, ignore arbitrary `RemoveAll` errors, change worker mount layout, or expand into reconciler behavior as part of this fix.
+- Keep Bug J-b (`/internal/logs` 401) separate observability debt unless post-fix failure analysis is impossible without merger result-log upload.
+
+Action:
+- Kyle delegated Mike under `d4a9c7e2` to own the ops handoff: verify source shape, targeted regression coverage, standard checks, active merger image/container evidence, then run at most one controlled `dremctl pass 6b6eb427` only after that proof is present.
+
+## Mike passive resolver-watch ACK retained at 2026-04-26T16:38:07Z
+
+Signal:
+- Mike reported at `2026-04-26T16:21:08Z`, replying to `773dbdeb`, that passive resolver-watch remains retained only and no lifecycle, recovery, canary, host-exec, Docker/SGLang, product, quality, worker-lane, operator-escalation, or added coordination action is open.
+- Kyle rechecked supported surfaces at `2026-04-26T16:38:07Z`: world health remains OK, `dremctl status` is reachable, supported status reports zero running workers, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 crash/status sequence.
+
+Decision:
+- Treat this as retained passive resolver-watch context only.
+- No lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Mike passive unless a resolver-watch or recovery trigger appears, supported lifecycle or disposition evidence changes, evidence risk changes, or operator/platform scope changes.
+
+## Seth standby-only passive quality ACK retained at 2026-04-26T16:36:29Z
+
+Signal:
+- Seth reported at `2026-04-26T16:17:07Z`, replying to `9c4e2a71`, that standby-only passive quality posture remains retained and no Seth action is open.
+- Kyle rechecked supported surfaces at `2026-04-26T16:36:29Z`: world health remains OK, `dremctl status` is reachable, supported status reports zero running workers, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger/status/crash sequence.
+
+Decision:
+- Treat this as retained standby-only passive quality posture only.
+- No Seth audit, disposition mutation, cold-worker request, host-exec expansion, SGLang action, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Seth standby-only unless a concrete quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+- This passive quality ACK does not supersede or dilute the active Mike-owned CanaryV17 recovery context in `strategic-goal-canaryv17-working.md`.
+
+## Mike passive resolver-watch ACK retained at 2026-04-26T16:35:13Z
+
+Signal:
+- Mike reported at `2026-04-26T16:20:31Z`, replying to `7e2c4a91`, that passive resolver-watch context remains retained and no lifecycle or coordination action is open from the ACK.
+- Kyle rechecked supported surfaces at `2026-04-26T16:35:13Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running, `6b6eb427` remains `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 crash/status and merger/reconciler sequence.
+
+Decision:
+- Treat this as retained passive resolver-watch context only.
+- No lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep this passive context separate from the active CanaryV17 recovery artifact; it does not change Mike-owned recovery ownership unless supported surfaces or operator scope change.
+
+## Mike passive resolver-closure ACK retained at 2026-04-26T16:33:32Z
+
+Signal:
+- Mike reported at `2026-04-26T16:19:26Z`, replying to `c3a1d620`, that passive resolver-closure context remains retained and he is not opening lifecycle mutation, host-exec, Docker, SGLang, product, quality, worker-lane, operator-escalation, retry, recovery, or additional action from that lane.
+- Kyle rechecked supported surfaces at `2026-04-26T16:33:32Z`: world health remains OK, `dremctl status` is reachable, supported status reports zero running workers, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger/reconciler loop.
+
+Decision:
+- Treat this as retained passive resolver-closure context only.
+- No lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep this passive context separate from the active CanaryV17 recovery recommendation lane already reported under `b7c4e91a`; it does not change the Mike-owned recovery lane unless supported surfaces or operator scope change.
+
+## Alex CanaryV17 passive product lane retained at 2026-04-26T16:32:03Z
+
+Signal:
+- Alex reported at `2026-04-26T16:18:04Z`, replying to `a4c9d2f8`, that the CanaryV17 product lane remains passive and no product route, lifecycle/disposition mutation, retry/recovery action, host-exec expansion, SGLang action, ops/quality reroute, worker-lane request, operator escalation, or extra C-Suite coordination is open.
+- Kyle rechecked supported surfaces at `2026-04-26T16:32:03Z`: world health remains OK, `dremctl status` is reachable, supported status reports project workers at zero running, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger failure/crash sequence.
+
+Decision:
+- Treat this as retained passive CanaryV17 product-lane posture only.
+- No Alex product route, lifecycle or disposition mutation, retry or recovery action, host-exec expansion, SGLang action, ops or quality reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this report.
+- Keep Alex passive unless supported lifecycle or disposition evidence changes, evidence is lost, unexpected CanaryV17/product movement appears, or Kyle/operator explicitly redirects the lane.
+- This passive product posture does not supersede or dilute the active Mike-owned CanaryV17 recovery context in `strategic-goal-canaryv17-working.md`.
+
+## Seth passive closure-only quality lane retained at 2026-04-26T16:29:19Z
+
+Signal:
+- Seth reported at `2026-04-26T16:14:46Z`, replying to `cdb68adb`, that the `b0c7e3a9` closure-only quality lane remains passive and no Seth action is open.
+- Kyle rechecked supported surfaces at `2026-04-26T16:29:19Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger failure/crash sequence.
+
+Decision:
+- Treat this as retained passive closure-only quality posture only.
+- No Seth audit, lifecycle or disposition mutation, cold-worker request, recovery action, host-exec expansion, SGLang action, operator escalation, or additional C-Suite coordination is required from this report.
+- Keep Seth passive unless a concrete quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+
+## Seth passive quality closure retained at 2026-04-26T16:28:14Z
+
+Signal:
+- Seth reported at `2026-04-26T16:13:22Z`, replying to `4c8d2f9a`, that passive quality closure remains retained and no Seth action is open.
+- Kyle rechecked supported surfaces at `2026-04-26T16:28:14Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained passive quality closure only.
+- No Seth audit, lifecycle or disposition mutation, cold-worker request, recovery action, host-exec expansion, SGLang action, operator escalation, or additional C-Suite coordination is required from this report.
+- Keep Seth passive unless a named quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+
+## Alex CanaryV17 passive product closure retained at 2026-04-26T16:26:52Z
+
+Signal:
+- Alex reported at `2026-04-26T16:12:58Z`, replying to `770b1ff5`, that CanaryV17 passive product closure remains retained and no product route, lifecycle/disposition mutation, retry/recovery action, host-exec expansion, SGLang action, ops/quality reroute, worker-lane request, operator escalation, or additional C-Suite coordination is open from Alex.
+- Kyle rechecked supported surfaces at `2026-04-26T16:26:52Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 merger failure loop.
+
+Decision:
+- Treat this as retained passive CanaryV17 product closure only.
+- No Alex product route, lifecycle or disposition mutation, retry or recovery action, host-exec expansion, SGLang action, ops or quality reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this report.
+- The active strategic recovery artifact remains an ops-led/Mike execution path; Alex stays passive unless product scope, success criteria, operator-visible behavior, supported lifecycle evidence, or Kyle/operator direction changes.
+
+## Mike passive resolver-watch ACK retained at 2026-04-26T16:20:24Z
+
+Signal:
+- Mike reported at `2026-04-26T16:15:04Z`, replying to `7c94a1d2` and with no explicit inbound `corrid`, that passive resolver-watch context is retained and no lifecycle mutation is being taken from the ACK.
+- Kyle rechecked supported surfaces at `2026-04-26T16:20:24Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 crash/status sequence.
+
+Decision:
+- Treat this as retained passive resolver-watch context only.
+- No lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Mike passive unless a resolver-watch trigger appears, evidence-risk posture changes, unexpected lifecycle movement appears, a supported lifecycle/disposition surface changes, or operator/platform recovery scope changes.
+
+## Mike passive resolver-watch ACK retained at 2026-04-26T16:19:12Z
+
+Signal:
+- Mike reported at `2026-04-26T16:15:02Z`, replying to `1a06b2f6`, that passive resolver-watch context is retained and no lifecycle mutation is being taken from the ACK.
+- Kyle rechecked supported surfaces at `2026-04-26T16:19:11Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 crash/status sequence.
+
+Decision:
+- Treat this as retained passive resolver-watch context only.
+- No lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep this passive context separate from the active CanaryV17 recovery artifact; it does not change the Mike-owned recovery lane unless supported surfaces or operator scope change.
+
+## Alex CanaryV17 passive product lane retained at 2026-04-26T16:17:05Z
+
+Signal:
+- Alex reported at `2026-04-26T16:11:40Z`, replying to `a4c9d2f8`, that the CanaryV17 product lane remains passive and supported surfaces still match the no-action posture.
+- Kyle rechecked supported surfaces at `2026-04-26T16:17:05Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 crash/status sequence.
+
+Decision:
+- Treat this as retained passive CanaryV17 product-lane posture only.
+- No Alex product route, lifecycle or disposition mutation, retry or recovery action, host-exec expansion, SGLang action, ops or quality reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this report.
+- Keep Alex passive unless supported lifecycle or disposition evidence changes, evidence is lost, unexpected CanaryV17/product movement appears, or Kyle/operator explicitly redirects the lane.
+
+## Seth standby-only passive quality ACK retained at 2026-04-26T16:16:10Z
+
+Signal:
+- Seth reported at `2026-04-26T16:11:36Z`, replying to `ad490578`, that standby-only passive quality posture remains retained and no Seth action is open.
+- Kyle rechecked supported surfaces at `2026-04-26T16:16:10Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained standby-only passive quality posture only.
+- No Seth audit, lifecycle or disposition mutation, cold-worker request, recovery action, host-exec expansion, SGLang action, operator escalation, or additional C-Suite coordination is required from this report.
+- Keep Seth standby-only unless a concrete quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+
+## Seth passive quality closure retained at 2026-04-26T16:15:10Z
+
+Signal:
+- Seth reported at `2026-04-26T16:11:36Z`, replying to `0bd1a98c`, that passive quality closure remains retained and no Seth action is open.
+- Kyle rechecked supported surfaces at `2026-04-26T16:15:10Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained passive quality closure only.
+- No Seth audit, lifecycle or disposition mutation, cold-worker request, recovery action, host-exec expansion, SGLang action, operator escalation, or additional C-Suite coordination is required from this report.
+- Keep Seth passive unless a named quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+
+## Seth passive quality closure acknowledged at 2026-04-26T16:12:25Z
+
+Signal:
+- Seth reported at `2026-04-26T16:11:36Z`, replying to `seth-20260425T152213Z-passive-quality-closure-ack`, that passive quality closure remains retained and no Seth action is open.
+- Kyle rechecked supported surfaces at `2026-04-26T16:12:25Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained passive quality closure only.
+- No Seth audit, lifecycle or disposition mutation, cold-worker request, recovery action, host-exec expansion, SGLang action, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Seth passive unless a named quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+
+## Alex passive product closure retained at 2026-04-26T16:11:32Z
+
+Signal:
+- Alex reported at `2026-04-26T15:33:46Z`, replying to `20260425T145350Z-alex-canaryv17-passive-closure-retained-ack`, that CanaryV17 remains retained passive product closure with no Alex-side route, mutation, escalation, or coordination open.
+- Kyle rechecked supported surfaces at `2026-04-26T16:11:32Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer lifecycle movement beyond the known 2026-04-24 merger failure loop.
+
+Decision:
+- Treat this as retained passive CanaryV17 product closure only.
+- No Alex product route, lifecycle or disposition mutation, retry or recovery action, host-exec expansion, SGLang action, ops or quality reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- The newer strategic recovery artifact remains an ops-led/Mike execution path; Alex stays passive unless product scope, success criteria, operator-visible behavior, or supported lifecycle evidence changes.
+
+## Mike passive resolver-watch retained at 2026-04-26T15:44:26Z
+
+Signal:
+- Mike reported at `2026-04-25T15:23:53Z`, with no explicit inbound `corrid` and replying to `e5c1a7b9`, that passive resolver-watch remains retained and no Mike lifecycle action is open.
+- Kyle rechecked supported surfaces at `2026-04-26T15:44:26Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained passive resolver-watch posture only.
+- No lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, product route, quality route, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Mike passive unless a named resolver/canary trigger appears, supported surfaces change, unexpected lifecycle movement appears, or operator scope changes.
+
+## Seth passive quality closure retained at 2026-04-26T15:41:59Z
+
+Signal:
+- Seth reported at `2026-04-25T15:18:55Z`, with no explicit inbound `corrid` and replying to `2663608f`, that passive quality closure remains retained and no Seth audit, recovery request, host-exec expansion, operator escalation, or additional C-Suite coordination is open.
+- Kyle rechecked supported surfaces at `2026-04-26T15:41:59Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained passive quality closure only.
+- No Seth audit, lifecycle or disposition mutation, recovery action, cold-worker request, host-exec expansion, SGLang action, product or ops reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Seth passive unless a named quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+
+## Alex CanaryV17 passive product lane ACK retained at 2026-04-26T15:39:47Z
+
+Signal:
+- Alex reported at `2026-04-25T15:21:26Z`, replying to `a4c9d2f8`, that the CanaryV17 passive product-lane posture remains retained, with prior thread `013b828e` treated as context only.
+- Kyle rechecked supported surfaces at `2026-04-26T15:39:47Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 crash/status sequence.
+
+Decision:
+- Treat this as retained passive CanaryV17 product-lane acknowledgement only.
+- No product route, lifecycle or disposition mutation, retry or recovery action, host-exec expansion, SGLang action, ops or quality reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Alex passive unless supported lifecycle or disposition evidence changes, evidence is lost, unexpected CanaryV17/product movement appears, or Kyle/operator explicitly redirects the lane.
+
+## Seth standby-only passive quality ACK retained at 2026-04-26T15:38:45Z
+
+Signal:
+- Seth reported at `2026-04-25T15:19:46Z`, replying to `ad490578`, that standby-only passive quality posture remains retained and no Seth audit, lifecycle or disposition mutation, recovery action, cold-worker request, host-exec expansion, SGLang action, product or ops reroute, worker-lane request, operator escalation, or additional C-Suite coordination is open.
+- Kyle rechecked supported surfaces at `2026-04-26T15:38:45Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained standby-only passive quality posture only.
+- No Seth audit, lifecycle or disposition mutation, recovery action, cold-worker request, host-exec expansion, SGLang action, product or ops reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Seth standby-only unless a concrete quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+
+## Mike passive resolver-closure maintenance retained at 2026-04-26T15:37:46Z
+
+Signal:
+- Mike reported at `2026-04-25T15:18:14Z`, replying to `d4f8a2c1`, that passive resolver-closure posture remains retained and no Mike action lane is open.
+- Kyle rechecked supported surfaces at `2026-04-26T15:37:46Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained passive resolver-closure maintenance posture only.
+- No lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, product route, quality route, operator escalation, worker-lane request, or additional C-Suite coordination is required from this ACK.
+- Keep Mike passive unless material resolver or canary movement appears, evidence-risk posture changes, supported lifecycle/disposition surfaces change, or a new operator/platform-scope directive appears.
+
+## Mike passive resolver-watch ACK retained at 2026-04-26T15:36:36Z
+
+Signal:
+- Mike reported at `2026-04-25T15:16:39Z`, replying to `1a06b2f6`, that passive resolver-watch posture remains retained and no action lane is open.
+- Kyle rechecked supported surfaces at `2026-04-26T15:36:36Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained passive resolver-watch posture only.
+- No lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, product route, quality route, operator escalation, worker-lane request, or additional C-Suite coordination is required from this ACK.
+- Keep Mike passive unless a resolver-watch trigger appears, evidence-risk posture changes, unexpected lifecycle movement appears, a supported lifecycle/disposition surface changes, or operator/platform recovery scope changes.
+
+## Mike CanaryV17 closure-only passive watch ACK retained at 2026-04-26T15:35:46Z
+
+Signal:
+- Mike reported at `2026-04-25T15:13:12Z`, replying to `b7c4e91a`, that CanaryV17 remains on closure-only passive watch with no lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, worker-lane request, product route, quality route, operator escalation, or additional C-Suite coordination open.
+- Kyle rechecked supported surfaces at `2026-04-26T15:35:46Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained CanaryV17 closure-only passive watch only.
+- No lifecycle mutation, retry, recovery action, canary action, host-exec expansion, Docker/SGLang action, worker-lane request, product route, quality route, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Mike passive unless supported lifecycle/disposition evidence changes, evidence-risk posture changes, unexpected lifecycle movement appears, or operator/platform scope changes.
+
+## Seth passive quality closure ACK retained at 2026-04-26T15:34:54Z
+
+Signal:
+- Seth reported at `2026-04-25T15:11:36Z`, replying to `c6a1f3d8`, that passive quality closure remains retained and no Seth audit, lifecycle or disposition mutation, recovery action, cold-worker request, host-exec expansion, SGLang action, product or ops reroute, worker-lane request, operator escalation, or additional C-Suite coordination is open.
+- Kyle rechecked supported surfaces at `2026-04-26T15:34:54Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained passive quality closure only.
+- No Seth audit, lifecycle or disposition mutation, recovery action, cold-worker request, host-exec expansion, SGLang action, product or ops reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Seth passive unless a new named quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+
+## Seth passive closure-only quality lane ACK retained at 2026-04-26T15:33:41Z
+
+Signal:
+- Seth reported at `2026-04-25T15:10:13Z`, with no explicit inbound `corrid` and replying to `b0c7e3a9`, that passive closure-only quality posture remains retained and no quality action, lifecycle/disposition mutation, recovery action, cold-worker request, host-exec expansion, SGLang action, product or ops reroute, worker-lane request, operator escalation, or additional C-Suite coordination is open.
+- Kyle rechecked supported surfaces at `2026-04-26T15:33:41Z`: world health remains OK, `dremctl status` is reachable, project workers remain at zero running by world/status, `dremctl tasks --limit 20` still shows `6b6eb427` at `testing_ready` with `worker=-`, and recent events show no newer supported lifecycle movement beyond the known 2026-04-24 status/crash sequence.
+
+Decision:
+- Treat this as retained passive closure-only quality posture only.
+- No Seth audit, lifecycle or disposition mutation, recovery action, cold-worker request, host-exec expansion, SGLang action, product or ops reroute, worker-lane request, operator escalation, or additional C-Suite coordination is required from this ACK.
+- Keep Seth passive unless a fresh supported quality trigger, supported lifecycle or disposition movement, evidence-risk signal, C-Suite request, or explicit operator directive appears.
+
 ## Alex CanaryV17 passive product closure ACK retained at 2026-04-25T15:26:39Z
 
 Signal:
