@@ -68,8 +68,10 @@ deploy/docker/context/csuite-prompts/
 # regenerable: drem-watchdog via deploy/docker/build-workers.sh,
 # drem-docker-query-proxy via its Dockerfile multi-stage build,
 # drem-classifier via deploy/docker/classifier.Dockerfile,
-# drem-planner via deploy/docker/planner.Dockerfile.
+# drem-planner via deploy/docker/planner.Dockerfile,
+# csuite-chat via csuite-chat-tui builds.
 /drem-watchdog
 /drem-docker-query-proxy
 /drem-classifier
 /drem-planner
+/csuite-chat
