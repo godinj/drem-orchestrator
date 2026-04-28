@@ -45,6 +45,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/godinj/drem-orchestrator/internal/artifactregistry"
 )
 
 // DefaultPollInterval is the spacing between successive inbox scans.
@@ -129,6 +131,15 @@ type Config struct {
 	// fsync cannot produce a delivery against stale bytes. Default:
 	// os.File.Sync via osFsyncer.
 	Fsyncer Fsyncer
+
+	// ArtifactAdmissionReporter records report-only context-firewall
+	// admission decisions for the assembled persona prompt and active inbox
+	// message. Nil preserves the legacy behavior exactly.
+	ArtifactAdmissionReporter ArtifactAdmissionReporter
+}
+
+type ArtifactAdmissionReporter interface {
+	AdmitArtifacts(context.Context, artifactregistry.AdmissionRequest, []artifactregistry.Artifact) (*artifactregistry.AdmissionResult, error)
 }
 
 // ApplyDefaults fills zero-value fields using Persona-derived defaults

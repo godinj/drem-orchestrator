@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/google/uuid"
 )
 
@@ -61,6 +62,7 @@ func (r *Registry) AdmitArtifacts(ctx context.Context, req AdmissionRequest, art
 		WorkflowStage:    req.WorkflowStage,
 		ActiveDirectives: directiveIDStrings(req.ActiveDirectiveIDs),
 		Summary:          "artifact registry context admission",
+		Metadata:         model.JSONField{"report_only": req.ReportOnly},
 		CreatedAt:        time.Now().UTC(),
 	}
 	result := &AdmissionResult{Packet: packet}
@@ -93,7 +95,12 @@ func (r *Registry) AdmitArtifacts(ctx context.Context, req AdmissionRequest, art
 			Reason:             reason,
 			TrustAtAdmission:   artifact.EvidenceTrust,
 			GoalRelevanceScore: directiveScores[artifact.ID],
-			CreatedAt:          packet.CreatedAt,
+			Metadata: model.JSONField{
+				"report_only":   req.ReportOnly,
+				"artifact_type": artifact.ArtifactType,
+				"content_uri":   artifact.ContentURI,
+			},
+			CreatedAt: packet.CreatedAt,
 		}
 		result.Decisions = append(result.Decisions, record)
 		switch decision {

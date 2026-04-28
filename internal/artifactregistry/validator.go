@@ -20,13 +20,28 @@ type ValidationReport struct {
 	Issues []ValidationIssue
 }
 
-func (r ValidationReport) HasErrors() bool {
+func (r ValidationReport) ErrorCount() int {
+	count := 0
 	for _, issue := range r.Issues {
 		if issue.Severity == "error" {
-			return true
+			count++
 		}
 	}
-	return false
+	return count
+}
+
+func (r ValidationReport) WarningCount() int {
+	count := 0
+	for _, issue := range r.Issues {
+		if issue.Severity == "warning" {
+			count++
+		}
+	}
+	return count
+}
+
+func (r ValidationReport) HasErrors() bool {
+	return r.ErrorCount() > 0
 }
 
 func (r *Registry) Validate(ctx context.Context) (*ValidationReport, error) {

@@ -19,6 +19,7 @@ package persona_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,7 +31,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/godinj/drem-orchestrator/internal/artifactregistry"
 	"github.com/godinj/drem-orchestrator/internal/csuite/persona"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
 // ---------------------------------------------------------------------------
@@ -149,6 +152,12 @@ func recorderSpawner(calls *[]spawnCall, mu *sync.Mutex, handler func(call spawn
 		}
 		return handler(call)
 	})
+}
+
+type failingAdmissionReporter struct{}
+
+func (failingAdmissionReporter) AdmitArtifacts(context.Context, artifactregistry.AdmissionRequest, []artifactregistry.Artifact) (*artifactregistry.AdmissionResult, error) {
+	return nil, errors.New("admission reporter unavailable")
 }
 
 // runPollerUntil launches p.Run in a goroutine and cancels ctx when cond
@@ -368,6 +377,112 @@ func TestPoller_FrontmatterBodyGoesInFinalOpenCodeArg(t *testing.T) {
 	want := []string{"opencode", "run", "--format", "json", "--agent", "build", "--dir", "/home/drem", "--model", "openai/gpt-5.5", "--variant", "high"}
 	if len(call.argv) != len(want)+1 || !equalArgv(call.argv[:len(want)], want) {
 		t.Fatalf("argv shape regressed\nwant: %v\ngot:  %v", want, call.argv)
+	}
+}
+
+func TestPoller_ReportOnlyAdmissionRecordsPromptAndInboxCandidates(t *testing.T) {
+	fs := newTestFS(t, "Seth system prompt body.")
+	db := testutil.NewTestDBWithModels(t, artifactregistry.Models()...)
+	cfg := baseConfig(fs)
+	cfg.ArtifactAdmissionReporter = artifactregistry.NewRegistry(db)
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	spawner := recorderSpawner(&calls, &mu, func(_ spawnCall) ([]byte, int, error) {
+		return []byte("ok"), 0, nil
+	})
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "001-ping.md", "hi persona", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) >= 1
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for spawn: %v", err)
+	}
+
+	mu.Lock()
+	if len(calls) != 1 {
+		mu.Unlock()
+		t.Fatalf("want 1 spawn, got %d", len(calls))
+	}
+	promptArg := calls[0].promptArg()
+	mu.Unlock()
+	if !strings.Contains(promptArg, "Seth system prompt body.") || !strings.Contains(promptArg, "hi persona") {
+		t.Fatalf("spawn prompt content changed unexpectedly: %q", promptArg)
+	}
+
+	var packets []artifactregistry.ContextPacket
+	if err := db.Find(&packets).Error; err != nil {
+		t.Fatalf("load packets: %v", err)
+	}
+	if len(packets) != 1 {
+		t.Fatalf("want one admission packet, got %d", len(packets))
+	}
+	if packets[0].Persona != "seth" || packets[0].AgentRole != "csuite_persona" || packets[0].WorkflowStage != "persona_turn_prompt_assembly" {
+		t.Fatalf("unexpected packet: %#v", packets[0])
+	}
+	if packets[0].Metadata["report_only"] != true {
+		t.Fatalf("packet must be report-only, got metadata %#v", packets[0].Metadata)
+	}
+
+	var decisions []artifactregistry.ContextAdmissionDecision
+	if err := db.Order("created_at ASC").Find(&decisions).Error; err != nil {
+		t.Fatalf("load decisions: %v", err)
+	}
+	if len(decisions) != 2 {
+		t.Fatalf("want two decisions, got %d (%#v)", len(decisions), decisions)
+	}
+	for _, decision := range decisions {
+		if decision.ContextPacketID != packets[0].ID {
+			t.Fatalf("decision packet id mismatch: %#v", decision)
+		}
+		if decision.Decision != artifactregistry.DecisionExcludeInadmissible {
+			t.Fatalf("candidate should be report-only inadmissible, got %#v", decision)
+		}
+		if decision.Metadata["report_only"] != true || decision.Metadata["content_uri"] == "" {
+			t.Fatalf("decision must carry report-only candidate metadata, got %#v", decision.Metadata)
+		}
+	}
+
+	if got := visibleInboxFiles(t, fs.inboxDir); len(got) != 0 {
+		t.Fatalf("inbox want empty after report-only admission, got %v", got)
+	}
+}
+
+func TestPoller_ReportOnlyAdmissionFailureDoesNotBlockTurn(t *testing.T) {
+	fs := newTestFS(t, "prompt")
+	cfg := baseConfig(fs)
+	cfg.ArtifactAdmissionReporter = failingAdmissionReporter{}
+
+	var calls []spawnCall
+	var mu sync.Mutex
+	spawner := recorderSpawner(&calls, &mu, func(_ spawnCall) ([]byte, int, error) {
+		return []byte("ok"), 0, nil
+	})
+	p, err := persona.New(cfg, spawner)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	writeInboxMessage(t, fs, "001-ping.md", "hi persona", time.Now())
+
+	err = runPollerUntil(t, p, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(calls) >= 1
+	}, 2*time.Second)
+	if err != nil {
+		t.Fatalf("waiting for spawn: %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("admission report failure must not block spawn, got %d calls", len(calls))
 	}
 }
 

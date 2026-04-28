@@ -29,7 +29,7 @@ import (
 // documented in plans/orch-api-gate-mutations.md §1.
 func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, gate GateClient, project string, opts ...RunOption) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, create-task, comment, experiment, approve, reject, answer, pass, fail, retry, reset-circuit, kyle")
+		return fmt.Errorf("usage: drem cli <subcommand> [options]\nsubcommands: tasks, task, agents, failures, stats, create-task, comment, experiment, artifact-registry, approve, reject, answer, pass, fail, retry, reset-circuit, kyle")
 	}
 
 	var ro runOptions
@@ -67,6 +67,8 @@ func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, gate GateClient
 		return handleComment(db, rest, w, jsonMode)
 	case "experiment":
 		return handleExperiment(db, rest, w, jsonMode)
+	case "artifact-registry":
+		return handleArtifactRegistry(db, rest, w, jsonMode)
 	case "reset-circuit":
 		return handleResetCircuit(ro.dbPath, w)
 	case "kyle":

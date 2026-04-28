@@ -108,6 +108,9 @@ func TestValidateFlagsActiveAuthoritativeArtifactWithoutDirective(t *testing.T) 
 	if len(report.Issues) != 1 {
 		t.Fatalf("expected one warning, got %#v", report.Issues)
 	}
+	if report.HasErrors() || report.ErrorCount() != 0 || report.WarningCount() != 1 {
+		t.Fatalf("unexpected report counts: errors=%d warnings=%d", report.ErrorCount(), report.WarningCount())
+	}
 	if report.Issues[0].Severity != "warning" || report.Issues[0].Message != "active authoritative artifact has no directive link" {
 		t.Fatalf("unexpected issue: %#v", report.Issues[0])
 	}

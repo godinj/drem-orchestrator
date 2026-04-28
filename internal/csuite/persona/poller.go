@@ -15,6 +15,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/godinj/drem-orchestrator/internal/artifactregistry"
+	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/google/uuid"
 )
 
 // sha256Bytes returns the hex-encoded SHA-256 of data. Used to build
@@ -201,6 +205,9 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 	// Pass the full turn prompt as OpenCode's final positional argument.
 	// Codex subscription auth is supplied by the OpenCode plugin reading the
 	// bind-mounted /home/drem/.codex/auth.json file.
+	turnPrompt := p.codexTurnPrompt(body)
+	p.reportPromptAdmission(ctx, name, body)
+
 	args := []string{
 		"opencode",
 		"run",
@@ -216,7 +223,7 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 	if variant != "" {
 		args = append(args, "--variant", variant)
 	}
-	args = append(args, string(p.codexTurnPrompt(body)))
+	args = append(args, string(turnPrompt))
 
 	start := p.cfg.Now()
 	stdout, exitCode, spawnErr := p.spawner.Spawn(invocationCtx, args, nil)
@@ -242,6 +249,73 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 	}
 
 	return p.recordSuccess(name, body, stdout, duration, outboxBefore)
+}
+
+func (p *Poller) reportPromptAdmission(ctx context.Context, inboxName string, body []byte) {
+	if p.cfg.ArtifactAdmissionReporter == nil {
+		return
+	}
+	req := artifactregistry.AdmissionRequest{
+		ProjectID:              os.Getenv("DREM_PROJECT"),
+		Persona:                p.cfg.Persona,
+		AgentRole:              "csuite_persona",
+		WorkflowStage:          "persona_turn_prompt_assembly",
+		EvidenceTrustThreshold: artifactregistry.TrustLow,
+		ReportOnly:             true,
+	}
+	artifacts := []artifactregistry.Artifact{
+		{
+			ID:             uuid.New(),
+			ArtifactType:   "persona_prompt",
+			ContentURI:     "file:" + p.cfg.PromptFile,
+			ContentHash:    sha256Bytes([]byte(p.prompt)),
+			Title:          p.cfg.Persona + " persona prompt",
+			Owner:          p.cfg.Persona,
+			PersonaScope:   p.cfg.Persona,
+			WorkflowScope:  "persona_turn_prompt_assembly",
+			Status:         artifactregistry.StatusCandidate,
+			AuthorityClass: artifactregistry.AuthorityTransient,
+			EvidenceTrust:  artifactregistry.TrustUnknown,
+			Confidence:     artifactregistry.TrustUnknown,
+			Metadata: model.JSONField{
+				"report_only":    true,
+				"candidate_kind": "persona_prompt",
+			},
+		},
+		{
+			ID:             uuid.New(),
+			ArtifactType:   "csuite_inbox_message",
+			ContentURI:     "file:" + filepath.Join(p.cfg.InboxDir, inboxName),
+			ContentHash:    sha256Bytes(body),
+			Title:          inboxName,
+			Owner:          "csuite",
+			PersonaScope:   p.cfg.Persona,
+			WorkflowScope:  "persona_turn_prompt_assembly",
+			Status:         artifactregistry.StatusCandidate,
+			AuthorityClass: artifactregistry.AuthorityTransient,
+			EvidenceTrust:  artifactregistry.TrustUnknown,
+			Confidence:     artifactregistry.TrustUnknown,
+			Metadata: model.JSONField{
+				"report_only":    true,
+				"candidate_kind": "inbox_message",
+				"inbox_file":     inboxName,
+			},
+		},
+	}
+	result, err := p.cfg.ArtifactAdmissionReporter.AdmitArtifacts(ctx, req, artifacts)
+	if err != nil {
+		p.cfg.Logger.Warn("context firewall admission report failed",
+			p.personaLabel,
+			slog.String("inbox_file", inboxName),
+			slog.Any("err", err))
+		return
+	}
+	p.cfg.Logger.Info("context firewall admission report recorded",
+		p.personaLabel,
+		slog.String("inbox_file", inboxName),
+		slog.String("context_packet_id", result.Packet.ID.String()),
+		slog.Int("decisions", len(result.Decisions)),
+		slog.Bool("report_only", true))
 }
 
 func (p *Poller) codexTurnPrompt(body []byte) []byte {
