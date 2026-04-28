@@ -208,7 +208,7 @@ func (p *Poller) processMessage(ctx context.Context, name string) error {
 		"--agent", "build",
 		"--dir", "/home/drem",
 	}
-	model := firstNonEmpty(os.Getenv("DREM_OPENCODE_MODEL"), os.Getenv("DREM_CODEX_MODEL"), "openai/gpt-5.3-codex-spark")
+	model := firstNonEmpty(os.Getenv("DREM_OPENCODE_MODEL"), os.Getenv("DREM_CODEX_MODEL"), "openai/gpt-5.4-mini")
 	if model != "" {
 		args = append(args, "--model", model)
 	}

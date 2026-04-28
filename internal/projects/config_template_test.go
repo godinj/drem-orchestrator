@@ -96,7 +96,7 @@ func TestRenderConfig_PlannerPinsCodex(t *testing.T) {
 
 	require.Contains(t, s, "[agents.planner]")
 	require.Contains(t, s, `provider = "codex"`)
-	require.Contains(t, s, `model    = "gpt-5.3-codex-spark"`)
+	require.Contains(t, s, `model    = "gpt-5.4-mini"`)
 	require.Contains(t, s, `effort   = "high"`)
 
 	// Round-trip through the TOML parser to catch template-quoting bugs
@@ -112,7 +112,7 @@ func TestRenderConfig_PlannerPinsCodex(t *testing.T) {
 	}
 	require.NoError(t, toml.Unmarshal(out, &parsed))
 	require.Equal(t, "codex", parsed.Agents.Planner.Provider)
-	require.Equal(t, "gpt-5.3-codex-spark", parsed.Agents.Planner.Model)
+	require.Equal(t, "gpt-5.4-mini", parsed.Agents.Planner.Model)
 	require.Equal(t, "high", parsed.Agents.Planner.Effort)
 }
 
