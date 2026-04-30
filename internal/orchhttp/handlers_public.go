@@ -350,9 +350,31 @@ func (s *Server) handleTaskAttempts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out := make([]orchdto.WorkerAttemptDTO, 0, len(spawns)+len(agents))
+	var durableAttempts []model.WorkerAttempt
+	if err := s.DB.WithContext(r.Context()).
+		Where("task_id = ?", taskID).
+		Order("created_at ASC").
+		Find(&durableAttempts).Error; err != nil {
+		writeDBError(w, err)
+		return
+	}
+
+	out := make([]orchdto.WorkerAttemptDTO, 0, len(durableAttempts)+len(spawns)+len(agents))
 	coveredAgents := map[string]struct{}{}
+	coveredAttemptIDs := map[string]struct{}{}
+	for _, attempt := range durableAttempts {
+		agent, hasAgent := model.Agent{}, false
+		if attempt.AgentID != nil {
+			agent, hasAgent = agentsByID[attempt.AgentID.String()]
+			coveredAgents[attempt.AgentID.String()] = struct{}{}
+		}
+		coveredAttemptIDs[attempt.ID.String()] = struct{}{}
+		out = append(out, toWorkerAttemptDTOFromDurable(attempt, agent, hasAgent))
+	}
 	for _, e := range spawns {
+		if _, ok := coveredAttemptIDs[stringField(e.Details, "attempt_id")]; ok {
+			continue
+		}
 		agentID := stringField(e.Details, "agent_id")
 		agent, ok := agentsByID[agentID]
 		if agentID != "" {
@@ -553,9 +575,21 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "log streaming not configured", http.StatusServiceUnavailable)
 		return
 	}
-	containerID := r.URL.Query().Get("container")
+	containerID := strings.TrimSpace(r.URL.Query().Get("container"))
+	if attemptID := strings.TrimSpace(r.URL.Query().Get("attempt")); attemptID != "" {
+		resolved, err := s.containerForAttempt(r.Context(), attemptID)
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			http.Error(w, "attempt not found", http.StatusNotFound)
+			return
+		}
+		if err != nil {
+			writeDBError(w, err)
+			return
+		}
+		containerID = resolved
+	}
 	if containerID == "" {
-		http.Error(w, "container is required", http.StatusBadRequest)
+		http.Error(w, "container or attempt is required", http.StatusBadRequest)
 		return
 	}
 	follow, err := parseBoolQuery(r, "follow")
@@ -581,6 +615,32 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	// Best-effort copy — we want partial output to reach the client even
 	// if the upstream reader later errors, so errors here are ignored.
 	_, _ = io.Copy(flushingWriter{w}, rc)
+}
+
+func (s *Server) containerForAttempt(ctx context.Context, id string) (string, error) {
+	parsed, err := uuid.Parse(id)
+	if err != nil {
+		return "", gorm.ErrRecordNotFound
+	}
+	var attempt model.WorkerAttempt
+	if err := s.DB.WithContext(ctx).First(&attempt, "id = ?", parsed).Error; err == nil {
+		if strings.TrimSpace(attempt.ContainerID) == "" {
+			return "", gorm.ErrRecordNotFound
+		}
+		return attempt.ContainerID, nil
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return "", err
+	}
+
+	var spawn model.TaskEvent
+	if err := s.DB.WithContext(ctx).First(&spawn, "id = ? AND event_type = ?", parsed, "worker_spawned").Error; err != nil {
+		return "", err
+	}
+	containerID := strings.TrimSpace(stringField(spawn.Details, "container_id"))
+	if containerID == "" {
+		return "", gorm.ErrRecordNotFound
+	}
+	return containerID, nil
 }
 
 func parseBoolQuery(r *http.Request, key string) (bool, error) {
@@ -733,9 +793,34 @@ func toWorkerAttemptDTOFromAgent(taskID uuid.UUID, a model.Agent) orchdto.Worker
 	}
 }
 
+func toWorkerAttemptDTOFromDurable(attempt model.WorkerAttempt, a model.Agent, hasAgent bool) orchdto.WorkerAttemptDTO {
+	d := orchdto.WorkerAttemptDTO{
+		AttemptID:   attempt.ID.String(),
+		TaskID:      attempt.TaskID.String(),
+		WorkerID:    attempt.WorkerID,
+		ContainerID: attempt.ContainerID,
+		AgentType:   attempt.AgentType,
+		StartedAt:   attempt.CreatedAt,
+	}
+	if attempt.AgentID != nil {
+		d.AgentID = attempt.AgentID.String()
+	}
+	if hasAgent {
+		fromAgent := toWorkerAttemptDTOFromAgent(attempt.TaskID, a)
+		fromAgent.AttemptID = d.AttemptID
+		fromAgent.WorkerID = firstNonEmpty(d.WorkerID, fromAgent.WorkerID)
+		fromAgent.AgentID = firstNonEmpty(d.AgentID, fromAgent.AgentID)
+		fromAgent.ContainerID = firstNonEmpty(d.ContainerID, fromAgent.ContainerID)
+		fromAgent.AgentType = firstNonEmpty(d.AgentType, fromAgent.AgentType)
+		fromAgent.StartedAt = d.StartedAt
+		return fromAgent
+	}
+	return d
+}
+
 func toWorkerAttemptDTOFromSpawn(e model.TaskEvent, a model.Agent, hasAgent bool) orchdto.WorkerAttemptDTO {
 	d := orchdto.WorkerAttemptDTO{
-		AttemptID:   e.ID.String(),
+		AttemptID:   firstNonEmpty(stringField(e.Details, "attempt_id"), e.ID.String()),
 		TaskID:      e.TaskID.String(),
 		WorkerID:    firstNonEmpty(stringField(e.Details, "worker_id"), stringField(e.Details, "agent_id")),
 		AgentID:     stringField(e.Details, "agent_id"),

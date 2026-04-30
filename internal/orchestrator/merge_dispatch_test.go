@@ -121,6 +121,41 @@ func TestDispatchMerge_SetsBareRepoReadWrite(t *testing.T) {
 	require.Equal(t, "/tmp/fake-bare", fake.spawnCalls[0].BareRepoMount)
 }
 
+func TestDispatchMerge_RecordsDurableAttemptWithoutCoderAttribution(t *testing.T) {
+	o, _ := dispatchMergeTestRig(t)
+	agentID := uuid.New()
+	require.NoError(t, o.db.Create(&model.Agent{
+		ID:        agentID,
+		ProjectID: o.projectID,
+		AgentType: model.AgentCoder,
+		Name:      "coder",
+		Status:    model.AgentWorking,
+	}).Error)
+	task := &model.Task{
+		ID:              uuid.New(),
+		ProjectID:       o.projectID,
+		Title:           "merge attempt attribution",
+		Status:          model.StatusMerging,
+		WorktreeBranch:  "feature/merge-attribution",
+		AssignedAgentID: &agentID,
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	_, err := o.dispatchMerge(context.Background(), task)
+	require.NoError(t, err)
+
+	var attempt model.WorkerAttempt
+	require.NoError(t, o.db.First(&attempt, "task_id = ?", task.ID).Error)
+	require.Equal(t, string(model.AgentMerger), attempt.AgentType)
+	require.Nil(t, attempt.AgentID)
+	require.NotEqual(t, uuid.Nil, attempt.ID)
+
+	var spawn model.TaskEvent
+	require.NoError(t, o.db.First(&spawn, "task_id = ? AND event_type = ?", task.ID, "worker_spawned").Error)
+	require.Equal(t, attempt.ID.String(), spawn.Details["attempt_id"])
+	require.Empty(t, spawn.Details["agent_id"])
+}
+
 // TestDispatchMerge_OmitsPromptAndCredsMounts documents that merger,
 // a Go binary, receives neither a prompt nor a creds mount — the
 // promptRequired and credsMountRequired tables both return false for

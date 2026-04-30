@@ -345,6 +345,18 @@ func TestTaskAttemptsReturnsOnlyAttemptsForTask(t *testing.T) {
 		"tmux_session": "stale-container",
 	}).Error)
 
+	attemptID := uuid.New()
+	agentID := ag.ID
+	require.NoError(t, srv.DB.Create(&model.WorkerAttempt{
+		ID:          attemptID,
+		TaskID:      task.ID,
+		AgentID:     &agentID,
+		WorkerID:    "worker-label-1",
+		ContainerID: "container-target",
+		AgentType:   string(model.AgentCoder),
+		Image:       "worker-image",
+		CreatedAt:   started,
+	}).Error)
 	spawnID := uuid.New()
 	retrySpawnID := uuid.New()
 	require.NoError(t, srv.DB.Create(&model.TaskEvent{
@@ -355,6 +367,7 @@ func TestTaskAttemptsReturnsOnlyAttemptsForTask(t *testing.T) {
 		Actor:     "orchestrator",
 		Details: model.JSONField{
 			"agent_id":     ag.ID.String(),
+			"attempt_id":   attemptID.String(),
 			"worker_id":    "worker-label-1",
 			"container_id": "container-target",
 			"agent_type":   string(model.AgentCoder),
@@ -404,7 +417,7 @@ func TestTaskAttemptsReturnsOnlyAttemptsForTask(t *testing.T) {
 	}
 
 	spawnAttempt := byContainer["container-target"]
-	require.Equal(t, spawnID.String(), spawnAttempt.AttemptID)
+	require.Equal(t, attemptID.String(), spawnAttempt.AttemptID)
 	require.Equal(t, ag.ID.String(), spawnAttempt.AgentID)
 	require.Equal(t, "worker-label-1", spawnAttempt.WorkerID)
 	require.Equal(t, "feature/target", spawnAttempt.Branch)
@@ -508,6 +521,52 @@ func TestGetLogsDefaultsToBoundedLogs(t *testing.T) {
 	opts := streamer.lastOpt.Load().(container.LogOptions)
 	require.False(t, opts.Follow)
 	require.True(t, opts.Since.IsZero())
+}
+
+func TestGetLogsResolvesDurableAttemptToContainer(t *testing.T) {
+	streamer := &fakeLogStreamer{payload: "attempt logs\n"}
+	srv, ts, project := setupHTTPTest(t, streamer)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "logs", model.StatusInProgress)
+	attemptID := uuid.New()
+	require.NoError(t, srv.DB.Create(&model.WorkerAttempt{
+		ID:          attemptID,
+		TaskID:      task.ID,
+		WorkerID:    "worker-label-1",
+		ContainerID: "container-attempt",
+		AgentType:   string(model.AgentCoder),
+	}).Error)
+
+	resp, err := http.Get(ts.URL + "/logs?attempt=" + attemptID.String())
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, "attempt logs\n", string(body))
+	require.Equal(t, "container-attempt", streamer.lastID.Load())
+}
+
+func TestGetLogsResolvesLegacySpawnAttemptToContainer(t *testing.T) {
+	streamer := &fakeLogStreamer{payload: "legacy logs\n"}
+	srv, ts, project := setupHTTPTest(t, streamer)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "logs", model.StatusInProgress)
+	spawnID := uuid.New()
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        spawnID,
+		TaskID:    task.ID,
+		EventType: "worker_spawned",
+		Actor:     "orchestrator",
+		Details: model.JSONField{
+			"container_id": "legacy-container",
+		},
+	}).Error)
+
+	resp, err := http.Get(ts.URL + "/logs?attempt=" + spawnID.String())
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, "legacy-container", streamer.lastID.Load())
 }
 
 func TestGetLogsRequiresContainer(t *testing.T) {

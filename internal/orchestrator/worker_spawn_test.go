@@ -257,6 +257,18 @@ func TestSpawnCoder_RecordsContainerIDAndModelMetadataOnAgent(t *testing.T) {
 	require.Equal(t, "opencode", fake.spawnCalls[0].Env["DREM_AGENT_HARNESS"])
 	require.Equal(t, "ollama/qwen3-coder", fake.spawnCalls[0].Env["DREM_MODEL"])
 	require.Equal(t, "minimal", fake.spawnCalls[0].Env["DREM_EFFORT"])
+
+	var attempt model.WorkerAttempt
+	require.NoError(t, o.db.First(&attempt, "task_id = ?", task.ID).Error)
+	require.Equal(t, task.ID, attempt.TaskID)
+	require.NotNil(t, attempt.AgentID)
+	require.Equal(t, ag.ID, *attempt.AgentID)
+	require.Equal(t, "container-xyz", attempt.ContainerID)
+	require.Equal(t, fake.spawnCalls[0].WorkerID, attempt.WorkerID)
+
+	var spawn model.TaskEvent
+	require.NoError(t, o.db.First(&spawn, "task_id = ? AND event_type = ?", task.ID, "worker_spawned").Error)
+	require.Equal(t, attempt.ID.String(), spawn.Details["attempt_id"])
 }
 
 func TestSpawnCoder_OnSpawnFailureReturnsError(t *testing.T) {

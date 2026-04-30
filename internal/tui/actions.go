@@ -202,7 +202,7 @@ func (m Model) handleLog() (tea.Model, tea.Cmd) {
 			if err != nil {
 				return logCapturedMsg{forTaskID: taskID, err: err}
 			}
-			rc, err := ds.StreamLogs(ctx, containerID)
+			rc, err := streamLogsForAgentAttempt(ctx, ds, taskID.String(), agent, containerID)
 			if err != nil {
 				return logCapturedMsg{forTaskID: taskID, err: err}
 			}
@@ -220,6 +220,18 @@ func (m Model) handleLog() (tea.Model, tea.Cmd) {
 		text, err := orch.GetAgentOutput(agentID)
 		return logCapturedMsg{forTaskID: taskID, text: text, err: err}
 	}
+}
+
+func streamLogsForAgentAttempt(ctx context.Context, ds DataSource, taskID string, agent model.Agent, containerID string) (io.ReadCloser, error) {
+	attempts, err := ds.TaskAttempts(ctx, taskID)
+	if err == nil {
+		for _, attempt := range attempts {
+			if attempt.AgentID == agent.ID.String() || attempt.ContainerID == containerID || attempt.WorkerLabel == agent.Name || attempt.WorkerID == agent.Name {
+				return ds.StreamAttemptLogs(ctx, attempt.AttemptID)
+			}
+		}
+	}
+	return ds.StreamLogs(ctx, containerID)
 }
 
 func formatWorkerHistoryAndLogs(history orchdto.WorkerHistoryDTO, logs string) string {

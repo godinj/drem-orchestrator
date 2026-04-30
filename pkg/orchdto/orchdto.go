@@ -76,8 +76,9 @@ type WorkerDTO struct {
 }
 
 // WorkerAttemptDTO is the public projection of a task execution attempt
-// attributed to a worker/container. It is derived from existing Agent rows
-// and TaskEvent spawn records rather than a dedicated attempts table.
+// attributed to a worker/container. New attempts are backed by a durable
+// WorkerAttempt row; older history may still be projected from spawn events
+// or Agent rows.
 type WorkerAttemptDTO struct {
 	AttemptID             string     `json:"attempt_id"`
 	TaskID                string     `json:"task_id"`

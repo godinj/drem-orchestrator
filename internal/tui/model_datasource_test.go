@@ -22,6 +22,7 @@ import (
 type fakeDataSource struct {
 	tasks     []orchdto.TaskDTO
 	workers   []orchdto.WorkerDTO
+	attempts  []orchdto.WorkerAttemptDTO
 	events    []orchdto.EventDTO
 	history   orchdto.WorkerHistoryDTO
 	logReader io.ReadCloser
@@ -29,12 +30,13 @@ type fakeDataSource struct {
 	// forceErr, if non-nil, is returned from every method.
 	forceErr error
 
-	taskCalls    int
-	workerCalls  int
-	historyCalls int
-	streamCalls  int
-	historyID    string
-	streamID     string
+	taskCalls       int
+	workerCalls     int
+	historyCalls    int
+	streamCalls     int
+	historyID       string
+	streamID        string
+	streamAttemptID string
 }
 
 func (f *fakeDataSource) ListTasks(_ context.Context, _ orchclient.TaskFilter) ([]orchdto.TaskDTO, error) {
@@ -69,9 +71,28 @@ func (f *fakeDataSource) WorkerHistory(_ context.Context, id string) (orchdto.Wo
 	return f.history, nil
 }
 
+func (f *fakeDataSource) TaskAttempts(_ context.Context, _ string) ([]orchdto.WorkerAttemptDTO, error) {
+	if f.forceErr != nil {
+		return nil, f.forceErr
+	}
+	return f.attempts, nil
+}
+
 func (f *fakeDataSource) StreamLogs(_ context.Context, id string) (io.ReadCloser, error) {
 	f.streamCalls++
 	f.streamID = id
+	if f.forceErr != nil {
+		return nil, f.forceErr
+	}
+	if f.logReader == nil {
+		return io.NopCloser(strings.NewReader("")), nil
+	}
+	return f.logReader, nil
+}
+
+func (f *fakeDataSource) StreamAttemptLogs(_ context.Context, id string) (io.ReadCloser, error) {
+	f.streamCalls++
+	f.streamAttemptID = id
 	if f.forceErr != nil {
 		return nil, f.forceErr
 	}
@@ -85,6 +106,7 @@ func TestHandleLog_UsesDataSourceHistoryAndLogs(t *testing.T) {
 	taskID := uuid.New()
 	workerID := uuid.New()
 	ds := &fakeDataSource{
+		attempts: []orchdto.WorkerAttemptDTO{{AttemptID: "attempt-1", AgentID: workerID.String(), ContainerID: "container-1"}},
 		history: orchdto.WorkerHistoryDTO{
 			WorkerID: workerID.String(),
 			Events: []orchdto.WorkerHistoryEntry{{
@@ -115,7 +137,8 @@ func TestHandleLog_UsesDataSourceHistoryAndLogs(t *testing.T) {
 	require.Equal(t, 1, ds.historyCalls)
 	require.Equal(t, 1, ds.streamCalls)
 	require.Equal(t, workerID.String(), ds.historyID)
-	require.Equal(t, "container-1", ds.streamID)
+	require.Equal(t, "attempt-1", ds.streamAttemptID)
+	require.Empty(t, ds.streamID)
 	require.Equal(t, 0, mock.callCount("GetAgentOutput"))
 }
 

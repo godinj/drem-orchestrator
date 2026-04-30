@@ -396,7 +396,8 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		}
 	}
 
-	o.recordSpawnEventWithWorkerID(task, agentType, res.ContainerID, params.Image, swc.workerID)
+	attemptID := o.recordWorkerAttempt(task, agentType, res.ContainerID, params.Image, swc.workerID)
+	o.recordSpawnEventWithWorkerID(task, agentType, res.ContainerID, params.Image, swc.workerID, attemptID)
 	return nil
 }
 
@@ -687,20 +688,23 @@ func (o *Orchestrator) updateAgentContainer(ag *model.Agent, containerID, provid
 // trail required by user story 49 is always present, regardless of whether
 // the spawn happened through the old worktree path or the new spawner RPC.
 func (o *Orchestrator) recordSpawnEvent(task *model.Task, agentType, containerID, image string) {
-	o.recordSpawnEventWithWorkerID(task, agentType, containerID, image, "")
+	o.recordSpawnEventWithWorkerID(task, agentType, containerID, image, "", uuid.Nil)
 }
 
-func (o *Orchestrator) recordSpawnEventWithWorkerID(task *model.Task, agentType, containerID, image, workerID string) {
+func (o *Orchestrator) recordSpawnEventWithWorkerID(task *model.Task, agentType, containerID, image, workerID string, attemptID uuid.UUID) {
 	detail := model.JSONField{
 		"agent_type":   agentType,
 		"container_id": containerID,
 		"image":        image,
 	}
+	if attemptID != uuid.Nil {
+		detail["attempt_id"] = attemptID.String()
+	}
 	if workerID != "" {
 		detail["worker_id"] = workerID
 	}
-	if task.AssignedAgentID != nil {
-		detail["agent_id"] = task.AssignedAgentID.String()
+	if agentID := o.assignedAgentIDForType(task, agentType); agentID != nil {
+		detail["agent_id"] = agentID.String()
 	}
 	evt := &model.TaskEvent{
 		ID:        uuid.New(),
@@ -715,6 +719,41 @@ func (o *Orchestrator) recordSpawnEventWithWorkerID(task *model.Task, agentType,
 	if err := o.db.Create(evt).Error; err != nil {
 		o.logger.Error("record spawn event", "task_id", task.ID, "error", err)
 	}
+}
+
+func (o *Orchestrator) recordWorkerAttempt(task *model.Task, agentType, containerID, image, workerID string) uuid.UUID {
+	attempt := model.WorkerAttempt{
+		ID:          uuid.New(),
+		TaskID:      task.ID,
+		WorkerID:    workerID,
+		ContainerID: containerID,
+		AgentType:   agentType,
+		Image:       image,
+	}
+	if agentID := o.assignedAgentIDForType(task, agentType); agentID != nil {
+		attempt.AgentID = agentID
+	}
+	if err := o.db.Create(&attempt).Error; err != nil {
+		o.logger.Error("record worker attempt", "task_id", task.ID, "error", err)
+		return uuid.Nil
+	}
+	return attempt.ID
+}
+
+func (o *Orchestrator) assignedAgentIDForType(task *model.Task, agentType string) *uuid.UUID {
+	if task == nil || task.AssignedAgentID == nil {
+		return nil
+	}
+	var ag model.Agent
+	if err := o.db.Select("id", "agent_type").First(&ag, "id = ?", *task.AssignedAgentID).Error; err != nil {
+		o.logger.Warn("resolve assigned agent for attempt", "task_id", task.ID, "agent_id", *task.AssignedAgentID, "error", err)
+		return nil
+	}
+	if string(ag.AgentType) != agentType {
+		return nil
+	}
+	id := ag.ID
+	return &id
 }
 
 // recordSpawnFailureEvent logs a spawn failure to the audit trail so a later

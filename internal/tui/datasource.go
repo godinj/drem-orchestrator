@@ -46,10 +46,17 @@ type DataSource interface {
 	// WorkerHistory returns the transition log for a single worker.
 	WorkerHistory(ctx context.Context, id string) (orchdto.WorkerHistoryDTO, error)
 
+	// TaskAttempts returns durable attempt identities for a task, with legacy
+	// projection fallbacks supplied by the orchestrator where needed.
+	TaskAttempts(ctx context.Context, taskID string) ([]orchdto.WorkerAttemptDTO, error)
+
 	// StreamLogs opens a follow-mode log stream for the named container.
 	// Callers must Close the returned reader to release the connection;
 	// cancelling ctx also terminates the stream.
 	StreamLogs(ctx context.Context, containerID string) (io.ReadCloser, error)
+
+	// StreamAttemptLogs opens a follow-mode log stream for the named attempt.
+	StreamAttemptLogs(ctx context.Context, attemptID string) (io.ReadCloser, error)
 }
 
 // HTTPDataSource is the DataSource implementation backed by the
@@ -103,6 +110,13 @@ func (h *HTTPDataSource) WorkerHistory(ctx context.Context, id string) (orchdto.
 	return h.Client.WorkerHistory(ctx, id)
 }
 
+func (h *HTTPDataSource) TaskAttempts(ctx context.Context, taskID string) ([]orchdto.WorkerAttemptDTO, error) {
+	if h == nil || h.Client == nil {
+		return nil, fmt.Errorf("tui: HTTPDataSource: nil client")
+	}
+	return h.Client.TaskAttempts(ctx, taskID)
+}
+
 // StreamLogs implements DataSource by forwarding to orchclient with
 // follow=true. Closing the returned reader (or cancelling ctx) cancels the
 // in-flight request; the log pane does this on navigate-away.
@@ -111,6 +125,13 @@ func (h *HTTPDataSource) StreamLogs(ctx context.Context, containerID string) (io
 		return nil, fmt.Errorf("tui: HTTPDataSource: nil client")
 	}
 	return h.Client.StreamLogs(ctx, containerID, time.Time{}, true)
+}
+
+func (h *HTTPDataSource) StreamAttemptLogs(ctx context.Context, attemptID string) (io.ReadCloser, error) {
+	if h == nil || h.Client == nil {
+		return nil, fmt.Errorf("tui: HTTPDataSource: nil client")
+	}
+	return h.Client.StreamAttemptLogs(ctx, attemptID, time.Time{}, true)
 }
 
 // ResolveOrchURL normalises an orchestrator URL. If raw is empty the

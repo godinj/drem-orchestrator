@@ -249,7 +249,13 @@ func (s *slowFakeDataSource) Events(_ context.Context, _ time.Time) ([]orchdto.E
 func (s *slowFakeDataSource) WorkerHistory(_ context.Context, _ string) (orchdto.WorkerHistoryDTO, error) {
 	return orchdto.WorkerHistoryDTO{}, nil
 }
+func (s *slowFakeDataSource) TaskAttempts(_ context.Context, _ string) ([]orchdto.WorkerAttemptDTO, error) {
+	return nil, nil
+}
 func (s *slowFakeDataSource) StreamLogs(_ context.Context, _ string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (s *slowFakeDataSource) StreamAttemptLogs(_ context.Context, _ string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("")), nil
 }
 

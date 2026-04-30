@@ -294,7 +294,8 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 	}
 
 	// Record the merger spawn in the audit trail.
-	o.recordSpawnEventWithWorkerID(task, "merger", res.ContainerID, params.Image, workerID)
+	attemptID := o.recordWorkerAttempt(task, "merger", res.ContainerID, params.Image, workerID)
+	o.recordSpawnEventWithWorkerID(task, "merger", res.ContainerID, params.Image, workerID, attemptID)
 
 	finalState, err := o.awaitMergerExit(dispatchCtx, res.ContainerID)
 	if err != nil {

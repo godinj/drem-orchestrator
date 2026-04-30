@@ -162,6 +162,22 @@ func (c *Client) StreamLogs(ctx context.Context, container string, since time.Ti
 	}
 	q := url.Values{}
 	q.Set("container", container)
+	return c.streamLogs(ctx, q, since, follow)
+}
+
+// StreamAttemptLogs opens logs for a durable worker attempt. The server
+// resolves the attempt to its recorded container; runtime isolation is still
+// whatever the underlying container log driver can provide.
+func (c *Client) StreamAttemptLogs(ctx context.Context, attemptID string, since time.Time, follow bool) (io.ReadCloser, error) {
+	if attemptID == "" {
+		return nil, fmt.Errorf("attempt is required")
+	}
+	q := url.Values{}
+	q.Set("attempt", attemptID)
+	return c.streamLogs(ctx, q, since, follow)
+}
+
+func (c *Client) streamLogs(ctx context.Context, q url.Values, since time.Time, follow bool) (io.ReadCloser, error) {
 	if !since.IsZero() {
 		q.Set("since", since.UTC().Format(time.RFC3339Nano))
 	}

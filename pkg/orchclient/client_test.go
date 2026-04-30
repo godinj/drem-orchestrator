@@ -182,6 +182,21 @@ func TestStreamLogsReturnsRawBody(t *testing.T) {
 	require.Contains(t, h.lastRaw, "follow=true")
 }
 
+func TestStreamAttemptLogsUsesAttemptQuery(t *testing.T) {
+	h := &recordingHandler{status: http.StatusOK, body: "attempt logs\n", ctype: "text/plain"}
+	c, _ := newClient(t, h)
+
+	rc, err := c.StreamAttemptLogs(context.Background(), "attempt-1", time.Time{}, false)
+	require.NoError(t, err)
+	defer rc.Close()
+	data, err := io.ReadAll(rc)
+	require.NoError(t, err)
+	require.Equal(t, "attempt logs\n", string(data))
+	require.Equal(t, "/logs", h.lastPath)
+	require.Contains(t, h.lastRaw, "attempt=attempt-1")
+	require.NotContains(t, h.lastRaw, "container=")
+}
+
 func TestStreamLogsRequiresContainer(t *testing.T) {
 	c := orchclient.New("http://nowhere.invalid")
 	_, err := c.StreamLogs(context.Background(), "", time.Time{}, false)

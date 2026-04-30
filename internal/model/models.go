@@ -91,6 +91,21 @@ type Agent struct {
 	UpdatedAt time.Time
 }
 
+// WorkerAttempt is the durable identity for one spawned worker execution.
+// Container logs are still physically scoped by runtime container, but this
+// row is the stable task-attempt handle exposed by the HTTP API.
+type WorkerAttempt struct {
+	ID          uuid.UUID  `gorm:"type:text;primaryKey"`
+	TaskID      uuid.UUID  `gorm:"type:text;not null;index"`
+	AgentID     *uuid.UUID `gorm:"type:text;index"`
+	WorkerID    string     `gorm:"index"`
+	ContainerID string     `gorm:"index"`
+	AgentType   string
+	Image       string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
 // TaskEvent records a status change or other significant event on a task.
 type TaskEvent struct {
 	ID        uuid.UUID `gorm:"type:text;primaryKey"`
