@@ -153,6 +153,12 @@ Or run only the dashboard against an already-running orchestrator API:
 
 For a fresh machine, use `docs/containerization/install.md` instead of treating this section as complete installation documentation.
 
+## TUI Dashboard
+
+The TUI Dashboard shows project tasks, workers, events, and health through the orchestrator HTTP API. It is designed to be run inside an operator-owned terminal or tmux session.
+
+To exit the dashboard, close or kill the tmux pane/session that owns it. The `q` key is not a quit keybinding because the dashboard is intended to stay attached to the project while work continues.
+
 ## Common Commands
 
 | Command | What it does |
@@ -211,6 +217,12 @@ Common settings include:
 | `[direct_tool_agent]` | Optional direct local-model tool-agent path. |
 
 Older tmux settings may still be accepted by the config loader for compatibility, but they are ignored by the current production path.
+
+## Module Depth Planning
+
+Drem planner prompts ask agents to design for module depth before work begins. A plan should describe `module_boundaries`, `interface_shapes`, and export pressure so reviewers can tell whether the design creates meaningful internal logic or only moves code around.
+
+Planner self-checks should reject shallow designs. A shallow plan often creates a thin wrapper, pass-through package, or exported function with no real decision-making behind it. A deep plan puts policy, state transitions, validation, or orchestration behind a small interface and keeps exports proportional to the module's responsibility.
 
 ## What Changed From The Older README
 

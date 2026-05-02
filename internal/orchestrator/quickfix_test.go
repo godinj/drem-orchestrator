@@ -292,7 +292,7 @@ func TestTransitionQuickFixToMerging_FastTracksThroughTestingReady(t *testing.T)
 }
 
 func TestTransitionQuickFixToMerging_ConstraintViolation_PausesTask(t *testing.T) {
-	bareRepo := testutil.SetupBareRepo(t)
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
 	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
 
 	db := testutil.NewTestDB(t)
@@ -319,22 +319,36 @@ func TestTransitionQuickFixToMerging_ConstraintViolation_PausesTask(t *testing.T
 		logger:    slog.Default().With("component", "quickfix-constraint-test"),
 	}
 
-	// Create a worktree branch name that points to a real worktree directory
-	// containing a .drem/constraints.toml with a failing constraint.
-	featureBranch := "feature/quickfix-constraint-violation"
-	featureDir := wt.FeatureWorktreePath(strings.TrimPrefix(featureBranch, "feature/"))
-
-	// Write a constraints.toml with a rule that always fails (max_lines=0).
-	constraintsDir := featureDir + "/.drem"
+	mainDir, err := wt.MainWorktreePath()
+	if err != nil {
+		t.Fatalf("main worktree path: %v", err)
+	}
+	constraintsDir := mainDir + "/.drem"
 	if err := os.MkdirAll(constraintsDir, 0o755); err != nil {
-		t.Fatalf("mkdir constraints dir: %v", err)
+		t.Fatalf("mkdir main constraints dir: %v", err)
 	}
 	constraintsToml := constraintsDir + "/constraints.toml"
-	if err := os.WriteFile(constraintsToml, []byte("[[max_lines]]\nname = \"always-fail\"\nglob = \"*.go\"\nlimit = 0\n"), 0o644); err != nil {
-		t.Fatalf("write constraints.toml: %v", err)
+	if err := os.WriteFile(constraintsToml, []byte("[[max_lines]]\nname = \"line-limit\"\nglob = \"*.go\"\nlimit = 1\n"), 0o644); err != nil {
+		t.Fatalf("write main constraints.toml: %v", err)
 	}
-	// Write a Go file so the constraint has something to match (exceeds limit=0).
-	if err := os.WriteFile(featureDir+"/dummy.go", []byte("package dummy\n"), 0o644); err != nil {
+	if err := os.WriteFile(mainDir+"/dummy.go", []byte("package dummy\n"), 0o644); err != nil {
+		t.Fatalf("write main dummy.go: %v", err)
+	}
+	if _, err := testutil.RunGit([]string{"add", "."}, mainDir); err != nil {
+		t.Fatalf("git add main: %v", err)
+	}
+	if _, err := testutil.RunGit([]string{"commit", "-m", "add baseline constraints"}, mainDir); err != nil {
+		t.Fatalf("git commit main: %v", err)
+	}
+
+	// Create a feature branch that worsens the baseline by making dummy.go
+	// exceed the line limit.
+	featureBranch := "feature/quickfix-constraint-violation"
+	if _, err := wt.CreateFeature(strings.TrimPrefix(featureBranch, "feature/")); err != nil {
+		t.Fatalf("create feature: %v", err)
+	}
+	featureDir := wt.FeatureWorktreePath(strings.TrimPrefix(featureBranch, "feature/"))
+	if err := os.WriteFile(featureDir+"/dummy.go", []byte("package dummy\nvar X = 1\n"), 0o644); err != nil {
 		t.Fatalf("write dummy.go: %v", err)
 	}
 
@@ -379,6 +393,99 @@ func TestTransitionQuickFixToMerging_ConstraintViolation_PausesTask(t *testing.T
 	}
 	if !hasPaused {
 		t.Error("expected a paused transition event after constraint violation")
+	}
+}
+
+func TestTransitionQuickFixToMerging_BaselineOnlyConstraintViolationFastTracks(t *testing.T) {
+	bareRepo := testutil.InitBareRepoWithMainWorktree(t)
+	defaultBranch := testutil.GetDefaultBranch(t, bareRepo)
+
+	db := testutil.NewTestDB(t)
+	projectID := uuid.New()
+	project := model.Project{
+		ID:            projectID,
+		Name:          "quickfix-baseline-constraint-test",
+		BareRepoPath:  bareRepo,
+		DefaultBranch: defaultBranch,
+	}
+	db.Create(&project)
+
+	events := make(chan Event, 100)
+	host := NewHostManager(bareRepo, defaultBranch)
+	wt := host.AsInterface()
+	runner := agent.NewRunner(db, nil, host.AsAgentWorktreeManager(), "/bin/false", "", 0, nil)
+
+	o := &Orchestrator{
+		db:        db,
+		projectID: projectID,
+		worktree:  wt,
+		runner:    runner,
+		events:    events,
+		logger:    slog.Default().With("component", "quickfix-baseline-constraint-test"),
+	}
+
+	mainDir, err := wt.MainWorktreePath()
+	if err != nil {
+		t.Fatalf("main worktree path: %v", err)
+	}
+	constraintsDir := mainDir + "/.drem"
+	if err := os.MkdirAll(constraintsDir, 0o755); err != nil {
+		t.Fatalf("mkdir main constraints dir: %v", err)
+	}
+	if err := os.WriteFile(constraintsDir+"/constraints.toml", []byte("[[max_lines]]\nname = \"existing-line-limit\"\nglob = \"*.go\"\nlimit = 0\n"), 0o644); err != nil {
+		t.Fatalf("write main constraints.toml: %v", err)
+	}
+	if err := os.WriteFile(mainDir+"/dummy.go", []byte("package dummy\n"), 0o644); err != nil {
+		t.Fatalf("write main dummy.go: %v", err)
+	}
+	if _, err := testutil.RunGit([]string{"add", "."}, mainDir); err != nil {
+		t.Fatalf("git add main: %v", err)
+	}
+	if _, err := testutil.RunGit([]string{"commit", "-m", "add failing baseline constraint"}, mainDir); err != nil {
+		t.Fatalf("git commit main: %v", err)
+	}
+
+	featureBranch := "feature/quickfix-baseline-only-constraint"
+	if _, err := wt.CreateFeature(strings.TrimPrefix(featureBranch, "feature/")); err != nil {
+		t.Fatalf("create feature: %v", err)
+	}
+	featureDir := wt.FeatureWorktreePath(strings.TrimPrefix(featureBranch, "feature/"))
+	if err := os.MkdirAll(featureDir+"/.drem", 0o755); err != nil {
+		t.Fatalf("mkdir feature metadata dir: %v", err)
+	}
+	if err := os.WriteFile(featureDir+"/.drem/capacity-canary-test.json", []byte("{}\n"), 0o644); err != nil {
+		t.Fatalf("write canary metadata: %v", err)
+	}
+
+	task := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      projectID,
+		Title:          "metadata-only canary",
+		Description:    "quick fix: metadata-only canary",
+		Status:         model.StatusInProgress,
+		Category:       model.CategoryQuickFix,
+		WorktreeBranch: featureBranch,
+	}
+	if err := db.Create(&task).Error; err != nil {
+		t.Fatalf("create task: %v", err)
+	}
+
+	if err := o.transitionQuickFixToMerging(&task); err != nil {
+		t.Fatalf("transitionQuickFixToMerging: unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("reload task: %v", err)
+	}
+	if updated.Status != model.StatusMerging {
+		t.Errorf("expected status %q, got %q", model.StatusMerging, updated.Status)
+	}
+	if updated.NeedsHumanReview {
+		t.Error("expected baseline-only violations not to require human review")
+	}
+	if _, ok := updated.Context["constraint_violations"]; ok {
+		t.Error("expected baseline-only violations not to be stored on task")
 	}
 }
 
