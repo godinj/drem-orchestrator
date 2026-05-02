@@ -49,6 +49,7 @@ func TestArtifactRegistrySeedPersonaContextUpdatesChangedArtifacts(t *testing.T)
 	repo := t.TempDir()
 	t.Chdir(repo)
 	requireWriteFile(t, filepath.Join(repo, "CLAUDE.md"), "first guidance\n")
+	requireWriteFile(t, filepath.Join(repo, "plans/drem-pipeline-reliability-policy.md"), "pipeline policy\n")
 
 	var buf bytes.Buffer
 	err := Run(db, []string{"artifact-registry", "seed-persona-context"}, &buf, false, nil, "")
@@ -63,6 +64,13 @@ func TestArtifactRegistrySeedPersonaContextUpdatesChangedArtifacts(t *testing.T)
 	}
 	if first.ContentHash == "" || first.LastSeenAt == nil || first.LastValidatedAt == nil {
 		t.Fatalf("expected content hash and validation timestamps, got %#v", first)
+	}
+	reliabilityPolicy, err := registry.FindArtifactByURI(context.Background(), "repo:plans/drem-pipeline-reliability-policy.md")
+	if err != nil {
+		t.Fatalf("find seeded reliability policy artifact: %v", err)
+	}
+	if reliabilityPolicy.ArtifactType != "operating_policy" || reliabilityPolicy.WorkflowScope != "pipeline_reliability" {
+		t.Fatalf("unexpected reliability policy metadata: %#v", reliabilityPolicy)
 	}
 
 	requireWriteFile(t, filepath.Join(repo, "CLAUDE.md"), "second guidance\n")
