@@ -139,6 +139,7 @@ type Orchestrator struct {
 	endpointHealth              *agent.EndpointHealthChecker    // nil means no health checking
 	metrics                     *metrics.Store                  // nil-safe: callers nil-check before use
 	experimentScheduler         *ExperimentScheduler            // experiment-aware scheduling
+	lifecycle                   lifecycleEngine                 // owns task lifecycle advancement; nil keeps legacy tests working
 	logger                      *slog.Logger
 
 	// Spawner is the RPC client for the spawner service that owns the Docker
@@ -242,7 +243,7 @@ func New(
 	if len(contextFixerPct) > 0 && contextFixerPct[0] > 0 {
 		fixerPct = contextFixerPct[0]
 	}
-	return &Orchestrator{
+	o := &Orchestrator{
 		db:              db,
 		dbPath:          dbPath,
 		runner:          runner,
@@ -262,6 +263,8 @@ func New(
 		contextFixerPct: fixerPct,
 		logger:          slog.Default().With("component", "orchestrator", "project_id", projectID),
 	}
+	o.lifecycle = newOrchestratorLifecycleEngine(o)
+	return o
 }
 
 // SetTestGateConfig updates the test gate configuration. Call this after
@@ -498,6 +501,19 @@ func (o *Orchestrator) Run(ctx context.Context) {
 // classified and promoted into tasks. Errors are logged and do not halt the tick.
 // doTick is a single iteration of the orchestrator loop.
 func (o *Orchestrator) doTick(ctx context.Context) {
+	if o.lifecycle != nil {
+		if _, err := o.lifecycle.Tick(ctx, TickScope{
+			ProjectID: o.projectID,
+			Now:       time.Now(),
+		}); err != nil {
+			o.logger.Error("lifecycle tick", "error", err)
+		}
+		return
+	}
+	o.doTickLegacy(ctx)
+}
+
+func (o *Orchestrator) doTickLegacy(ctx context.Context) {
 	_ = ctx
 	// -1. Check for operator signal files (e.g. reset-circuit).
 	o.checkSignalFiles()
