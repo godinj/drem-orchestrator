@@ -50,6 +50,7 @@ func TestArtifactRegistrySeedPersonaContextUpdatesChangedArtifacts(t *testing.T)
 	t.Chdir(repo)
 	requireWriteFile(t, filepath.Join(repo, "CLAUDE.md"), "first guidance\n")
 	requireWriteFile(t, filepath.Join(repo, "plans/drem-pipeline-reliability-policy.md"), "pipeline policy\n")
+	requireWriteFile(t, filepath.Join(repo, "plans/orch-stale-task-cleanup-2026-05-02.md"), "cleanup record\n")
 
 	var buf bytes.Buffer
 	err := Run(db, []string{"artifact-registry", "seed-persona-context"}, &buf, false, nil, "")
@@ -71,6 +72,13 @@ func TestArtifactRegistrySeedPersonaContextUpdatesChangedArtifacts(t *testing.T)
 	}
 	if reliabilityPolicy.ArtifactType != "operating_policy" || reliabilityPolicy.WorkflowScope != "pipeline_reliability" {
 		t.Fatalf("unexpected reliability policy metadata: %#v", reliabilityPolicy)
+	}
+	cleanupRecord, err := registry.FindArtifactByURI(context.Background(), "repo:plans/orch-stale-task-cleanup-2026-05-02.md")
+	if err != nil {
+		t.Fatalf("find seeded cleanup record artifact: %v", err)
+	}
+	if cleanupRecord.ArtifactType != "cleanup_record" || cleanupRecord.Owner != "kyle" {
+		t.Fatalf("unexpected cleanup record metadata: %#v", cleanupRecord)
 	}
 
 	requireWriteFile(t, filepath.Join(repo, "CLAUDE.md"), "second guidance\n")
