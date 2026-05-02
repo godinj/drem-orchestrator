@@ -1,0 +1,15 @@
+{
+  "canary_id": "1777680564",
+  "type": "standard-parent",
+  "description": "Validation of the standard parent orchestration workflow including classifier, planner, implementation, and merger.",
+  "workflow_steps": [
+    "classification",
+    "planning",
+    "implementation",
+    "merging"
+  ],
+  "metadata": {
+    "created_at": "2023-10-27T10:00:00Z",
+    "version": "1.0.0"
+  }
+}
