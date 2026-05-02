@@ -33,6 +33,9 @@ func TestPromptWriteVerification_Success(t *testing.T) {
 }
 
 func TestPromptWriteVerification_ReadOnlyPath(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("skipping read-only path test when running as root")
+	}
 	dir := t.TempDir()
 
 	// Create a read-only directory.
