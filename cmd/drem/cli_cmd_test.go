@@ -37,7 +37,7 @@ func (f *fakeGateOrch) HandleTestReviewRejected(uuid.UUID, string) error  { retu
 func (f *fakeGateOrch) HandleTestPassed(taskID uuid.UUID) error           { return nil }
 func (f *fakeGateOrch) HandleTestFailed(taskID uuid.UUID) error           { return nil }
 func (f *fakeGateOrch) HandleClarificationAnswer(uuid.UUID, string) error { return nil }
-func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error                   { return nil }
+func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error                  { return nil }
 
 // TestCLIApproveAgainstRealOrchHTTP is the end-to-end regression test
 // for Phase 2 of the orch API gate-mutation pivot. It wires a real
@@ -120,4 +120,47 @@ func TestCLIApproveJSONMode(t *testing.T) {
 	var dto orchdto.TaskDTO
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &dto))
 	require.Equal(t, task.ID.String(), dto.ID)
+}
+
+func TestShouldWarnImplicitStatsDB(t *testing.T) {
+	tests := []struct {
+		name           string
+		configExplicit bool
+		databasePath   string
+		args           []string
+		want           bool
+	}{
+		{
+			name:         "stats with implicit default database",
+			databasePath: "./drem.db",
+			args:         []string{"stats"},
+			want:         true,
+		},
+		{
+			name:           "explicit config suppresses warning",
+			configExplicit: true,
+			databasePath:   "./drem.db",
+			args:           []string{"stats"},
+		},
+		{
+			name:         "non-default database suppresses warning",
+			databasePath: "/tmp/live/drem.db",
+			args:         []string{"stats"},
+		},
+		{
+			name:         "other command suppresses warning",
+			databasePath: "./drem.db",
+			args:         []string{"tasks"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.DatabasePath = tt.databasePath
+			if got := shouldWarnImplicitStatsDB(tt.configExplicit, cfg, tt.args); got != tt.want {
+				t.Fatalf("shouldWarnImplicitStatsDB() = %v, want %v", got, tt.want)
+			}
+		})
+	}
 }

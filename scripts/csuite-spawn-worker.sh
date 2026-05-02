@@ -285,6 +285,20 @@ STATE_EOF
 
 echo "Launching ${WORKER_ID} in tmux session '${SESSION_NAME}' (harness: ${HARNESS})..."
 
+WORKER_BIN_DIR="${WORKER_DIR}/bin"
+mkdir -p "$WORKER_BIN_DIR"
+cat > "${WORKER_BIN_DIR}/dremctl" <<WRAPPER_EOF
+#!/usr/bin/env bash
+cd "$WORK_DIR"
+exec go run ./cmd/dremctl "\$@"
+WRAPPER_EOF
+cat > "${WORKER_BIN_DIR}/drem" <<WRAPPER_EOF
+#!/usr/bin/env bash
+cd "$WORK_DIR"
+exec go run ./cmd/drem "\$@"
+WRAPPER_EOF
+chmod +x "${WORKER_BIN_DIR}/dremctl" "${WORKER_BIN_DIR}/drem"
+
 INITIAL_PROMPT="You are ${WORKER_ID}. Read your task brief at ~/.drem-csuite/temp-workers/${WORKER_ID}/inbox/ and begin."
 
 # Determine system prompt path (used by Claude; OpenCode reads it differently).
@@ -331,6 +345,7 @@ ${INITIAL_PROMPT}"
 #!/usr/bin/env bash
 cd "$WORK_DIR"
 export CSUITE_AGENT="$WORKER_ID"
+export PATH="$WORKER_BIN_DIR:\$PATH"
 exec opencode run \\
     --model "$MODEL" \\
     "\$(cat "$OC_PROMPT_FILE")"
@@ -352,14 +367,14 @@ else
 
     if [ -n "$SYSTEM_PROMPT" ]; then
         tmux -L "$TMUX_SOCKET" new-session -d -s "$SESSION_NAME" \
-            "cd '$WORK_DIR' && CSUITE_AGENT='$WORKER_ID' claude \
+            "cd '$WORK_DIR' && export CSUITE_AGENT='$WORKER_ID' PATH='$WORKER_BIN_DIR':\"\$PATH\" && claude \
                 $CLAUDE_ARGS \
                 --system-prompt '$SYSTEM_PROMPT' \
                 --dangerously-skip-permissions \
                 '$INITIAL_PROMPT'"
     else
         tmux -L "$TMUX_SOCKET" new-session -d -s "$SESSION_NAME" \
-            "cd '$WORK_DIR' && CSUITE_AGENT='$WORKER_ID' claude \
+            "cd '$WORK_DIR' && export CSUITE_AGENT='$WORKER_ID' PATH='$WORKER_BIN_DIR':\"\$PATH\" && claude \
                 $CLAUDE_ARGS \
                 --dangerously-skip-permissions \
                 '$INITIAL_PROMPT'"

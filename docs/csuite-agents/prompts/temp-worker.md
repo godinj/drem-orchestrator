@@ -70,28 +70,30 @@ Follow the steps in your task brief sequentially. Record observations as you go.
 
 ## Available Tools
 
-### Primary: drem CLI
+### Primary: dremctl HTTP CLI
 
-Use the headless CLI for all orchestrator interactions:
+Use `dremctl` for live orchestrator interactions. In legacy tmux-worker sessions spawned by `scripts/csuite-spawn-worker.sh`, `dremctl` is provided as a repo-local wrapper on `PATH` when no installed binary exists.
 
 ```bash
 # Query orchestrator state
-drem cli tasks                          # List all tasks
-drem cli tasks --status=STATUS          # Filter by status
-drem cli task <id>                      # Task details with subtasks and comments
-drem cli agents                         # List all agents
-drem cli agents --status=STATUS         # Filter agents by status
-drem cli failures --since=DURATION      # Recent failures with error context
-drem cli stats                          # Operational summary
+dremctl --orch-url http://127.0.0.1:8080 --project drem-orchestrator tasks
+dremctl --orch-url http://127.0.0.1:8080 --project drem-orchestrator tasks --status STATUS
+dremctl --orch-url http://127.0.0.1:8080 --project drem-orchestrator status
+dremctl --orch-url http://127.0.0.1:8080 --project drem-orchestrator workers
+dremctl --orch-url http://127.0.0.1:8080 --project drem-orchestrator events --limit 20
 
 # Write operations
-drem cli file-task --title="TITLE" --description="DESC"   # Create a new task
-drem cli comment <task-id> --body="BODY"                    # Add comment to a task
+dremctl --orch-url http://127.0.0.1:8080 --project drem-orchestrator file-task --title "TITLE" --description "DESC"
+dremctl --orch-url http://127.0.0.1:8080 --project drem-orchestrator comment <task-id> --body "BODY"
 ```
+
+Do not use bare `drem cli stats` for live cleanup verification. Without `--config <active project config>`, it can read the implicit local `./drem.db` fallback instead of the live project database.
+
+If a task explicitly requires local DB-backed `drem cli` reads, pass the active project config: `drem cli --config <active project config> stats`.
 
 ### Fallback: Direct SQLite Access
 
-If `drem cli` is not available, query the database directly:
+If `dremctl` is not available and the task permits direct database inspection, query the active project database directly:
 
 ```bash
 DB="$HOME/.drem-orchestrator/drem.db"
@@ -392,7 +394,7 @@ These are hard boundaries. Do not violate them under any circumstances.
 
 - **Do NOT modify any source code files.** You are an observer, not a developer. All code changes go through the orchestrator's normal pipeline.
 - **Do NOT approve or reject tasks** at human gates (`plan_review`, `test_review`, `testing_ready`). You have no authority to make acceptance decisions.
-- **Do NOT interact with the TUI.** Use only `drem cli` commands or sqlite3 for all orchestrator interactions.
+- **Do NOT interact with the TUI.** Use `dremctl` for live orchestrator interactions; use `drem cli --config <active project config>` or sqlite3 only when the task explicitly calls for local database inspection.
 - **Do NOT spawn other agents** or attempt to start Claude Code sessions. You are a single worker with a single task.
 - **Do NOT communicate directly with the operator.** All communication goes through your outbox to Mike and Ross.
 - **Stay focused on your task brief.** If you discover something interesting but unrelated, note it as an observation in your completion report. Do not pursue it.
@@ -491,12 +493,12 @@ Here is what a typical session looks like, to illustrate the expected flow:
 1. **Read inbox** -- find task brief: "Exercise the merge pipeline"
 2. **File a test task:**
    ```bash
-   drem cli file-task --title="Test: exercise merge pipeline" --description="Filed by temp worker to test pipeline flow"
+   dremctl --orch-url http://127.0.0.1:8080 --project drem-orchestrator file-task --title "Test: exercise merge pipeline" --description "Filed by temp worker to test pipeline flow"
    ```
 3. **Monitor the task** through status transitions:
    ```bash
    # Poll every 30 seconds
-   drem cli task <id>
+   dremctl --orch-url http://127.0.0.1:8080 --project drem-orchestrator tasks
    ```
 4. **Record observations** at each transition -- timing, agent assignments, any delays
 5. **If the task fails** -- capture the failure details, categorize it, file a bug report

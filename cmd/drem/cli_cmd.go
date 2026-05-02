@@ -26,6 +26,7 @@ import (
 func runCLI() {
 	// Find --config flag in os.Args before the subcommand args.
 	configPath := "drem.toml"
+	configExplicit := false
 	var cliArgs []string
 	args := os.Args[2:] // skip binary name and "cli"
 
@@ -37,9 +38,11 @@ func runCLI() {
 		case args[i] == "--json":
 			jsonMode = true
 		case args[i] == "--config" && i+1 < len(args):
+			configExplicit = true
 			configPath = args[i+1]
 			i++
 		case strings.HasPrefix(args[i], "--config="):
+			configExplicit = true
 			configPath = strings.TrimPrefix(args[i], "--config=")
 		case args[i] == "--orch-url" && i+1 < len(args):
 			orchURL = args[i+1]
@@ -55,6 +58,9 @@ func runCLI() {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "config: %v\n", err)
 		os.Exit(1)
+	}
+	if shouldWarnImplicitStatsDB(configExplicit, cfg, cliArgs) {
+		fmt.Fprintln(os.Stderr, "warning: drem cli stats is reading the implicit ./drem.db fallback. For live operations, use dremctl --orch-url ... --project ... status or drem cli --config <active project config> stats.")
 	}
 
 	database, err := db.Init(cfg.DatabasePath)
@@ -86,4 +92,11 @@ func runCLI() {
 func projectNameFromBareRepo(bareRepoPath string) string {
 	base := filepath.Base(bareRepoPath)
 	return strings.TrimSuffix(base, ".git")
+}
+
+func shouldWarnImplicitStatsDB(configExplicit bool, cfg Config, cliArgs []string) bool {
+	if configExplicit || len(cliArgs) == 0 || cliArgs[0] != "stats" {
+		return false
+	}
+	return filepath.Clean(cfg.DatabasePath) == filepath.Clean(DefaultConfig().DatabasePath)
 }

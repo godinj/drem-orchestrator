@@ -341,6 +341,29 @@ test_state_file_has_metadata() {
     echo "  $CURRENT_TEST: done"
 }
 
+test_launch_environment_adds_repo_local_cli_wrappers() {
+    CURRENT_TEST="test_launch_environment_adds_repo_local_cli_wrappers"
+    local td="${TMPDIR_ROOT}/cli_wrappers"
+    local mockbin
+    mockbin="$(setup_spawn_env "$td")"
+
+    run_spawn "$td" "$mockbin" "${td}/task-brief.md" --worker-id worker-010 >/dev/null
+
+    assert_file_exists "${td}/temp-workers/worker-010/bin/dremctl"
+    assert_file_exists "${td}/temp-workers/worker-010/bin/drem"
+    assert_file_exists "${td}/temp-workers/worker-010/launch.sh"
+
+    local dremctl_wrapper drem_wrapper launch_script
+    dremctl_wrapper="$(cat "${td}/temp-workers/worker-010/bin/dremctl")"
+    drem_wrapper="$(cat "${td}/temp-workers/worker-010/bin/drem")"
+    launch_script="$(cat "${td}/temp-workers/worker-010/launch.sh")"
+    assert_contains "$dremctl_wrapper" "go run ./cmd/dremctl"
+    assert_contains "$drem_wrapper" "go run ./cmd/drem"
+    assert_contains "$launch_script" "export PATH=\"${td}/temp-workers/worker-010/bin:\$PATH\""
+
+    echo "  $CURRENT_TEST: done"
+}
+
 test_tmux_session_launched() {
     CURRENT_TEST="test_tmux_session_launched"
     local td="${TMPDIR_ROOT}/tmux_launch"
@@ -519,6 +542,7 @@ test_manual_worker_id
 test_creates_worker_directory_structure
 test_copies_task_brief_to_inbox
 test_state_file_has_metadata
+test_launch_environment_adds_repo_local_cli_wrappers
 test_tmux_session_launched
 test_existing_session_blocked
 test_dry_run_no_side_effects
