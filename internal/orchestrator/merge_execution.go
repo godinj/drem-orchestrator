@@ -92,10 +92,16 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 		switch result.FailureReason {
 		case "tests_failed":
 			reason := "merge aborted: pre-push tests failed"
+			markTerminalMergerFailure(task, terminalMergerFailureTestsFailed)
+			if task.Context == nil {
+				task.Context = make(model.JSONField)
+			}
+			task.Context["merger_failure_reason"] = result.FailureReason
+			task.Context["merger_exit_code"] = result.ExitCode
 			if err := o.failTask(task, reason); err != nil {
 				return err
 			}
-			o.emit("merge_tests_failed", map[string]any{"task_id": task.ID})
+			o.emit("merge_tests_failed", map[string]any{"task_id": task.ID, "failure_reason": result.FailureReason, "exit_code": result.ExitCode})
 			return nil
 		case "misc", "unknown":
 			reason := fmt.Sprintf("merge aborted: %s exit from merger (code=%d)", result.FailureReason, result.ExitCode)
@@ -336,6 +342,7 @@ const (
 	terminalMergerFailureConflict          = "conflict"
 	terminalMergerFailureAttemptsExhausted = "merge_failed_after_attempts"
 	terminalMergerFailurePreflight         = "merger_preflight_failed"
+	terminalMergerFailureTestsFailed       = "tests_failed"
 )
 
 func markTerminalMergerFailure(task *model.Task, reason string) {
@@ -356,6 +363,7 @@ func hasTerminalMergerFailure(task *model.Task) bool {
 	failureReason = strings.ToLower(failureReason)
 	return strings.Contains(failureReason, "merge conflicts") ||
 		strings.Contains(failureReason, "merge failed after") ||
+		strings.Contains(failureReason, "pre-push tests failed") ||
 		strings.Contains(failureReason, "merger spawn skipped")
 }
 

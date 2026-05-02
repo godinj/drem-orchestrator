@@ -181,12 +181,9 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 			}
 		}
 
-		// Direct tool agent intercept: when the SGLang direct path is
-		// configured and this is a coder subtask, bypass the OpenCode/Claude
-		// subprocess and drive the role via RunDirectToolAgent. Saves ~20K
-		// tokens of tool-definition overhead per agent. This check runs
-		// BEFORE the runner capacity gate because direct agents manage their
-		// own concurrency independently of the subprocess runner.
+		// Legacy no-container direct tool intercept. When a spawner is wired,
+		// shouldUseDirectToolAgent returns false and sglang-direct coders go
+		// through the worker harness so tools execute outside orch.
 		if agentType == model.AgentCoder && o.shouldUseDirectToolAgent(sub, agentType) {
 			if err := o.processCoderDirect(sub, parent); err != nil {
 				o.logger.Error("direct coder dispatch failed", "subtask_id", sub.ID, "error", err)

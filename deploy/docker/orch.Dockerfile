@@ -18,7 +18,7 @@
 #   docker build -f deploy/docker/orch.Dockerfile \
 #     -t localhost:5000/drem-orch:latest .
 #   docker push localhost:5000/drem-orch:latest
-#
+
 # ---------- build stage ----------
 FROM golang:1.25-bookworm AS build
 
@@ -47,16 +47,12 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
          ca-certificates \
          curl \
-         git \
-         tini \
          gcc \
+         git \
          libc6-dev \
          pkg-config \
+         tini \
     && rm -rf /var/lib/apt/lists/*
-
-# Copy Go toolchain from build stage to support running tests in runtime
-COPY --from=build /usr/local/go /usr/local/go
-ENV PATH="/usr/local/go/bin:${PATH}"
 
 # curl is required by the compose healthcheck declared in
 # internal/projects/templates/project-compose.yml.tmpl — Bug E W5.1 hits
@@ -64,13 +60,18 @@ ENV PATH="/usr/local/go/bin:${PATH}"
 # 30s and restarts the container on three consecutive failures. The
 # binary adds ~200 KB + deps already satisfied by ca-certificates, so
 # the image-size cost is negligible compared to the observability gain.
-#
+
 # The bare repo is bind-mounted from the host (owned by the operator's UID,
 # typically 1000) into this root-owned container. Git 2.35+ refuses cross-UID
 # repository access unless safe.directory lists it; setting it system-wide to
 # "*" bypasses the check for every mount. This is safe because the container
 # is operator-scoped — nothing inside it belongs to another principal.
-RUN git config --system --add safe.directory '*'
+RUN git config --system --add safe.directory '*' \
+    && git config --system user.name drem-orchestrator \
+    && git config --system user.email drem-orchestrator@localhost
+
+COPY --from=build /usr/local/go /usr/local/go
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 COPY --from=build /out/drem /usr/local/bin/drem
 

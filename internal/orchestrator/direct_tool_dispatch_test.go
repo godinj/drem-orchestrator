@@ -134,6 +134,31 @@ func TestProcessCoderDirect_CreatesAgentRecord(t *testing.T) {
 	}
 }
 
+func TestDispatchQuickFixDirect_CreatesDirectAgentRecord(t *testing.T) {
+	orch, projectID, _ := setupDirectToolDispatchTest(t)
+	orch.runner = agent.NewRunner(orch.db, nil, nil, "/bin/false", "/bin/false", 1, nil)
+	task := testutil.CreateTask(t, orch.db, projectID, "Quickfix via GQ", model.StatusInProgress)
+	task.WorktreeBranch = "feature/quickfix-direct"
+	if err := orch.db.Save(&task).Error; err != nil {
+		t.Fatalf("save task: %v", err)
+	}
+
+	if err := orch.dispatchQuickFixDirect(&task, nil); err != nil {
+		t.Fatalf("dispatchQuickFixDirect: %v", err)
+	}
+
+	var ag model.Agent
+	if err := orch.db.Where("project_id = ? AND current_task_id = ?", projectID, task.ID).First(&ag).Error; err != nil {
+		t.Fatalf("load agent: %v", err)
+	}
+	if ag.Provider != string(model.ProviderSGLangDirect) {
+		t.Fatalf("provider = %q, want %q", ag.Provider, model.ProviderSGLangDirect)
+	}
+	if ag.WorktreeBranch != task.WorktreeBranch {
+		t.Fatalf("worktree branch = %q, want %q", ag.WorktreeBranch, task.WorktreeBranch)
+	}
+}
+
 func TestProcessReviewerDirect_CreatesAgentRecord(t *testing.T) {
 	orch, projectID, _ := setupDirectToolDispatchTest(t)
 

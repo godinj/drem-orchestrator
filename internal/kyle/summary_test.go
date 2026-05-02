@@ -90,3 +90,116 @@ func TestRenderSummary_HealthStates(t *testing.T) {
 		require.NoError(t, err)
 	}
 }
+
+func TestRenderSummary_IncludesTaskFailureAttentionLine(t *testing.T) {
+	now := time.Date(2026, 4, 19, 15, 22, 0, 0, time.UTC)
+	current := true
+	historical := false
+	snap := kyle.ProjectSnapshot{
+		Project: "diagnostics",
+		Tasks: []orchdto.TaskDTO{
+			{
+				Title:                "merge the thing",
+				Status:               "failed",
+				CurrentHealth:        "failed",
+				LatestFailureSummary: "merge conflict in api.go",
+				LatestFailureCurrent: &current,
+			},
+			{
+				Title:                "ask operator",
+				Status:               "plan_review",
+				CurrentHealth:        "needs_attention",
+				LatestFailureSummary: "planner needs scope decision",
+				LatestFailureCurrent: &current,
+			},
+			{
+				Title:                "old flakes",
+				Status:               "in_progress",
+				LatestFailureSummary: "historical test flake",
+				LatestFailureCurrent: &historical,
+			},
+		},
+		FetchedAt: now,
+	}
+
+	got := kyle.RenderSummary(now, []kyle.ProjectSnapshot{snap})
+
+	require.Contains(t, got, "attention:  failure merge the thing: merge conflict in api.go; needs-attention ask operator: planner needs scope decision")
+	require.NotContains(t, got, "old flakes")
+}
+
+func TestRenderSummary_IncludesStaleActiveTaskAttentionLine(t *testing.T) {
+	now := time.Date(2026, 4, 19, 15, 22, 0, 0, time.UTC)
+	snap := kyle.ProjectSnapshot{
+		Project: "diagnostics",
+		Tasks: []orchdto.TaskDTO{
+			{
+				Title:     "write the plan",
+				Status:    "planning",
+				UpdatedAt: now.Add(-5 * time.Hour),
+			},
+			{
+				ID:        "task-2",
+				Status:    "in_progress",
+				UpdatedAt: now.Add(-26 * time.Hour),
+			},
+			{
+				Title:     "fresh tests",
+				Status:    "testing_ready",
+				UpdatedAt: now.Add(-30 * time.Minute),
+			},
+		},
+		FetchedAt: now,
+	}
+
+	got := kyle.RenderSummary(now, []kyle.ProjectSnapshot{snap})
+
+	require.Contains(t, got, "attention:  stuck write the plan: planning for 5h; stuck task-2: in_progress for 26h")
+	require.NotContains(t, got, "fresh tests")
+}
+
+func TestRenderSummary_StaleActiveStatuses(t *testing.T) {
+	now := time.Date(2026, 4, 19, 15, 22, 0, 0, time.UTC)
+	for _, status := range []string{"planning", "test_writing", "in_progress", "testing_ready", "merging", "classifying"} {
+		snap := kyle.ProjectSnapshot{
+			Project:   "diagnostics",
+			Tasks:     []orchdto.TaskDTO{{Title: "old task", Status: status, UpdatedAt: now.Add(-4 * time.Hour)}},
+			FetchedAt: now,
+		}
+
+		got := kyle.RenderSummary(now, []kyle.ProjectSnapshot{snap})
+
+		require.Contains(t, got, "attention:  stuck old task: "+status+" for 4h")
+	}
+}
+
+func TestRenderSummary_DoesNotMarkHumanReviewGatesAsStale(t *testing.T) {
+	now := time.Date(2026, 4, 19, 15, 22, 0, 0, time.UTC)
+	snap := kyle.ProjectSnapshot{
+		Project: "diagnostics",
+		Tasks: []orchdto.TaskDTO{
+			{Title: "review plan", Status: "plan_review", UpdatedAt: now.Add(-24 * time.Hour)},
+			{Title: "review tests", Status: "test_review", UpdatedAt: now.Add(-24 * time.Hour)},
+		},
+		FetchedAt: now,
+	}
+
+	got := kyle.RenderSummary(now, []kyle.ProjectSnapshot{snap})
+
+	require.NotContains(t, got, "attention:")
+}
+
+func TestRenderSummary_NoAttentionLineWithoutStaleOrFailureTasks(t *testing.T) {
+	now := time.Date(2026, 4, 19, 15, 22, 0, 0, time.UTC)
+	snap := kyle.ProjectSnapshot{
+		Project: "diagnostics",
+		Tasks: []orchdto.TaskDTO{
+			{Title: "fresh work", Status: "in_progress", UpdatedAt: now.Add(-time.Hour)},
+		},
+		FetchedAt: now,
+	}
+
+	got := kyle.RenderSummary(now, []kyle.ProjectSnapshot{snap})
+
+	require.NotContains(t, got, "attention:")
+}

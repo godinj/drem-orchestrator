@@ -128,8 +128,9 @@ ENV PATH=/home/drem/.opencode/bin:/usr/local/go/bin:/home/drem/.local/bin:/usr/l
 # build time so the spawner does not need to know about file modes.
 USER root
 COPY --chown=root:root drem-watchdog         /usr/local/bin/drem-watchdog
+COPY --chown=root:root drem-direct-agent     /usr/local/bin/drem-direct-agent
 COPY --chown=root:root worker-entrypoint.sh  /usr/local/bin/worker-entrypoint
-RUN chmod 0755 /usr/local/bin/drem-watchdog /usr/local/bin/worker-entrypoint
+RUN chmod 0755 /usr/local/bin/drem-watchdog /usr/local/bin/drem-direct-agent /usr/local/bin/worker-entrypoint
 
 # ---- runtime surface -------------------------------------------------------
 USER drem

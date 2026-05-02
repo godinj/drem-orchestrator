@@ -1002,6 +1002,60 @@ func TestReconcileStuckAgents_TopLevelTask_WithCommits_NotFailed(t *testing.T) {
 	}
 }
 
+func TestReconcileStuckAgents_ContainerFeatureBranchCommit_Completes(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "container-feature-commit"
+	featureDir := createFeatureWorktree(t, bareRepo, featureName)
+	testFile := filepath.Join(featureDir, "container-work.txt")
+	if err := os.WriteFile(testFile, []byte("container committed work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, featureDir, "add", ".")
+	runGitCmd(t, featureDir, "commit", "-m", "container worker commit")
+
+	taskID := uuid.New()
+	agentID := uuid.New()
+	featureBranch := "feature/" + featureName
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "container-agent",
+		Status:         model.AgentWorking,
+		WorktreeBranch: featureBranch,
+		TmuxSession:    "container-exited-with-commit",
+		CurrentTaskID:  &taskID,
+	}
+	db.Create(&ag)
+	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
+
+	task := model.Task{
+		ID:              taskID,
+		ProjectID:       orch.projectID,
+		Title:           "container worker committed to feature branch",
+		Description:     "reconciler should treat feature-branch commits as produced work",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+		WorktreeBranch:  featureBranch,
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileStuckAgents()
+	if err != nil {
+		t.Fatalf("reconcileStuckAgents() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix for exited container with feature commit, got %d", fixes)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", taskID)
+	if updated.Status != model.StatusDone {
+		t.Fatalf("expected task status done, got %s", updated.Status)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // reconcileAlreadyMergedFeatures
 // ---------------------------------------------------------------------------
@@ -1097,6 +1151,49 @@ func TestReconcileAlreadyMergedFeatures_NotMerged(t *testing.T) {
 	}
 
 	// Task should remain FAILED.
+	var updated model.Task
+	db.First(&updated, "id = ?", task.ID)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected task to stay failed, got %s", updated.Status)
+	}
+}
+
+func TestReconcileAlreadyMergedFeatures_ZeroCommitBranchAtHeadNotDone(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	mainDir := filepath.Join(bareRepo, "main")
+	runGitCmd(t, bareRepo, "worktree", "add", mainDir, "main")
+
+	featureName := "zero-commit-at-head"
+	createFeatureWorktree(t, bareRepo, featureName)
+
+	task := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      orch.projectID,
+		Title:          "failed startup should not look done",
+		Description:    "branch is exactly HEAD because the worker never committed",
+		Status:         model.StatusFailed,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&task)
+	db.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    task.ID,
+		EventType: "status_change",
+		OldValue:  string(model.StatusInProgress),
+		NewValue:  string(model.StatusFailed),
+		Actor:     "orchestrator",
+		Details:   model.JSONField{"reason": "agent session died without producing commits"},
+	})
+
+	fixes, err := orch.reconcileAlreadyMergedFeatures()
+	if err != nil {
+		t.Fatalf("reconcileAlreadyMergedFeatures() error: %v", err)
+	}
+	if fixes != 0 {
+		t.Errorf("expected 0 fixes for zero-commit branch at HEAD, got %d", fixes)
+	}
+
 	var updated model.Task
 	db.First(&updated, "id = ?", task.ID)
 	if updated.Status != model.StatusFailed {

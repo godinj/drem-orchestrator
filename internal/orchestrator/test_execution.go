@@ -80,6 +80,7 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 	if parent.Context == nil {
 		parent.Context = make(model.JSONField)
 	}
+	parent.Context["testing_ready_failure_summary"] = conciseFailureSummary(testOutput)
 
 	fixerAttempted := false
 	if v, ok := parent.Context["testing_ready_fixer_attempted"].(bool); ok && v {
@@ -230,6 +231,16 @@ Description: %s
 	o.logger.Info("testing_ready: fixer spawned for test failures",
 		"task_id", parent.ID, "fixer_id", fixerAg.ID)
 	return nil
+}
+
+func conciseFailureSummary(output string) string {
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return truncate(line, 240)
+		}
+	}
+	return "tests failed"
 }
 
 // runTestSuite runs the test suite in the given worktree and returns whether

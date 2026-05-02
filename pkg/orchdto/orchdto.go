@@ -32,12 +32,18 @@ type ProjectDTO struct {
 // directly; the HTTP API intentionally returns a narrow shape so Kyle and
 // the TUI do not become coupled to every field on the GORM model.
 type TaskDTO struct {
-	ID             string    `json:"id"`
-	Title          string    `json:"title"`
-	Status         string    `json:"status"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	AssignedWorker string    `json:"assigned_worker"`
+	ID                   string     `json:"id"`
+	Title                string     `json:"title"`
+	Status               string     `json:"status"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	AssignedWorker       string     `json:"assigned_worker"`
+	Category             string     `json:"category,omitempty"`
+	CurrentHealth        string     `json:"current_health,omitempty"`
+	LatestFailureSummary string     `json:"latest_failure_summary,omitempty"`
+	LatestFailureType    string     `json:"latest_failure_type,omitempty"`
+	LatestFailureAt      *time.Time `json:"latest_failure_at,omitempty"`
+	LatestFailureCurrent *bool      `json:"latest_failure_current,omitempty"`
 }
 
 // TaskCommentDTO is the public projection returned after appending a task

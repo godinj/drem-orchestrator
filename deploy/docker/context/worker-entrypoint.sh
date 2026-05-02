@@ -21,7 +21,8 @@
 #
 #   DREM_BRANCH          feature branch to clone and push to (required)
 #   DREM_AGENT_ID        agent identifier used in watchdog heartbeats (required)
-#   DREM_AGENT_HARNESS   "claude" (default), "opencode", or "codex"
+#   DREM_AGENT_HARNESS   "claude" (default), "opencode", "codex", or
+#                        "sglang-direct"
 #   DREM_TEST_CMD        optional test command the watchdog will run on cadence
 #   DREM_PROMPT_PATH     absolute path (inside the container) to the prompt the
 #                        spawner wrote before starting the container
@@ -61,8 +62,8 @@ require_env DREM_AGENT_ID
 
 HARNESS="${DREM_AGENT_HARNESS:-claude}"
 case "${HARNESS}" in
-    claude|opencode|codex) ;;
-    *) die "unsupported DREM_AGENT_HARNESS='${HARNESS}' (expected 'claude', 'opencode', or 'codex')" ;;
+    claude|opencode|codex|sglang-direct) ;;
+    *) die "unsupported DREM_AGENT_HARNESS='${HARNESS}' (expected 'claude', 'opencode', 'codex', or 'sglang-direct')" ;;
 esac
 
 BARE_REPO="${DREM_REMOTE_URL:-/bare}"
@@ -172,5 +173,13 @@ case "${HARNESS}" in
             exec codex "${codex_args[@]}" - < "${PROMPT_PATH}"
         fi
         die "codex requires DREM_PROMPT_PATH (non-interactive harness)"
+        ;;
+
+    sglang-direct)
+        if [[ -n "${PROMPT_PATH}" && -f "${PROMPT_PATH}" ]]; then
+            log "execing sglang-direct with prompt from ${PROMPT_PATH}"
+            exec drem-direct-agent --role "${DREM_AGENT:-coder}" --prompt "${PROMPT_PATH}" --workdir "${WORK_DIR}"
+        fi
+        die "sglang-direct requires DREM_PROMPT_PATH (non-interactive harness)"
         ;;
 esac

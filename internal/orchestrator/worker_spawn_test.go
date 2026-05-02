@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -212,6 +213,46 @@ func TestSpawnCoder_BuildsExpectedParams(t *testing.T) {
 	// plans/worker-bare-mount-rw.md.
 	require.True(t, p.BareRepoReadWrite,
 		"workers need /bare mounted rw so the watchdog can push commits")
+}
+
+func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
+	setWorkerPromptRootEnv(t, t.TempDir())
+	o, fake, _ := workerSpawnTestRig(t)
+	o.SetDirectToolAgentConfig(&agent.DirectToolAgentConfig{
+		Endpoint:      "http://gq:8090/v1/chat/completions",
+		Model:         "gemma4-26b",
+		MaxTokens:     2048,
+		MaxIterations: 7,
+		Temperature:   0.2,
+		Timeout:       30 * time.Second,
+	})
+	o.runner = agent.NewRunner(o.db, nil, nil, "/bin/false", "", 1, func(at model.AgentType) model.AgentCLIConfig {
+		require.Equal(t, model.AgentCoder, at)
+		return model.AgentCLIConfig{Provider: model.ProviderSGLangDirect, Model: "gemma4-26b"}
+	})
+
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "Run sglang-direct in a container harness",
+		Description:    "d",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/no-container-sglang",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	require.NoError(t, o.spawnCoder(context.Background(), task))
+	require.Len(t, fake.spawnCalls, 1)
+	p := fake.spawnCalls[0]
+	require.Equal(t, "sglang-direct", p.Env["DREM_AGENT_HARNESS"])
+	require.Equal(t, "http://gq:8090/v1/chat/completions", p.Env["DREM_DIRECT_ENDPOINT"])
+	require.Equal(t, "gemma4-26b", p.Env["DREM_MODEL"])
+	require.Equal(t, "2048", p.Env["DREM_DIRECT_MAX_TOKENS"])
+	require.Equal(t, "7", p.Env["DREM_DIRECT_MAX_ITERATIONS"])
+	require.Equal(t, "0.2", p.Env["DREM_DIRECT_TEMPERATURE"])
+	require.Equal(t, "30s", p.Env["DREM_DIRECT_TIMEOUT"])
+	require.Empty(t, p.CredsMount)
+	require.NotEmpty(t, p.PromptMount)
 }
 
 func TestSpawnCoder_RecordsContainerIDAndModelMetadataOnAgent(t *testing.T) {

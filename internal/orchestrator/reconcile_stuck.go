@@ -113,13 +113,18 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 
 		// Check if the agent branch has commits.
 		featureDir := o.resolveFeatureWorktree(task)
+		featureBranch := o.featureBranchForTask(task)
 		hasCommits := false
 		if featureDir != "" && ag.WorktreeBranch != "" {
-			var err error
-			hasCommits, err = gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch)
-			if err != nil {
-				o.logger.Warn("reconcile stuck: failed to check commits",
-					"agent_id", ag.ID, "error", err)
+			if ag.WorktreeBranch == featureBranch {
+				hasCommits = o.featureBranchHasChanges(task, featureDir)
+			} else {
+				var err error
+				hasCommits, err = gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch)
+				if err != nil {
+					o.logger.Warn("reconcile stuck: failed to check commits",
+						"agent_id", ag.ID, "error", err)
+				}
 			}
 		}
 

@@ -146,11 +146,49 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
+	failureEvents, err := s.latestTaskFailureEvents(ctx, tasks)
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			writeTasksTimeout(w, time.Since(start))
+			return
+		}
+		writeDBError(w, err)
+		return
+	}
 	out := make([]orchdto.TaskDTO, 0, len(tasks))
 	for _, t := range tasks {
-		out = append(out, toTaskDTO(t))
+		out = append(out, toTaskDTO(t, failureEvents[t.ID]))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) latestTaskFailureEvents(ctx context.Context, tasks []model.Task) (map[uuid.UUID]model.TaskEvent, error) {
+	out := map[uuid.UUID]model.TaskEvent{}
+	ids := make([]uuid.UUID, 0, len(tasks))
+	for _, t := range tasks {
+		ids = append(ids, t.ID)
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var events []model.TaskEvent
+	if err := s.DB.WithContext(ctx).
+		Where("task_id IN ? AND event_type IN ?", ids, []string{recordTypeCrash, recordTypeBuildError, recordTypeTestResult, recordTypeMergeResult}).
+		Order("created_at DESC").
+		Find(&events).Error; err != nil {
+		return nil, err
+	}
+	for _, e := range events {
+		if _, ok := out[e.TaskID]; ok {
+			continue
+		}
+		failureType, summary := taskFailureFromEvent(e)
+		if failureType == "" || summary == "" {
+			continue
+		}
+		out[e.TaskID] = e
+	}
+	return out, nil
 }
 
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
@@ -703,19 +741,106 @@ func paginationFrom(r *http.Request) (int, int) {
 // toTaskDTO marshals an internal model.Task into the public TaskDTO
 // shape. AssignedAgentID is rendered as an empty string when nil so the
 // JSON shape stays stable across assigned/unassigned tasks.
-func toTaskDTO(t model.Task) orchdto.TaskDTO {
+func toTaskDTO(t model.Task, events ...model.TaskEvent) orchdto.TaskDTO {
 	assigned := ""
 	if t.AssignedAgentID != nil {
 		assigned = t.AssignedAgentID.String()
 	}
-	return orchdto.TaskDTO{
+	d := orchdto.TaskDTO{
 		ID:             t.ID.String(),
 		Title:          t.Title,
 		Status:         string(t.Status),
 		CreatedAt:      t.CreatedAt,
 		UpdatedAt:      t.UpdatedAt,
 		AssignedWorker: assigned,
+		Category:       string(t.Category),
 	}
+	d.CurrentHealth = taskCurrentHealth(t)
+	applyTaskFailureDiagnostics(&d, t, events...)
+	return d
+}
+
+func taskCurrentHealth(t model.Task) string {
+	if h := firstNonEmpty(
+		stringField(t.Context, "current_health"),
+		stringField(t.Context, "task_health"),
+		stringField(t.Context, "health"),
+	); h != "" {
+		return h
+	}
+	if t.Status == model.StatusDone || t.Status == model.StatusCancelled {
+		return ""
+	}
+	if t.Status == model.StatusFailed {
+		return "failed"
+	}
+	if t.NeedsHumanReview || t.Status.IsHumanGate() {
+		return "needs_attention"
+	}
+	return ""
+}
+
+func applyTaskFailureDiagnostics(d *orchdto.TaskDTO, t model.Task, events ...model.TaskEvent) {
+	summary := firstNonEmpty(
+		stringField(t.Context, "latest_failure_summary"),
+		stringField(t.Context, "failure_diagnosis"),
+		stringField(t.Context, "failure_reason"),
+		stringField(t.Context, "merge_failure_reason"),
+		stringField(t.Context, "testing_ready_failure"),
+		stringField(t.Context, "test_writing_failure"),
+		stringField(t.Context, "test_failure_output"),
+	)
+	failureType := firstNonEmpty(
+		stringField(t.Context, "latest_failure_type"),
+		stringField(t.Context, "failure_category"),
+	)
+	var failureAt *time.Time
+	for _, e := range events {
+		eventType, eventSummary := taskFailureFromEvent(e)
+		if eventType == "" || eventSummary == "" {
+			continue
+		}
+		if summary == "" {
+			summary = eventSummary
+		}
+		if failureType == "" {
+			failureType = eventType
+		}
+		at := e.CreatedAt
+		failureAt = &at
+		break
+	}
+	if summary == "" {
+		return
+	}
+	d.LatestFailureSummary = boundFailureEvidence(summary)
+	d.LatestFailureType = firstNonEmpty(failureType, "task_failure")
+	d.LatestFailureAt = failureAt
+	current := taskFailureIsCurrent(t, d.CurrentHealth)
+	d.LatestFailureCurrent = &current
+}
+
+func taskFailureFromEvent(e model.TaskEvent) (string, string) {
+	switch e.EventType {
+	case recordTypeMergeResult:
+		if success, ok := boolField(e.Details, "success"); ok && success {
+			return "", ""
+		}
+		return "merge_failure", firstNonEmpty(stringField(e.Details, "failure_reason"), e.NewValue)
+	}
+	return evidenceFromEvent(e)
+}
+
+func taskFailureIsCurrent(t model.Task, health string) bool {
+	switch health {
+	case "failed", "needs_attention", "stuck", "unhealthy", "degraded":
+		return true
+	}
+	switch t.Status {
+	case model.StatusFailed, model.StatusRejected, model.StatusPaused:
+		return true
+	}
+	return false
 }
 
 func toTaskCommentDTO(c model.TaskComment) orchdto.TaskCommentDTO {

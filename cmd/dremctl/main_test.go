@@ -257,11 +257,54 @@ func TestStatusHitsCompositeEndpoints(t *testing.T) {
 			t.Fatalf("request %d path = %s, want %s", i, got[i].Path, want)
 		}
 	}
-	if !strings.Contains(out.String(), "tasks: 2") || !strings.Contains(out.String(), "failed=1") || !strings.Contains(out.String(), "workers: 1") {
+	if !strings.Contains(out.String(), "tasks: 2") || !strings.Contains(out.String(), "failed=1") || !strings.Contains(out.String(), "workers: 1") || !strings.Contains(out.String(), "live workers: 1 {running=1}") {
 		t.Fatalf("unexpected status output: %q", out.String())
 	}
 	if got[3].Query != "limit=10" {
 		t.Fatalf("events query = %q, want limit=10", got[3].Query)
+	}
+}
+
+func TestStatusJSONDistinguishesHistoricalAndLiveWorkers(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/projects":
+			writeJSONResponse(t, w, []map[string]any{{"name": "canvas", "language": "go", "orch_url": "http://orch:8080", "worker_count": 99}})
+		case "/projects/canvas/tasks":
+			writeJSONResponse(t, w, []map[string]any{})
+		case "/projects/canvas/workers":
+			workers := make([]map[string]any, 0, 40)
+			for i := 0; i < 40; i++ {
+				workers = append(workers, map[string]any{"id": fmt.Sprintf("worker-%d", i), "status": "dead"})
+			}
+			writeJSONResponse(t, w, workers)
+		case "/events":
+			writeJSONResponse(t, w, []map[string]any{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"--json", "status"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(out.Bytes(), &decoded); err != nil {
+		t.Fatalf("output was not JSON: %v\n%s", err, out.String())
+	}
+	if decoded["worker_count"] != float64(40) || decoded["historical_worker_count"] != float64(40) || decoded["live_worker_count"] != float64(0) {
+		t.Fatalf("unexpected worker counts: %#v", decoded)
+	}
+	liveByStatus, ok := decoded["live_workers_by_status"].(map[string]any)
+	if !ok || len(liveByStatus) != 0 {
+		t.Fatalf("live_workers_by_status = %#v, want empty object", decoded["live_workers_by_status"])
 	}
 }
 

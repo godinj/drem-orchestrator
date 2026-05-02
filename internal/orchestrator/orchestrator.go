@@ -721,6 +721,32 @@ func (o *Orchestrator) resolveFeatureWorktree(task *model.Task) string {
 	return o.worktree.FeatureWorktreePath(fn)
 }
 
+func (o *Orchestrator) featureBranchForTask(task *model.Task) string {
+	if task.WorktreeBranch != "" {
+		return task.WorktreeBranch
+	}
+	if task.ParentTaskID == nil {
+		return ""
+	}
+	var parent model.Task
+	if err := o.db.Select("worktree_branch").First(&parent, "id = ?", task.ParentTaskID).Error; err != nil {
+		return ""
+	}
+	return parent.WorktreeBranch
+}
+
+func (o *Orchestrator) featureBranchHasChanges(task *model.Task, featureDir string) bool {
+	if featureDir == "" || o.worktree == nil {
+		return false
+	}
+	changed, err := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranchName())
+	if err != nil {
+		o.logger.Warn("feature branch change check failed", "task_id", task.ID, "error", err)
+		return false
+	}
+	return len(changed) > 0
+}
+
 func (o *Orchestrator) recoverStuckAgents() {
 	var agents []model.Agent
 	if err := o.db.Where("project_id = ? AND status = ?", o.projectID, model.AgentWorking).

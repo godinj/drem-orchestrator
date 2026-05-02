@@ -88,78 +88,80 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		}
 	}
 
-	// Merge agent branch into feature.
-	// Subtasks don't carry WorktreeBranch — resolve from the parent task.
-	featureBranch := task.WorktreeBranch
-	if featureBranch == "" && task.ParentTaskID != nil {
-		var parent model.Task
-		if err := o.db.Select("worktree_branch").First(&parent, "id = ?", task.ParentTaskID).Error; err == nil {
-			featureBranch = parent.WorktreeBranch
-		}
-	}
+	// Merge agent branch into feature. Container workers commit directly to
+	// the feature branch, while legacy host workers commit to a separate agent
+	// branch that must be merged.
+	featureBranch := o.featureBranchForTask(task)
 	merged := false
 	var mergeResult *WorktreeMergeResult
 	if ag.WorktreeBranch != "" && featureBranch != "" {
 		fn := strings.TrimPrefix(featureBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
-
-		// Check if agent actually committed changes before attempting merge.
-		hasCommits, commitErr := gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch)
-		if commitErr != nil {
-			o.logger.Warn("failed to check agent commits, proceeding with merge", "agent_id", ag.ID, "error", commitErr)
-			hasCommits = true // assume there are commits on error
-		}
-		if !hasCommits {
-			// Agent may have made changes but failed to commit. Rescue them.
-			committed, rescueErr := gitexec.CommitUnstagedChanges(
-				context.Background(),
-				ag.WorktreePath,
-				fmt.Sprintf("Auto-commit uncommitted agent work for task: %s", task.Title),
-			)
-			if rescueErr != nil {
-				o.logger.Warn("failed to rescue uncommitted agent work", "agent_id", ag.ID, "error", rescueErr)
-			} else if committed {
-				o.logger.Info("rescued uncommitted agent work", "agent_id", ag.ID, "task_id", task.ID)
-				hasCommits = true
+		if ag.WorktreeBranch == featureBranch {
+			if !o.featureBranchHasChanges(task, featureDir) {
+				return o.onAgentEmptyWork(ag, task, output)
 			}
-		}
-		if !hasCommits {
-			return o.onAgentEmptyWork(ag, task, output)
-		}
-
-		// Resolve diagnostic refs before merge for structured failure events.
-		mergeBase, _ := gitexec.RunGit(context.Background(), featureDir, "merge-base", "HEAD", ag.WorktreeBranch)
-		featureHEAD, _ := gitexec.RunGit(context.Background(), featureDir, "rev-parse", "HEAD")
-		agentHEAD, _ := gitexec.RunGit(context.Background(), featureDir, "rev-parse", ag.WorktreeBranch)
-
-		result, mergeErr := o.mergeAgentBranchIntoFeature(context.Background(), ag.WorktreeBranch, featureDir)
-		if mergeErr != nil {
-			o.logger.Error("merge agent into feature failed", "agent_id", ag.ID, "error", mergeErr)
-		} else if !result.Success {
-			mergeResult = result
-			o.logger.Error("merge agent into feature had conflicts",
-				"agent_id", ag.ID,
-				"source", result.SourceBranch,
-				"target", result.TargetBranch,
-				"conflicts", result.Conflicts,
-				"git_stderr", result.GitStderr,
-				"git_command", result.GitCommand)
-
-			// Emit structured merge failure event with full diagnostics.
-			o.emit("merge_failed", map[string]any{
-				"task_id":        task.ID,
-				"agent_id":       ag.ID,
-				"agent_branch":   ag.WorktreeBranch,
-				"feature_branch": featureBranch,
-				"conflicts":      result.Conflicts,
-				"git_stderr":     result.GitStderr,
-				"git_command":    result.GitCommand,
-				"merge_base":     mergeBase,
-				"feature_head":   featureHEAD,
-				"agent_head":     agentHEAD,
-			})
-		} else {
 			merged = true
+		} else {
+
+			// Check if agent actually committed changes before attempting merge.
+			hasCommits, commitErr := gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch)
+			if commitErr != nil {
+				o.logger.Warn("failed to check agent commits, proceeding with merge", "agent_id", ag.ID, "error", commitErr)
+				hasCommits = true // assume there are commits on error
+			}
+			if !hasCommits {
+				// Agent may have made changes but failed to commit. Rescue them.
+				committed, rescueErr := gitexec.CommitUnstagedChanges(
+					context.Background(),
+					ag.WorktreePath,
+					fmt.Sprintf("Auto-commit uncommitted agent work for task: %s", task.Title),
+				)
+				if rescueErr != nil {
+					o.logger.Warn("failed to rescue uncommitted agent work", "agent_id", ag.ID, "error", rescueErr)
+				} else if committed {
+					o.logger.Info("rescued uncommitted agent work", "agent_id", ag.ID, "task_id", task.ID)
+					hasCommits = true
+				}
+			}
+			if !hasCommits {
+				return o.onAgentEmptyWork(ag, task, output)
+			}
+
+			// Resolve diagnostic refs before merge for structured failure events.
+			mergeBase, _ := gitexec.RunGit(context.Background(), featureDir, "merge-base", "HEAD", ag.WorktreeBranch)
+			featureHEAD, _ := gitexec.RunGit(context.Background(), featureDir, "rev-parse", "HEAD")
+			agentHEAD, _ := gitexec.RunGit(context.Background(), featureDir, "rev-parse", ag.WorktreeBranch)
+
+			result, mergeErr := o.mergeAgentBranchIntoFeature(context.Background(), ag.WorktreeBranch, featureDir)
+			if mergeErr != nil {
+				o.logger.Error("merge agent into feature failed", "agent_id", ag.ID, "error", mergeErr)
+			} else if !result.Success {
+				mergeResult = result
+				o.logger.Error("merge agent into feature had conflicts",
+					"agent_id", ag.ID,
+					"source", result.SourceBranch,
+					"target", result.TargetBranch,
+					"conflicts", result.Conflicts,
+					"git_stderr", result.GitStderr,
+					"git_command", result.GitCommand)
+
+				// Emit structured merge failure event with full diagnostics.
+				o.emit("merge_failed", map[string]any{
+					"task_id":        task.ID,
+					"agent_id":       ag.ID,
+					"agent_branch":   ag.WorktreeBranch,
+					"feature_branch": featureBranch,
+					"conflicts":      result.Conflicts,
+					"git_stderr":     result.GitStderr,
+					"git_command":    result.GitCommand,
+					"merge_base":     mergeBase,
+					"feature_head":   featureHEAD,
+					"agent_head":     agentHEAD,
+				})
+			} else {
+				merged = true
+			}
 		}
 	} else {
 		// No branches to merge (e.g. planner-only task); treat as merged.

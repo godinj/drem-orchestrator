@@ -263,12 +263,15 @@ func handleLogs(ctx context.Context, client *orchclient.Client, args []string, s
 }
 
 type statusDTO struct {
-	Projects        []orchdto.ProjectDTO `json:"projects"`
-	TaskCount       int                  `json:"task_count"`
-	TasksByStatus   map[string]int       `json:"tasks_by_status"`
-	WorkerCount     int                  `json:"worker_count"`
-	WorkersByStatus map[string]int       `json:"workers_by_status"`
-	RecentEvents    []orchdto.EventDTO   `json:"recent_events"`
+	Projects              []orchdto.ProjectDTO `json:"projects"`
+	TaskCount             int                  `json:"task_count"`
+	TasksByStatus         map[string]int       `json:"tasks_by_status"`
+	WorkerCount           int                  `json:"worker_count"`
+	HistoricalWorkerCount int                  `json:"historical_worker_count"`
+	WorkersByStatus       map[string]int       `json:"workers_by_status"`
+	LiveWorkerCount       int                  `json:"live_worker_count"`
+	LiveWorkersByStatus   map[string]int       `json:"live_workers_by_status"`
+	RecentEvents          []orchdto.EventDTO   `json:"recent_events"`
 }
 
 func handleStatus(ctx context.Context, client *orchclient.Client, cfg cliConfig, stdout io.Writer) error {
@@ -288,13 +291,17 @@ func handleStatus(ctx context.Context, client *orchclient.Client, cfg cliConfig,
 	if err != nil {
 		return err
 	}
+	liveWorkersByStatus := countLiveWorkersByStatus(workers)
 	status := statusDTO{
-		Projects:        projects,
-		TaskCount:       len(tasks),
-		TasksByStatus:   countTasksByStatus(tasks),
-		WorkerCount:     len(workers),
-		WorkersByStatus: countWorkersByStatus(workers),
-		RecentEvents:    events,
+		Projects:              projects,
+		TaskCount:             len(tasks),
+		TasksByStatus:         countTasksByStatus(tasks),
+		WorkerCount:           len(workers),
+		HistoricalWorkerCount: len(workers),
+		WorkersByStatus:       countWorkersByStatus(workers),
+		LiveWorkerCount:       sumCounts(liveWorkersByStatus),
+		LiveWorkersByStatus:   liveWorkersByStatus,
+		RecentEvents:          events,
 	}
 	if cfg.json {
 		return writeJSON(stdout, status)
@@ -596,6 +603,7 @@ func renderStatus(w io.Writer, status statusDTO) error {
 	}
 	fmt.Fprintf(w, "tasks: %d %s\n", status.TaskCount, formatCounts(status.TasksByStatus))
 	fmt.Fprintf(w, "workers: %d %s\n", status.WorkerCount, formatCounts(status.WorkersByStatus))
+	fmt.Fprintf(w, "live workers: %d %s\n", status.LiveWorkerCount, formatCounts(status.LiveWorkersByStatus))
 	fmt.Fprintln(w, "recent_events:")
 	for _, event := range status.RecentEvents {
 		fmt.Fprintf(w, "  %s %s\n", formatTime(event.Timestamp), event.Type)
@@ -633,6 +641,33 @@ func countWorkersByStatus(workers []orchdto.WorkerDTO) map[string]int {
 		counts[worker.Status]++
 	}
 	return counts
+}
+
+func countLiveWorkersByStatus(workers []orchdto.WorkerDTO) map[string]int {
+	counts := make(map[string]int)
+	for _, worker := range workers {
+		if isLiveWorkerStatus(worker.Status) {
+			counts[worker.Status]++
+		}
+	}
+	return counts
+}
+
+func isLiveWorkerStatus(status string) bool {
+	switch status {
+	case "running", "working":
+		return true
+	default:
+		return false
+	}
+}
+
+func sumCounts(counts map[string]int) int {
+	total := 0
+	for _, count := range counts {
+		total += count
+	}
+	return total
 }
 
 func formatCounts(counts map[string]int) string {

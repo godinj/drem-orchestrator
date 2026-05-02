@@ -127,6 +127,63 @@ func TestListTasksHidesCancelledByDefault(t *testing.T) {
 	require.Equal(t, "archived", got[0].Title)
 }
 
+func TestListTasksIncludesDiagnosticsFromContextAndEvents(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+
+	contextTask := testutil.CreateTask(t, srv.DB, project.ID, "context failure", model.StatusFailed)
+	require.NoError(t, srv.DB.Model(&contextTask).Updates(map[string]any{
+		"category": model.CategoryQuickFix,
+		"context": model.JSONField{
+			"current_health":    "needs_attention",
+			"failure_diagnosis": "merge conflict while applying worker branch",
+			"failure_category":  "merge_conflict",
+		},
+	}).Error)
+	eventTask := testutil.CreateTask(t, srv.DB, project.ID, "event failure", model.StatusInProgress)
+	failureAt := time.Date(2026, 4, 30, 10, 0, 0, 0, time.UTC)
+	require.NoError(t, srv.DB.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    eventTask.ID,
+		EventType: "test_result",
+		NewValue:  "integration tests failed",
+		Details: model.JSONField{
+			"success": false,
+			"summary": "go test ./... failed in package x",
+		},
+		Actor:     "worker-1",
+		CreatedAt: failureAt,
+	}).Error)
+
+	resp, err := http.Get(ts.URL + "/projects/" + projectName + "/tasks")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got []orchdto.TaskDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	byTitle := map[string]orchdto.TaskDTO{}
+	for _, d := range got {
+		byTitle[d.Title] = d
+	}
+
+	fromContext := byTitle["context failure"]
+	require.Equal(t, "quickfix", fromContext.Category)
+	require.Equal(t, "needs_attention", fromContext.CurrentHealth)
+	require.Equal(t, "merge conflict while applying worker branch", fromContext.LatestFailureSummary)
+	require.Equal(t, "merge_conflict", fromContext.LatestFailureType)
+	require.NotNil(t, fromContext.LatestFailureCurrent)
+	require.True(t, *fromContext.LatestFailureCurrent)
+
+	fromEvent := byTitle["event failure"]
+	require.Equal(t, "standard", fromEvent.Category)
+	require.Equal(t, "go test ./... failed in package x", fromEvent.LatestFailureSummary)
+	require.Equal(t, "test_failure", fromEvent.LatestFailureType)
+	require.NotNil(t, fromEvent.LatestFailureAt)
+	require.True(t, failureAt.Equal(*fromEvent.LatestFailureAt))
+	require.NotNil(t, fromEvent.LatestFailureCurrent)
+	require.False(t, *fromEvent.LatestFailureCurrent)
+}
+
 func TestListTasksUnknownProjectReturns404(t *testing.T) {
 	_, ts, _ := setupHTTPTest(t, nil)
 

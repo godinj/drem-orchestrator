@@ -45,6 +45,22 @@ func (o *Orchestrator) reconcileAlreadyMergedFeatures() (int, error) {
 			continue // not merged yet
 		}
 
+		// A branch created from HEAD with zero commits is also an ancestor of
+		// HEAD. If the task failed specifically because no commits were produced,
+		// do not let this reconciler mask the startup/empty-work failure as done.
+		branchHead, branchErr := gitexec.RunGit(context.Background(), mainWorktree, "rev-parse", task.WorktreeBranch)
+		defaultHead, headErr := gitexec.RunGit(context.Background(), mainWorktree, "rev-parse", "HEAD")
+		if branchErr == nil && headErr == nil && strings.TrimSpace(branchHead) == strings.TrimSpace(defaultHead) {
+			var emptyWorkFailures int64
+			o.db.Model(&model.TaskEvent{}).Where(
+				"task_id = ? AND new_value = ? AND details LIKE ?",
+				task.ID, string(model.StatusFailed), "%without producing commits%",
+			).Count(&emptyWorkFailures)
+			if emptyWorkFailures > 0 {
+				continue
+			}
+		}
+
 		// Guard: if the task has subtasks but none completed, the feature
 		// branch was never successfully worked on. A branch created from
 		// HEAD with zero commits is trivially an ancestor — don't treat

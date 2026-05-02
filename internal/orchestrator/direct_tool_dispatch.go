@@ -182,14 +182,15 @@ func (o *Orchestrator) wireDirectAgentCallbacks(
 	return act
 }
 
-// shouldUseDirectToolAgent decides whether the given subtask should be
-// dispatched via the direct SGLang HTTP path. The direct path is used when
-// the orchestrator has been configured with a DirectToolAgentConfig (via
-// SetDirectToolAgentConfig). Once per-role provider resolution is wired
-// through the task context, this will also consult the agent's
-// EffectiveProvider for finer-grained routing.
+// shouldUseDirectToolAgent decides whether the given task should run inside
+// the orchestrator process via the direct SGLang HTTP loop. Production
+// container mode keeps the same sglang-direct provider, but runs it through a
+// spawned worker harness instead so tools execute outside the orch container.
 func (o *Orchestrator) shouldUseDirectToolAgent(sub *model.Task, agentType model.AgentType) bool {
 	if o.directToolAgentCfg == nil {
+		return false
+	}
+	if o.Spawner != nil && agentType == model.AgentCoder {
 		return false
 	}
 	// Provider override in task context: if the agent config was recorded
@@ -406,6 +407,127 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 		runAndComplete()
 	}
 
+	return nil
+}
+
+// dispatchQuickFixDirect launches a top-level quickfix coder through the
+// direct GQ/SGLang tool path. Quickfix tasks do not have subtasks, so the
+// normal processCoderDirect subtask fast-track is intentionally skipped.
+func (o *Orchestrator) dispatchQuickFixDirect(task *model.Task, event *model.TaskEvent) error {
+	if o.directToolAgentCfg == nil {
+		return nil
+	}
+	if o.endpointHealth != nil && !o.endpointHealth.IsHealthy() {
+		o.logger.Warn("direct quickfix: LLM endpoint unhealthy, skipping dispatch",
+			"task_id", task.ID, "status", o.endpointHealth.Status())
+		return nil
+	}
+
+	featureDir := o.resolveReviewerWorkDir(task)
+	if featureDir == "" {
+		return fmt.Errorf("direct quickfix: no feature workdir resolved")
+	}
+
+	toolCfg := *o.directToolAgentCfg
+	toolCfg.WorkDir = featureDir
+	o.applyContextThresholds(&toolCfg)
+
+	agentID := uuid.New()
+	tracePath := fmt.Sprintf("%s/agent-trace-%s.jsonl", featureDir, agentID.String()[:8])
+	traceFile, traceErr := os.OpenFile(tracePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if traceErr == nil {
+		toolCfg.TraceWriter = traceFile
+	}
+	o.wireDirectAgentCallbacks(&toolCfg, agentID)
+
+	now := time.Now()
+	ag := &model.Agent{
+		ID:             agentID,
+		ProjectID:      task.ProjectID,
+		AgentType:      model.AgentCoder,
+		Name:           fmt.Sprintf("direct-coder-%s", task.ID.String()[:4]),
+		Status:         model.AgentWorking,
+		CurrentTaskID:  &task.ID,
+		WorktreePath:   featureDir,
+		WorktreeBranch: task.WorktreeBranch,
+		Provider:       string(model.ProviderSGLangDirect),
+		ModelID:        toolCfg.Model,
+		HeartbeatAt:    &now,
+	}
+	if err := o.db.Create(ag).Error; err != nil {
+		return fmt.Errorf("direct quickfix: create agent record: %w", err)
+	}
+
+	task.AssignedAgentID = &ag.ID
+	if err := o.db.Save(task).Error; err != nil {
+		return fmt.Errorf("direct quickfix: save task assignment: %w", err)
+	}
+
+	systemPrompt := prompt.GenerateDirectCoder(prompt.Opts{
+		Task:         task,
+		AgentType:    model.AgentCoder,
+		WorktreePath: featureDir,
+	})
+	userMessage := task.Description
+	if userMessage == "" {
+		userMessage = task.Title
+	}
+
+	o.emit("quickfix_started", map[string]any{"task_id": task.ID, "agent_id": ag.ID, "provider": ag.Provider})
+	if event != nil {
+		o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "quickfix started")
+	}
+	o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(ag.AgentType), string(model.AgentWorking))
+	o.logger.Info("quickfix started via direct tool agent", "task_id", task.ID, "agent_id", ag.ID)
+
+	runAndComplete := func() {
+		if traceFile != nil {
+			defer traceFile.Close()
+		}
+		defer func() {
+			if r := recover(); r != nil {
+				o.logger.Error("direct quickfix: goroutine panic recovered", "task_id", task.ID, "agent_id", ag.ID, "panic", r)
+				if o.endpointHealth != nil {
+					o.endpointHealth.RecordFailure()
+				}
+				if o.runner != nil {
+					o.runner.SendCompletion(agent.Completion{AgentID: agentID, ReturnCode: 1})
+				}
+			}
+		}()
+
+		result, runErr := agent.RunDirectToolAgent(toolCfg, systemPrompt, userMessage, agent.ToolsForRole("coder"), "")
+		if result != nil {
+			ag.TokensIn = result.TokensIn
+			ag.TokensOut = result.TokensOut
+			persistDirectAgentContext(ag, result, toolCfg.MaxIterations)
+			if saveErr := o.db.Save(ag).Error; saveErr != nil {
+				o.logger.Warn("direct quickfix: save tokens", "agent_id", ag.ID, "error", saveErr)
+			}
+		}
+
+		comp := agent.Completion{AgentID: agentID, ReturnCode: 0}
+		if runErr != nil {
+			o.logger.Error("direct quickfix: tool agent failed", "task_id", task.ID, "agent_id", ag.ID, "error", runErr)
+			comp.ReturnCode = 1
+			if o.endpointHealth != nil {
+				o.endpointHealth.RecordFailure()
+			}
+		} else if o.endpointHealth != nil {
+			o.endpointHealth.RecordSuccess()
+		}
+		if o.runner != nil {
+			o.runner.SendCompletion(comp)
+		} else if err := o.processAgentResult(comp); err != nil {
+			o.logger.Error("direct quickfix: inline processAgentResult", "agent_id", agentID, "error", err)
+		}
+	}
+
+	if o.runner != nil {
+		go runAndComplete()
+	} else {
+		runAndComplete()
+	}
 	return nil
 }
 

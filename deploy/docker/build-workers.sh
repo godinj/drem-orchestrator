@@ -7,10 +7,10 @@
 # after a change to the watchdog, the entrypoint, or any Dockerfile under
 # deploy/docker/.
 #
-# The watchdog binary is built first and dropped into the shared Docker build
-# context (deploy/docker/context/drem-watchdog) so that worker-base can COPY it
-# without depending on a multi-stage Go build — keeps the base image small and
-# lets us reuse it for language images that don't have Go installed.
+# The worker Go binaries are built first and dropped into the shared Docker
+# build context so worker-base can COPY them without depending on a multi-stage
+# Go build — keeps the base image small and lets us reuse it for language images
+# that don't have Go installed.
 #
 # Usage:
 #   bash deploy/docker/build-workers.sh
@@ -39,6 +39,12 @@ CGO_ENABLED=0 GOOS=linux go build \
     -trimpath -ldflags="-s -w" \
     -o deploy/docker/context/drem-watchdog \
     ./cmd/drem-watchdog
+
+echo ">> building drem-direct-agent -> deploy/docker/context/drem-direct-agent"
+CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath -ldflags="-s -w" \
+    -o deploy/docker/context/drem-direct-agent \
+    ./cmd/drem-direct-agent
 
 # worker-entrypoint.sh must live in the build context so worker-base can
 # COPY it into /usr/local/bin. The canonical source file is checked into

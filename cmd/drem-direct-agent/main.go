@@ -1,0 +1,288 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/godinj/drem-orchestrator/internal/agent"
+)
+
+const pushStderrTailBytes = 2048
+
+type gitCommandError struct {
+	Args     []string `json:"-"`
+	ExitCode int      `json:"exit_code"`
+	Output   string   `json:"-"`
+	Stderr   string   `json:"-"`
+}
+
+func (e *gitCommandError) Error() string {
+	return fmt.Sprintf("git %s: exit %d", strings.Join(e.Args, " "), e.ExitCode)
+}
+
+type pushDiagnostic struct {
+	Kind       string `json:"kind"`
+	Branch     string `json:"branch"`
+	Remote     string `json:"remote"`
+	Refspec    string `json:"refspec"`
+	ExitCode   int    `json:"exit_code"`
+	StderrTail string `json:"stderr_tail"`
+	LocalSHA   string `json:"local_sha,omitempty"`
+	RemoteSHA  string `json:"remote_sha,omitempty"`
+}
+
+func main() {
+	role := flag.String("role", envDefault("DREM_AGENT", "coder"), "agent role")
+	promptPath := flag.String("prompt", os.Getenv("DREM_PROMPT_PATH"), "prompt file path")
+	workDir := flag.String("workdir", envDefault("DREM_WORKDIR", "."), "workspace directory")
+	flag.Parse()
+
+	if strings.TrimSpace(*promptPath) == "" {
+		log.Fatal("--prompt or DREM_PROMPT_PATH is required")
+	}
+	promptBytes, err := os.ReadFile(*promptPath)
+	if err != nil {
+		log.Fatalf("read prompt: %v", err)
+	}
+
+	cfg := agent.DefaultDirectToolAgentConfig()
+	cfg.Endpoint = envDefault("DREM_DIRECT_ENDPOINT", cfg.Endpoint)
+	cfg.Model = envDefault("DREM_MODEL", cfg.Model)
+	cfg.WorkDir = *workDir
+	cfg.MaxTokens = envInt("DREM_DIRECT_MAX_TOKENS", cfg.MaxTokens)
+	cfg.MaxIterations = envInt("DREM_DIRECT_MAX_ITERATIONS", cfg.MaxIterations)
+	cfg.Temperature = envFloat("DREM_DIRECT_TEMPERATURE", cfg.Temperature)
+	cfg.Timeout = envDuration("DREM_DIRECT_TIMEOUT", cfg.Timeout)
+	cfg.BashTimeout = envDuration("DREM_DIRECT_BASH_TIMEOUT", cfg.BashTimeout)
+	cfg.ChatTemplateKwargs = envJSONMap("DREM_DIRECT_CHAT_TEMPLATE_KWARGS")
+
+	traceFile, err := openTrace(*workDir)
+	if err != nil {
+		log.Printf("trace disabled: %v", err)
+	} else if traceFile != nil {
+		defer traceFile.Close()
+		cfg.TraceWriter = traceFile
+	}
+
+	systemPrompt := systemPromptForRole(*role)
+	result, runErr := agent.RunDirectToolAgent(cfg, systemPrompt, string(promptBytes), agent.ToolsForRole(*role), "")
+	if result != nil {
+		_, _ = fmt.Fprintf(os.Stdout, "%s\n", strings.TrimSpace(result.Output))
+		_, _ = fmt.Fprintf(os.Stderr, "drem-direct-agent: iterations=%d tokens_in=%d tokens_out=%d duration=%s stop_reason=%s\n",
+			result.Iterations, result.TokensIn, result.TokensOut, result.Duration, result.StopReason)
+	}
+	if runErr != nil {
+		log.Fatalf("direct tool agent failed: %v", runErr)
+	}
+	if err := finalizeGit(*workDir); err != nil {
+		log.Fatalf("finalize git work: %v", err)
+	}
+}
+
+func systemPromptForRole(role string) string {
+	switch role {
+	case "reviewer":
+		return "You are a code reviewer. Inspect the repository, report concrete findings, and avoid modifying files."
+	case "fixer":
+		return "You are a fixer agent. Make the smallest correct code changes requested by the prompt and verify them when possible."
+	default:
+		return "You are a coder agent. Make the smallest correct code changes requested by the prompt. Task-specific instructions override any generic checklist in the prompt. If the task is a tiny metadata/artifact change or explicitly says not to test, do not run tests; write the requested file, commit it, and finish."
+	}
+}
+
+func openTrace(workDir string) (io.WriteCloser, error) {
+	agentID := envDefault("DREM_AGENT_ID", "direct")
+	shortID := agentID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	path := filepath.Join(workDir, "agent-trace-"+shortID+".jsonl")
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+}
+
+func finalizeGit(workDir string) error {
+	branch := strings.TrimSpace(os.Getenv("DREM_BRANCH"))
+	if branch == "" {
+		return nil
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".git")); err != nil {
+		return nil
+	}
+	if out, err := git(workDir, "status", "--porcelain"); err != nil {
+		return fmt.Errorf("git status: %w: %s", err, out)
+	} else if strings.TrimSpace(out) != "" {
+		if out, err := git(workDir, "add", "-A"); err != nil {
+			return fmt.Errorf("git add: %w: %s", err, out)
+		}
+		if out, err := git(workDir, "commit", "-m", "Commit direct agent changes"); err != nil {
+			return fmt.Errorf("git commit: %w: %s", err, out)
+		}
+	}
+	remote := "origin"
+	refspec := "HEAD:" + branch
+	if out, err := git(workDir, "push", remote, refspec); err != nil {
+		diag := buildPushDiagnostic(workDir, remote, branch, refspec, err, out)
+		writePushDiagnostic(workDir, diag)
+		if diag.Kind == "duplicate" {
+			log.Printf("git push duplicate: branch=%s remote=%s local_sha=%s remote_sha=%s", branch, remote, diag.LocalSHA, diag.RemoteSHA)
+			return nil
+		}
+		return fmt.Errorf("git push: %w: %s", err, out)
+	}
+	return nil
+}
+
+func git(workDir string, args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = workDir
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	out := stdout.String() + stderr.String()
+	if err != nil {
+		var exitErr *exec.ExitError
+		exitCode := -1
+		if errors.As(err, &exitErr) {
+			exitCode = exitErr.ExitCode()
+		}
+		return out, &gitCommandError{Args: args, ExitCode: exitCode, Output: out, Stderr: stderr.String()}
+	}
+	return out, nil
+}
+
+func buildPushDiagnostic(workDir, remote, branch, refspec string, pushErr error, pushOutput string) pushDiagnostic {
+	diag := pushDiagnostic{
+		Kind:       "unknown",
+		Branch:     branch,
+		Remote:     remote,
+		Refspec:    refspec,
+		ExitCode:   -1,
+		StderrTail: tailString(pushOutput, pushStderrTailBytes),
+	}
+	var gitErr *gitCommandError
+	if errors.As(pushErr, &gitErr) {
+		diag.ExitCode = gitErr.ExitCode
+		diag.StderrTail = tailString(gitErr.Stderr, pushStderrTailBytes)
+	}
+	diag.LocalSHA = gitValue(workDir, "rev-parse", "HEAD")
+	diag.RemoteSHA = gitValue(workDir, "ls-remote", remote, "refs/heads/"+branch)
+	if fields := strings.Fields(diag.RemoteSHA); len(fields) > 0 {
+		diag.RemoteSHA = fields[0]
+	}
+	diag.Kind = classifyPushFailure(diag.LocalSHA, diag.RemoteSHA, diag.StderrTail)
+	return diag
+}
+
+func classifyPushFailure(localSHA, remoteSHA, stderr string) string {
+	if localSHA != "" && remoteSHA != "" && localSHA == remoteSHA {
+		return "duplicate"
+	}
+	lower := strings.ToLower(stderr)
+	if strings.Contains(lower, "fetch first") ||
+		strings.Contains(lower, "non-fast-forward") ||
+		strings.Contains(lower, "stale info") ||
+		strings.Contains(lower, "failed to push some refs") {
+		return "stale_ref_or_race"
+	}
+	return "unknown"
+}
+
+func gitValue(workDir string, args ...string) string {
+	out, err := git(workDir, args...)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+func writePushDiagnostic(workDir string, diag pushDiagnostic) {
+	data, err := json.Marshal(diag)
+	if err != nil {
+		log.Printf("git push diagnostic marshal: %v", err)
+		return
+	}
+	path := filepath.Join(workDir, "agent-push-diagnostic.json")
+	if err := os.WriteFile(path, append(data, '\n'), 0644); err != nil {
+		log.Printf("git push diagnostic write: %v", err)
+	}
+	log.Printf("git push diagnostic: %s", data)
+}
+
+func tailString(s string, maxBytes int) string {
+	trimmed := strings.TrimSpace(s)
+	if maxBytes <= 0 || len(trimmed) <= maxBytes {
+		return trimmed
+	}
+	return string(bytes.TrimSpace([]byte(trimmed[len(trimmed)-maxBytes:])))
+}
+
+func envDefault(key, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func envInt(key string, fallback int) int {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %d", key, value, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func envFloat(key string, fallback float64) float64 {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %g", key, value, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func envDuration(key string, fallback time.Duration) time.Duration {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return fallback
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil {
+		log.Printf("invalid %s=%q, using %s", key, value, fallback)
+		return fallback
+	}
+	return parsed
+}
+
+func envJSONMap(key string) map[string]any {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return nil
+	}
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(value), &parsed); err != nil {
+		log.Printf("invalid %s JSON: %v", key, err)
+		return nil
+	}
+	return parsed
+}

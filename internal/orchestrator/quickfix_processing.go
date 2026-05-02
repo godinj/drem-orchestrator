@@ -92,6 +92,9 @@ func (o *Orchestrator) processQuickFix(task *model.Task) error {
 	// migration rationale (T3 canary regressed because the classifier
 	// picked quickfix, which still shelled out to `claude` on the orch
 	// container's PATH).
+	if o.shouldUseDirectToolAgent(task, model.AgentCoder) {
+		return o.dispatchQuickFixDirect(task, event)
+	}
 	if o.Spawner != nil {
 		return o.dispatchQuickFixViaSpawner(task, event)
 	}
@@ -182,10 +185,21 @@ func (o *Orchestrator) respawnQuickFixAgent(task *model.Task) error {
 		return nil // wait for capacity
 	}
 
-	// Container-mode dispatch: prefer o.spawnCoder when the spawner is
-	// wired, falling back to runner.SpawnAgent only when o.Spawner is nil.
-	// State-machine cleanup (clearing empty_work) must still happen in
-	// both paths — it's not a spawn concern.
+	// Direct tool dispatch only bypasses the spawner in legacy no-container
+	// mode. In production, sglang-direct runs as a worker harness inside its
+	// own container so tool execution never happens in orch.
+	if o.shouldUseDirectToolAgent(task, model.AgentCoder) {
+		if err := o.dispatchQuickFixDirect(task, nil); err != nil {
+			return err
+		}
+		delete(task.Context, "empty_work")
+		return o.db.Save(task).Error
+	}
+
+	// Container-mode dispatch: prefer o.spawnCoder when the spawner is wired,
+	// falling back to runner.SpawnAgent only when o.Spawner is nil.
+	// State-machine cleanup (clearing empty_work) must still happen in both
+	// paths — it's not a spawn concern.
 	if o.Spawner != nil {
 		return o.respawnQuickFixAgentViaSpawner(task)
 	}

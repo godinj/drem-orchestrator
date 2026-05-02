@@ -34,12 +34,14 @@ skip_constraint_gate  = false
   model    = "gemma4-26b"
 
 [agents.reviewer]
-  provider = "sglang-direct"
-  model    = "gemma4-26b"
+  provider = "codex"
+  model    = "gpt-5.5"
+  effort   = "medium"
 
 [agents.fixer]
-  provider = "sglang-direct"
-  model    = "gemma4-26b"
+  provider = "codex"
+  model    = "gpt-5.5"
+  effort   = "medium"
 
 [agents.merger]
   provider = "sglang-direct"

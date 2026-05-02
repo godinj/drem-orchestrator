@@ -450,6 +450,23 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		env["DREM_AGENT_HARNESS"] = "opencode"
 	case model.ProviderCodex:
 		env["DREM_AGENT_HARNESS"] = "codex"
+	case model.ProviderSGLangDirect:
+		env["DREM_AGENT_HARNESS"] = "sglang-direct"
+		if o.directToolAgentCfg != nil {
+			env["DREM_DIRECT_ENDPOINT"] = o.directToolAgentCfg.Endpoint
+			if o.directToolAgentCfg.MaxTokens > 0 {
+				env["DREM_DIRECT_MAX_TOKENS"] = fmt.Sprintf("%d", o.directToolAgentCfg.MaxTokens)
+			}
+			if o.directToolAgentCfg.MaxIterations > 0 {
+				env["DREM_DIRECT_MAX_ITERATIONS"] = fmt.Sprintf("%d", o.directToolAgentCfg.MaxIterations)
+			}
+			if o.directToolAgentCfg.Temperature >= 0 {
+				env["DREM_DIRECT_TEMPERATURE"] = fmt.Sprintf("%g", o.directToolAgentCfg.Temperature)
+			}
+			if o.directToolAgentCfg.Timeout > 0 {
+				env["DREM_DIRECT_TIMEOUT"] = o.directToolAgentCfg.Timeout.String()
+			}
+		}
 	default:
 		env["DREM_AGENT_HARNESS"] = "claude"
 	}
