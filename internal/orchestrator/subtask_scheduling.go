@@ -354,9 +354,9 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 // BACKLOG through PLANNING and PLAN_REVIEW to IN_PROGRESS, plus the
 // subtask_scheduled event, task_transition and agent_status publishes,
 // and the Info log line. The Agent row is created by spawnTypedWorker
-// (via recordContainerOnAgent) with the container ID in TmuxSession;
+// (via worker identity recording) with the container handle;
 // this function reloads the subtask after the spawn call so the
-// scheduler picks up the assignment that recordContainerOnAgent wrote.
+// scheduler picks up the assignment that worker identity recording wrote.
 //
 // Errors are returned to the caller, which logs them and continues to
 // the next candidate — a single subtask's failure must not starve the
@@ -371,19 +371,20 @@ func (o *Orchestrator) dispatchSubtaskViaSpawner(sub *model.Task, agentType mode
 	}
 
 	ctx := context.Background()
-	if err := o.spawnTypedWorker(ctx, sub, string(agentType)); err != nil {
+	launch, err := o.workerLaunchService().Launch(ctx, sub, agentType)
+	if err != nil {
 		return fmt.Errorf("spawn %s via spawner: %w", agentType, err)
 	}
 
 	// Reload the subtask so AssignedAgentID (written by
-	// recordContainerOnAgent during the spawn) and the task row's
+	// the worker launch service during the spawn) and the task row's
 	// container-carrying Agent handle are visible to the rest of the
 	// scheduling loop and the downstream publishers.
 	if err := o.db.First(sub, "id = ?", sub.ID).Error; err != nil {
 		return fmt.Errorf("reload subtask after container spawn: %w", err)
 	}
 	if sub.AssignedAgentID == nil {
-		// recordContainerOnAgent should always populate this; if it
+		// worker identity recording should always populate this; if it
 		// did not, treat it as a spawn failure and fail the subtask so
 		// the operator surfaces the gap rather than seeing a silent
 		// stall. Mirrors the legacy path's "agent record not found
@@ -418,18 +419,17 @@ func (o *Orchestrator) dispatchSubtaskViaSpawner(sub *model.Task, agentType mode
 		return fmt.Errorf("save subtask after fast-track: %w", err)
 	}
 
-	agentID := *sub.AssignedAgentID
 	o.emit("subtask_scheduled", map[string]any{
 		"task_id":    sub.ID,
-		"agent_id":   agentID,
+		"agent_id":   launch.AgentID,
 		"agent_type": agentType,
 	})
 	o.publishTaskTransition(sub.ID.String(), string(model.StatusBacklog),
 		string(sub.Status), "subtask scheduled")
-	o.publishAgentStatus(sub.ID.String(), agentID.String(),
+	o.publishAgentStatus(sub.ID.String(), launch.AgentID.String(),
 		string(agentType), string(model.AgentWorking))
 	o.logger.Info("subtask scheduled via spawner",
-		"subtask_id", sub.ID, "agent_id", agentID, "type", agentType)
+		"subtask_id", sub.ID, "agent_id", launch.AgentID, "type", agentType)
 	return nil
 }
 

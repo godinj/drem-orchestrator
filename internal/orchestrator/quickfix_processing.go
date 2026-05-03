@@ -140,15 +140,16 @@ func (o *Orchestrator) processQuickFix(task *model.Task) error {
 // IN_PROGRESS (event is the resulting TaskEvent) so this function only
 // handles spawn + post-spawn bookkeeping. Mirrors dispatchSubtaskViaSpawner
 // in subtask_scheduling.go: reload the task so AssignedAgentID written by
-// recordContainerOnAgent is visible, then emit the quickfix_started event
+// worker identity recording is visible, then emit the quickfix_started event
 // and publish task-transition + agent-status updates using the reloaded
 // agent ID (no local `ag` handle exists in the container path).
 func (o *Orchestrator) dispatchQuickFixViaSpawner(task *model.Task, event *model.TaskEvent) error {
-	if err := o.spawnCoder(context.Background(), task); err != nil {
+	launch, err := o.workerLaunchService().Launch(context.Background(), task, model.AgentCoder)
+	if err != nil {
 		return fmt.Errorf("process quick fix: spawn coder: %w", err)
 	}
 
-	// Reload so AssignedAgentID (written by recordContainerOnAgent during
+	// Reload so AssignedAgentID (written by worker identity recording during
 	// the spawn) is visible to the rest of the quickfix flow.
 	if err := o.db.First(task, "id = ?", task.ID).Error; err != nil {
 		return fmt.Errorf("process quick fix: reload task after container spawn: %w", err)
@@ -160,7 +161,7 @@ func (o *Orchestrator) dispatchQuickFixViaSpawner(task *model.Task, event *model
 	// Source the agent handle from the reloaded task — there's no local
 	// `ag` in the container path.
 	var ag model.Agent
-	if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err != nil {
+	if err := o.db.First(&ag, "id = ?", launch.AgentID).Error; err != nil {
 		return fmt.Errorf("process quick fix: load agent after spawn: %w", err)
 	}
 
@@ -253,7 +254,8 @@ func (o *Orchestrator) respawnQuickFixAgent(task *model.Task) error {
 // agent also produces empty work, onAgentEmptyWork will set the flag again
 // and the cycle repeats until MaxEmptyWorkRetries.
 func (o *Orchestrator) respawnQuickFixAgentViaSpawner(task *model.Task) error {
-	if err := o.spawnCoder(context.Background(), task); err != nil {
+	launch, err := o.workerLaunchService().Launch(context.Background(), task, model.AgentCoder)
+	if err != nil {
 		return fmt.Errorf("respawn quickfix agent: spawn via spawner: %w", err)
 	}
 
@@ -273,7 +275,7 @@ func (o *Orchestrator) respawnQuickFixAgentViaSpawner(task *model.Task) error {
 	}
 
 	var ag model.Agent
-	if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err != nil {
+	if err := o.db.First(&ag, "id = ?", launch.AgentID).Error; err != nil {
 		return fmt.Errorf("respawn quickfix agent: load agent after spawn: %w", err)
 	}
 

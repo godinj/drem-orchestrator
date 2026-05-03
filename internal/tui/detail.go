@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
 
 // depInfo holds a dependency task's title and status for display.
@@ -417,7 +418,7 @@ func (d DetailModel) availableActions() string {
 	// Agent-specific actions.
 	if d.agent != nil {
 		parts = append(parts, "[l] view log")
-		if d.agent.TmuxSession != "" {
+		if workeridentity.FromAgent(*d.agent).CanJumpToTmux() {
 			parts = append(parts, "[g] jump to agent")
 		}
 	}

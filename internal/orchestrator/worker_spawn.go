@@ -15,6 +15,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
+	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
 
 // workerCredsPathEnv is the environment variable the per-project compose
@@ -372,8 +373,20 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 	// DREM_BRANCH env var and drem.branch label, so the reconciler's
 	// commit-check finds the right ref regardless of which branch
 	// source the spawner used.
-	if err := o.recordContainerOnAgent(task, res.ContainerID, swc.provider, swc.modelID, swc.effort, agentType, params.Branch); err != nil {
-		o.logger.Error("spawn worker: record agent container", "task_id", task.ID, "error", err)
+	handle, recordErr := workeridentity.NewStore(o.db).RecordSpawn(ctx, workeridentity.SpawnRecord{
+		Task:        task,
+		ProjectID:   o.projectID,
+		AgentType:   agentType,
+		WorkerID:    swc.workerID,
+		ContainerID: res.ContainerID,
+		Image:       params.Image,
+		Branch:      params.Branch,
+		Provider:    swc.provider,
+		ModelID:     swc.modelID,
+		Effort:      swc.effort,
+	})
+	if recordErr != nil {
+		o.logger.Error("spawn worker: record identity", "task_id", task.ID, "error", recordErr)
 	}
 
 	// Register the branch in gitref so downstream reconciliation and cleanup
@@ -396,8 +409,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		}
 	}
 
-	attemptID := o.recordWorkerAttempt(task, agentType, res.ContainerID, params.Image, swc.workerID)
-	o.recordSpawnEventWithWorkerID(task, agentType, res.ContainerID, params.Image, swc.workerID, attemptID)
+	o.recordSpawnEventWithWorkerID(task, agentType, res.ContainerID, params.Image, swc.workerID, handle.AttemptID)
 	return nil
 }
 
@@ -603,104 +615,6 @@ func (o *Orchestrator) resolveProjectLanguage() string {
 	return "go"
 }
 
-// recordContainerOnAgent writes the container ID, provider/model/effort, and
-// task/branch coupling onto the assigned agent row. When no agent is
-// assigned yet, a synthetic one is created and attached so the audit
-// trail is complete (user story 49).
-//
-// branch is the feature branch the worker clones — the spawner has
-// already set DREM_BRANCH + drem.branch on the container to this
-// value. The same string must land on the Agent row so
-// reconcile_stuck.go's commit-check guard
-// (`featureDir != "" && ag.WorktreeBranch != ""`) can resolve the ref
-// and route a post-push container exit through synthesizeCompletion
-// instead of failing the task with "agent session died without
-// producing commits." The v13 canary regression surfaced exactly that
-// gap: both the create-synthetic and update-existing paths silently
-// dropped the branch; this function pins the contract that both paths
-// persist it alongside CurrentTaskID and AgentType.
-//
-// See plans/container-agent-branch-persistence.md for the full symptom
-// and fix narrative.
-func (o *Orchestrator) recordContainerOnAgent(task *model.Task, containerID, provider, modelID, effort, agentType, branch string) error {
-	if containerID == "" {
-		return nil
-	}
-
-	now := time.Now()
-	var ag model.Agent
-	if task.AssignedAgentID != nil {
-		if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err == nil {
-			return o.updateAgentContainer(&ag, containerID, provider, modelID, effort, agentType, branch, task.ID, now)
-		}
-	}
-
-	// No agent yet — create one carrying every field the reconciler,
-	// TUI, and audit queries need. In particular: WorktreeBranch and
-	// CurrentTaskID MUST be populated so reconcile_stuck.go can
-	// commit-check the branch on a container exit. Status is set to
-	// AgentWorking because the spawner has just handed us a live
-	// container; status transitions away from Working are owned by the
-	// heartbeat / exit-event paths.
-	ag = model.Agent{
-		ID:             uuid.New(),
-		ProjectID:      o.projectID,
-		AgentType:      model.AgentType(agentType),
-		Name:           fmt.Sprintf("%s-%s", agentType, task.ID.String()[:shortIDLen]),
-		Status:         model.AgentWorking,
-		CurrentTaskID:  &task.ID,
-		WorktreeBranch: branch,
-		TmuxSession:    containerID, // re-use TmuxSession as the container handle
-		Provider:       provider,
-		ModelID:        modelID,
-		Effort:         effort,
-		HeartbeatAt:    &now,
-	}
-	if err := o.db.Create(&ag).Error; err != nil {
-		return fmt.Errorf("recordContainerOnAgent: create agent: %w", err)
-	}
-
-	task.AssignedAgentID = &ag.ID
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("recordContainerOnAgent: save task: %w", err)
-	}
-	return nil
-}
-
-// updateAgentContainer writes container metadata onto an existing
-// agent row. The pre-fix version only wrote TmuxSession / ModelID /
-// HeartbeatAt and silently dropped the branch + task coupling,
-// producing the v13 canary symptom (agent row with correct container
-// ID but empty worktree_branch). The post-fix version writes the same
-// set of fields the create-synthetic path does, so both entry points
-// leave an Agent row in a shape the reconciler can reason about. ModelID is
-// the CLI model identifier from the spawn config, not the Docker image.
-//
-// branch is the feature branch the spawner cloned into the container
-// (buildSpawnContext.branch). It is written unconditionally — an empty
-// string is never the right value for a container-mode worker and
-// should have been caught at spawn-context build time. taskID is the
-// task driving the spawn; both agentType and WorktreeBranch are
-// rewritten on every update because a pre-existing agent row could
-// carry stale values from a prior assignment on a different task /
-// branch (e.g. after a retry that recycles the same row).
-func (o *Orchestrator) updateAgentContainer(ag *model.Agent, containerID, provider, modelID, effort, agentType, branch string, taskID uuid.UUID, now time.Time) error {
-	ag.TmuxSession = containerID
-	ag.Provider = provider
-	ag.ModelID = modelID
-	ag.Effort = effort
-	if agentType != "" {
-		ag.AgentType = model.AgentType(agentType)
-	}
-	ag.WorktreeBranch = branch
-	ag.CurrentTaskID = &taskID
-	ag.HeartbeatAt = &now
-	if err := o.db.Save(ag).Error; err != nil {
-		return fmt.Errorf("updateAgentContainer: save: %w", err)
-	}
-	return nil
-}
-
 // recordSpawnEvent writes a TaskEvent documenting the spawn so the audit
 // trail required by user story 49 is always present, regardless of whether
 // the spawn happened through the old worktree path or the new spawner RPC.
@@ -736,25 +650,6 @@ func (o *Orchestrator) recordSpawnEventWithWorkerID(task *model.Task, agentType,
 	if err := o.db.Create(evt).Error; err != nil {
 		o.logger.Error("record spawn event", "task_id", task.ID, "error", err)
 	}
-}
-
-func (o *Orchestrator) recordWorkerAttempt(task *model.Task, agentType, containerID, image, workerID string) uuid.UUID {
-	attempt := model.WorkerAttempt{
-		ID:          uuid.New(),
-		TaskID:      task.ID,
-		WorkerID:    workerID,
-		ContainerID: containerID,
-		AgentType:   agentType,
-		Image:       image,
-	}
-	if agentID := o.assignedAgentIDForType(task, agentType); agentID != nil {
-		attempt.AgentID = agentID
-	}
-	if err := o.db.Create(&attempt).Error; err != nil {
-		o.logger.Error("record worker attempt", "task_id", task.ID, "error", err)
-		return uuid.Nil
-	}
-	return attempt.ID
 }
 
 func (o *Orchestrator) assignedAgentIDForType(task *model.Task, agentType string) *uuid.UUID {
@@ -905,12 +800,12 @@ func (o *Orchestrator) destroyWorkerForTask(ctx context.Context, task *model.Tas
 	if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err != nil {
 		return nil
 	}
-	containerID := strings.TrimSpace(ag.TmuxSession)
-	if containerID == "" {
+	handle := workeridentity.FromAgent(ag)
+	if !handle.HasContainer() {
 		return nil
 	}
-	if err := o.Spawner.DestroyWorker(ctx, spawner.DestroyWorkerParams{ContainerID: containerID}); err != nil {
-		return fmt.Errorf("destroy worker %s: %w", containerID, err)
+	if err := o.Spawner.DestroyWorker(ctx, spawner.DestroyWorkerParams{ContainerID: handle.ContainerID}); err != nil {
+		return fmt.Errorf("destroy worker %s: %w", handle.ContainerID, err)
 	}
 
 	if o.GitrefRegistry != nil && o.worktree != nil && ag.WorktreeBranch != "" {

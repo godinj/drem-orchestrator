@@ -19,6 +19,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/logging"
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
 
@@ -491,9 +492,11 @@ func (s *Server) historyScopeForWorker(ctx context.Context, id string) (workerHi
 	if parsed, err := uuid.Parse(id); err == nil {
 		var agent model.Agent
 		if err := s.DB.WithContext(ctx).First(&agent, "id = ?", parsed).Error; err == nil {
+			handle := workeridentity.FromAgent(agent)
 			addSelector(scope.selectors, agent.ID.String())
 			addSelector(scope.selectors, agent.Name)
-			addSelector(scope.selectors, agent.TmuxSession)
+			addSelector(scope.selectors, handle.LogContainerID())
+			addSelector(scope.selectors, handle.TmuxSession)
 			if agent.CurrentTaskID != nil {
 				scope.taskIDs[*agent.CurrentTaskID] = struct{}{}
 			}
@@ -865,9 +868,10 @@ func toWorkerDTO(a model.Agent, project string) orchdto.WorkerDTO {
 	if a.HeartbeatAt != nil {
 		hb = *a.HeartbeatAt
 	}
+	handle := workeridentity.FromAgent(a)
 	return orchdto.WorkerDTO{
 		ID:                   a.ID.String(),
-		ContainerID:          a.TmuxSession, // repurposed: post-containerization this holds the container ID
+		ContainerID:          handle.LogContainerID(),
 		Project:              project,
 		AgentType:            string(a.AgentType),
 		Branch:               a.WorktreeBranch,
@@ -893,12 +897,13 @@ func toWorkerAttemptDTOFromAgent(taskID uuid.UUID, a model.Agent) orchdto.Worker
 	if a.HeartbeatAt != nil {
 		hb = *a.HeartbeatAt
 	}
+	handle := workeridentity.FromAgent(a)
 	return orchdto.WorkerAttemptDTO{
 		AttemptID:            a.ID.String(),
 		TaskID:               taskID.String(),
 		WorkerID:             a.ID.String(),
 		AgentID:              a.ID.String(),
-		ContainerID:          a.TmuxSession,
+		ContainerID:          handle.LogContainerID(),
 		WorkerLabel:          a.Name,
 		AgentType:            string(a.AgentType),
 		Branch:               a.WorktreeBranch,

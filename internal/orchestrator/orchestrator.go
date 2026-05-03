@@ -29,6 +29,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
+	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
 
 const (
@@ -110,6 +111,7 @@ type Orchestrator struct {
 	runner                      *agent.Runner
 	worktree                    WorktreeManager
 	mergeDispatcher             MergeDispatcher // optional override for tests; nil → dispatchMerge
+	workerLauncher              WorkerLaunchService
 	memory                      *memory.Manager
 	bus                         *eventbus.Bus          // nil disables C-Suite event emission
 	supervisor                  *supervisor.Supervisor // nil disables LLM-powered decisions
@@ -780,13 +782,8 @@ func (o *Orchestrator) recoverStuckAgents() {
 		}
 
 		// Container-mode agents don't share a host-visible worktree, so the
-		// idle-signal-file heuristic is moot for them. A container agent
-		// carries its container ID in TmuxSession (not a tmux session name)
-		// and typically has no WorktreePath set. Skip to avoid accidentally
-		// matching a stale .claude/agent-idle file if a host path was ever
-		// recorded. Container-mode stuck detection is handled by
-		// reconcileStuckAgents via the spawner's ListWorkers result.
-		if ag.TmuxSession != "" && !isLegacyTmuxSession(ag.TmuxSession) {
+		// idle-signal-file heuristic is moot for them.
+		if workeridentity.FromAgent(ag).HasContainer() {
 			continue
 		}
 

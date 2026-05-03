@@ -114,7 +114,7 @@ func TestReconcileOnStartup_GoneContainersRespawn(t *testing.T) {
 	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
 	require.NotNil(t, reloaded.AssignedAgentID, "fresh agent must be assigned")
 	// The old stale agent binding was cleared and a new one written via
-	// spawnCoder's recordContainerOnAgent path.
+	// spawnCoder's worker identity recording path.
 }
 
 func TestReconcileOnStartup_TasksWithoutContainerIDIgnored(t *testing.T) {
@@ -165,14 +165,6 @@ func TestReconcileOnStartup_WithoutSpawnerIsNoop(t *testing.T) {
 		logger:    slog.Default(),
 	}
 	require.NoError(t, o.reconcileOnStartup(context.Background()))
-}
-
-func TestIsLegacyTmuxSession(t *testing.T) {
-	require.True(t, isLegacyTmuxSession("dashboard/coder - Fix bug abcd"))
-	require.True(t, isLegacyTmuxSession("session:abc"))
-	require.True(t, isLegacyTmuxSession("foo bar"))
-	require.False(t, isLegacyTmuxSession("abc123def456"))
-	require.False(t, isLegacyTmuxSession("c7a3b2f1-5d9e-4e8a-b3f5-2e7f0a1d2c3b"))
 }
 
 // backdateAgentPastGrace pushes the agent's created_at well past the

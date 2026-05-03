@@ -4,6 +4,8 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
 
 // handleKey dispatches key messages based on the current focus.
@@ -174,10 +176,11 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Drill into the selected agent: jump to its tmux session if alive,
 		// otherwise fall through to the detail panel.
 		if ag := m.agents.Selected(); ag != nil {
-			if ag.TmuxSession != "" {
-				alive, _ := m.tmux.IsAgentSessionAlive(ag.TmuxSession)
+			handle := workeridentity.FromAgent(*ag)
+			if handle.CanJumpToTmux() {
+				alive, _ := m.tmux.IsAgentSessionAlive(handle.TmuxSession)
 				if alive {
-					_ = m.tmux.FocusAgentSession(ag.TmuxSession)
+					_ = m.tmux.FocusAgentSession(handle.TmuxSession)
 					return m, nil
 				}
 			}
@@ -205,10 +208,11 @@ func (m Model) handleAgentKeys(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Jump to the selected agent's tmux session (supervisors only)
 		// or show log for headless agents.
 		if ag := m.agents.Selected(); ag != nil {
-			if ag.TmuxSession != "" {
-				alive, _ := m.tmux.IsAgentSessionAlive(ag.TmuxSession)
+			handle := workeridentity.FromAgent(*ag)
+			if handle.CanJumpToTmux() {
+				alive, _ := m.tmux.IsAgentSessionAlive(handle.TmuxSession)
 				if alive {
-					_ = m.tmux.FocusAgentSession(ag.TmuxSession)
+					_ = m.tmux.FocusAgentSession(handle.TmuxSession)
 					return m, nil
 				}
 			}

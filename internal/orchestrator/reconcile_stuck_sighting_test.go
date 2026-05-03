@@ -51,7 +51,7 @@ func TestReconcileStuck_SkipsKillWhenAgentmonUnsighted(t *testing.T) {
 		WorktreeBranch: "",
 		CurrentTaskID:  &taskID,
 		// TmuxSession carries the container ID in container mode; see
-		// recordContainerOnAgent. The probe keys off this field.
+		// worker identity recording. The probe keys off this field.
 		TmuxSession: containerID,
 	}
 	db.Create(&ag)

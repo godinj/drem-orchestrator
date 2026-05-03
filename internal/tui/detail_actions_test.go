@@ -136,7 +136,7 @@ func TestAvailableActions_AgentActions(t *testing.T) {
 			task: &model.Task{ID: uuid.New(), Status: model.StatusInProgress},
 			agent: &model.Agent{
 				ID:          agentID,
-				TmuxSession: "sess-1",
+				TmuxSession: "session:sess-1",
 			},
 		}
 		result := d.availableActions()

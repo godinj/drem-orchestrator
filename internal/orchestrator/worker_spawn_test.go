@@ -284,7 +284,7 @@ func TestSpawnCoder_RecordsContainerIDAndModelMetadataOnAgent(t *testing.T) {
 
 	require.NoError(t, o.spawnCoder(context.Background(), task))
 
-	// Reload task to pick up AssignedAgentID written by recordContainerOnAgent.
+	// Reload task to pick up AssignedAgentID written by worker identity recording.
 	require.NoError(t, o.db.First(task, "id = ?", task.ID).Error)
 	require.NotNil(t, task.AssignedAgentID)
 
@@ -805,7 +805,7 @@ func TestSpawnTypedWorker_IdempotentPreservesInFlightCommits(t *testing.T) {
 // failing the task with "agent session died without producing commits."
 //
 // Before this fix, the create-synthetic branch in
-// recordContainerOnAgent omitted WorktreeBranch entirely; the update
+// the old container recording path omitted WorktreeBranch entirely; the update
 // path omitted it AND the task/agent-type coupling. Both are covered
 // by this pair of tests.
 func TestRecordContainerOnAgent_CreatePathPopulatesBranchAndTask(t *testing.T) {
@@ -833,7 +833,7 @@ func TestRecordContainerOnAgent_CreatePathPopulatesBranchAndTask(t *testing.T) {
 	// carries the branch/task/type coupling the reconciler needs.
 	require.NoError(t, o.db.First(task, "id = ?", task.ID).Error)
 	require.NotNil(t, task.AssignedAgentID,
-		"recordContainerOnAgent must attach a synthetic agent when none was assigned")
+		"worker identity recording must attach a synthetic agent when none was assigned")
 
 	var ag model.Agent
 	require.NoError(t, o.db.First(&ag, "id = ?", task.AssignedAgentID).Error)

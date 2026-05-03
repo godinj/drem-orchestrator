@@ -150,10 +150,10 @@ Description: %s
 			return fmt.Errorf("processTestingReady: save parent context before spawn: %w", err)
 		}
 		// spawnFixer expects a clean AssignedAgentID — clear any prior
-		// coder assignment so recordContainerOnAgent creates a fresh
+		// coder assignment so worker identity recording creates a fresh
 		// fixer Agent row. The legacy runner.SpawnAgentInWorktree path
 		// creates a new Agent row unconditionally; the container path
-		// needs this explicit clear because recordContainerOnAgent
+		// needs this explicit clear because worker identity recording
 		// updates rather than replaces.
 		prevAgentID := parent.AssignedAgentID
 		parent.AssignedAgentID = nil
@@ -174,7 +174,7 @@ Description: %s
 			return nil
 		}
 		// Reload to pick up AssignedAgentID written by
-		// recordContainerOnAgent.
+		// worker identity recording.
 		if err := o.db.First(parent, "id = ?", parent.ID).Error; err != nil {
 			return fmt.Errorf("processTestingReady: reload parent after container spawn: %w", err)
 		}

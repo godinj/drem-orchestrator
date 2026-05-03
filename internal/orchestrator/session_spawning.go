@@ -16,6 +16,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
+	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
 
 // SpawnReviewerSession spawns a reviewer agent for the given task.
@@ -37,7 +38,7 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 	if err == nil {
 		// Already a working reviewer — return its session.
 		o.logger.Info("reviewer already running for task", "task_id", taskID, "agent_id", existing.ID)
-		return existing.TmuxSession, nil
+		return workerHandleString(existing), nil
 	}
 
 	// Resolve integration worktree.
@@ -106,7 +107,7 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 		if err := o.spawnReviewer(context.Background(), &task); err != nil {
 			return "", fmt.Errorf("spawn reviewer via spawner: %w", err)
 		}
-		// Reload so AssignedAgentID (written by recordContainerOnAgent)
+		// Reload so AssignedAgentID (written by worker identity recording)
 		// is visible, then look up the Agent row to return the
 		// container ID as the "session name" the TUI displays.
 		if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
@@ -122,7 +123,7 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 		o.emit("reviewer_spawned", map[string]any{"task_id": taskID, "agent_id": ag.ID, "mode": reviewMode})
 		o.logger.Info("reviewer spawned via spawner",
 			"task_id", taskID, "agent_id", ag.ID, "mode", reviewMode)
-		return ag.TmuxSession, nil
+		return workerHandleString(ag), nil
 	}
 
 	// Generate prompt.
@@ -146,7 +147,7 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 
 	o.emit("reviewer_spawned", map[string]any{"task_id": taskID, "agent_id": ag.ID, "mode": reviewMode})
 	o.logger.Info("reviewer spawned", "task_id", taskID, "agent_id", ag.ID, "mode", reviewMode)
-	return ag.TmuxSession, nil
+	return workerHandleString(*ag), nil
 }
 
 // spawnDirectPlanReviewer runs the direct SGLang plan review synchronously.
@@ -272,7 +273,7 @@ func (o *Orchestrator) SpawnFixerSession(taskID uuid.UUID) (string, error) {
 		// Record fixer spawn metric. The legacy path reads the parent
 		// agent (the originating agent whose work triggered the fixer)
 		// to tag the metric with parent_model. In container mode the
-		// AssignedAgentID was overwritten by recordContainerOnAgent to
+		// AssignedAgentID was overwritten by worker identity recording to
 		// point at the new fixer agent — the parent-model label here
 		// records the fixer's image rather than the originator's
 		// model. An accurate parent_model label requires reading the
@@ -286,7 +287,7 @@ func (o *Orchestrator) SpawnFixerSession(taskID uuid.UUID) (string, error) {
 		o.emit("fixer_spawned", map[string]any{"task_id": taskID, "agent_id": ag.ID})
 		o.logger.Info("fixer spawned via spawner",
 			"task_id", taskID, "agent_id", ag.ID)
-		return ag.TmuxSession, nil
+		return workerHandleString(ag), nil
 	}
 
 	// Generate prompt.
@@ -320,7 +321,15 @@ func (o *Orchestrator) SpawnFixerSession(taskID uuid.UUID) (string, error) {
 
 	o.emit("fixer_spawned", map[string]any{"task_id": taskID, "agent_id": ag.ID})
 	o.logger.Info("fixer spawned", "task_id", taskID, "agent_id", ag.ID)
-	return ag.TmuxSession, nil
+	return workerHandleString(*ag), nil
+}
+
+func workerHandleString(ag model.Agent) string {
+	handle := workeridentity.FromAgent(ag)
+	if handle.HasContainer() {
+		return handle.ContainerID
+	}
+	return handle.TmuxSession
 }
 
 // resolveIntegrationWorktree returns the integration worktree path for a task.

@@ -7,6 +7,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
+	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
 
 // reconcileOnStartup reconstructs in-flight state at orchestrator start by
@@ -48,20 +49,20 @@ func (o *Orchestrator) reconcileOnStartup(ctx context.Context) error {
 	respawned := 0
 	for i := range inflight {
 		task := &inflight[i]
-		containerID := o.taskContainerID(task)
-		if containerID == "" {
+		handle, err := workeridentity.NewStore(o.db).ForTask(ctx, task)
+		if err != nil || !handle.HasContainer() {
 			// Older task with no container — legacy path handles it.
 			continue
 		}
-		if liveIDs[containerID] {
+		if liveIDs[handle.ContainerID] {
 			// Container is alive; event watcher will pick up future transitions.
 			o.logger.Debug("reconcileOnStartup: container alive, reattach",
-				"task_id", task.ID, "container_id", containerID)
+				"task_id", task.ID, "container_id", handle.ContainerID)
 			continue
 		}
 		// Container is gone; respawn to resume the task.
 		o.logger.Warn("reconcileOnStartup: container missing, respawning",
-			"task_id", task.ID, "container_id", containerID)
+			"task_id", task.ID, "container_id", handle.ContainerID)
 		if err := o.respawnForTask(ctx, task); err != nil {
 			o.logger.Error("reconcileOnStartup: respawn", "task_id", task.ID, "error", err)
 			continue
@@ -92,39 +93,6 @@ func (o *Orchestrator) loadInflightTasks() ([]model.Task, error) {
 		return nil, fmt.Errorf("loadInflightTasks: query: %w", err)
 	}
 	return tasks, nil
-}
-
-// taskContainerID returns the container ID recorded on a task's assigned
-// agent, or empty when none is recorded. The container ID lives in the
-// Agent.TmuxSession column (repurposed as the handle in container mode so
-// no schema migration is required for Tier 3).
-func (o *Orchestrator) taskContainerID(task *model.Task) string {
-	if task.AssignedAgentID == nil {
-		return ""
-	}
-	var ag model.Agent
-	if err := o.db.Select("tmux_session").First(&ag, "id = ?", task.AssignedAgentID).Error; err != nil {
-		return ""
-	}
-	// Container IDs are hex/uuid-shaped; legacy TmuxSession values contain
-	// slashes and colons (e.g. "dashboard/coder - Fix bug abcd"). A simple
-	// heuristic keeps this safe for mixed-mode databases during rollout.
-	if isLegacyTmuxSession(ag.TmuxSession) {
-		return ""
-	}
-	return ag.TmuxSession
-}
-
-// isLegacyTmuxSession returns true if the value looks like a tmux session
-// name rather than a Docker container ID. Tmux sessions contain "/" or "-"
-// with spaces; container IDs are hex or uuid-shaped.
-func isLegacyTmuxSession(s string) bool {
-	for _, r := range s {
-		if r == '/' || r == ' ' || r == ':' {
-			return true
-		}
-	}
-	return false
 }
 
 // respawnForTask dispatches a replacement worker whose agent type matches

@@ -9,6 +9,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
+	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
 
 // reconcileStuckAgents finds tasks in actionable statuses (classifying,
@@ -61,12 +62,13 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 			continue
 		}
 
+		handle := workeridentity.FromAgent(ag)
+
 		// Skip container-mode agents whose container is still running per
-		// the spawner. TmuxSession is repurposed to carry the container ID
-		// in container mode (see recordContainerOnAgent).
-		if ag.TmuxSession != "" && containerRunningSet[ag.TmuxSession] {
+		// the spawner.
+		if handle.HasContainer() && containerRunningSet[handle.ContainerID] {
 			o.logger.Debug("reconcile stuck: container-mode agent still running, skipping",
-				"agent_id", ag.ID, "container_id", ag.TmuxSession, "task", task.Title)
+				"agent_id", ag.ID, "container_id", handle.ContainerID, "task", task.Title)
 			continue
 		}
 
@@ -101,15 +103,15 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 		// mode — the operator sees distinct log spam pointing at agentmon,
 		// not false-positive kills. Probe=nil preserves pre-container host
 		// behaviour unchanged.
-		if o.sightingProbe != nil && ag.TmuxSession != "" && !o.sightingProbe.HasSeen(ag.TmuxSession) {
+		if o.sightingProbe != nil && handle.HasContainer() && !o.sightingProbe.HasSeen(handle.ContainerID) {
 			o.logger.Warn("reconcile stuck: skipping dead-agent kill because agentmon has no sighting",
-				"agent_id", ag.ID, "task", task.Title, "container_id", ag.TmuxSession)
+				"agent_id", ag.ID, "task", task.Title, "container_id", handle.ContainerID)
 			continue
 		}
 
 		// Agent is NOT in the runner's running map AND DB status is working.
 		o.logger.Warn("detected dead agent session without completion",
-			"agent_id", ag.ID, "task", task.Title, "session", ag.TmuxSession)
+			"agent_id", ag.ID, "task", task.Title, "session", handle.TmuxSession, "container_id", handle.LogContainerID())
 
 		// Check if the agent branch has commits.
 		featureDir := o.resolveFeatureWorktree(task)

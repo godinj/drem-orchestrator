@@ -148,7 +148,7 @@ func TestSpawnReviewerSession_DispatchesViaSpawner(t *testing.T) {
 	assert.Equal(t, "reviewer", fake.spawnCalls[0].AgentType)
 	assert.Equal(t, "/host/.claude/.credentials.json", fake.spawnCalls[0].CredsMount)
 
-	// AssignedAgentID was populated by recordContainerOnAgent.
+	// AssignedAgentID was populated by worker identity recording.
 	var reloaded model.Task
 	require.NoError(t, o.db.First(&reloaded, "id = ?", taskID).Error)
 	require.NotNil(t, reloaded.AssignedAgentID)

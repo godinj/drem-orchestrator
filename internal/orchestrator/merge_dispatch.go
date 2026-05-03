@@ -12,6 +12,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
+	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
 
 // errMergerSpawnSkippedEmptyTestCmd is the sentinel error dispatchMerge
@@ -68,7 +69,7 @@ func (o *Orchestrator) mergeDispatch(ctx context.Context, task *model.Task) (*Me
 	if o.mergeDispatcher != nil {
 		return o.mergeDispatcher.Dispatch(ctx, task)
 	}
-	return o.dispatchMerge(ctx, task)
+	return o.workerLaunchService().LaunchMerge(ctx, task)
 }
 
 // SetMergeDispatcher overrides the MergeDispatcher used for
@@ -294,8 +295,19 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 	}
 
 	// Record the merger spawn in the audit trail.
-	attemptID := o.recordWorkerAttempt(task, "merger", res.ContainerID, params.Image, workerID)
-	o.recordSpawnEventWithWorkerID(task, "merger", res.ContainerID, params.Image, workerID, attemptID)
+	handle, recordErr := workeridentity.NewStore(o.db).RecordSpawn(ctx, workeridentity.SpawnRecord{
+		Task:        task,
+		ProjectID:   o.projectID,
+		AgentType:   "merger",
+		WorkerID:    workerID,
+		ContainerID: res.ContainerID,
+		Image:       params.Image,
+		Branch:      task.WorktreeBranch,
+	})
+	if recordErr != nil {
+		o.logger.Error("dispatchMerge: record identity", "task_id", task.ID, "error", recordErr)
+	}
+	o.recordSpawnEventWithWorkerID(task, "merger", res.ContainerID, params.Image, workerID, handle.AttemptID)
 
 	finalState, err := o.awaitMergerExit(dispatchCtx, res.ContainerID)
 	if err != nil {
