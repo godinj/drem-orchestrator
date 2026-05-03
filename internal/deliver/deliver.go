@@ -108,7 +108,8 @@ type Config struct {
 // /rescan share the X-Csuite-Token auth; the /v1/* audit endpoints
 // use bearer auth against Config.AuditToken.
 func Handler(cfg Config) http.Handler {
-	h := &handler{cfg: cfg, clock: time.Now}
+	svc := NewDeliveryService(cfg)
+	h := &handler{cfg: cfg, svc: svc}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", h.healthz)
 	mux.Handle("/deliver", TokenAuth(cfg.Token, http.HandlerFunc(h.deliver)))
@@ -120,6 +121,18 @@ func Handler(cfg Config) http.Handler {
 // handler carries the configured state for the deliver endpoint.
 // Kept private; callers compose via Handler.
 type handler struct {
+	cfg   Config
+	svc   *DeliveryService
+	svcMu sync.Mutex
+
+	// clock is retained for package tests that construct handler
+	// directly. Production handlers set the service explicitly.
+	clock func() time.Time
+}
+
+// DeliveryService owns durable delivery behavior. HTTP handlers are
+// responsible for auth, JSON, methods, and status mapping only.
+type DeliveryService struct {
 	cfg Config
 
 	// destMutexes serialises write operations for a single
@@ -135,13 +148,53 @@ type handler struct {
 	clock func() time.Time
 }
 
+// DeliveryResult is the transport-neutral result of a delivery attempt.
+type DeliveryResult struct {
+	DeliveryID string
+	Duplicate  bool
+}
+
+var (
+	errNoLedger        = errors.New("delivery not yet implemented")
+	errLedgerLookup    = errors.New("ledger lookup failed")
+	errClassify        = errors.New("classify failed")
+	errLedgerInsert    = errors.New("ledger insert failed")
+	errQuarantineWrite = errors.New("quarantine write failed")
+	errDeliveryFailed  = errors.New("delivery failed")
+	errUnknownClass    = errors.New("unknown classification")
+)
+
+// NewDeliveryService builds the package delivery boundary for callers
+// that need to invoke delivery or rescan without HTTP transport logic.
+func NewDeliveryService(cfg Config) *DeliveryService {
+	return &DeliveryService{cfg: cfg, clock: time.Now}
+}
+
+func (h *handler) service() *DeliveryService {
+	h.svcMu.Lock()
+	defer h.svcMu.Unlock()
+	if h.svc != nil {
+		return h.svc
+	}
+	clock := h.clock
+	if clock == nil {
+		clock = time.Now
+	}
+	h.svc = &DeliveryService{cfg: h.cfg, clock: clock}
+	return h.svc
+}
+
 // logger returns the configured logger, defaulting to the stdlib
 // default if none was supplied. Keeps the call sites terse.
-func (h *handler) logger() *log.Logger {
-	if h.cfg.Logger != nil {
-		return h.cfg.Logger
+func (s *DeliveryService) logger() *log.Logger {
+	if s.cfg.Logger != nil {
+		return s.cfg.Logger
 	}
 	return log.Default()
+}
+
+func (h *handler) logger() *log.Logger {
+	return h.service().logger()
 }
 
 // healthz serves GET /healthz with a fixed body. No auth, no state —
@@ -156,10 +209,8 @@ func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"status":"ok"}`))
 }
 
-// deliver serves POST /deliver. The current tracer slice layers
-// auth, schema, and ledger idempotency. On a duplicate sha256 the
-// handler returns 409; on a new sha256 it logs "would deliver" and
-// replies 501 until later commits wire real delivery work.
+// deliver serves POST /deliver. Auth is handled by TokenAuth at the mux
+// level; this method owns HTTP method, JSON/schema, and status mapping.
 func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.Header().Set("Allow", http.MethodPost)
@@ -180,104 +231,119 @@ func (h *handler) deliver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Without a ledger we can't enforce idempotency — fall back to
-	// commit-1 behaviour so test scaffolding that omits a ledger
-	// keeps working.
-	if h.cfg.Ledger == nil {
-		writeJSONError(w, http.StatusNotImplemented, "delivery not yet implemented")
+	result, err := h.service().Deliver(req)
+	if err == nil {
+		w.Header().Set("Content-Type", "application/json")
+		if result.Duplicate {
+			w.WriteHeader(http.StatusConflict)
+		} else {
+			w.WriteHeader(http.StatusAccepted)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": result.DeliveryID})
 		return
 	}
 
-	existing, found, err := h.cfg.Ledger.Lookup(req.SHA256)
-	if err != nil {
-		h.logger().Printf("deliver: ledger lookup failed for sha=%s: %v", req.SHA256, err)
+	switch {
+	case errors.Is(err, errNoLedger):
+		writeJSONError(w, http.StatusNotImplemented, "delivery not yet implemented")
+	case errors.Is(err, errLedgerLookup):
 		writeJSONError(w, http.StatusInternalServerError, "ledger lookup failed")
-		return
+	case errors.Is(err, ErrMultiRecipient):
+		writeJSONError(w, http.StatusBadRequest, "multi-recipient not supported")
+	case errors.Is(err, errClassify):
+		writeJSONError(w, http.StatusInternalServerError, "classify failed")
+	case errors.Is(err, errQuarantineWrite):
+		writeJSONError(w, http.StatusInternalServerError, "quarantine write failed")
+	case errors.Is(err, errLedgerInsert):
+		writeJSONError(w, http.StatusInternalServerError, "ledger insert failed")
+	case errors.Is(err, errDeliveryFailed):
+		writeJSONError(w, http.StatusInternalServerError, "delivery failed")
+	case errors.Is(err, errUnknownClass):
+		writeJSONError(w, http.StatusInternalServerError, "unknown classification")
+	default:
+		writeJSONError(w, http.StatusInternalServerError, "delivery failed")
+	}
+}
+
+// Deliver routes a validated delivery request through the durable
+// delivery pipeline: ledger idempotency, classification,
+// suppress/quarantine/persona/operator routing, inbox writes, source
+// movement, destination locking, logging, and clock use.
+func (s *DeliveryService) Deliver(req DeliverRequest) (DeliveryResult, error) {
+	if s.cfg.Ledger == nil {
+		return DeliveryResult{}, errNoLedger
+	}
+
+	existing, found, err := s.cfg.Ledger.Lookup(req.SHA256)
+	if err != nil {
+		s.logger().Printf("deliver: ledger lookup failed for sha=%s: %v", req.SHA256, err)
+		return DeliveryResult{}, fmt.Errorf("%w: %v", errLedgerLookup, err)
 	}
 	if found {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusConflict)
-		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": existing.SHA256})
-		return
+		return DeliveryResult{DeliveryID: existing.SHA256, Duplicate: true}, nil
 	}
 
 	class, err := ClassifyFile(req.OutboxPath)
 	if errors.Is(err, ErrMultiRecipient) {
-		writeJSONError(w, http.StatusBadRequest, "multi-recipient not supported")
-		return
+		return DeliveryResult{}, ErrMultiRecipient
 	}
 	if err != nil {
-		h.logger().Printf("deliver: classify failed for sha=%s path=%s: %v", req.SHA256, req.OutboxPath, err)
-		writeJSONError(w, http.StatusInternalServerError, "classify failed")
-		return
+		s.logger().Printf("deliver: classify failed for sha=%s path=%s: %v", req.SHA256, req.OutboxPath, err)
+		return DeliveryResult{}, fmt.Errorf("%w: %v", errClassify, err)
 	}
 
 	switch class.Class {
 	case ClassSuppress:
-		h.logger().Printf("deliver: suppressed source=%s reason=%q sha=%s", req.SourcePersona, class.Reason, req.SHA256)
-		if err := h.cfg.Ledger.Insert(Delivery{
+		s.logger().Printf("deliver: suppressed source=%s reason=%q sha=%s", req.SourcePersona, class.Reason, req.SHA256)
+		if err := s.cfg.Ledger.Insert(Delivery{
 			SHA256:        req.SHA256,
 			SourcePersona: req.SourcePersona,
 			Dest:          ClassSuppress,
 			SourcePath:    req.OutboxPath,
 			DestPath:      "",
-			DeliveredAt:   time.Now().UTC(),
+			DeliveredAt:   s.now().UTC(),
 		}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
-			h.logger().Printf("deliver: suppress ledger insert failed: %v", err)
-			writeJSONError(w, http.StatusInternalServerError, "ledger insert failed")
-			return
+			s.logger().Printf("deliver: suppress ledger insert failed: %v", err)
+			return DeliveryResult{}, fmt.Errorf("%w: %v", errLedgerInsert, err)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": req.SHA256})
-		return
+		return DeliveryResult{DeliveryID: req.SHA256}, nil
 	case ClassQuarantine:
-		h.logger().Printf("deliver: quarantine: source=%s reason=%q sha=%s", req.SourcePersona, class.Reason, req.SHA256)
+		s.logger().Printf("deliver: quarantine: source=%s reason=%q sha=%s", req.SourcePersona, class.Reason, req.SHA256)
 		dest := quarantinePath(req.SourcePersona, req.OutboxPath)
 		if err := atomicCopyFile(req.OutboxPath, dest); err != nil {
-			h.logger().Printf("deliver: quarantine write failed: %v", err)
-			writeJSONError(w, http.StatusInternalServerError, "quarantine write failed")
-			return
+			s.logger().Printf("deliver: quarantine write failed: %v", err)
+			return DeliveryResult{}, fmt.Errorf("%w: %v", errQuarantineWrite, err)
 		}
-		if err := h.cfg.Ledger.Insert(Delivery{
+		if err := s.cfg.Ledger.Insert(Delivery{
 			SHA256:        req.SHA256,
 			SourcePersona: req.SourcePersona,
 			Dest:          ClassQuarantine,
 			SourcePath:    req.OutboxPath,
 			DestPath:      dest,
-			DeliveredAt:   time.Now().UTC(),
+			DeliveredAt:   s.now().UTC(),
 		}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
-			h.logger().Printf("deliver: quarantine ledger insert failed: %v", err)
-			writeJSONError(w, http.StatusInternalServerError, "ledger insert failed")
-			return
+			s.logger().Printf("deliver: quarantine ledger insert failed: %v", err)
+			return DeliveryResult{}, fmt.Errorf("%w: %v", errLedgerInsert, err)
 		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": req.SHA256})
-		return
+		return DeliveryResult{DeliveryID: req.SHA256}, nil
 	case ClassPersona, ClassOperator:
 		// ClassOperator shares the same delivery mechanics as
 		// ClassPersona: class.Dest is "operator", so deliverToInbox
 		// lands the file at /csuite/operator/inbox/ via the same
 		// path-builder. See plans/drem-csuite-send-cli.md §Phase 1.
-		destPath, err := h.deliverToInbox(req, class)
+		destPath, err := s.deliverToInbox(req, class)
 		if err != nil {
-			h.logger().Printf("deliver: %s -> %s failed sha=%s: %v",
+			s.logger().Printf("deliver: %s -> %s failed sha=%s: %v",
 				req.SourcePersona, class.Dest, req.SHA256, err)
-			writeJSONError(w, http.StatusInternalServerError, "delivery failed")
-			return
+			return DeliveryResult{}, fmt.Errorf("%w: %v", errDeliveryFailed, err)
 		}
-		h.logger().Printf("deliver: delivered source=%s dest=%s sha=%s dest_path=%s",
+		s.logger().Printf("deliver: delivered source=%s dest=%s sha=%s dest_path=%s",
 			req.SourcePersona, class.Dest, req.SHA256, destPath)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]string{"delivery_id": req.SHA256})
-		return
+		return DeliveryResult{DeliveryID: req.SHA256}, nil
 	default:
 		// Defensive — classifyBytes always returns one of the above.
-		h.logger().Printf("deliver: unknown class %q for sha=%s", class.Class, req.SHA256)
-		writeJSONError(w, http.StatusInternalServerError, "unknown classification")
-		return
+		s.logger().Printf("deliver: unknown class %q for sha=%s", class.Class, req.SHA256)
+		return DeliveryResult{}, errUnknownClass
 	}
 }
 
@@ -355,12 +421,12 @@ func writeJSONError(w http.ResponseWriter, code int, msg string) {
 // rescan will see the ledger row and skip).
 //
 // Returns the protocol dest path on success.
-func (h *handler) deliverToInbox(req DeliverRequest, class Classification) (string, error) {
-	mu := h.destMutex(class.Dest)
+func (s *DeliveryService) deliverToInbox(req DeliverRequest, class Classification) (string, error) {
+	mu := s.destMutex(class.Dest)
 	mu.Lock()
 	defer mu.Unlock()
 
-	now := h.clock().UTC()
+	now := s.now().UTC()
 	sha8 := req.SHA256
 	if len(sha8) > 8 {
 		sha8 = sha8[:8]
@@ -372,7 +438,7 @@ func (h *handler) deliverToInbox(req DeliverRequest, class Classification) (stri
 		return "", fmt.Errorf("copy to inbox: %w", err)
 	}
 
-	if err := h.cfg.Ledger.Insert(Delivery{
+	if err := s.cfg.Ledger.Insert(Delivery{
 		SHA256:        req.SHA256,
 		SourcePersona: req.SourcePersona,
 		Dest:          class.Dest,
@@ -400,16 +466,31 @@ func (h *handler) deliverToInbox(req DeliverRequest, class Classification) (stri
 	realSrc := resolveCsuitePath(req.OutboxPath)
 	realDelivered := resolveCsuitePath(deliveredPath)
 	if err := moveSource(realSrc, realDelivered); err != nil {
-		h.logger().Printf("deliver: source move failed (ledger is committed): %v", err)
+		s.logger().Printf("deliver: source move failed (ledger is committed): %v", err)
 	}
 	return destPath, nil
+}
+
+func (h *handler) deliverToInbox(req DeliverRequest, class Classification) (string, error) {
+	return h.service().deliverToInbox(req, class)
 }
 
 // destMutex returns the mutex guarding writes to the given
 // destination, creating one on first use. The mutex map never
 // shrinks — the set of destinations is small and bounded (four
 // personas + kyle + quarantine), so this is fine.
-func (h *handler) destMutex(dest string) *sync.Mutex {
-	v, _ := h.destMutexes.LoadOrStore(dest, &sync.Mutex{})
+func (s *DeliveryService) destMutex(dest string) *sync.Mutex {
+	v, _ := s.destMutexes.LoadOrStore(dest, &sync.Mutex{})
 	return v.(*sync.Mutex)
+}
+
+func (h *handler) destMutex(dest string) *sync.Mutex {
+	return h.service().destMutex(dest)
+}
+
+func (s *DeliveryService) now() time.Time {
+	if s.clock != nil {
+		return s.clock()
+	}
+	return time.Now()
 }

@@ -102,14 +102,9 @@ func (m *Manager) MainWorktreePath() (string, error) {
 		return "", fmt.Errorf("main worktree path: list worktrees: %w", err)
 	}
 
-	var currentPath string
-	for _, line := range strings.Split(output, "\n") {
-		if strings.HasPrefix(line, "worktree ") {
-			currentPath = strings.TrimPrefix(line, "worktree ")
-		}
-		if strings.TrimSpace(line) == "branch refs/heads/"+m.DefaultBranch && currentPath != "" {
-			return currentPath, nil
-		}
+	path, ok := mainWorktreePathFromPorcelain(output, m.DefaultBranch)
+	if ok {
+		return path, nil
 	}
 
 	return "", fmt.Errorf("main worktree path: no worktree found for branch %s", m.DefaultBranch)
@@ -218,6 +213,19 @@ func (m *Manager) ListWorktrees() ([]WorktreeInfo, error) {
 		return nil, fmt.Errorf("list worktrees: %w", err)
 	}
 
+	return parseWorktreeListPorcelain(output), nil
+}
+
+func mainWorktreePathFromPorcelain(output, defaultBranch string) (string, bool) {
+	for _, wt := range parseWorktreeListPorcelain(output) {
+		if wt.Branch == defaultBranch && wt.Path != "" {
+			return wt.Path, true
+		}
+	}
+	return "", false
+}
+
+func parseWorktreeListPorcelain(output string) []WorktreeInfo {
 	var worktrees []WorktreeInfo
 	var wtPath, head, branch string
 	isBare := false
@@ -250,7 +258,7 @@ func (m *Manager) ListWorktrees() ([]WorktreeInfo, error) {
 		}
 	}
 
-	return worktrees, nil
+	return worktrees
 }
 
 // CreateAgentWorktree creates an agent worktree as a sibling of the

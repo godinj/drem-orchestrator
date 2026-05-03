@@ -1,6 +1,7 @@
 package bridgeclient
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -29,25 +30,9 @@ func New(baseURL, token string) *Client {
 
 // GetAgents returns the agent dashboard from GET /api/agents.
 func (c *Client) GetAgents(ctx context.Context) ([]Agent, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/agents", nil)
-	if err != nil {
-		return nil, err
-	}
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkStatus(resp, http.StatusOK); err != nil {
-		return nil, err
-	}
-
 	var agents []Agent
-	if err := json.NewDecoder(resp.Body).Decode(&agents); err != nil {
-		return nil, fmt.Errorf("decode agents: %w", err)
+	if err := c.getJSON(ctx, "/api/agents", nil, &agents, "agents"); err != nil {
+		return nil, err
 	}
 	return agents, nil
 }
@@ -65,25 +50,9 @@ func (c *Client) GetMessages(ctx context.Context, from, to string, limit int, be
 		params.Set("before_id", beforeID)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/messages?"+params.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkStatus(resp, http.StatusOK); err != nil {
-		return nil, err
-	}
-
 	var msgs []Message
-	if err := json.NewDecoder(resp.Body).Decode(&msgs); err != nil {
-		return nil, fmt.Errorf("decode messages: %w", err)
+	if err := c.getJSON(ctx, "/api/messages", params, &msgs, "messages"); err != nil {
+		return nil, err
 	}
 	return msgs, nil
 }
@@ -95,25 +64,9 @@ func (c *Client) GetInboxQueue(ctx context.Context, agent string, limit int) ([]
 		params.Set("limit", fmt.Sprint(limit))
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/inbox?"+params.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkStatus(resp, http.StatusOK); err != nil {
-		return nil, err
-	}
-
 	var items []InboxQueueItem
-	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
-		return nil, fmt.Errorf("decode inbox queue: %w", err)
+	if err := c.getJSON(ctx, "/api/inbox", params, &items, "inbox queue"); err != nil {
+		return nil, err
 	}
 	return items, nil
 }
@@ -138,157 +91,45 @@ func (c *Client) IgnoreInboxItem(ctx context.Context, agent, id, reason string) 
 
 // GetPersonaContainers returns the allowlisted persona container control state.
 func (c *Client) GetPersonaContainers(ctx context.Context) (*PersonaContainersResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/personas/containers", nil)
-	if err != nil {
-		return nil, err
-	}
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkStatus(resp, http.StatusOK); err != nil {
-		return nil, err
-	}
-
 	var containers PersonaContainersResponse
-	if err := json.NewDecoder(resp.Body).Decode(&containers); err != nil {
-		return nil, fmt.Errorf("decode persona containers: %w", err)
+	if err := c.getJSON(ctx, "/api/personas/containers", nil, &containers, "persona containers"); err != nil {
+		return nil, err
 	}
 	return &containers, nil
 }
 
 // ControlPersonaContainer runs a safe allowlisted persona container action.
 func (c *Client) ControlPersonaContainer(ctx context.Context, reqBody PersonaControlRequest) (*PersonaControlResult, error) {
-	body, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/personas/control", strings.NewReader(string(body)))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkStatus(resp, http.StatusOK); err != nil {
-		return nil, err
-	}
-
 	var result PersonaControlResult
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode persona control result: %w", err)
+	if err := c.doJSON(ctx, http.MethodPost, "/api/personas/control", nil, reqBody, http.StatusOK, &result, "persona control result"); err != nil {
+		return nil, err
 	}
 	return &result, nil
 }
 
 // GetPersonaModels returns the current model per persona from GET /api/personas/models.
 func (c *Client) GetPersonaModels(ctx context.Context) (map[string]string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/api/personas/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkStatus(resp, http.StatusOK); err != nil {
-		return nil, err
-	}
-
 	var models map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&models); err != nil {
-		return nil, fmt.Errorf("decode persona models: %w", err)
+	if err := c.getJSON(ctx, "/api/personas/models", nil, &models, "persona models"); err != nil {
+		return nil, err
 	}
 	return models, nil
 }
 
 // SetPersonaModel updates one persona's model via PUT /api/personas/model.
 func (c *Client) SetPersonaModel(ctx context.Context, target, model string) error {
-	body, err := json.Marshal(SetPersonaModelRequest{Target: target, Model: model})
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+"/api/personas/model", strings.NewReader(string(body)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	return checkStatus(resp, http.StatusOK)
+	return c.doJSON(ctx, http.MethodPut, "/api/personas/model", nil, SetPersonaModelRequest{Target: target, Model: model}, http.StatusOK, nil, "")
 }
 
 func (c *Client) postInboxQueueAction(ctx context.Context, path string, bodyReq InboxQueueActionRequest) error {
-	body, err := json.Marshal(bodyReq)
-	if err != nil {
-		return err
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, strings.NewReader(string(body)))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	c.setAuth(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	return checkStatus(resp, http.StatusOK)
+	return c.doJSON(ctx, http.MethodPost, path, nil, bodyReq, http.StatusOK, nil, "")
 }
 
 // SendMessage creates a new message via POST /api/messages.
 func (c *Client) SendMessage(ctx context.Context, req SendRequest) (*Message, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/messages", strings.NewReader(string(body)))
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	c.setAuth(httpReq)
-
-	resp, err := c.httpClient.Do(httpReq)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if err := checkStatus(resp, http.StatusCreated); err != nil {
-		return nil, err
-	}
-
 	var msg Message
-	if err := json.NewDecoder(resp.Body).Decode(&msg); err != nil {
-		return nil, fmt.Errorf("decode message: %w", err)
+	if err := c.doJSON(ctx, http.MethodPost, "/api/messages", nil, req, http.StatusCreated, &msg, "message"); err != nil {
+		return nil, err
 	}
 	return &msg, nil
 }
@@ -303,6 +144,59 @@ func (c *Client) WSURL() string {
 
 func (c *Client) setAuth(req *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+c.token)
+}
+
+func (c *Client) getJSON(ctx context.Context, path string, query url.Values, into any, decodeName string) error {
+	return c.doJSON(ctx, http.MethodGet, path, query, nil, http.StatusOK, into, decodeName)
+}
+
+func (c *Client) doJSON(ctx context.Context, method, path string, query url.Values, bodyReq any, wantStatus int, into any, decodeName string) error {
+	var body io.Reader
+	if bodyReq != nil {
+		data, err := json.Marshal(bodyReq)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(data)
+	}
+
+	req, err := c.newRequest(ctx, method, path, query, body)
+	if err != nil {
+		return err
+	}
+	if bodyReq != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if err := checkStatus(resp, wantStatus); err != nil {
+		return err
+	}
+	if into == nil {
+		return nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(into); err != nil {
+		return fmt.Errorf("decode %s: %w", decodeName, err)
+	}
+	return nil
+}
+
+func (c *Client) newRequest(ctx context.Context, method, path string, query url.Values, body io.Reader) (*http.Request, error) {
+	endpoint := c.baseURL + path
+	if len(query) > 0 {
+		endpoint += "?" + query.Encode()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, endpoint, body)
+	if err != nil {
+		return nil, err
+	}
+	c.setAuth(req)
+	return req, nil
 }
 
 func checkStatus(resp *http.Response, want int) error {

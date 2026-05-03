@@ -70,22 +70,26 @@ type RescanPersonaResult struct {
 //
 // Errors from individual files are collected into result.Errors and
 // do not abort the walk.
-func (h *handler) Rescan() RescanResult {
+func (s *DeliveryService) Rescan() RescanResult {
 	res := RescanResult{Personas: make(map[string]RescanPersonaResult, len(rescanPersonas))}
-	if h.cfg.Ledger == nil {
+	if s.cfg.Ledger == nil {
 		res.Errors = append(res.Errors, "rescan aborted: no ledger configured")
 		return res
 	}
 	for _, src := range rescanPersonas {
-		h.rescanPersona(src, &res)
+		s.rescanPersona(src, &res)
 	}
 	return res
+}
+
+func (h *handler) Rescan() RescanResult {
+	return h.service().Rescan()
 }
 
 // rescanPersona walks a single persona's outbox and routes any
 // unledgered files. Errors are recorded in res.Errors; the walk
 // continues.
-func (h *handler) rescanPersona(src string, res *RescanResult) {
+func (s *DeliveryService) rescanPersona(src string, res *RescanResult) {
 	persona := RescanPersonaResult{}
 	defer func() {
 		res.Personas[src] = persona
@@ -137,17 +141,14 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 		return cands[i].name < cands[j].name
 	})
 	if len(cands) > 0 {
-		now := time.Now()
-		if h.clock != nil {
-			now = h.clock()
-		}
+		now := s.now()
 		age := now.Sub(cands[0].mtime)
 		if age < 0 {
 			age = 0
 		}
 		persona.OldestPendingAgeSeconds = int64(age.Seconds())
 	}
-	if limit := h.maxRescanFilesPerPersona(); limit >= 0 && len(cands) > limit {
+	if limit := s.maxRescanFilesPerPersona(); limit >= 0 && len(cands) > limit {
 		cands = cands[:limit]
 	}
 
@@ -169,13 +170,13 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 		// belongs to a prior delivery. The source move into
 		// delivered/ may have failed, but the ledger is
 		// authoritative.
-		if _, found, err := h.cfg.Ledger.Lookup(sha); err != nil {
+		if _, found, err := s.cfg.Ledger.Lookup(sha); err != nil {
 			recordErr("%s: ledger lookup %s: %v", src, c.name, err)
 			continue
 		} else if found {
 			res.Skipped++
 			persona.Skipped++
-			h.logger().Printf("rescan: skip (ledger hit) %s/%s sha=%s", src, c.name, sha)
+			s.logger().Printf("rescan: skip (ledger hit) %s/%s sha=%s", src, c.name, sha)
 			continue
 		}
 
@@ -194,7 +195,7 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 		if errors.Is(err, ErrMultiRecipient) {
 			res.Quarantined++
 			persona.Quarantined++
-			h.logger().Printf("rescan: multi-recipient rejected %s/%s", src, c.name)
+			s.logger().Printf("rescan: multi-recipient rejected %s/%s", src, c.name)
 			continue
 		}
 		if err != nil {
@@ -204,40 +205,40 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 
 		switch class.Class {
 		case ClassSuppress:
-			if err := h.cfg.Ledger.Insert(Delivery{
+			if err := s.cfg.Ledger.Insert(Delivery{
 				SHA256:        req.SHA256,
 				SourcePersona: req.SourcePersona,
 				Dest:          ClassSuppress,
 				SourcePath:    req.OutboxPath,
 				DestPath:      "",
-				DeliveredAt:   time.Now().UTC(),
+				DeliveredAt:   s.now().UTC(),
 			}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
 				recordErr("%s: suppress ledger %s: %v", src, c.name, err)
 				continue
 			}
 			res.Suppressed++
 			persona.Suppressed++
-			h.logger().Printf("rescan: suppressed %s/%s reason=%q", src, c.name, class.Reason)
+			s.logger().Printf("rescan: suppressed %s/%s reason=%q", src, c.name, class.Reason)
 		case ClassQuarantine:
 			dest := quarantinePath(req.SourcePersona, req.OutboxPath)
 			if err := atomicCopyFile(req.OutboxPath, dest); err != nil {
 				recordErr("%s: quarantine write %s: %v", src, c.name, err)
 				continue
 			}
-			if err := h.cfg.Ledger.Insert(Delivery{
+			if err := s.cfg.Ledger.Insert(Delivery{
 				SHA256:        req.SHA256,
 				SourcePersona: req.SourcePersona,
 				Dest:          ClassQuarantine,
 				SourcePath:    req.OutboxPath,
 				DestPath:      dest,
-				DeliveredAt:   time.Now().UTC(),
+				DeliveredAt:   s.now().UTC(),
 			}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
 				recordErr("%s: quarantine ledger %s: %v", src, c.name, err)
 				continue
 			}
 			res.Quarantined++
 			persona.Quarantined++
-			h.logger().Printf("rescan: quarantine %s/%s reason=%q", src, c.name, class.Reason)
+			s.logger().Printf("rescan: quarantine %s/%s reason=%q", src, c.name, class.Reason)
 		case ClassPersona, ClassOperator:
 			// ClassOperator is destination-only: a persona wrote a
 			// "to: operator" reply that the rescan must deliver into
@@ -246,14 +247,14 @@ func (h *handler) rescanPersona(src string, res *RescanResult) {
 			// destination name (persona or "operator"). Operator is
 			// NOT added to rescanPersonas — it has no outbox to scan
 			// from. See plans/drem-csuite-send-cli.md §Phase 1.
-			destPath, err := h.deliverToInbox(req, class)
+			destPath, err := s.deliverToInbox(req, class)
 			if err != nil {
 				recordErr("%s: deliver %s: %v", src, c.name, err)
 				continue
 			}
 			res.Delivered++
 			persona.Delivered++
-			h.logger().Printf("rescan: delivered source=%s dest=%s sha=%s dest_path=%s",
+			s.logger().Printf("rescan: delivered source=%s dest=%s sha=%s dest_path=%s",
 				src, class.Dest, sha, destPath)
 		default:
 			recordErr("%s: unknown class %q for %s", src, class.Class, c.name)
@@ -302,14 +303,14 @@ func RescanOnce(cfg Config) RescanResult {
 	return res
 }
 
-func (h *handler) maxRescanFilesPerPersona() int {
-	if h.cfg.MaxRescanFilesPerPersona < 0 {
+func (s *DeliveryService) maxRescanFilesPerPersona() int {
+	if s.cfg.MaxRescanFilesPerPersona < 0 {
 		return -1
 	}
-	if h.cfg.MaxRescanFilesPerPersona == 0 {
+	if s.cfg.MaxRescanFilesPerPersona == 0 {
 		return DefaultMaxRescanFilesPerPersona
 	}
-	return h.cfg.MaxRescanFilesPerPersona
+	return s.cfg.MaxRescanFilesPerPersona
 }
 
 // rescanBasename returns the final path component of a protocol path
