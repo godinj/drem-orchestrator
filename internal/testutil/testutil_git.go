@@ -50,6 +50,18 @@ func RunGit(args []string, cwd string) (string, error) {
 // Git repo helpers
 // ---------------------------------------------------------------------------
 
+// InitBareRepo creates an empty bare git repo in a temp dir and returns its
+// path. Use richer helpers below when tests need seeded commits or worktrees.
+func InitBareRepo(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	bareRepo := filepath.Join(dir, "test.git")
+
+	runGit(t, []string{"init", "--bare", bareRepo}, "")
+
+	return bareRepo
+}
+
 // SetupBareRepo creates a bare git repo with an initial commit in a temp dir.
 // Returns the bare repo path. The temp dir is cleaned up automatically by
 // t.TempDir().

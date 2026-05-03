@@ -7,23 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/stretchr/testify/require"
 )
-
-// initBareRepo initialises a bare git repo in a temp dir and returns
-// the path. Used by every test in this file; kept local (rather than
-// promoting to testutil) because testutil already imports a richer
-// helper and this one wants the minimal layout: `git init --bare` and
-// nothing else.
-func initBareRepo(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	bare := filepath.Join(dir, "test.git")
-	cmd := exec.Command("git", "init", "--bare", bare)
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, "git init --bare failed: %s", out)
-	return bare
-}
 
 // readConfig returns the current value of the given git config key in
 // the bare repo, or the empty string when the key is unset.
@@ -46,7 +32,7 @@ func readConfig(t *testing.T, bare, key string) string {
 // receive options required for drem's stale host worktree layout on a freshly
 // initialised bare repo.
 func TestConfigureBareRepo_HappyPath(t *testing.T) {
-	bare := initBareRepo(t)
+	bare := testutil.InitBareRepo(t)
 
 	err := ConfigureBareRepo(bare)
 	require.NoError(t, err)
@@ -58,7 +44,7 @@ func TestConfigureBareRepo_HappyPath(t *testing.T) {
 // TestConfigureBareRepo_Idempotent asserts that calling the helper
 // twice is safe (no error, value unchanged).
 func TestConfigureBareRepo_Idempotent(t *testing.T) {
-	bare := initBareRepo(t)
+	bare := testutil.InitBareRepo(t)
 
 	require.NoError(t, ConfigureBareRepo(bare))
 	require.NoError(t, ConfigureBareRepo(bare))
@@ -75,7 +61,7 @@ func TestConfigureBareRepo_Idempotent(t *testing.T) {
 // doubles as a migration check for operators whose bare repo still
 // carries the old setting.
 func TestConfigureBareRepo_OverwritesDifferingValue(t *testing.T) {
-	bare := initBareRepo(t)
+	bare := testutil.InitBareRepo(t)
 
 	// Seed the repo with a different value.
 	cmd := exec.Command("git", "--git-dir="+bare, "config",

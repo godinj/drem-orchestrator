@@ -9,11 +9,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 
-	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchhttp"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
@@ -32,27 +29,16 @@ func TestListTasksDBQueryTimeoutReturns503(t *testing.T) {
 	t.Setenv("DREM_ORCH_TASKS_MAX_INFLIGHT", "1024")
 	t.Setenv("DREM_ORCH_MAX_INFLIGHT", "1024")
 
-	// Stand up a fresh file-backed DB so we can register a slow
-	// callback without fighting the shared in-memory cache.
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared&_journal_mode=WAL"), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
-	})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(
-		&model.Project{},
-		&model.Task{},
-		&model.Agent{},
-		&model.TaskEvent{},
-		&model.Memory{},
-		&model.TaskComment{},
-	))
+	// Stand up a fresh DB so we can register a slow callback without
+	// fighting a shared in-memory cache.
+	db := testutil.NewTestDB(t)
 	project := testutil.CreateProject(t, db, "test-project", "/tmp/repo.git", "master")
 	_ = project
 
 	// Install a Query callback that blocks until the request context
 	// cancels (i.e. the context.WithTimeout fires), simulating a
 	// hung DB query.
-	err = db.Callback().Query().Before("gorm:query").Register("slow_query_sim",
+	err := db.Callback().Query().Before("gorm:query").Register("slow_query_sim",
 		func(tx *gorm.DB) {
 			// Only block queries that came through a request context —
 			// lets initial setup (CreateProject) proceed unhindered.

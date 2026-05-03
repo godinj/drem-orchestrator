@@ -7,10 +7,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
 func TestFromAgentClassifiesLegacyTmuxAndContainers(t *testing.T) {
@@ -22,7 +21,7 @@ func TestFromAgentClassifiesLegacyTmuxAndContainers(t *testing.T) {
 }
 
 func TestRecordSpawnCreatesAgentAttemptAndHandle(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	projectID := uuid.New()
 	task := model.Task{ID: uuid.New(), ProjectID: projectID, Title: "Fix bug", Description: "desc", Status: model.StatusInProgress}
 	require.NoError(t, db.Create(&task).Error)
@@ -62,19 +61,11 @@ func TestRecordSpawnCreatesAgentAttemptAndHandle(t *testing.T) {
 }
 
 func TestForTaskReturnsEmptyHandleForUnassignedTask(t *testing.T) {
-	db := newTestDB(t)
+	db := testutil.NewTestDB(t)
 	task := model.Task{ID: uuid.New(), ProjectID: uuid.New(), Title: "Backlog", Description: "desc", Status: model.StatusBacklog}
 	h, err := NewStore(db).ForTask(context.Background(), &task)
 	require.NoError(t, err)
 	require.Equal(t, task.ID, h.TaskID)
 	require.False(t, h.HasContainer())
 	require.False(t, h.CanJumpToTmux())
-}
-
-func newTestDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:"), &gorm.Config{})
-	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&model.Project{}, &model.Task{}, &model.Agent{}, &model.WorkerAttempt{}))
-	return db
 }

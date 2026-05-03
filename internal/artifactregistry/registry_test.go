@@ -11,15 +11,9 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
-func newTestRegistry(t *testing.T) *Registry {
-	t.Helper()
-	db := testutil.NewTestDBWithModels(t, Models()...)
-	return NewRegistry(db)
-}
-
 func TestRegisterArtifactUpsertsByContentURI(t *testing.T) {
 	ctx := context.Background()
-	registry := newTestRegistry(t)
+	registry := NewRegistry(testutil.NewTestDBWithModels(t, Models()...))
 
 	artifact := Artifact{
 		ArtifactType:   "implementation_plan",
@@ -55,7 +49,7 @@ func TestRegisterArtifactUpsertsByContentURI(t *testing.T) {
 
 func TestSupersedeMarksOldArtifactAndLinksReplacement(t *testing.T) {
 	ctx := context.Background()
-	registry := newTestRegistry(t)
+	registry := NewRegistry(testutil.NewTestDBWithModels(t, Models()...))
 
 	oldArtifact := mustRegisterArtifact(t, registry, Artifact{
 		ArtifactType:   "persona_contract",
@@ -91,7 +85,7 @@ func TestSupersedeMarksOldArtifactAndLinksReplacement(t *testing.T) {
 
 func TestValidateFlagsActiveAuthoritativeArtifactWithoutDirective(t *testing.T) {
 	ctx := context.Background()
-	registry := newTestRegistry(t)
+	registry := NewRegistry(testutil.NewTestDBWithModels(t, Models()...))
 	mustRegisterArtifact(t, registry, Artifact{
 		ArtifactType:   "workflow_recipe",
 		ContentURI:     "repo:recipes/review.md",
@@ -118,7 +112,7 @@ func TestValidateFlagsActiveAuthoritativeArtifactWithoutDirective(t *testing.T) 
 
 func TestAdmitContextFiltersStaleSupersededAndIrrelevantArtifacts(t *testing.T) {
 	ctx := context.Background()
-	registry := newTestRegistry(t)
+	registry := NewRegistry(testutil.NewTestDBWithModels(t, Models()...))
 	directive := Directive{DirectiveType: "operator_directive", Title: "Use registry", Status: DirectiveActive}
 	if err := registry.RegisterDirective(ctx, &directive); err != nil {
 		t.Fatalf("register directive: %v", err)
@@ -203,7 +197,7 @@ func TestAdmitContextFiltersStaleSupersededAndIrrelevantArtifacts(t *testing.T) 
 
 func TestAdmitContextEscalatesDirectiveConflicts(t *testing.T) {
 	ctx := context.Background()
-	registry := newTestRegistry(t)
+	registry := NewRegistry(testutil.NewTestDBWithModels(t, Models()...))
 	directive := Directive{DirectiveType: "operator_directive", Title: "Current directive", Status: DirectiveActive}
 	if err := registry.RegisterDirective(ctx, &directive); err != nil {
 		t.Fatalf("register directive: %v", err)
