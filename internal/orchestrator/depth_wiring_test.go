@@ -361,57 +361,6 @@ func TestCheckPlanDepthGate_SupervisorFailure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: planDepthScore computation
-// ---------------------------------------------------------------------------
-
-func TestPlanDepthScore(t *testing.T) {
-	tests := []struct {
-		name    string
-		entries []planEntry
-		want    float64
-	}{
-		{
-			name:    "empty plan",
-			entries: nil,
-			want:    1.0,
-		},
-		{
-			name: "all entries have files",
-			entries: []planEntry{
-				{Title: "a", EstimatedFiles: []string{"a.go"}},
-				{Title: "b", EstimatedFiles: []string{"b.go"}},
-			},
-			want: 1.0,
-		},
-		{
-			name: "no entries have files",
-			entries: []planEntry{
-				{Title: "a"},
-				{Title: "b"},
-			},
-			want: 0.0,
-		},
-		{
-			name: "half entries have files",
-			entries: []planEntry{
-				{Title: "a", EstimatedFiles: []string{"a.go"}},
-				{Title: "b"},
-			},
-			want: 0.5,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := planDepthScore(tt.entries)
-			if !scoreApproxEqual(got, tt.want) {
-				t.Errorf("planDepthScore() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
 // Test 9: scorePlanGate includes depth dimension
 // ---------------------------------------------------------------------------
 

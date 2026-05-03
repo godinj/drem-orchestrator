@@ -19,22 +19,22 @@ type StepScore struct {
 
 // ModuleBoundary describes a package-level boundary for depth scoring.
 type ModuleBoundary struct {
-	Package     string
-	Description string
-	Exports     int
+	Package     string `json:"package"`
+	Description string `json:"description"`
+	Exports     int    `json:"exports"`
 }
 
 // InterfaceShape describes the public API surface of a module for depth scoring.
 type InterfaceShape struct {
-	Package   string
-	Functions []string
-	Types     []string
+	Package   string   `json:"package"`
+	Functions []string `json:"functions"`
+	Types     []string `json:"types"`
 }
 
 // DepthMeta carries module boundary and interface shape info for depth scoring.
 type DepthMeta struct {
-	ModuleBoundaries []ModuleBoundary
-	InterfaceShapes  []InterfaceShape
+	ModuleBoundaries []ModuleBoundary `json:"module_boundaries"`
+	InterfaceShapes  []InterfaceShape `json:"interface_shapes"`
 }
 
 // PlanEntry represents a single subtask in a plan.
@@ -281,13 +281,13 @@ func scorePlanDepth(entries []PlanEntry) float64 {
 var coverageRegex = regexp.MustCompile(`coverage:\s+([\d.]+)%\s+of\s+statements`)
 
 // ScoreImplementation scores an implementation at testing_ready time.
-// Depth is not evaluated at implementation time (enforced at plan review).
+// Depth is considered satisfied at implementation time because it is enforced at plan review.
 func ScoreImplementation(input ImplScoreInput) StepScore {
 	return StepScore{
 		TDD:           scoreImplTDD(input.CoverageOutput),
 		Constitution:  scoreImplConstitution(input.ConstraintsPassed, input.ConstraintsFailed),
 		Documentation: scoreImplDocumentation(input.ChangedFiles),
-		Depth:         0.0,
+		Depth:         1.0,
 	}
 }
 

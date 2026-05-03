@@ -446,12 +446,12 @@ func TestScoreImplementation_TDD(t *testing.T) {
 	}{
 		{
 			name:           "single package 85% coverage",
-			coverageOutput: "ok  \tgithub.com/godinj/drem-orchestrator/internal/score\tcoverage: 85.0% of statements",
+			coverageOutput: "ok  \tgithub.com/godinj/drem-orchestrator/pkg/score\tcoverage: 85.0% of statements",
 			wantTDD:        0.85,
 		},
 		{
 			name:           "100% coverage",
-			coverageOutput: "ok  \tgithub.com/godinj/drem-orchestrator/internal/score\tcoverage: 100.0% of statements",
+			coverageOutput: "ok  \tgithub.com/godinj/drem-orchestrator/pkg/score\tcoverage: 100.0% of statements",
 			wantTDD:        1.0,
 		},
 		{
@@ -529,7 +529,7 @@ func TestScoreImplementation_Documentation(t *testing.T) {
 	}{
 		{
 			name:         "README.md in changed files",
-			changedFiles: []string{"internal/score/score.go", "README.md"},
+			changedFiles: []string{"pkg/score/score.go", "README.md"},
 			wantDoc:      1.0,
 		},
 		{
@@ -539,7 +539,7 @@ func TestScoreImplementation_Documentation(t *testing.T) {
 		},
 		{
 			name:         "only .go files, no docs",
-			changedFiles: []string{"internal/score/score.go", "internal/score/score_test.go"},
+			changedFiles: []string{"pkg/score/score.go", "pkg/score/score_test.go"},
 			wantDoc:      0.0,
 		},
 		{
@@ -568,8 +568,8 @@ func TestScoreImplementation_Depth(t *testing.T) {
 		CoverageOutput:    "coverage: 80.0% of statements",
 	}
 	got := ScoreImplementation(input)
-	if !approxEqual(got.Depth, 0.0) {
-		t.Errorf("ScoreImplementation Depth = %v, want 0.0 (not evaluated at impl time)", got.Depth)
+	if !approxEqual(got.Depth, 1.0) {
+		t.Errorf("ScoreImplementation Depth = %v, want 1.0 (already enforced at plan review)", got.Depth)
 	}
 }
 

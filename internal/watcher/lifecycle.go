@@ -16,7 +16,6 @@ import (
 )
 
 const defaultTimeout = 99 * time.Minute
-const defaultTurnCooldown = 3 * time.Minute
 
 // LifecycleManager launches agent turns as claude subprocesses, waits for
 // completion, parses JSON output for token counts, and records metrics.
@@ -41,16 +40,10 @@ type LifecycleManager struct {
 	cfg    Config
 	runner CommandRunner
 
-	mu      sync.Mutex
-	running map[string]bool
-	queued  map[string]bool
-	delayed map[string]bool
-	wg      sync.WaitGroup
-	ctx     context.Context
-	cancel  context.CancelFunc
-
-	// lastTurnEnd tracks when each agent's last turn ended, used for cooldown calculation
-	lastTurnEnd map[string]time.Time
+	scheduler *turnScheduler
+	wg        sync.WaitGroup
+	ctx       context.Context
+	cancel    context.CancelFunc
 }
 
 // NewLifecycleManagerFromStore creates a LifecycleManager with default settings
@@ -154,15 +147,12 @@ func (m *LifecycleManager) RunTurn(agent string, systemPrompt string) (*Lifecycl
 func NewLifecycleManager(db *gorm.DB, cfg Config, runner CommandRunner) *LifecycleManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &LifecycleManager{
-		db:          db,
-		cfg:         cfg,
-		runner:      runner,
-		running:     make(map[string]bool),
-		queued:      make(map[string]bool),
-		delayed:     make(map[string]bool),
-		ctx:         ctx,
-		cancel:      cancel,
-		lastTurnEnd: make(map[string]time.Time),
+		db:        db,
+		cfg:       cfg,
+		runner:    runner,
+		scheduler: newTurnScheduler(cfg.AllowedAgents, cfg.TurnCooldown, Queued),
+		ctx:       ctx,
+		cancel:    cancel,
 	}
 }
 
@@ -173,33 +163,9 @@ func NewLifecycleManager(db *gorm.DB, cfg Config, runner CommandRunner) *Lifecyc
 //   - Refused: name is not in Config.AllowedAgents; no action taken.
 //   - Cooldown: agent is in a post-turn cooldown period; trigger is queued.
 func (m *LifecycleManager) TriggerAgent(name string) TriggerResult {
-	if !m.isAllowed(name) {
-		return Refused
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if m.running[name] {
-		if m.delayed[name] {
-			return Cooldown
-		}
-		m.queued[name] = true
-		return Queued
-	}
-
-	if remaining := m.remainingCooldownLocked(name); remaining > 0 {
-		m.running[name] = true
-		m.delayed[name] = true
-		m.wg.Add(1)
-		go m.runTurnAfterDelay(name, remaining)
-		return Cooldown
-	}
-
-	m.running[name] = true
-	m.wg.Add(1)
-	go m.runTurnAsync(name)
-	return Started
+	result, action := m.scheduler.Trigger(name)
+	m.launchScheduled(name, action)
+	return result
 }
 
 // Close shuts down the LifecycleManager, waiting for any active or queued
@@ -207,16 +173,6 @@ func (m *LifecycleManager) TriggerAgent(name string) TriggerResult {
 func (m *LifecycleManager) Close() {
 	m.cancel()
 	m.wg.Wait()
-}
-
-// isAllowed reports whether name is in cfg.AllowedAgents.
-func (m *LifecycleManager) isAllowed(name string) bool {
-	for _, a := range m.cfg.AllowedAgents {
-		if a == name {
-			return true
-		}
-	}
-	return false
 }
 
 // runTurnAsync executes one agent turn, persists metrics, then auto-starts a
@@ -236,7 +192,7 @@ func (m *LifecycleManager) runTurnAsync(agent string) {
 	// Pre-check: skip if agent has no actionable work.
 	if m.cfg.Precheck != nil && !m.cfg.Precheck.HasWork(agent) {
 		log.Printf("watcher: skipping %s: no inbox messages and no unacked events", agent)
-		m.drainQueue(agent)
+		m.launchScheduled(agent, m.scheduler.Complete(agent))
 		return
 	}
 
@@ -270,39 +226,17 @@ func (m *LifecycleManager) runTurnAsync(agent string) {
 		"messages_sent":    resp.MessagesSent,
 	}).Error
 
-	m.drainQueue(agent)
+	m.launchScheduled(agent, m.scheduler.Complete(agent))
 }
 
-// drainQueue checks for a queued trigger and either launches the next turn
-// or cleans up the running state for the agent.
-func (m *LifecycleManager) drainQueue(agent string) {
-	m.mu.Lock()
-	wasQueued := m.queued[agent]
-	delete(m.queued, agent)
-	if wasQueued {
-		// Check if we need to apply a cooldown delay
-		if m.cfg.TurnCooldown != 0 {
-			// Set the last turn end time before scheduling the delayed turn
-			m.lastTurnEnd[agent] = time.Now()
-
-			// Schedule the delayed turn
-			m.delayed[agent] = true
-			m.wg.Add(1)
-			m.mu.Unlock()
-			go m.runTurnAfterDelay(agent, m.cooldownDuration())
-		} else {
-			// No cooldown - proceed immediately
-			m.wg.Add(1)
-			m.mu.Unlock()
-			go m.runTurnAsync(agent)
-		}
-	} else {
-		// Record turn end time for cooldown tracking
-		if m.cfg.TurnCooldown != 0 {
-			m.lastTurnEnd[agent] = time.Now()
-		}
-		delete(m.running, agent)
-		m.mu.Unlock()
+func (m *LifecycleManager) launchScheduled(agent string, action schedulerAction) {
+	switch action.kind {
+	case schedulerStartNow:
+		m.wg.Add(1)
+		go m.runTurnAsync(agent)
+	case schedulerStartAfter:
+		m.wg.Add(1)
+		go m.runTurnAfterDelay(agent, action.delay)
 	}
 }
 
@@ -315,44 +249,14 @@ func (m *LifecycleManager) runTurnAfterDelay(agent string, delay time.Duration) 
 
 	select {
 	case <-timer.C:
-		// Time is up, run the turn
-		m.mu.Lock()
-		delete(m.delayed, agent)
-		m.mu.Unlock()
-		m.runTurnAsync(agent)
+		if m.scheduler.DelayElapsed(agent) {
+			m.runTurnAsync(agent)
+			return
+		}
+		m.wg.Done()
 	case <-m.ctx.Done():
-		// Context cancelled, probably due to Close() being called
-		m.mu.Lock()
-		delete(m.queued, agent)
-		delete(m.delayed, agent)
-		delete(m.running, agent)
-		m.mu.Unlock()
+		m.scheduler.Cancel(agent)
 		m.wg.Done()
 		return
 	}
-}
-
-// remainingCooldownLocked returns the cooldown left for agent. m.mu must be held.
-func (m *LifecycleManager) remainingCooldownLocked(agent string) time.Duration {
-	if m.cfg.TurnCooldown == 0 {
-		return 0
-	}
-	lastEnd, ok := m.lastTurnEnd[agent]
-	if !ok {
-		return 0
-	}
-	remaining := m.cooldownDuration() - time.Since(lastEnd)
-	if remaining <= 0 {
-		return 0
-	}
-	return remaining
-}
-
-// cooldownDuration returns the cooldown duration to use for the turn.
-// If TurnCooldown is configured, it uses that. Otherwise it falls back to the default.
-func (m *LifecycleManager) cooldownDuration() time.Duration {
-	if m.cfg.TurnCooldown != 0 {
-		return m.cfg.TurnCooldown
-	}
-	return defaultTurnCooldown
 }

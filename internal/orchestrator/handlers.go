@@ -15,6 +15,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
+	"github.com/godinj/drem-orchestrator/pkg/score"
 )
 
 const maxPlanRejections = 3
@@ -538,17 +539,17 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 // planEntry is an intermediate struct for parsing plans from JSON that may
 // include dependency indices and TDD phase information.
 type planEntry struct {
-	Title          string     `json:"title"`
-	Description    string     `json:"description"`
-	AgentType      string     `json:"agent_type"`
-	EstimatedFiles []string   `json:"estimated_files"`
-	Files          []string   `json:"files"`
-	Dependencies   []int      `json:"dependencies"`
-	Priority       int        `json:"priority"`
-	IsTest         bool       `json:"is_test,omitempty"`
-	Phase          string     `json:"phase,omitempty"`
-	TestsFor       []int      `json:"tests_for,omitempty"`
-	DepthMeta      *depthMeta `json:"depth_meta,omitempty"`
+	Title          string           `json:"title"`
+	Description    string           `json:"description"`
+	AgentType      string           `json:"agent_type"`
+	EstimatedFiles []string         `json:"estimated_files"`
+	Files          []string         `json:"files"`
+	Dependencies   []int            `json:"dependencies"`
+	Priority       int              `json:"priority"`
+	IsTest         bool             `json:"is_test,omitempty"`
+	Phase          string           `json:"phase,omitempty"`
+	TestsFor       []int            `json:"tests_for,omitempty"`
+	DepthMeta      *score.DepthMeta `json:"depth_meta,omitempty"`
 }
 
 // tddException represents a planner-declared exception to TDD enforcement

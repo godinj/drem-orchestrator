@@ -4,77 +4,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/godinj/drem-orchestrator/internal/constraints"
-	"github.com/godinj/drem-orchestrator/internal/score"
+	"github.com/godinj/drem-orchestrator/pkg/score"
 )
-
-// computePlanScores converts orchestrator plan types to score package inputs
-// and computes quality scores for the plan review gate.
-func computePlanScores(subtasks []planEntry, exceptions []tddException, validation PlanValidationResult) score.StepScore {
-	entries := make([]score.PlanEntry, len(subtasks))
-	for i, s := range subtasks {
-		entries[i] = score.PlanEntry{
-			Title:          s.Title,
-			AgentType:      s.AgentType,
-			Phase:          s.Phase,
-			EstimatedFiles: s.EstimatedFiles,
-			TestsFor:       s.TestsFor,
-			Dependencies:   s.Dependencies,
-		}
-		if s.DepthMeta != nil {
-			dm := &score.DepthMeta{}
-			for _, b := range s.DepthMeta.ModuleBoundaries {
-				dm.ModuleBoundaries = append(dm.ModuleBoundaries, score.ModuleBoundary{
-					Package:     b.Package,
-					Description: b.Description,
-					Exports:     b.Exports,
-				})
-			}
-			for _, iface := range s.DepthMeta.InterfaceShapes {
-				dm.InterfaceShapes = append(dm.InterfaceShapes, score.InterfaceShape{
-					Package:   iface.Package,
-					Functions: iface.Functions,
-					Types:     iface.Types,
-				})
-			}
-			entries[i].DepthMeta = dm
-		}
-	}
-
-	scoreExceptions := make([]score.TDDException, len(exceptions))
-	for i, e := range exceptions {
-		scoreExceptions[i] = score.TDDException{
-			SubtaskIndex: e.SubtaskIndex,
-			Reason:       e.Reason,
-		}
-	}
-
-	return score.ScorePlan(score.PlanScoreInput{
-		Entries:       entries,
-		TDDExceptions: scoreExceptions,
-		ValidationResult: score.PlanValidationResult{
-			Valid:    validation.Valid,
-			Warnings: validation.Warnings,
-			Errors:   validation.Errors,
-		},
-	})
-}
-
-// computeImplementationScores converts implementation review inputs to score
-// package types and computes quality scores for the implementation review gate.
-func computeImplementationScores(report *constraints.Report, changedFiles []string, coverageOutput string) score.StepScore {
-	passed, failed := 0, 0
-	if report != nil {
-		passed = report.Passed
-		failed = report.Failed
-	}
-	return score.ScoreImplementation(score.ImplScoreInput{
-		ConstraintsPassed: passed,
-		ConstraintsFailed: failed,
-		ChangedFiles:      changedFiles,
-		CoverageOutput:    coverageOutput,
-	})
-}
 
 const scoreTolerance = 0.001
 
@@ -82,293 +13,85 @@ func scoreApproxEqual(a, b float64) bool {
 	return math.Abs(a-b) < scoreTolerance
 }
 
-// ---------------------------------------------------------------------------
-// Test 1: Plan with full TDD coverage and doc subtask → all scores 1.0
-// ---------------------------------------------------------------------------
-
-func TestComputePlanScores_FullCoverage(t *testing.T) {
+func TestScorePlanGate_ConvertsPlanInputs(t *testing.T) {
 	subtasks := []planEntry{
 		{Title: "test A", Phase: "test", TestsFor: []int{1}},
-		{Title: "impl A", Phase: "implementation", EstimatedFiles: []string{"internal/foo/foo.go"}},
-		{Title: "test B", Phase: "test", TestsFor: []int{3}},
-		{Title: "impl B", Phase: "implementation", EstimatedFiles: []string{"internal/bar/bar.go"}},
-		{Title: "update docs", Phase: "implementation", EstimatedFiles: []string{"README.md"}},
+		{
+			Title:          "impl A",
+			Phase:          "implementation",
+			EstimatedFiles: []string{"internal/foo/foo.go"},
+			DepthMeta: &score.DepthMeta{
+				ModuleBoundaries: []score.ModuleBoundary{
+					{Package: "internal/foo", Description: "handles foo logic", Exports: 5},
+				},
+				InterfaceShapes: []score.InterfaceShape{
+					{Package: "internal/foo", Functions: []string{"Run"}, Types: []string{"Runner"}},
+				},
+			},
+		},
+		{Title: "impl B", Phase: "implementation"},
 	}
-	exceptions := []tddException(nil)
-	validation := PlanValidationResult{Valid: true}
+	exceptions := []tddException{{SubtaskIndex: 2, Reason: "config-only change"}}
+	validation := PlanValidationResult{Valid: true, Warnings: []string{"warn"}}
 
-	scores := computePlanScores(subtasks, exceptions, validation)
+	got := scorePlanGate(subtasks, exceptions, validation)
 
-	if !scoreApproxEqual(scores.TDD, 1.0) {
-		t.Errorf("TDD = %v, want 1.0 (all impl subtasks covered by tests)", scores.TDD)
+	checks := map[string]float64{
+		"tdd":           0.75,
+		"constitution":  0.9,
+		"documentation": 0.0,
+		"depth":         1.0,
 	}
-	if !scoreApproxEqual(scores.Constitution, 1.0) {
-		t.Errorf("Constitution = %v, want 1.0 (valid plan, no warnings)", scores.Constitution)
-	}
-	if !scoreApproxEqual(scores.Documentation, 1.0) {
-		t.Errorf("Documentation = %v, want 1.0 (plan touches README.md)", scores.Documentation)
-	}
-
-	// Verify ScoresToMap produces the expected keys.
-	m := score.ScoresToMap(scores)
-	for _, key := range []string{"tdd", "constitution", "documentation", "depth", "formatted"} {
-		if _, ok := m[key]; !ok {
-			t.Errorf("ScoresToMap missing key %q", key)
+	for key, want := range checks {
+		gotScore, ok := got[key].(float64)
+		if !ok {
+			t.Fatalf("scorePlanGate()[%q] = %T, want float64", key, got[key])
+		}
+		if !scoreApproxEqual(gotScore, want) {
+			t.Errorf("scorePlanGate()[%q] = %v, want %v", key, gotScore, want)
 		}
 	}
-}
 
-// ---------------------------------------------------------------------------
-// Test 2: Plan with missing test coverage → TDD < 1.0
-// ---------------------------------------------------------------------------
-
-func TestComputePlanScores_MissingTests(t *testing.T) {
-	subtasks := []planEntry{
-		{Title: "test A", Phase: "test", TestsFor: []int{1}},
-		{Title: "impl A", Phase: "implementation"},
-		{Title: "impl B", Phase: "implementation"}, // no test covers this
+	formatted, ok := got["formatted"].(string)
+	if !ok {
+		t.Fatalf("scorePlanGate()[formatted] = %T, want string", got["formatted"])
 	}
-
-	scores := computePlanScores(subtasks, nil, PlanValidationResult{Valid: true})
-
-	if scores.TDD >= 1.0 {
-		t.Errorf("TDD = %v, want < 1.0 (impl B has no covering test)", scores.TDD)
-	}
-	// Expect 0.5: 1 covered out of 2 impl subtasks.
-	if !scoreApproxEqual(scores.TDD, 0.5) {
-		t.Errorf("TDD = %v, want ~0.5", scores.TDD)
+	if formatted != "TDD: 75% | Constitution: 90% | Docs: 0% | Depth: 100%" {
+		t.Errorf("formatted = %q", formatted)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Test 3: computeImplementationScores with constraint report and coverage
-// ---------------------------------------------------------------------------
+func TestScorePlanGate_DepthFallback(t *testing.T) {
+	got := scorePlanGate([]planEntry{
+		{Title: "impl A", Phase: "implementation", EstimatedFiles: []string{"internal/foo/foo.go"}},
+		{Title: "impl B", Phase: "implementation"},
+	}, nil, PlanValidationResult{Valid: true})
 
-func TestComputeImplementationScores(t *testing.T) {
-	report := &constraints.Report{
-		Results: makeConstraintResults(8, 1),
-		Passed:  8,
-		Failed:  1,
+	depth, ok := got["depth"].(float64)
+	if !ok {
+		t.Fatalf("depth = %T, want float64", got["depth"])
 	}
-	changedFiles := []string{
-		"internal/orchestrator/score_bridge.go",
-		"README.md",
-	}
-	coverageOutput := "ok  \tgithub.com/godinj/drem-orchestrator/internal/score\tcoverage: 90.0% of statements"
-
-	scores := computeImplementationScores(report, changedFiles, coverageOutput)
-
-	// TDD: parsed from coverage output → 0.90
-	if !scoreApproxEqual(scores.TDD, 0.90) {
-		t.Errorf("TDD = %v, want 0.90", scores.TDD)
-	}
-
-	// Constitution: 8/(8+1) ≈ 0.889
-	wantConstitution := 8.0 / 9.0
-	if !scoreApproxEqual(scores.Constitution, wantConstitution) {
-		t.Errorf("Constitution = %v, want %v", scores.Constitution, wantConstitution)
-	}
-
-	// Documentation: README.md in changed files → 1.0
-	if !scoreApproxEqual(scores.Documentation, 1.0) {
-		t.Errorf("Documentation = %v, want 1.0", scores.Documentation)
+	if !scoreApproxEqual(depth, 0.5) {
+		t.Errorf("depth = %v, want 0.5", depth)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Test 4: computePlanScores type conversion integration
-// ---------------------------------------------------------------------------
+func TestScoreImplGate_UsesCanonicalImplementationScores(t *testing.T) {
+	got := scoreImplGate(8, 1, []string{"internal/orchestrator/score_bridge.go", "README.md"}, "coverage: 90.0% of statements")
 
-func TestComputePlanScores_Integration(t *testing.T) {
-	tests := []struct {
-		name       string
-		subtasks   []planEntry
-		exceptions []tddException
-		validation PlanValidationResult
-		wantTDD    float64
-		wantConst  float64
-		wantDoc    float64
-	}{
-		{
-			name: "exception counts as 50%",
-			subtasks: []planEntry{
-				{Title: "test A", Phase: "test", TestsFor: []int{1}},
-				{Title: "impl A", Phase: "implementation"},
-				{Title: "impl B", Phase: "implementation"}, // exception
-			},
-			exceptions: []tddException{
-				{SubtaskIndex: 2, Reason: "config-only change"},
-			},
-			validation: PlanValidationResult{Valid: true},
-			wantTDD:    0.75, // (1.0 + 0.5) / 2
-			wantConst:  1.0,
-			wantDoc:    0.0,
-		},
-		{
-			name: "warnings reduce constitution",
-			subtasks: []planEntry{
-				{Title: "impl", Phase: "implementation"},
-			},
-			validation: PlanValidationResult{
-				Valid:    true,
-				Warnings: []string{"warn1", "warn2"},
-			},
-			wantTDD:   0.0,
-			wantConst: 0.8,
-			wantDoc:   0.0,
-		},
-		{
-			name: "errors make constitution 0",
-			subtasks: []planEntry{
-				{Title: "impl", Phase: "implementation"},
-			},
-			validation: PlanValidationResult{
-				Valid:  false,
-				Errors: []string{"bad"},
-			},
-			wantTDD:   0.0,
-			wantConst: 0.0,
-			wantDoc:   0.0,
-		},
-		{
-			name: "docs/ file triggers documentation score",
-			subtasks: []planEntry{
-				{Title: "test A", Phase: "test", TestsFor: []int{1}},
-				{Title: "impl A", Phase: "implementation", EstimatedFiles: []string{"docs/walkthrough.md"}},
-			},
-			validation: PlanValidationResult{Valid: true},
-			wantTDD:    1.0,
-			wantConst:  1.0,
-			wantDoc:    1.0,
-		},
+	checks := map[string]float64{
+		"tdd":           0.9,
+		"constitution":  8.0 / 9.0,
+		"documentation": 1.0,
+		"depth":         1.0,
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := computePlanScores(tt.subtasks, tt.exceptions, tt.validation)
-
-			if !scoreApproxEqual(got.TDD, tt.wantTDD) {
-				t.Errorf("TDD = %v, want %v", got.TDD, tt.wantTDD)
-			}
-			if !scoreApproxEqual(got.Constitution, tt.wantConst) {
-				t.Errorf("Constitution = %v, want %v", got.Constitution, tt.wantConst)
-			}
-			if !scoreApproxEqual(got.Documentation, tt.wantDoc) {
-				t.Errorf("Documentation = %v, want %v", got.Documentation, tt.wantDoc)
-			}
-		})
+	for key, want := range checks {
+		gotScore, ok := got[key].(float64)
+		if !ok {
+			t.Fatalf("scoreImplGate()[%q] = %T, want float64", key, got[key])
+		}
+		if !scoreApproxEqual(gotScore, want) {
+			t.Errorf("scoreImplGate()[%q] = %v, want %v", key, gotScore, want)
+		}
 	}
-}
-
-// ---------------------------------------------------------------------------
-// Test 5: Depth scoring parity — bridge and canonical must agree
-// ---------------------------------------------------------------------------
-
-func TestDepthScoreParity(t *testing.T) {
-	tests := []struct {
-		name      string
-		subtasks  []planEntry
-		wantDepth float64
-	}{
-		{
-			name: "all 3 criteria met → 1.0",
-			subtasks: []planEntry{
-				{
-					Title: "impl A", Phase: "implementation",
-					EstimatedFiles: []string{"internal/foo/foo.go"},
-					DepthMeta: &depthMeta{
-						ModuleBoundaries: []moduleBoundary{
-							{Package: "internal/foo", Description: "handles foo logic", Exports: 5},
-						},
-						InterfaceShapes: []interfaceShape{
-							{Package: "internal/foo", Functions: []string{"Run"}, Types: []string{"Runner"}},
-						},
-					},
-				},
-			},
-			wantDepth: 1.0,
-		},
-		{
-			name: "boundaries only no interfaces → 0.67",
-			subtasks: []planEntry{
-				{
-					Title: "impl B", Phase: "implementation",
-					EstimatedFiles: []string{"internal/bar/bar.go"},
-					DepthMeta: &depthMeta{
-						ModuleBoundaries: []moduleBoundary{
-							{Package: "internal/bar", Description: "bar module", Exports: 10},
-						},
-					},
-				},
-			},
-			wantDepth: 2.0 / 3.0, // boundaries yes, interfaces no, deep yes (Exports ≤ 20) → 2/3
-		},
-		{
-			name: "no DepthMeta → current behavior",
-			subtasks: []planEntry{
-				{Title: "impl C", Phase: "implementation", EstimatedFiles: []string{"internal/baz/baz.go"}},
-				{Title: "impl D", Phase: "implementation"},
-			},
-			wantDepth: 0.5, // fallback to file-coverage: 1/2 entries have files
-		},
-		{
-			name: "exports > 20 violates deep decomposition → 0.67",
-			subtasks: []planEntry{
-				{
-					Title: "impl E", Phase: "implementation",
-					EstimatedFiles: []string{"internal/qux/qux.go"},
-					DepthMeta: &depthMeta{
-						ModuleBoundaries: []moduleBoundary{
-							{Package: "internal/qux", Description: "qux module", Exports: 25},
-						},
-						InterfaceShapes: []interfaceShape{
-							{Package: "internal/qux", Functions: []string{"Process"}, Types: []string{"Processor"}},
-						},
-					},
-				},
-			},
-			wantDepth: 2.0 / 3.0, // boundaries yes, interfaces yes, deep no → 2/3
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Canonical score via score package.
-			canonical := computePlanScores(tt.subtasks, nil, PlanValidationResult{Valid: true})
-
-			if !scoreApproxEqual(canonical.Depth, tt.wantDepth) {
-				t.Errorf("canonical Depth = %v, want %v", canonical.Depth, tt.wantDepth)
-			}
-
-			// Bridge score via scorePlanGate.
-			bridge := scorePlanGate(tt.subtasks, nil, PlanValidationResult{Valid: true})
-			bridgeDepth, ok := bridge["depth"].(float64)
-			if !ok {
-				t.Fatalf("bridge depth not a float64: %T", bridge["depth"])
-			}
-
-			if !scoreApproxEqual(bridgeDepth, tt.wantDepth) {
-				t.Errorf("bridge depth = %v, want %v", bridgeDepth, tt.wantDepth)
-			}
-
-			if !scoreApproxEqual(bridgeDepth, canonical.Depth) {
-				t.Errorf("PARITY MISMATCH: bridge=%v canonical=%v", bridgeDepth, canonical.Depth)
-			}
-		})
-	}
-}
-
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
-
-func makeConstraintResults(passed, failed int) []constraints.Result {
-	results := make([]constraints.Result, 0, passed+failed)
-	for i := 0; i < passed; i++ {
-		results = append(results, constraints.Result{Name: "pass", Passed: true})
-	}
-	for i := 0; i < failed; i++ {
-		results = append(results, constraints.Result{Name: "fail", Passed: false})
-	}
-	return results
 }

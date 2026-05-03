@@ -1,12 +1,5 @@
-// Package watcher manages the C-Suite agent turn lifecycle, including
-// per-agent trigger deduplication with bounded queue depth.
-//
-// Deduplication prevents parallel turns for the same agent. At most one turn
-// runs and at most one additional trigger is queued per agent. Triggers for
-// different agents are fully independent.
+// Package watcher manages the C-Suite agent turn lifecycle.
 package watcher
-
-import "sync"
 
 // TriggerResult describes the outcome of a TriggerAgent call.
 //
@@ -35,26 +28,15 @@ const (
 	Cooldown
 )
 
-// TurnRunner executes a single agent turn synchronously. The call blocks
-// until the turn completes or fails. Implementations must be safe for
-// concurrent calls with different agent names.
+// TurnRunner executes a single agent turn synchronously. The call blocks until
+// the turn completes or fails. Implementations must be safe for concurrent
+// calls with different agent names.
 type TurnRunner interface {
 	RunTurn(agent string)
 }
 
-type agentState int
-
-const (
-	stateRunning       agentState = iota // turn in progress, nothing queued
-	stateRunningQueued                   // turn in progress, one trigger queued
-)
-
 // kyle is the permanently ineligible agent name.
 const kyle = "kyle"
-
-type agentEntry struct {
-	state agentState
-}
 
 // Deduplicator manages per-agent turn deduplication. Concurrent calls to
 // TriggerAgent for the same agent are serialized: at most one turn runs and
@@ -63,16 +45,15 @@ type agentEntry struct {
 //
 // Use NewDeduplicator to create a Deduplicator.
 type Deduplicator struct {
-	mu     sync.Mutex
-	agents map[string]*agentEntry
-	runner TurnRunner
+	scheduler *turnScheduler
+	runner    TurnRunner
 }
 
 // NewDeduplicator creates a Deduplicator backed by runner for turn execution.
 func NewDeduplicator(runner TurnRunner) *Deduplicator {
 	return &Deduplicator{
-		agents: make(map[string]*agentEntry),
-		runner: runner,
+		scheduler: newTurnScheduler(nil, 0, Dropped),
+		runner:    runner,
 	}
 }
 
@@ -89,43 +70,19 @@ func NewDeduplicator(runner TurnRunner) *Deduplicator {
 //
 // TriggerAgent is safe for concurrent use by multiple goroutines.
 func (d *Deduplicator) TriggerAgent(agent string) TriggerResult {
-	if agent == kyle {
-		return Refused
-	}
-
-	d.mu.Lock()
-	entry, ok := d.agents[agent]
-	if !ok {
-		d.agents[agent] = &agentEntry{state: stateRunning}
-		d.mu.Unlock()
-		go d.runLoop(agent)
-		return Started
-	}
-	if entry.state == stateRunning {
-		entry.state = stateRunningQueued
-		d.mu.Unlock()
-		return Queued
-	}
-	d.mu.Unlock()
-	return Dropped
+	result, action := d.scheduler.Trigger(agent)
+	d.launch(agent, action)
+	return result
 }
 
-// runLoop executes turns for agent, re-running if a queued trigger exists.
-func (d *Deduplicator) runLoop(agent string) {
-	for {
-		d.runner.RunTurn(agent)
-
-		d.mu.Lock()
-		entry := d.agents[agent]
-		if entry.state == stateRunningQueued {
-			entry.state = stateRunning
-			d.mu.Unlock()
-			// loop: run the queued turn
-			continue
-		}
-		// state == stateRunning, no queued trigger — clean up
-		delete(d.agents, agent)
-		d.mu.Unlock()
+func (d *Deduplicator) launch(agent string, action schedulerAction) {
+	if action.kind != schedulerStartNow {
 		return
 	}
+	go d.run(agent)
+}
+
+func (d *Deduplicator) run(agent string) {
+	d.runner.RunTurn(agent)
+	d.launch(agent, d.scheduler.Complete(agent))
 }
