@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -351,6 +352,62 @@ func TestProcessTestWriting_RejectedTestSubtaskFailureReasonNamesChild(t *testin
 	reason, _ := updated.Context["failure_reason"].(string)
 	if !strings.Contains(reason, rejected.ID.String()) || !strings.Contains(reason, "test-rejected") || !strings.Contains(reason, string(model.StatusRejected)) {
 		t.Fatalf("failure_reason = %q, want rejected child id, status, and title", reason)
+	}
+}
+
+func TestProcessTestWriting_SupersededRejectedTestDoesNotFailParent(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test-superseded-rejected-" + o.projectID.String()}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent",
+		Description: "test parent",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	created := time.Now().Add(-time.Hour)
+	rejected := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "metric registration test",
+		Description:  "old rejected test subtask",
+		Status:       model.StatusRejected,
+		Phase:        "test",
+		CreatedAt:    created,
+		UpdatedAt:    created,
+	}
+	db.Create(&rejected)
+
+	replacement := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "metric registration test",
+		Description:  "replacement test subtask",
+		Status:       model.StatusDone,
+		Phase:        "test",
+		CreatedAt:    created.Add(time.Minute),
+		UpdatedAt:    created.Add(time.Minute),
+	}
+	db.Create(&replacement)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusTestReview {
+		t.Fatalf("expected parent status test_review, got %s", updated.Status)
 	}
 }
 

@@ -72,6 +72,7 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		Find(&testSubtasks).Error; err != nil {
 		return fmt.Errorf("process test writing: query test subtasks: %w", err)
 	}
+	testSubtasks = activeTestWritingSubtasks(testSubtasks)
 
 	switch o.subtaskRecovery.Evaluate(parent, len(testSubtasks)) {
 	case RecoveryReplan:
@@ -209,6 +210,36 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 	}
 
 	return nil
+}
+
+func activeTestWritingSubtasks(subtasks []model.Task) []model.Task {
+	newestByTitle := make(map[string]model.Task, len(subtasks))
+	for _, sub := range subtasks {
+		key := testWritingTitleKey(sub.Title)
+		newest, ok := newestByTitle[key]
+		if !ok || sub.CreatedAt.After(newest.CreatedAt) {
+			newestByTitle[key] = sub
+		}
+	}
+
+	active := make([]model.Task, 0, len(subtasks))
+	for _, sub := range subtasks {
+		if sub.Status == model.StatusRejected {
+			if newest, ok := newestByTitle[testWritingTitleKey(sub.Title)]; ok && newest.ID != sub.ID {
+				continue
+			}
+		}
+		active = append(active, sub)
+	}
+	return active
+}
+
+func testWritingTitleKey(title string) string {
+	idx := strings.LastIndex(title, " (revision ")
+	if idx < 0 || !strings.HasSuffix(title, ")") {
+		return title
+	}
+	return title[:idx]
 }
 
 func (o *Orchestrator) hasPendingSourceLaneSubtasks(parentID uuid.UUID) (bool, error) {
