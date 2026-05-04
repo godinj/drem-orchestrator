@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -302,6 +303,54 @@ func TestProcessTestWriting_AllTestSubtasksTerminal_SomeFailed(t *testing.T) {
 	db.First(&updated, "id = ?", parentID)
 	if updated.Status != model.StatusFailed {
 		t.Errorf("expected parent status failed, got %s", updated.Status)
+	}
+	reason, _ := updated.Context["failure_reason"].(string)
+	if !strings.Contains(reason, sub2.ID.String()) || !strings.Contains(reason, "test-failed") || !strings.Contains(reason, string(model.StatusFailed)) {
+		t.Fatalf("failure_reason = %q, want failed child id, status, and title", reason)
+	}
+}
+
+func TestProcessTestWriting_RejectedTestSubtaskFailureReasonNamesChild(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent",
+		Description: "test parent",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	rejected := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test-rejected",
+		Description:  "rejected test subtask",
+		Status:       model.StatusRejected,
+		Phase:        "test",
+	}
+	db.Create(&rejected)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected parent status failed, got %s", updated.Status)
+	}
+	reason, _ := updated.Context["failure_reason"].(string)
+	if !strings.Contains(reason, rejected.ID.String()) || !strings.Contains(reason, "test-rejected") || !strings.Contains(reason, string(model.StatusRejected)) {
+		t.Fatalf("failure_reason = %q, want rejected child id, status, and title", reason)
 	}
 }
 

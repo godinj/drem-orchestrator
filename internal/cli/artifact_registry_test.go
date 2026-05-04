@@ -51,6 +51,7 @@ func TestArtifactRegistrySeedPersonaContextUpdatesChangedArtifacts(t *testing.T)
 	requireWriteFile(t, filepath.Join(repo, "CLAUDE.md"), "first guidance\n")
 	requireWriteFile(t, filepath.Join(repo, "plans/drem-pipeline-reliability-policy.md"), "pipeline policy\n")
 	requireWriteFile(t, filepath.Join(repo, "plans/orch-stale-task-cleanup-2026-05-02.md"), "cleanup record\n")
+	requireWriteFile(t, filepath.Join(repo, "plans/operator-grafana-metrics-2026-05-03.md"), "grafana metrics objective\n")
 
 	var buf bytes.Buffer
 	err := Run(db, []string{"artifact-registry", "seed-persona-context"}, &buf, false, nil, "")
@@ -79,6 +80,13 @@ func TestArtifactRegistrySeedPersonaContextUpdatesChangedArtifacts(t *testing.T)
 	}
 	if cleanupRecord.ArtifactType != "cleanup_record" || cleanupRecord.Owner != "kyle" {
 		t.Fatalf("unexpected cleanup record metadata: %#v", cleanupRecord)
+	}
+	grafanaObjective, err := registry.FindArtifactByURI(context.Background(), "repo:plans/operator-grafana-metrics-2026-05-03.md")
+	if err != nil {
+		t.Fatalf("find seeded grafana objective artifact: %v", err)
+	}
+	if grafanaObjective.ArtifactType != "operator_objective" || grafanaObjective.WorkflowScope != "observability" {
+		t.Fatalf("unexpected grafana objective metadata: %#v", grafanaObjective)
 	}
 
 	requireWriteFile(t, filepath.Join(repo, "CLAUDE.md"), "second guidance\n")

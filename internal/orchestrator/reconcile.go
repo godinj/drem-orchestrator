@@ -143,19 +143,18 @@ func (o *Orchestrator) reconcileStaleSubtasks() (int, error) {
 		// Feature branch has no changes but subtasks claim to be done.
 		for i := range subs {
 			sub := &subs[i]
-			o.logger.Warn("reconcile: resetting done subtask with no feature changes",
+			o.logger.Warn("reconcile: preserving done subtask with no feature changes",
 				"subtask_id", sub.ID, "parent_id", parent.ID)
 
-			// Force status back to backlog (bypasses state machine since
-			// DONE is terminal and has no valid outbound transitions).
-			sub.Status = model.StatusBacklog
+			// DONE is terminal. Do not reopen it implicitly: doing so can
+			// reschedule already-merged child work and corrupt parent accounting.
 			sub.AssignedAgentID = nil
 			sub.UpdatedAt = time.Now()
 			if sub.Context == nil {
 				sub.Context = make(model.JSONField)
 			}
 			sub.Context["reconciled"] = true
-			sub.Context["reconcile_reason"] = "subtask was done but feature branch has no changes"
+			sub.Context["reconcile_reason"] = "subtask was done but feature branch has no changes; terminal status preserved"
 			if err := o.db.Save(sub).Error; err != nil {
 				o.logger.Error("reconcile: save subtask", "subtask_id", sub.ID, "error", err)
 				continue

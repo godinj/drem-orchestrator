@@ -109,11 +109,14 @@ func TestReconcile_AggregatesFixes(t *testing.T) {
 		t.Errorf("expected at least 1 fix from stale subtask reconciliation, got %d", fixes)
 	}
 
-	// Verify the subtask was reset to backlog.
+	// Verify the terminal subtask was annotated, not reopened.
 	var updated model.Task
 	db.First(&updated, "id = ?", sub.ID)
-	if updated.Status != model.StatusBacklog {
-		t.Errorf("expected subtask status backlog, got %s", updated.Status)
+	if updated.Status != model.StatusDone {
+		t.Errorf("expected subtask status done, got %s", updated.Status)
+	}
+	if updated.AssignedAgentID != nil {
+		t.Error("expected assigned agent to be cleared")
 	}
 }
 
@@ -230,14 +233,17 @@ func TestReconcileStaleSubtasks_NoCommits(t *testing.T) {
 		t.Errorf("expected 1 fix, got %d", fixes)
 	}
 
-	// Subtask should be reset to BACKLOG.
+	// DONE is terminal: no-diff reconciliation must not reopen the child.
 	var updated model.Task
 	db.First(&updated, "id = ?", sub.ID)
-	if updated.Status != model.StatusBacklog {
-		t.Errorf("expected subtask status backlog, got %s", updated.Status)
+	if updated.Status != model.StatusDone {
+		t.Errorf("expected subtask status done, got %s", updated.Status)
 	}
 	if updated.AssignedAgentID != nil {
 		t.Error("expected assigned agent to be cleared")
+	}
+	if got := updated.Context["reconcile_reason"]; got != "subtask was done but feature branch has no changes; terminal status preserved" {
+		t.Errorf("unexpected reconcile_reason: %v", got)
 	}
 }
 

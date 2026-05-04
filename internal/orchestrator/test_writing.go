@@ -198,8 +198,8 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		// All test subtasks terminal but some failed -> fail the parent.
 		var failedNames []string
 		for _, sub := range testSubtasks {
-			if sub.Status == model.StatusFailed {
-				failedNames = append(failedNames, sub.Title)
+			if sub.Status == model.StatusFailed || sub.Status == model.StatusRejected {
+				failedNames = append(failedNames, fmt.Sprintf("%s (%s: %s)", sub.ID, sub.Status, sub.Title))
 			}
 		}
 		if err := o.failTask(parent, fmt.Sprintf("test subtasks failed: %s",
