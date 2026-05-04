@@ -373,6 +373,8 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		switch sub.Status {
 		case model.StatusDone:
 			// good
+		case model.StatusCancelled:
+			// Superseded subtasks are terminal and should not block the active generation.
 		case model.StatusFailed:
 			anyFailed = true
 			allDone = false

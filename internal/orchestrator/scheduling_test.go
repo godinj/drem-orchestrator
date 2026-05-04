@@ -351,6 +351,34 @@ func TestCheckFeatureCompletion_AllSubtasksDone(t *testing.T) {
 	}
 }
 
+func TestCheckFeatureCompletion_CancelledSubtasksDoNotBlockDoneWork(t *testing.T) {
+	o, db, projectID := setupSchedulingTest(t)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   projectID,
+		Title:       "parent-with-superseded-subtasks",
+		Description: "parent with done work and cancelled superseded subtasks",
+		Status:      model.StatusInProgress,
+	}
+	db.Create(&parent)
+
+	createTask(t, db, projectID, "done-sub-1", model.StatusDone, &parentID)
+	createTask(t, db, projectID, "done-sub-2", model.StatusDone, &parentID)
+	createTask(t, db, projectID, "cancelled-superseded-sub", model.StatusCancelled, &parentID)
+
+	if err := o.checkFeatureCompletion(&parent); err != nil {
+		t.Fatalf("checkFeatureCompletion: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected parent status testing_ready, got %s", updated.Status)
+	}
+}
+
 func TestCheckFeatureCompletion_SomeSubtasksPending(t *testing.T) {
 	o, db, projectID := setupSchedulingTest(t)
 
