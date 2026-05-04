@@ -191,7 +191,7 @@ func (s *DeliveryService) rescanPersona(src string, res *RescanResult) {
 			recordErr("%s: validate %s: %v", src, c.name, err)
 			continue
 		}
-		class, err := ClassifyFile(protocolPath)
+		route, err := s.routeDelivery(req)
 		if errors.Is(err, ErrMultiRecipient) {
 			res.Quarantined++
 			persona.Quarantined++
@@ -199,66 +199,46 @@ func (s *DeliveryService) rescanPersona(src string, res *RescanResult) {
 			continue
 		}
 		if err != nil {
-			recordErr("%s: classify %s: %v", src, c.name, err)
+			s.recordRescanRouteError(src, c.name, route, err, recordErr)
 			continue
 		}
 
-		switch class.Class {
-		case ClassSuppress:
-			if err := s.cfg.Ledger.Insert(Delivery{
-				SHA256:        req.SHA256,
-				SourcePersona: req.SourcePersona,
-				Dest:          ClassSuppress,
-				SourcePath:    req.OutboxPath,
-				DestPath:      "",
-				DeliveredAt:   s.now().UTC(),
-			}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
-				recordErr("%s: suppress ledger %s: %v", src, c.name, err)
-				continue
-			}
+		switch route.Outcome {
+		case deliveryOutcomeSuppressed:
 			res.Suppressed++
 			persona.Suppressed++
-			s.logger().Printf("rescan: suppressed %s/%s reason=%q", src, c.name, class.Reason)
-		case ClassQuarantine:
-			dest := quarantinePath(req.SourcePersona, req.OutboxPath)
-			if err := atomicCopyFile(req.OutboxPath, dest); err != nil {
-				recordErr("%s: quarantine write %s: %v", src, c.name, err)
-				continue
-			}
-			if err := s.cfg.Ledger.Insert(Delivery{
-				SHA256:        req.SHA256,
-				SourcePersona: req.SourcePersona,
-				Dest:          ClassQuarantine,
-				SourcePath:    req.OutboxPath,
-				DestPath:      dest,
-				DeliveredAt:   s.now().UTC(),
-			}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
-				recordErr("%s: quarantine ledger %s: %v", src, c.name, err)
-				continue
-			}
+			s.logger().Printf("rescan: suppressed %s/%s reason=%q", src, c.name, route.Class.Reason)
+		case deliveryOutcomeQuarantined:
 			res.Quarantined++
 			persona.Quarantined++
-			s.logger().Printf("rescan: quarantine %s/%s reason=%q", src, c.name, class.Reason)
-		case ClassPersona, ClassOperator:
-			// ClassOperator is destination-only: a persona wrote a
-			// "to: operator" reply that the rescan must deliver into
-			// /csuite/operator/inbox/. deliverToInbox handles both
-			// classes identically because class.Dest carries the
-			// destination name (persona or "operator"). Operator is
-			// NOT added to rescanPersonas — it has no outbox to scan
-			// from. See plans/drem-csuite-send-cli.md §Phase 1.
-			destPath, err := s.deliverToInbox(req, class)
-			if err != nil {
-				recordErr("%s: deliver %s: %v", src, c.name, err)
-				continue
-			}
+			s.logger().Printf("rescan: quarantine %s/%s reason=%q", src, c.name, route.Class.Reason)
+		case deliveryOutcomeDelivered:
 			res.Delivered++
 			persona.Delivered++
 			s.logger().Printf("rescan: delivered source=%s dest=%s sha=%s dest_path=%s",
-				src, class.Dest, sha, destPath)
+				src, route.Class.Dest, sha, route.DestPath)
 		default:
-			recordErr("%s: unknown class %q for %s", src, class.Class, c.name)
+			recordErr("%s: unknown class %q for %s", src, route.Class.Class, c.name)
 		}
+	}
+}
+
+func (*DeliveryService) recordRescanRouteError(src, name string, route deliveryRouteResult, err error, recordErr func(string, ...any)) {
+	switch {
+	case errors.Is(err, errClassify):
+		recordErr("%s: classify %s: %v", src, name, err)
+	case errors.Is(err, errQuarantineWrite):
+		recordErr("%s: quarantine write %s: %v", src, name, err)
+	case errors.Is(err, errLedgerInsert) && route.Class.Class == ClassSuppress:
+		recordErr("%s: suppress ledger %s: %v", src, name, err)
+	case errors.Is(err, errLedgerInsert) && route.Class.Class == ClassQuarantine:
+		recordErr("%s: quarantine ledger %s: %v", src, name, err)
+	case errors.Is(err, errDeliveryFailed):
+		recordErr("%s: deliver %s: %v", src, name, err)
+	case errors.Is(err, errUnknownClass):
+		recordErr("%s: unknown class %q for %s", src, route.Class.Class, name)
+	default:
+		recordErr("%s: route %s: %v", src, name, err)
 	}
 }
 

@@ -5,8 +5,6 @@ package memory
 
 import (
 	"fmt"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -135,55 +133,8 @@ func (m *Manager) CompactAgentMemory(agentID uuid.UUID) (string, error) {
 		return "", nil
 	}
 
-	// 2. Group by MemoryType
-	grouped := make(map[string][]model.Memory)
-	for _, mem := range memories {
-		grouped[mem.MemoryType] = append(grouped[mem.MemoryType], mem)
-	}
-
 	// 3. Build structured summary
-	var sections []string
-
-	// Process known types in a stable order
-	knownTypes := []struct {
-		key   string
-		title string
-	}{
-		{"decision", "Decisions"},
-		{"file_change", "File Changes"},
-		{"lesson", "Lessons"},
-		{"blocker", "Blockers"},
-		{"completion", "Completed"},
-	}
-	covered := make(map[string]bool)
-
-	for _, kt := range knownTypes {
-		mems, ok := grouped[kt.key]
-		if !ok {
-			continue
-		}
-		covered[kt.key] = true
-		var items []string
-		for _, mem := range mems {
-			items = append(items, fmt.Sprintf("- %s", mem.Content))
-		}
-		sections = append(sections, fmt.Sprintf("## %s\n%s", kt.title, strings.Join(items, "\n")))
-	}
-
-	// Include any other types not covered above
-	for mtype, mems := range grouped {
-		if covered[mtype] {
-			continue
-		}
-		var items []string
-		for _, mem := range mems {
-			items = append(items, fmt.Sprintf("- %s", mem.Content))
-		}
-		title := titleCase(strings.ReplaceAll(mtype, "_", " "))
-		sections = append(sections, fmt.Sprintf("## %s\n%s", title, strings.Join(items, "\n")))
-	}
-
-	summaryText := strings.Join(sections, "\n\n")
+	summaryText := renderMemorySummary(memories)
 
 	// 4. Update Agent.MemorySummary
 	if err := m.db.Model(&model.Agent{}).Where("id = ?", agentID).Update("memory_summary", summaryText).Error; err != nil {
@@ -215,16 +166,10 @@ func (m *Manager) BuildAgentContext(agentID, taskID uuid.UUID, maxTokens int) (s
 	}
 	maxChars := maxTokens * 4
 
-	var parts []string
-
 	// 1. Agent's MemorySummary
 	var agent model.Agent
 	if err := m.db.Where("id = ?", agentID).First(&agent).Error; err != nil {
 		return "", fmt.Errorf("build agent context: load agent: %w", err)
-	}
-
-	if agent.MemorySummary != "" {
-		parts = append(parts, "# Agent Memory Summary\n\n"+agent.MemorySummary)
 	}
 
 	// 2. Recent task-specific memories (last recentMemoryLimit)
@@ -241,16 +186,6 @@ func (m *Manager) BuildAgentContext(agentID, taskID uuid.UUID, maxTokens int) (s
 		return "", fmt.Errorf("build agent context: task memories: %w", err)
 	}
 
-	if len(taskMemories) > 0 {
-		var items []string
-		// Reverse to chronological order
-		for i := len(taskMemories) - 1; i >= 0; i-- {
-			mem := taskMemories[i]
-			items = append(items, fmt.Sprintf("- [%s] %s", mem.MemoryType, mem.Content))
-		}
-		parts = append(parts, "# Recent Task Memories\n\n"+strings.Join(items, "\n"))
-	}
-
 	// 3. Project-wide decisions and lessons (last projectDecisionLimit)
 	var projectMemories []model.Memory
 	err = m.db.Model(&model.Memory{}).
@@ -265,87 +200,14 @@ func (m *Manager) BuildAgentContext(agentID, taskID uuid.UUID, maxTokens int) (s
 		return "", fmt.Errorf("build agent context: project memories: %w", err)
 	}
 
-	if len(projectMemories) > 0 {
-		var items []string
-		// Reverse to chronological order
-		for i := len(projectMemories) - 1; i >= 0; i-- {
-			mem := projectMemories[i]
-			items = append(items, fmt.Sprintf("- [%s] %s", mem.MemoryType, mem.Content))
-		}
-		parts = append(parts, "# Project-Wide Context\n\n"+strings.Join(items, "\n"))
-	}
-
-	context := strings.Join(parts, "\n\n---\n\n")
-
-	// 4. Truncate if over maxTokens
-	if len(context) > maxChars {
-		context = context[:maxChars]
-	}
-
-	return context, nil
-}
-
-// Regex patterns for extracting structured memories from agent output.
-var (
-	decisionPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:decided to|chose|approach:)\s*(.+)`),
-	}
-	blockerPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:blocked by|need|waiting for)\s*(.+)`),
-	}
-	fileChangePatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:created|modified|updated|deleted)\s+(?:file\s+)?(\S+\.\w+)`),
-	}
-	completionPatterns = []*regexp.Regexp{
-		regexp.MustCompile(`(?i)(?:completed|finished|done:)\s*(.+)`),
-	}
-)
-
-// extractEntry holds a memory type and content extracted from output.
-type extractEntry struct {
-	memoryType string
-	content    string
+	return renderAgentContext(agent.MemorySummary, taskMemories, projectMemories, maxChars), nil
 }
 
 // ExtractMemoriesFromOutput parses agent output for structured memories using
 // regex patterns. For each match it calls StoreMemory with the appropriate
 // type. Returns all created memories.
 func (m *Manager) ExtractMemoriesFromOutput(agentID, taskID uuid.UUID, output string) ([]model.Memory, error) {
-	var extracted []extractEntry
-
-	for _, line := range strings.Split(output, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		if entry, ok := matchPatterns(line, decisionPatterns, "decision"); ok {
-			extracted = append(extracted, entry)
-			continue
-		}
-		if entry, ok := matchPatterns(line, blockerPatterns, "blocker"); ok {
-			extracted = append(extracted, entry)
-			continue
-		}
-		if entry, ok := matchPatterns(line, fileChangePatterns, "file_change"); ok {
-			extracted = append(extracted, entry)
-			continue
-		}
-		if entry, ok := matchPatterns(line, completionPatterns, "completion"); ok {
-			extracted = append(extracted, entry)
-			continue
-		}
-	}
-
-	// Deduplicate
-	seen := make(map[extractEntry]bool)
-	var unique []extractEntry
-	for _, e := range extracted {
-		if !seen[e] {
-			seen[e] = true
-			unique = append(unique, e)
-		}
-	}
+	unique := extractMemoryEntries(output)
 
 	// Store each extracted memory
 	tid := &taskID
@@ -359,30 +221,4 @@ func (m *Manager) ExtractMemoriesFromOutput(agentID, taskID uuid.UUID, output st
 	}
 
 	return memories, nil
-}
-
-// titleCase capitalises the first letter of each space-separated word.
-func titleCase(s string) string {
-	words := strings.Fields(s)
-	for i, w := range words {
-		if len(w) > 0 {
-			words[i] = strings.ToUpper(w[:1]) + w[1:]
-		}
-	}
-	return strings.Join(words, " ")
-}
-
-// matchPatterns checks a line against a list of regex patterns. If a match is
-// found, it returns the full match text and true.
-func matchPatterns(line string, patterns []*regexp.Regexp, memoryType string) (extractEntry, bool) {
-	for _, p := range patterns {
-		match := p.FindString(line)
-		if match != "" {
-			return extractEntry{
-				memoryType: memoryType,
-				content:    strings.TrimSpace(match),
-			}, true
-		}
-	}
-	return extractEntry{}, false
 }

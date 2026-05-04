@@ -31,64 +31,23 @@ import (
 	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite/persona"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
 // ---------------------------------------------------------------------------
 // Test harness.
 // ---------------------------------------------------------------------------
 
-// testFS is the fully-populated directory tree used by every test. Each
-// sub-path corresponds to the field of the same name on persona.Config.
-type testFS struct {
-	root       string
-	inboxDir   string
-	outboxDir  string
-	stateFile  string
-	archiveDir string
-	promptFile string
-}
-
-// newTestFS builds a tmpdir layout that mirrors what the compose bind-mounts
-// create at runtime. Returning the paths rather than a persona.Config lets
-// individual tests override just the piece they care about (e.g. poll
-// interval).
-func newTestFS(t *testing.T, promptBody string) testFS {
-	t.Helper()
-	root := t.TempDir()
-	inbox := filepath.Join(root, "inbox")
-	outbox := filepath.Join(root, "outbox")
-	archive := filepath.Join(inbox, ".archive")
-	state := filepath.Join(root, "state.md")
-	prompt := filepath.Join(root, "prompts", "seth.md")
-
-	for _, d := range []string{inbox, outbox, archive, filepath.Dir(prompt)} {
-		if err := os.MkdirAll(d, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", d, err)
-		}
-	}
-	if err := os.WriteFile(prompt, []byte(promptBody), 0o644); err != nil {
-		t.Fatalf("write prompt: %v", err)
-	}
-	return testFS{
-		root:       root,
-		inboxDir:   inbox,
-		outboxDir:  outbox,
-		stateFile:  state,
-		archiveDir: archive,
-		promptFile: prompt,
-	}
-}
-
 // baseConfig returns a persona.Config wired against fs with sensible test
 // defaults. PollInterval is intentionally tight so the loop spins quickly.
-func baseConfig(fs testFS) persona.Config {
+func baseConfig(fs testutil.PersonaFS) persona.Config {
 	return persona.Config{
 		Persona:       "seth",
-		InboxDir:      fs.inboxDir,
-		OutboxDir:     fs.outboxDir,
-		StateFile:     fs.stateFile,
-		ArchiveDir:    fs.archiveDir,
-		PromptFile:    fs.promptFile,
+		InboxDir:      fs.InboxDir,
+		OutboxDir:     fs.OutboxDir,
+		StateFile:     fs.StateFile,
+		ArchiveDir:    fs.ArchiveDir,
+		PromptFile:    fs.PromptFile,
 		PollInterval:  20 * time.Millisecond,
 		ClaudeTimeout: time.Second,
 		MaxFailures:   3,
@@ -99,9 +58,9 @@ func baseConfig(fs testFS) persona.Config {
 
 // writeInboxMessage drops a message into the inbox with an explicit mtime so
 // tests can verify mtime-ordered pickup.
-func writeInboxMessage(t *testing.T, fs testFS, name, body string, when time.Time) {
+func writeInboxMessage(t *testing.T, fs testutil.PersonaFS, name, body string, when time.Time) {
 	t.Helper()
-	path := filepath.Join(fs.inboxDir, name)
+	path := filepath.Join(fs.InboxDir, name)
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
@@ -192,7 +151,7 @@ func runPollerUntil(t *testing.T, p *persona.Poller, cond func() bool, timeout t
 // body so the legacy stub path stays exercised; the stub suppression
 // path is covered in TestPoller_SuppressesStubWhenClaudeWroteOutbox.
 func TestPoller_PicksUpInboxFile(t *testing.T) {
-	fs := newTestFS(t, "Seth system prompt body.")
+	fs := testutil.NewPersonaFS(t, "Seth system prompt body.")
 	cfg := baseConfig(fs)
 
 	const stdoutFM = "---\nfrom: seth\nto: kyle\n---\n\nhello from claude\n"
@@ -249,7 +208,7 @@ func TestPoller_PicksUpInboxFile(t *testing.T) {
 	}
 
 	// Outbox must contain exactly one file whose name includes the persona.
-	outEntries := dirEntries(t, fs.outboxDir)
+	outEntries := dirEntries(t, fs.OutboxDir)
 	if len(outEntries) != 1 {
 		t.Fatalf("outbox entries: want 1, got %d (%v)", len(outEntries), outEntries)
 	}
@@ -258,11 +217,11 @@ func TestPoller_PicksUpInboxFile(t *testing.T) {
 	}
 
 	// Inbox must be empty (.archive dir does not count as an entry).
-	if got := visibleInboxFiles(t, fs.inboxDir); len(got) != 0 {
+	if got := visibleInboxFiles(t, fs.InboxDir); len(got) != 0 {
 		t.Fatalf("inbox want empty, got %v", got)
 	}
 	// Archive must contain the original filename.
-	archived := dirEntries(t, fs.archiveDir)
+	archived := dirEntries(t, fs.ArchiveDir)
 	if len(archived) != 1 || archived[0] != "001-ping.md" {
 		t.Fatalf("archive want [001-ping.md], got %v", archived)
 	}
@@ -273,7 +232,7 @@ func TestPoller_PicksUpInboxFile(t *testing.T) {
 // poller is the only subscriber to the inbox — any reordering would change
 // the persona's perceived conversation history.
 func TestPoller_OrderingByMtime(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 
 	var calls []spawnCall
@@ -314,7 +273,7 @@ func TestPoller_OrderingByMtime(t *testing.T) {
 // frontmatter-bearing message body is isolated to OpenCode's final prompt
 // argument and never appears in the flag prefix.
 func TestPoller_FrontmatterBodyGoesInFinalOpenCodeArg(t *testing.T) {
-	fs := newTestFS(t, "Alex system prompt.")
+	fs := testutil.NewPersonaFS(t, "Alex system prompt.")
 	cfg := baseConfig(fs)
 	cfg.Persona = "alex"
 
@@ -372,10 +331,10 @@ func TestPoller_FrontmatterBodyGoesInFinalOpenCodeArg(t *testing.T) {
 }
 
 func TestPoller_ModelConfigOverridesEnvironment(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	t.Setenv("DREM_OPENCODE_MODEL", "openai/gpt-5.4-mini")
-	if err := os.WriteFile(filepath.Join(fs.root, "config.json"), []byte(`{"model":"openai/gpt-5.5"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(fs.Root, "config.json"), []byte(`{"model":"openai/gpt-5.5"}`), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -404,10 +363,10 @@ func TestPoller_ModelConfigOverridesEnvironment(t *testing.T) {
 }
 
 func TestPoller_InvalidModelConfigFallsBackToEnvironment(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	t.Setenv("DREM_OPENCODE_MODEL", "openai/gpt-5.5")
-	if err := os.WriteFile(filepath.Join(fs.root, "config.json"), []byte(`{"model":"not-real"}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(fs.Root, "config.json"), []byte(`{"model":"not-real"}`), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -448,11 +407,11 @@ func argvFlagValue(argv []string, flag string) string {
 // a successful processing pass and asserts the new state.md is a complete
 // well-formed document (no partial write artifact, no leftover tempfile).
 func TestPoller_StateFileAtomicUpdate(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	// Pre-seed state.md with content the test can detect if the update is
 	// non-atomic (e.g. the poller truncates then writes without rename).
-	if err := os.WriteFile(fs.stateFile, []byte("POISON\n"), 0o644); err != nil {
+	if err := os.WriteFile(fs.StateFile, []byte("POISON\n"), 0o644); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}
 
@@ -473,7 +432,7 @@ func TestPoller_StateFileAtomicUpdate(t *testing.T) {
 		t.Fatalf("waiting for spawn: %v", err)
 	}
 
-	data, err := os.ReadFile(fs.stateFile)
+	data, err := os.ReadFile(fs.StateFile)
 	if err != nil {
 		t.Fatalf("read state: %v", err)
 	}
@@ -487,13 +446,13 @@ func TestPoller_StateFileAtomicUpdate(t *testing.T) {
 		}
 	}
 	// No tempfile should be lingering next to state.md.
-	entries, err := os.ReadDir(filepath.Dir(fs.stateFile))
+	entries, err := os.ReadDir(filepath.Dir(fs.StateFile))
 	if err != nil {
 		t.Fatalf("read state dir: %v", err)
 	}
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), ".state-") {
-			t.Fatalf("leftover tempfile %q in %s", e.Name(), filepath.Dir(fs.stateFile))
+			t.Fatalf("leftover tempfile %q in %s", e.Name(), filepath.Dir(fs.StateFile))
 		}
 	}
 }
@@ -502,7 +461,7 @@ func TestPoller_StateFileAtomicUpdate(t *testing.T) {
 // and verifies the message is renamed to .failed, the sidecar is cleaned up,
 // and the loop does not retry it.
 func TestPoller_FailureRetryThenArchive(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	cfg.MaxFailures = 2
 
@@ -520,16 +479,16 @@ func TestPoller_FailureRetryThenArchive(t *testing.T) {
 	err = runPollerUntil(t, p, func() bool {
 		// After MaxFailures attempts the file should be archived as .failed
 		// and the original should be gone from the inbox.
-		_, err := os.Stat(filepath.Join(fs.archiveDir, "broken.md.failed"))
+		_, err := os.Stat(filepath.Join(fs.ArchiveDir, "broken.md.failed"))
 		return err == nil
 	}, 3*time.Second)
 	if err != nil {
 		t.Fatalf("waiting for .failed archival: %v (calls=%d, inbox=%v)",
-			err, atomic.LoadInt32(&calls), dirEntries(t, fs.inboxDir))
+			err, atomic.LoadInt32(&calls), dirEntries(t, fs.InboxDir))
 	}
 
 	// Sidecar must be gone after archival.
-	if _, err := os.Stat(filepath.Join(fs.inboxDir, "broken.md.failures")); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(fs.InboxDir, "broken.md.failures")); !os.IsNotExist(err) {
 		t.Fatalf("sidecar .failures should be gone, stat err=%v", err)
 	}
 
@@ -549,7 +508,7 @@ func TestPoller_FailureRetryThenArchive(t *testing.T) {
 // the Spawner returns an error (not a non-zero exit). The poller must treat
 // this as a retriable failure and eventually archive the message.
 func TestPoller_SpawnErrorIsRetried(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	cfg.MaxFailures = 2
 
@@ -563,7 +522,7 @@ func TestPoller_SpawnErrorIsRetried(t *testing.T) {
 	writeInboxMessage(t, fs, "doomed.md", "body", time.Now())
 
 	err = runPollerUntil(t, p, func() bool {
-		_, err := os.Stat(filepath.Join(fs.archiveDir, "doomed.md.failed"))
+		_, err := os.Stat(filepath.Join(fs.ArchiveDir, "doomed.md.failed"))
 		return err == nil
 	}, 3*time.Second)
 	if err != nil {
@@ -576,7 +535,7 @@ func TestPoller_SpawnErrorIsRetried(t *testing.T) {
 // SIGTERM: docker stop waits 10s by default, so the loop must come to rest
 // well before that.
 func TestPoller_ContextCancelReturnsCleanly(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	cfg.PollInterval = 500 * time.Millisecond // long tick so cancel wins
 
@@ -608,9 +567,9 @@ func TestPoller_ContextCancelReturnsCleanly(t *testing.T) {
 // Validate so a bind-mount misconfiguration crashes the container
 // immediately instead of polling forever.
 func TestPoller_ValidateRejectsMissingInbox(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
-	cfg.InboxDir = filepath.Join(fs.root, "does-not-exist")
+	cfg.InboxDir = filepath.Join(fs.Root, "does-not-exist")
 
 	if _, err := persona.New(cfg, persona.SpawnerFunc(stubSpawner)); err == nil {
 		t.Fatalf("New should reject missing inbox dir")
@@ -620,7 +579,7 @@ func TestPoller_ValidateRejectsMissingInbox(t *testing.T) {
 // TestPoller_ValidateRejectsUnknownPersona guards against typos in the
 // CSUITE_AGENT env var propagating into the default-path computation.
 func TestPoller_ValidateRejectsUnknownPersona(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	cfg.Persona = "nobody"
 	if _, err := persona.New(cfg, persona.SpawnerFunc(stubSpawner)); err == nil {
@@ -671,7 +630,7 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 // §Signal-failure-isolation pins the guarantee that outbox write +
 // fsync is sufficient state for a signal.
 func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	rec := &recordingSignaler{onCall: func(_ signalCall) persona.SignalOutcome {
 		return persona.SignalOK
@@ -687,8 +646,8 @@ func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
 	// the legacy stub-write path (non-frontmatter stdout now
 	// suppresses the stub — see TestPoller_SuppressesStubWhenStdoutHasNoFrontmatter).
 	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
-		srcPath := filepath.Join(fs.inboxDir, "claude-moved-me.md")
-		dstPath := filepath.Join(fs.archiveDir, "claude-moved-me.md")
+		srcPath := filepath.Join(fs.InboxDir, "claude-moved-me.md")
+		dstPath := filepath.Join(fs.ArchiveDir, "claude-moved-me.md")
 		if err := os.Rename(srcPath, dstPath); err != nil {
 			return nil, 1, fmt.Errorf("test spawner: pre-archive: %v", err)
 		}
@@ -719,7 +678,7 @@ func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
 	}
 	// The outbox file must exist and the signal's sha256 must match
 	// its on-disk contents.
-	outEntries := dirEntries(t, fs.outboxDir)
+	outEntries := dirEntries(t, fs.OutboxDir)
 	if len(outEntries) != 1 {
 		t.Fatalf("outbox entries: want 1, got %d (%v)", len(outEntries), outEntries)
 	}
@@ -732,7 +691,7 @@ func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
 	}
 	// Archive directory must still have the file Claude moved; the
 	// poller's second archive attempt is a no-op here.
-	archived := dirEntries(t, fs.archiveDir)
+	archived := dirEntries(t, fs.ArchiveDir)
 	if len(archived) != 1 || archived[0] != "claude-moved-me.md" {
 		t.Errorf("archive dir = %v, want [claude-moved-me.md]", archived)
 	}
@@ -750,7 +709,7 @@ func TestPoller_SignalFiresWhenInboxAlreadyArchived(t *testing.T) {
 // Pre-fix, the stub was always emitted and quarantined; post-fix the
 // outbox carries exactly one file — the one Claude wrote.
 func TestPoller_SuppressesStubWhenClaudeWroteOutbox(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 
 	const claudeWritten = "20260422T140000Z-seth-to-alex-scoreboard.md"
@@ -759,7 +718,7 @@ func TestPoller_SuppressesStubWhenClaudeWroteOutbox(t *testing.T) {
 	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
 		// Simulate Claude's Write tool emitting a frontmatter-bearing
 		// outbox file during the turn.
-		if err := os.WriteFile(filepath.Join(fs.outboxDir, claudeWritten), []byte(claudeBody), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(fs.OutboxDir, claudeWritten), []byte(claudeBody), 0o644); err != nil {
 			return nil, 1, fmt.Errorf("simulated Write: %v", err)
 		}
 		// Claude's stdout is a plain-text "turn summary" with no
@@ -775,7 +734,7 @@ func TestPoller_SuppressesStubWhenClaudeWroteOutbox(t *testing.T) {
 
 	err = runPollerUntil(t, p, func() bool {
 		// Wait for state.md to land — signals "turn is done".
-		data, _ := os.ReadFile(fs.stateFile)
+		data, _ := os.ReadFile(fs.StateFile)
 		return strings.Contains(string(data), "last_processed: trigger.md")
 	}, 2*time.Second)
 	if err != nil {
@@ -783,7 +742,7 @@ func TestPoller_SuppressesStubWhenClaudeWroteOutbox(t *testing.T) {
 	}
 
 	// Outbox must contain EXACTLY the file Claude wrote — no stub.
-	entries := dirEntries(t, fs.outboxDir)
+	entries := dirEntries(t, fs.OutboxDir)
 	if len(entries) != 1 {
 		t.Fatalf("outbox entries: want 1 (claude's file only), got %d: %v", len(entries), entries)
 	}
@@ -804,7 +763,7 @@ func TestPoller_SuppressesStubWhenClaudeWroteOutbox(t *testing.T) {
 // fall back to writing a stub. Quarantined stubs were the whole fail
 // mode this fix eliminates.
 func TestPoller_SuppressesStubWhenStdoutHasNoFrontmatter(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 
 	spawner := persona.SpawnerFunc(func(_ context.Context, _ []string, _ io.Reader) ([]byte, int, error) {
@@ -817,7 +776,7 @@ func TestPoller_SuppressesStubWhenStdoutHasNoFrontmatter(t *testing.T) {
 	writeInboxMessage(t, fs, "silent.md", "are you there?", time.Now())
 
 	err = runPollerUntil(t, p, func() bool {
-		data, _ := os.ReadFile(fs.stateFile)
+		data, _ := os.ReadFile(fs.StateFile)
 		return strings.Contains(string(data), "last_processed: silent.md")
 	}, 2*time.Second)
 	if err != nil {
@@ -825,13 +784,13 @@ func TestPoller_SuppressesStubWhenStdoutHasNoFrontmatter(t *testing.T) {
 	}
 
 	// Outbox MUST be empty — no stub for quarantine-bound non-frontmatter output.
-	entries := dirEntries(t, fs.outboxDir)
+	entries := dirEntries(t, fs.OutboxDir)
 	if len(entries) != 0 {
 		t.Fatalf("outbox must be empty (stub suppressed), got %v", entries)
 	}
 	// Inbox must still be archived — the turn ran to completion even though
 	// no outbox file was emitted.
-	archived := dirEntries(t, fs.archiveDir)
+	archived := dirEntries(t, fs.ArchiveDir)
 	if len(archived) != 1 || archived[0] != "silent.md" {
 		t.Fatalf("archive = %v, want [silent.md]", archived)
 	}
@@ -843,7 +802,7 @@ func TestPoller_SuppressesStubWhenStdoutHasNoFrontmatter(t *testing.T) {
 // Stdout that starts with "---\n" and contains a closing "\n---"
 // remains eligible for stub-wrapping — the watcher can classify it.
 func TestPoller_KeepsStubWhenStdoutIsFrontmatter(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 
 	const fmStdout = "---\nfrom: seth\nto: kyle\n---\n\ninline reply"
@@ -857,14 +816,14 @@ func TestPoller_KeepsStubWhenStdoutIsFrontmatter(t *testing.T) {
 	writeInboxMessage(t, fs, "ping.md", "hi", time.Now())
 
 	err = runPollerUntil(t, p, func() bool {
-		data, _ := os.ReadFile(fs.stateFile)
+		data, _ := os.ReadFile(fs.StateFile)
 		return strings.Contains(string(data), "last_processed: ping.md")
 	}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("waiting for state.md: %v", err)
 	}
 
-	entries := dirEntries(t, fs.outboxDir)
+	entries := dirEntries(t, fs.OutboxDir)
 	if len(entries) != 1 {
 		t.Fatalf("want 1 outbox entry (stub from fm-stdout), got %d: %v", len(entries), entries)
 	}

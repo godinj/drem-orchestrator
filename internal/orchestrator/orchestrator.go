@@ -25,7 +25,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/memory"
-	"github.com/godinj/drem-orchestrator/internal/metrics"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
@@ -96,6 +95,10 @@ type TestResult struct {
 	AttemptCount int       `json:"attempt_count"`
 }
 
+type metricsRecorder interface {
+	Record(agentID uuid.UUID, name string, value float64, labels map[string]string) error
+}
+
 // commandResult holds the output from running a shell command.
 type commandResult struct {
 	Output   string
@@ -139,7 +142,7 @@ type Orchestrator struct {
 	directPrepCfg               *agent.DirectPrepConfig         // nil means use OpenCode subprocess path
 	directToolAgentCfg          *agent.DirectToolAgentConfig    // nil means use subprocess path for coder/reviewer/fixer
 	endpointHealth              *agent.EndpointHealthChecker    // nil means no health checking
-	metrics                     *metrics.Store                  // nil-safe: callers nil-check before use
+	metrics                     metricsRecorder                 // nil-safe: callers nil-check before use
 	experimentScheduler         *ExperimentScheduler            // experiment-aware scheduling
 	lifecycle                   lifecycleEngine                 // owns task lifecycle advancement; nil keeps legacy tests working
 	logger                      *slog.Logger

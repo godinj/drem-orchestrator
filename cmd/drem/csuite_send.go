@@ -231,13 +231,13 @@ func runCsuiteSend(args []string, stdin io.Reader, stdout, stderr io.Writer) int
 // skip past flag values when hunting for the persona positional.
 // --help / -h are bool flags and not listed.
 var sendFlagsTakingValue = map[string]bool{
-	"-m":              true,
-	"--message":       true,
-	"-f":              true,
-	"--file":          true,
-	"-t":              true,
-	"--topic":         true,
-	"--timeout":       true,
+	"-m":               true,
+	"--message":        true,
+	"-f":               true,
+	"--file":           true,
+	"-t":               true,
+	"--topic":          true,
+	"--timeout":        true,
 	"--correlation-id": true,
 }
 

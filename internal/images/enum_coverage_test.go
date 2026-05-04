@@ -11,16 +11,16 @@ import (
 // spawn-on-demand roles and must never gain an image here without a
 // corresponding architectural change.
 //
-// - AgentPlanner: warm drem-planner lives in deploy/compose/global.yml
-//   and the orchestrator reaches it over HTTP via dispatchPlanHTTP.
-//   See plans/warm-planner-pivot.md §7.
-// - AgentOrchestrator: the orchestrator itself is the process that
-//   spawns the others — it cannot be a spawn target.
-// - AgentResearcher: no container image exists for the researcher role
-//   yet; keeping it unmapped surfaces a clean error at dispatch time
-//   rather than silently routing to a stale image tag.
-// - AgentPrep: warm direct-prep path in internal/agent/direct_prep.go;
-//   no spawn-on-demand container. See plans/warm-direct-prep.md.
+//   - AgentPlanner: warm drem-planner lives in deploy/compose/global.yml
+//     and the orchestrator reaches it over HTTP via dispatchPlanHTTP.
+//     See plans/warm-planner-pivot.md §7.
+//   - AgentOrchestrator: the orchestrator itself is the process that
+//     spawns the others — it cannot be a spawn target.
+//   - AgentResearcher: no container image exists for the researcher role
+//     yet; keeping it unmapped surfaces a clean error at dispatch time
+//     rather than silently routing to a stale image tag.
+//   - AgentPrep: warm direct-prep path in internal/agent/direct_prep.go;
+//     no spawn-on-demand container. See plans/warm-direct-prep.md.
 var intentionallyUnmapped = map[model.AgentType]struct{}{
 	model.AgentOrchestrator: {},
 	model.AgentPlanner:      {},

@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -17,7 +16,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/experiment"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 )
 
 // Run parses args (after "cli" is consumed) and dispatches to the
@@ -78,21 +76,6 @@ func Run(db *gorm.DB, args []string, w io.Writer, jsonMode bool, gate GateClient
 	}
 }
 
-// handleKyle dispatches `drem cli kyle <subsub> ...`. Today the only
-// supported subsub is `inbox`; future additions (e.g. `kyle state`)
-// slot in here. Scoreboard item 4 / attack plan §3 Group A.
-func handleKyle(args []string, w io.Writer, jsonMode bool) error {
-	if len(args) == 0 {
-		return fmt.Errorf("usage: drem cli kyle <subsubcommand>\nsubsubcommands: inbox")
-	}
-	switch args[0] {
-	case "inbox":
-		return RunKyleInbox(DefaultKyleInboxDir(), args[1:], w, jsonMode)
-	default:
-		return fmt.Errorf("unknown kyle subcommand: %q", args[0])
-	}
-}
-
 // runOptions holds optional parameters for Run.
 type runOptions struct {
 	dbPath string
@@ -105,20 +88,6 @@ type RunOption func(*runOptions)
 // derive the signal directory.
 func WithDBPath(path string) RunOption {
 	return func(o *runOptions) { o.dbPath = path }
-}
-
-// handleResetCircuit writes the reset-circuit signal file so the running
-// orchestrator will close its circuit breaker on the next tick.
-func handleResetCircuit(dbPath string, w io.Writer) error {
-	if dbPath == "" {
-		return fmt.Errorf("reset-circuit requires --config to resolve signal directory")
-	}
-	signalPath := orchestrator.SignalFilePath(dbPath, orchestrator.SignalResetCircuit)
-	if err := os.WriteFile(signalPath, []byte("reset"), 0644); err != nil {
-		return fmt.Errorf("write signal file: %w", err)
-	}
-	fmt.Fprintf(w, "Signal written: %s\nOrchestrator will reset circuit breaker on next tick.\n", signalPath)
-	return nil
 }
 
 // ── helpers ──────────────────────────────────────────────────────────

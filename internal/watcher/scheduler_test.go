@@ -5,13 +5,6 @@ import (
 	"time"
 )
 
-func newTestScheduler(allowed []string, cooldown time.Duration, duplicate TriggerResult) (*turnScheduler, *time.Time) {
-	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
-	scheduler := newTurnScheduler(allowed, cooldown, duplicate)
-	scheduler.now = func() time.Time { return now }
-	return scheduler, &now
-}
-
 func requireAction(t *testing.T, action schedulerAction, want schedulerActionKind) {
 	t.Helper()
 	if action.kind != want {
@@ -20,7 +13,7 @@ func requireAction(t *testing.T, action schedulerAction, want schedulerActionKin
 }
 
 func TestTurnScheduler_Started(t *testing.T) {
-	scheduler, _ := newTestScheduler([]string{"mike"}, 0, Dropped)
+	scheduler := newTurnScheduler([]string{"mike"}, 0, Dropped)
 
 	result, action := scheduler.Trigger("mike")
 	if result != Started {
@@ -30,7 +23,7 @@ func TestTurnScheduler_Started(t *testing.T) {
 }
 
 func TestTurnScheduler_Queued(t *testing.T) {
-	scheduler, _ := newTestScheduler([]string{"mike"}, 0, Dropped)
+	scheduler := newTurnScheduler([]string{"mike"}, 0, Dropped)
 	scheduler.Trigger("mike")
 
 	result, action := scheduler.Trigger("mike")
@@ -41,7 +34,7 @@ func TestTurnScheduler_Queued(t *testing.T) {
 }
 
 func TestTurnScheduler_DuplicateQueue(t *testing.T) {
-	scheduler, _ := newTestScheduler([]string{"mike"}, 0, Dropped)
+	scheduler := newTurnScheduler([]string{"mike"}, 0, Dropped)
 	scheduler.Trigger("mike")
 	scheduler.Trigger("mike")
 
@@ -53,7 +46,7 @@ func TestTurnScheduler_DuplicateQueue(t *testing.T) {
 }
 
 func TestTurnScheduler_RefusedAgent(t *testing.T) {
-	scheduler, _ := newTestScheduler([]string{"mike"}, 0, Dropped)
+	scheduler := newTurnScheduler([]string{"mike"}, 0, Dropped)
 
 	result, action := scheduler.Trigger("kyle")
 	if result != Refused {
@@ -63,10 +56,12 @@ func TestTurnScheduler_RefusedAgent(t *testing.T) {
 }
 
 func TestTurnScheduler_Cooldown(t *testing.T) {
-	scheduler, now := newTestScheduler([]string{"mike"}, 100*time.Millisecond, Dropped)
+	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	scheduler := newTurnScheduler([]string{"mike"}, 100*time.Millisecond, Dropped)
+	scheduler.now = func() time.Time { return now }
 	scheduler.Trigger("mike")
 	scheduler.Complete("mike")
-	*now = now.Add(25 * time.Millisecond)
+	now = now.Add(25 * time.Millisecond)
 
 	result, action := scheduler.Trigger("mike")
 	if result != Cooldown {
@@ -79,7 +74,7 @@ func TestTurnScheduler_Cooldown(t *testing.T) {
 }
 
 func TestTurnScheduler_QueuedAutoStart(t *testing.T) {
-	scheduler, _ := newTestScheduler([]string{"mike"}, 0, Dropped)
+	scheduler := newTurnScheduler([]string{"mike"}, 0, Dropped)
 	scheduler.Trigger("mike")
 	scheduler.Trigger("mike")
 
@@ -88,7 +83,7 @@ func TestTurnScheduler_QueuedAutoStart(t *testing.T) {
 }
 
 func TestTurnScheduler_IdleCleanup(t *testing.T) {
-	scheduler, _ := newTestScheduler([]string{"mike"}, 0, Dropped)
+	scheduler := newTurnScheduler([]string{"mike"}, 0, Dropped)
 	scheduler.Trigger("mike")
 	scheduler.Complete("mike")
 
@@ -100,7 +95,7 @@ func TestTurnScheduler_IdleCleanup(t *testing.T) {
 }
 
 func TestTurnScheduler_IndependentAgents(t *testing.T) {
-	scheduler, _ := newTestScheduler([]string{"mike", "alex"}, 0, Dropped)
+	scheduler := newTurnScheduler([]string{"mike", "alex"}, 0, Dropped)
 
 	mikeResult, mikeAction := scheduler.Trigger("mike")
 	alexResult, alexAction := scheduler.Trigger("alex")

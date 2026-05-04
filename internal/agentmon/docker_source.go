@@ -98,10 +98,13 @@ type DockerSource struct {
 	buckets   [eventsWindowSeconds]bucketEntry
 
 	// state tracks active per-container tails so EventDie can cancel
-	// the matching tail goroutine.
-	mu    sync.Mutex
-	tails map[string]context.CancelFunc
-	wg    sync.WaitGroup
+	// the matching tail goroutine. seenContainers records lifecycle
+	// sightings independently from liveness buckets so HasSeen remains
+	// strict per container ID.
+	mu             sync.Mutex
+	tails          map[string]context.CancelFunc
+	seenContainers map[string]struct{}
+	wg             sync.WaitGroup
 }
 
 // bucketEntry is one slot in the per-second ring. Epoch is the unix
@@ -125,6 +128,7 @@ func (s *DockerSource) Run(ctx context.Context) error {
 	}
 	s.mu.Lock()
 	s.tails = make(map[string]context.CancelFunc)
+	s.seenContainers = make(map[string]struct{})
 	s.mu.Unlock()
 
 	events, err := s.Runtime.SubscribeEvents(ctx, s.ContainerFilter)
@@ -249,40 +253,15 @@ func (s *DockerSource) EventsMatchedLastMinute() int {
 	return total
 }
 
-// HasSeen returns true if any event with the given container ID has
-// been observed since subscription start. Implements the hook shape
-// consumed by the orchestrator's reconcile_stuck predicate. A true
-// return means the subscription observed at least one lifecycle
-// event for the container (start, die, OOM, destroy, etc.) since
-// Run began. The DockerSource's tail map is authoritative for this
-// because startTail/stopTail mutate it on every relevant event.
-//
-// Note: when a tail exits naturally (e.g. the log stream closed),
-// removeTail drops the entry. That is fine for the reconciler's
-// purpose — a container whose tail ran and exited WAS sighted, and
-// the reconciler's question is "has this container ever been
-// observed" not "is it active". To cover that narrower case we
-// consult the per-second bucket total as a secondary signal: if
-// there were events in the trailing minute the subscription is
-// demonstrably live regardless of which container they were for.
-// For a strict "sighted this container id" signal callers should
-// build their own index over sighted IDs; the reconciler's shape
-// treats empty trailing-minute traffic as "agentmon is blind",
-// which is the v12–v14 failure mode.
+// HasSeen returns true if any lifecycle event with the given container
+// ID has been observed since subscription start. Liveness is tracked
+// separately by EventsMatchedLastMinute; recent events for other
+// containers do not satisfy this per-ID sighting check.
 func (s *DockerSource) HasSeen(containerID string) bool {
 	s.mu.Lock()
-	_, active := s.tails[containerID]
+	_, seen := s.seenContainers[containerID]
 	s.mu.Unlock()
-	if active {
-		return true
-	}
-	// Fallback: if the subscription is demonstrably receiving events
-	// in the trailing minute, consider the daemon side of the pipe
-	// alive. A container whose tail exited is still covered by this
-	// because start/die events both count toward the bucket total.
-	// Callers that want strict per-ID sighting can wrap HasSeen with
-	// their own set keyed off EventStart observations.
-	return s.EventsMatchedLastMinute() > 0
+	return seen
 }
 
 // clock returns the current time from Now if set, else wall-clock.
@@ -297,12 +276,25 @@ func (s *DockerSource) clock() time.Time {
 // handleEvent routes a single lifecycle event to start or cancel a
 // per-container tail. Unknown event types are ignored.
 func (s *DockerSource) handleEvent(ctx context.Context, ev container.Event) {
+	s.recordContainerSeen(ev.ContainerID)
 	switch ev.Type {
 	case container.EventStart:
 		s.startTail(ctx, ev)
 	case container.EventDie, container.EventOOM, container.EventDestroy:
 		s.stopTail(ev.ContainerID)
 	}
+}
+
+func (s *DockerSource) recordContainerSeen(containerID string) {
+	if containerID == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.seenContainers == nil {
+		s.seenContainers = make(map[string]struct{})
+	}
+	s.seenContainers[containerID] = struct{}{}
+	s.mu.Unlock()
 }
 
 // startTail spawns a tail goroutine for the container unless one is

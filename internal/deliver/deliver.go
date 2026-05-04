@@ -154,6 +154,36 @@ type DeliveryResult struct {
 	Duplicate  bool
 }
 
+type deliveryOutcome string
+
+const (
+	deliveryOutcomeSuppressed  deliveryOutcome = "suppressed"
+	deliveryOutcomeQuarantined deliveryOutcome = "quarantined"
+	deliveryOutcomeDelivered   deliveryOutcome = "delivered"
+)
+
+type deliveryRouteResult struct {
+	Class    Classification
+	Outcome  deliveryOutcome
+	DestPath string
+}
+
+type deliveryRouteError struct {
+	kind  error
+	cause error
+}
+
+func (e deliveryRouteError) Error() string {
+	if e.cause == nil {
+		return e.kind.Error()
+	}
+	return e.cause.Error()
+}
+
+func (e deliveryRouteError) Unwrap() error {
+	return e.kind
+}
+
 var (
 	errNoLedger        = errors.New("delivery not yet implemented")
 	errLedgerLookup    = errors.New("ledger lookup failed")
@@ -283,67 +313,95 @@ func (s *DeliveryService) Deliver(req DeliverRequest) (DeliveryResult, error) {
 		return DeliveryResult{DeliveryID: existing.SHA256, Duplicate: true}, nil
 	}
 
+	route, err := s.routeDelivery(req)
+	if err != nil {
+		s.logDeliverRouteError(req, route, err)
+		return DeliveryResult{}, err
+	}
+
+	switch route.Outcome {
+	case deliveryOutcomeSuppressed:
+		s.logger().Printf("deliver: suppressed source=%s reason=%q sha=%s", req.SourcePersona, route.Class.Reason, req.SHA256)
+	case deliveryOutcomeQuarantined:
+		s.logger().Printf("deliver: quarantine: source=%s reason=%q sha=%s", req.SourcePersona, route.Class.Reason, req.SHA256)
+	case deliveryOutcomeDelivered:
+		s.logger().Printf("deliver: delivered source=%s dest=%s sha=%s dest_path=%s",
+			req.SourcePersona, route.Class.Dest, req.SHA256, route.DestPath)
+	}
+	return DeliveryResult{DeliveryID: req.SHA256}, nil
+}
+
+func (s *DeliveryService) routeDelivery(req DeliverRequest) (deliveryRouteResult, error) {
 	class, err := ClassifyFile(req.OutboxPath)
+	result := deliveryRouteResult{Class: class}
 	if errors.Is(err, ErrMultiRecipient) {
-		return DeliveryResult{}, ErrMultiRecipient
+		return result, ErrMultiRecipient
 	}
 	if err != nil {
-		s.logger().Printf("deliver: classify failed for sha=%s path=%s: %v", req.SHA256, req.OutboxPath, err)
-		return DeliveryResult{}, fmt.Errorf("%w: %v", errClassify, err)
+		return result, deliveryRouteError{kind: errClassify, cause: err}
 	}
 
 	switch class.Class {
 	case ClassSuppress:
-		s.logger().Printf("deliver: suppressed source=%s reason=%q sha=%s", req.SourcePersona, class.Reason, req.SHA256)
-		if err := s.cfg.Ledger.Insert(Delivery{
-			SHA256:        req.SHA256,
-			SourcePersona: req.SourcePersona,
-			Dest:          ClassSuppress,
-			SourcePath:    req.OutboxPath,
-			DestPath:      "",
-			DeliveredAt:   s.now().UTC(),
-		}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
-			s.logger().Printf("deliver: suppress ledger insert failed: %v", err)
-			return DeliveryResult{}, fmt.Errorf("%w: %v", errLedgerInsert, err)
+		result.Outcome = deliveryOutcomeSuppressed
+		if err := s.insertRouteLedger(req, ClassSuppress, ""); err != nil {
+			return result, deliveryRouteError{kind: errLedgerInsert, cause: err}
 		}
-		return DeliveryResult{DeliveryID: req.SHA256}, nil
+		return result, nil
 	case ClassQuarantine:
-		s.logger().Printf("deliver: quarantine: source=%s reason=%q sha=%s", req.SourcePersona, class.Reason, req.SHA256)
-		dest := quarantinePath(req.SourcePersona, req.OutboxPath)
-		if err := atomicCopyFile(req.OutboxPath, dest); err != nil {
-			s.logger().Printf("deliver: quarantine write failed: %v", err)
-			return DeliveryResult{}, fmt.Errorf("%w: %v", errQuarantineWrite, err)
+		result.Outcome = deliveryOutcomeQuarantined
+		result.DestPath = quarantinePath(req.SourcePersona, req.OutboxPath)
+		if err := atomicCopyFile(req.OutboxPath, result.DestPath); err != nil {
+			return result, deliveryRouteError{kind: errQuarantineWrite, cause: err}
 		}
-		if err := s.cfg.Ledger.Insert(Delivery{
-			SHA256:        req.SHA256,
-			SourcePersona: req.SourcePersona,
-			Dest:          ClassQuarantine,
-			SourcePath:    req.OutboxPath,
-			DestPath:      dest,
-			DeliveredAt:   s.now().UTC(),
-		}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
-			s.logger().Printf("deliver: quarantine ledger insert failed: %v", err)
-			return DeliveryResult{}, fmt.Errorf("%w: %v", errLedgerInsert, err)
+		if err := s.insertRouteLedger(req, ClassQuarantine, result.DestPath); err != nil {
+			return result, deliveryRouteError{kind: errLedgerInsert, cause: err}
 		}
-		return DeliveryResult{DeliveryID: req.SHA256}, nil
+		return result, nil
 	case ClassPersona, ClassOperator:
-		// ClassOperator shares the same delivery mechanics as
-		// ClassPersona: class.Dest is "operator", so deliverToInbox
-		// lands the file at /csuite/operator/inbox/ via the same
-		// path-builder. See plans/drem-csuite-send-cli.md §Phase 1.
+		// ClassOperator shares the same delivery mechanics as ClassPersona:
+		// class.Dest is "operator", so deliverToInbox writes to operator/inbox.
+		result.Outcome = deliveryOutcomeDelivered
 		destPath, err := s.deliverToInbox(req, class)
+		result.DestPath = destPath
 		if err != nil {
-			s.logger().Printf("deliver: %s -> %s failed sha=%s: %v",
-				req.SourcePersona, class.Dest, req.SHA256, err)
-			return DeliveryResult{}, fmt.Errorf("%w: %v", errDeliveryFailed, err)
+			return result, deliveryRouteError{kind: errDeliveryFailed, cause: err}
 		}
-		s.logger().Printf("deliver: delivered source=%s dest=%s sha=%s dest_path=%s",
-			req.SourcePersona, class.Dest, req.SHA256, destPath)
-		return DeliveryResult{DeliveryID: req.SHA256}, nil
+		return result, nil
 	default:
-		// Defensive — classifyBytes always returns one of the above.
-		s.logger().Printf("deliver: unknown class %q for sha=%s", class.Class, req.SHA256)
-		return DeliveryResult{}, errUnknownClass
+		return result, errUnknownClass
+	}
+}
+
+func (s *DeliveryService) insertRouteLedger(req DeliverRequest, dest, destPath string) error {
+	if err := s.cfg.Ledger.Insert(Delivery{
+		SHA256:        req.SHA256,
+		SourcePersona: req.SourcePersona,
+		Dest:          dest,
+		SourcePath:    req.OutboxPath,
+		DestPath:      destPath,
+		DeliveredAt:   s.now().UTC(),
+	}); err != nil && !errors.Is(err, ErrDuplicateDelivery) {
+		return err
+	}
+	return nil
+}
+
+func (s *DeliveryService) logDeliverRouteError(req DeliverRequest, route deliveryRouteResult, err error) {
+	switch {
+	case errors.Is(err, errClassify):
+		s.logger().Printf("deliver: classify failed for sha=%s path=%s: %v", req.SHA256, req.OutboxPath, err)
+	case errors.Is(err, errQuarantineWrite):
+		s.logger().Printf("deliver: quarantine write failed: %v", err)
+	case errors.Is(err, errLedgerInsert) && route.Class.Class == ClassSuppress:
+		s.logger().Printf("deliver: suppress ledger insert failed: %v", err)
+	case errors.Is(err, errLedgerInsert) && route.Class.Class == ClassQuarantine:
+		s.logger().Printf("deliver: quarantine ledger insert failed: %v", err)
+	case errors.Is(err, errDeliveryFailed):
+		s.logger().Printf("deliver: %s -> %s failed sha=%s: %v",
+			req.SourcePersona, route.Class.Dest, req.SHA256, err)
+	case errors.Is(err, errUnknownClass):
+		s.logger().Printf("deliver: unknown class %q for sha=%s", route.Class.Class, req.SHA256)
 	}
 }
 

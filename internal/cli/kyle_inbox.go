@@ -46,6 +46,21 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// handleKyle dispatches `drem cli kyle <subsub> ...`. Today the only
+// supported subsub is `inbox`; future additions (e.g. `kyle state`)
+// slot in here. Scoreboard item 4 / attack plan §3 Group A.
+func handleKyle(args []string, w io.Writer, jsonMode bool) error {
+	if len(args) == 0 {
+		return fmt.Errorf("usage: drem cli kyle <subsubcommand>\nsubsubcommands: inbox")
+	}
+	switch args[0] {
+	case "inbox":
+		return RunKyleInbox(DefaultKyleInboxDir(), args[1:], w, jsonMode)
+	default:
+		return fmt.Errorf("unknown kyle subcommand: %q", args[0])
+	}
+}
+
 // KyleInboxMessage is the shape returned by --list (one per .md file
 // in the kyle inbox). Kept minimal on purpose — deep parsing happens
 // only when the operator runs --read.

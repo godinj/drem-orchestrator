@@ -84,9 +84,9 @@ type Server struct {
 	Deps   Deps
 	Logger *slog.Logger
 
-	http         *httpserver.Server
-	tokensIn     *expvar.Int
-	tokensOut    *expvar.Int
+	http      *httpserver.Server
+	tokensIn  *expvar.Int
+	tokensOut *expvar.Int
 }
 
 // classifierTokenMetricsOnce dedupes the classifier-specific token counters

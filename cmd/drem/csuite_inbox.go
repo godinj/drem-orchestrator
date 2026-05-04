@@ -589,4 +589,3 @@ func printInboxUsage(w io.Writer) {
 	fmt.Fprintln(w, "here via watcher ClassOperator routing, see")
 	fmt.Fprintln(w, "plans/drem-csuite-send-cli.md).")
 }
-

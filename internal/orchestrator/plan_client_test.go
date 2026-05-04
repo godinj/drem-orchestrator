@@ -294,15 +294,15 @@ func TestShouldDispatchPlanHTTP_FalseWhenProviderSGLang(t *testing.T) {
 		return model.AgentCLIConfig{}
 	})
 	o := &Orchestrator{
-		db:                     db,
-		projectID:              projectID,
-		events:                 make(chan Event, 16),
-		worktree:               &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"},
-		runner:                 runner,
-		logger:                 slog.Default(),
-		GitrefRegistry:         gitref.NewRegistry(db),
-		plannerContainerURL:    "http://drem-planner:8090/plan",
-		plannerContainerToken:  "t",
+		db:                    db,
+		projectID:             projectID,
+		events:                make(chan Event, 16),
+		worktree:              &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"},
+		runner:                runner,
+		logger:                slog.Default(),
+		GitrefRegistry:        gitref.NewRegistry(db),
+		plannerContainerURL:   "http://drem-planner:8090/plan",
+		plannerContainerToken: "t",
 	}
 	require.False(t, o.shouldDispatchPlanHTTP())
 }

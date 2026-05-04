@@ -64,9 +64,9 @@ func TestTasksPerEndpointCapReturns503Fast(t *testing.T) {
 	)
 
 	type result struct {
-		status int
+		status  int
 		elapsed time.Duration
-		retry  string
+		retry   string
 	}
 
 	results := make(chan result, total)

@@ -406,11 +406,10 @@ func TestDockerSource_EventsMatchedLastMinute(t *testing.T) {
 	<-done
 }
 
-// TestDockerSource_HasSeenReflectsActiveAndRecentTraffic verifies
-// that HasSeen returns true while a tail is live and keeps returning
-// true as long as the subscription has recent traffic — the exact
-// guarantee the reconciler's correlation predicate depends on.
-func TestDockerSource_HasSeenReflectsActiveAndRecentTraffic(t *testing.T) {
+// TestDockerSource_HasSeenReflectsContainerSightings verifies that
+// HasSeen is strict per container ID while subscription liveness stays
+// available through EventsMatchedLastMinute.
+func TestDockerSource_HasSeenReflectsContainerSightings(t *testing.T) {
 	rt := newLiveFakeRuntime()
 	ing := newCaptureIngestor()
 
@@ -434,7 +433,7 @@ func TestDockerSource_HasSeenReflectsActiveAndRecentTraffic(t *testing.T) {
 	require.False(t, src.HasSeen("c-unknown"))
 
 	// Emit a start for c1; HasSeen(c1) should become true once the
-	// tail registers.
+	// event is handled.
 	rt.EmitEvent(container.Event{
 		Type:        container.EventStart,
 		ContainerID: "c1",
@@ -446,10 +445,31 @@ func TestDockerSource_HasSeenReflectsActiveAndRecentTraffic(t *testing.T) {
 	}, 2*time.Second, 10*time.Millisecond,
 		"HasSeen(c1) never became true after EventStart")
 
-	// A container we never saw should still return true IF we had
-	// recent traffic (agentmon-is-alive fallback).
-	require.True(t, src.HasSeen("c-different"),
-		"HasSeen should fall back to recent-traffic heuristic")
+	require.Eventually(t, func() bool {
+		return src.EventsMatchedLastMinute() > 0
+	}, 2*time.Second, 10*time.Millisecond,
+		"subscription liveness bucket never recorded the start event")
+	require.False(t, src.HasSeen("c-different"),
+		"HasSeen must not fall back to recent traffic from another container")
+
+	// Stop the tail; sighting history should remain true even after the
+	// active tail is gone.
+	rt.EmitEvent(container.Event{
+		Type:        container.EventDie,
+		ContainerID: "c1",
+		Labels:      map[string]string{},
+		Timestamp:   time.Now(),
+	})
+	rt.ClosePipe("c1")
+	require.Eventually(t, func() bool {
+		src.mu.Lock()
+		_, active := src.tails["c1"]
+		src.mu.Unlock()
+		return !active
+	}, 2*time.Second, 10*time.Millisecond,
+		"tail for c1 never stopped after EventDie")
+	require.True(t, src.HasSeen("c1"),
+		"HasSeen should preserve per-container sighting after tail exits")
 
 	cancel()
 	<-done

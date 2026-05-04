@@ -107,9 +107,9 @@ func TestClassify_FiltersInternalContextKeys(t *testing.T) {
 		TaskID: uuid.New(),
 		Title:  "t",
 		Context: map[string]any{
-			"retry_count":  3,            // filtered
-			"human_triage": true,         // filtered
-			"relevant_ctx": "keep-this",  // preserved
+			"retry_count":  3,           // filtered
+			"human_triage": true,        // filtered
+			"relevant_ctx": "keep-this", // preserved
 		},
 	})
 	require.NoError(t, err)

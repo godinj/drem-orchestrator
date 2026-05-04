@@ -353,10 +353,10 @@ func TestCsuiteSend_DeriveTopic(t *testing.T) {
 // most likely to type.
 func TestCsuiteSend_ExtractPersonaArg(t *testing.T) {
 	cases := []struct {
-		name         string
-		args         []string
-		wantPersona  string
-		wantRemains  []string
+		name        string
+		args        []string
+		wantPersona string
+		wantRemains []string
 	}{
 		{"persona first", []string{"mike", "-m", "hi"}, "mike", []string{"-m", "hi"}},
 		{"persona after bool flag", []string{"--no-wait", "mike", "-m", "hi"}, "mike", []string{"--no-wait", "-m", "hi"}},
@@ -695,4 +695,3 @@ func TestCsuiteSend_FormatReply_WithFrontmatterAndJSONConflict(t *testing.T) {
 		t.Errorf("body mode: got %q", m)
 	}
 }
-

@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/csuite/persona"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
 // immediateSleep is the non-sleeping sleep the signal tests inject so
@@ -396,7 +397,7 @@ func TestHTTPSignaler_ErrPermanentSignalRecognition(t *testing.T) {
 // internally, but the sequence we guarantee to the watcher is:
 // write -> fsync -> signal.
 func TestPoller_FsyncBeforeSignal(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 
 	fsyncer := &recordingFsyncer{}
@@ -455,7 +456,7 @@ func TestPoller_FsyncBeforeSignal(t *testing.T) {
 // path never spawns a goroutine and never touches state.md with a
 // pending status. The signal field in state.md should read "disabled".
 func TestPoller_NilSignalerNoGoroutines(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	// Explicitly no Signaler.
 	cfg.Signaler = nil
@@ -472,13 +473,13 @@ func TestPoller_NilSignalerNoGoroutines(t *testing.T) {
 	// Wait for a state.md write rather than a signal call — there is
 	// no signal in this path.
 	err = runPollerUntil(t, p, func() bool {
-		data, err := os.ReadFile(fs.stateFile)
+		data, err := os.ReadFile(fs.StateFile)
 		return err == nil && strings.Contains(string(data), "last_processed: m.md")
 	}, 2*time.Second)
 	if err != nil {
 		t.Fatalf("waiting for state.md: %v", err)
 	}
-	data, err := os.ReadFile(fs.stateFile)
+	data, err := os.ReadFile(fs.StateFile)
 	if err != nil {
 		t.Fatalf("read state: %v", err)
 	}
@@ -491,7 +492,7 @@ func TestPoller_NilSignalerNoGoroutines(t *testing.T) {
 // last_signal_status value written to state.md after the goroutine
 // completes. We use a recordingSignaler that reports SignalOK.
 func TestPoller_StateRecordsSignalOutcome(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	rec := &recordingSignaler{onCall: func(_ signalCall) persona.SignalOutcome {
 		return persona.SignalOK
@@ -509,11 +510,11 @@ func TestPoller_StateRecordsSignalOutcome(t *testing.T) {
 
 	// Wait for the goroutine to flip last_signal_status to "ok".
 	err = runPollerUntil(t, p, func() bool {
-		data, err := os.ReadFile(fs.stateFile)
+		data, err := os.ReadFile(fs.StateFile)
 		return err == nil && strings.Contains(string(data), "last_signal_status: ok")
 	}, 2*time.Second)
 	if err != nil {
-		data, _ := os.ReadFile(fs.stateFile)
+		data, _ := os.ReadFile(fs.StateFile)
 		t.Fatalf("waiting for last_signal_status=ok: %v; state=%q", err, string(data))
 	}
 }
@@ -529,7 +530,7 @@ func TestPoller_StateRecordsSignalOutcome(t *testing.T) {
 // sha (not re-reading from disk), the invariant we test is that the
 // sha in the signal matches the bytes the spawner returned.
 func TestPoller_TornWriteScenario(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 
 	fsyncer := &recordingFsyncer{
@@ -580,7 +581,7 @@ func TestPoller_TornWriteScenario(t *testing.T) {
 // than a pre-translated watcher path. The Signaler owns the
 // translation.
 func TestPoller_OutboxPathIsAbsoluteLocalPath(t *testing.T) {
-	fs := newTestFS(t, "prompt")
+	fs := testutil.NewPersonaFS(t, "prompt")
 	cfg := baseConfig(fs)
 	rec := &recordingSignaler{}
 	cfg.Signaler = rec
@@ -610,9 +611,9 @@ func TestPoller_OutboxPathIsAbsoluteLocalPath(t *testing.T) {
 
 	// Path must start with the poller's OutboxDir (the on-persona
 	// view); translation to /csuite/ happens inside the Signaler.
-	if !strings.HasPrefix(sigCalls[0].outboxPath, fs.outboxDir) {
+	if !strings.HasPrefix(sigCalls[0].outboxPath, fs.OutboxDir) {
 		t.Errorf("outboxPath = %q, want prefix %q (poller should hand local path to signaler)",
-			sigCalls[0].outboxPath, fs.outboxDir)
+			sigCalls[0].outboxPath, fs.OutboxDir)
 	}
 }
 

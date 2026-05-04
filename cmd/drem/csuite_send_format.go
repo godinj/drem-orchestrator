@@ -48,7 +48,7 @@ type jsonReplyEnvelope struct {
 //   - raw is malformed (no frontmatter delimiters) AND mode wants the
 //     frontmatter dict → "reply has no frontmatter".
 //   - JSON marshalling fails (should never happen for map[string]any
-//     + string, but guarded for completeness).
+//   - string, but guarded for completeness).
 //
 // Modes:
 //   - "body": returns the body text with a guaranteed trailing "\n"
@@ -139,4 +139,3 @@ func selectReplyMode(withFrontmatter, asJSON bool) (string, error) {
 		return replyModeBody, nil
 	}
 }
-
