@@ -244,7 +244,7 @@ func (sp *SchedulingPolicy) isWaveBlocked(
 				First(&task, "id = ?", id).Error; err != nil {
 				continue
 			}
-			if task.Status != model.StatusDone && task.Status != model.StatusFailed {
+			if !isTerminalWaveStatus(task.Status) {
 				return true, fmt.Sprintf(
 					"wave group %d blocked: group %d still has active tasks",
 					candGroup, g.Order)
@@ -253,6 +253,15 @@ func (sp *SchedulingPolicy) isWaveBlocked(
 	}
 
 	return false, ""
+}
+
+func isTerminalWaveStatus(status model.TaskStatus) bool {
+	switch status {
+	case model.StatusDone, model.StatusFailed, model.StatusRejected, model.StatusCancelled:
+		return true
+	default:
+		return false
+	}
 }
 
 // ComputeConflictScore calculates the overlap severity between two file lists.

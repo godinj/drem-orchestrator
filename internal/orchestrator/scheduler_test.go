@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
 func TestBuildSchedule_NoFileOverlap(t *testing.T) {
@@ -416,5 +417,59 @@ func TestScheduleContextRoundTrip(t *testing.T) {
 		if len(g.TaskIDs) != 1 {
 			t.Errorf("group %d: expected 1 task, got %d", i, len(g.TaskIDs))
 		}
+	}
+}
+
+func TestEvaluateDispatch_TerminalRejectedWaveDoesNotBlockReplacement(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	projectID := uuid.New()
+	rejectedID := uuid.New()
+	candidateID := uuid.New()
+	parentID := uuid.New()
+
+	project := model.Project{ID: projectID, Name: "test-" + projectID.String()}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   projectID,
+		Title:       "parent",
+		Description: "parent",
+		Status:      model.StatusTestWriting,
+		Context: model.JSONField{"schedule": Schedule{Groups: []SubtaskGroup{
+			{Order: 0, TaskIDs: []uuid.UUID{rejectedID}},
+			{Order: 1, TaskIDs: []uuid.UUID{candidateID}},
+		}}},
+	}
+	if err := db.Create(&parent).Error; err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	rejected := model.Task{
+		ID:           rejectedID,
+		ProjectID:    projectID,
+		ParentTaskID: &parentID,
+		Title:        "rejected first-generation test",
+		Description:  "rejected",
+		Status:       model.StatusRejected,
+	}
+	if err := db.Create(&rejected).Error; err != nil {
+		t.Fatalf("create rejected task: %v", err)
+	}
+	candidate := model.Task{
+		ID:           candidateID,
+		ProjectID:    projectID,
+		ParentTaskID: &parentID,
+		Title:        "replacement test",
+		Description:  "replacement",
+		Status:       model.StatusBacklog,
+	}
+
+	decisions := NewSchedulingPolicy(db).EvaluateDispatch([]model.Task{candidate}, nil)
+	if len(decisions) != 1 {
+		t.Fatalf("expected one decision, got %d", len(decisions))
+	}
+	if !decisions[0].Dispatchable {
+		t.Fatalf("expected rejected prior wave to be terminal, got blocked: %s", decisions[0].Reason)
 	}
 }
