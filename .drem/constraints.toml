@@ -30,11 +30,6 @@ path           = "internal/orchestrator/orchestrator.go"
 rule           = "shrink-only"
 baseline_lines = 2250
 
-[[max_lines.exception]]
-path           = "internal/orchhttp/handlers_public.go"
-rule           = "shrink-only"
-baseline_lines = 1122
-
 # ── Symbol Counts ────────────────────────────────────────────
 
 [[max_matches]]

@@ -80,18 +80,11 @@ const maxLimit = 500
 // response is a slice so Kyle can concatenate across orchestrators
 // without reshaping.
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	var count int64
-	if err := s.DB.WithContext(r.Context()).Model(&model.Agent{}).
-		Where("status = ?", model.AgentWorking).Count(&count).Error; err != nil {
+	resp, err := publicReadModel{db: s.DB, project: s.Project}.ListProjects(r.Context())
+	if err != nil {
 		writeDBError(w, err)
 		return
 	}
-	resp := []orchdto.ProjectDTO{{
-		Name:        s.Project.Name,
-		Language:    s.Project.Language,
-		OrchURL:     s.Project.OrchURL,
-		WorkerCount: int(count),
-	}}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -113,41 +106,14 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	start := time.Now()
-	var project model.Project
-	err := s.DB.WithContext(ctx).Where("name = ?", name).First(&project).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		writeJSON(w, http.StatusOK, []orchdto.TaskDTO{})
-		return
-	}
-	if err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			writeTasksTimeout(w, time.Since(start))
-			return
-		}
-		writeDBError(w, err)
-		return
-	}
-
 	limit, offset := paginationFrom(r)
-	q := s.DB.WithContext(ctx).
-		Where("project_id = ?", project.ID).
-		Order("created_at DESC").
-		Limit(limit).Offset(offset)
-	if status := r.URL.Query().Get("status"); status != "" {
-		q = q.Where("status = ?", status)
-	} else if r.URL.Query().Get("include_archived") != "true" {
-		q = q.Where("status <> ?", model.StatusCancelled)
-	}
-	var tasks []model.Task
-	if err := q.Find(&tasks).Error; err != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			writeTasksTimeout(w, time.Since(start))
-			return
-		}
-		writeDBError(w, err)
-		return
-	}
-	failureEvents, err := s.latestTaskFailureEvents(ctx, tasks)
+	out, err := publicReadModel{db: s.DB, project: s.Project}.ListTasks(ctx, taskListQuery{
+		ProjectName:     name,
+		Status:          r.URL.Query().Get("status"),
+		IncludeArchived: r.URL.Query().Get("include_archived") == "true",
+		Limit:           limit,
+		Offset:          offset,
+	})
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			writeTasksTimeout(w, time.Since(start))
@@ -155,41 +121,8 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		writeDBError(w, err)
 		return
-	}
-	out := make([]orchdto.TaskDTO, 0, len(tasks))
-	for _, t := range tasks {
-		out = append(out, toTaskDTO(t, failureEvents[t.ID]))
 	}
 	writeJSON(w, http.StatusOK, out)
-}
-
-func (s *Server) latestTaskFailureEvents(ctx context.Context, tasks []model.Task) (map[uuid.UUID]model.TaskEvent, error) {
-	out := map[uuid.UUID]model.TaskEvent{}
-	ids := make([]uuid.UUID, 0, len(tasks))
-	for _, t := range tasks {
-		ids = append(ids, t.ID)
-	}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	var events []model.TaskEvent
-	if err := s.DB.WithContext(ctx).
-		Where("task_id IN ? AND event_type IN ?", ids, []string{recordTypeCrash, recordTypeBuildError, recordTypeTestResult, recordTypeMergeResult}).
-		Order("created_at DESC").
-		Find(&events).Error; err != nil {
-		return nil, err
-	}
-	for _, e := range events {
-		if _, ok := out[e.TaskID]; ok {
-			continue
-		}
-		failureType, summary := taskFailureFromEvent(e)
-		if failureType == "" || summary == "" {
-			continue
-		}
-		out[e.TaskID] = e
-	}
-	return out, nil
 }
 
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
@@ -296,27 +229,10 @@ func (s *Server) handleListWorkers(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project not found", http.StatusNotFound)
 		return
 	}
-	var project model.Project
-	err := s.DB.WithContext(r.Context()).Where("name = ?", name).First(&project).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		writeJSON(w, http.StatusOK, []orchdto.WorkerDTO{})
-		return
-	}
+	out, err := publicReadModel{db: s.DB, project: s.Project}.ListWorkers(r.Context(), name)
 	if err != nil {
 		writeDBError(w, err)
 		return
-	}
-	var agents []model.Agent
-	if err := s.DB.WithContext(r.Context()).
-		Where("project_id = ?", project.ID).
-		Order("created_at DESC").
-		Find(&agents).Error; err != nil {
-		writeDBError(w, err)
-		return
-	}
-	out := make([]orchdto.WorkerDTO, 0, len(agents))
-	for _, a := range agents {
-		out = append(out, toWorkerDTO(a, s.Project.Name))
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -330,8 +246,7 @@ func (s *Server) handleGetWorker(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "worker not found", http.StatusNotFound)
 		return
 	}
-	var agent model.Agent
-	err = s.DB.WithContext(r.Context()).Where("id = ?", id).First(&agent).Error
+	out, err := publicReadModel{db: s.DB, project: s.Project}.GetWorker(r.Context(), id)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		http.Error(w, "worker not found", http.StatusNotFound)
 		return
@@ -340,7 +255,7 @@ func (s *Server) handleGetWorker(w http.ResponseWriter, r *http.Request) {
 		writeDBError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toWorkerDTO(agent, s.Project.Name))
+	writeJSON(w, http.StatusOK, out)
 }
 
 // handleTaskAttempts returns worker/container attempts attributable to a task.
@@ -354,8 +269,7 @@ func (s *Server) handleTaskAttempts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var task model.Task
-	err = s.DB.WithContext(r.Context()).First(&task, "id = ?", taskID).Error
+	out, err := publicReadModel{db: s.DB, project: s.Project}.TaskAttempts(r.Context(), taskID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		http.Error(w, "task not found", http.StatusNotFound)
 		return
@@ -363,80 +277,6 @@ func (s *Server) handleTaskAttempts(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeDBError(w, err)
 		return
-	}
-
-	var agents []model.Agent
-	agentQuery := s.DB.WithContext(r.Context()).Where("current_task_id = ?", taskID)
-	if task.AssignedAgentID != nil {
-		agentQuery = agentQuery.Or("id = ?", *task.AssignedAgentID)
-	}
-	if err := agentQuery.Order("created_at ASC").Find(&agents).Error; err != nil {
-		writeDBError(w, err)
-		return
-	}
-
-	agentsByID := make(map[string]model.Agent, len(agents))
-	for _, a := range agents {
-		agentsByID[a.ID.String()] = a
-	}
-
-	var spawns []model.TaskEvent
-	if err := s.DB.WithContext(r.Context()).
-		Where("task_id = ? AND event_type = ?", taskID, "worker_spawned").
-		Order("created_at ASC").
-		Find(&spawns).Error; err != nil {
-		writeDBError(w, err)
-		return
-	}
-
-	var durableAttempts []model.WorkerAttempt
-	if err := s.DB.WithContext(r.Context()).
-		Where("task_id = ?", taskID).
-		Order("created_at ASC").
-		Find(&durableAttempts).Error; err != nil {
-		writeDBError(w, err)
-		return
-	}
-
-	out := make([]orchdto.WorkerAttemptDTO, 0, len(durableAttempts)+len(spawns)+len(agents))
-	coveredAgents := map[string]struct{}{}
-	coveredAttemptIDs := map[string]struct{}{}
-	for _, attempt := range durableAttempts {
-		agent, hasAgent := model.Agent{}, false
-		if attempt.AgentID != nil {
-			agent, hasAgent = agentsByID[attempt.AgentID.String()]
-			coveredAgents[attempt.AgentID.String()] = struct{}{}
-		}
-		coveredAttemptIDs[attempt.ID.String()] = struct{}{}
-		out = append(out, toWorkerAttemptDTOFromDurable(attempt, agent, hasAgent))
-	}
-	for _, e := range spawns {
-		if _, ok := coveredAttemptIDs[stringField(e.Details, "attempt_id")]; ok {
-			continue
-		}
-		agentID := stringField(e.Details, "agent_id")
-		agent, ok := agentsByID[agentID]
-		if agentID != "" {
-			coveredAgents[agentID] = struct{}{}
-		}
-		out = append(out, toWorkerAttemptDTOFromSpawn(e, agent, ok))
-	}
-	for _, a := range agents {
-		if _, ok := coveredAgents[a.ID.String()]; ok {
-			continue
-		}
-		out = append(out, toWorkerAttemptDTOFromAgent(taskID, a))
-	}
-	if len(out) > 0 {
-		var failureEvents []model.TaskEvent
-		if err := s.DB.WithContext(r.Context()).
-			Where("task_id = ? AND event_type IN ?", taskID, []string{recordTypeCrash, recordTypeBuildError, recordTypeTestResult}).
-			Order("created_at ASC").
-			Find(&failureEvents).Error; err != nil {
-			writeDBError(w, err)
-			return
-		}
-		applyFailureEvidence(out, failureEvents, task)
 	}
 
 	writeJSON(w, http.StatusOK, out)
@@ -739,365 +579,6 @@ func paginationFrom(r *http.Request) (int, int) {
 		}
 	}
 	return limit, offset
-}
-
-// toTaskDTO marshals an internal model.Task into the public TaskDTO
-// shape. AssignedAgentID is rendered as an empty string when nil so the
-// JSON shape stays stable across assigned/unassigned tasks.
-func toTaskDTO(t model.Task, events ...model.TaskEvent) orchdto.TaskDTO {
-	assigned := ""
-	if t.AssignedAgentID != nil {
-		assigned = t.AssignedAgentID.String()
-	}
-	d := orchdto.TaskDTO{
-		ID:             t.ID.String(),
-		Title:          t.Title,
-		Status:         string(t.Status),
-		CreatedAt:      t.CreatedAt,
-		UpdatedAt:      t.UpdatedAt,
-		AssignedWorker: assigned,
-		Category:       string(t.Category),
-	}
-	d.CurrentHealth = taskCurrentHealth(t)
-	applyTaskFailureDiagnostics(&d, t, events...)
-	return d
-}
-
-func taskCurrentHealth(t model.Task) string {
-	if h := firstNonEmpty(
-		stringField(t.Context, "current_health"),
-		stringField(t.Context, "task_health"),
-		stringField(t.Context, "health"),
-	); h != "" {
-		return h
-	}
-	if t.Status == model.StatusDone || t.Status == model.StatusCancelled {
-		return ""
-	}
-	if t.Status == model.StatusFailed {
-		return "failed"
-	}
-	if t.NeedsHumanReview || t.Status.IsHumanGate() {
-		return "needs_attention"
-	}
-	return ""
-}
-
-func applyTaskFailureDiagnostics(d *orchdto.TaskDTO, t model.Task, events ...model.TaskEvent) {
-	summary := firstNonEmpty(
-		stringField(t.Context, "latest_failure_summary"),
-		stringField(t.Context, "failure_diagnosis"),
-		stringField(t.Context, "failure_reason"),
-		stringField(t.Context, "merge_failure_reason"),
-		stringField(t.Context, "testing_ready_failure"),
-		stringField(t.Context, "test_writing_failure"),
-		stringField(t.Context, "test_failure_output"),
-	)
-	failureType := firstNonEmpty(
-		stringField(t.Context, "latest_failure_type"),
-		stringField(t.Context, "failure_category"),
-	)
-	var failureAt *time.Time
-	for _, e := range events {
-		eventType, eventSummary := taskFailureFromEvent(e)
-		if eventType == "" || eventSummary == "" {
-			continue
-		}
-		if summary == "" {
-			summary = eventSummary
-		}
-		if failureType == "" {
-			failureType = eventType
-		}
-		at := e.CreatedAt
-		failureAt = &at
-		break
-	}
-	if summary == "" {
-		return
-	}
-	d.LatestFailureSummary = boundFailureEvidence(summary)
-	d.LatestFailureType = firstNonEmpty(failureType, "task_failure")
-	d.LatestFailureAt = failureAt
-	current := taskFailureIsCurrent(t, d.CurrentHealth)
-	d.LatestFailureCurrent = &current
-}
-
-func taskFailureFromEvent(e model.TaskEvent) (string, string) {
-	switch e.EventType {
-	case recordTypeMergeResult:
-		if success, ok := boolField(e.Details, "success"); ok && success {
-			return "", ""
-		}
-		return "merge_failure", firstNonEmpty(stringField(e.Details, "failure_reason"), e.NewValue)
-	}
-	return evidenceFromEvent(e)
-}
-
-func taskFailureIsCurrent(t model.Task, health string) bool {
-	switch health {
-	case "failed", "needs_attention", "stuck", "unhealthy", "degraded":
-		return true
-	}
-	switch t.Status {
-	case model.StatusFailed, model.StatusRejected, model.StatusPaused:
-		return true
-	}
-	return false
-}
-
-func toTaskCommentDTO(c model.TaskComment) orchdto.TaskCommentDTO {
-	return orchdto.TaskCommentDTO{
-		ID:        c.ID.String(),
-		TaskID:    c.TaskID.String(),
-		Author:    c.Author,
-		Body:      c.Body,
-		CreatedAt: c.CreatedAt,
-	}
-}
-
-// toWorkerDTO marshals an internal model.Agent into the public WorkerDTO
-// shape. HeartbeatAt is the "last I saw you alive" timestamp; a nil
-// pointer surfaces as the zero time, which is the agreed sentinel.
-func toWorkerDTO(a model.Agent, project string) orchdto.WorkerDTO {
-	current := ""
-	if a.CurrentTaskID != nil {
-		current = a.CurrentTaskID.String()
-	}
-	hb := time.Time{}
-	if a.HeartbeatAt != nil {
-		hb = *a.HeartbeatAt
-	}
-	handle := workeridentity.FromAgent(a)
-	return orchdto.WorkerDTO{
-		ID:                   a.ID.String(),
-		ContainerID:          handle.LogContainerID(),
-		Project:              project,
-		AgentType:            string(a.AgentType),
-		Branch:               a.WorktreeBranch,
-		Status:               string(a.Status),
-		StartedAt:            a.CreatedAt,
-		LastHeartbeat:        hb,
-		CurrentTask:          current,
-		Provider:             a.Provider,
-		ModelID:              a.ModelID,
-		Effort:               a.Effort,
-		CompletedAt:          a.CompletedAt,
-		ExitReason:           a.ExitReason,
-		TotalCostUSD:         a.TotalCostUSD,
-		FinalContextPct:      a.FinalContextPct,
-		TokensIn:             a.TokensIn,
-		TokensOut:            a.TokensOut,
-		ConstraintViolations: a.ConstraintViolations,
-	}
-}
-
-func toWorkerAttemptDTOFromAgent(taskID uuid.UUID, a model.Agent) orchdto.WorkerAttemptDTO {
-	hb := time.Time{}
-	if a.HeartbeatAt != nil {
-		hb = *a.HeartbeatAt
-	}
-	handle := workeridentity.FromAgent(a)
-	return orchdto.WorkerAttemptDTO{
-		AttemptID:            a.ID.String(),
-		TaskID:               taskID.String(),
-		WorkerID:             a.ID.String(),
-		AgentID:              a.ID.String(),
-		ContainerID:          handle.LogContainerID(),
-		WorkerLabel:          a.Name,
-		AgentType:            string(a.AgentType),
-		Branch:               a.WorktreeBranch,
-		Provider:             a.Provider,
-		ModelID:              a.ModelID,
-		Effort:               a.Effort,
-		Status:               string(a.Status),
-		StartedAt:            a.CreatedAt,
-		CompletedAt:          a.CompletedAt,
-		LastHeartbeat:        hb,
-		ExitReason:           a.ExitReason,
-		TokensIn:             a.TokensIn,
-		TokensOut:            a.TokensOut,
-		TotalCostUSD:         a.TotalCostUSD,
-		FinalContextPct:      a.FinalContextPct,
-		ConstraintViolations: a.ConstraintViolations,
-	}
-}
-
-func toWorkerAttemptDTOFromDurable(attempt model.WorkerAttempt, a model.Agent, hasAgent bool) orchdto.WorkerAttemptDTO {
-	d := orchdto.WorkerAttemptDTO{
-		AttemptID:   attempt.ID.String(),
-		TaskID:      attempt.TaskID.String(),
-		WorkerID:    attempt.WorkerID,
-		ContainerID: attempt.ContainerID,
-		AgentType:   attempt.AgentType,
-		StartedAt:   attempt.CreatedAt,
-	}
-	if attempt.AgentID != nil {
-		d.AgentID = attempt.AgentID.String()
-	}
-	if hasAgent {
-		fromAgent := toWorkerAttemptDTOFromAgent(attempt.TaskID, a)
-		fromAgent.AttemptID = d.AttemptID
-		fromAgent.WorkerID = firstNonEmpty(d.WorkerID, fromAgent.WorkerID)
-		fromAgent.AgentID = firstNonEmpty(d.AgentID, fromAgent.AgentID)
-		fromAgent.ContainerID = firstNonEmpty(d.ContainerID, fromAgent.ContainerID)
-		fromAgent.AgentType = firstNonEmpty(d.AgentType, fromAgent.AgentType)
-		fromAgent.StartedAt = d.StartedAt
-		return fromAgent
-	}
-	return d
-}
-
-func toWorkerAttemptDTOFromSpawn(e model.TaskEvent, a model.Agent, hasAgent bool) orchdto.WorkerAttemptDTO {
-	d := orchdto.WorkerAttemptDTO{
-		AttemptID:   firstNonEmpty(stringField(e.Details, "attempt_id"), e.ID.String()),
-		TaskID:      e.TaskID.String(),
-		WorkerID:    firstNonEmpty(stringField(e.Details, "worker_id"), stringField(e.Details, "agent_id")),
-		AgentID:     stringField(e.Details, "agent_id"),
-		ContainerID: stringField(e.Details, "container_id"),
-		WorkerLabel: firstNonEmpty(stringField(e.Details, "worker_label"), stringField(e.Details, "worker_id")),
-		AgentType:   firstNonEmpty(stringField(e.Details, "agent_type"), e.NewValue),
-		StartedAt:   e.CreatedAt,
-	}
-	if hasAgent {
-		fromAgent := toWorkerAttemptDTOFromAgent(e.TaskID, a)
-		fromAgent.AttemptID = d.AttemptID
-		fromAgent.WorkerID = firstNonEmpty(d.WorkerID, fromAgent.WorkerID)
-		fromAgent.AgentID = firstNonEmpty(d.AgentID, fromAgent.AgentID)
-		fromAgent.ContainerID = firstNonEmpty(d.ContainerID, fromAgent.ContainerID)
-		fromAgent.WorkerLabel = firstNonEmpty(d.WorkerLabel, fromAgent.WorkerLabel)
-		fromAgent.AgentType = firstNonEmpty(d.AgentType, fromAgent.AgentType)
-		fromAgent.StartedAt = d.StartedAt
-		return fromAgent
-	}
-	return d
-}
-
-func applyFailureEvidence(attempts []orchdto.WorkerAttemptDTO, events []model.TaskEvent, task model.Task) {
-	taskFailure := stringField(task.Context, "failure_reason")
-	for i := range attempts {
-		if classification, firstError := evidenceFromExitReason(attempts[i].ExitReason); classification != "" {
-			attempts[i].FailureClassification = classification
-			attempts[i].FirstError = boundFailureEvidence(firstError)
-		}
-		for _, e := range events {
-			if len(attempts) > 1 && !attemptMatchesEvent(attempts[i], e) {
-				continue
-			}
-			classification, firstError := evidenceFromEvent(e)
-			if classification == "" {
-				continue
-			}
-			attempts[i].FailureClassification = classification
-			attempts[i].FirstError = boundFailureEvidence(firstError)
-			break
-		}
-		if attempts[i].FailureClassification == "" && taskFailure != "" {
-			attempts[i].FailureClassification = "task_failure"
-			attempts[i].FirstError = boundFailureEvidence(taskFailure)
-		}
-	}
-}
-
-func evidenceFromExitReason(reason string) (string, string) {
-	reason = strings.TrimSpace(reason)
-	if reason == "" || reason == "success" || reason == "completed" {
-		return "", ""
-	}
-	return "exit_reason", reason
-}
-
-func evidenceFromEvent(e model.TaskEvent) (string, string) {
-	switch e.EventType {
-	case recordTypeCrash:
-		return "crash", firstNonEmpty(stringField(e.Details, "reason"), e.NewValue)
-	case recordTypeBuildError:
-		return "build_error", firstNonEmpty(stringField(e.Details, "message"), e.NewValue)
-	case recordTypeTestResult:
-		if success, ok := boolField(e.Details, "success"); ok && success {
-			return "", ""
-		}
-		return "test_failure", firstNonEmpty(stringField(e.Details, "summary"), e.NewValue)
-	}
-	return "", ""
-}
-
-func attemptMatchesEvent(a orchdto.WorkerAttemptDTO, e model.TaskEvent) bool {
-	selectors := map[string]struct{}{}
-	addSelector(selectors, a.WorkerID)
-	addSelector(selectors, a.AgentID)
-	addSelector(selectors, a.ContainerID)
-	addSelector(selectors, a.WorkerLabel)
-	return eventMatchesSelectors(e, selectors)
-}
-
-func eventMatchesSelectors(e model.TaskEvent, selectors map[string]struct{}) bool {
-	if len(selectors) == 0 {
-		return false
-	}
-	if _, ok := selectors[e.Actor]; ok && e.Actor != "" {
-		return true
-	}
-	if _, ok := selectors[e.OldValue]; ok && e.OldValue != "" {
-		return true
-	}
-	for _, key := range []string{"agent_id", "worker_id", "container_id", "worker_label"} {
-		if v := stringField(e.Details, key); v != "" {
-			if _, ok := selectors[v]; ok {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func boundFailureEvidence(s string) string {
-	s = strings.TrimSpace(s)
-	for _, pattern := range secretEvidencePatterns {
-		s = pattern.ReplaceAllString(s, `${1}[REDACTED]`)
-	}
-	if len(s) <= maxWorkerAttemptFirstErrorLen {
-		return s
-	}
-	return s[:maxWorkerAttemptFirstErrorLen]
-}
-
-func boolField(m map[string]any, key string) (bool, bool) {
-	v, ok := m[key]
-	if !ok {
-		return false, false
-	}
-	b, ok := v.(bool)
-	return b, ok
-}
-
-func mapKeys(m map[string]struct{}) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		if strings.TrimSpace(k) != "" {
-			out = append(out, k)
-		}
-	}
-	return out
-}
-
-func uuidMapKeys(m map[uuid.UUID]struct{}) []uuid.UUID {
-	out := make([]uuid.UUID, 0, len(m))
-	for k := range m {
-		if k != uuid.Nil {
-			out = append(out, k)
-		}
-	}
-	return out
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
 }
 
 // writeJSON marshals v, sets the Content-Type header, and writes the
