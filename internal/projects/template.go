@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"text/template"
 )
 
@@ -67,7 +66,7 @@ type TemplateData struct {
 	ConfigFilePath string
 	// HostHome is the host operator's home directory ($HOME on host).
 	// Used to derive the default WorkerCredsPath when the caller does
-	// not set it explicitly. Populated by applyDefaults from
+	// not set it explicitly. Populated by the deployment spec compiler from
 	// os.UserHomeDir() when empty so Render callers don't have to know
 	// about it. See plans/worker-subscription-auth.md §6 commit 6.
 	HostHome string
@@ -164,11 +163,10 @@ func NewSharedToken() (string, error) {
 }
 
 // Render executes the compose template with data and returns the rendered
-// bytes. Zero-valued fields on data are filled in with sensible defaults
-// (OrchImage, OrchHostPort) so that callers from older code paths do not
-// produce broken compose files.
+// bytes. Zero-valued fields on data are filled in with deployment defaults so
+// callers from older code paths do not produce broken compose files.
 func Render(data TemplateData) ([]byte, error) {
-	applyDefaults(&data)
+	data = compileTemplateDefaults(data, "", "")
 	tmpl, err := template.ParseFS(composeTemplateFS, composeTemplateName)
 	if err != nil {
 		return nil, fmt.Errorf("parse compose template: %w", err)
@@ -178,74 +176,6 @@ func Render(data TemplateData) ([]byte, error) {
 		return nil, fmt.Errorf("execute compose template: %w", err)
 	}
 	return buf.Bytes(), nil
-}
-
-// applyDefaults fills in unset fields on data. It is called by Render so
-// every rendered compose file has a usable image and port even when the
-// caller only populated the minimum set.
-func applyDefaults(data *TemplateData) {
-	if data.OrchImage == "" {
-		if data.DevMode {
-			data.OrchImage = DefaultOrchDevImage
-		} else {
-			data.OrchImage = DefaultOrchImage
-		}
-	}
-	if data.OrchHostPort == 0 {
-		data.OrchHostPort = DefaultOrchHostPort
-	}
-	// HostHome + WorkerCredsPath: derive from os.UserHomeDir on the
-	// operator's host at render time. `drem project register` runs on
-	// host, so $HOME here is the operator's home — not the orch
-	// container's /root. This is the whole reason HostHome is a
-	// template field rather than something orch introspects at
-	// runtime. See plans/worker-subscription-auth.md §6 commit 6.
-	if data.HostHome == "" {
-		if h, err := os.UserHomeDir(); err == nil {
-			data.HostHome = h
-		}
-	}
-	if data.WorkerCredsPath == "" && data.HostHome != "" {
-		data.WorkerCredsPath = filepath.Join(data.HostHome, ".claude", ".credentials.json")
-	}
-	if data.WorkerCodexAuthPath == "" && data.HostHome != "" {
-		data.WorkerCodexAuthPath = filepath.Join(data.HostHome, ".codex", "auth.json")
-	}
-	// WorkerPromptRoot mirrors WorkerCredsPath's derivation pattern but
-	// is per-project (one prompt dir per project, not a shared host
-	// file). The path HAS to be under a host dir docker can bind-mount
-	// both into orch (rw, for writing) and into each worker (ro, for
-	// reading), which is why it lives under HostHome rather than inside
-	// the orch container's own filesystem. See
-	// plans/worker-prompt-delivery.md §2.
-	if data.WorkerPromptRoot == "" && data.HostHome != "" && data.ProjectName != "" {
-		data.WorkerPromptRoot = filepath.Join(
-			data.HostHome, ".drem", "projects", data.ProjectName, "prompts")
-	}
-	// CsuiteHomeRoot is host-global (one per operator, not per project)
-	// so it only depends on HostHome. Defaulted here so render callers
-	// and compose.override.yml operators don't have to know the layout.
-	if data.CsuiteHomeRoot == "" && data.HostHome != "" {
-		data.CsuiteHomeRoot = filepath.Join(data.HostHome, ".drem-csuite")
-	}
-	// HostDataDir is per-project (the orch DB is per-project). Mirrors
-	// WorkerPromptRoot's derivation. See plans/orch-db-host-access-impl.md.
-	if data.HostDataDir == "" && data.HostHome != "" && data.ProjectName != "" {
-		data.HostDataDir = filepath.Join(
-			data.HostHome, ".drem", "projects", data.ProjectName, "data")
-	}
-	// CsuiteWatcherTokenPath is host-global (one operator token for
-	// all personas + the watcher). Scoreboard item 33 / attack plan §3.
-	if data.CsuiteWatcherTokenPath == "" && data.HostHome != "" {
-		data.CsuiteWatcherTokenPath = filepath.Join(
-			data.HostHome, ".drem", "csuite-watcher.token")
-	}
-	// HostExecTokenPath is host-global (daemon is installed
-	// system-scope at /etc/drem/host-exec.token per the Option-A
-	// addendum). Independent of HostHome — the file is under /etc.
-	if data.HostExecTokenPath == "" {
-		data.HostExecTokenPath = "/etc/drem/host-exec.token"
-	}
 }
 
 // WriteProjectCompose renders the template and writes it to
@@ -262,35 +192,16 @@ func WriteProjectComposeAt(homeDir, projectName string, data TemplateData) (stri
 	if projectName == "" {
 		return "", errors.New("projectName is required")
 	}
-	if data.ProjectName == "" {
-		data.ProjectName = projectName
-	}
-	if homeDir == "" {
-		h, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home dir: %w", err)
-		}
-		homeDir = h
-	}
-	dir := filepath.Join(homeDir, ".drem", "projects", projectName)
-	// Fill in the drem.toml mount path before rendering so the compose
-	// template can bind-mount it. The toml file itself is produced by
-	// WriteProjectConfigAt; the paths must agree.
-	if data.ConfigFilePath == "" {
-		data.ConfigFilePath = filepath.Join(dir, configFilename)
-	}
-	// Apply defaults locally so the WorkerPromptRoot / HostDataDir
-	// MkdirAll steps below see the same paths Render bakes into the
-	// compose file. Render receives its own by-value copy and re-runs
-	// applyDefaults internally — double-application is idempotent
-	// (each branch is no-op when the field is already set).
-	applyDefaults(&data)
-	rendered, err := Render(data)
+	spec, err := compileProjectDeploymentSpec(homeDir, projectName, data)
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create project dir %q: %w", dir, err)
+	rendered, err := Render(spec.TemplateData)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(spec.ProjectDir, 0o755); err != nil {
+		return "", fmt.Errorf("create project dir %q: %w", spec.ProjectDir, err)
 	}
 	// Pre-create the host-side prompts dir so the first worker spawn
 	// doesn't race to `MkdirAll` inside a bind-mount source docker
@@ -300,8 +211,8 @@ func WriteProjectComposeAt(homeDir, projectName string, data TemplateData) (stri
 	// override), MkdirAll on its parent may fail and that's fine —
 	// the orch container still boots and the first spawn will surface
 	// the real error.
-	if data.WorkerPromptRoot != "" {
-		_ = os.MkdirAll(data.WorkerPromptRoot, 0o755)
+	if spec.WorkerPromptRoot != "" {
+		_ = os.MkdirAll(spec.WorkerPromptRoot, 0o755)
 	}
 	// Pre-create the host-side data dir so the first orch boot doesn't
 	// race docker into creating the bind-mount source as root (which
@@ -313,9 +224,9 @@ func WriteProjectComposeAt(homeDir, projectName string, data TemplateData) (stri
 	// running as a non-root uid that can't chown, and the orch
 	// container runs as root today regardless. See
 	// plans/orch-db-host-access-impl.md §2.
-	if data.HostDataDir != "" {
-		if err := os.MkdirAll(data.HostDataDir, 0o755); err == nil {
-			_ = os.Chown(data.HostDataDir, 1000, 1000)
+	if spec.HostDataDir != "" {
+		if err := os.MkdirAll(spec.HostDataDir, 0o755); err == nil {
+			_ = os.Chown(spec.HostDataDir, 1000, 1000)
 		}
 	}
 	// Pre-create the operator pseudo-persona's inbox tree under
@@ -336,13 +247,11 @@ func WriteProjectComposeAt(homeDir, projectName string, data TemplateData) (stri
 	// cannot be created; for an arbitrary CsuiteHomeRoot override
 	// that points outside $HOME, this mirrors the
 	// WorkerPromptRoot / HostDataDir best-effort posture above.
-	if data.CsuiteHomeRoot != "" {
-		opArchive := filepath.Join(data.CsuiteHomeRoot, "operator", "inbox", ".archive")
-		_ = os.MkdirAll(opArchive, 0o755)
+	if spec.CsuiteOperatorArchive != "" {
+		_ = os.MkdirAll(spec.CsuiteOperatorArchive, 0o755)
 	}
-	path := filepath.Join(dir, "compose.yml")
-	if err := os.WriteFile(path, rendered, 0o644); err != nil {
-		return "", fmt.Errorf("write compose file %q: %w", path, err)
+	if err := os.WriteFile(spec.ComposePath, rendered, 0o644); err != nil {
+		return "", fmt.Errorf("write compose file %q: %w", spec.ComposePath, err)
 	}
-	return path, nil
+	return spec.ComposePath, nil
 }

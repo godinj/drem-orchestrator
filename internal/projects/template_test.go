@@ -194,14 +194,14 @@ func TestRender_WorkerCredsPathIsWired(t *testing.T) {
 	require.NotContains(t, s, "ANTHROPIC_API_KEY")
 }
 
-// TestRender_WorkerCredsPathDefaultsFromHostHome asserts applyDefaults
+// TestRender_WorkerCredsPathDefaultsFromHostHome asserts deployment defaults
 // fills in WorkerCredsPath from HostHome when both are zero-value.
 // HostHome itself is populated from os.UserHomeDir — we set it
 // explicitly here to avoid a dependency on $HOME in test.
 func TestRender_WorkerCredsPathDefaultsFromHostHome(t *testing.T) {
 	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
 	data.HostHome = "/root"
-	// Caller leaves WorkerCredsPath zero; applyDefaults fills it.
+	// Caller leaves WorkerCredsPath zero; deployment defaults fill it.
 	out, err := projects.Render(data)
 	require.NoError(t, err)
 	require.Contains(t, string(out), "/root/.claude/.credentials.json")
@@ -474,7 +474,7 @@ func TestRender_WorkerPromptRootIsWired(t *testing.T) {
 		parsed.Services["orch"].Volumes)
 }
 
-// TestRender_WorkerPromptRootDefaultsFromHostHome asserts applyDefaults
+// TestRender_WorkerPromptRootDefaultsFromHostHome asserts deployment defaults
 // fills in WorkerPromptRoot from HostHome + ProjectName when both are
 // zero-value at the caller. See plans/worker-prompt-delivery.md §4.
 func TestRender_WorkerPromptRootDefaultsFromHostHome(t *testing.T) {
@@ -589,7 +589,7 @@ func TestRender_CsuiteHomeMountsAreWired(t *testing.T) {
 	}
 }
 
-// TestRender_CsuiteHomeRootDefaultsFromHostHome asserts applyDefaults
+// TestRender_CsuiteHomeRootDefaultsFromHostHome asserts deployment defaults
 // fills in CsuiteHomeRoot as <HostHome>/.drem-csuite when the caller
 // leaves it zero-value. The csuite comms tree is host-global (one per
 // operator, not per project), so the default only depends on HostHome.
@@ -881,7 +881,7 @@ func TestRender_HostDataDirBindMountIsWired(t *testing.T) {
 		parsed.Services["orch"].Volumes)
 }
 
-// TestRender_HostDataDirDefaultsFromHostHome asserts applyDefaults
+// TestRender_HostDataDirDefaultsFromHostHome asserts deployment defaults
 // fills in HostDataDir as <HostHome>/.drem/projects/<ProjectName>/data
 // when the caller leaves it zero-value. Mirrors the WorkerPromptRoot
 // defaulting pattern so every per-project host-side tree lives under

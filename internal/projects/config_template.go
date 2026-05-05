@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"text/template"
 )
 
@@ -59,27 +58,19 @@ func WriteProjectConfigAt(homeDir, projectName string, data TemplateData) (strin
 	if projectName == "" {
 		return "", errors.New("projectName is required")
 	}
-	if data.ProjectName == "" {
-		data.ProjectName = projectName
-	}
-	rendered, err := RenderConfig(data)
+	spec, err := compileProjectDeploymentSpec(homeDir, projectName, data)
 	if err != nil {
 		return "", err
 	}
-	if homeDir == "" {
-		h, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home dir: %w", err)
-		}
-		homeDir = h
+	rendered, err := RenderConfig(spec.TemplateData)
+	if err != nil {
+		return "", err
 	}
-	dir := filepath.Join(homeDir, ".drem", "projects", projectName)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create project dir %q: %w", dir, err)
+	if err := os.MkdirAll(spec.ProjectDir, 0o755); err != nil {
+		return "", fmt.Errorf("create project dir %q: %w", spec.ProjectDir, err)
 	}
-	path := filepath.Join(dir, configFilename)
-	if err := os.WriteFile(path, rendered, 0o644); err != nil {
-		return "", fmt.Errorf("write drem.toml %q: %w", path, err)
+	if err := os.WriteFile(spec.ConfigPath, rendered, 0o644); err != nil {
+		return "", fmt.Errorf("write drem.toml %q: %w", spec.ConfigPath, err)
 	}
-	return path, nil
+	return spec.ConfigPath, nil
 }
