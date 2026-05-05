@@ -10,6 +10,7 @@
 - [Merge Reliability PRD](merge-overhaul/prd-merge-reliability.md) — Active roadmap for >90% merge success rate (11 fixes)
 - [Merge Reliability Findings](merge-reliability-findings.md) — Root cause analysis from 6 production features backing the PRD
 - [Merge Overhaul Prompts](merge-overhaul/prompts/) — Agent prompts implementing the reliability fixes (6 prompts, 2 tiers)
+- [Grafana Operator Guide](grafana-operator-guide.md) — How to use Grafana as the Drem operator observability dashboard
 - [Reconcile Overhaul](../feature/reconcile-overhaul.md) — Reconcile function redesign (currently disabled)
 
 ## Model Profiles
