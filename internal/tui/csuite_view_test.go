@@ -72,12 +72,30 @@ func TestCsuiteView_WithAgents(t *testing.T) {
 			"kyle":   3,
 			"rachel": 1,
 		},
+		WatcherData: &csuite.WatcherSnapshot{
+			Available: true,
+			Metrics: map[string]csuite.AgentWatcherMetrics{
+				"kyle": {
+					Running:        true,
+					TokensInTotal:  1200,
+					TokensOutTotal: 300,
+				},
+				"mike": {
+					LastTurn: &csuite.TurnSummary{
+						DurationMs: 45000,
+						ExitStatus: 0,
+					},
+					TokensInTotal:  2400,
+					TokensOutTotal: 800,
+				},
+			},
+		},
 		Timestamp: now,
 	}
 
 	c := CsuiteModel{
 		snapshot: &snapshot,
-		width:    100,
+		width:    140,
 		height:   40,
 	}
 
@@ -113,6 +131,15 @@ func TestCsuiteView_WithAgents(t *testing.T) {
 	// Activities should appear.
 	if !strings.Contains(view, "reviewing pipeline") {
 		t.Error("view should contain agent activity")
+	}
+	if !strings.Contains(view, "running") {
+		t.Error("view should contain watcher running state")
+	}
+	if !strings.Contains(view, "ok/45s") {
+		t.Error("view should contain last turn summary")
+	}
+	if !strings.Contains(view, "1.2k↑ 300↓") {
+		t.Error("view should contain cumulative token metrics")
 	}
 
 	// Pipeline summary should be present.

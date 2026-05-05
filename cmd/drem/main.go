@@ -447,6 +447,16 @@ func main() {
 	// Start C-Suite dashboard poller backed by disk state files.
 	csuiteSource := csuite.NewDiskSnapshotSource("")
 	csuitePoller := csuite.NewPoller(csuiteSource, csuite.DefaultPollInterval, log.Default())
+	if watcherSource, err := csuite.NewWatcherSource(defaultCsuiteWatcherDBPath(), defaultCsuiteEventBusDBPath()); err != nil {
+		slog.Warn("C-Suite watcher metrics unavailable", "error", err)
+	} else if watcherSource != nil {
+		csuitePoller.SetWatcherSource(watcherSource)
+		defer func() {
+			if err := watcherSource.Close(); err != nil {
+				slog.Warn("close C-Suite watcher metrics source", "error", err)
+			}
+		}()
+	}
 	go csuitePoller.Start(ctx)
 
 	// Create C-Suite store for messaging operations (compose, list, detail).
@@ -582,6 +592,28 @@ func envOr(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func defaultCsuiteWatcherDBPath() string {
+	return expandHomePath(envOr("DREM_CSUITE_WATCHER_DB", "~/.drem-csuite/watcher.db"))
+}
+
+func defaultCsuiteEventBusDBPath() string {
+	return expandHomePath(envOr("DREM_CSUITE_EVENTBUS_DB", "~/.drem-csuite/csuite.db"))
+}
+
+func expandHomePath(path string) string {
+	if path == "~" {
+		if home, err := os.UserHomeDir(); err == nil {
+			return home
+		}
+	}
+	if strings.HasPrefix(path, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(path, "~/"))
+		}
+	}
+	return path
 }
 
 // buildDirectToolAgentConfig resolves the runtime configuration for the

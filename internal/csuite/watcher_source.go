@@ -151,7 +151,7 @@ func (ws *WatcherSource) loadTokenTotals(snap *WatcherSnapshot) error {
 	}
 	var sums []tokenSum
 	err := ws.watcherDB.Model(&turnMetricRow{}).
-		Select("agent, SUM(COALESCE(tokens_in,0) + COALESCE(input_tokens,0)) as total_in, SUM(COALESCE(tokens_out,0) + COALESCE(output_tokens,0)) as total_out").
+		Select("agent, SUM(CASE WHEN COALESCE(tokens_in,0) != 0 THEN tokens_in ELSE COALESCE(input_tokens,0) END) as total_in, SUM(CASE WHEN COALESCE(tokens_out,0) != 0 THEN tokens_out ELSE COALESCE(output_tokens,0) END) as total_out").
 		Group("agent").
 		Find(&sums).Error
 	if err != nil {
@@ -273,8 +273,8 @@ func turnRowToSummary(row *turnMetricRow) *TurnSummary {
 		StartedAt:       row.StartedAt,
 		EndedAt:         row.EndedAt,
 		DurationMs:      row.DurationMs,
-		TokensIn:        row.TokensIn + row.InputTokens,
-		TokensOut:       row.TokensOut + row.OutputTokens,
+		TokensIn:        firstNonZero(row.TokensIn, row.InputTokens),
+		TokensOut:       firstNonZero(row.TokensOut, row.OutputTokens),
 		EventsProcessed: row.EventsProcessed,
 		ExitStatus:      row.ExitStatus,
 	}
@@ -282,6 +282,13 @@ func turnRowToSummary(row *turnMetricRow) *TurnSummary {
 		ts.ErrorDetails = *row.ErrorDetails
 	}
 	return ts
+}
+
+func firstNonZero(primary, fallback int) int {
+	if primary != 0 {
+		return primary
+	}
+	return fallback
 }
 
 // todayMidnight returns today's date at 00:00:00 local time.

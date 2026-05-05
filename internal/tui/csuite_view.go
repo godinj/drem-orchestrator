@@ -308,8 +308,8 @@ func (c CsuiteModel) renderAgentHealthTable() string {
 
 	// Column headers.
 	headerStyle := lipgloss.NewStyle().Bold(true).Foreground(colorInfo)
-	header := fmt.Sprintf("  %-20s %-10s %-12s %-8s %-8s %s",
-		"Agent", "Status", "Heartbeat", "Ctx%", "Inbox", "Activity")
+	header := fmt.Sprintf("  %-20s %-10s %-12s %-8s %-8s %-12s %-15s %s",
+		"Agent", "Status", "Heartbeat", "Ctx%", "Inbox", "Turn", "Tokens", "Activity")
 	var lines []string
 	lines = append(lines, headerStyle.Render(header))
 	lines = append(lines, subtitleStyle.Render("  "+strings.Repeat("─", c.width-4)))
@@ -344,9 +344,11 @@ func (c CsuiteModel) renderAgentHealthTable() string {
 			inboxStr = lipgloss.NewStyle().Foreground(colorWarning).Bold(true).Render(inboxStr)
 		}
 
+		turnStr, tokenStr := c.agentWatcherMetricStrings(summary.Name)
+
 		// Activity.
 		activity := summary.CurrentActivity
-		maxActivity := c.width - 70
+		maxActivity := c.width - 100
 		if maxActivity < 10 {
 			maxActivity = 10
 		}
@@ -354,13 +356,13 @@ func (c CsuiteModel) renderAgentHealthTable() string {
 			activity = activity[:maxActivity-1] + "…"
 		}
 
-		line := fmt.Sprintf("  %-20s %-10s %-12s %-8s %-8s %s",
-			name, statusStr, heartbeat, ctxPct, inboxStr, activity)
+		line := fmt.Sprintf("  %-20s %-10s %-12s %-8s %-8s %-12s %-15s %s",
+			name, statusStr, heartbeat, ctxPct, inboxStr, turnStr, tokenStr, activity)
 
 		if i == c.cursor {
 			line = selectedStyle.Width(c.width).Render(
-				fmt.Sprintf("> %-19s %-10s %-12s %-8s %-8s %s",
-					name, statusStr, heartbeat, ctxPct, inboxStr, activity))
+				fmt.Sprintf("> %-19s %-10s %-12s %-8s %-8s %-12s %-15s %s",
+					name, statusStr, heartbeat, ctxPct, inboxStr, turnStr, tokenStr, activity))
 		}
 
 		lines = append(lines, line)
@@ -388,6 +390,54 @@ func (c CsuiteModel) renderAgentHealthTable() string {
 	}
 
 	return strings.Join(visible, "\n")
+}
+
+func (c CsuiteModel) agentWatcherMetricStrings(agentName string) (string, string) {
+	if c.snapshot == nil || c.snapshot.WatcherData == nil {
+		return "-", "-"
+	}
+	metrics, ok := c.snapshot.WatcherData.Metrics[agentName]
+	if !ok {
+		return "-", "-"
+	}
+
+	turn := "idle"
+	if metrics.Running {
+		turn = "running"
+	} else if metrics.LastTurn != nil {
+		turn = formatTurnSummary(metrics.LastTurn)
+	}
+
+	tokens := fmt.Sprintf("%s↑ %s↓", formatTokenCount(metrics.TokensInTotal), formatTokenCount(metrics.TokensOutTotal))
+	return turn, tokens
+}
+
+func formatTurnSummary(turn *csuite.TurnSummary) string {
+	if turn == nil {
+		return "-"
+	}
+	status := "ok"
+	if turn.ExitStatus != 0 {
+		status = fmt.Sprintf("exit%d", turn.ExitStatus)
+	}
+	duration := time.Duration(turn.DurationMs) * time.Millisecond
+	if duration <= 0 && !turn.StartedAt.IsZero() && !turn.EndedAt.IsZero() {
+		duration = turn.EndedAt.Sub(turn.StartedAt)
+	}
+	if duration <= 0 {
+		return status
+	}
+	return fmt.Sprintf("%s/%s", status, formatShortDuration(duration))
+}
+
+func formatShortDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	}
+	return fmt.Sprintf("%dh", int(d.Hours()))
 }
 
 // renderPipelineSummary shows aggregate inbox counts across all agents.
