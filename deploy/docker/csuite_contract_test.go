@@ -46,7 +46,7 @@ func TestCSuitePersonaBuildContractUsesOpenCode(t *testing.T) {
 	content := string(data)
 	for _, required := range []string{
 		"OpenCode CLI",
-		"opencode plugin @guard22/opencode-multi-auth-codex@latest",
+		"opencode plugin \"@guard22/opencode-multi-auth-codex@${OPENCODE_MULTI_AUTH_CODEX_VERSION}\"",
 		"csuite-persona",
 	} {
 		if !strings.Contains(content, required) {

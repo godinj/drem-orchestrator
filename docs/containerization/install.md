@@ -539,7 +539,8 @@ The poller never reads or sets `CLAUDE_CODE_OAUTH_TOKEN`,
 `ANTHROPIC_API_KEY`, or `ANTHROPIC_AUTH_TOKEN`. The shipped persona
 runtime uses OpenCode with the Codex subscription auth file bind-mounted
 read-only at `/home/drem/.codex/auth.json`; OpenCode reads it through
-the configured multi-auth plugin. If that file is missing or expired,
+the pinned `@guard22/opencode-multi-auth-codex@1.4.3` multi-auth plugin.
+If that file is missing or expired,
 each `opencode run` invocation fails and the message hits the .failures
 retry path. Refresh the subscription auth on the host; do not add API
 token env-var fallback.

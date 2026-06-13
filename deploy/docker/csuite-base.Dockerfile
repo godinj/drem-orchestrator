@@ -49,6 +49,7 @@ FROM debian:bookworm-slim
 ARG CLAUDE_CODE_VERSION=2.1.116
 ARG CODEX_VERSION=latest
 ARG OPENCODE_VERSION=latest
+ARG OPENCODE_MULTI_AUTH_CODEX_VERSION=1.4.3
 ARG NODE_MAJOR=20
 ARG DREM_UID=1000
 ARG DREM_GID=1000
@@ -160,7 +161,7 @@ RUN set -eux; \
     export OPENCODE_VERSION="${OPENCODE_VERSION}" ; \
     curl -fsSL https://opencode.ai/install | bash
 COPY --chown=drem:drem opencode-codex-subscription.json /home/drem/.config/opencode/opencode.json
-RUN opencode plugin @guard22/opencode-multi-auth-codex@latest --global --force
+RUN opencode plugin "@guard22/opencode-multi-auth-codex@${OPENCODE_MULTI_AUTH_CODEX_VERSION}" --global --force
 USER root
 
 # ---- persona prompts -------------------------------------------------------
