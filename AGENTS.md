@@ -1,11 +1,11 @@
-# Project guidance for Claude Code
+# Project guidance for AI agents
 
 This file records hard constraints and recurring decisions that must
 survive across sessions. Update it any time an operator directive
 would otherwise be lost.
 
-`AGENTS.md` is the cross-agent copy of this guidance. Keep both files
-in sync when changing durable agent guidance.
+`CLAUDE.md` is kept as a compatibility mirror for Claude Code. Keep
+both files in sync when changing durable agent guidance.
 
 ## Authentication: subscription-only
 
