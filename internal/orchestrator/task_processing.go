@@ -397,6 +397,9 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 			if changeErr != nil {
 				o.logger.Warn("failed to check feature branch changes", "task_id", parent.ID, "error", changeErr)
 			} else if len(changed) == 0 {
+				if o.featureBranchAlreadyMergedToDefault(parent.WorktreeBranch) {
+					return o.markFeatureAlreadyMergedDone(parent)
+				}
 				o.logger.Warn("all subtasks done but feature branch has no changes, failing parent", "task_id", parent.ID)
 				if parent.Context == nil {
 					parent.Context = make(model.JSONField)

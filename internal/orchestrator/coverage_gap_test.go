@@ -3538,6 +3538,58 @@ func TestCheckFeatureCompletion_AllDoneButNoChanges(t *testing.T) {
 	}
 }
 
+func TestCheckFeatureCompletion_AllDoneAlreadyMergedToDefault(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	mainDir := filepath.Join(bareRepo, "main")
+	runGitCmd(t, bareRepo, "worktree", "add", mainDir, "main")
+
+	featureName := "already-merged-parent"
+	featureDir := createFeatureWorktree(t, bareRepo, featureName)
+	writeFile(t, featureDir, "merged.txt", "merged work")
+	runGitCmd(t, featureDir, "add", ".")
+	runGitCmd(t, featureDir, "commit", "-m", "merged work")
+	runGitCmd(t, mainDir, "merge", "feature/"+featureName, "--no-edit")
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      orch.projectID,
+		Title:          "already-merged-parent",
+		Description:    "parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&parent)
+
+	db.Create(&model.Task{
+		ID:           uuid.New(),
+		ProjectID:    orch.projectID,
+		ParentTaskID: &parentID,
+		Title:        "done-sub-merged",
+		Description:  "done",
+		Status:       model.StatusDone,
+	})
+
+	if err := orch.checkFeatureCompletion(&parent); err != nil {
+		t.Fatalf("checkFeatureCompletion error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusDone {
+		t.Fatalf("expected done for already-merged feature branch, got %s", updated.Status)
+	}
+
+	var failedEvents int64
+	db.Model(&model.TaskEvent{}).Where(
+		"task_id = ? AND new_value = ?", parentID, string(model.StatusFailed),
+	).Count(&failedEvents)
+	if failedEvents != 0 {
+		t.Fatalf("expected no transient failed event, got %d", failedEvents)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // checkFeatureCompletion with real changes on feature branch
 // ---------------------------------------------------------------------------

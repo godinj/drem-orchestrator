@@ -119,6 +119,55 @@ func (o *Orchestrator) reconcileAlreadyMergedFeatures() (int, error) {
 	return fixed, nil
 }
 
+func (o *Orchestrator) featureBranchAlreadyMergedToDefault(branch string) bool {
+	mainWorktree, err := o.worktree.MainWorktreePath()
+	if err != nil {
+		return false
+	}
+	_, err = gitexec.RunGit(
+		context.Background(), mainWorktree,
+		"merge-base", "--is-ancestor", branch, "HEAD",
+	)
+	return err == nil
+}
+
+func (o *Orchestrator) markFeatureAlreadyMergedDone(task *model.Task) error {
+	o.logger.Info("feature branch already merged to default, transitioning task to done",
+		"task_id", task.ID, "branch", task.WorktreeBranch)
+
+	now := time.Now()
+	event := &model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    task.ID,
+		EventType: "status_change",
+		OldValue:  string(task.Status),
+		NewValue:  string(model.StatusDone),
+		Details:   model.JSONField{"reason": "reconcile-already-merged-to-default"},
+		Actor:     "orchestrator",
+		CreatedAt: now,
+	}
+	task.Status = model.StatusDone
+	task.UpdatedAt = now
+
+	if err := o.db.Save(task).Error; err != nil {
+		return fmt.Errorf("mark already-merged task done: save: %w", err)
+	}
+	if err := o.db.Create(event).Error; err != nil {
+		return fmt.Errorf("mark already-merged task done: save event: %w", err)
+	}
+
+	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+	if featureName != "" {
+		if err := o.worktree.RemoveFeature(featureName); err != nil {
+			o.logger.Warn("cleanup merged feature worktree", "task_id", task.ID, "error", err)
+		}
+	}
+
+	o.emit("task_updated", task)
+	o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "reconcile: feature already merged to default")
+	return nil
+}
+
 // parentReconcilePolicy defines how to reconcile parent tasks in a specific
 // status whose subtasks are all done. This avoids duplicating the
 // query-filter-advance loop across reconcileCompletedParents and
