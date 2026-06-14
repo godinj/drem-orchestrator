@@ -195,6 +195,9 @@ func archiveURL(base, task string) string {
 func commentURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/comments", base, projectName, task)
 }
+func auditURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/audit-events", base, projectName, task)
+}
 
 // ------------------------------------------------------------------
 // 1. Approve happy path, plan_review → in_progress.
@@ -691,6 +694,36 @@ func TestCommentTaskEndpoint_UnknownTaskReturns404(t *testing.T) {
 	resp, body := doJSON(t, http.MethodPost, commentURL(base, uuid.NewString()), `{"body":"x"}`)
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 	require.Equal(t, "task not found", decodeErr(t, body))
+}
+
+func TestRecoveryAuditEndpoint_RecordsStructuredKyleEvent(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "blocked", model.StatusTestingReady)
+	body := `{"actor":"kyle","policy_rule":"testing_ready.infra_tooling.one_retry_max","evidence":"tooling timeout","surface":"POST /fail","action":"retry testing_ready via fail endpoint","result":"task transitioned to in_progress","next_follow_up":"escalate if blocker repeats","supported_path":true}`
+
+	resp, raw := doJSON(t, http.MethodPost, auditURL(base, task.ID.String()), body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(raw))
+
+	var dto orchdto.EventDTO
+	require.NoError(t, json.Unmarshal(raw, &dto))
+	require.Equal(t, "kyle_recovery_audit", dto.Type)
+
+	var event model.TaskEvent
+	require.NoError(t, srv.DB.Where("task_id = ? AND event_type = ?", task.ID, "kyle_recovery_audit").First(&event).Error)
+	require.Equal(t, "kyle", event.Actor)
+	require.Equal(t, "retry testing_ready via fail endpoint", event.NewValue)
+	require.Equal(t, "testing_ready.infra_tooling.one_retry_max", event.Details["policy_rule"])
+	require.Equal(t, "tooling timeout", event.Details["observed_evidence"])
+	require.Equal(t, true, event.Details["supported_path"])
+}
+
+func TestRecoveryAuditEndpoint_RequiresCoreFields(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "blocked", model.StatusTestingReady)
+
+	resp, body := doJSON(t, http.MethodPost, auditURL(base, task.ID.String()), `{"actor":"kyle"}`)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), "actor, policy_rule, action, and result are required")
 }
 
 func TestArchiveTaskEndpoint_CancelsFailedTaskAndAudits(t *testing.T) {

@@ -137,6 +137,21 @@ type EventDTO struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+// RecoveryAuditRequest is the public payload accepted by Kyle's narrow
+// recovery audit endpoint. It records why an autonomous action was allowed and
+// what result it produced without exposing a generic task-event write surface.
+type RecoveryAuditRequest struct {
+	Actor          string `json:"actor"`
+	PolicyRule     string `json:"policy_rule"`
+	Evidence       string `json:"evidence"`
+	Surface        string `json:"surface"`
+	Action         string `json:"action"`
+	Result         string `json:"result"`
+	NextFollowUp   string `json:"next_follow_up"`
+	SupportedPath  bool   `json:"supported_path"`
+	BreakGlassPath bool   `json:"break_glass_path"`
+}
+
 // IngestRequest is the body accepted by POST /internal/logs. Each element
 // of Records is a discriminated-union record tagged by a "type" field; the
 // server decodes and routes per record.

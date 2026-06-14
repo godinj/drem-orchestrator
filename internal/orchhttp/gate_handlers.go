@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
 
 // Gate mutation endpoints — POST /projects/{name}/tasks/{id}/{approve,reject,
@@ -454,6 +455,69 @@ func (s *Server) handleCommentTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toTaskCommentDTO(comment))
+}
+
+// handleRecoveryAuditTask records Kyle's structured recovery audit event. It is
+// scoped to the recovery payload so clients cannot write arbitrary task events.
+func (s *Server) handleRecoveryAuditTask(w http.ResponseWriter, r *http.Request) {
+	if !s.requireProject(w, r) {
+		return
+	}
+	task, ok := s.loadTaskForMutation(w, r)
+	if !ok {
+		return
+	}
+
+	var req orchdto.RecoveryAuditRequest
+	if err := decodeOptionalJSON(r.Body, &req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	req.Actor = strings.TrimSpace(req.Actor)
+	req.PolicyRule = strings.TrimSpace(req.PolicyRule)
+	req.Evidence = strings.TrimSpace(req.Evidence)
+	req.Surface = strings.TrimSpace(req.Surface)
+	req.Action = strings.TrimSpace(req.Action)
+	req.Result = strings.TrimSpace(req.Result)
+	req.NextFollowUp = strings.TrimSpace(req.NextFollowUp)
+	if req.Actor == "" || req.PolicyRule == "" || req.Action == "" || req.Result == "" {
+		writeJSONError(w, http.StatusBadRequest, "actor, policy_rule, action, and result are required")
+		return
+	}
+
+	now := time.Now()
+	event := model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    task.ID,
+		EventType: "kyle_recovery_audit",
+		NewValue:  req.Action,
+		Details: model.JSONField{
+			"actor":             req.Actor,
+			"policy_rule":       req.PolicyRule,
+			"observed_evidence": req.Evidence,
+			"surface":           req.Surface,
+			"action":            req.Action,
+			"result":            req.Result,
+			"next_follow_up":    req.NextFollowUp,
+			"supported_path":    req.SupportedPath,
+			"break_glass_path":  req.BreakGlassPath,
+		},
+		Actor:     req.Actor,
+		CreatedAt: now,
+	}
+	if err := s.DB.WithContext(r.Context()).Create(&event).Error; err != nil {
+		slog.Error("orchhttp: recovery audit failed", "task_id", task.ID, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"task_id":   event.TaskID.String(),
+		"old_value": event.OldValue,
+		"new_value": event.NewValue,
+		"actor":     event.Actor,
+		"details":   event.Details,
+	})
+	writeJSON(w, http.StatusOK, orchdto.EventDTO{Timestamp: event.CreatedAt, Type: event.EventType, Payload: payload})
 }
 
 // requireProject verifies that the {name} path segment matches this server's

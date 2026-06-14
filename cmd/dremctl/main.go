@@ -43,6 +43,7 @@ Commands:
   retry <task-id-prefix>
   archive <task-id-prefix> --reason TEXT [--actor TEXT]
   comment <task-id-prefix> --body TEXT
+  kyle recover [--mission-file PATH] (--dry-run|--apply)
 `
 
 const taskPageLimit = 500
@@ -125,6 +126,11 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 			return err
 		}
 		return handleMutation(ctx, client, cfg, command, commandArgs, stdout)
+	case "kyle":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleKyle(ctx, client, cfg, commandArgs, stdout)
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -548,6 +549,291 @@ func TestCreateTaskRequiresTitleAndDescriptionBeforeNetwork(t *testing.T) {
 				t.Fatal("server was called despite missing create-task input")
 			}
 		})
+	}
+}
+
+func TestKyleRecoverDryRunClassifiesTestingReadyBlockers(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/projects/canvas/tasks":
+			writeJSONResponse(t, w, []map[string]any{{
+				"id":                     testTaskID,
+				"title":                  "A",
+				"status":                 "testing_ready",
+				"created_at":             rfc3339("2026-04-24T10:00:00Z"),
+				"updated_at":             rfc3339("2026-04-24T10:01:00Z"),
+				"latest_failure_type":    "build_error",
+				"latest_failure_summary": "tooling timeout while running gate",
+			}})
+		case "/events":
+			writeJSONResponse(t, w, []map[string]any{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"kyle", "recover", "--dry-run"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	for _, want := range []string{"TASK ID", "testing_ready", "tooling timeout", "infra_tooling_gate_failure", retryPolicyRule, recoveryRetryAction, "supported"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("dry-run output %q missing %q", out.String(), want)
+		}
+	}
+}
+
+func TestKyleRecoverDryRunRepresentsBreakGlassSelfConfirmationWithoutExecution(t *testing.T) {
+	missionFile := t.TempDir() + "/mission.md"
+	if err := os.WriteFile(missionFile, []byte("keep the orchestrator pipeline unblocked"), 0o600); err != nil {
+		t.Fatalf("write mission file: %v", err)
+	}
+	calledPost := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks":
+			writeJSONResponse(t, w, []map[string]any{{
+				"id":                     testTaskID,
+				"title":                  "A",
+				"status":                 "testing_ready",
+				"created_at":             rfc3339("2026-04-24T10:00:00Z"),
+				"updated_at":             rfc3339("2026-04-24T10:01:00Z"),
+				"latest_failure_type":    "state_repair",
+				"latest_failure_summary": "supported surface unavailable for task state repair; direct DB would unblock",
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/events":
+			writeJSONResponse(t, w, []map[string]any{})
+		case r.Method == http.MethodPost:
+			calledPost = true
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"kyle", "recover", "--mission-file", missionFile, "--dry-run"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if calledPost {
+		t.Fatal("dry-run posted for break-glass decision")
+	}
+	for _, want := range []string{"keep the orchestrator pipeline unblocked", "supported_surface_unavailable", breakGlassPolicy, "break-glass", "self-confirmed by policy", "unsupported DB/Docker/host execution is not implemented"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("dry-run output %q missing %q", out.String(), want)
+		}
+	}
+}
+
+func TestKyleRecoverApplyDoesNotExecuteBreakGlassActions(t *testing.T) {
+	missionFile := t.TempDir() + "/mission.md"
+	if err := os.WriteFile(missionFile, []byte("keep the orchestrator pipeline unblocked"), 0o600); err != nil {
+		t.Fatalf("write mission file: %v", err)
+	}
+	calledPost := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks":
+			writeJSONResponse(t, w, []map[string]any{{
+				"id":                     testTaskID,
+				"title":                  "A",
+				"status":                 "testing_ready",
+				"created_at":             rfc3339("2026-04-24T10:00:00Z"),
+				"updated_at":             rfc3339("2026-04-24T10:01:00Z"),
+				"latest_failure_summary": "supported surface unavailable for docker --no-deps repair",
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/events":
+			writeJSONResponse(t, w, []map[string]any{})
+		case r.Method == http.MethodPost:
+			calledPost = true
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"kyle", "recover", "--mission-file", missionFile, "--apply"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if calledPost {
+		t.Fatal("apply posted despite break-glass action being execution-disabled")
+	}
+	if !strings.Contains(out.String(), "no allowlisted supported recovery action") || !strings.Contains(out.String(), "break-glass") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestKyleRecoverApplyExecutesFirstSupportedRetryAndAudits(t *testing.T) {
+	var posts []recordedRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := recordRequest(t, r)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks":
+			writeJSONResponse(t, w, []map[string]any{{
+				"id":                     testTaskID,
+				"title":                  "A",
+				"status":                 "testing_ready",
+				"created_at":             rfc3339("2026-04-24T10:00:00Z"),
+				"updated_at":             rfc3339("2026-04-24T10:01:00Z"),
+				"latest_failure_type":    "crash",
+				"latest_failure_summary": "container runtime timeout",
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/events":
+			writeJSONResponse(t, w, []map[string]any{})
+		case r.Method == http.MethodPost:
+			posts = append(posts, rec)
+			switch r.URL.Path {
+			case "/projects/canvas/tasks/" + testTaskID + "/fail":
+				writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": "A", "status": "in_progress", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:02:00Z")})
+			case "/projects/canvas/tasks/" + testTaskID + "/comments":
+				writeJSONResponse(t, w, map[string]any{"id": "87654321-1234-1234-1234-123456789abc", "task_id": testTaskID, "author": "csuite", "body": "audit", "created_at": rfc3339("2026-04-24T10:02:00Z")})
+			case "/projects/canvas/tasks/" + testTaskID + "/audit-events":
+				writeJSONResponse(t, w, map[string]any{"timestamp": rfc3339("2026-04-24T10:02:00Z"), "type": recoveryAuditType, "payload": map[string]any{"task_id": testTaskID}})
+			default:
+				http.NotFound(w, r)
+			}
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"kyle", "recover", "--apply"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	wantPaths := []string{
+		"/projects/canvas/tasks/" + testTaskID + "/fail",
+		"/projects/canvas/tasks/" + testTaskID + "/comments",
+		"/projects/canvas/tasks/" + testTaskID + "/audit-events",
+	}
+	if len(posts) != len(wantPaths) {
+		t.Fatalf("got %d POSTs, want %d: %#v", len(posts), len(wantPaths), posts)
+	}
+	for i, want := range wantPaths {
+		if posts[i].Path != want {
+			t.Fatalf("POST %d path = %s, want %s", i, posts[i].Path, want)
+		}
+	}
+	if !strings.Contains(posts[2].Body, `"actor":"kyle"`) || !strings.Contains(posts[2].Body, retryPolicyRule) || !strings.Contains(posts[2].Body, `"supported_path":true`) {
+		t.Fatalf("audit body missing required fields: %s", posts[2].Body)
+	}
+	if !strings.Contains(out.String(), "apply: task transitioned to in_progress") {
+		t.Fatalf("unexpected apply output: %q", out.String())
+	}
+}
+
+func TestKyleRecoverApplyHonorsRetryBudget(t *testing.T) {
+	calledPost := false
+	eventsQuery := ""
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks":
+			writeJSONResponse(t, w, []map[string]any{{
+				"id":                     testTaskID,
+				"title":                  "A",
+				"status":                 "testing_ready",
+				"created_at":             rfc3339("2026-04-24T10:00:00Z"),
+				"updated_at":             rfc3339("2026-04-24T10:01:00Z"),
+				"latest_failure_type":    "crash",
+				"latest_failure_summary": "tooling timeout",
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/events":
+			eventsQuery = r.URL.RawQuery
+			writeJSONResponse(t, w, []map[string]any{{
+				"timestamp": rfc3339("2026-04-24T10:02:00Z"),
+				"type":      recoveryAuditType,
+				"payload": map[string]any{
+					"task_id": testTaskID,
+					"details": map[string]any{"policy_rule": retryPolicyRule},
+				},
+			}})
+		case r.Method == http.MethodPost:
+			calledPost = true
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"kyle", "recover", "--apply"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if calledPost {
+		t.Fatal("apply posted despite exhausted retry budget")
+	}
+	if eventsQuery != "limit=500" {
+		t.Fatalf("retry budget should use the existing bounded /events window, got query %q", eventsQuery)
+	}
+	if !strings.Contains(out.String(), "retry budget exhausted") || !strings.Contains(out.String(), "no allowlisted supported recovery action") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestKyleRecoverApplyPreventsEscalationOnlyActions(t *testing.T) {
+	calledPost := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks":
+			writeJSONResponse(t, w, []map[string]any{{
+				"id":                     testTaskID,
+				"title":                  "A",
+				"status":                 "testing_ready",
+				"created_at":             rfc3339("2026-04-24T10:00:00Z"),
+				"updated_at":             rfc3339("2026-04-24T10:01:00Z"),
+				"latest_failure_type":    "test_failure",
+				"latest_failure_summary": "needs secret token to continue",
+			}})
+		case r.Method == http.MethodGet && r.URL.Path == "/events":
+			writeJSONResponse(t, w, []map[string]any{})
+		case r.Method == http.MethodPost:
+			calledPost = true
+			http.NotFound(w, r)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"kyle", "recover", "--apply"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if calledPost {
+		t.Fatal("apply posted despite escalation-only classification")
+	}
+	if !strings.Contains(out.String(), "escalation_only") || !strings.Contains(out.String(), "escalation-only action class") {
+		t.Fatalf("unexpected output: %q", out.String())
 	}
 }
 

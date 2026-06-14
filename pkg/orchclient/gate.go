@@ -178,6 +178,26 @@ func (c *Client) Comment(ctx context.Context, project string, taskID uuid.UUID, 
 	return out, nil
 }
 
+// AuditRecovery records Kyle's structured autonomous-recovery audit event for
+// a task. This is intentionally narrower than a generic event writer.
+func (c *Client) AuditRecovery(ctx context.Context, project string, taskID uuid.UUID, req orchdto.RecoveryAuditRequest) (orchdto.EventDTO, error) {
+	if strings.TrimSpace(req.Actor) == "" {
+		return orchdto.EventDTO{}, &ErrBadRequest{Message: "audit actor is required"}
+	}
+	if strings.TrimSpace(req.PolicyRule) == "" {
+		return orchdto.EventDTO{}, &ErrBadRequest{Message: "audit policy rule is required"}
+	}
+	if strings.TrimSpace(req.Action) == "" {
+		return orchdto.EventDTO{}, &ErrBadRequest{Message: "audit action is required"}
+	}
+	var out orchdto.EventDTO
+	path := gatePath(project, taskID, "audit-events")
+	if err := c.postGate(ctx, path, req, &out); err != nil {
+		return orchdto.EventDTO{}, err
+	}
+	return out, nil
+}
+
 // gatePath returns the HTTP path for a gate mutation verb on the given
 // task in the given project. The project name is URL-escaped; the UUID
 // is emitted in its canonical 36-char form which is already URL-safe.

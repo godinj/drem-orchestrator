@@ -132,6 +132,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/retry", s.handleRetryTask)
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/archive", s.handleArchiveTask)
 	mux.HandleFunc("POST /projects/{name}/tasks/{id}/comments", s.handleCommentTask)
+	mux.HandleFunc("POST /projects/{name}/tasks/{id}/audit-events", s.handleRecoveryAuditTask)
 
 	// Internal ingestion endpoint — protected by header auth.
 	mux.Handle("POST /internal/logs", s.requireAgentmonToken(http.HandlerFunc(s.handleIngest)))
