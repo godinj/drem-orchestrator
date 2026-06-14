@@ -540,6 +540,11 @@ The poller never reads or sets `CLAUDE_CODE_OAUTH_TOKEN`,
 runtime uses OpenCode with the Codex subscription auth file bind-mounted
 read-only at `/home/drem/.codex/auth.json`; OpenCode reads it through
 the pinned `@guard22/opencode-multi-auth-codex@1.4.3` multi-auth plugin.
+The baked OpenCode config at
+`deploy/docker/context/opencode-codex-subscription.json` mirrors the
+portable Codex-subscription config from dotfiles commit `145d16f`, so
+the same `codex login` OAuth state is used on the host and inside
+C-Suite persona containers.
 If that file is missing or expired,
 each `opencode run` invocation fails and the message hits the .failures
 retry path. Refresh the subscription auth on the host; do not add API
