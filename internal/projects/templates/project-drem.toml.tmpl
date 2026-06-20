@@ -9,6 +9,9 @@
 bare_repo_path = "{{.BareRepoPath}}"
 database_path  = "/var/lib/drem/drem.db"
 log_path       = "/var/lib/drem/drem.log"
+# Compatibility for currently deployed orch images that still read the
+# legacy top-level key in HTTP project metadata.
+project_language = "{{.Language}}"
 
 [project]
   language = "{{.Language}}"

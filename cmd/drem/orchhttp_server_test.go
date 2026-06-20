@@ -171,6 +171,36 @@ func TestStartOrchHTTPRejectsWrongTokenFromEnv(t *testing.T) {
 	require.Contains(t, err.Error(), "status 401")
 }
 
+func TestStartOrchHTTPReportsEffectiveProjectLanguage(t *testing.T) {
+	t.Setenv("DREM_AGENTMON_TOKEN", "server-token")
+
+	db := newOrchHTTPTestDB(t)
+	port := freePort(t)
+	cfg := Config{
+		OrchHTTPPort:    port,
+		ProjectLanguage: "go",
+		Project:         ProjectTOMLConfig{Language: "cpp"},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stop := startOrchHTTP(ctx, cfg, db, "test-project", nil)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = stop(shutdownCtx)
+	}()
+	waitForListener(t, "127.0.0.1:"+port)
+
+	resp, err := http.Get("http://127.0.0.1:" + port + "/projects")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"language":"cpp"`)
+}
+
 func TestStartOrchHTTPConfiguresDockerLogs(t *testing.T) {
 	orig := newDockerLogStreamer
 	fakeLogs := &fakeStartupLogStreamer{}

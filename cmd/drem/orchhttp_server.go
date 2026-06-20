@@ -82,7 +82,7 @@ func startOrchHTTP(ctx context.Context, cfg Config, db *gorm.DB, project string,
 	}
 	srv := orchhttp.New(db, token, logs, orchhttp.ProjectInfo{
 		Name:     project,
-		Language: cfg.ProjectLanguage,
+		Language: cfg.EffectiveProjectLanguage(),
 		OrchURL:  "http://localhost:" + cfg.OrchHTTPPort,
 	})
 	// orch is the single in-process orchestrator instance. Wiring it here
