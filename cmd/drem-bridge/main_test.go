@@ -28,6 +28,7 @@ func TestResolveConfig(t *testing.T) {
 		envAddr    string
 		envDB      string
 		envRoot    string
+		envProject string
 		envNoAuth  string
 		flagToken  string
 		flagAddr   string
@@ -92,6 +93,23 @@ func TestResolveConfig(t *testing.T) {
 			wantRoot:  "/tmp/csuite-root",
 		},
 		{
+			name:       "project_env_sets_default_root",
+			envProject: "drem-canvas",
+			wantToken:  "",
+			wantAddr:   ":8080",
+			wantDB:     "~/.drem/projects/drem-canvas/csuite/csuite.db",
+			wantRoot:   "~/.drem/projects/drem-canvas/csuite",
+		},
+		{
+			name:       "disk_root_env_overrides_project_default",
+			envRoot:    "/tmp/csuite-root",
+			envProject: "drem-canvas",
+			wantToken:  "",
+			wantAddr:   ":8080",
+			wantDB:     "/tmp/csuite-root/csuite.db",
+			wantRoot:   "/tmp/csuite-root",
+		},
+		{
 			name:       "partial_flag_override",
 			envToken:   "env-tok",
 			envAddr:    ":9090",
@@ -111,6 +129,7 @@ func TestResolveConfig(t *testing.T) {
 			t.Setenv("DREM_BRIDGE_ADDR", tc.envAddr)
 			t.Setenv("CSUITE_DB", tc.envDB)
 			t.Setenv("DREM_CSUITE_ROOT", tc.envRoot)
+			t.Setenv("DREM_PROJECT", tc.envProject)
 			t.Setenv("DREM_BRIDGE_NO_AUTH", tc.envNoAuth)
 
 			got := resolveConfig(tc.flagToken, tc.flagAddr, tc.flagDB, tc.flagNoAuth)

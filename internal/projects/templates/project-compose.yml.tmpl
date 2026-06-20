@@ -11,7 +11,7 @@ volumes:
   drem-{{.ProjectName}}-db:
   drem-{{.ProjectName}}-prompts:
   # csuite-watcher private state (delivery ledger). Named volume keeps
-  # watcher-internal SQLite out of the shared /csuite/ tree so a
+  # watcher-internal SQLite out of the project /csuite/ tree so a
   # mis-aimed persona write can never corrupt the idempotency key.
   # See plans/csuite-watcher-outbox-routing.md §4.
   drem-{{.ProjectName}}-csuite-watcher-data:
@@ -195,7 +195,7 @@ services:
       - {{.CsuiteHomeRoot}}:/csuite:rw
       # Watcher-private state (delivery ledger). Named volume so the
       # SQLite file survives container recreation but stays out of the
-      # shared /csuite/ tree.
+      # project /csuite/ tree.
       - drem-{{.ProjectName}}-csuite-watcher-data:/var/lib/watcher
       # Shared audit-token file, read-only. Same host path the personas
       # bind below under /run/secrets/csuite-watcher-token — reuse keeps
@@ -289,7 +289,7 @@ services:
       # synthesis passes — closing it eliminates delegation overhead on
       # every future CTO synthesis.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
-      # Read-only shared C-Suite root so personas can review sibling-owned
+      # Read-only project C-Suite root so personas can review sibling-owned
       # evidence bundles without write access. The persona-specific mount below
       # overlays its own subtree read-write for inbox/outbox/state.
       - {{.CsuiteHomeRoot}}:/home/drem/.drem-csuite:ro
@@ -355,7 +355,7 @@ services:
       # synthesis passes — closing it eliminates delegation overhead on
       # every future CTO synthesis.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
-      # Read-only shared C-Suite root so personas can review sibling-owned
+      # Read-only project C-Suite root so personas can review sibling-owned
       # evidence bundles without write access. The persona-specific mount below
       # overlays its own subtree read-write for inbox/outbox/state.
       - {{.CsuiteHomeRoot}}:/home/drem/.drem-csuite:ro
@@ -413,7 +413,7 @@ services:
       # synthesis passes — closing it eliminates delegation overhead on
       # every future CTO synthesis.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
-      # Read-only shared C-Suite root so personas can review sibling-owned
+      # Read-only project C-Suite root so personas can review sibling-owned
       # evidence bundles without write access. The persona-specific mount below
       # overlays its own subtree read-write for inbox/outbox/state.
       - {{.CsuiteHomeRoot}}:/home/drem/.drem-csuite:ro
@@ -480,7 +480,7 @@ services:
       # coexistence rules in docs/csuite-agents/prompts/kyle.md
       # (Phase 4) spell out how the two Kyles hand off the tree.
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:rw
-      # Read-only shared C-Suite root so Kyle can review sibling-owned evidence
+      # Read-only project C-Suite root so Kyle can review sibling-owned evidence
       # bundles without broad write access. The Kyle-specific mount below
       # overlays his own subtree read-write for inbox/outbox/state.
       - {{.CsuiteHomeRoot}}:/home/drem/.drem-csuite:ro

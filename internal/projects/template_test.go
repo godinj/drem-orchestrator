@@ -538,7 +538,7 @@ func TestRender_NoPlannerTemplateStub(t *testing.T) {
 
 // TestRender_CsuiteHomeMountsAreWired asserts that each csuite-*
 // service bind-mounts the operator's Claude subscription credentials
-// (read-only), the shared C-Suite root (read-only for evidence review),
+// (read-only), the project C-Suite root (read-only for evidence review),
 // and the per-persona inbox/outbox/state tree under
 // <CsuiteHomeRoot>/<persona> (read-write). Without these mounts the
 // containerized persona cannot authenticate, receive inbox messages, or
@@ -559,11 +559,12 @@ func TestRender_CsuiteHomeMountsAreWired(t *testing.T) {
 
 	for _, persona := range []string{"mike", "alex", "seth"} {
 		svc := "csuite-" + persona
+		csuiteRoot := "/home/operator/.drem/projects/drem-orchestrator/csuite"
 		creds := "/home/operator/.claude/.credentials.json:" +
 			"/home/drem/.claude/.credentials.json:ro"
-		sharedHome := "/home/operator/.drem-csuite:" +
+		sharedHome := csuiteRoot + ":" +
 			"/home/drem/.drem-csuite:ro"
-		home := "/home/operator/.drem-csuite/" + persona +
+		home := csuiteRoot + "/" + persona +
 			":/home/drem/.drem-csuite/" + persona + ":rw"
 		prompt := "/home/dev/git/drem-orchestrator.git/master/docs/csuite-agents/prompts/" + persona + ".md:" +
 			"/opt/csuite/prompts/" + persona + ".md:ro"
@@ -589,10 +590,10 @@ func TestRender_CsuiteHomeMountsAreWired(t *testing.T) {
 	}
 }
 
-// TestRender_CsuiteHomeRootDefaultsFromHostHome asserts deployment defaults
-// fills in CsuiteHomeRoot as <HostHome>/.drem-csuite when the caller
-// leaves it zero-value. The csuite comms tree is host-global (one per
-// operator, not per project), so the default only depends on HostHome.
+// TestRender_CsuiteHomeRootDefaultsFromProject asserts deployment defaults
+// fill in CsuiteHomeRoot as <HostHome>/.drem/projects/<project>/csuite when
+// the caller leaves it zero-value. This keeps persona inbox/outbox/state and
+// watcher routing isolated per registered project by default.
 func TestRender_CsuiteHomeRootDefaultsFromHostHome(t *testing.T) {
 	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
 	data.HostHome = "/root"
@@ -601,8 +602,8 @@ func TestRender_CsuiteHomeRootDefaultsFromHostHome(t *testing.T) {
 	out, err := projects.Render(data)
 	require.NoError(t, err)
 	require.Contains(t, string(out),
-		"/root/.drem-csuite/seth:/home/drem/.drem-csuite/seth:rw",
-		"default CsuiteHomeRoot must derive from HostHome")
+		"/root/.drem/projects/drem-orchestrator/csuite/seth:/home/drem/.drem-csuite/seth:rw",
+		"default CsuiteHomeRoot must derive from HostHome and project name")
 }
 
 // TestRender_CsuiteHomeRootExplicitOverride asserts a caller-supplied
@@ -620,7 +621,7 @@ func TestRender_CsuiteHomeRootExplicitOverride(t *testing.T) {
 	require.Contains(t, s,
 		"/srv/drem-csuite/seth:/home/drem/.drem-csuite/seth:rw")
 	require.NotContains(t, s,
-		"/home/operator/.drem-csuite/",
+		"/home/operator/.drem/projects/drem-orchestrator/csuite/",
 		"explicit CsuiteHomeRoot must override the HostHome default")
 }
 
@@ -746,7 +747,7 @@ func TestRender_CsuiteWatcherRoutingMountsAreWired(t *testing.T) {
 
 	watcher := parsed.Services["csuite-watcher"]
 	require.Contains(t, watcher.Volumes,
-		"/home/operator/.drem-csuite:/csuite:rw",
+		"/home/operator/.drem/projects/drem-orchestrator/csuite:/csuite:rw",
 		"watcher must bind-mount the csuite home root at /csuite so it "+
 			"can route outbox -> inbox files; volumes=%v", watcher.Volumes)
 	require.Contains(t, watcher.Volumes,
@@ -961,7 +962,8 @@ func TestWriteProjectComposeAt_PrecreatesOperatorInboxTree(t *testing.T) {
 	_, err := projects.WriteProjectComposeAt(homeDir, "drem-orchestrator", data)
 	require.NoError(t, err)
 
-	inbox := filepath.Join(homeDir, ".drem-csuite", "operator", "inbox")
+	csuiteRoot := filepath.Join(homeDir, ".drem", "projects", "drem-orchestrator", "csuite")
+	inbox := filepath.Join(csuiteRoot, "operator", "inbox")
 	info, err := os.Stat(inbox)
 	require.NoError(t, err,
 		"WriteProjectComposeAt must pre-create <CsuiteHomeRoot>/operator/inbox")
@@ -974,7 +976,7 @@ func TestWriteProjectComposeAt_PrecreatesOperatorInboxTree(t *testing.T) {
 	require.True(t, info.IsDir(), "operator inbox .archive must be a directory")
 
 	// Operator is destination-only: no outbox dir.
-	outbox := filepath.Join(homeDir, ".drem-csuite", "operator", "outbox")
+	outbox := filepath.Join(csuiteRoot, "operator", "outbox")
 	_, err = os.Stat(outbox)
 	require.True(t, os.IsNotExist(err),
 		"operator must NOT have an outbox dir (destination-only persona)")

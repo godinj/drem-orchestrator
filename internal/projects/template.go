@@ -93,15 +93,16 @@ type TemplateData struct {
 	// plans/worker-prompt-delivery.md §§2, 4.
 	WorkerPromptRoot string
 	// CsuiteHomeRoot is the host directory that holds per-persona
-	// inbox/outbox/state trees for the three csuite agents (mike, alex,
-	// seth). The compose template bind-mounts
+	// inbox/outbox/state trees for the four csuite agents (mike, alex,
+	// seth, kyle). The compose template bind-mounts
 	// <CsuiteHomeRoot>/<persona>/ read-write into each csuite-*
 	// container at /home/drem/.drem-csuite/<persona>/ so inbox
 	// messages dropped by the host reach the containerized persona and
 	// state.md writes persist across restarts. Defaults to
-	// HostHome/.drem-csuite when empty. Shared across projects (one
-	// csuite comms tree per operator, not per project). See the csuite-
-	// docker end-to-end design and plans/ for the rationale.
+	// HostHome/.drem/projects/<ProjectName>/csuite when empty so each
+	// registered project gets isolated inbox/outbox/state and watcher
+	// routing by default. Explicit overrides can still point at a shared
+	// or custom root when an operator deliberately wants that topology.
 	CsuiteHomeRoot string
 	// HostDataDir is the host directory bind-mounted into the orch
 	// container at /var/lib/drem. Holds the SQLite database (drem.db),

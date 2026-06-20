@@ -16,6 +16,7 @@ func TestCompileProjectDeploymentSpec_DerivesProjectLayoutAndTemplateDefaults(t 
 	require.NoError(t, err)
 
 	projectDir := filepath.Join(homeDir, ".drem", "projects", "drem-orchestrator")
+	csuiteRoot := filepath.Join(projectDir, "csuite")
 	require.Equal(t, homeDir, spec.HomeDir)
 	require.Equal(t, "drem-orchestrator", spec.ProjectName)
 	require.Equal(t, projectDir, spec.ProjectDir)
@@ -24,7 +25,7 @@ func TestCompileProjectDeploymentSpec_DerivesProjectLayoutAndTemplateDefaults(t 
 	require.Equal(t, filepath.Join(projectDir, "prompts"), spec.WorkerPromptRoot)
 	require.Equal(t, filepath.Join(projectDir, "data"), spec.HostDataDir)
 	require.Equal(t,
-		filepath.Join(homeDir, ".drem-csuite", "operator", "inbox", ".archive"),
+		filepath.Join(csuiteRoot, "operator", "inbox", ".archive"),
 		spec.CsuiteOperatorArchive)
 
 	data := spec.TemplateData
@@ -36,10 +37,26 @@ func TestCompileProjectDeploymentSpec_DerivesProjectLayoutAndTemplateDefaults(t 
 	require.Equal(t, filepath.Join(homeDir, ".claude", ".credentials.json"), data.WorkerCredsPath)
 	require.Equal(t, filepath.Join(homeDir, ".codex", "auth.json"), data.WorkerCodexAuthPath)
 	require.Equal(t, spec.WorkerPromptRoot, data.WorkerPromptRoot)
-	require.Equal(t, filepath.Join(homeDir, ".drem-csuite"), data.CsuiteHomeRoot)
+	require.Equal(t, csuiteRoot, data.CsuiteHomeRoot)
 	require.Equal(t, spec.HostDataDir, data.HostDataDir)
 	require.Equal(t, filepath.Join(homeDir, ".drem", "csuite-watcher.token"), data.CsuiteWatcherTokenPath)
 	require.Equal(t, "/etc/drem/host-exec.token", data.HostExecTokenPath)
+}
+
+func TestCompileProjectDeploymentSpec_IsolatesCsuiteRootPerProject(t *testing.T) {
+	homeDir := filepath.Join(string(filepath.Separator), "home", "operator")
+	first, err := compileProjectDeploymentSpec(homeDir, "drem-orchestrator", TemplateData{})
+	require.NoError(t, err)
+	second, err := compileProjectDeploymentSpec(homeDir, "drem-canvas", TemplateData{})
+	require.NoError(t, err)
+
+	require.Equal(t,
+		filepath.Join(homeDir, ".drem", "projects", "drem-orchestrator", "csuite"),
+		first.TemplateData.CsuiteHomeRoot)
+	require.Equal(t,
+		filepath.Join(homeDir, ".drem", "projects", "drem-canvas", "csuite"),
+		second.TemplateData.CsuiteHomeRoot)
+	require.NotEqual(t, first.TemplateData.CsuiteHomeRoot, second.TemplateData.CsuiteHomeRoot)
 }
 
 func TestCompileProjectDeploymentSpec_PreservesExplicitDeploymentOverrides(t *testing.T) {

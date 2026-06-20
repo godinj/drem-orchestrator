@@ -32,7 +32,7 @@ func run(args []string, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	token := fs.String("token", "", "bearer token (env: DREM_BRIDGE_TOKEN)")
 	listen := fs.String("listen", "", "listen address (env: DREM_BRIDGE_ADDR, default :8080)")
-	dbFlag := fs.String("db", "", "csuite.db path (env: CSUITE_DB, default ~/.drem-csuite/csuite.db)")
+	dbFlag := fs.String("db", "", "csuite.db path (env: CSUITE_DB, default <csuite-root>/csuite.db)")
 	noAuth := fs.Bool("no-auth", false, "disable bearer token authentication (env: DREM_BRIDGE_NO_AUTH=true)")
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -131,7 +131,7 @@ func resolveConfig(flagToken, flagListen, flagDB string, flagNoAuth bool) bridge
 		Token:    os.Getenv("DREM_BRIDGE_TOKEN"),
 		Addr:     os.Getenv("DREM_BRIDGE_ADDR"),
 		DBPath:   os.Getenv("CSUITE_DB"),
-		DiskRoot: os.Getenv("DREM_CSUITE_ROOT"),
+		DiskRoot: resolveDefaultCsuiteRoot(),
 		NoAuth:   parseBoolEnv(os.Getenv("DREM_BRIDGE_NO_AUTH")),
 	}
 	if flagToken != "" {
@@ -149,13 +149,20 @@ func resolveConfig(flagToken, flagListen, flagDB string, flagNoAuth bool) bridge
 	if cfg.Addr == "" {
 		cfg.Addr = ":8080"
 	}
-	if cfg.DiskRoot == "" {
-		cfg.DiskRoot = "~/.drem-csuite"
-	}
 	if cfg.DBPath == "" {
 		cfg.DBPath = filepath.Join(cfg.DiskRoot, "csuite.db")
 	}
 	return cfg
+}
+
+func resolveDefaultCsuiteRoot() string {
+	if root := os.Getenv("DREM_CSUITE_ROOT"); root != "" {
+		return root
+	}
+	if project := strings.TrimSpace(os.Getenv("DREM_PROJECT")); project != "" {
+		return filepath.Join("~", ".drem", "projects", project, "csuite")
+	}
+	return "~/.drem-csuite"
 }
 
 func parseBoolEnv(v string) bool {

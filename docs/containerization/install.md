@@ -450,7 +450,7 @@ entrypoint with the `csuite-persona` headless poller baked into
 `drem-csuite-base`. Before the pivot, `csuite-run.sh` did
 `exec claude --print --system-prompt-file …` and then just sat there —
 the CLI had no mechanism to notice files appearing in the persona's
-inbox, so the dispatcher's "drop a message into `~/.drem-csuite/seth/inbox/`"
+inbox, so the dispatcher's "drop a message into the project's C-Suite root"
 pattern reached a dead end. The poller closes that gap.
 
 2026-04-24 correction: the shipped poller invokes OpenCode, not
@@ -519,10 +519,13 @@ as separate counts.
 └── seth.md                 # --system-prompt value for the CLI
 ```
 
-The whole `.drem-csuite/<persona>/` tree is bind-mounted from the host
-at `~/.drem-csuite/<persona>/` (Wave 1, commit `7fa9e85`) so an operator
-running `ls ~/.drem-csuite/seth/outbox/` on the host sees the replies
-without `docker cp`.
+The whole in-container `.drem-csuite/<persona>/` tree is bind-mounted from
+the host at `~/.drem/projects/<project>/csuite/<persona>/` so an operator
+running `ls ~/.drem/projects/<project>/csuite/seth/outbox/` on the host sees
+the replies without `docker cp`. Older registrations used the global
+`~/.drem-csuite/<persona>/` root; re-rendering compose after the isolation
+pivot moves new project state under the per-project root unless an explicit
+`CsuiteHomeRoot` override is configured.
 
 ### Persona model selection
 
@@ -530,8 +533,10 @@ without `docker cp`.
 (`openai/gpt-5.5`) and `GPT 5.4 Mini` (`openai/gpt-5.4-mini`) without
 restarting containers. Press `F8` in the chat TUI, choose the model, and
 confirm with Enter. The bridge writes the selected model to
-`~/.drem-csuite/<persona>/config.json`; the persona poller applies it on
-the next `opencode run`, not to any turn already in flight.
+the active C-Suite root's `<persona>/config.json`; the persona poller applies
+it on the next `opencode run`, not to any turn already in flight. For generated
+per-project compose, that host path is
+`~/.drem/projects/<project>/csuite/<persona>/config.json`.
 
 ### Authentication — subscription-only
 
@@ -553,7 +558,7 @@ token env-var fallback.
 ### Operator runbook — upgrading a pre-pivot project
 
 The bind-mounts that the poller depends on (per-persona
-`~/.drem-csuite/<persona>/`, the credentials file, the settings
+`~/.drem/projects/<project>/csuite/<persona>/`, the credentials file, the settings
 preseed) landed in the per-project compose template in Wave 1 and the
 image switch is this commit sequence. A project registered before Wave
 1 needs the mounts regenerated AND the image rebuilt:
@@ -615,13 +620,14 @@ image switch is this commit sequence. A project registered before Wave
    smallest:
 
    ```bash
-   cat > ~/.drem-csuite/seth/inbox/$(date +%Y%m%dT%H%M%S)-smoke.md <<'EOF'
+   CSUITE_ROOT=~/.drem/projects/<name>/csuite
+   cat > "$CSUITE_ROOT/seth/inbox/$(date +%Y%m%dT%H%M%S)-smoke.md" <<'EOF'
    Smoke test — reply with a single sentence.
    EOF
    # Wait a few seconds, then check:
-   ls ~/.drem-csuite/seth/outbox/
-   cat ~/.drem-csuite/seth/state.md
-   ls ~/.drem-csuite/seth/inbox/.archive/
+   ls "$CSUITE_ROOT/seth/outbox/"
+   cat "$CSUITE_ROOT/seth/state.md"
+   ls "$CSUITE_ROOT/seth/inbox/.archive/"
    ```
 
    Expected outcome: the smoke-test file moved from inbox to archive,

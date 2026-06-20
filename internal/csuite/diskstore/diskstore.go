@@ -40,7 +40,7 @@ type Store struct {
 
 // New constructs a Store rooted at root. If root is empty, resolution
 // order is DREM_CSUITE_ROOT env var, then "/csuite" (the in-container
-// default — the watcher service bind-mounts ~/.drem-csuite there).
+// default — the watcher service bind-mounts the project C-Suite root there).
 func New(root string) *Store {
 	if root == "" {
 		root = os.Getenv("DREM_CSUITE_ROOT")

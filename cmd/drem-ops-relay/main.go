@@ -25,7 +25,7 @@ func run(args []string) int {
 	var types csvFlag
 	fs := flag.NewFlagSet("drem-ops-relay", flag.ContinueOnError)
 	orchURL := fs.String("orch-url", getenv("DREM_ORCH_URL", ""), "orchestrator HTTP URL")
-	csuiteRoot := fs.String("csuite-root", getenv("DREM_CSUITE_ROOT", "~/.drem-csuite"), "C-Suite home root")
+	csuiteRoot := fs.String("csuite-root", defaultCsuiteRoot(), "C-Suite home root")
 	cursor := fs.String("cursor", getenv("DREM_OPS_RELAY_CURSOR", "~/.drem/ops-relay.cursor"), "cursor state path")
 	project := fs.String("project", getenv("DREM_PROJECT", ""), "project label to include in messages")
 	recipient := fs.String("to", "mike", "C-Suite recipient")
@@ -92,6 +92,16 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func defaultCsuiteRoot() string {
+	if root := os.Getenv("DREM_CSUITE_ROOT"); root != "" {
+		return root
+	}
+	if project := strings.TrimSpace(os.Getenv("DREM_PROJECT")); project != "" {
+		return filepath.Join("~", ".drem", "projects", project, "csuite")
+	}
+	return "~/.drem-csuite"
 }
 
 func expandTilde(path string) string {

@@ -99,7 +99,7 @@ The solution has ten parts:
 - Build worker and merger spawns from a single project runtime context object.
 - Maintain dual identity: human-readable project name for operators and stable project ID for joins, labels, attempts, and metrics.
 - Add isolated project sub-roots for data, prompts, logs, artifacts, relay cursors, C-Suite project state, and generated config.
-- Make C-Suite roots project-specific by default or introduce a project-aware routing/state layout under a shared root.
+- Make C-Suite roots project-specific by default, with explicit shared-root overrides reserved for deliberate operator topology choices.
 - Scope relay cursors by project and recipient.
 - Promote mission metadata to durable task metadata: mission owner/governor, mission correlation ID, mission kind, and project.
 - Define a canonical low-cardinality metrics label vocabulary: `project`, `project_id`, `scope`, `service`, `agent_type`, `provider`, `model`, `status`, `failure_class`, `language`, and `experiment`.
@@ -148,6 +148,6 @@ Required coverage:
 
 The repo already has meaningful foundations: project registry, per-project compose templates, host-port allocation concepts, dual project labels in spawner types, worker attempt recording, Kyle polling, event relay, SQLite metrics, and Grafana dashboards.
 
-The remaining issue is confidence and completeness. Current behavior is multi-project-shaped, but not yet proven as a complete simultaneous multi-project runtime. Known pressure points include single mounted DB assumptions, shared C-Suite roots, singleton Grafana datasource paths, global relay cursor defaults, and registry/host bind-mount safety.
+The remaining issue is confidence and completeness. Current behavior is multi-project-shaped, but not yet proven as a complete simultaneous multi-project runtime. Known pressure points include single mounted DB assumptions, C-Suite host tools that may still default to legacy global roots unless configured, singleton Grafana datasource paths, global relay cursor defaults, and registry/host bind-mount safety.
 
 This PRD should be treated as the portability finish line. The system is not done until a two-project canary proves task execution, observability, relays, C-Suite routing, metrics, dashboards, and teardown all work concurrently with clear attribution.

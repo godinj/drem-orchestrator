@@ -88,8 +88,8 @@ func compileTemplateDefaults(data TemplateData, fallbackHome, fallbackProject st
 	if data.WorkerPromptRoot == "" && data.HostHome != "" && projectName != "" {
 		data.WorkerPromptRoot = filepath.Join(data.HostHome, ".drem", "projects", projectName, "prompts")
 	}
-	if data.CsuiteHomeRoot == "" && data.HostHome != "" {
-		data.CsuiteHomeRoot = filepath.Join(data.HostHome, ".drem-csuite")
+	if data.CsuiteHomeRoot == "" && data.HostHome != "" && projectName != "" {
+		data.CsuiteHomeRoot = filepath.Join(data.HostHome, ".drem", "projects", projectName, "csuite")
 	}
 	if data.HostDataDir == "" && data.HostHome != "" && projectName != "" {
 		data.HostDataDir = filepath.Join(data.HostHome, ".drem", "projects", projectName, "data")
