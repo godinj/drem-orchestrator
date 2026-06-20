@@ -1,0 +1,4 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+hard-refactor,1,7,10406,521,7444,stop,true,
+hard-refactor,2,9,14932,1596,21452,stop,true,
+hard-refactor,3,10,15733,392,5547,stop,true,

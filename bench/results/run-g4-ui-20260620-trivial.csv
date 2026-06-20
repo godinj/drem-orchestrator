@@ -1,0 +1,4 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+trivial-doc,1,5,4838,107,2977,stop,true,
+trivial-doc,2,5,4838,107,1626,stop,true,
+trivial-doc,3,5,4838,107,1512,stop,true,

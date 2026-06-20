@@ -1,0 +1,4 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+medium-test,1,9,11834,311,5115,stop,true,
+medium-test,2,9,12244,311,4826,stop,true,
+medium-test,3,9,12052,332,5019,stop,true,
