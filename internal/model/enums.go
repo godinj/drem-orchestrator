@@ -181,6 +181,7 @@ const (
 	ExitReasonKilled        = "killed"         // Agent was forcibly terminated
 	ExitReasonTimeout       = "timeout"        // Agent exceeded timeout
 	ExitReasonMaxIterations = "max_iterations" // Agent exhausted iteration budget
+	ExitReasonNoProgress    = "no_progress"    // Agent repeated tool calls without progress
 	ExitReasonEmptyOutput   = "empty_output"   // Agent produced no output
 	ExitReasonDefault       = "unknown"        // Default when exit info is nil
 )

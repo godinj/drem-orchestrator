@@ -65,6 +65,9 @@ func main() {
 	cfg.Temperature = envFloat("DREM_DIRECT_TEMPERATURE", cfg.Temperature)
 	cfg.Timeout = envDuration("DREM_DIRECT_TIMEOUT", cfg.Timeout)
 	cfg.BashTimeout = envDuration("DREM_DIRECT_BASH_TIMEOUT", cfg.BashTimeout)
+	cfg.ContextLimit = envInt("DREM_DIRECT_CONTEXT_LIMIT", cfg.ContextLimit)
+	cfg.ContextWarnPct = envInt("DREM_DIRECT_CONTEXT_WARN_PCT", cfg.ContextWarnPct)
+	cfg.ContextStopPct = envInt("DREM_DIRECT_CONTEXT_STOP_PCT", cfg.ContextStopPct)
 	cfg.ChatTemplateKwargs = envJSONMap("DREM_DIRECT_CHAT_TEMPLATE_KWARGS")
 
 	traceFile, err := openTrace(*workDir)

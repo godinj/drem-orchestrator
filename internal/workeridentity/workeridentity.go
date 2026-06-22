@@ -28,17 +28,20 @@ func NewStore(db *gorm.DB) *Store {
 }
 
 type SpawnRecord struct {
-	Task        *model.Task
-	ProjectID   uuid.UUID
-	AgentType   string
-	WorkerID    string
-	ContainerID string
-	Image       string
-	Branch      string
-	Provider    string
-	ModelID     string
-	Effort      string
-	Now         time.Time
+	Task                    *model.Task
+	ProjectID               uuid.UUID
+	AgentType               string
+	WorkerID                string
+	ContainerID             string
+	Image                   string
+	Branch                  string
+	Provider                string
+	ModelID                 string
+	Effort                  string
+	PromptAssetVersionsJSON string
+	RenderedPromptHash      string
+	RenderedPromptPath      string
+	Now                     time.Time
 }
 
 type Handle struct {
@@ -121,12 +124,15 @@ func (s *Store) RecordSpawn(ctx context.Context, r SpawnRecord) (Handle, error) 
 	}
 
 	attempt := model.WorkerAttempt{
-		ID:          uuid.New(),
-		TaskID:      r.Task.ID,
-		WorkerID:    r.WorkerID,
-		ContainerID: r.ContainerID,
-		AgentType:   r.AgentType,
-		Image:       r.Image,
+		ID:                      uuid.New(),
+		TaskID:                  r.Task.ID,
+		WorkerID:                r.WorkerID,
+		ContainerID:             r.ContainerID,
+		AgentType:               r.AgentType,
+		Image:                   r.Image,
+		PromptAssetVersionsJSON: r.PromptAssetVersionsJSON,
+		RenderedPromptHash:      r.RenderedPromptHash,
+		RenderedPromptPath:      r.RenderedPromptPath,
 	}
 	if h.AgentID != uuid.Nil {
 		agentID := h.AgentID

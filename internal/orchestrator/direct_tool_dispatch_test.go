@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -334,6 +335,42 @@ func TestPersistDirectAgentContext_StopReasonContextLimit(t *testing.T) {
 	}
 	if ag.Config["stop_reason"] != "context_limit" {
 		t.Errorf("stop_reason = %v, want %q", ag.Config["stop_reason"], "context_limit")
+	}
+}
+
+func TestPersistDirectAgentContext_StructuredStopReasons(t *testing.T) {
+	tests := []struct {
+		name       string
+		stopReason string
+		want       string
+	}{
+		{name: "max iterations", stopReason: "max_iterations", want: model.ExitReasonMaxIterations},
+		{name: "no progress", stopReason: "no_progress", want: model.ExitReasonNoProgress},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ag := &model.Agent{ID: uuid.New()}
+			persistDirectAgentContext(ag, &agent.DirectToolAgentResult{StopReason: tt.stopReason}, 20)
+
+			if ag.ExitReason != tt.want {
+				t.Fatalf("ExitReason = %q, want %q", ag.ExitReason, tt.want)
+			}
+			if ag.Config["stop_reason"] != tt.stopReason {
+				t.Fatalf("stop_reason = %v, want %q", ag.Config["stop_reason"], tt.stopReason)
+			}
+		})
+	}
+}
+
+func TestDirectToolHelpers_ReadBashCmdArgument(t *testing.T) {
+	args := map[string]any{"cmd": "go test ./... && git commit -m test"}
+
+	if got := derivePhase("bash", args); got != "testing" {
+		t.Fatalf("derivePhase = %q, want testing", got)
+	}
+	if got := deriveTarget("bash", args); !strings.Contains(got, "go test") {
+		t.Fatalf("deriveTarget = %q, want command snippet", got)
 	}
 }
 

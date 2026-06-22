@@ -153,6 +153,7 @@ func parseTaskIDFromLabels(labels map[string]string) (uuid.UUID, bool) {
 // transitions to failed (user story 14).
 func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, ev container.Event, tracker *replacementTracker) {
 	now := time.Now()
+	o.markAssignedWorkerDead(task, ev, now)
 	attempts := tracker.recordAndCount(task.ID, now)
 	if attempts > replacementCap {
 		reason := fmt.Sprintf("worker death cap exceeded (%d/%d in %s)",
@@ -171,6 +172,42 @@ func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, 
 		o.logger.Error("handle worker death: respawn failed",
 			"task_id", task.ID, "error", err)
 	}
+}
+
+func (o *Orchestrator) markAssignedWorkerDead(task *model.Task, ev container.Event, now time.Time) {
+	if task == nil || task.AssignedAgentID == nil {
+		return
+	}
+	var ag model.Agent
+	if err := o.db.First(&ag, "id = ?", *task.AssignedAgentID).Error; err != nil {
+		o.logger.Warn("worker death: load assigned agent", "task_id", task.ID, "agent_id", *task.AssignedAgentID, "error", err)
+		task.AssignedAgentID = nil
+		_ = o.db.Save(task).Error
+		return
+	}
+	ag.Status = model.AgentDead
+	ag.CurrentTaskID = nil
+	ag.CompletedAt = &now
+	if ev.OOMKilled {
+		ag.ExitReason = model.ExitReasonKilled
+	} else {
+		ag.ExitReason = model.ExitReasonError
+	}
+	if ag.Config == nil {
+		ag.Config = model.JSONField{}
+	}
+	ag.Config["container_id"] = ev.ContainerID
+	ag.Config["exit_code"] = float64(ev.ExitCode)
+	ag.Config["oom_killed"] = ev.OOMKilled
+	ag.Config["exit_reason"] = ag.ExitReason
+	if err := o.db.Save(&ag).Error; err != nil {
+		o.logger.Error("worker death: mark agent dead", "task_id", task.ID, "agent_id", ag.ID, "error", err)
+	}
+	task.AssignedAgentID = nil
+	if err := o.db.Save(task).Error; err != nil {
+		o.logger.Error("worker death: clear task assignment", "task_id", task.ID, "error", err)
+	}
+	o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(ag.AgentType), string(model.AgentDead))
 }
 
 // recordContainerLifecycleEvent writes a TaskEvent row for every observed

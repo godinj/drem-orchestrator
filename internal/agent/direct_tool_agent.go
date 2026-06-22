@@ -112,9 +112,8 @@ type DirectToolAgentResult struct {
 	// FinalContextPct is the most recent prompt_tokens / ContextLimit
 	// expressed in 0..100. Stays 0 when ContextLimit is unset.
 	FinalContextPct int
-	// StopReason is "context_limit" when the loop was halted by the context
-	// monitor's stop threshold; empty otherwise (natural stop, max iters,
-	// length truncation, etc.).
+	// StopReason is set for structured non-natural stops such as
+	// "context_limit", "max_iterations", or "no_progress".
 	StopReason string
 }
 
@@ -503,6 +502,18 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 						"tool", tc.Function.Name,
 						"repeats", consecutiveRepeats,
 					)
+					if consecutiveRepeats >= 5 {
+						writeTrace(cfg.TraceWriter, traceEvent)
+						return &DirectToolAgentResult{
+							Output:          choice.Message.Content,
+							TokensIn:        totalTokensIn,
+							TokensOut:       totalTokensOut,
+							Iterations:      iteration + 1,
+							Duration:        time.Since(start),
+							FinalContextPct: finalPct,
+							StopReason:      "no_progress",
+						}, fmt.Errorf("agent made no progress after %d repeated %s tool calls", consecutiveRepeats+1, tc.Function.Name)
+					}
 					if consecutiveRepeats >= 3 {
 						result += "\n\n[HARNESS NOTE: You have repeated this EXACT call " +
 							fmt.Sprintf("%d", consecutiveRepeats+1) + " times with identical results. " +
@@ -612,6 +623,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		Iterations:      maxIter,
 		Duration:        time.Since(start),
 		FinalContextPct: finalPct,
+		StopReason:      "max_iterations",
 	}, fmt.Errorf("exceeded max iterations (%d)", maxIter)
 }
 

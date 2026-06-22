@@ -12,11 +12,29 @@ type Project struct {
 	Name          string    `gorm:"uniqueIndex;not null"`
 	BareRepoPath  string    `gorm:"not null"`
 	DefaultBranch string    `gorm:"default:master"`
+	Language      string    `gorm:"default:go;index"`
 	Description   string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
-	Tasks         []Task  `gorm:"foreignKey:ProjectID"`
-	Agents        []Agent `gorm:"foreignKey:ProjectID"`
+	Tasks         []Task               `gorm:"foreignKey:ProjectID"`
+	Agents        []Agent              `gorm:"foreignKey:ProjectID"`
+	PromptAssets  []ProjectPromptAsset `gorm:"foreignKey:ProjectID"`
+}
+
+// ProjectPromptAsset stores project-scoped prompt/template fragments seeded
+// from source defaults and then owned by the project DB for operational edits.
+type ProjectPromptAsset struct {
+	ID          uuid.UUID `gorm:"type:text;primaryKey"`
+	ProjectID   uuid.UUID `gorm:"type:text;not null;index;uniqueIndex:idx_project_prompt_asset"`
+	Kind        string    `gorm:"not null;uniqueIndex:idx_project_prompt_asset"`
+	Name        string    `gorm:"not null;uniqueIndex:idx_project_prompt_asset"`
+	Language    string    `gorm:"not null;index"`
+	Content     string    `gorm:"type:text;not null"`
+	ContentHash string    `gorm:"not null"`
+	Version     string    `gorm:"not null"`
+	Active      bool      `gorm:"default:true;index"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // Task represents a unit of work tracked by the orchestrator.
@@ -95,15 +113,18 @@ type Agent struct {
 // Container logs are still physically scoped by runtime container, but this
 // row is the stable task-attempt handle exposed by the HTTP API.
 type WorkerAttempt struct {
-	ID          uuid.UUID  `gorm:"type:text;primaryKey"`
-	TaskID      uuid.UUID  `gorm:"type:text;not null;index"`
-	AgentID     *uuid.UUID `gorm:"type:text;index"`
-	WorkerID    string     `gorm:"index"`
-	ContainerID string     `gorm:"index"`
-	AgentType   string
-	Image       string
-	CreatedAt   time.Time
-	UpdatedAt   time.Time
+	ID                      uuid.UUID  `gorm:"type:text;primaryKey"`
+	TaskID                  uuid.UUID  `gorm:"type:text;not null;index"`
+	AgentID                 *uuid.UUID `gorm:"type:text;index"`
+	WorkerID                string     `gorm:"index"`
+	ContainerID             string     `gorm:"index"`
+	AgentType               string
+	Image                   string
+	PromptAssetVersionsJSON string `gorm:"type:text"`
+	RenderedPromptHash      string
+	RenderedPromptPath      string
+	CreatedAt               time.Time
+	UpdatedAt               time.Time
 }
 
 // TaskEvent records a status change or other significant event on a task.

@@ -72,6 +72,7 @@ func Init(dbPath string, logPath ...string) (*gorm.DB, error) {
 func AutoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
 		&model.Project{},
+		&model.ProjectPromptAsset{},
 		&model.Task{},
 		&model.Agent{},
 		&model.WorkerAttempt{},

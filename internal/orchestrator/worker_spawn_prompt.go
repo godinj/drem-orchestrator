@@ -1,6 +1,10 @@
 package orchestrator
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,7 +12,14 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
+	"github.com/godinj/drem-orchestrator/internal/promptassets"
 )
+
+type renderedPromptInfo struct {
+	Path          string
+	Hash          string
+	AssetVersions string
+}
 
 // workerCredsPathEnv is the environment variable the per-project compose
 // template passes to orch carrying the host path of the operator's
@@ -153,12 +164,12 @@ func (o *Orchestrator) renderAndWritePrompt(
 	project *model.Project,
 	agentType string,
 	promptRoot string,
-) (string, error) {
+) (renderedPromptInfo, error) {
 	if task == nil {
-		return "", fmt.Errorf("nil task")
+		return renderedPromptInfo{}, fmt.Errorf("nil task")
 	}
 	if promptRoot == "" {
-		return "", fmt.Errorf("prompt root is empty")
+		return renderedPromptInfo{}, fmt.Errorf("prompt root is empty")
 	}
 
 	// WorktreePath: for container workers the worktree lives inside
@@ -175,26 +186,44 @@ func (o *Orchestrator) renderAndWritePrompt(
 		worktreePath = o.worktree.BareRepo()
 	}
 
+	var assets map[string]string
+	versions := map[string]string{}
+	if project != nil {
+		var err error
+		assets, versions, err = promptassets.Load(context.Background(), o.db, project.ID)
+		if err != nil {
+			return renderedPromptInfo{}, fmt.Errorf("load prompt assets: %w", err)
+		}
+	}
+	versionsJSON := "{}"
+	if len(versions) > 0 {
+		if b, err := json.Marshal(versions); err == nil {
+			versionsJSON = string(b)
+		}
+	}
+
 	diagnosis, suggestedFix, affectedFiles := extractFixerContext(task)
 	rendered := prompt.Generate(prompt.Opts{
 		Task:          task,
 		Project:       project,
 		AgentType:     model.AgentType(agentType),
 		WorktreePath:  worktreePath,
+		PromptAssets:  assets,
 		Diagnosis:     diagnosis,
 		AffectedFiles: affectedFiles,
 		SuggestedFix:  suggestedFix,
 	})
 	if strings.TrimSpace(rendered) == "" {
-		return "", fmt.Errorf("prompt.Generate produced empty output for agent_type=%q task_id=%s",
+		return renderedPromptInfo{}, fmt.Errorf("prompt.Generate produced empty output for agent_type=%q task_id=%s",
 			agentType, task.ID)
 	}
+	hash := sha256.Sum256([]byte(rendered))
 
 	// Ensure the destination exists before writing. The per-project
 	// compose template creates the dir at `drem project register`
 	// time, but a fresh worktree or CI checkout may have raced ahead.
 	if err := os.MkdirAll(promptRoot, 0o755); err != nil {
-		return "", fmt.Errorf("mkdir prompt root %s: %w", promptRoot, err)
+		return renderedPromptInfo{}, fmt.Errorf("mkdir prompt root %s: %w", promptRoot, err)
 	}
 
 	finalPath := filepath.Join(promptRoot, task.ID.String()+".md")
@@ -202,13 +231,13 @@ func (o *Orchestrator) renderAndWritePrompt(
 	// the worker's pre-stat never sees a partial write.
 	tmpPath := finalPath + ".tmp"
 	if err := os.WriteFile(tmpPath, []byte(rendered), 0o644); err != nil {
-		return "", fmt.Errorf("write prompt tmp %s: %w", tmpPath, err)
+		return renderedPromptInfo{}, fmt.Errorf("write prompt tmp %s: %w", tmpPath, err)
 	}
 	if err := os.Rename(tmpPath, finalPath); err != nil {
 		// Best-effort cleanup of the tmp file; ignore errors because
 		// the caller is about to fail the spawn anyway.
 		_ = os.Remove(tmpPath)
-		return "", fmt.Errorf("rename prompt %s -> %s: %w", tmpPath, finalPath, err)
+		return renderedPromptInfo{}, fmt.Errorf("rename prompt %s -> %s: %w", tmpPath, finalPath, err)
 	}
-	return finalPath, nil
+	return renderedPromptInfo{Path: finalPath, Hash: hex.EncodeToString(hash[:]), AssetVersions: versionsJSON}, nil
 }

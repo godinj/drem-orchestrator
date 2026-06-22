@@ -56,7 +56,12 @@ func GenerateDirectCoder(opts Opts) string {
 	b.WriteString("You MUST follow these steps IN ORDER. Do NOT deviate.\n\n")
 	b.WriteString("STEP 1: Read ONE source file (the main file you need to understand).\n")
 	b.WriteString("STEP 2: Write your code using write. Write the COMPLETE file content.\n")
-	b.WriteString("STEP 3: Run `go vet ./... && go test ./...`\n")
+	if rules := asset(opts, "direct", "coder"); rules != "" {
+		b.WriteString(rules)
+		b.WriteString("\n")
+	} else {
+		b.WriteString("STEP 3: Run `go vet ./... && go test ./...`\n")
+	}
 	b.WriteString("STEP 4: If tests fail, fix and re-run ONCE.\n")
 	b.WriteString("STEP 5: Run `git add -A && git commit -m '<message>'`\n\n")
 	b.WriteString("RULES:\n")
@@ -65,10 +70,12 @@ func GenerateDirectCoder(opts Opts) string {
 	b.WriteString("- Do NOT read more than 2 files before writing code.\n")
 	b.WriteString("- WRITE CODE on your 2nd or 3rd tool call. Not later.\n")
 	b.WriteString("- If you have not called write by your 4th tool call, you are FAILING.\n\n")
-	b.WriteString("Test Infrastructure:\n")
-	b.WriteString("- DB: use `testutil.NewTestDB(t)`, never `gorm.Open` directly.\n")
-	b.WriteString("- Git helpers: `testutil.SetupBareRepo(t)`, `testutil.CommitFile(t, ...)`\n")
-	b.WriteString("- Shared helpers: `internal/testutil/testutil.go`\n\n")
+	if projectLanguage(opts) != "cpp" {
+		b.WriteString("Test Infrastructure:\n")
+		b.WriteString("- DB: use `testutil.NewTestDB(t)`, never `gorm.Open` directly.\n")
+		b.WriteString("- Git helpers: `testutil.SetupBareRepo(t)`, `testutil.CommitFile(t, ...)`\n")
+		b.WriteString("- Shared helpers: `internal/testutil/testutil.go`\n\n")
+	}
 	b.WriteString("If tests fail after 2 fix attempts, commit anyway with a note about failures.\n")
 	b.WriteString("Do NOT push to remote.\n")
 
@@ -183,7 +190,16 @@ func GenerateDirectFixer(opts Opts) string {
 	b.WriteString("## Rules\n\n")
 	b.WriteString("- Apply the minimal change needed to resolve the diagnosis.\n")
 	b.WriteString("- Do not refactor unrelated code.\n")
-	b.WriteString("- Verify with `go vet ./... && go test ./...` in a SINGLE bash command.\n")
+	if rules := asset(opts, "direct", "fixer"); rules != "" {
+		for _, line := range strings.Split(rules, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				fmt.Fprintf(&b, "- %s\n", strings.TrimPrefix(line, "- "))
+			}
+		}
+	} else {
+		b.WriteString("- Verify with `go vet ./... && go test ./...` in a SINGLE bash command.\n")
+	}
 	b.WriteString("- When tests pass, `git add` and `git commit` with a short descriptive message.\n")
 	b.WriteString("- Do NOT push to remote.\n")
 

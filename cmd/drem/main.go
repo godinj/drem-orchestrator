@@ -34,6 +34,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	"github.com/godinj/drem-orchestrator/internal/orchhttp"
+	"github.com/godinj/drem-orchestrator/internal/promptassets"
 	"github.com/godinj/drem-orchestrator/internal/ratelimit"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
@@ -163,10 +164,22 @@ func main() {
 			Name:          projectName,
 			BareRepoPath:  cfg.BareRepoPath,
 			DefaultBranch: cfg.DefaultBranch,
+			Language:      cfg.EffectiveProjectLanguage(),
 		}
 		if err := database.Create(&project).Error; err != nil {
 			log.Fatalf("create project: %v", err)
 		}
+	} else {
+		language := cfg.EffectiveProjectLanguage()
+		if language != "" && project.Language != language {
+			project.Language = language
+			if err := database.Save(&project).Error; err != nil {
+				log.Fatalf("update project language: %v", err)
+			}
+		}
+	}
+	if err := promptassets.SeedDefaults(context.Background(), database, project.ID, project.Language); err != nil {
+		log.Fatalf("seed prompt assets: %v", err)
 	}
 
 	// Init components. The host-mode worktree manager is built behind

@@ -24,6 +24,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
+	"github.com/godinj/drem-orchestrator/internal/promptassets"
 	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
@@ -48,6 +49,19 @@ func (o *Orchestrator) shouldUseDirectToolAgent(sub *model.Task, agentType model
 	}
 	_ = agentType
 	return true
+}
+
+func (o *Orchestrator) projectPromptContext() (*model.Project, map[string]string) {
+	var project model.Project
+	if err := o.db.First(&project, "id = ?", o.projectID).Error; err != nil {
+		return nil, nil
+	}
+	assets, _, err := promptassets.Load(context.Background(), o.db, project.ID)
+	if err != nil {
+		o.logger.Warn("direct prompt: load project prompt assets", "project_id", project.ID, "error", err)
+		assets = nil
+	}
+	return &project, assets
 }
 
 // processCoderDirect launches a coder agent via the direct SGLang tool-call
@@ -138,11 +152,14 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 		"parent_description": parent.Description,
 		"feature_branch":     parent.WorktreeBranch,
 	}
+	promptProject, promptAssets := o.projectPromptContext()
 	systemPrompt := prompt.GenerateDirectCoder(prompt.Opts{
 		Task:         sub,
+		Project:      promptProject,
 		AgentType:    model.AgentCoder,
 		WorktreePath: featureDir,
 		ParentCtx:    parentCtx,
+		PromptAssets: promptAssets,
 	})
 
 	// Frontload file content: read estimated_files and include their content
@@ -308,10 +325,13 @@ func (o *Orchestrator) dispatchQuickFixDirect(task *model.Task, event *model.Tas
 		return fmt.Errorf("direct quickfix: save task assignment: %w", err)
 	}
 
+	promptProject, promptAssets := o.projectPromptContext()
 	systemPrompt := prompt.GenerateDirectCoder(prompt.Opts{
 		Task:         task,
+		Project:      promptProject,
 		AgentType:    model.AgentCoder,
 		WorktreePath: featureDir,
+		PromptAssets: promptAssets,
 	})
 	userMessage := task.Description
 	if userMessage == "" {
@@ -413,13 +433,16 @@ func (o *Orchestrator) processReviewerDirect(task *model.Task) error {
 	}
 
 	reviewMode, planJSON, gitDiff := o.buildReviewerContext(task, worktreePath)
+	promptProject, promptAssets := o.projectPromptContext()
 	systemPrompt := prompt.GenerateDirectReviewer(prompt.Opts{
 		Task:         task,
+		Project:      promptProject,
 		AgentType:    model.AgentReviewer,
 		WorktreePath: worktreePath,
 		ReviewMode:   reviewMode,
 		PlanJSON:     planJSON,
 		GitDiff:      gitDiff,
+		PromptAssets: promptAssets,
 	})
 	userMessage := fmt.Sprintf("Review the %s and produce review.json.", reviewMode)
 
@@ -488,13 +511,16 @@ func (o *Orchestrator) processFixerDirect(task *model.Task) error {
 
 	diagnosis, suggestedFix, affectedFiles := extractFixerContext(task)
 
+	promptProject, promptAssets := o.projectPromptContext()
 	systemPrompt := prompt.GenerateDirectFixer(prompt.Opts{
 		Task:          task,
+		Project:       promptProject,
 		AgentType:     model.AgentFixer,
 		WorktreePath:  worktreePath,
 		Diagnosis:     diagnosis,
 		AffectedFiles: affectedFiles,
 		SuggestedFix:  suggestedFix,
+		PromptAssets:  promptAssets,
 	})
 	userMessage := diagnosis
 	if userMessage == "" {

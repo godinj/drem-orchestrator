@@ -35,7 +35,7 @@ func derivePhase(toolName string, args map[string]any) string {
 	case "write", "edit":
 		return "implementing"
 	case "bash":
-		cmd, _ := args["command"].(string)
+		cmd := bashCommandArg(args)
 		cmdLower := strings.ToLower(cmd)
 		switch {
 		case strings.Contains(cmdLower, "go test") || strings.Contains(cmdLower, "pytest") ||
@@ -72,12 +72,22 @@ func deriveTarget(toolName string, args map[string]any) string {
 			return p
 		}
 	case "bash":
-		if cmd, ok := args["command"].(string); ok && cmd != "" {
+		if cmd := bashCommandArg(args); cmd != "" {
 			if len(cmd) > 40 {
 				cmd = cmd[:40] + "…"
 			}
 			return cmd
 		}
+	}
+	return ""
+}
+
+func bashCommandArg(args map[string]any) string {
+	if cmd, ok := args["cmd"].(string); ok {
+		return cmd
+	}
+	if cmd, ok := args["command"].(string); ok {
+		return cmd
 	}
 	return ""
 }
@@ -156,7 +166,7 @@ func (o *Orchestrator) wireDirectAgentCallbacks(
 
 		// Detect git commits in bash commands.
 		if toolName == "bash" {
-			if cmd, ok := args["command"].(string); ok && strings.Contains(cmd, "git commit") {
+			if cmd := bashCommandArg(args); strings.Contains(cmd, "git commit") {
 				act.hasCommitted = true
 			}
 		}
@@ -215,6 +225,12 @@ func persistDirectAgentContext(ag *model.Agent, result *agent.DirectToolAgentRes
 	case result.StopReason == "context_limit":
 		ag.ExitReason = model.ExitReasonContextLimit
 		ag.Config["exit_reason"] = model.ExitReasonContextLimit
+	case result.StopReason == "no_progress":
+		ag.ExitReason = model.ExitReasonNoProgress
+		ag.Config["exit_reason"] = model.ExitReasonNoProgress
+	case result.StopReason == "max_iterations":
+		ag.ExitReason = model.ExitReasonMaxIterations
+		ag.Config["exit_reason"] = model.ExitReasonMaxIterations
 	case maxIterations > 0 && result.Iterations >= maxIterations:
 		ag.ExitReason = model.ExitReasonMaxIterations
 		ag.Config["exit_reason"] = model.ExitReasonMaxIterations

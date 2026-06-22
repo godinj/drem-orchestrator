@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/promptassets"
 )
 
 const maxDiffLen = 50000
@@ -22,6 +23,7 @@ type Opts struct {
 	Memories     []model.Memory
 	Comments     []model.TaskComment
 	ParentCtx    map[string]any
+	PromptAssets map[string]string
 
 	// Reviewer fields
 	ReviewMode string // "plan" or "feature"
@@ -59,6 +61,9 @@ func Generate(opts Opts) string {
 			sections = append(sections, fmt.Sprintf("- **Description**: %s", opts.Project.Description))
 		}
 		sections = append(sections, fmt.Sprintf("- **Bare repo**: `%s`", opts.Project.BareRepoPath))
+		if language := projectLanguage(opts); language != "" {
+			sections = append(sections, fmt.Sprintf("- **Language**: %s", language))
+		}
 		sections = append(sections, "")
 	}
 
@@ -88,12 +93,16 @@ func Generate(opts Opts) string {
 
 	// 2d. Verification Efficiency — not needed for read-only classifiers.
 	if opts.AgentType != model.AgentClassifier {
+		verification := asset(opts, "verification", "strategy")
+		if verification == "" {
+			verification = "Run `go vet ./... && go test ./...` in a SINGLE command — never separately"
+		}
 		sections = append(sections,
 			"## Verification Strategy",
 			"",
 			"Each turn costs context. Minimize verification rounds:",
 			"1. Write ALL code changes before running any verification",
-			"2. Run `go vet ./... && go test ./...` in a SINGLE command — never separately",
+			"2. "+verification,
 			"3. If verification fails, read ALL errors, fix ALL issues in one pass, then verify ONCE more",
 			"4. Maximum 2 verification cycles. If tests still fail after 2 fix attempts, commit what you have with a note",
 			"5. Do NOT re-read files you already read — use your memory of their contents",
@@ -177,6 +186,9 @@ func Generate(opts Opts) string {
 	switch opts.AgentType {
 	case model.AgentPlanner:
 		sections = append(sections, plannerInstructions()...)
+		if guidance := asset(opts, "planner", "guidance"); guidance != "" {
+			sections = append(sections, "## Project Planning Guidance", "", guidance, "")
+		}
 		sections = append(sections, targetModelGuidance(opts.TargetCoderProvider, opts.TargetCoderModel)...)
 	case model.AgentCoder:
 		sections = append(sections, coderInstructions(opts)...)
@@ -257,6 +269,20 @@ func Generate(opts Opts) string {
 	return strings.Join(sections, "\n")
 }
 
+func asset(opts Opts, kind, name string) string {
+	if opts.PromptAssets == nil {
+		return ""
+	}
+	return strings.TrimSpace(opts.PromptAssets[promptassets.Key(kind, name)])
+}
+
+func projectLanguage(opts Opts) string {
+	if opts.Project != nil && opts.Project.Language != "" {
+		return opts.Project.Language
+	}
+	return "go"
+}
+
 // coderInstructions returns prompt sections for coder agents, dispatching
 // by the task's Phase field to provide TDD-specific guidance. If a prep agent
 // produced a tactical brief (stored in task context as prep_data), it is
@@ -287,6 +313,9 @@ func testPhaseCoderInstructions(opts Opts) []string {
 	var sections []string
 
 	sections = append(sections, "## Instructions", "")
+	if custom := asset(opts, "coder", "test"); custom != "" {
+		sections = append(sections, custom, "")
+	}
 	sections = append(sections,
 		"You are writing tests BEFORE implementation (TDD).",
 		"",
@@ -306,50 +335,52 @@ func testPhaseCoderInstructions(opts Opts) []string {
 		}
 	}
 
-	sections = append(sections,
-		"## Test Infrastructure Rules (Constitution-Enforced)",
-		"",
-		"These rules are enforced by the post-merge constitution check. Violations will cause",
-		"your merge to be rejected.",
-		"",
-		"1. **DB init**: NEVER call `gorm.Open(sqlite.Open(...))` in test files. Always use",
-		"   `testutil.NewTestDB(t)` for core models or `testutil.NewTestDBWithModels(t, &YourModel{})`",
-		"   for packages with custom GORM models (e.g., csuite). Import `internal/testutil`.",
-		"",
-		"2. **Test factories**: NEVER define helper functions matching `func createTest*`,",
-		"   `func newTest*`, or `func mockTestDB*` in your test files. All shared test helpers",
-		"   MUST live in `internal/testutil/testutil.go`. If you need a new factory, add it there.",
-		"",
-		"3. **Git test helpers**: NEVER define `func setupBareRepo`, `func initBareRepo`,",
-		"   `func addWorktree`, or `func commitFile` in test files. Use the equivalents from",
-		"   `testutil` (e.g., `testutil.SetupBareRepo(t)`, `testutil.CommitFile(t, ...)`).",
-		"",
+	if projectLanguage(opts) != "cpp" {
+		sections = append(sections,
+			"## Test Infrastructure Rules (Constitution-Enforced)",
+			"",
+			"These rules are enforced by the post-merge constitution check. Violations will cause",
+			"your merge to be rejected.",
+			"",
+			"1. **DB init**: NEVER call `gorm.Open(sqlite.Open(...))` in test files. Always use",
+			"   `testutil.NewTestDB(t)` for core models or `testutil.NewTestDBWithModels(t, &YourModel{})`",
+			"   for packages with custom GORM models (e.g., csuite). Import `internal/testutil`.",
+			"",
+			"2. **Test factories**: NEVER define helper functions matching `func createTest*`,",
+			"   `func newTest*`, or `func mockTestDB*` in your test files. All shared test helpers",
+			"   MUST live in `internal/testutil/testutil.go`. If you need a new factory, add it there.",
+			"",
+			"3. **Git test helpers**: NEVER define `func setupBareRepo`, `func initBareRepo`,",
+			"   `func addWorktree`, or `func commitFile` in test files. Use the equivalents from",
+			"   `testutil` (e.g., `testutil.SetupBareRepo(t)`, `testutil.CommitFile(t, ...)`).",
+			"",
 
-		"## Stub Requirements",
-		"",
-		"Your tests must compile and link. To achieve this, create minimal stub implementations",
-		"alongside your tests:",
-		"",
-		"- **Headers**: Full class/struct declarations with method signatures matching what your",
-		"  tests call. Use correct includes and namespaces.",
-		"- **Source files**: Method bodies that compile and link but do NOT implement real logic.",
-		"  Return default values (0, false, \"\", empty containers). The goal is that tests fail",
-		"  on ASSERTIONS, not on compilation or linker errors.",
-		"- **Only stub what tests need**: Don't stub internal helpers or implementation details.",
-		"  The stubs define the public API contract that the implementation must fulfill.",
-		"",
-		"The human reviewer will examine your tests AND stubs together to approve the API surface",
-		"before implementation begins. Your stubs ARE the interface specification.",
-		"",
-		"After writing tests and stubs:",
-		"1. Run `go vet ./... && go test ./...` in ONE command to verify compilation and test status",
-		"2. Tests SHOULD fail on assertions (that's expected for TDD) — verify failures are not compilation errors",
-		"3. If compilation fails, fix ALL errors in one pass, then re-run ONE more time",
-		"4. Run `git add` for all new/untracked files, then commit both test files AND stub files "+
-			`together with message: "test: <what these tests verify>"`,
-		"5. Do NOT push to remote",
-		"",
-	)
+			"## Stub Requirements",
+			"",
+			"Your tests must compile and link. To achieve this, create minimal stub implementations",
+			"alongside your tests:",
+			"",
+			"- **Headers**: Full class/struct declarations with method signatures matching what your",
+			"  tests call. Use correct includes and namespaces.",
+			"- **Source files**: Method bodies that compile and link but do NOT implement real logic.",
+			"  Return default values (0, false, \"\", empty containers). The goal is that tests fail",
+			"  on ASSERTIONS, not on compilation or linker errors.",
+			"- **Only stub what tests need**: Don't stub internal helpers or implementation details.",
+			"  The stubs define the public API contract that the implementation must fulfill.",
+			"",
+			"The human reviewer will examine your tests AND stubs together to approve the API surface",
+			"before implementation begins. Your stubs ARE the interface specification.",
+			"",
+			"After writing tests and stubs:",
+			"1. Run `go vet ./... && go test ./...` in ONE command to verify compilation and test status",
+			"2. Tests SHOULD fail on assertions (that's expected for TDD) — verify failures are not compilation errors",
+			"3. If compilation fails, fix ALL errors in one pass, then re-run ONE more time",
+			"4. Run `git add` for all new/untracked files, then commit both test files AND stub files "+
+				`together with message: "test: <what these tests verify>"`,
+			"5. Do NOT push to remote",
+			"",
+		)
+	}
 
 	// Include test plan if set
 	if task.TestPlan != "" {
@@ -395,6 +426,9 @@ func implPhaseCoderInstructions(opts Opts) []string {
 	}
 
 	sections = append(sections, "## Instructions", "")
+	if custom := asset(opts, "coder", "implementation"); custom != "" {
+		sections = append(sections, custom, "")
+	}
 	sections = append(sections,
 		"You are implementing code to pass pre-written tests (TDD).",
 		"",
@@ -408,22 +442,24 @@ func implPhaseCoderInstructions(opts Opts) []string {
 		sections = append(sections, "")
 	}
 
-	sections = append(sections,
-		"Your implementation should:",
-		"1. Read the pre-written tests first to understand expected behavior",
-		"2. Implement the minimum code to make ALL tests pass",
-		"3. Do NOT modify the pre-written tests unless they have a genuine bug",
-		"4. If you believe a test is wrong, note it in your commit message but make it pass anyway",
-		"",
-		"After implementation:",
-		"1. Run `go vet ./... && go test ./...` in ONE command",
-		"2. If anything fails, read ALL errors, fix ALL issues in one pass, re-run ONCE",
-		"3. NEVER modify pre-written TDD tests. Fix your code to match the tests.",
-		"4. Run `git add` for all new/untracked files, then commit with "+
-			`message: "feat: <what was implemented>"`,
-		"5. Do NOT push to remote",
-		"",
-	)
+	if projectLanguage(opts) != "cpp" {
+		sections = append(sections,
+			"Your implementation should:",
+			"1. Read the pre-written tests first to understand expected behavior",
+			"2. Implement the minimum code to make ALL tests pass",
+			"3. Do NOT modify the pre-written tests unless they have a genuine bug",
+			"4. If you believe a test is wrong, note it in your commit message but make it pass anyway",
+			"",
+			"After implementation:",
+			"1. Run `go vet ./... && go test ./...` in ONE command",
+			"2. If anything fails, read ALL errors, fix ALL issues in one pass, re-run ONCE",
+			"3. NEVER modify pre-written TDD tests. Fix your code to match the tests.",
+			"4. Run `git add` for all new/untracked files, then commit with "+
+				`message: "feat: <what was implemented>"`,
+			"5. Do NOT push to remote",
+			"",
+		)
+	}
 
 	// Include test plan if set
 	if task.TestPlan != "" {
@@ -445,6 +481,9 @@ func defaultCoderInstructions(opts Opts) []string {
 
 	sections = append(sections, "## Instructions", "")
 	sections = append(sections, "You are a coder agent. Implement the described task.", "")
+	if custom := asset(opts, "coder", "default"); custom != "" {
+		sections = append(sections, custom, "")
+	}
 
 	// Include estimated files from task context if present
 	if len(task.Context) > 0 {
@@ -453,28 +492,32 @@ func defaultCoderInstructions(opts Opts) []string {
 		}
 	}
 
-	sections = append(sections,
-		"## Test Infrastructure Rules (Constitution-Enforced)",
-		"",
-		"When writing or modifying tests, these rules are strictly enforced:",
-		"- DB init: Use `testutil.NewTestDB(t)` or `testutil.NewTestDBWithModels(t, &Model{})` — never `gorm.Open()` in test files",
-		"- Test factories: Must live in `internal/testutil/testutil.go`, not local test files",
-		"- Git helpers: Use `testutil.SetupBareRepo(t)`, `testutil.CommitFile(t, ...)`, etc.",
-		"",
-	)
+	if projectLanguage(opts) != "cpp" {
+		sections = append(sections,
+			"## Test Infrastructure Rules (Constitution-Enforced)",
+			"",
+			"When writing or modifying tests, these rules are strictly enforced:",
+			"- DB init: Use `testutil.NewTestDB(t)` or `testutil.NewTestDBWithModels(t, &Model{})` — never `gorm.Open()` in test files",
+			"- Test factories: Must live in `internal/testutil/testutil.go`, not local test files",
+			"- Git helpers: Use `testutil.SetupBareRepo(t)`, `testutil.CommitFile(t, ...)`, etc.",
+			"",
+		)
+	}
 
-	sections = append(sections,
-		"After implementation:",
-		"1. Run `go vet ./... && go test ./...` in ONE command — not separately",
-		"2. If anything fails, read ALL errors, fix ALL in one pass, re-run ONCE more",
-		"3. If a pre-existing test breaks: fix your implementation, not the test",
-		"4. If this is an integration subtask and the feature changes user-facing "+
-			"behavior (CLI, config, TUI, new capabilities), update the README "+
-			"or relevant documentation to reflect the changes",
-		"5. Run `git add` for all new/untracked files, then commit your changes with a descriptive message",
-		"6. Do NOT push to remote",
-		"",
-	)
+	if projectLanguage(opts) != "cpp" {
+		sections = append(sections,
+			"After implementation:",
+			"1. Run `go vet ./... && go test ./...` in ONE command — not separately",
+			"2. If anything fails, read ALL errors, fix ALL in one pass, re-run ONCE more",
+			"3. If a pre-existing test breaks: fix your implementation, not the test",
+			"4. If this is an integration subtask and the feature changes user-facing "+
+				"behavior (CLI, config, TUI, new capabilities), update the README "+
+				"or relevant documentation to reflect the changes",
+			"5. Run `git add` for all new/untracked files, then commit your changes with a descriptive message",
+			"6. Do NOT push to remote",
+			"",
+		)
+	}
 
 	// Include test plan if set
 	if task.TestPlan != "" {

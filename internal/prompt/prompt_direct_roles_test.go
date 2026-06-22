@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/promptassets"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -56,6 +57,27 @@ func TestGenerateDirectCoder_WithParentCtx(t *testing.T) {
 
 	result := GenerateDirectCoder(opts)
 	assert.Contains(t, result, "Parent Feature", "should include parent context")
+}
+
+func TestGenerateDirectCoder_CppUsesProjectAssets(t *testing.T) {
+	task := &model.Task{Title: "Add CMake test", Description: "Add a focused C++ test."}
+	task.ID = uuid.New()
+	assets := map[string]string{}
+	for _, a := range promptassets.DefaultsForLanguage("cpp") {
+		assets[promptassets.Key(a.Kind, a.Name)] = a.Content
+	}
+
+	result := GenerateDirectCoder(Opts{
+		Task:         task,
+		Project:      &model.Project{Language: "cpp"},
+		AgentType:    model.AgentCoder,
+		WorktreePath: "/tmp/worktree/cpp",
+		PromptAssets: assets,
+	})
+
+	assert.Contains(t, result, "cmake --preset test")
+	assert.NotContains(t, result, "go vet ./... && go test ./...")
+	assert.NotContains(t, result, "testutil.NewTestDB")
 }
 
 func TestGenerateDirectReviewer_PlanReview(t *testing.T) {
@@ -157,6 +179,26 @@ func TestGenerateDirectFixer(t *testing.T) {
 	assert.Contains(t, result, "minimal", "should instruct minimal fix approach")
 
 	assert.NotContains(t, result, "Repository Map", "direct prompt must not include repo map")
+}
+
+func TestGenerateDirectFixer_CppUsesProjectAssets(t *testing.T) {
+	task := &model.Task{Title: "Fix CMake target", Description: "Fix a C++ build failure."}
+	task.ID = uuid.New()
+	assets := map[string]string{}
+	for _, a := range promptassets.DefaultsForLanguage("cpp") {
+		assets[promptassets.Key(a.Kind, a.Name)] = a.Content
+	}
+
+	result := GenerateDirectFixer(Opts{
+		Task:         task,
+		Project:      &model.Project{Language: "cpp"},
+		AgentType:    model.AgentFixer,
+		WorktreePath: "/tmp/worktree/cpp",
+		PromptAssets: assets,
+	})
+
+	assert.Contains(t, result, "C++/CMake")
+	assert.NotContains(t, result, "go vet ./... && go test ./...")
 }
 
 func TestGenerateDirectFixer_EmptyDiagnosis(t *testing.T) {

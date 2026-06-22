@@ -33,22 +33,24 @@ type WorkerSpawner interface {
 // projectID is the stable UUID (maps to drem.project_id). See
 // plans/dual-label-worker-spawn.md.
 type spawnWorkerContext struct {
-	project     string
-	projectID   string
-	agentType   string
-	workerID    string
-	branch      string
-	image       string
-	language    string
-	bareRepo    string
-	credsMount  string
-	codexAuth   string
-	promptMount string
-	provider    string
-	modelID     string
-	effort      string
-	envVars     map[string]string
-	extraLabel  map[string]string
+	project             string
+	projectID           string
+	agentType           string
+	workerID            string
+	branch              string
+	image               string
+	language            string
+	bareRepo            string
+	credsMount          string
+	codexAuth           string
+	promptMount         string
+	promptHash          string
+	promptAssetVersions string
+	provider            string
+	modelID             string
+	effort              string
+	envVars             map[string]string
+	extraLabel          map[string]string
 }
 
 // spawnCoder dispatches a coder worker for a task via the configured
@@ -168,16 +170,19 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 	// commit-check finds the right ref regardless of which branch
 	// source the spawner used.
 	handle, recordErr := workeridentity.NewStore(o.db).RecordSpawn(ctx, workeridentity.SpawnRecord{
-		Task:        task,
-		ProjectID:   o.projectID,
-		AgentType:   agentType,
-		WorkerID:    swc.workerID,
-		ContainerID: res.ContainerID,
-		Image:       params.Image,
-		Branch:      params.Branch,
-		Provider:    swc.provider,
-		ModelID:     swc.modelID,
-		Effort:      swc.effort,
+		Task:                    task,
+		ProjectID:               o.projectID,
+		AgentType:               agentType,
+		WorkerID:                swc.workerID,
+		ContainerID:             res.ContainerID,
+		Image:                   params.Image,
+		Branch:                  params.Branch,
+		Provider:                swc.provider,
+		ModelID:                 swc.modelID,
+		Effort:                  swc.effort,
+		PromptAssetVersionsJSON: swc.promptAssetVersions,
+		RenderedPromptHash:      swc.promptHash,
+		RenderedPromptPath:      swc.promptMount,
 	})
 	if recordErr != nil {
 		o.logger.Error("spawn worker: record identity", "task_id", task.ID, "error", recordErr)
@@ -272,6 +277,18 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 			if o.directToolAgentCfg.Timeout > 0 {
 				env["DREM_DIRECT_TIMEOUT"] = o.directToolAgentCfg.Timeout.String()
 			}
+			if o.directToolAgentCfg.BashTimeout > 0 {
+				env["DREM_DIRECT_BASH_TIMEOUT"] = o.directToolAgentCfg.BashTimeout.String()
+			}
+			if o.directToolAgentCfg.ContextLimit > 0 {
+				env["DREM_DIRECT_CONTEXT_LIMIT"] = fmt.Sprintf("%d", o.directToolAgentCfg.ContextLimit)
+			}
+			if o.contextWarnPct > 0 {
+				env["DREM_DIRECT_CONTEXT_WARN_PCT"] = fmt.Sprintf("%d", o.contextWarnPct)
+			}
+			if o.contextStopPct > 0 {
+				env["DREM_DIRECT_CONTEXT_STOP_PCT"] = fmt.Sprintf("%d", o.contextStopPct)
+			}
 		}
 	default:
 		env["DREM_AGENT_HARNESS"] = "claude"
@@ -325,6 +342,8 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 	// /home/drem/.drem/prompt.md and sets DREM_PROMPT_PATH there.
 	// See plans/worker-prompt-delivery.md §§2, 4.
 	promptMount := ""
+	promptHash := ""
+	promptAssetVersions := ""
 	if promptRequired(agentType) {
 		// resolveWorkerPromptRoot's fallback builds
 		// $HOME/.drem/projects/<project>/prompts so the name is the
@@ -347,30 +366,34 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		if err := o.db.First(&row, "id = ?", o.projectID).Error; err == nil {
 			proj = &row
 		}
-		written, err := o.renderAndWritePrompt(task, proj, agentType, promptRoot)
+		promptInfo, err := o.renderAndWritePrompt(task, proj, agentType, promptRoot)
 		if err != nil {
 			return spawnWorkerContext{}, fmt.Errorf(
 				"render prompt for agent_type=%q task_id=%s: %w",
 				agentType, task.ID, err)
 		}
-		promptMount = written
+		promptMount = promptInfo.Path
+		promptHash = promptInfo.Hash
+		promptAssetVersions = promptInfo.AssetVersions
 	}
 
 	return spawnWorkerContext{
-		project:     projectName,
-		projectID:   projectID,
-		agentType:   agentType,
-		workerID:    workerID,
-		branch:      branch,
-		bareRepo:    bareRepo,
-		credsMount:  credsMount,
-		codexAuth:   codexAuth,
-		promptMount: promptMount,
-		provider:    string(provider),
-		modelID:     cliConfig.Model,
-		effort:      cliConfig.Effort,
-		envVars:     env,
-		extraLabel:  labels,
+		project:             projectName,
+		projectID:           projectID,
+		agentType:           agentType,
+		workerID:            workerID,
+		branch:              branch,
+		bareRepo:            bareRepo,
+		credsMount:          credsMount,
+		codexAuth:           codexAuth,
+		promptMount:         promptMount,
+		promptHash:          promptHash,
+		promptAssetVersions: promptAssetVersions,
+		provider:            string(provider),
+		modelID:             cliConfig.Model,
+		effort:              cliConfig.Effort,
+		envVars:             env,
+		extraLabel:          labels,
 	}, nil
 }
 
@@ -402,11 +425,10 @@ func (o *Orchestrator) resolveProjectLanguage() string {
 	if err := o.db.First(&proj, "id = ?", o.projectID).Error; err != nil {
 		return "go"
 	}
-	// Project does not carry language yet; fall back to "go" so the spawner
-	// mapping resolves. A future migration can add Project.Language and the
-	// caller will pick it up without changing the spawn contract.
-	_ = proj
-	return "go"
+	if proj.Language == "" {
+		return "go"
+	}
+	return proj.Language
 }
 
 // recordSpawnEvent writes a TaskEvent documenting the spawn so the audit

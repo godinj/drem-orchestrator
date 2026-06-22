@@ -456,9 +456,49 @@ func TestRunDirectToolAgent_MaxIterations(t *testing.T) {
 	cfg.WorkDir = t.TempDir()
 	cfg.MaxIterations = 3
 
-	_, err := RunDirectToolAgent(cfg, "You are a coder.", "Do something.", ToolsForRole("coder"), "")
+	result, err := RunDirectToolAgent(cfg, "You are a coder.", "Do something.", ToolsForRole("coder"), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeded max iterations (3)")
+	require.NotNil(t, result)
+	assert.Equal(t, "max_iterations", result.StopReason)
+}
+
+func TestRunDirectToolAgent_NoProgressStopsRepeatedIdenticalToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := toolChatResponse{
+			Choices: []toolChatChoice{{
+				Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+					ID:   "call_loop",
+					Type: "function",
+					Function: toolCallFunction{
+						Name:      "write",
+						Arguments: `{"path":"same.txt","content":"same"}`,
+					},
+				}}},
+				FinishReason: "tool_calls",
+			}},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			}{PromptTokens: 50, CompletionTokens: 10, TotalTokens: 60},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.MaxIterations = 20
+
+	result, err := RunDirectToolAgent(cfg, "You are a coder.", "Do something.", ToolsForRole("coder"), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no progress")
+	require.NotNil(t, result)
+	assert.Equal(t, "no_progress", result.StopReason)
+	assert.Less(t, result.Iterations, cfg.MaxIterations)
 }
 
 func TestRunDirectToolAgent_WritesOutputFile(t *testing.T) {
