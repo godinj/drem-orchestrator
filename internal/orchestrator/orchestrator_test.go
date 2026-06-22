@@ -204,6 +204,175 @@ func TestIsWorkAlreadyMerged_BranchIsAncestor(t *testing.T) {
 	}
 }
 
+func TestIsWorkAlreadyMerged_EqualBranchRejected(t *testing.T) {
+	bareRepoPath := setupTestRepoWithMainBranch(t)
+
+	featureName := "test-feature-equal"
+	createFeatureWorktree(t, bareRepoPath, featureName)
+	featureDir := filepath.Join(bareRepoPath, "feature", featureName, "integration")
+	featureBranch := "feature/" + featureName
+	agentBranch := "worktree-agent-equal"
+	runGitCmd(t, bareRepoPath, "branch", agentBranch, featureBranch)
+
+	db := testutil.NewTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	agentID := uuid.New()
+	db.Create(&model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-agent",
+		Status:         model.AgentIdle,
+		WorktreeBranch: agentBranch,
+	})
+
+	subtask := &model.Task{ID: uuid.New(), AssignedAgentID: &agentID}
+	if o.isWorkAlreadyMerged(subtask, featureDir) {
+		t.Error("expected false when agent branch is equal to feature HEAD")
+	}
+}
+
+func TestIsWorkAlreadyMerged_EphemeralOnlyBranchRejected(t *testing.T) {
+	bareRepoPath := setupTestRepoWithMainBranch(t)
+
+	featureName := "test-feature-ephemeral"
+	createFeatureWorktree(t, bareRepoPath, featureName)
+	featureDir := filepath.Join(bareRepoPath, "feature", featureName, "integration")
+	featureBranch := "feature/" + featureName
+	agentBranch := "worktree-agent-ephemeral"
+	runGitCmd(t, bareRepoPath, "branch", agentBranch, featureBranch)
+	agentDir := filepath.Join(bareRepoPath, "feature", featureName, "agent-ephemeral")
+	runGitCmd(t, bareRepoPath, "worktree", "add", agentDir, agentBranch)
+	runGitCmd(t, agentDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, agentDir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(agentDir, "plan.json"), []byte(`{"plan":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, agentDir, "add", ".")
+	runGitCmd(t, agentDir, "commit", "-m", "ephemeral only")
+	runGitCmd(t, featureDir, "merge", "--no-ff", agentBranch, "-m", "merge ephemeral")
+
+	db := testutil.NewTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	agentID := uuid.New()
+	db.Create(&model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-agent",
+		Status:         model.AgentIdle,
+		WorktreeBranch: agentBranch,
+	})
+
+	subtask := &model.Task{ID: uuid.New(), AssignedAgentID: &agentID}
+	if o.isWorkAlreadyMerged(subtask, featureDir) {
+		t.Error("expected false when agent branch only changed ephemeral files")
+	}
+}
+
+func TestIsWorkAlreadyMerged_NonZeroContainerDeathBlocks(t *testing.T) {
+	bareRepoPath := setupTestRepoWithMainBranch(t)
+
+	featureName := "test-feature-container-death"
+	createFeatureWorktree(t, bareRepoPath, featureName)
+	agentBranch := createAgentBranch(t, bareRepoPath, featureName, "worktree-agent-container-death", true)
+	featureDir := filepath.Join(bareRepoPath, "feature", featureName, "integration")
+
+	db := testutil.NewTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	agentID := uuid.New()
+	containerID := "container-dead-1"
+	db.Create(&model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-agent",
+		Status:         model.AgentDead,
+		WorktreeBranch: agentBranch,
+		TmuxSession:    containerID,
+	})
+	subtask := &model.Task{ID: uuid.New(), AssignedAgentID: &agentID}
+	db.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    subtask.ID,
+		EventType: "container_died",
+		Details: model.JSONField{
+			"container_id": containerID,
+			"exit_code":    float64(1),
+		},
+		Actor:     "docker-events",
+		CreatedAt: time.Now(),
+	})
+
+	if o.isWorkAlreadyMerged(subtask, featureDir) {
+		t.Error("expected false when the worker has a non-zero container death event")
+	}
+}
+
+func TestIsWorkAlreadyMerged_PushFailureBlocks(t *testing.T) {
+	bareRepoPath := setupTestRepoWithMainBranch(t)
+
+	featureName := "test-feature-push-failure"
+	createFeatureWorktree(t, bareRepoPath, featureName)
+	agentBranch := createAgentBranch(t, bareRepoPath, featureName, "worktree-agent-push-failure", true)
+	featureDir := filepath.Join(bareRepoPath, "feature", featureName, "integration")
+
+	db := testutil.NewTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	agentID := uuid.New()
+	db.Create(&model.Agent{
+		ID:             agentID,
+		ProjectID:      o.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "test-agent",
+		Status:         model.AgentDead,
+		WorktreeBranch: agentBranch,
+		TmuxSession:    "container-push-failure",
+	})
+	subtask := &model.Task{ID: uuid.New(), AssignedAgentID: &agentID}
+	db.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    subtask.ID,
+		EventType: "build_error",
+		NewValue:  "failed to push some refs to '/bare'",
+		Actor:     "watchdog",
+		CreatedAt: time.Now(),
+	})
+
+	if o.isWorkAlreadyMerged(subtask, featureDir) {
+		t.Error("expected false when the worker recorded a push failure")
+	}
+}
+
+func TestFeatureBranchHasChanges_IgnoresEphemeralOnly(t *testing.T) {
+	bareRepoPath := setupTestRepoWithMainBranch(t)
+
+	featureName := "test-feature-ephemeral-direct"
+	featureDir := createFeatureWorktree(t, bareRepoPath, featureName)
+	if err := os.WriteFile(filepath.Join(featureDir, "plan.json"), []byte(`{"plan":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, featureDir, "add", ".")
+	runGitCmd(t, featureDir, "commit", "-m", "ephemeral only")
+
+	db := testutil.NewTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: bareRepoPath, Default: "main"}
+	o := testOrchestrator(t, db, wt)
+	task := &model.Task{ID: uuid.New()}
+
+	if o.featureBranchHasChanges(task, featureDir) {
+		t.Error("expected ephemeral-only feature changes not to count as task work")
+	}
+}
+
 func TestIsWorkAlreadyMerged_BranchDiverged(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
 

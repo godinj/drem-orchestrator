@@ -705,12 +705,99 @@ func (o *Orchestrator) isWorkAlreadyMerged(subtask *model.Task, featureWorktree 
 		return false
 	}
 
+	if o.hasBlockingCompletionSignal(subtask, &ag) {
+		return false
+	}
+
+	agentHEAD, err := gitexec.RunGit(context.Background(), featureWorktree, "rev-parse", ag.WorktreeBranch)
+	if err != nil {
+		return false
+	}
+	featureHEAD, err := gitexec.RunGit(context.Background(), featureWorktree, "rev-parse", "HEAD")
+	if err != nil {
+		return false
+	}
+	if agentHEAD == featureHEAD {
+		return false
+	}
+
+	if !o.agentBranchHasMeaningfulFiles(featureWorktree, ag.WorktreeBranch) {
+		return false
+	}
+
 	// Check if agent branch tip is an ancestor of feature HEAD.
-	_, err := gitexec.RunGit(
+	_, err = gitexec.RunGit(
 		context.Background(), featureWorktree,
 		"merge-base", "--is-ancestor", ag.WorktreeBranch, "HEAD",
 	)
 	return err == nil // exit code 0 means it IS an ancestor
+}
+
+func (o *Orchestrator) agentBranchHasMeaningfulFiles(featureWorktree, agentBranch string) bool {
+	baseRef := "HEAD"
+	if o.worktree != nil {
+		baseRef = o.worktree.DefaultBranchName()
+	}
+	return branchHasMeaningfulDiff(featureWorktree, baseRef, agentBranch)
+}
+
+func branchHasMeaningfulDiff(featureWorktree, baseRef, branch string) bool {
+	output, err := gitexec.RunGit(context.Background(), featureWorktree, "diff", "--name-only", baseRef+".."+branch)
+	if err != nil {
+		return false
+	}
+	for _, path := range strings.Split(output, "\n") {
+		if isMeaningfulWorkPath(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func isMeaningfulWorkPath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	switch path {
+	case "plan.json", ".claude/settings.json":
+		return false
+	}
+	return true
+}
+
+func (o *Orchestrator) hasBlockingCompletionSignal(task *model.Task, ag *model.Agent) bool {
+	if task == nil || ag == nil {
+		return false
+	}
+	containerID := ag.TmuxSession
+	if containerID == "" && ag.Config != nil {
+		containerID, _ = ag.Config["container_id"].(string)
+	}
+	if containerID == "" {
+		return false
+	}
+
+	var event model.TaskEvent
+	if err := o.db.Where("task_id = ? AND event_type = ? AND new_value LIKE ?", task.ID, "build_error", "%failed to push some refs%").
+		Order("created_at DESC").First(&event).Error; err == nil {
+		return true
+	}
+
+	if err := o.db.Where("task_id = ? AND event_type = ?", task.ID, "container_died").
+		Order("created_at DESC").First(&event).Error; err != nil {
+		return false
+	}
+	if event.Details == nil || event.Details["container_id"] != containerID {
+		return false
+	}
+	switch v := event.Details["exit_code"].(type) {
+	case float64:
+		return int(v) != 0
+	case int:
+		return v != 0
+	}
+	return false
 }
 
 // resolveFeatureWorktree resolves the feature integration worktree path
@@ -765,7 +852,16 @@ func (o *Orchestrator) featureBranchHasChanges(task *model.Task, featureDir stri
 		o.logger.Warn("feature branch change check failed", "task_id", task.ID, "error", err)
 		return false
 	}
-	return len(changed) > 0
+	return hasMeaningfulWorkPaths(changed)
+}
+
+func hasMeaningfulWorkPaths(paths []string) bool {
+	for _, path := range paths {
+		if isMeaningfulWorkPath(path) {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *Orchestrator) recoverStuckAgents() {

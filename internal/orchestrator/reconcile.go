@@ -135,7 +135,7 @@ func (o *Orchestrator) reconcileStaleSubtasks() (int, error) {
 		if err != nil {
 			continue
 		}
-		if len(changedFiles) > 0 {
+		if hasMeaningfulWorkPaths(changedFiles) {
 			// Feature branch has changes — subtasks plausibly contributed.
 			continue
 		}
@@ -276,8 +276,11 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 
 			hasCommits, err := gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch)
 			if err != nil {
-				// Branch likely already cleaned up — assume merge happened.
-				merged = true
+				o.logger.Warn("reconcile: cannot inspect agent branch, leaving subtask unfinished",
+					"subtask_id", sub.ID, "agent_id", ag.ID, "branch", ag.WorktreeBranch, "error", err)
+			} else if !branchHasMeaningfulDiff(featureDir, "HEAD", ag.WorktreeBranch) {
+				o.logger.Warn("reconcile: agent branch has no meaningful file changes, leaving subtask unfinished",
+					"subtask_id", sub.ID, "agent_id", ag.ID, "branch", ag.WorktreeBranch)
 			} else if hasCommits {
 				result, mergeErr := o.mergeAgentBranchIntoFeature(context.Background(), ag.WorktreeBranch, featureDir)
 				if mergeErr != nil {
@@ -293,11 +296,9 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 						"subtask_id", sub.ID, "conflicts", result.Conflicts)
 				}
 			} else {
-				// No commits on agent branch — already merged or empty work.
-				merged = true
+				o.logger.Warn("reconcile: agent branch has no new commits, leaving subtask unfinished",
+					"subtask_id", sub.ID, "agent_id", ag.ID, "branch", ag.WorktreeBranch)
 			}
-		} else {
-			merged = true
 		}
 
 		if !merged {
@@ -379,7 +380,7 @@ func (o *Orchestrator) reconcileEmptyFeatures() (int, error) {
 		if err != nil {
 			continue
 		}
-		if len(changed) > 0 {
+		if hasMeaningfulWorkPaths(changed) {
 			continue
 		}
 

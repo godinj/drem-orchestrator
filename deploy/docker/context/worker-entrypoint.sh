@@ -73,6 +73,15 @@ if [[ ! -d "${BARE_REPO}" ]]; then
     die "bare repo not mounted at ${BARE_REPO}"
 fi
 
+# Fail before cloning or spending model tokens if the worker cannot create the
+# ref lock that git push will need later. This catches host bind-mount ownership
+# drift such as refs/heads/feature being root-owned inside /bare.
+ref_dir="${BARE_REPO}/refs/heads/$(dirname "${DREM_BRANCH}")"
+ref_lock="${BARE_REPO}/refs/heads/${DREM_BRANCH}.drem-preflight-lock.$$"
+mkdir -p "${ref_dir}" || die "bare repo refs not writable for ${DREM_BRANCH}"
+: >"${ref_lock}" || die "bare repo ref lock not writable for ${DREM_BRANCH}"
+rm -f "${ref_lock}" || die "bare repo ref lock cleanup failed for ${DREM_BRANCH}"
+
 # ---------- clone + remote wiring -----------------------------------------
 # A fresh container always starts with an empty workspace, but the image's
 # WORKDIR is /home/drem/work; guard against it having pre-existing state

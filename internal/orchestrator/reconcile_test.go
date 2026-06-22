@@ -405,11 +405,136 @@ func TestReconcileOrphanedSubtasks_DeadAgent(t *testing.T) {
 		t.Errorf("expected 1 fix for dead agent, got %d", fixes)
 	}
 
-	// Subtask should fast-track to DONE (matches onAgentCompleted behavior).
+	// Dead agents with no branch/work must not fast-track to DONE.
 	var updated model.Task
 	db.First(&updated, "id = ?", subID)
-	if updated.Status != model.StatusDone {
-		t.Errorf("expected subtask to reach done, got %s", updated.Status)
+	if updated.Status == model.StatusDone {
+		t.Errorf("expected subtask not to reach done")
+	}
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected subtask to fail for dead empty agent, got %s", updated.Status)
+	}
+}
+
+func TestReconcileOrphanedSubtasks_EqualAgentBranchNotDone(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "orphan-equal"
+	createFeatureWorktree(t, bareRepo, featureName)
+	featureBranch := "feature/" + featureName
+	agentBranch := "worktree-agent-equal-reconcile"
+	runGitCmd(t, bareRepo, "branch", agentBranch, featureBranch)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      orch.projectID,
+		Title:          "orphan-equal-parent",
+		Description:    "test parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: featureBranch,
+	}
+	db.Create(&parent)
+
+	agentID := uuid.New()
+	ag := model.Agent{
+		ID:             agentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "equal-agent",
+		Status:         model.AgentDead,
+		WorktreeBranch: agentBranch,
+	}
+	db.Create(&ag)
+
+	subID := uuid.New()
+	sub := model.Task{
+		ID:              subID,
+		ProjectID:       orch.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "orphan-equal-sub",
+		Description:     "subtask whose agent branch is equal to feature",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&sub)
+
+	fixes, err := orch.reconcileOrphanedSubtasks()
+	if err != nil {
+		t.Fatalf("reconcileOrphanedSubtasks() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix for dead equal-branch agent, got %d", fixes)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", subID)
+	if updated.Status == model.StatusDone {
+		t.Fatal("expected equal agent branch not to be reconciled as done")
+	}
+}
+
+func TestReconcileOrphanedSubtasks_EphemeralOnlyAgentBranchNotDone(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "orphan-ephemeral"
+	createFeatureWorktree(t, bareRepo, featureName)
+	featureBranch := "feature/" + featureName
+	agentBranch := "worktree-agent-ephemeral-reconcile"
+	runGitCmd(t, bareRepo, "branch", agentBranch, featureBranch)
+	agentDir := filepath.Join(bareRepo, "feature", featureName, "agent-ephemeral")
+	runGitCmd(t, bareRepo, "worktree", "add", agentDir, agentBranch)
+	runGitCmd(t, agentDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, agentDir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(agentDir, "plan.json"), []byte(`{"plan":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, agentDir, "add", ".")
+	runGitCmd(t, agentDir, "commit", "-m", "ephemeral only")
+
+	parentID := uuid.New()
+	db.Create(&model.Task{
+		ID:             parentID,
+		ProjectID:      orch.projectID,
+		Title:          "orphan-ephemeral-parent",
+		Description:    "test parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: featureBranch,
+	})
+
+	agentID := uuid.New()
+	db.Create(&model.Agent{
+		ID:             agentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "ephemeral-agent",
+		Status:         model.AgentDead,
+		WorktreeBranch: agentBranch,
+	})
+
+	subID := uuid.New()
+	db.Create(&model.Task{
+		ID:              subID,
+		ProjectID:       orch.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "orphan-ephemeral-sub",
+		Description:     "subtask whose agent branch only has ephemeral changes",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+	})
+
+	fixes, err := orch.reconcileOrphanedSubtasks()
+	if err != nil {
+		t.Fatalf("reconcileOrphanedSubtasks() error: %v", err)
+	}
+	if fixes != 1 {
+		t.Errorf("expected 1 fix for dead ephemeral-only agent, got %d", fixes)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", subID)
+	if updated.Status == model.StatusDone {
+		t.Fatal("expected ephemeral-only agent branch not to be reconciled as done")
 	}
 }
 
