@@ -802,6 +802,39 @@ func TestIsDeleteSection(t *testing.T) {
 	}
 }
 
+func TestDetailView_ShowsPlanDetailsForNonReviewTask(t *testing.T) {
+	task := &model.Task{
+		ID:     uuid.New(),
+		Title:  "implementation task",
+		Status: model.StatusInProgress,
+		Plan: model.JSONField{
+			"subtasks": []any{
+				map[string]any{
+					"title":           "Wire detail visibility",
+					"description":     "Load and render the full stored task plan.",
+					"phase":           "implementation",
+					"estimated_files": []any{"internal/tui/detail.go", "internal/tui/data_cmds.go"},
+				},
+			},
+		},
+	}
+	d := DetailModel{task: task, width: 120, height: 50}
+
+	output := d.View()
+
+	for _, want := range []string{
+		"Plan:",
+		"Wire detail visibility",
+		"Load and render the full stored task plan.",
+		"phase: implementation",
+		"files: internal/tui/detail.go, internal/tui/data_cmds.go",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("detail view missing %q, got:\n%s", want, output)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Clarification questions display
 // ---------------------------------------------------------------------------

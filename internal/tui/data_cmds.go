@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/ctxmon"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -174,6 +175,8 @@ func listenForEvents(events <-chan Event) tea.Cmd {
 // that case the Cmd emits an empty result instead of panicking.
 func (m Model) loadTasks() tea.Cmd {
 	ds := m.dataSource
+	db := m.db
+	projectID := m.projectID
 	return func() tea.Msg {
 		if ds == nil {
 			return tasksLoadedMsg{tasks: nil}
@@ -184,7 +187,32 @@ func (m Model) loadTasks() tea.Cmd {
 		if err != nil {
 			return dataErrMsg{err: err}
 		}
-		return tasksLoadedMsg{tasks: TasksFromDTOs(dtos)}
+		tasks := TasksFromDTOs(dtos)
+		enrichTasksFromDB(db, projectID, tasks)
+		return tasksLoadedMsg{tasks: tasks}
+	}
+}
+
+func enrichTasksFromDB(db *gorm.DB, projectID uuid.UUID, tasks []model.Task) {
+	if db == nil || len(tasks) == 0 {
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(tasks))
+	for _, task := range tasks {
+		ids = append(ids, task.ID)
+	}
+	var fullTasks []model.Task
+	if err := db.Where("project_id = ? AND id IN ?", projectID, ids).Find(&fullTasks).Error; err != nil {
+		return
+	}
+	byID := make(map[uuid.UUID]model.Task, len(fullTasks))
+	for _, task := range fullTasks {
+		byID[task.ID] = task
+	}
+	for i := range tasks {
+		if full, ok := byID[tasks[i].ID]; ok {
+			tasks[i] = full
+		}
 	}
 }
 

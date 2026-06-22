@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/pkg/orchclient"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
@@ -261,6 +262,34 @@ func TestLoadTasks_ErrorReturnsDataErrMsg(t *testing.T) {
 	errMsg, ok := msg.(dataErrMsg)
 	require.True(t, ok, "expected dataErrMsg, got %T", msg)
 	require.EqualError(t, errMsg.err, "boom")
+}
+
+func TestLoadTasks_EnrichesHTTPTasksFromLocalDB(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	project := testutil.CreateProject(t, db, "canvas", "/tmp/canvas.git", "master")
+	task := testutil.CreateTask(t, db, project.ID, "planned task", model.StatusPlanReview)
+	task.Plan = model.JSONField{
+		"subtasks": []any{
+			map[string]any{"title": "Visible plan step"},
+		},
+	}
+	require.NoError(t, db.Save(&task).Error)
+
+	ds := &fakeDataSource{
+		tasks: []orchdto.TaskDTO{{
+			ID:     task.ID.String(),
+			Title:  task.Title,
+			Status: string(task.Status),
+		}},
+	}
+	m := Model{dataSource: ds, db: db, projectID: project.ID}
+
+	msg := m.loadTasks()()
+	loaded, ok := msg.(tasksLoadedMsg)
+	require.True(t, ok, "expected tasksLoadedMsg, got %T", msg)
+	require.Len(t, loaded.tasks, 1)
+	require.NotNil(t, loaded.tasks[0].Plan)
+	require.Contains(t, loaded.tasks[0].Plan, "subtasks")
 }
 
 // TestLoadAgents_ErrorReturnsDataErrMsg mirrors TestLoadTasks_ErrorReturnsDataErrMsg

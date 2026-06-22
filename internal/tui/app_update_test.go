@@ -527,7 +527,7 @@ func TestModelUpdate_DataRefreshedMsg_UpdatesTasksAndAgents(t *testing.T) {
 func TestModelUpdate_DataRefreshedMsg_UsesFullTaskForDetailPlan(t *testing.T) {
 	m := newKeyTestModel(t, FocusBoard)
 	taskID := uuid.New()
-	listTask := model.Task{ID: taskID, Title: "Planless", Status: model.StatusPlanReview}
+	listTask := model.Task{ID: taskID, Title: "Planless", Status: model.StatusInProgress}
 	m.board.tasks = []model.Task{listTask}
 	m.board.cursor = 0
 	m.board.selectedID = &taskID

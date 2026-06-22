@@ -164,8 +164,9 @@ func (d DetailModel) View() string {
 		}
 	}
 
-	// Plan subtasks (for plan_review, show the proposed plan).
-	if d.task.Status == model.StatusPlanReview && d.task.Plan != nil {
+	// Plan subtasks. Plans remain useful after approval, so show them for any
+	// task status when the orchestrator has stored one.
+	if d.task.Plan != nil {
 		if subtasks, ok := d.task.Plan["subtasks"]; ok {
 			if items, ok := subtasks.([]any); ok && len(items) > 0 {
 				planHeader := "Plan:"
@@ -192,6 +193,23 @@ func (d DetailModel) View() string {
 							line = deleteHighlight.Render(line)
 						}
 						sections = append(sections, line)
+						if desc, _ := m["description"].(string); desc != "" {
+							sections = append(sections, subtitleStyle.Render("     "+desc))
+						}
+						if phase, _ := m["phase"].(string); phase != "" {
+							sections = append(sections, subtitleStyle.Render("     phase: "+phase))
+						}
+						if files, ok := m["estimated_files"].([]any); ok && len(files) > 0 {
+							var names []string
+							for _, file := range files {
+								if s, ok := file.(string); ok && s != "" {
+									names = append(names, s)
+								}
+							}
+							if len(names) > 0 {
+								sections = append(sections, subtitleStyle.Render("     files: "+strings.Join(names, ", ")))
+							}
+						}
 					}
 				}
 			}
