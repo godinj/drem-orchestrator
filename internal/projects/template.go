@@ -117,6 +117,13 @@ type TemplateData struct {
 	// See plans/orch-db-host-access-impl.md (Option A).
 	HostDataDir string
 
+	// PlanPacketRoot is the host directory bind-mounted read-only into
+	// C-Suite persona containers at /home/drem/orch-plans. It holds
+	// generated DB-backed task plan review packets, which are runtime
+	// orchestration state rather than project source artifacts. Defaults
+	// to HostHome/.drem/projects/<ProjectName>/plan-packets when empty.
+	PlanPacketRoot string
+
 	// CsuiteWatcherTokenPath is the host path of the operator's
 	// csuite-watcher shared token file (generated once via
 	// `openssl rand -hex 32 > ~/.drem/csuite-watcher.token`). The
@@ -229,6 +236,11 @@ func WriteProjectComposeAt(homeDir, projectName string, data TemplateData) (stri
 		if err := os.MkdirAll(spec.HostDataDir, 0o755); err == nil {
 			_ = os.Chown(spec.HostDataDir, 1000, 1000)
 		}
+	}
+	// Pre-create the runtime plan-packet dir so Docker does not create
+	// the bind source as root before the DB export path writes into it.
+	if spec.PlanPacketRoot != "" {
+		_ = os.MkdirAll(spec.PlanPacketRoot, 0o755)
 	}
 	// Pre-create the operator pseudo-persona's inbox tree under
 	// CsuiteHomeRoot so "to: operator" replies delivered by the

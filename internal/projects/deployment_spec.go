@@ -17,6 +17,7 @@ type projectDeploymentSpec struct {
 	ConfigPath            string
 	WorkerPromptRoot      string
 	HostDataDir           string
+	PlanPacketRoot        string
 	CsuiteOperatorArchive string
 	TemplateData          TemplateData
 }
@@ -49,6 +50,7 @@ func compileProjectDeploymentSpec(homeDir, projectName string, data TemplateData
 		ConfigPath:       configPath,
 		WorkerPromptRoot: data.WorkerPromptRoot,
 		HostDataDir:      data.HostDataDir,
+		PlanPacketRoot:   data.PlanPacketRoot,
 		TemplateData:     data,
 	}
 	if data.CsuiteHomeRoot != "" {
@@ -93,6 +95,9 @@ func compileTemplateDefaults(data TemplateData, fallbackHome, fallbackProject st
 	}
 	if data.HostDataDir == "" && data.HostHome != "" && projectName != "" {
 		data.HostDataDir = filepath.Join(data.HostHome, ".drem", "projects", projectName, "data")
+	}
+	if data.PlanPacketRoot == "" && data.HostHome != "" && projectName != "" {
+		data.PlanPacketRoot = filepath.Join(data.HostHome, ".drem", "projects", projectName, "plan-packets")
 	}
 	if data.CsuiteWatcherTokenPath == "" && data.HostHome != "" {
 		data.CsuiteWatcherTokenPath = filepath.Join(data.HostHome, ".drem", "csuite-watcher.token")

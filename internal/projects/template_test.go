@@ -314,13 +314,9 @@ func TestRender_CsuiteWatcherTokenPathIsWired(t *testing.T) {
 }
 
 // TestRender_CsuiteKyleServicePresent asserts that the csuite-kyle
-// service block renders with the expected shape — same as the other
-// three personas PLUS the Kyle-only :rw orch-plans bind-mount. Kyle is
-// the C-Suite's plan-author; the compose template breaks the strict
-// persona-block symmetry intentionally to grant him write access to
-// plans/ in the bare-repo master working tree without delegating
-// through a worker. See plans/container-kyle-transition.md §Phase 1
-// (Seth adjustment #2).
+// service block renders with the expected shape. Kyle gets the same
+// read-only runtime plan-packet mount as the other C-Suite personas;
+// generated DB-backed plan packets are not project source artifacts.
 func TestRender_CsuiteKyleServicePresent(t *testing.T) {
 	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
 	data.HostHome = "/home/operator"
@@ -355,19 +351,18 @@ func TestRender_CsuiteKyleServicePresent(t *testing.T) {
 		svc.Environment["CSUITE_SIGNAL_ENDPOINT"])
 	require.Equal(t, "60m", svc.Environment["DREM_CLAUDE_TIMEOUT"])
 
-	// Kyle-only privilege: the orch-plans mount is :rw, not :ro. The
-	// other three personas must stay :ro so their plan writes go
-	// through a PR/worker path; Kyle is deliberately exempted because
-	// he is the plan-author in the C-Suite.
-	var plansRW bool
+	// Runtime plan packets are read-only for every persona, including Kyle.
+	var plansRO bool
 	for _, v := range svc.Volumes {
 		if strings.Contains(v, ":/home/drem/orch-plans:") {
-			require.True(t, strings.HasSuffix(v, ":/home/drem/orch-plans:rw"),
-				"csuite-kyle orch-plans mount must be :rw, got %q", v)
-			plansRW = true
+			require.Equal(t,
+				"/home/operator/.drem/projects/drem-orchestrator/plan-packets:/home/drem/orch-plans:ro",
+				v,
+				"csuite-kyle orch-plans mount must use runtime plan packets read-only")
+			plansRO = true
 		}
 	}
-	require.True(t, plansRW, "csuite-kyle missing orch-plans mount")
+	require.True(t, plansRO, "csuite-kyle missing orch-plans mount")
 
 	// Kyle state tree mounts at the kyle-specific host-side subdir.
 	var kyleHomeMounted bool
@@ -392,16 +387,17 @@ func TestRender_CsuiteKyleServicePresent(t *testing.T) {
 	// depends_on [orch] just like the others.
 	require.Contains(t, svc.DependsOn, "orch")
 
-	// Cross-persona sanity: mike/alex/seth must still have :ro on the
-	// plans mount so we don't silently elevate the wrong persona.
+	// Cross-persona sanity: mike/alex/seth must use the same read-only
+	// runtime plan packet mount.
 	for _, p := range []string{"csuite-mike", "csuite-alex", "csuite-seth"} {
 		other, ok := parsed.Services[p]
 		require.True(t, ok)
 		for _, v := range other.Volumes {
 			if strings.Contains(v, ":/home/drem/orch-plans:") {
-				require.True(t, strings.HasSuffix(v, ":/home/drem/orch-plans:ro"),
-					"%s orch-plans mount must remain :ro (kyle is the only :rw persona), got %q",
-					p, v)
+				require.Equal(t,
+					"/home/operator/.drem/projects/drem-orchestrator/plan-packets:/home/drem/orch-plans:ro",
+					v,
+					"%s orch-plans mount must use runtime plan packets read-only", p)
 			}
 		}
 	}
@@ -969,6 +965,35 @@ func TestRender_HostDataDirExplicitOverride(t *testing.T) {
 		"explicit HostDataDir must override the HostHome default")
 }
 
+func TestRender_PlanPacketRootDefaultsFromHostHome(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/root"
+	data.PlanPacketRoot = "" // explicit
+
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	require.Contains(t, string(out),
+		"/root/.drem/projects/drem-orchestrator/plan-packets:/home/drem/orch-plans:ro",
+		"default PlanPacketRoot must derive from HostHome + ProjectName")
+	require.NotContains(t, string(out),
+		"/home/dev/git/drem-orchestrator.git/master/plans:/home/drem/orch-plans",
+		"generated plan packets must not be mounted from the project source checkout")
+}
+
+func TestRender_PlanPacketRootExplicitOverride(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostHome = "/home/operator"
+	data.PlanPacketRoot = "/srv/drem-state/drem-orchestrator/plan-packets"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+	s := string(out)
+	require.Contains(t, s,
+		"/srv/drem-state/drem-orchestrator/plan-packets:/home/drem/orch-plans:ro")
+	require.NotContains(t, s,
+		"/home/operator/.drem/projects/drem-orchestrator/plan-packets:/home/drem/orch-plans:ro",
+		"explicit PlanPacketRoot must override the HostHome default")
+}
+
 // TestWriteProjectComposeAt_PrecreatesHostDataDir asserts the helper
 // creates the host-side data dir on disk so docker's auto-create as
 // root doesn't race the first `docker compose up`. Best-effort Chown
@@ -992,6 +1017,27 @@ func TestWriteProjectComposeAt_PrecreatesHostDataDir(t *testing.T) {
 	info, err := os.Stat(dataDir)
 	require.NoError(t, err, "WriteProjectComposeAt must pre-create HostDataDir")
 	require.True(t, info.IsDir(), "HostDataDir must be a directory")
+}
+
+func TestWriteProjectComposeAt_PrecreatesPlanPacketRoot(t *testing.T) {
+	homeDir := t.TempDir()
+	data := projects.TemplateData{
+		ProjectName:  "drem-orchestrator",
+		OrchURL:      "http://localhost:8080",
+		Language:     projects.LanguageGo,
+		WorkerImage:  "drem-worker-go:latest",
+		MergerImage:  "drem-merger:latest",
+		BareRepoPath: "/home/dev/git/drem-orchestrator.git",
+		SharedToken:  "token-123",
+		HostHome:     homeDir,
+	}
+	_, err := projects.WriteProjectComposeAt(homeDir, "drem-orchestrator", data)
+	require.NoError(t, err)
+
+	planPacketRoot := filepath.Join(homeDir, ".drem", "projects", "drem-orchestrator", "plan-packets")
+	info, err := os.Stat(planPacketRoot)
+	require.NoError(t, err, "WriteProjectComposeAt must pre-create PlanPacketRoot")
+	require.True(t, info.IsDir(), "PlanPacketRoot must be a directory")
 }
 
 // TestWriteProjectComposeAt_PrecreatesOperatorInboxTree asserts the

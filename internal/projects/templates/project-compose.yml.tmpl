@@ -306,17 +306,11 @@ services:
       # is empty, so this mount path is the canonical source of truth
       # regardless of host shell env state at `docker compose up` time.
       - {{.CsuiteWatcherTokenPath}}:/run/secrets/csuite-watcher-token:ro
-      # Bind-mount the project's bare-repo master working-tree plans/
-      # directory so personas can read plan docs, PRDs, and investigation
-      # notes directly without delegating to a temp worker with repo
-      # access. Read-only; bare-repo master working tree is the source
-      # of truth. Path inside container: /home/drem/orch-plans/. Seth
-      # (CTO) flagged this as a recurring wall during pass-1 / pass-2
-      # synthesis passes — closing it eliminates delegation overhead on
-      # every future CTO synthesis.
       # Read-only full checkout for source-level review by C-Suite personas.
       - {{.BareRepoPath}}/master:{{.BareRepoPath}}/master:ro
-      - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
+      # Runtime plan-review packets exported from drem.db. These are
+      # operational orchestration state, not project source artifacts.
+      - {{.PlanPacketRoot}}:/home/drem/orch-plans:ro
       # Read-only project C-Suite root so personas can review sibling-owned
       # evidence bundles without write access. The persona-specific mount below
       # overlays its own subtree read-write for inbox/outbox/state.
@@ -374,17 +368,11 @@ services:
       # is empty, so this mount path is the canonical source of truth
       # regardless of host shell env state at `docker compose up` time.
       - {{.CsuiteWatcherTokenPath}}:/run/secrets/csuite-watcher-token:ro
-      # Bind-mount the project's bare-repo master working-tree plans/
-      # directory so personas can read plan docs, PRDs, and investigation
-      # notes directly without delegating to a temp worker with repo
-      # access. Read-only; bare-repo master working tree is the source
-      # of truth. Path inside container: /home/drem/orch-plans/. Seth
-      # (CTO) flagged this as a recurring wall during pass-1 / pass-2
-      # synthesis passes — closing it eliminates delegation overhead on
-      # every future CTO synthesis.
       # Read-only full checkout for source-level review by C-Suite personas.
       - {{.BareRepoPath}}/master:{{.BareRepoPath}}/master:ro
-      - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
+      # Runtime plan-review packets exported from drem.db. These are
+      # operational orchestration state, not project source artifacts.
+      - {{.PlanPacketRoot}}:/home/drem/orch-plans:ro
       # Read-only project C-Suite root so personas can review sibling-owned
       # evidence bundles without write access. The persona-specific mount below
       # overlays its own subtree read-write for inbox/outbox/state.
@@ -434,17 +422,11 @@ services:
       # is empty, so this mount path is the canonical source of truth
       # regardless of host shell env state at `docker compose up` time.
       - {{.CsuiteWatcherTokenPath}}:/run/secrets/csuite-watcher-token:ro
-      # Bind-mount the project's bare-repo master working-tree plans/
-      # directory so personas can read plan docs, PRDs, and investigation
-      # notes directly without delegating to a temp worker with repo
-      # access. Read-only; bare-repo master working tree is the source
-      # of truth. Path inside container: /home/drem/orch-plans/. Seth
-      # (CTO) flagged this as a recurring wall during pass-1 / pass-2
-      # synthesis passes — closing it eliminates delegation overhead on
-      # every future CTO synthesis.
       # Read-only full checkout for source-level review by C-Suite personas.
       - {{.BareRepoPath}}/master:{{.BareRepoPath}}/master:ro
-      - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
+      # Runtime plan-review packets exported from drem.db. These are
+      # operational orchestration state, not project source artifacts.
+      - {{.PlanPacketRoot}}:/home/drem/orch-plans:ro
       # Read-only project C-Suite root so personas can review sibling-owned
       # evidence bundles without write access. The persona-specific mount below
       # overlays its own subtree read-write for inbox/outbox/state.
@@ -462,13 +444,8 @@ services:
     restart: unless-stopped
 
   # csuite-kyle is the CEO persona. Runs the same csuite-persona poller
-  # as mike/alex/seth but with one deliberate privilege asymmetry:
-  # the orch-plans bind-mount is :rw (not :ro). Kyle is the C-Suite's
-  # plan-author — he authors PRDs, plan docs, and session records under
-  # plans/ in the bare-repo master working tree — so he needs to write
-  # there directly rather than delegate to a worker. The other three
-  # personas remain :ro; only Kyle's service block differs. See
-  # plans/container-kyle-transition.md §Phase 1 (Seth adjustment #2).
+  # as mike/alex/seth. Like the other personas, Kyle receives a read-only
+  # full checkout plus read-only runtime plan packets at /home/drem/orch-plans.
   csuite-kyle:
     image: {{index .CsuiteImages "kyle"}}
     environment:
@@ -502,18 +479,11 @@ services:
       # is empty, so this mount path is the canonical source of truth
       # regardless of host shell env state at `docker compose up` time.
       - {{.CsuiteWatcherTokenPath}}:/run/secrets/csuite-watcher-token:ro
-      # Kyle-only :rw on the plans tree. Every other persona's block
-      # mounts this path :ro. Kyle writes plan docs during normal
-      # operation — PRD drafts, container-Kyle-transition.md style
-      # plan files, session records, scoreboard spin-outs — and
-      # delegating every edit to a worker container would add minutes
-      # of latency to every plan revision. The operator's interactive
-      # Kyle instance writes to the same path on the host; the
-      # coexistence rules in docs/csuite-agents/prompts/kyle.md
-      # (Phase 4) spell out how the two Kyles hand off the tree.
       # Read-only full checkout for source-level review by C-Suite personas.
       - {{.BareRepoPath}}/master:{{.BareRepoPath}}/master:ro
-      - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:rw
+      # Runtime plan-review packets exported from drem.db. These are
+      # operational orchestration state, not project source artifacts.
+      - {{.PlanPacketRoot}}:/home/drem/orch-plans:ro
       # Read-only project C-Suite root so Kyle can review sibling-owned evidence
       # bundles without broad write access. The Kyle-specific mount below
       # overlays his own subtree read-write for inbox/outbox/state.

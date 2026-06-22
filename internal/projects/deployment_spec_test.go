@@ -24,6 +24,7 @@ func TestCompileProjectDeploymentSpec_DerivesProjectLayoutAndTemplateDefaults(t 
 	require.Equal(t, filepath.Join(projectDir, configFilename), spec.ConfigPath)
 	require.Equal(t, filepath.Join(projectDir, "prompts"), spec.WorkerPromptRoot)
 	require.Equal(t, filepath.Join(projectDir, "data"), spec.HostDataDir)
+	require.Equal(t, filepath.Join(projectDir, "plan-packets"), spec.PlanPacketRoot)
 	require.Equal(t,
 		filepath.Join(csuiteRoot, "operator", "inbox", ".archive"),
 		spec.CsuiteOperatorArchive)
@@ -39,6 +40,7 @@ func TestCompileProjectDeploymentSpec_DerivesProjectLayoutAndTemplateDefaults(t 
 	require.Equal(t, spec.WorkerPromptRoot, data.WorkerPromptRoot)
 	require.Equal(t, csuiteRoot, data.CsuiteHomeRoot)
 	require.Equal(t, spec.HostDataDir, data.HostDataDir)
+	require.Equal(t, spec.PlanPacketRoot, data.PlanPacketRoot)
 	require.Equal(t, filepath.Join(homeDir, ".drem", "csuite-watcher.token"), data.CsuiteWatcherTokenPath)
 	require.Equal(t, "/etc/drem/host-exec.token", data.HostExecTokenPath)
 }
@@ -75,6 +77,7 @@ func TestCompileProjectDeploymentSpec_PreservesExplicitDeploymentOverrides(t *te
 		WorkerPromptRoot:       "/var/drem/prompts",
 		CsuiteHomeRoot:         "/var/drem/csuite",
 		HostDataDir:            "/var/drem/data",
+		PlanPacketRoot:         "/var/drem/plan-packets",
 		CsuiteWatcherTokenPath: "/run/drem/watcher.token",
 		HostExecTokenPath:      "/run/drem/host-exec.token",
 	}
@@ -87,6 +90,7 @@ func TestCompileProjectDeploymentSpec_PreservesExplicitDeploymentOverrides(t *te
 	require.Equal(t, "/etc/drem/project.toml", spec.ConfigPath)
 	require.Equal(t, "/var/drem/prompts", spec.WorkerPromptRoot)
 	require.Equal(t, "/var/drem/data", spec.HostDataDir)
+	require.Equal(t, "/var/drem/plan-packets", spec.PlanPacketRoot)
 	require.Equal(t, filepath.Join("/var/drem/csuite", "operator", "inbox", ".archive"),
 		spec.CsuiteOperatorArchive)
 
@@ -101,6 +105,7 @@ func TestCompileProjectDeploymentSpec_PreservesExplicitDeploymentOverrides(t *te
 	require.Equal(t, data.WorkerPromptRoot, compiled.WorkerPromptRoot)
 	require.Equal(t, data.CsuiteHomeRoot, compiled.CsuiteHomeRoot)
 	require.Equal(t, data.HostDataDir, compiled.HostDataDir)
+	require.Equal(t, data.PlanPacketRoot, compiled.PlanPacketRoot)
 	require.Equal(t, data.CsuiteWatcherTokenPath, compiled.CsuiteWatcherTokenPath)
 	require.Equal(t, data.HostExecTokenPath, compiled.HostExecTokenPath)
 }
