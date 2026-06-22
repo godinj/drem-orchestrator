@@ -132,7 +132,7 @@ func TestRender_GoTemplateFull(t *testing.T) {
 	// DREM_ORCH_URL must be present on orch so dispatchMerge has a
 	// self-URL to pass to spawned merger containers. See
 	// plans/merger-spawn-on-demand-impl.md.
-	require.Equal(t, "http://orch:8080", parsed.Services["orch"].Environment["DREM_ORCH_URL"])
+	require.Equal(t, "http://orch-drem-orchestrator:8080", parsed.Services["orch"].Environment["DREM_ORCH_URL"])
 	// DREM_CLASSIFIER_URL must route orch to the warm drem-classifier
 	// container on drem-net; see plans/warm-direct-classifier.md §3.
 	require.Equal(t, "http://drem-classifier:8090/classify", parsed.Services["orch"].Environment["DREM_CLASSIFIER_URL"])
@@ -171,9 +171,32 @@ func TestRender_OpsRelayRoutesReviewGatesToMike(t *testing.T) {
 	require.Contains(t, svc.Command, "--to=mike")
 	require.Contains(t, svc.Command, "--type=status_change")
 	require.Contains(t, svc.Command, "--new-value=plan_review,test_review")
+	require.Contains(t, svc.Command, "--orch-url=http://orch-drem-orchestrator:8080")
 	require.Contains(t, svc.Command, "--csuite-root=/csuite")
 	require.Contains(t, svc.Volumes, data.HostDataDir+":/var/lib/drem:rw")
 	require.Contains(t, svc.Volumes, data.CsuiteHomeRoot+":/csuite:rw")
+}
+
+func TestRender_UsesProjectScopedOrchURL(t *testing.T) {
+	data := fullTemplateData("canvas", projects.LanguageGo)
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+			Command     []string          `yaml:"command"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	wantURL := "http://orch-canvas:8080"
+	for _, service := range []string{"orch", "agentmon", "csuite-watcher", "csuite-mike", "csuite-alex", "csuite-seth", "csuite-kyle"} {
+		require.Equal(t, wantURL, parsed.Services[service].Environment["DREM_ORCH_URL"], service)
+	}
+	require.Contains(t, parsed.Services["ops-relay"].Command, "--orch-url="+wantURL)
+	require.Contains(t, string(out), "- orch-canvas")
+	require.NotContains(t, string(out), "http://orch:8080")
 }
 
 // TestRender_OrchDoesNotForwardAnthropicAPIKey asserts the compose
@@ -325,7 +348,7 @@ func TestRender_CsuiteKyleServicePresent(t *testing.T) {
 
 	// Env parity with mike/alex/seth.
 	require.Equal(t, "drem-orchestrator", svc.Environment["DREM_PROJECT"])
-	require.Equal(t, "http://orch:8080", svc.Environment["DREM_ORCH_URL"])
+	require.Equal(t, "http://orch-drem-orchestrator:8080", svc.Environment["DREM_ORCH_URL"])
 	require.Equal(t, "/run/secrets/csuite-watcher-token",
 		svc.Environment["CSUITE_WATCHER_TOKEN_FILE"])
 	require.Equal(t, "http://csuite-watcher:8090/deliver",

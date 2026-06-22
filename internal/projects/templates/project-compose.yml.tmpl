@@ -31,7 +31,7 @@ services:
       DREM_SPAWNER_SOCKET: "/var/run/drem/spawner.sock"
       # Self-URL so dispatchMerge can pass --orch-url to spawned merger
       # containers. Mergers POST merge_result records back to this URL.
-      DREM_ORCH_URL: "http://orch:8080"
+      DREM_ORCH_URL: "http://orch-{{.ProjectName}}:8080"
       DREM_AGENTMON_TOKEN: "{{.SharedToken}}"
       # Warm drem-classifier endpoint — orch POSTs classify jobs here
       # instead of running the direct-SGLang call inline. Matches the
@@ -102,7 +102,10 @@ services:
       # the host FS). Operators who want durable access can add the
       # mount to compose.override.yml and point it at a directory they
       # control. See plans/bug-e-orch-load-shedding.md §W3.2.
-    networks: [drem-net]
+    networks:
+      drem-net:
+        aliases:
+          - orch-{{.ProjectName}}
     labels:
       drem.project: "{{.ProjectName}}"
       drem.service: orch
@@ -129,7 +132,7 @@ services:
     image: localhost:5000/drem-agentmon:latest
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
-      DREM_ORCH_URL: "http://orch:8080"
+      DREM_ORCH_URL: "http://orch-{{.ProjectName}}:8080"
       DREM_AGENTMON_TOKEN: "{{.SharedToken}}"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -144,7 +147,7 @@ services:
     image: localhost:5000/drem-csuite-watcher:latest
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
-      DREM_ORCH_URL: "http://orch:8080"
+      DREM_ORCH_URL: "http://orch-{{.ProjectName}}:8080"
       # 12-factor overrides for cmd/csuite-watcher serve. The container has
       # no drem.toml mounted; the binary reads these instead of [serve] keys.
       # Reuses the agentmon shared token so both can authenticate against orch.
@@ -215,7 +218,7 @@ services:
     user: "1000:1000"
     entrypoint: ["/usr/bin/tini", "--", "/usr/local/bin/drem-ops-relay"]
     command:
-      - "--orch-url=http://orch:8080"
+      - "--orch-url=http://orch-{{.ProjectName}}:8080"
       - "--csuite-root=/csuite"
       - "--cursor=/var/lib/drem/ops-relay.cursor"
       - "--project={{.ProjectName}}"
@@ -274,7 +277,7 @@ services:
     image: {{index .CsuiteImages "mike"}}
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
-      DREM_ORCH_URL: "http://orch:8080"
+      DREM_ORCH_URL: "http://orch-{{.ProjectName}}:8080"
       # Scoreboard item 33 mitigation: the persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE when CSUITE_WATCHER_TOKEN is empty,
       # so the token-file bind-mount below is the primary path
@@ -342,7 +345,7 @@ services:
     image: {{index .CsuiteImages "alex"}}
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
-      DREM_ORCH_URL: "http://orch:8080"
+      DREM_ORCH_URL: "http://orch-{{.ProjectName}}:8080"
       # Scoreboard item 33 mitigation: the persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE when CSUITE_WATCHER_TOKEN is empty,
       # so the token-file bind-mount below is the primary path
@@ -402,7 +405,7 @@ services:
     image: {{index .CsuiteImages "seth"}}
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
-      DREM_ORCH_URL: "http://orch:8080"
+      DREM_ORCH_URL: "http://orch-{{.ProjectName}}:8080"
       # Scoreboard item 33 mitigation: the persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE when CSUITE_WATCHER_TOKEN is empty,
       # so the token-file bind-mount below is the primary path
@@ -470,7 +473,7 @@ services:
     image: {{index .CsuiteImages "kyle"}}
     environment:
       DREM_PROJECT: "{{.ProjectName}}"
-      DREM_ORCH_URL: "http://orch:8080"
+      DREM_ORCH_URL: "http://orch-{{.ProjectName}}:8080"
       # Scoreboard item 33 mitigation: the persona binary reads
       # CSUITE_WATCHER_TOKEN_FILE when CSUITE_WATCHER_TOKEN is empty,
       # so the token-file bind-mount below is the primary path

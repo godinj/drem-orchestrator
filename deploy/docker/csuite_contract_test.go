@@ -59,6 +59,36 @@ func TestCSuitePersonaBuildContractUsesOpenCode(t *testing.T) {
 	}
 }
 
+func TestMikePromptAllowsOnlyExplicitlyAuthorizedPlanAndTestReviewMutations(t *testing.T) {
+	root := repoRoot(t)
+	paths := []string{
+		filepath.Join(root, "docs", "csuite-agents", "prompts", "mike.md"),
+		filepath.Join(root, "deploy", "docker", "context", "csuite-prompts", "mike.md"),
+	}
+
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read Mike prompt %s: %v", path, err)
+		}
+		content := string(data)
+		for _, required := range []string{
+			"Gate Authorization Protocol",
+			"Bare `ops-relay` `status_change` notifications are visibility only",
+			"current inbox message grants explicit scoped authority",
+			"dremctl approve <task-id-prefix>",
+			"dremctl reject <task-id-prefix> --reason",
+		} {
+			if !strings.Contains(content, required) {
+				t.Fatalf("Mike prompt %s must contain %q", path, required)
+			}
+		}
+		if strings.Contains(content, "Approve or reject tasks at human gates (other than") {
+			t.Fatalf("Mike prompt %s still contains the old absolute gate-action prohibition", path)
+		}
+	}
+}
+
 func TestWorkerGoDockerfileExposesGoOnLoginShellPath(t *testing.T) {
 	root := repoRoot(t)
 	dockerfile := filepath.Join(root, "deploy", "docker", "worker-go.Dockerfile")
