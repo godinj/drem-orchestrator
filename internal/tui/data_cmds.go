@@ -30,6 +30,7 @@ type dataRefreshedMsg struct {
 	tasks     []model.Task
 	agents    []model.Agent
 	forTaskID *uuid.UUID // which task the detail data was loaded for
+	task      *model.Task
 	subtasks  []model.Task
 	agent     *model.Agent
 	comments  []model.TaskComment
@@ -269,6 +270,7 @@ func (m Model) refreshData() tea.Cmd {
 			ag.Config["context_window_size"] = float64(usage.ContextWindowSize)
 		}
 
+		var detailTask *model.Task
 		var subtasks []model.Task
 		var detailAgent *model.Agent
 		var comments []model.TaskComment
@@ -278,6 +280,10 @@ func (m Model) refreshData() tea.Cmd {
 		// handle is available (e.g. tests, or a future TUI invoked
 		// against a remote orchestrator without local SQLite).
 		if db != nil && selectedTask != nil {
+			var fullTask model.Task
+			if err := db.Where("id = ? AND project_id = ?", selectedTask.ID, projectID).First(&fullTask).Error; err == nil {
+				detailTask = &fullTask
+			}
 			db.Where("parent_task_id = ?", selectedTask.ID).Find(&subtasks)
 			db.Where("task_id = ?", selectedTask.ID).Order("created_at asc").Find(&comments)
 			if selectedTask.AssignedAgentID != nil {
@@ -315,6 +321,7 @@ func (m Model) refreshData() tea.Cmd {
 			tasks:     tasks,
 			agents:    agents,
 			forTaskID: forTaskID,
+			task:      detailTask,
 			subtasks:  subtasks,
 			agent:     detailAgent,
 			comments:  comments,

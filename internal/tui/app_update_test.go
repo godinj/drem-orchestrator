@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -520,6 +521,43 @@ func TestModelUpdate_DataRefreshedMsg_UpdatesTasksAndAgents(t *testing.T) {
 	}
 	if got.detail.agent == nil {
 		t.Error("detail agent should be set from refresh when task matches")
+	}
+}
+
+func TestModelUpdate_DataRefreshedMsg_UsesFullTaskForDetailPlan(t *testing.T) {
+	m := newKeyTestModel(t, FocusBoard)
+	taskID := uuid.New()
+	listTask := model.Task{ID: taskID, Title: "Planless", Status: model.StatusPlanReview}
+	m.board.tasks = []model.Task{listTask}
+	m.board.cursor = 0
+	m.board.selectedID = &taskID
+	m.detail.task = &listTask
+
+	fullTask := listTask
+	fullTask.Title = "With plan"
+	fullTask.Description = "Full DB-backed detail"
+	fullTask.Plan = model.JSONField{
+		"subtasks": []any{
+			map[string]any{"title": "Show the proposed plan"},
+		},
+	}
+
+	result, _ := m.Update(dataRefreshedMsg{
+		tasks:     []model.Task{listTask},
+		forTaskID: &taskID,
+		task:      &fullTask,
+	})
+	got := result.(Model)
+
+	if got.detail.task == nil {
+		t.Fatal("detail task should be populated")
+	}
+	if got.detail.task.Plan == nil {
+		t.Fatal("detail task should preserve the full task plan")
+	}
+	view := got.detail.View()
+	if !strings.Contains(view, "Plan:") || !strings.Contains(view, "Show the proposed plan") {
+		t.Fatalf("detail view should render full task plan, got:\n%s", view)
 	}
 }
 

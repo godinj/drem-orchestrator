@@ -233,6 +233,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case dataRefreshedMsg:
+		if msg.task != nil && msg.forTaskID != nil && msg.task.ID == *msg.forTaskID {
+			for i := range msg.tasks {
+				if msg.tasks[i].ID == msg.task.ID {
+					msg.tasks[i] = *msg.task
+					break
+				}
+			}
+		}
 		m.board.tasks = msg.tasks
 		m.agents.agents = msg.agents
 		m.board.relocateCursor()
