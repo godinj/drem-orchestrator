@@ -210,6 +210,29 @@ services:
     depends_on: [orch]
     restart: unless-stopped
 
+  ops-relay:
+    image: {{.OrchImage}}
+    user: "1000:1000"
+    entrypoint: ["/usr/bin/tini", "--", "/usr/local/bin/drem-ops-relay"]
+    command:
+      - "--orch-url=http://orch:8080"
+      - "--csuite-root=/csuite"
+      - "--cursor=/var/lib/drem/ops-relay.cursor"
+      - "--project={{.ProjectName}}"
+      - "--to=mike"
+      - "--interval=5s"
+      - "--type=status_change"
+      - "--new-value=plan_review,test_review"
+    volumes:
+      - {{.HostDataDir}}:/var/lib/drem:rw
+      - {{.CsuiteHomeRoot}}:/csuite:rw
+    networks: [drem-net]
+    labels:
+      drem.project: "{{.ProjectName}}"
+      drem.service: ops-relay
+    depends_on: [orch]
+    restart: unless-stopped
+
   # Each csuite-<persona> service bind-mounts auth + state paths read-only
   # or read-write so the containerized persona can (a) authenticate
   # against Claude via the operator's subscription credentials file —
@@ -263,7 +286,7 @@ services:
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
       OPENCODE_MULTI_AUTH_CODEX_AUTH_FILE: "/home/drem/.codex/auth.json"
       OPENCODE_MULTI_AUTH_PREFER_CODEX_LATEST: "1"
-      DREM_OPENCODE_MODEL: "openai/gpt-5.4-mini"
+      DREM_OPENCODE_MODEL: "openai/gpt-5.5"
       DREM_OPENCODE_VARIANT: "high"
       # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CTO-synthesis and deep-analysis tasks
@@ -288,6 +311,8 @@ services:
       # (CTO) flagged this as a recurring wall during pass-1 / pass-2
       # synthesis passes — closing it eliminates delegation overhead on
       # every future CTO synthesis.
+      # Read-only full checkout for source-level review by C-Suite personas.
+      - {{.BareRepoPath}}/master:{{.BareRepoPath}}/master:ro
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
       # Read-only project C-Suite root so personas can review sibling-owned
       # evidence bundles without write access. The persona-specific mount below
@@ -329,7 +354,7 @@ services:
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
       OPENCODE_MULTI_AUTH_CODEX_AUTH_FILE: "/home/drem/.codex/auth.json"
       OPENCODE_MULTI_AUTH_PREFER_CODEX_LATEST: "1"
-      DREM_OPENCODE_MODEL: "openai/gpt-5.4-mini"
+      DREM_OPENCODE_MODEL: "openai/gpt-5.5"
       DREM_OPENCODE_VARIANT: "high"
       # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CTO-synthesis and deep-analysis tasks
@@ -354,6 +379,8 @@ services:
       # (CTO) flagged this as a recurring wall during pass-1 / pass-2
       # synthesis passes — closing it eliminates delegation overhead on
       # every future CTO synthesis.
+      # Read-only full checkout for source-level review by C-Suite personas.
+      - {{.BareRepoPath}}/master:{{.BareRepoPath}}/master:ro
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
       # Read-only project C-Suite root so personas can review sibling-owned
       # evidence bundles without write access. The persona-specific mount below
@@ -387,7 +414,7 @@ services:
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
       OPENCODE_MULTI_AUTH_CODEX_AUTH_FILE: "/home/drem/.codex/auth.json"
       OPENCODE_MULTI_AUTH_PREFER_CODEX_LATEST: "1"
-      DREM_OPENCODE_MODEL: "openai/gpt-5.4-mini"
+      DREM_OPENCODE_MODEL: "openai/gpt-5.5"
       DREM_OPENCODE_VARIANT: "high"
       # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CTO-synthesis and deep-analysis tasks
@@ -412,6 +439,8 @@ services:
       # (CTO) flagged this as a recurring wall during pass-1 / pass-2
       # synthesis passes — closing it eliminates delegation overhead on
       # every future CTO synthesis.
+      # Read-only full checkout for source-level review by C-Suite personas.
+      - {{.BareRepoPath}}/master:{{.BareRepoPath}}/master:ro
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:ro
       # Read-only project C-Suite root so personas can review sibling-owned
       # evidence bundles without write access. The persona-specific mount below
@@ -453,7 +482,7 @@ services:
       CSUITE_SIGNAL_ENDPOINT: "http://csuite-watcher:8090/deliver"
       OPENCODE_MULTI_AUTH_CODEX_AUTH_FILE: "/home/drem/.codex/auth.json"
       OPENCODE_MULTI_AUTH_PREFER_CODEX_LATEST: "1"
-      DREM_OPENCODE_MODEL: "openai/gpt-5.4-mini"
+      DREM_OPENCODE_MODEL: "openai/gpt-5.5"
       DREM_OPENCODE_VARIANT: "high"
       # Extend the poller's per-model-turn timeout from the 5-minute
       # default to 60 minutes so CEO-level synthesis and deep-analysis
@@ -479,6 +508,8 @@ services:
       # Kyle instance writes to the same path on the host; the
       # coexistence rules in docs/csuite-agents/prompts/kyle.md
       # (Phase 4) spell out how the two Kyles hand off the tree.
+      # Read-only full checkout for source-level review by C-Suite personas.
+      - {{.BareRepoPath}}/master:{{.BareRepoPath}}/master:ro
       - {{.BareRepoPath}}/master/plans:/home/drem/orch-plans:rw
       # Read-only project C-Suite root so Kyle can review sibling-owned evidence
       # bundles without broad write access. The Kyle-specific mount below

@@ -17,7 +17,7 @@ set -euo pipefail
 # Options:
 #   --worker-id <id>  Override the auto-assigned worker ID (e.g. worker-042).
 #   --harness <name>  Harness CLI to use: "opencode" (default) or "claude".
-#   --model <model>   Model override (default: openai/gpt-5.4-mini).
+#   --model <model>   Model override (default: openai/gpt-5.5).
 #   --dry-run         Print what would happen without creating anything.
 #   --help            Show this help message.
 #
@@ -70,7 +70,7 @@ DRY_RUN=false
 
 # Harness configuration: env vars provide defaults, flags override.
 HARNESS="${CSUITE_HARNESS:-opencode}"
-MODEL="${CSUITE_MODEL:-openai/gpt-5.4-mini}"
+MODEL="${CSUITE_MODEL:-openai/gpt-5.5}"
 
 # ---------------------------------------------------------------------------
 # Parse arguments
@@ -94,7 +94,7 @@ while [ $# -gt 0 ]; do
             echo "Options:"
             echo "  --worker-id <id>    Override auto-assigned worker ID (e.g. worker-042)"
             echo "  --harness <name>    Harness CLI: \"opencode\" (default) or \"claude\""
-            echo "  --model <model>     Model override (default: openai/gpt-5.4-mini)"
+            echo "  --model <model>     Model override (default: openai/gpt-5.5)"
             echo "  --dry-run           Print actions without executing them"
             echo "  --help              Show this help message"
             echo ""

@@ -114,6 +114,15 @@ Kyle receives event deliveries and has status tracked, but the trigger system do
 - [ ] Tests: signal file triggers agent wake; event delivery triggers agent wake; safety timer fires on schedule
 - [ ] Documentation: trigger system overview and configuration
 
+### Container persona relay note
+
+The containerized persona path does not consume the legacy watcher event-bus
+SQLite file directly. Generated project compose files therefore run
+`ops-relay`, which polls orch `/events` and writes Mike inbox messages for
+manual gate entries only: `status_change` events whose `new_value` is
+`plan_review` or `test_review`. This keeps the current inbox-driven persona
+runtime informed without relying on a shared event-bus DB mount.
+
 ---
 
 ## Phase 5: Service Packaging + Resilience

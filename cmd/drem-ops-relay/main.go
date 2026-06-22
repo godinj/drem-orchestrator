@@ -23,6 +23,7 @@ func main() {
 
 func run(args []string) int {
 	var types csvFlag
+	var targets csvFlag
 	fs := flag.NewFlagSet("drem-ops-relay", flag.ContinueOnError)
 	orchURL := fs.String("orch-url", getenv("DREM_ORCH_URL", ""), "orchestrator HTTP URL")
 	csuiteRoot := fs.String("csuite-root", defaultCsuiteRoot(), "C-Suite home root")
@@ -32,6 +33,7 @@ func run(args []string) int {
 	limit := fs.Int("limit", 100, "maximum events to fetch")
 	interval := fs.Duration("interval", 0, "poll interval; 0 runs once and exits")
 	fs.Var(&types, "type", "event type to include; repeat or comma-separate; default includes all")
+	fs.Var(&targets, "new-value", "status target/new_value to include; repeat or comma-separate; default includes all")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -44,15 +46,16 @@ func run(args []string) int {
 	defer cancel()
 
 	cfg := opsrelay.Config{
-		Source:       orchclient.New(*orchURL),
-		CsuiteRoot:   expandTilde(*csuiteRoot),
-		CursorPath:   expandTilde(*cursor),
-		Limit:        *limit,
-		OrchURL:      *orchURL,
-		Project:      *project,
-		Recipient:    *recipient,
-		IncludeTypes: types.set(),
-		Now:          time.Now,
+		Source:         orchclient.New(*orchURL),
+		CsuiteRoot:     expandTilde(*csuiteRoot),
+		CursorPath:     expandTilde(*cursor),
+		Limit:          *limit,
+		OrchURL:        *orchURL,
+		Project:        *project,
+		Recipient:      *recipient,
+		IncludeTypes:   types.set(),
+		IncludeTargets: targets.set(),
+		Now:            time.Now,
 	}
 	if *interval <= 0 {
 		return pollAndPrint(ctx, cfg)

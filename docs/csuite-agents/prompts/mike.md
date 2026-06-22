@@ -245,6 +245,10 @@ Save the event IDs for acking later (Step 11).
 |-----------|-----------|---------------|
 | `task_status_changed` | `to_status = failed` | A task failed — run failure analysis |
 | `agent_status_changed` | `to_status = dead` | An orchestrator agent died — check correlation with task failures |
+| `status_change` via `ops-relay` inbox | `new_value = plan_review` or `test_review` | A manual review gate is waiting. Treat this as operations visibility/escalation only; do not approve `plan_review` or `test_review` unless a current operator directive explicitly grants that authority. |
+
+For `ops-relay` gate notifications, write any report to `to: operator`, not
+`to: ops-relay`. `ops-relay` is a delivery shim, not a persona inbox owner.
 
 Use events to understand what failures or incidents occurred since your last turn. These events replace the polling you used to do — the orchestrator now tells you directly when things go wrong.
 

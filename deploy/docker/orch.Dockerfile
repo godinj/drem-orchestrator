@@ -40,6 +40,12 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -ldflags="-s -w" \
     -o /out/drem ./cmd/drem
 
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=1 GOOS=linux \
+    go build -trimpath -ldflags="-s -w" \
+    -o /out/drem-ops-relay ./cmd/drem-ops-relay
+
 # ---------- runtime stage ----------
 FROM debian:bookworm-slim
 
@@ -74,6 +80,7 @@ COPY --from=build /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 COPY --from=build /out/drem /usr/local/bin/drem
+COPY --from=build /out/drem-ops-relay /usr/local/bin/drem-ops-relay
 
 # The orchestrator expects /var/lib/drem (volume-mounted by the per-project
 # compose) for the SQLite database and prompts cache, and /bare for the

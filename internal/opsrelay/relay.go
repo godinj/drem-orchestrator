@@ -21,7 +21,7 @@ import (
 const (
 	defaultLimit = 100
 	defaultTo    = "mike"
-	fromOpsRelay = "ops-relay"
+	fromOpsRelay = "operator"
 )
 
 // EventSource is the read-only orchestrator event surface used by the relay.
@@ -32,17 +32,18 @@ type EventSource interface {
 
 // Config controls a single relay poll.
 type Config struct {
-	Source        EventSource
-	CsuiteRoot    string
-	CursorPath    string
-	Since         time.Time
-	Limit         int
-	Now           func() time.Time
-	OrchURL       string
-	Project       string
-	Recipient     string
-	IncludeTypes  map[string]struct{}
-	CursorAdvance time.Duration
+	Source         EventSource
+	CsuiteRoot     string
+	CursorPath     string
+	Since          time.Time
+	Limit          int
+	Now            func() time.Time
+	OrchURL        string
+	Project        string
+	Recipient      string
+	IncludeTypes   map[string]struct{}
+	IncludeTargets map[string]struct{}
+	CursorAdvance  time.Duration
 }
 
 // Result summarizes a poll pass.
@@ -96,11 +97,9 @@ func PollOnce(ctx context.Context, cfg Config) (Result, error) {
 
 	res := Result{Fetched: len(events), Cursor: since}
 	for _, ev := range events {
-		if len(cfg.IncludeTypes) > 0 {
-			if _, ok := cfg.IncludeTypes[ev.Type]; !ok {
-				res.Cursor = advanceCursor(res.Cursor, ev.Timestamp, cfg.CursorAdvance)
-				continue
-			}
+		if !includeEvent(cfg, ev) {
+			res.Cursor = advanceCursor(res.Cursor, ev.Timestamp, cfg.CursorAdvance)
+			continue
 		}
 		path, err := writeEvent(ctx, cfg, ev)
 		if err != nil {
@@ -117,6 +116,41 @@ func PollOnce(ctx context.Context, cfg Config) (Result, error) {
 		}
 	}
 	return res, nil
+}
+
+func includeEvent(cfg Config, ev orchdto.EventDTO) bool {
+	if len(cfg.IncludeTypes) > 0 {
+		if _, ok := cfg.IncludeTypes[ev.Type]; !ok {
+			return false
+		}
+	}
+	if len(cfg.IncludeTargets) > 0 {
+		newValue, ok := eventNewValue(ev)
+		if !ok {
+			return false
+		}
+		if _, ok := cfg.IncludeTargets[newValue]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func eventNewValue(ev orchdto.EventDTO) (string, bool) {
+	var payload struct {
+		NewValue string `json:"new_value"`
+		ToStatus string `json:"to_status"`
+	}
+	if len(ev.Payload) == 0 || json.Unmarshal(ev.Payload, &payload) != nil {
+		return "", false
+	}
+	if payload.NewValue != "" {
+		return payload.NewValue, true
+	}
+	if payload.ToStatus != "" {
+		return payload.ToStatus, true
+	}
+	return "", false
 }
 
 func writeEvent(ctx context.Context, cfg Config, ev orchdto.EventDTO) (string, error) {
@@ -156,7 +190,8 @@ func bodyFor(cfg Config, ev orchdto.EventDTO) string {
 
 func bodyHeader(cfg Config, ev orchdto.EventDTO) string {
 	lines := []string{
-		"Operational orchestrator event routed for C-Suite review.",
+		"Operational orchestrator event routed for C-Suite review by ops-relay.",
+		"Reply to: operator.",
 		"",
 		"Type: " + ev.Type,
 		"Timestamp: " + ev.Timestamp.UTC().Format(time.RFC3339Nano),

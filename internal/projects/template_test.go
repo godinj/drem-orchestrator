@@ -96,7 +96,7 @@ func TestWriteProjectComposeAt_RejectsEmptyName(t *testing.T) {
 }
 
 // TestRender_GoTemplateFull verifies that a Go-language project renders
-// every expected service (orch, agentmon, csuite-watcher, four C-Suite
+// every expected service (orch, agentmon, csuite-watcher, ops-relay, four C-Suite
 // personas) with the shared token plumbed to orch + agentmon and the
 // worker image tagged for Go. The merger image is referenced by an
 // image-prime stub (merger-template, profiles: ["never"]) rather than a
@@ -109,7 +109,7 @@ func TestRender_GoTemplateFull(t *testing.T) {
 
 	s := string(out)
 	for _, service := range []string{
-		"orch:", "agentmon:", "csuite-watcher:",
+		"orch:", "agentmon:", "csuite-watcher:", "ops-relay:",
 		"csuite-mike:", "csuite-alex:", "csuite-seth:",
 	} {
 		require.Contains(t, s, service, "missing service %q", service)
@@ -145,6 +145,35 @@ func TestRender_GoTemplateFull(t *testing.T) {
 	require.NotContains(t, parsed.Services, "merger-pool")
 	require.Contains(t, parsed.Services, "merger-template")
 	require.Equal(t, data.MergerImage, parsed.Services["merger-template"].Image)
+}
+
+func TestRender_OpsRelayRoutesReviewGatesToMike(t *testing.T) {
+	data := fullTemplateData("drem-orchestrator", projects.LanguageGo)
+	data.HostDataDir = "/srv/drem/data"
+	data.CsuiteHomeRoot = "/srv/drem/csuite"
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Services map[string]struct {
+			Image      string   `yaml:"image"`
+			Entrypoint []string `yaml:"entrypoint"`
+			Command    []string `yaml:"command"`
+			Volumes    []string `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+
+	svc, ok := parsed.Services["ops-relay"]
+	require.True(t, ok, "ops-relay service missing from rendered compose")
+	require.Equal(t, data.OrchImage, svc.Image)
+	require.Contains(t, svc.Entrypoint, "/usr/local/bin/drem-ops-relay")
+	require.Contains(t, svc.Command, "--to=mike")
+	require.Contains(t, svc.Command, "--type=status_change")
+	require.Contains(t, svc.Command, "--new-value=plan_review,test_review")
+	require.Contains(t, svc.Command, "--csuite-root=/csuite")
+	require.Contains(t, svc.Volumes, data.HostDataDir+":/var/lib/drem:rw")
+	require.Contains(t, svc.Volumes, data.CsuiteHomeRoot+":/csuite:rw")
 }
 
 // TestRender_OrchDoesNotForwardAnthropicAPIKey asserts the compose
@@ -256,6 +285,8 @@ func TestRender_CsuiteWatcherTokenPathIsWired(t *testing.T) {
 			}
 		}
 		require.True(t, found, "%s missing csuite-watcher token mount", p)
+		require.Equal(t, "openai/gpt-5.5", svc.Environment["DREM_OPENCODE_MODEL"],
+			"%s must default to an available OpenCode model", p)
 	}
 }
 
