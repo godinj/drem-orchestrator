@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,10 +17,11 @@ import (
 // accepted, current, visible, and admissible.
 type Registry struct {
 	db *gorm.DB
+	mu *sync.Mutex
 }
 
 func NewRegistry(db *gorm.DB) *Registry {
-	return &Registry{db: db}
+	return &Registry{db: db, mu: &sync.Mutex{}}
 }
 
 // Models returns every GORM model owned by this package.
@@ -41,13 +44,27 @@ func (r *Registry) RegisterArtifact(ctx context.Context, artifact *Artifact) err
 		return errors.New("artifactregistry: RegisterArtifact: ContentURI, ArtifactType, and Title are required")
 	}
 	setArtifactDefaults(artifact)
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
+	return withSQLiteRetry(ctx, func() error { return r.registerArtifactOnce(ctx, artifact) })
+}
+
+func (r *Registry) registerArtifactOnce(ctx context.Context, artifact *Artifact) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var existing Artifact
 		err := tx.Where("content_uri = ?", artifact.ContentURI).Take(&existing).Error
 		switch {
 		case errors.Is(err, gorm.ErrRecordNotFound):
 			if createErr := tx.Create(artifact).Error; createErr != nil {
+				var raced Artifact
+				if lookupErr := tx.Where("content_uri = ?", artifact.ContentURI).Take(&raced).Error; lookupErr == nil {
+					artifact.ID = raced.ID
+					if updateErr := tx.Model(&raced).Updates(artifact).Error; updateErr != nil {
+						return fmt.Errorf("artifactregistry: RegisterArtifact: update raced %s: %w", artifact.ContentURI, updateErr)
+					}
+					return tx.Where("id = ?", raced.ID).Take(artifact).Error
+				}
 				return fmt.Errorf("artifactregistry: RegisterArtifact: create %s: %w", artifact.ContentURI, createErr)
 			}
 			return nil
@@ -62,6 +79,8 @@ func (r *Registry) RegisterArtifact(ctx context.Context, artifact *Artifact) err
 		return tx.Where("id = ?", existing.ID).Take(artifact).Error
 	})
 }
+
+var ErrArtifactConflict = errors.New("artifact conflict")
 
 func (r *Registry) GetArtifact(ctx context.Context, id uuid.UUID) (*Artifact, error) {
 	var artifact Artifact
@@ -196,8 +215,14 @@ func (r *Registry) Supersede(ctx context.Context, supersededID, supersedingID uu
 		return errors.New("artifactregistry: Supersede: artifact cannot supersede itself")
 	}
 	now := time.Now().UTC()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return withSQLiteRetry(ctx, func() error { return r.supersedeOnce(ctx, supersededID, supersedingID, reason, decidedBy, now) })
+}
+
+func (r *Registry) supersedeOnce(ctx context.Context, supersededID, supersedingID uuid.UUID, reason, decidedBy string, now time.Time) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(&Artifact{}).Where("id = ?", supersededID).Updates(map[string]any{
+		res := tx.Model(&Artifact{}).Where("id = ? AND superseded_by_id IS NULL", supersededID).Updates(map[string]any{
 			"status":            StatusSuperseded,
 			"superseded_by_id":  supersedingID,
 			"staleness_reason":  reason,
@@ -207,6 +232,19 @@ func (r *Registry) Supersede(ctx context.Context, supersededID, supersedingID uu
 			return fmt.Errorf("artifactregistry: Supersede: update superseded: %w", res.Error)
 		}
 		if res.RowsAffected == 0 {
+			var existing Artifact
+			if err := tx.Where("id = ?", supersededID).Take(&existing).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return gorm.ErrRecordNotFound
+				}
+				return fmt.Errorf("artifactregistry: Supersede: reload superseded: %w", err)
+			}
+			if existing.SupersededByID != nil && *existing.SupersededByID != supersedingID {
+				return fmt.Errorf("%w: artifact %s already superseded by %s", ErrArtifactConflict, supersededID, existing.SupersededByID.String())
+			}
+			if existing.SupersededByID != nil && *existing.SupersededByID == supersedingID {
+				return nil
+			}
 			return gorm.ErrRecordNotFound
 		}
 		res = tx.Model(&Artifact{}).Where("id = ?", supersedingID).Update("supersedes_id", supersededID)
@@ -233,6 +271,30 @@ func (r *Registry) Supersede(ctx context.Context, supersededID, supersedingID uu
 		}
 		return nil
 	})
+}
+
+func withSQLiteRetry(ctx context.Context, fn func() error) error {
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		err = fn()
+		if !isSQLiteLocked(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 5 * time.Millisecond):
+		}
+	}
+	return err
+}
+
+func isSQLiteLocked(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "database table is locked") || strings.Contains(msg, "database is locked")
 }
 
 func setArtifactDefaults(artifact *Artifact) {

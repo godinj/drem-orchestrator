@@ -178,7 +178,7 @@ func (b *Bus) Ack(agent string, eventIDs []string) error {
 		return nil
 	}
 	return b.db.Model(&EventDelivery{}).
-		Where("agent = ? AND event_id IN ?", agent, eventIDs).
+		Where("agent = ? AND event_id IN ? AND acked_at IS NULL", agent, eventIDs).
 		Update("acked_at", time.Now()).Error
 }
 

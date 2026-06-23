@@ -2,6 +2,8 @@ package artifactregistry
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -47,6 +49,46 @@ func TestRegisterArtifactUpsertsByContentURI(t *testing.T) {
 	}
 }
 
+func TestRegisterArtifactConcurrentSameURISucceeds(t *testing.T) {
+	ctx := context.Background()
+	registry := NewRegistry(testutil.NewTestDBWithModels(t, Models()...))
+
+	const workers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			artifact := Artifact{
+				ArtifactType:   "implementation_plan",
+				ContentURI:     "repo:plans/concurrent.md",
+				Title:          "Concurrent plan",
+				Owner:          "operator",
+				Status:         StatusActive,
+				AuthorityClass: AuthoritySourceOfTruth,
+				EvidenceTrust:  TrustHigh,
+			}
+			errs <- registry.RegisterArtifact(ctx, &artifact)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("RegisterArtifact concurrent error: %v", err)
+		}
+	}
+
+	var count int64
+	if err := registry.db.Model(&Artifact{}).Where("content_uri = ?", "repo:plans/concurrent.md").Count(&count).Error; err != nil {
+		t.Fatalf("count artifacts: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("artifact count = %d, want 1", count)
+	}
+}
+
 func TestSupersedeMarksOldArtifactAndLinksReplacement(t *testing.T) {
 	ctx := context.Background()
 	registry := NewRegistry(testutil.NewTestDBWithModels(t, Models()...))
@@ -80,6 +122,60 @@ func TestSupersedeMarksOldArtifactAndLinksReplacement(t *testing.T) {
 	var link ArtifactLink
 	if err := registry.db.Where("source_artifact_id = ? AND target_artifact_id = ? AND link_type = ?", newArtifact.ID, oldArtifact.ID, "supersedes").Take(&link).Error; err != nil {
 		t.Fatalf("expected supersession link: %v", err)
+	}
+}
+
+func TestSupersedeConcurrentDifferentTargetsConflicts(t *testing.T) {
+	ctx := context.Background()
+	registry := NewRegistry(testutil.NewTestDBWithModels(t, Models()...))
+	oldArtifact := mustRegisterArtifact(t, registry, Artifact{
+		ArtifactType:   "persona_contract",
+		ContentURI:     "repo:old-concurrent.md",
+		Title:          "Old contract",
+		Status:         StatusActive,
+		AuthorityClass: AuthoritySourceOfTruth,
+	})
+	replacementA := mustRegisterArtifact(t, registry, Artifact{
+		ArtifactType:   "persona_contract",
+		ContentURI:     "repo:new-a.md",
+		Title:          "New contract A",
+		Status:         StatusActive,
+		AuthorityClass: AuthoritySourceOfTruth,
+	})
+	replacementB := mustRegisterArtifact(t, registry, Artifact{
+		ArtifactType:   "persona_contract",
+		ContentURI:     "repo:new-b.md",
+		Title:          "New contract B",
+		Status:         StatusActive,
+		AuthorityClass: AuthoritySourceOfTruth,
+	})
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, replacement := range []Artifact{replacementA, replacementB} {
+		wg.Add(1)
+		go func(replacement Artifact) {
+			defer wg.Done()
+			errs <- registry.Supersede(ctx, oldArtifact.ID, replacement.ID, "newer", "operator")
+		}(replacement)
+	}
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	conflicts := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrArtifactConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected supersede error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d, want 1 and 1", successes, conflicts)
 	}
 }
 

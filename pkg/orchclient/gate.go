@@ -258,7 +258,17 @@ func (c *Client) postGate(ctx context.Context, path string, body any, out any) e
 	defer resp.Body.Close()
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return json.NewDecoder(resp.Body).Decode(out)
+		if resp.StatusCode == http.StatusNoContent || out == nil {
+			return nil
+		}
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(string(raw)) == "" {
+			return nil
+		}
+		return json.Unmarshal(raw, out)
 	}
 
 	// Non-2xx: try to extract {"error": "..."} for the typed-error

@@ -99,7 +99,7 @@ func (f *fakeGateOrch) HandleTestFailed(taskID uuid.UUID) error {
 	if f.ErrTestFailed != nil {
 		return f.ErrTestFailed
 	}
-	return f.transition(taskID, model.StatusFailed)
+	return f.transition(taskID, model.StatusInProgress)
 }
 
 func (f *fakeGateOrch) HandleClarificationAnswer(taskID uuid.UUID, answer string) error {
@@ -371,7 +371,7 @@ func TestPassHappy(t *testing.T) {
 }
 
 // ------------------------------------------------------------------
-// 12. Fail testing_ready → 200.
+// 12. Fail testing_ready → 200 and returns to implementation.
 // ------------------------------------------------------------------
 func TestFailHappy(t *testing.T) {
 	fake, project, srv, base := setupGateHTTPTest(t)
@@ -382,7 +382,7 @@ func TestFailHappy(t *testing.T) {
 
 	var dto orchdto.TaskDTO
 	require.NoError(t, json.Unmarshal(body, &dto))
-	require.Equal(t, string(model.StatusFailed), dto.Status)
+	require.Equal(t, string(model.StatusInProgress), dto.Status)
 
 	require.Len(t, fake.Calls, 1)
 	require.Equal(t, "HandleTestFailed", fake.Calls[0].Method)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -170,6 +171,32 @@ func TestEnsureBranch_IdempotentWhenPresent(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, tipBefore, tipAfter,
 		"EnsureBranch must NOT rewind an existing branch to its source tip")
+}
+
+func TestEnsureBranch_ConcurrentCreateIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	bare := testutil.SetupBareRepo(t)
+	defaultBranch, err := gitref.DefaultBranch(ctx, bare)
+	require.NoError(t, err)
+
+	const workers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- gitref.EnsureBranch(ctx, bare, "feature/concurrent", defaultBranch)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	exists, err := gitref.BranchExists(ctx, bare, "feature/concurrent")
+	require.NoError(t, err)
+	require.True(t, exists)
 }
 
 // TestEnsureBranch_ErrorsOnMissingSource asserts fork-from-ghost is

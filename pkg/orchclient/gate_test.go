@@ -171,6 +171,24 @@ func TestApproveNetworkError(t *testing.T) {
 	// net/http stack and their shape varies across Go versions.
 }
 
+func TestApproveNoContentSuccessReturnsZeroDTO(t *testing.T) {
+	h := &gateHandler{status: http.StatusNoContent}
+	c, _ := newGateClient(t, h)
+
+	got, err := c.Approve(context.Background(), "canvas", uuid.New())
+	require.NoError(t, err)
+	require.Equal(t, orchdto.TaskDTO{}, got)
+}
+
+func TestApproveEmptyOKSuccessReturnsZeroDTO(t *testing.T) {
+	h := &gateHandler{status: http.StatusOK, respBody: "   \n"}
+	c, _ := newGateClient(t, h)
+
+	got, err := c.Approve(context.Background(), "canvas", uuid.New())
+	require.NoError(t, err)
+	require.Equal(t, orchdto.TaskDTO{}, got)
+}
+
 // -- Reject --------------------------------------------------------------
 
 func TestRejectHappyPathWithReason(t *testing.T) {

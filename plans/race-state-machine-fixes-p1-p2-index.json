@@ -1,0 +1,77 @@
+{
+  "artifact_type": "p1_p2_race_state_machine_fix_plan_index",
+  "generated_at": "2026-06-23",
+  "source_review_artifacts": [
+    "plans/race-state-machine-edge-cases.md",
+    "plans/race-state-machine-edge-cases.json"
+  ],
+  "implementation_mode": "plan_plus_incremental_safe_fixes",
+  "plans": [
+    {
+      "path": "plans/race-state-machine-fixes-p1-p2-gate-recovery.md",
+      "findings": ["RACE-SM-008", "RACE-SM-010", "RACE-SM-011", "RACE-SM-012", "RACE-SM-015", "RACE-SM-041"],
+      "status": "mixed",
+      "implemented_in_this_pass": ["RACE-SM-041"],
+      "deferred": ["RACE-SM-008", "RACE-SM-010", "RACE-SM-011", "RACE-SM-012", "RACE-SM-015"],
+      "primary_files": [
+        "internal/orchhttp/gate_handlers.go",
+        "internal/orchhttp/gate_handlers_test.go",
+        "internal/orchhttp/health_recovery.go",
+        "internal/orchhttp/health_recovery_test.go",
+        "internal/orchhttp/handlers_internal.go",
+        "internal/orchestrator/reconcile_stuck.go"
+      ]
+    },
+    {
+      "path": "plans/race-state-machine-fixes-p1-p2-infra.md",
+      "findings": ["RACE-SM-016", "RACE-SM-017", "RACE-SM-018", "RACE-SM-023", "RACE-SM-024", "RACE-SM-027", "RACE-SM-032", "RACE-SM-036"],
+      "status": "mixed",
+      "implemented_in_this_pass": ["RACE-SM-017", "RACE-SM-027", "RACE-SM-032", "RACE-SM-036"],
+      "deferred": ["RACE-SM-016", "RACE-SM-018", "RACE-SM-023", "RACE-SM-024"],
+      "primary_files": [
+        "internal/gitref/git.go",
+        "internal/gitref/git_test.go",
+        "internal/state/machine.go",
+        "internal/state/machine_test.go",
+        "pkg/orchclient/gate.go",
+        "pkg/orchclient/gate_test.go",
+        "internal/eventbus/eventbus.go",
+        "internal/eventbus/bus_test.go"
+      ]
+    },
+    {
+      "path": "plans/race-state-machine-fixes-p1-p2-csuite-artifacts.md",
+      "findings": ["RACE-SM-029", "RACE-SM-030", "RACE-SM-031", "RACE-SM-039", "RACE-SM-040"],
+      "status": "implemented_in_this_pass",
+      "implemented_in_this_pass": ["RACE-SM-029", "RACE-SM-030", "RACE-SM-031", "RACE-SM-039", "RACE-SM-040"],
+      "deferred": [],
+      "primary_files": [
+        "internal/csuite/inbox_queue.go",
+        "internal/csuite/diskstore/diskstore.go",
+        "internal/csuite/diskstore/diskstore_test.go",
+        "internal/csuite/store.go",
+        "internal/serve/inbox.go",
+        "internal/serve/inbox_test.go",
+        "internal/artifactregistry/registry.go",
+        "internal/artifactregistry/registry_test.go"
+      ]
+    }
+  ],
+  "recommended_commit_batches": [
+    "planning artifacts",
+    "infra low-risk state/client/eventbus/gitref fixes",
+    "csuite inbox pagination and artifact concurrency fixes",
+    "gate-recovery contract alignment"
+  ],
+  "deferred_rationale": {
+    "RACE-SM-008": "Best completed with a shared typed stale-transition error from the broader transactional gate work; otherwise handlers risk inconsistent ad hoc string matching.",
+    "RACE-SM-010": "Archive live-assignment guard needs a conditional DB update over task assignment plus agent status/heartbeat snapshot; unsafe to patch without full handler/repository transaction tests.",
+    "RACE-SM-011": "Stale-assignment recovery needs classify-and-apply snapshot predicates in one transaction; separate from the small client/store fixes in this pass.",
+    "RACE-SM-012": "Heartbeat ingest touches extract parsing, internal event handling, and agent liveness semantics; requires an end-to-end ingest/recovery test to avoid updating stale attempts.",
+    "RACE-SM-015": "False-kill prevention depends on spawner ListWorkers error semantics and sighting probes; should be paired with runtime inspect behavior tests.",
+    "RACE-SM-016": "Merge retry backoff needs durable next-retry state and clock injection in merge dispatch; broader than an isolated bug fix.",
+    "RACE-SM-018": "Gitref registration failure after spawn requires coordinated worker identity cleanup and container destroy compensation; risky without spawn-path transaction tests.",
+    "RACE-SM-023": "Websocket broadcast isolation likely needs hub write-pump/interface refactor for reliable blocked-client tests.",
+    "RACE-SM-024": "Atomic eventbus claim changes watcher delivery API from poll-then-deliver to claim-then-side-effect; requires call-site migration and duplicate-delivery compatibility review."
+  }
+}

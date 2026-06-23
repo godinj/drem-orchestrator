@@ -15,6 +15,10 @@ var (
 	// ErrInboxItemNotFound indicates the requested queue item is not present
 	// in the live inbox. Archived and ignored items are intentionally excluded.
 	ErrInboxItemNotFound = errors.New("inbox item not found")
+
+	// ErrInboxItemConflict indicates the requested queue move would overwrite
+	// an existing archived/ignored item.
+	ErrInboxItemConflict = errors.New("inbox item conflict")
 )
 
 // InboxQueueItem is a live on-disk persona inbox item exposed for operator

@@ -72,6 +72,7 @@ func TestValidateTransition(t *testing.T) {
 		{"failed to backlog", model.StatusFailed, model.StatusBacklog, false},
 		{"failed to in_progress", model.StatusFailed, model.StatusInProgress, false},
 		{"failed to done is INVALID", model.StatusFailed, model.StatusDone, true},
+		{"cancelled is terminal", model.StatusCancelled, model.StatusBacklog, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -83,6 +84,34 @@ func TestValidateTransition(t *testing.T) {
 				t.Errorf("ValidateTransition(%q, %q) = %v, want nil", tc.from, tc.to, err)
 			}
 		})
+	}
+}
+
+func TestValidTransitionsModelsEveryKnownTaskStatus(t *testing.T) {
+	statuses := []model.TaskStatus{
+		model.StatusClassifying,
+		model.StatusBacklog,
+		model.StatusPlanning,
+		model.StatusNeedsClarification,
+		model.StatusPlanReview,
+		model.StatusTestWriting,
+		model.StatusTestReview,
+		model.StatusInProgress,
+		model.StatusTestingReady,
+		model.StatusMerging,
+		model.StatusPaused,
+		model.StatusDone,
+		model.StatusFailed,
+		model.StatusRejected,
+		model.StatusCancelled,
+	}
+	for _, status := range statuses {
+		if _, ok := ValidTransitions[status]; !ok {
+			t.Errorf("ValidTransitions missing status %q", status)
+		}
+	}
+	if got := ValidTransitions[model.StatusCancelled]; len(got) != 0 {
+		t.Errorf("cancelled transitions = %v, want terminal state", got)
 	}
 }
 

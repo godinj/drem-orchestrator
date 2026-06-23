@@ -316,9 +316,10 @@ func (s *Store) GetMessagesBetween(agent1, agent2 string, limit int, beforeID uu
 		}
 		if cursorIdx >= 0 {
 			cursorTs := msgs[cursorIdx].CreatedAt
+			cursorID := msgs[cursorIdx].ID.String()
 			filtered := msgs[:0]
 			for _, m := range msgs {
-				if m.CreatedAt.Before(cursorTs) {
+				if m.CreatedAt.Before(cursorTs) || (m.CreatedAt.Equal(cursorTs) && m.ID.String() < cursorID) {
 					filtered = append(filtered, m)
 				}
 			}
@@ -418,9 +419,29 @@ func (s *Store) moveInboxItem(agent, id, destDirName string) error {
 		if err := os.MkdirAll(destDir, 0o755); err != nil {
 			return err
 		}
-		return os.Rename(entry.Path, filepath.Join(destDir, filepath.Base(entry.Path)))
+		return moveNoOverwrite(entry.Path, filepath.Join(destDir, filepath.Base(entry.Path)))
 	}
 	return csuite.ErrInboxItemNotFound
+}
+
+func moveNoOverwrite(src, dest string) error {
+	if err := os.Link(src, dest); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return csuite.ErrInboxItemConflict
+		}
+		if errors.Is(err, os.ErrNotExist) {
+			return csuite.ErrInboxItemNotFound
+		}
+		return err
+	}
+	if err := os.Remove(src); err != nil {
+		_ = os.Remove(dest)
+		if errors.Is(err, os.ErrNotExist) {
+			return csuite.ErrInboxItemNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 // GetMessageCountByAgent returns the number of inbox files (live +

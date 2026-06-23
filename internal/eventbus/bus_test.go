@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "github.com/mattn/go-sqlite3"
 
@@ -749,6 +750,50 @@ func TestAck_Idempotent(t *testing.T) {
 	if err := bus.Ack("watcher-agent", []string{e.ID}); err != nil {
 		t.Errorf("second Ack (idempotent) returned error: %v", err)
 	}
+}
+
+func TestAck_IdempotentPreservesFirstAckTimestamp(t *testing.T) {
+	dbPath := newTempDB(t)
+
+	bus, err := eventbus.New(dbPath)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	e := &eventbus.Event{Type: "task.created", Source: "orchestrator", Details: "{}"}
+	if err := bus.Publish(e); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if err := bus.Deliver(e.ID, "watcher-agent"); err != nil {
+		t.Fatalf("Deliver: %v", err)
+	}
+
+	if err := bus.Ack("watcher-agent", []string{e.ID}); err != nil {
+		t.Fatalf("first Ack: %v", err)
+	}
+	first := ackedAtString(t, dbPath, e.ID, "watcher-agent")
+	time.Sleep(2 * time.Millisecond)
+	if err := bus.Ack("watcher-agent", []string{e.ID}); err != nil {
+		t.Fatalf("second Ack: %v", err)
+	}
+	second := ackedAtString(t, dbPath, e.ID, "watcher-agent")
+	if second != first {
+		t.Fatalf("second ack changed acked_at: first %q, second %q", first, second)
+	}
+}
+
+func ackedAtString(t *testing.T, dbPath, eventID, agent string) string {
+	t.Helper()
+	db := openRaw(t, dbPath)
+	var ackedAt sql.NullString
+	row := db.QueryRow("SELECT acked_at FROM event_deliveries WHERE event_id = ? AND agent = ?", eventID, agent)
+	if err := row.Scan(&ackedAt); err != nil {
+		t.Fatalf("query acked_at: %v", err)
+	}
+	if !ackedAt.Valid || ackedAt.String == "" {
+		t.Fatal("acked_at is not set")
+	}
+	return ackedAt.String
 }
 
 // TestAck_EmptySliceIsNoop verifies that calling Ack with an empty eventIDs

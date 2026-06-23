@@ -103,6 +103,24 @@ func TestInboxQueueValidationFailures(t *testing.T) {
 	postInboxAction(t, mux, "/api/inbox/archive", uuid.NewString(), http.StatusNotFound)
 }
 
+func TestInboxQueueArchiveCollisionReturnsConflict(t *testing.T) {
+	root := t.TempDir()
+	name := "20260101T000000Z-operator-to-mike-aaaaaaaa.md"
+	seedServeInboxFile(t, root, "mike", "inbox", name, "archive me", "aaaaaaaa")
+	seedServeInboxFile(t, root, "mike", filepath.Join("inbox", ".archive"), name, "existing", "aaaaaaaa")
+	store := diskstore.New(root)
+	items, err := store.ListInboxQueue("mike", 0)
+	if err != nil {
+		t.Fatalf("ListInboxQueue: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+	mux := New(Config{Token: "secret", Store: store}).buildMux()
+
+	postInboxAction(t, mux, "/api/inbox/archive", items[0].ID.String(), http.StatusConflict)
+}
+
 func postInboxAction(t *testing.T, mux http.Handler, path, id string, want int) {
 	t.Helper()
 	body := []byte(`{"agent":"mike","id":"` + id + `","reason":"operator restart review"}`)

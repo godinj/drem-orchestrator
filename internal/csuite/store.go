@@ -231,9 +231,9 @@ func (s *Store) PurgeArchivedMessages(retention time.Duration) (*PurgeResult, er
 // ---------------------------------------------------------------------------
 
 // GetMessagesBetween returns messages exchanged between agent1 and agent2,
-// ordered by created_at DESC (newest first). If beforeID is non-zero, only
-// messages created before the message with that ID are returned (cursor
-// pagination). limit caps the result set; pass 0 to use the default (50).
+// ordered by created_at DESC, id DESC (newest first with deterministic tie
+// break). If beforeID is non-zero, only messages older than that full sort key
+// are returned. limit caps the result set; pass 0 to use the default (50).
 func (s *Store) GetMessagesBetween(agent1, agent2 string, limit int, beforeID uuid.UUID) ([]CsuiteInboxMessage, error) {
 	const defaultLimit = 50
 	if limit <= 0 {
@@ -243,14 +243,14 @@ func (s *Store) GetMessagesBetween(agent1, agent2 string, limit int, beforeID uu
 	q := s.db.Where(
 		"(from_agent = ? AND to_agent = ?) OR (from_agent = ? AND to_agent = ?)",
 		agent1, agent2, agent2, agent1,
-	).Order("created_at DESC").Limit(limit)
+	).Order("created_at DESC, id DESC").Limit(limit)
 
 	if beforeID != uuid.Nil {
 		var cursor CsuiteInboxMessage
 		if err := s.db.First(&cursor, "id = ?", beforeID).Error; err != nil {
 			return nil, fmt.Errorf("get cursor message %s: %w", beforeID, err)
 		}
-		q = q.Where("created_at < ?", cursor.CreatedAt)
+		q = q.Where("created_at < ? OR (created_at = ? AND id < ?)", cursor.CreatedAt, cursor.CreatedAt, cursor.ID)
 	}
 
 	var msgs []CsuiteInboxMessage

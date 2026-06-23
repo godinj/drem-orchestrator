@@ -123,6 +123,8 @@ func writeInboxQueueError(w http.ResponseWriter, err error) {
 		writeJSONError(w, http.StatusBadRequest, "unknown persona")
 	case errors.Is(err, csuite.ErrInboxItemNotFound):
 		writeJSONError(w, http.StatusNotFound, "inbox item not found")
+	case errors.Is(err, csuite.ErrInboxItemConflict):
+		writeJSONError(w, http.StatusConflict, "inbox item conflict")
 	default:
 		writeJSONError(w, http.StatusInternalServerError, "store unavailable")
 	}

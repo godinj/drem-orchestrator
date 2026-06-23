@@ -124,6 +124,9 @@ func EnsureBranch(ctx context.Context, bareRepo, branch, fromBranch string) erro
 	// ref and is the narrow verb we want. It has no working-tree side
 	// effect in a bare repo — just a ref write against the object DB.
 	if _, err := runGit(ctx, bareRepo, "branch", branch, fromBranch); err != nil {
+		if exists, existsErr := BranchExists(ctx, bareRepo, branch); existsErr == nil && exists {
+			return nil
+		}
 		return fmt.Errorf("gitref: EnsureBranch: create %s from %s in %s: %w",
 			branch, fromBranch, bareRepo, err)
 	}

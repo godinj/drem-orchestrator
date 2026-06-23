@@ -1,6 +1,7 @@
 package diskstore
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -438,6 +439,71 @@ func TestStore_GetMessagesBetween_CursorPagination(t *testing.T) {
 	}
 	if again[0].ID != first[0].ID || again[1].ID != first[1].ID {
 		t.Errorf("IDs not stable across calls")
+	}
+}
+
+func TestStore_GetMessagesBetween_CursorPaginationSameTimestamp(t *testing.T) {
+	root := t.TempDir()
+	ts := time.Now().UTC().Truncate(time.Second)
+	for _, corrid := range []string{"aaaa1111", "bbbb2222", "cccc3333", "dddd4444", "eeee5555"} {
+		seedFile(t, root, "mike", "inbox", "20260101T000000Z-operator-to-mike-"+corrid+".md",
+			frontmatterFile("operator", "mike", corrid, "body", corrid, ts))
+	}
+	store := New(root)
+
+	first, err := store.GetMessagesBetween("operator", "mike", 2, uuid.Nil)
+	if err != nil {
+		t.Fatalf("first page: %v", err)
+	}
+	if len(first) != 2 {
+		t.Fatalf("first page len: want 2, got %d", len(first))
+	}
+	second, err := store.GetMessagesBetween("operator", "mike", 2, first[1].ID)
+	if err != nil {
+		t.Fatalf("second page: %v", err)
+	}
+	if len(second) != 2 {
+		t.Fatalf("second page len: want 2, got %d", len(second))
+	}
+	third, err := store.GetMessagesBetween("operator", "mike", 2, second[1].ID)
+	if err != nil {
+		t.Fatalf("third page: %v", err)
+	}
+
+	seen := map[uuid.UUID]bool{}
+	for _, page := range [][]csuite.CsuiteInboxMessage{first, second, third} {
+		for _, msg := range page {
+			if seen[msg.ID] {
+				t.Fatalf("message %s appeared on multiple pages", msg.ID)
+			}
+			seen[msg.ID] = true
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("paginated %d unique messages, want 5", len(seen))
+	}
+}
+
+func TestMoveInboxItemDestinationCollisionReturnsConflict(t *testing.T) {
+	root := t.TempDir()
+	name := "20260101T000000Z-operator-to-mike-aaaaaaaa.md"
+	now := time.Now().UTC()
+	seedFile(t, root, "mike", "inbox", name,
+		frontmatterFile("operator", "mike", "live", "body", "aaaaaaaa", now))
+	seedFile(t, root, "mike", "inbox/.archive", name,
+		frontmatterFile("operator", "mike", "existing", "body", "aaaaaaaa", now))
+	store := New(root)
+	items, err := store.ListInboxQueue("mike", 0)
+	if err != nil {
+		t.Fatalf("ListInboxQueue: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("items len = %d, want 1", len(items))
+	}
+
+	err = store.ArchiveInboxItem("mike", items[0].ID.String(), "collision")
+	if !errors.Is(err, csuite.ErrInboxItemConflict) {
+		t.Fatalf("ArchiveInboxItem err = %v, want ErrInboxItemConflict", err)
 	}
 }
 
