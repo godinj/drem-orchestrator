@@ -160,6 +160,14 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 	task.AssignedAgentID = nil
 
 	if task.ParentTaskID == nil {
+		if task.WorktreeBranch != "" && o.worktree != nil {
+			featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+			if err := o.worktree.RemoveFeature(featureName); err != nil {
+				return fmt.Errorf("retry task: remove stale feature %s: %w", task.WorktreeBranch, err)
+			}
+			task.WorktreeBranch = ""
+		}
+
 		var staleChildren []model.Task
 		if err := o.db.Where("parent_task_id = ?", task.ID).Find(&staleChildren).Error; err != nil {
 			return fmt.Errorf("retry task: load stale children: %w", err)

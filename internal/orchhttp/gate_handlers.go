@@ -237,8 +237,9 @@ func (s *Server) handleAnswerTask(w http.ResponseWriter, r *http.Request) {
 // handleRetryTask dispatches POST /projects/{name}/tasks/{id}/retry. Only
 // failed is accepted; any other status returns 409. Delegates to
 // Orchestrator.RetryTask, which does the failed→backlog transition,
-// clears retry_count/last_error/failure diagnostics, detaches stale children,
-// unlinks stale agents, and records a "user retried task" event. See
+// clears retry_count/last_error/failure diagnostics, removes the stale feature
+// branch for top-level tasks, detaches stale children, unlinks stale agents,
+// and records a "user retried task" event. See
 // internal/orchestrator/task_api.go RetryTask for the full semantics.
 //
 // Parent re-animation cascade (Bug I #1 fix): when the target task is a

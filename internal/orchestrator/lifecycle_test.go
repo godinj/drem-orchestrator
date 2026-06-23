@@ -1229,6 +1229,8 @@ func TestRetryTask_DetachesAllTopLevelChildren(t *testing.T) {
 	o, db := setupLifecycleTest(t)
 
 	parent := createLifecycleTask(t, db, o.projectID, "retry-parent", model.StatusFailed, nil)
+	parent.WorktreeBranch = "feature/stale-retry-parent"
+	db.Save(&parent)
 	doneChild := model.Task{
 		ID:           uuid.New(),
 		ProjectID:    o.projectID,
@@ -1252,6 +1254,15 @@ func TestRetryTask_DetachesAllTopLevelChildren(t *testing.T) {
 
 	if err := o.RetryTask(parent.ID); err != nil {
 		t.Fatalf("RetryTask: unexpected error: %v", err)
+	}
+
+	var reloadedParent model.Task
+	db.First(&reloadedParent, "id = ?", parent.ID)
+	if reloadedParent.WorktreeBranch != "" {
+		t.Fatalf("expected stale parent worktree branch cleared, got %q", reloadedParent.WorktreeBranch)
+	}
+	if len(o.worktree.(*FakeWorktreeManager).RemovedFeatures) != 1 || o.worktree.(*FakeWorktreeManager).RemovedFeatures[0] != "stale-retry-parent" {
+		t.Fatalf("expected stale feature removed, got %v", o.worktree.(*FakeWorktreeManager).RemovedFeatures)
 	}
 
 	var attachedCount int64
