@@ -88,6 +88,40 @@ func TestIsClean_IgnoresClaude(t *testing.T) {
 	require.True(t, clean, "untracked .claude/ entries should not mark as dirty")
 }
 
+func TestWorktreeHeadDiffersFromBranchTip_DetectsRefAdvancedBehindWorktree(t *testing.T) {
+	bare := testutil.SetupBareRepo(t)
+	wt := filepath.Join(t.TempDir(), "feature")
+	_, err := testutil.RunGit([]string{"branch", "feature/stale", "HEAD"}, bare)
+	require.NoError(t, err)
+	_, err = testutil.RunGit([]string{"worktree", "add", wt, "feature/stale"}, bare)
+	require.NoError(t, err)
+	_, err = testutil.RunGit([]string{"config", "user.email", "test@test.com"}, wt)
+	require.NoError(t, err)
+	_, err = testutil.RunGit([]string{"config", "user.name", "Test"}, wt)
+	require.NoError(t, err)
+	oldSHA, err := RunGit(context.Background(), wt, "rev-parse", "HEAD")
+	require.NoError(t, err)
+	_, err = testutil.RunGit([]string{"checkout", "--detach", oldSHA}, wt)
+	require.NoError(t, err)
+
+	tmp := filepath.Join(t.TempDir(), "tmp")
+	_, err = testutil.RunGit([]string{"worktree", "add", "-b", "advance-feature-stale", tmp, "feature/stale"}, bare)
+	require.NoError(t, err)
+	_, err = testutil.RunGit([]string{"config", "user.email", "test@test.com"}, tmp)
+	require.NoError(t, err)
+	_, err = testutil.RunGit([]string{"config", "user.name", "Test"}, tmp)
+	require.NoError(t, err)
+	testutil.CommitFile(t, tmp, "advanced.txt", "new", "advance branch")
+	advancedSHA, err := RunGit(context.Background(), tmp, "rev-parse", "HEAD")
+	require.NoError(t, err)
+	_, err = testutil.RunGit([]string{"update-ref", "refs/heads/feature/stale", advancedSHA}, bare)
+	require.NoError(t, err)
+
+	stale, err := WorktreeHeadDiffersFromBranchTip(context.Background(), wt, "feature/stale")
+	require.NoError(t, err)
+	require.True(t, stale)
+}
+
 func TestCommitUnstagedChanges_Nothing(t *testing.T) {
 	_, wt := setupWorktree(t)
 	committed, err := CommitUnstagedChanges(context.Background(), wt, "noop")

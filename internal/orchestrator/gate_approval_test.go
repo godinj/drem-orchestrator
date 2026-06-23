@@ -1,11 +1,14 @@
 package orchestrator
 
 import (
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
@@ -149,5 +152,99 @@ func TestRetryFailedParentThenApproveDoesNotDuplicateActiveSubtasksOrStaleSchedu
 	}
 	if activeChildren[0].ID == staleChild.ID {
 		t.Fatalf("stale child was reused as active child")
+	}
+}
+
+func TestHandlePlanApprovedConcurrentDoubleApproveExactlyOnce(t *testing.T) {
+	db := testutil.NewTestDBFileWAL(t)
+	requireMigrateCore(t, db)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	task := model.Task{
+		ID:          uuid.New(),
+		ProjectID:   o.projectID,
+		Title:       "plan-review",
+		Description: "approve once",
+		Status:      model.StatusPlanReview,
+		Plan: model.JSONField{"subtasks": []any{
+			map[string]any{"title": "write tests", "description": "tests", "phase": "test", "agent_type": "coder"},
+			map[string]any{"title": "implement", "description": "impl", "phase": "implementation", "agent_type": "coder", "dependencies": []any{0}},
+		}},
+	}
+	db.Create(&task)
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- o.HandlePlanApproved(task.ID)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	successes := 0
+	stale := 0
+	for err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, state.ErrStaleTransition):
+			stale++
+		default:
+			t.Fatalf("HandlePlanApproved unexpected error: %v", err)
+		}
+	}
+	if successes != 1 || stale != 1 {
+		t.Fatalf("expected one success and one stale error, got successes=%d stale=%d", successes, stale)
+	}
+
+	var reloaded model.Task
+	if err := db.First(&reloaded, "id = ?", task.ID).Error; err != nil {
+		t.Fatalf("load task: %v", err)
+	}
+	if reloaded.Status != model.StatusTestWriting {
+		t.Fatalf("expected task status %q, got %q", model.StatusTestWriting, reloaded.Status)
+	}
+
+	var childCount int64
+	if err := db.Model(&model.Task{}).Where("parent_task_id = ?", task.ID).Count(&childCount).Error; err != nil {
+		t.Fatalf("count children: %v", err)
+	}
+	if childCount != 2 {
+		t.Fatalf("expected exactly 2 children, got %d", childCount)
+	}
+
+	var eventCount int64
+	if err := db.Model(&model.TaskEvent{}).
+		Where("task_id = ? AND event_type = ? AND old_value = ?", task.ID, "status_change", string(model.StatusPlanReview)).
+		Count(&eventCount).Error; err != nil {
+		t.Fatalf("count status events: %v", err)
+	}
+	if eventCount != 1 {
+		t.Fatalf("expected exactly one plan_review status event, got %d", eventCount)
+	}
+}
+
+func requireMigrateCore(t *testing.T, db interface{ AutoMigrate(...any) error }) {
+	t.Helper()
+	if err := db.AutoMigrate(
+		&model.Project{},
+		&model.Task{},
+		&model.Agent{},
+		&model.TaskEvent{},
+		&model.Memory{},
+		&model.TaskComment{},
+	); err != nil {
+		t.Fatalf("auto migrate: %v", err)
 	}
 }

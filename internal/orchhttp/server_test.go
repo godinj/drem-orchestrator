@@ -64,6 +64,20 @@ func setupHTTPTest(t *testing.T, logs orchhttp.LogStreamer) (*orchhttp.Server, *
 	return srv, ts, project
 }
 
+func postIngestRecord(t *testing.T, baseURL string, record map[string]any) {
+	t.Helper()
+	body, err := json.Marshal(map[string]any{"records": []any{record}})
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodPost, baseURL+"/internal/logs", bytes.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("X-Drem-Agentmon-Token", "secret-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusAccepted, resp.StatusCode)
+}
+
 func TestListProjectsReturnsProjectInfo(t *testing.T) {
 	_, ts, _ := setupHTTPTest(t, nil)
 
@@ -762,6 +776,20 @@ func TestIngestLeavesUnmatchedMissingTaskIDUnattributed(t *testing.T) {
 func TestIngestAcceptsMergeResultAndUpdatesTaskContext(t *testing.T) {
 	srv, ts, project := setupHTTPTest(t, nil)
 	task := testutil.CreateTask(t, srv.DB, project.ID, "merge me", model.StatusMerging)
+	attemptID := uuid.New()
+	require.NoError(t, srv.DB.Create(&model.WorkerAttempt{
+		ID:          attemptID,
+		TaskID:      task.ID,
+		AgentType:   string(model.AgentMerger),
+		WorkerID:    "merger-worker-1",
+		ContainerID: "container-1",
+		State:       model.WorkerAttemptRunning,
+	}).Error)
+	require.NoError(t, srv.DB.Model(&task).Update("context", model.JSONField{
+		"current_merge_attempt_id":   attemptID.String(),
+		"current_merge_container_id": "container-1",
+		"current_merge_worker_id":    "merger-worker-1",
+	}).Error)
 
 	record := map[string]any{
 		"type":           "merge_result",
@@ -791,12 +819,88 @@ func TestIngestAcceptsMergeResultAndUpdatesTaskContext(t *testing.T) {
 	require.Equal(t, "conflict", saved.Context["merge_failure_reason"])
 	require.Equal(t, "merge failed", saved.Context["merge_test_output"])
 	require.Equal(t, []any{"README.md"}, saved.Context["merge_conflicts"])
+	require.Equal(t, attemptID.String(), saved.Context["merge_result_attempt_id"])
+	require.Equal(t, "container-1", saved.Context["merge_result_container_id"])
 
 	var evt model.TaskEvent
 	require.NoError(t, srv.DB.First(&evt, "event_type = ?", "merge_result").Error)
 	require.Equal(t, task.ID, evt.TaskID)
 	require.Equal(t, "merger-worker-1", evt.Actor)
 	require.Equal(t, "container-1", evt.OldValue)
+}
+
+func TestIngestMergeResultIgnoresStaleMergerAttempt(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "stale merge", model.StatusMerging)
+	currentAttemptID := uuid.New()
+	require.NoError(t, srv.DB.Create(&model.WorkerAttempt{
+		ID:          currentAttemptID,
+		TaskID:      task.ID,
+		AgentType:   string(model.AgentMerger),
+		WorkerID:    "new-worker",
+		ContainerID: "new-container",
+		State:       model.WorkerAttemptRunning,
+	}).Error)
+	initialContext := model.JSONField{
+		"current_merge_attempt_id":   currentAttemptID.String(),
+		"current_merge_container_id": "new-container",
+		"current_merge_worker_id":    "new-worker",
+	}
+	require.NoError(t, srv.DB.Model(&task).Update("context", initialContext).Error)
+
+	postIngestRecord(t, ts.URL, map[string]any{
+		"type":           "merge_result",
+		"container_id":   "old-container",
+		"worker_id":      "old-worker",
+		"task_id":        task.ID.String(),
+		"success":        false,
+		"failure_reason": "conflict",
+		"conflicts":      []string{"stale.txt"},
+	})
+
+	var saved model.Task
+	require.NoError(t, srv.DB.First(&saved, "id = ?", task.ID).Error)
+	require.Equal(t, currentAttemptID.String(), saved.Context["current_merge_attempt_id"])
+	require.NotContains(t, saved.Context, "merge_failure_reason")
+	require.NotContains(t, saved.Context, "merge_conflicts")
+	require.NotContains(t, saved.Context, "merge_result_attempt_id")
+
+	var evt model.TaskEvent
+	require.NoError(t, srv.DB.First(&evt, "event_type = ?", "merge_result").Error)
+	require.Equal(t, task.ID, evt.TaskID)
+}
+
+func TestIngestMergeResultIgnoresSideEffectsForNonMergingTask(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "done merge", model.StatusDone)
+	attemptID := uuid.New()
+	require.NoError(t, srv.DB.Create(&model.WorkerAttempt{
+		ID:          attemptID,
+		TaskID:      task.ID,
+		AgentType:   string(model.AgentMerger),
+		WorkerID:    "merger-worker-1",
+		ContainerID: "container-1",
+		State:       model.WorkerAttemptRunning,
+	}).Error)
+	require.NoError(t, srv.DB.Model(&task).Update("context", model.JSONField{
+		"current_merge_attempt_id":   attemptID.String(),
+		"current_merge_container_id": "container-1",
+		"current_merge_worker_id":    "merger-worker-1",
+	}).Error)
+
+	postIngestRecord(t, ts.URL, map[string]any{
+		"type":           "merge_result",
+		"container_id":   "container-1",
+		"worker_id":      "merger-worker-1",
+		"task_id":        task.ID.String(),
+		"success":        false,
+		"failure_reason": "conflict",
+	})
+
+	var saved model.Task
+	require.NoError(t, srv.DB.First(&saved, "id = ?", task.ID).Error)
+	require.NotContains(t, saved.Context, "merge_failure_reason")
+	require.NotContains(t, saved.Context, "merge_result_attempt_id")
 }
 
 // TestIngestAcceptsAgentmonHTTPIngestorRoundTrip is the cross-package

@@ -12,12 +12,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
+	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
 
 // setWorkerCredsPathEnv sets the DREM_WORKER_CREDS_PATH env var and
@@ -63,6 +65,8 @@ type fakeWorkerSpawner struct {
 
 	spawnCalls   []spawner.SpawnWorkerParams
 	spawnResults []spawnOutcome
+	spawnEntered chan struct{}
+	spawnRelease chan struct{}
 
 	destroyCalls []spawner.DestroyWorkerParams
 	destroyErr   error
@@ -81,9 +85,20 @@ type spawnOutcome struct {
 
 func (f *fakeWorkerSpawner) SpawnWorker(_ context.Context, p spawner.SpawnWorkerParams) (spawner.SpawnWorkerResult, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.spawnCalls = append(f.spawnCalls, p)
 	idx := len(f.spawnCalls) - 1
+	f.mu.Unlock()
+	if f.spawnEntered != nil {
+		select {
+		case f.spawnEntered <- struct{}{}:
+		default:
+		}
+	}
+	if f.spawnRelease != nil {
+		<-f.spawnRelease
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if idx >= len(f.spawnResults) {
 		return spawner.SpawnWorkerResult{ContainerID: "fake-container-" + uuid.NewString()[:8]}, nil
 	}
@@ -339,11 +354,103 @@ func TestSpawnCoder_OnSpawnFailureReturnsError(t *testing.T) {
 	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
 	require.Equal(t, model.StatusInProgress, reloaded.Status)
 	require.Nil(t, reloaded.AssignedAgentID)
+	require.Empty(t, fake.destroyCalls, "no container exists when SpawnWorker fails")
+
+	var attempt model.WorkerAttempt
+	require.NoError(t, o.db.First(&attempt, "task_id = ?", task.ID).Error)
+	require.Equal(t, model.WorkerAttemptFailed, attempt.State)
+	require.NotNil(t, attempt.CompletedAt)
 
 	// A worker_spawn_failed audit event must exist (user story 49).
 	var evts []model.TaskEvent
 	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_spawn_failed").Find(&evts).Error)
 	require.Len(t, evts, 1)
+}
+
+func TestSpawnCoder_FinalizeFailureDestroysContainerAndClearsReservation(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
+	o, fake, _ := workerSpawnTestRig(t)
+
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "Test",
+		Description:    "x",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/finalize-fails",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+	fake.spawnResults = []spawnOutcome{{res: spawner.SpawnWorkerResult{ContainerID: "container-finalize-fails"}}}
+
+	failed := false
+	workerAttemptUpdates := 0
+	o.db.Callback().Update().Before("gorm:update").Register("test_fail_finalize_attempt_once", func(tx *gorm.DB) {
+		if failed || tx.Statement == nil || tx.Statement.Schema == nil || tx.Statement.Schema.Name != "WorkerAttempt" {
+			return
+		}
+		workerAttemptUpdates++
+		if workerAttemptUpdates < 2 {
+			return
+		}
+		failed = true
+		tx.AddError(errors.New("injected finalize failure"))
+	})
+
+	err := o.spawnCoder(context.Background(), task)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "finalize identity")
+	require.True(t, failed)
+	require.Len(t, fake.destroyCalls, 1)
+	require.Equal(t, "container-finalize-fails", fake.destroyCalls[0].ContainerID)
+
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Nil(t, reloaded.AssignedAgentID)
+
+	var attempt model.WorkerAttempt
+	require.NoError(t, o.db.First(&attempt, "task_id = ?", task.ID).Error)
+	require.Equal(t, model.WorkerAttemptFailed, attempt.State)
+	require.NotNil(t, attempt.CompletedAt)
+}
+
+func TestSpawnCoder_ConcurrentSameTaskCallsSpawnerOnce(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
+	o, fake, _ := workerSpawnTestRig(t)
+	fake.spawnEntered = make(chan struct{}, 1)
+	fake.spawnRelease = make(chan struct{})
+	fake.spawnResults = []spawnOutcome{{res: spawner.SpawnWorkerResult{ContainerID: "container-one"}}}
+
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "Test",
+		Description:    "x",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/concurrent",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	firstErr := make(chan error, 1)
+	go func() { firstErr <- o.spawnCoder(context.Background(), task) }()
+	<-fake.spawnEntered
+
+	secondErr := o.spawnCoder(context.Background(), task)
+	require.Error(t, secondErr)
+	require.True(t, errors.Is(secondErr, workeridentity.ErrTaskAlreadyClaimed))
+	close(fake.spawnRelease)
+	require.NoError(t, <-firstErr)
+
+	require.Len(t, fake.spawnCalls, 1)
+	var attempts []model.WorkerAttempt
+	require.NoError(t, o.db.Where("task_id = ? AND completed_at IS NULL", task.ID).Find(&attempts).Error)
+	require.Len(t, attempts, 1)
+	require.Equal(t, model.WorkerAttemptRunning, attempts[0].State)
+
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.NotNil(t, reloaded.AssignedAgentID)
 }
 
 func TestSpawnCoder_RegistersBranchInGitref(t *testing.T) {
@@ -848,35 +955,14 @@ func TestRecordContainerOnAgent_CreatePathPopulatesBranchAndTask(t *testing.T) {
 	require.Equal(t, "c-create-path", ag.TmuxSession)
 }
 
-// TestRecordContainerOnAgent_UpdatePathPopulatesBranchAndTask covers
-// the sibling path: a pre-existing agent row (e.g. one created by the
-// legacy host-subprocess path or a retried spawn) MUST have its
-// WorktreeBranch and CurrentTaskID populated when the spawner attaches
-// a container to it. Before the fix, updateAgentContainer only wrote
-// TmuxSession / ModelID / HeartbeatAt and silently left branch + task
-// empty, producing the exact v13 symptom observed in production:
-// agent rows with correct container IDs but empty branch/task fields.
-func TestRecordContainerOnAgent_UpdatePathPopulatesBranchAndTask(t *testing.T) {
+// TestSpawnCoder_PreAssignedTaskFailsBeforeExternalSpawn codifies the
+// reservation CAS: container worker spawn only claims tasks whose
+// assigned_agent_id is NULL. A pre-assigned task is already owned and
+// must not be updated by attaching a new external container.
+func TestSpawnCoder_PreAssignedTaskFailsBeforeExternalSpawn(t *testing.T) {
 	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
 	setWorkerPromptRootEnv(t, t.TempDir())
 	o, fake, _ := workerSpawnTestRig(t)
-	o.runner = agent.NewRunner(o.db, nil, nil, "/bin/false", "", 1, func(at model.AgentType) model.AgentCLIConfig {
-		require.Equal(t, model.AgentCoder, at)
-		return model.AgentCLIConfig{
-			Provider: model.ProviderCodex,
-			Model:    "gpt-5.5",
-			Effort:   "high",
-		}
-	})
-	prevCodexAuth, codexAuthWasSet := os.LookupEnv(workerCodexAuthPathEnv)
-	require.NoError(t, os.Setenv(workerCodexAuthPathEnv, "/host/.codex/auth.json"))
-	t.Cleanup(func() {
-		if codexAuthWasSet {
-			_ = os.Setenv(workerCodexAuthPathEnv, prevCodexAuth)
-		} else {
-			_ = os.Unsetenv(workerCodexAuthPathEnv)
-		}
-	})
 
 	task := &model.Task{
 		ID:             uuid.New(),
@@ -888,38 +974,27 @@ func TestRecordContainerOnAgent_UpdatePathPopulatesBranchAndTask(t *testing.T) {
 	}
 	require.NoError(t, o.db.Create(task).Error)
 
-	// Pre-create an agent row with empty branch/task (mirrors the
-	// shape that produced the v13 incident) and assign it to the task.
 	preExisting := model.Agent{
 		ID:        uuid.New(),
 		ProjectID: o.projectID,
 		AgentType: model.AgentCoder,
 		Name:      "legacy-agent",
 		Status:    model.AgentIdle,
-		// WorktreeBranch deliberately empty.
-		// CurrentTaskID deliberately nil.
 	}
 	require.NoError(t, o.db.Create(&preExisting).Error)
 	task.AssignedAgentID = &preExisting.ID
 	require.NoError(t, o.db.Save(task).Error)
 
-	fake.spawnResults = []spawnOutcome{
-		{res: spawner.SpawnWorkerResult{ContainerID: "c-update-path"}},
-	}
-
-	require.NoError(t, o.spawnCoder(context.Background(), task))
+	err := o.spawnCoder(context.Background(), task)
+	require.Error(t, err)
+	require.True(t, errors.Is(err, workeridentity.ErrTaskAlreadyClaimed))
+	require.Empty(t, fake.spawnCalls)
 
 	var ag model.Agent
 	require.NoError(t, o.db.First(&ag, "id = ?", preExisting.ID).Error)
-	require.Equal(t, "feature/def", ag.WorktreeBranch,
-		"update path must write WorktreeBranch onto the pre-existing agent row")
-	require.NotNil(t, ag.CurrentTaskID,
-		"update path must populate CurrentTaskID on the pre-existing agent row")
-	require.Equal(t, task.ID, *ag.CurrentTaskID)
-	require.Equal(t, "c-update-path", ag.TmuxSession)
-	require.Equal(t, "codex", ag.Provider)
-	require.Equal(t, "gpt-5.5", ag.ModelID)
-	require.Equal(t, "high", ag.Effort)
+	require.Empty(t, ag.TmuxSession)
+	require.Empty(t, ag.WorktreeBranch)
+	require.Nil(t, ag.CurrentTaskID)
 }
 
 // TestSpawnTypedWorker_SubtaskWithMissingParentBranchFailsClosed

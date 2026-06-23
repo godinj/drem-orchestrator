@@ -125,7 +125,20 @@ func (o *Orchestrator) dispatchEvent(ctx context.Context, ev container.Event, tr
 		if isTerminal(task.Status) {
 			return
 		}
-		o.handleWorkerDeath(ctx, &task, ev, tracker)
+		attempt, ok := o.workerAttemptForDeathEvent(task.ID, ev)
+		if !ok {
+			o.logger.Warn("docker death event has no matching worker attempt",
+				"task_id", task.ID, "container_id", ev.ContainerID,
+				"worker_id", ev.Labels["drem.worker_id"])
+			return
+		}
+		if !currentAssignedAttempt(&task, attempt) {
+			o.logger.Info("ignoring stale docker death event for non-current attempt",
+				"task_id", task.ID, "container_id", ev.ContainerID,
+				"worker_id", ev.Labels["drem.worker_id"], "attempt_id", attempt.ID)
+			return
+		}
+		o.handleWorkerDeath(ctx, &task, attempt, ev, tracker)
 	case container.EventDestroy:
 		// Destroy is emitted post-Destroy; no state machine impact.
 		return
@@ -151,9 +164,33 @@ func parseTaskIDFromLabels(labels map[string]string) (uuid.UUID, bool) {
 // or whose OOMKilled flag is set. It respawns a replacement coder for the
 // task unless the per-hour cap has been reached, in which case the task
 // transitions to failed (user story 14).
-func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, ev container.Event, tracker *replacementTracker) {
+func (o *Orchestrator) workerAttemptForDeathEvent(taskID uuid.UUID, ev container.Event) (*model.WorkerAttempt, bool) {
+	var attempt model.WorkerAttempt
+	if ev.ContainerID != "" {
+		if err := o.db.Where("task_id = ? AND container_id = ?", taskID, ev.ContainerID).
+			Order("created_at DESC").First(&attempt).Error; err == nil {
+			return &attempt, true
+		}
+	}
+	if workerID := ev.Labels["drem.worker_id"]; workerID != "" {
+		if err := o.db.Where("task_id = ? AND worker_id = ?", taskID, workerID).
+			Order("created_at DESC").First(&attempt).Error; err == nil {
+			return &attempt, true
+		}
+	}
+	return nil, false
+}
+
+func currentAssignedAttempt(task *model.Task, attempt *model.WorkerAttempt) bool {
+	if task == nil || attempt == nil || task.AssignedAgentID == nil || attempt.AgentID == nil {
+		return false
+	}
+	return *task.AssignedAgentID == *attempt.AgentID
+}
+
+func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, attempt *model.WorkerAttempt, ev container.Event, tracker *replacementTracker) {
 	now := time.Now()
-	o.markAssignedWorkerDead(task, ev, now)
+	o.markWorkerAttemptDead(task, attempt, ev, now)
 	attempts := tracker.recordAndCount(task.ID, now)
 	if attempts > replacementCap {
 		reason := fmt.Sprintf("worker death cap exceeded (%d/%d in %s)",
@@ -168,21 +205,42 @@ func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, 
 		"task_id", task.ID, "container_id", ev.ContainerID,
 		"exit_code", ev.ExitCode, "oom", ev.OOMKilled, "attempt", attempts)
 
-	if err := o.spawnCoder(ctx, task); err != nil {
+	if err := o.respawnWorkerRole(ctx, task, attempt.AgentType); err != nil {
 		o.logger.Error("handle worker death: respawn failed",
 			"task_id", task.ID, "error", err)
 	}
 }
 
-func (o *Orchestrator) markAssignedWorkerDead(task *model.Task, ev container.Event, now time.Time) {
-	if task == nil || task.AssignedAgentID == nil {
+func (o *Orchestrator) respawnWorkerRole(ctx context.Context, task *model.Task, role string) error {
+	switch role {
+	case string(model.AgentCoder):
+		return o.spawnCoder(ctx, task)
+	case string(model.AgentReviewer):
+		return o.spawnReviewer(ctx, task)
+	case string(model.AgentFixer):
+		return o.spawnFixer(ctx, task)
+	case "supervisor":
+		return o.spawnSupervisor(ctx, task)
+	case string(model.AgentMerger):
+		return nil
+	default:
+		return fmt.Errorf("unknown worker role %q for respawn", role)
+	}
+}
+
+func (o *Orchestrator) markWorkerAttemptDead(task *model.Task, attempt *model.WorkerAttempt, ev container.Event, now time.Time) {
+	if task == nil || attempt == nil || task.AssignedAgentID == nil || attempt.AgentID == nil || *task.AssignedAgentID != *attempt.AgentID {
 		return
 	}
 	var ag model.Agent
-	if err := o.db.First(&ag, "id = ?", *task.AssignedAgentID).Error; err != nil {
-		o.logger.Warn("worker death: load assigned agent", "task_id", task.ID, "agent_id", *task.AssignedAgentID, "error", err)
-		task.AssignedAgentID = nil
-		_ = o.db.Save(task).Error
+	if err := o.db.First(&ag, "id = ?", *attempt.AgentID).Error; err != nil {
+		o.logger.Warn("worker death: load assigned agent", "task_id", task.ID, "agent_id", *attempt.AgentID, "error", err)
+		return
+	}
+	if ev.ContainerID != "" && ag.TmuxSession != "" && ev.ContainerID != ag.TmuxSession {
+		o.logger.Info("ignoring docker death event for mismatched current agent container",
+			"task_id", task.ID, "agent_id", ag.ID, "event_container_id", ev.ContainerID,
+			"agent_container_id", ag.TmuxSession, "attempt_id", attempt.ID)
 		return
 	}
 	ag.Status = model.AgentDead
@@ -203,6 +261,14 @@ func (o *Orchestrator) markAssignedWorkerDead(task *model.Task, ev container.Eve
 	if err := o.db.Save(&ag).Error; err != nil {
 		o.logger.Error("worker death: mark agent dead", "task_id", task.ID, "agent_id", ag.ID, "error", err)
 	}
+	attempt.State = model.WorkerAttemptFailed
+	attempt.CompletedAt = &now
+	if err := o.db.Save(attempt).Error; err != nil {
+		o.logger.Error("worker death: mark attempt failed", "task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+	}
+	if task.AssignedAgentID == nil || *task.AssignedAgentID != *attempt.AgentID {
+		return
+	}
 	task.AssignedAgentID = nil
 	if err := o.db.Save(task).Error; err != nil {
 		o.logger.Error("worker death: clear task assignment", "task_id", task.ID, "error", err)
@@ -219,6 +285,8 @@ func (o *Orchestrator) recordContainerLifecycleEvent(taskID uuid.UUID, ev contai
 		"exit_code":    ev.ExitCode,
 		"oom_killed":   ev.OOMKilled,
 		"event_type":   string(ev.Type),
+		"worker_id":    ev.Labels["drem.worker_id"],
+		"agent_type":   ev.Labels["drem.agent_type"],
 	}
 	evt := &model.TaskEvent{
 		ID:        uuid.New(),

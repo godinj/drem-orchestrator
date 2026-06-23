@@ -130,8 +130,14 @@ func TestProcessCoderDirect_CreatesAgentRecord(t *testing.T) {
 	if err := orch.db.First(&reloaded, "id = ?", sub.ID).Error; err != nil {
 		t.Fatalf("reload subtask: %v", err)
 	}
-	if reloaded.AssignedAgentID == nil {
-		t.Error("expected subtask.AssignedAgentID to be set after processCoderDirect")
+	if reloaded.AssignedAgentID != nil {
+		t.Error("expected subtask.AssignedAgentID to be cleared after synchronous direct completion")
+	}
+	if err := orch.db.First(&ag, "id = ?", ag.ID).Error; err != nil {
+		t.Fatalf("reload direct coder agent: %v", err)
+	}
+	if ag.CompletedAt == nil {
+		t.Error("expected direct coder agent completion timestamp to be set")
 	}
 }
 

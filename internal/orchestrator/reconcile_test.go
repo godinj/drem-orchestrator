@@ -655,6 +655,90 @@ func TestReconcileOrphanedSubtasks_FastTracksToDone(t *testing.T) {
 	}
 }
 
+func TestReconcileOrphanedSubtasks_SkipsStaleFeatureWorktreeWithoutAutoCommit(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	featureName := "orphan-stale-feature"
+	featureDir := createFeatureWorktree(t, bareRepo, featureName)
+	featureBranch := "feature/" + featureName
+	testFile := filepath.Join(featureDir, "feature.txt")
+	if err := os.WriteFile(testFile, []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, featureDir, "add", ".")
+	runGitCmd(t, featureDir, "commit", "-m", "feature base")
+	if err := os.WriteFile(testFile, []byte("dirty stale edit"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldFeatureSHA := runGitCmd(t, featureDir, "rev-parse", "HEAD")
+	runGitCmd(t, featureDir, "checkout", "--detach", oldFeatureSHA)
+
+	advanceDir := filepath.Join(bareRepo, "feature", featureName, "advance")
+	runGitCmd(t, bareRepo, "worktree", "add", "-b", "advance-"+featureName, advanceDir, featureBranch)
+	runGitCmd(t, advanceDir, "config", "user.email", "test@test.com")
+	runGitCmd(t, advanceDir, "config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(advanceDir, "advanced.txt"), []byte("worker pushed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, advanceDir, "add", ".")
+	runGitCmd(t, advanceDir, "commit", "-m", "worker pushed feature tip")
+	advancedSHA := runGitCmd(t, advanceDir, "rev-parse", "HEAD")
+	runGitCmd(t, bareRepo, "update-ref", "refs/heads/"+featureBranch, advancedSHA)
+
+	agentBranch := "worktree-agent-stale-feature"
+	runGitCmd(t, bareRepo, "branch", agentBranch, featureBranch)
+	parentID := uuid.New()
+	db.Create(&model.Task{
+		ID:             parentID,
+		ProjectID:      orch.projectID,
+		Title:          "orphan-stale-parent",
+		Description:    "test parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: featureBranch,
+	})
+	agentID := uuid.New()
+	db.Create(&model.Agent{
+		ID:             agentID,
+		ProjectID:      orch.projectID,
+		AgentType:      model.AgentCoder,
+		Name:           "stale-feature-agent",
+		Status:         model.AgentDead,
+		WorktreeBranch: agentBranch,
+	})
+	subID := uuid.New()
+	db.Create(&model.Task{
+		ID:              subID,
+		ProjectID:       orch.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "orphan-stale-sub",
+		Description:     "subtask whose feature worktree is stale",
+		Status:          model.StatusInProgress,
+		AssignedAgentID: &agentID,
+	})
+
+	fixes, err := orch.reconcileOrphanedSubtasks()
+	if err != nil {
+		t.Fatalf("reconcileOrphanedSubtasks() error: %v", err)
+	}
+	if fixes != 0 {
+		t.Errorf("expected 0 fixes for stale feature worktree, got %d", fixes)
+	}
+
+	latestSubject := runGitCmd(t, featureDir, "log", "-1", "--format=%s", featureBranch)
+	if latestSubject != "worker pushed feature tip" {
+		t.Fatalf("expected branch tip to remain worker-pushed commit, got %q", latestSubject)
+	}
+	worktreeSubject := runGitCmd(t, featureDir, "log", "-1", "--format=%s", "HEAD")
+	if worktreeSubject == "Auto-commit uncommitted feature worktree changes (reconcile)" {
+		t.Fatal("reconcile must not auto-commit dirty stale feature worktree")
+	}
+	var updated model.Task
+	db.First(&updated, "id = ?", subID)
+	if updated.Status != model.StatusInProgress {
+		t.Errorf("expected stale worktree subtask to remain in_progress, got %s", updated.Status)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // reconcileEmptyFeatures
 // ---------------------------------------------------------------------------

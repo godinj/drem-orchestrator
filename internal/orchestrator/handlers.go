@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/clarification"
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
@@ -31,6 +32,10 @@ const maxPlanRejections = 3
 // processTestWriting (for plans approved via raw DB update that bypassed
 // subtask creation).
 func (o *Orchestrator) materializeSubtasks(task *model.Task) (*parsePlanResult, []uuid.UUID, error) {
+	return o.materializeSubtasksWithDB(o.db, task, true)
+}
+
+func (o *Orchestrator) materializeSubtasksWithDB(db *gorm.DB, task *model.Task, cleanupDuplicates bool) (*parsePlanResult, []uuid.UUID, error) {
 	planResult, err := parsePlan(task.Plan)
 	if err != nil {
 		return nil, nil, fmt.Errorf("materialize subtasks: %w", err)
@@ -38,7 +43,7 @@ func (o *Orchestrator) materializeSubtasks(task *model.Task) (*parsePlanResult, 
 	subtaskPlans := planResult.Subtasks
 
 	var existingSubtasks []model.Task
-	if err := o.db.Where("parent_task_id = ?", task.ID).
+	if err := db.Where("parent_task_id = ?", task.ID).
 		Find(&existingSubtasks).Error; err != nil {
 		return nil, nil, fmt.Errorf("materialize subtasks: load existing subtasks: %w", err)
 	}
@@ -62,12 +67,23 @@ func (o *Orchestrator) materializeSubtasks(task *model.Task) (*parsePlanResult, 
 			break
 		}
 		if createdIDs[i] != uuid.Nil {
-			for _, duplicate := range existingSubtasks {
-				if duplicate.ID == reused.ID || duplicate.Status == model.StatusDone || duplicate.Title != sp.Title || duplicate.Phase != sp.Phase {
-					continue
+			if cleanupDuplicates {
+				for _, duplicate := range existingSubtasks {
+					if duplicate.ID == reused.ID || duplicate.Status == model.StatusDone || duplicate.Title != sp.Title || duplicate.Phase != sp.Phase {
+						continue
+					}
+					if err := o.DeleteSubtask(duplicate.ID); err != nil {
+						return nil, nil, fmt.Errorf("materialize subtasks: delete stale duplicate subtask %s: %w", duplicate.ID, err)
+					}
 				}
-				if err := o.DeleteSubtask(duplicate.ID); err != nil {
-					return nil, nil, fmt.Errorf("materialize subtasks: delete stale duplicate subtask %s: %w", duplicate.ID, err)
+			} else {
+				for _, duplicate := range existingSubtasks {
+					if duplicate.ID == reused.ID || duplicate.Status == model.StatusDone || duplicate.Title != sp.Title || duplicate.Phase != sp.Phase {
+						continue
+					}
+					if err := deleteSubtaskRowsWithDB(db, &duplicate); err != nil {
+						return nil, nil, fmt.Errorf("materialize subtasks: delete stale duplicate subtask %s: %w", duplicate.ID, err)
+					}
 				}
 			}
 			continue
@@ -96,7 +112,7 @@ func (o *Orchestrator) materializeSubtasks(task *model.Task) (*parsePlanResult, 
 			Priority:     len(subtaskPlans) - i,
 		}
 
-		if err := o.db.Create(&sub).Error; err != nil {
+		if err := db.Create(&sub).Error; err != nil {
 			return nil, nil, fmt.Errorf("materialize subtasks: create subtask %d: %w", i, err)
 		}
 	}
@@ -113,7 +129,7 @@ func (o *Orchestrator) materializeSubtasks(task *model.Task) (*parsePlanResult, 
 			}
 		}
 		if len(depIDs) > 0 {
-			if err := o.db.Model(&model.Task{}).Where("id = ?", createdIDs[i]).
+			if err := db.Model(&model.Task{}).Where("id = ?", createdIDs[i]).
 				Update("dependency_ids", depIDs).Error; err != nil {
 				return nil, nil, fmt.Errorf("materialize subtasks: update dependencies for subtask %d: %w", i, err)
 			}
@@ -130,13 +146,29 @@ func (o *Orchestrator) materializeSubtasks(task *model.Task) (*parsePlanResult, 
 				}
 			}
 			if len(testsForIDs) > 0 {
-				o.db.Model(&model.Task{}).Where("id = ?", createdIDs[i]).
+				db.Model(&model.Task{}).Where("id = ?", createdIDs[i]).
 					Update("tests_for", testsForIDs)
 			}
 		}
 	}
 
 	return planResult, createdIDs, nil
+}
+
+func deleteSubtaskRowsWithDB(db *gorm.DB, sub *model.Task) error {
+	if sub.AssignedAgentID != nil {
+		if err := db.Model(&model.Agent{}).Where("id = ?", *sub.AssignedAgentID).
+			Update("status", model.AgentDead).Error; err != nil {
+			return err
+		}
+	}
+	if err := db.Where("task_id = ?", sub.ID).Delete(&model.TaskComment{}).Error; err != nil {
+		return err
+	}
+	if err := db.Where("task_id = ?", sub.ID).Delete(&model.TaskEvent{}).Error; err != nil {
+		return err
+	}
+	return db.Delete(sub).Error
 }
 
 // HandlePlanApproved creates subtask records from the plan and transitions the
@@ -146,112 +178,141 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
 		return fmt.Errorf("handle plan approved: load task: %w", err)
 	}
-
 	if task.Status != model.StatusPlanReview {
-		return fmt.Errorf("handle plan approved: task %s is in %s, expected plan_review", taskID, task.Status)
+		return fmt.Errorf("%w: task %s is in %s, expected plan_review", state.ErrStaleTransition, taskID, task.Status)
 	}
 
-	planResult, _, err := o.materializeSubtasks(&task)
+	planResult, err := parsePlan(task.Plan)
 	if err != nil {
-		return fmt.Errorf("handle plan approved: %w", err)
+		return fmt.Errorf("handle plan approved: materialize subtasks: %w", err)
 	}
-	subtaskPlans := planResult.Subtasks
+	subtaskCount := len(planResult.Subtasks)
 
-	// Store TDD exceptions on the parent task.
 	if len(planResult.TDDExceptions) > 0 {
 		exceptionsJSON, _ := json.Marshal(planResult.TDDExceptions)
 		var exceptionsField any
-		json.Unmarshal(exceptionsJSON, &exceptionsField)
+		_ = json.Unmarshal(exceptionsJSON, &exceptionsField)
 		if task.TDDExceptions == nil {
 			task.TDDExceptions = make(model.JSONField)
 		}
 		task.TDDExceptions["exceptions"] = exceptionsField
 	}
 
-	// Build wave schedule from the created subtasks.
-	var createdSubtasks []model.Task
-	if err := o.db.Where("parent_task_id = ?", task.ID).Find(&createdSubtasks).Error; err != nil {
-		o.logger.Warn("handle plan approved: failed to load subtasks for scheduling", "error", err)
-	} else if len(createdSubtasks) > 0 {
-		schedule := BuildSchedule(createdSubtasks)
-		scheduleJSON, marshalErr := json.Marshal(schedule)
-		if marshalErr != nil {
-			o.logger.Warn("handle plan approved: failed to marshal schedule", "error", marshalErr)
-		} else {
+	// Clear planner agent assignment now that review is complete.
+	task.AssignedAgentID = nil
+
+	targetStatus := approvedPlanTargetStatus(planResult.Subtasks)
+	evt, err := state.TransitionTask(&task, targetStatus, "user", map[string]any{"action": "plan_approved"})
+	if err != nil {
+		return fmt.Errorf("handle plan approved: transition: %w", err)
+	}
+
+	var committedTask model.Task
+	err = o.db.Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&model.Task{}).
+			Where("id = ? AND status = ?", task.ID, model.StatusPlanReview).
+			Updates(map[string]any{
+				"status":            task.Status,
+				"updated_at":        task.UpdatedAt,
+				"assigned_agent_id": nil,
+				"tdd_exceptions":    task.TDDExceptions,
+			})
+		if res.Error != nil {
+			return fmt.Errorf("handle plan approved: claim task: %w", res.Error)
+		}
+		if res.RowsAffected != 1 {
+			return fmt.Errorf("%w: task %s approval already claimed", state.ErrStaleTransition, task.ID)
+		}
+
+		if _, _, err := o.materializeSubtasksWithDB(tx, &task, false); err != nil {
+			return fmt.Errorf("handle plan approved: %w", err)
+		}
+
+		var createdSubtasks []model.Task
+		if err := tx.Where("parent_task_id = ?", task.ID).Find(&createdSubtasks).Error; err != nil {
+			return fmt.Errorf("handle plan approved: load subtasks for scheduling: %w", err)
+		}
+		if len(createdSubtasks) > 0 {
+			schedule := BuildSchedule(createdSubtasks)
+			scheduleJSON, err := json.Marshal(schedule)
+			if err != nil {
+				return fmt.Errorf("handle plan approved: marshal schedule: %w", err)
+			}
 			if task.Context == nil {
 				task.Context = make(model.JSONField)
 			}
 			var scheduleField any
 			if err := json.Unmarshal(scheduleJSON, &scheduleField); err != nil {
-				o.logger.Warn("handle plan approved: failed to unmarshal schedule into context", "error", err)
-			} else {
-				task.Context["schedule"] = scheduleField
-				o.logger.Info("wave schedule computed",
-					"task_id", task.ID,
-					"groups", len(schedule.Groups),
-					"subtasks", len(createdSubtasks))
+				return fmt.Errorf("handle plan approved: unmarshal schedule into context: %w", err)
 			}
+			task.Context["schedule"] = scheduleField
+			o.logger.Info("wave schedule computed",
+				"task_id", task.ID,
+				"groups", len(schedule.Groups),
+				"subtasks", len(createdSubtasks))
 		}
+
+		if err := tx.Model(&model.Task{}).Where("id = ?", task.ID).
+			Updates(map[string]any{
+				"context":        task.Context,
+				"tdd_exceptions": task.TDDExceptions,
+			}).Error; err != nil {
+			return fmt.Errorf("handle plan approved: save task metadata: %w", err)
+		}
+		if err := tx.Create(evt).Error; err != nil {
+			return fmt.Errorf("handle plan approved: save event: %w", err)
+		}
+
+		if err := tx.First(&committedTask, "id = ?", task.ID).Error; err != nil {
+			return fmt.Errorf("handle plan approved: reload committed task: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
 
-	// Clear planner agent assignment now that review is complete.
-	task.AssignedAgentID = nil
+	o.writeApprovedPlanJSON(&committedTask)
+	o.emit("task_updated", &committedTask)
+	o.publishTaskTransition(committedTask.ID.String(), evt.OldValue, evt.NewValue, "plan approved")
+	o.logger.Info("plan approved", "task_id", committedTask.ID, "subtask_count", subtaskCount)
+	return nil
+}
 
-	// Write plan.json to the integration worktree as an untracked file.
-	// Agents can read it from disk but it must not be committed — tracked
-	// plan.json causes merge conflicts between feature branches.
-	if task.WorktreeBranch != "" {
-		featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
-		featureDir := o.worktree.FeatureWorktreePath(featureName)
-		planJSON, marshalErr := json.MarshalIndent(task.Plan, "", "  ")
-		if marshalErr != nil {
-			o.logger.Warn("handle plan approved: failed to marshal plan for worktree", "error", marshalErr)
-		} else {
-			planPath := filepath.Join(featureDir, "plan.json")
-			if writeErr := os.WriteFile(planPath, planJSON, 0o644); writeErr != nil {
-				o.logger.Warn("handle plan approved: failed to write plan.json to worktree", "error", writeErr)
-			}
-			// If plan.json was previously tracked, untrack it.
-			if removed, rmErr := gitexec.UntrackEphemeralFiles(context.Background(), featureDir); rmErr != nil {
-				o.logger.Warn("handle plan approved: failed to untrack plan.json", "error", rmErr)
-			} else if removed {
-				o.logger.Info("handle plan approved: untracked plan.json in integration worktree",
-					"task_id", task.ID)
-			}
-		}
-	}
-
-	// Determine transition target: TEST_WRITING if plan has test-phase subtasks.
-	hasTestPhase := false
+func approvedPlanTargetStatus(subtaskPlans []planEntry) model.TaskStatus {
 	for _, sp := range subtaskPlans {
 		if sp.Phase == "test" {
-			hasTestPhase = true
-			break
+			return model.StatusTestWriting
 		}
 	}
+	return model.StatusInProgress
+}
 
-	var targetStatus model.TaskStatus
-	if hasTestPhase {
-		targetStatus = model.StatusTestWriting
-	} else {
-		targetStatus = model.StatusInProgress
+func (o *Orchestrator) writeApprovedPlanJSON(task *model.Task) {
+	// Write plan.json to the integration worktree as an untracked file.
+	// Agents can read it from disk but it must not be committed; tracked
+	// plan.json causes merge conflicts between feature branches.
+	if task.WorktreeBranch == "" {
+		return
 	}
-
-	evt, err := state.TransitionTask(&task, targetStatus, "user", map[string]any{"action": "plan_approved"})
-	if err != nil {
-		return fmt.Errorf("handle plan approved: transition: %w", err)
+	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
+	featureDir := o.worktree.FeatureWorktreePath(featureName)
+	planJSON, marshalErr := json.MarshalIndent(task.Plan, "", "  ")
+	if marshalErr != nil {
+		o.logger.Warn("handle plan approved: failed to marshal plan for worktree", "error", marshalErr)
+		return
 	}
-	if err := o.db.Save(&task).Error; err != nil {
-		return fmt.Errorf("handle plan approved: save task: %w", err)
+	planPath := filepath.Join(featureDir, "plan.json")
+	if writeErr := os.WriteFile(planPath, planJSON, 0o644); writeErr != nil {
+		o.logger.Warn("handle plan approved: failed to write plan.json to worktree", "error", writeErr)
 	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("handle plan approved: save event: %w", err)
+	// If plan.json was previously tracked, untrack it.
+	if removed, rmErr := gitexec.UntrackEphemeralFiles(context.Background(), featureDir); rmErr != nil {
+		o.logger.Warn("handle plan approved: failed to untrack plan.json", "error", rmErr)
+	} else if removed {
+		o.logger.Info("handle plan approved: untracked plan.json in integration worktree",
+			"task_id", task.ID)
 	}
-
-	o.emit("task_updated", &task)
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "plan approved")
-	o.logger.Info("plan approved", "task_id", task.ID, "subtask_count", len(subtaskPlans))
-	return nil
 }
 
 // HandlePlanRejected clears the plan and transitions back to PLANNING.

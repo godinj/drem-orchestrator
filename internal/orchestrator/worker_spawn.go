@@ -152,13 +152,43 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		PromptMount:       swc.promptMount,
 	}
 
+	store := workeridentity.NewStore(o.db)
+	reservation, reserveErr := store.ReserveSpawn(ctx, workeridentity.SpawnRecord{
+		Task:                    task,
+		ProjectID:               o.projectID,
+		AgentType:               agentType,
+		WorkerID:                swc.workerID,
+		Image:                   params.Image,
+		Branch:                  params.Branch,
+		Provider:                swc.provider,
+		ModelID:                 swc.modelID,
+		Effort:                  swc.effort,
+		PromptAssetVersionsJSON: swc.promptAssetVersions,
+		RenderedPromptHash:      swc.promptHash,
+		RenderedPromptPath:      swc.promptMount,
+	})
+	if reserveErr != nil {
+		reason := "worker_reservation_failed"
+		if errors.Is(reserveErr, workeridentity.ErrTaskAlreadyClaimed) {
+			reason = "worker_already_active"
+		}
+		o.recordSpawnFailureEventWithReason(task, agentType, reason, reserveErr)
+		return fmt.Errorf("spawn %s worker: reserve identity: %w", agentType, reserveErr)
+	}
+	if params.Env != nil {
+		params.Env["DREM_AGENT_ID"] = reservation.AgentID.String()
+	}
+
 	res, spawnErr := o.Spawner.SpawnWorker(ctx, params)
 	if spawnErr != nil {
+		if abortErr := store.AbortReservation(ctx, reservation, "spawn_failed"); abortErr != nil {
+			o.logger.Error("spawn worker: abort reservation after spawn failure", "task_id", task.ID, "error", abortErr)
+		}
 		o.recordSpawnFailureEvent(task, agentType, spawnErr)
 		return fmt.Errorf("spawn %s worker: %w", agentType, spawnErr)
 	}
 
-	// Record container ID and model identity on the agent row so the audit
+	// Finalize container ID and model identity on the agent row so the audit
 	// trail in user story 49 has a single join from task → agent → container.
 	//
 	// params.Branch (not task.WorktreeBranch) is the canonical branch
@@ -169,23 +199,17 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 	// DREM_BRANCH env var and drem.branch label, so the reconciler's
 	// commit-check finds the right ref regardless of which branch
 	// source the spawner used.
-	handle, recordErr := workeridentity.NewStore(o.db).RecordSpawn(ctx, workeridentity.SpawnRecord{
-		Task:                    task,
-		ProjectID:               o.projectID,
-		AgentType:               agentType,
-		WorkerID:                swc.workerID,
-		ContainerID:             res.ContainerID,
-		Image:                   params.Image,
-		Branch:                  params.Branch,
-		Provider:                swc.provider,
-		ModelID:                 swc.modelID,
-		Effort:                  swc.effort,
-		PromptAssetVersionsJSON: swc.promptAssetVersions,
-		RenderedPromptHash:      swc.promptHash,
-		RenderedPromptPath:      swc.promptMount,
-	})
-	if recordErr != nil {
-		o.logger.Error("spawn worker: record identity", "task_id", task.ID, "error", recordErr)
+	handle, finalizeErr := store.FinalizeSpawn(ctx, reservation, res.ContainerID)
+	if finalizeErr != nil {
+		destroyErr := o.Spawner.DestroyWorker(ctx, spawner.DestroyWorkerParams{ContainerID: res.ContainerID})
+		if abortErr := store.AbortReservation(ctx, reservation, "finalize_failed"); abortErr != nil {
+			o.logger.Error("spawn worker: abort reservation after finalize failure", "task_id", task.ID, "error", abortErr)
+		}
+		o.recordSpawnFailureEventWithReason(task, agentType, "identity_finalize_failed", finalizeErr)
+		if destroyErr != nil {
+			return fmt.Errorf("spawn %s worker: finalize identity: %w; destroy %s failed: %v", agentType, finalizeErr, res.ContainerID, destroyErr)
+		}
+		return fmt.Errorf("spawn %s worker: finalize identity: %w", agentType, finalizeErr)
 	}
 
 	// Register the branch in gitref so downstream reconciliation and cleanup

@@ -1,0 +1,102 @@
+{
+  "artifact_type": "p0_race_state_machine_fix_plan_index",
+  "generated_at": "2026-06-23",
+  "source_review_artifacts": [
+    "plans/race-state-machine-edge-cases.md",
+    "plans/race-state-machine-edge-cases.json"
+  ],
+  "implementation_mode": "reviewable_plan_artifacts_only_no_source_changes",
+  "plans": [
+    {
+      "path": "plans/race-state-machine-fixes-p0-gate.md",
+      "findings": ["RACE-SM-001"],
+      "related_findings": ["RACE-SM-008", "RACE-SM-009"],
+      "primary_files": [
+        "internal/orchhttp/gate_handlers.go",
+        "internal/orchestrator/handlers.go",
+        "internal/state/machine.go",
+        "internal/orchestrator/gate_approval_test.go",
+        "internal/orchhttp/gate_handlers_test.go"
+      ],
+      "core_strategy": "CAS claim plan_review inside transaction; materialize subtasks and event atomically; map stale errors to 409"
+    },
+    {
+      "path": "plans/race-state-machine-fixes-p0-docker-events.md",
+      "findings": ["RACE-SM-002", "RACE-SM-003"],
+      "related_findings": ["RACE-SM-006", "RACE-SM-007"],
+      "primary_files": [
+        "internal/orchestrator/docker_events.go",
+        "internal/orchestrator/docker_events_test.go",
+        "internal/workeridentity/workeridentity.go",
+        "internal/model/models.go"
+      ],
+      "core_strategy": "Match death events to current WorkerAttempt by container/worker ID; ignore stale events; respawn same agent role"
+    },
+    {
+      "path": "plans/race-state-machine-fixes-p0-merge-reconcile.md",
+      "findings": ["RACE-SM-004", "RACE-SM-005"],
+      "related_findings": ["RACE-SM-006"],
+      "primary_files": [
+        "internal/orchhttp/handlers_internal.go",
+        "internal/orchestrator/merge_dispatch.go",
+        "internal/orchestrator/reconcile.go",
+        "internal/gitexec/gitexec.go",
+        "internal/orchhttp/server_test.go",
+        "internal/orchestrator/merge_dispatch_test.go",
+        "internal/orchestrator/reconcile_test.go",
+        "internal/gitexec/gitexec_test.go"
+      ],
+      "core_strategy": "Scope merge_result context mutation to current merger attempt; remove reconciler auto-commit and fail closed on stale/dirty worktrees"
+    },
+    {
+      "path": "plans/race-state-machine-fixes-p0-spawn.md",
+      "findings": ["RACE-SM-006", "RACE-SM-007"],
+      "related_findings": ["RACE-SM-002", "RACE-SM-003", "RACE-SM-004"],
+      "primary_files": [
+        "internal/orchestrator/worker_spawn.go",
+        "internal/workeridentity/workeridentity.go",
+        "internal/model/models.go",
+        "internal/orchestrator/worker_spawn_test.go",
+        "internal/workeridentity/workeridentity_test.go"
+      ],
+      "core_strategy": "Reserve worker identity and CAS task assignment before external spawn; finalize with container ID; destroy container on finalize failure"
+    }
+  ],
+  "recommended_application_order": [
+    "plans/race-state-machine-fixes-p0-spawn.md",
+    "plans/race-state-machine-fixes-p0-docker-events.md",
+    "plans/race-state-machine-fixes-p0-merge-reconcile.md",
+    "plans/race-state-machine-fixes-p0-gate.md"
+  ],
+  "conflict_hotspots": [
+    {
+      "file": "internal/workeridentity/workeridentity.go",
+      "reason": "Spawn reservation, Docker event matching, and merge attempt scoping all depend on durable WorkerAttempt semantics."
+    },
+    {
+      "file": "internal/model/models.go",
+      "reason": "WorkerAttempt lifecycle fields and active uniqueness affect spawn, Docker event, and merge plans."
+    },
+    {
+      "file": "internal/orchestrator/worker_spawn.go",
+      "reason": "Spawn identity changes affect role-preserving respawn and tests that inspect fake spawner calls."
+    },
+    {
+      "file": "internal/orchestrator/merge_dispatch.go",
+      "reason": "Merge attempt scoping may conflict with compatibility RecordSpawn behavior retained by spawn plan."
+    },
+    {
+      "file": "internal/orchestrator/reconcile.go",
+      "reason": "Stale worktree fail-closed behavior can interact with unrelated reconciler fixes."
+    },
+    {
+      "file": "internal/orchhttp/gate_handlers.go",
+      "reason": "Stale-transition error mapping may later be generalized across all gate handlers."
+    }
+  ],
+  "notes": [
+    "No source files were intentionally modified by this planning pass.",
+    "Plans are TDD-first and include expected tests plus conflict notes.",
+    "Spawn identity plan should be reviewed first because it supplies WorkerAttempt invariants required by Docker event and merge scoping plans."
+  ]
+}

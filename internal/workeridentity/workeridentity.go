@@ -2,6 +2,7 @@ package workeridentity
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -22,6 +23,8 @@ const (
 type Store struct {
 	db *gorm.DB
 }
+
+var ErrTaskAlreadyClaimed = errors.New("task already has an active worker reservation")
 
 func NewStore(db *gorm.DB) *Store {
 	return &Store{db: db}
@@ -55,6 +58,19 @@ type Handle struct {
 	Branch      string
 	Image       string
 	Runtime     RuntimeKind
+}
+
+type Reservation struct {
+	TaskID    uuid.UUID
+	AgentID   uuid.UUID
+	AttemptID uuid.UUID
+	WorkerID  string
+	AgentType string
+	Branch    string
+	Image     string
+	Provider  string
+	ModelID   string
+	Effort    string
 }
 
 func (h Handle) HasContainer() bool {
@@ -130,6 +146,7 @@ func (s *Store) RecordSpawn(ctx context.Context, r SpawnRecord) (Handle, error) 
 		ContainerID:             r.ContainerID,
 		AgentType:               r.AgentType,
 		Image:                   r.Image,
+		State:                   model.WorkerAttemptRunning,
 		PromptAssetVersionsJSON: r.PromptAssetVersionsJSON,
 		RenderedPromptHash:      r.RenderedPromptHash,
 		RenderedPromptPath:      r.RenderedPromptPath,
@@ -143,6 +160,178 @@ func (s *Store) RecordSpawn(ctx context.Context, r SpawnRecord) (Handle, error) 
 	}
 	h.AttemptID = attempt.ID
 	return h, nil
+}
+
+func (s *Store) ReserveSpawn(ctx context.Context, r SpawnRecord) (Reservation, error) {
+	if r.Task == nil {
+		return Reservation{}, fmt.Errorf("workeridentity.ReserveSpawn: task is nil")
+	}
+	now := r.Now
+	if now.IsZero() {
+		now = time.Now()
+	}
+
+	var out Reservation
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var task model.Task
+		if err := tx.First(&task, "id = ?", r.Task.ID).Error; err != nil {
+			return fmt.Errorf("load task: %w", err)
+		}
+		if task.AssignedAgentID != nil {
+			return ErrTaskAlreadyClaimed
+		}
+		if err := tx.Model(&model.WorkerAttempt{}).
+			Where("task_id = ? AND agent_type = ? AND completed_at IS NULL", task.ID, r.AgentType).
+			Updates(map[string]any{
+				"state":        model.WorkerAttemptFailed,
+				"completed_at": &now,
+			}).Error; err != nil {
+			return fmt.Errorf("close stale attempts: %w", err)
+		}
+
+		ag := model.Agent{
+			ID:             uuid.New(),
+			ProjectID:      r.ProjectID,
+			AgentType:      model.AgentType(r.AgentType),
+			Name:           fmt.Sprintf("%s-%s", r.AgentType, task.ID.String()[:8]),
+			Status:         model.AgentWorking,
+			CurrentTaskID:  &task.ID,
+			WorktreeBranch: r.Branch,
+			Provider:       r.Provider,
+			ModelID:        r.ModelID,
+			Effort:         r.Effort,
+			HeartbeatAt:    &now,
+		}
+		if err := tx.Create(&ag).Error; err != nil {
+			return fmt.Errorf("create agent: %w", err)
+		}
+
+		attempt := model.WorkerAttempt{
+			ID:                      uuid.New(),
+			TaskID:                  task.ID,
+			AgentID:                 &ag.ID,
+			WorkerID:                r.WorkerID,
+			AgentType:               r.AgentType,
+			Image:                   r.Image,
+			State:                   model.WorkerAttemptReserved,
+			PromptAssetVersionsJSON: r.PromptAssetVersionsJSON,
+			RenderedPromptHash:      r.RenderedPromptHash,
+			RenderedPromptPath:      r.RenderedPromptPath,
+		}
+		if err := tx.Create(&attempt).Error; err != nil {
+			return fmt.Errorf("create attempt: %w", err)
+		}
+
+		res := tx.Model(&model.Task{}).
+			Where("id = ? AND assigned_agent_id IS NULL", task.ID).
+			Update("assigned_agent_id", ag.ID)
+		if res.Error != nil {
+			return fmt.Errorf("claim task: %w", res.Error)
+		}
+		if res.RowsAffected != 1 {
+			return ErrTaskAlreadyClaimed
+		}
+
+		out = Reservation{
+			TaskID:    task.ID,
+			AgentID:   ag.ID,
+			AttemptID: attempt.ID,
+			WorkerID:  r.WorkerID,
+			AgentType: r.AgentType,
+			Branch:    r.Branch,
+			Image:     r.Image,
+			Provider:  r.Provider,
+			ModelID:   r.ModelID,
+			Effort:    r.Effort,
+		}
+		return nil
+	})
+	if err != nil {
+		return Reservation{}, fmt.Errorf("workeridentity.ReserveSpawn: %w", err)
+	}
+	r.Task.AssignedAgentID = &out.AgentID
+	return out, nil
+}
+
+func (s *Store) FinalizeSpawn(ctx context.Context, res Reservation, containerID string) (Handle, error) {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var ag model.Agent
+		if err := tx.First(&ag, "id = ?", res.AgentID).Error; err != nil {
+			return fmt.Errorf("load agent: %w", err)
+		}
+		ag.TmuxSession = containerID
+		if err := tx.Save(&ag).Error; err != nil {
+			return fmt.Errorf("update agent: %w", err)
+		}
+
+		updates := map[string]any{
+			"container_id": containerID,
+			"state":        model.WorkerAttemptRunning,
+		}
+		result := tx.Model(&model.WorkerAttempt{}).
+			Where("id = ? AND state = ?", res.AttemptID, model.WorkerAttemptReserved).
+			Updates(updates)
+		if result.Error != nil {
+			return fmt.Errorf("update attempt: %w", result.Error)
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("attempt is not reserved")
+		}
+		return nil
+	})
+	if err != nil {
+		return Handle{}, fmt.Errorf("workeridentity.FinalizeSpawn: %w", err)
+	}
+	return Handle{
+		TaskID:      res.TaskID,
+		AgentID:     res.AgentID,
+		AttemptID:   res.AttemptID,
+		WorkerID:    res.WorkerID,
+		ContainerID: containerID,
+		AgentType:   res.AgentType,
+		Branch:      res.Branch,
+		Image:       res.Image,
+		Runtime:     RuntimeContainer,
+	}, nil
+}
+
+func (s *Store) AbortReservation(ctx context.Context, res Reservation, reason string) error {
+	now := time.Now()
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{
+			"state":        model.WorkerAttemptFailed,
+			"completed_at": &now,
+		}
+		if reason != "" {
+			updates["container_id"] = ""
+		}
+		if err := tx.Model(&model.WorkerAttempt{}).
+			Where("id = ?", res.AttemptID).
+			Updates(updates).Error; err != nil {
+			return fmt.Errorf("mark attempt failed: %w", err)
+		}
+
+		if err := tx.Model(&model.Agent{}).
+			Where("id = ?", res.AgentID).
+			Updates(map[string]any{
+				"status":       model.AgentDead,
+				"completed_at": &now,
+				"exit_reason":  reason,
+			}).Error; err != nil {
+			return fmt.Errorf("mark agent done: %w", err)
+		}
+
+		if err := tx.Model(&model.Task{}).
+			Where("id = ? AND assigned_agent_id = ?", res.TaskID, res.AgentID).
+			Update("assigned_agent_id", nil).Error; err != nil {
+			return fmt.Errorf("clear task assignment: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("workeridentity.AbortReservation: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) ForTask(ctx context.Context, task *model.Task) (Handle, error) {

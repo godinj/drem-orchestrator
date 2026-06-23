@@ -53,6 +53,7 @@ func NewTestDB(t *testing.T) *gorm.DB {
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_attempt_active_task_role ON worker_attempts(task_id, agent_type) WHERE completed_at IS NULL")
 	return db
 }
 
@@ -89,6 +90,7 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 	// production does (Bug E W2.1). GORM AutoMigrate cannot emit the
 	// DESC direction; declare it explicitly.
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at DESC)")
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_attempt_active_task_role ON worker_attempts(task_id, agent_type) WHERE completed_at IS NULL")
 	return db
 }
 

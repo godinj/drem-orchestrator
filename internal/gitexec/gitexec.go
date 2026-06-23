@@ -106,6 +106,20 @@ func IsClean(ctx context.Context, dir string) (bool, error) {
 	return true, nil
 }
 
+// WorktreeHeadDiffersFromBranchTip reports whether dir's checked-out HEAD is
+// stale relative to the named branch ref visible from that worktree.
+func WorktreeHeadDiffersFromBranchTip(ctx context.Context, dir, branch string) (bool, error) {
+	head, err := RunGit(ctx, dir, "rev-parse", "HEAD")
+	if err != nil {
+		return false, fmt.Errorf("worktree freshness: resolve HEAD: %w", err)
+	}
+	tip, err := RunGit(ctx, dir, "rev-parse", branch)
+	if err != nil {
+		return false, fmt.Errorf("worktree freshness: resolve branch %s: %w", branch, err)
+	}
+	return strings.TrimSpace(head) != strings.TrimSpace(tip), nil
+}
+
 // CommitUnstagedChanges stages all tracked non-.claude/ changes and commits
 // them. Returns true if a commit was created, false if there was nothing to
 // commit.

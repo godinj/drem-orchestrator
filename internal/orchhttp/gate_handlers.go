@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
 
@@ -95,6 +96,10 @@ func (s *Server) handleApproveTask(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		slog.Error("orchhttp: approve failed", "task_id", task.ID, "err", err)
+		if errors.Is(err, state.ErrStaleTransition) {
+			writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
 		return
 	}

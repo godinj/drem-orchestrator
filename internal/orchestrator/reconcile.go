@@ -264,14 +264,24 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 			fn := strings.TrimPrefix(featureBranch, "feature/")
 			featureDir := o.worktree.FeatureWorktreePath(fn)
 
-			// Ensure the feature worktree is clean before merge attempts.
-			// Leftover changes (e.g. plan.json) block MergeAgentIntoFeature.
-			if committed, cErr := gitexec.CommitUnstagedChanges(
-				context.Background(), featureDir, "Auto-commit uncommitted feature worktree changes (reconcile)",
-			); cErr != nil {
-				o.logger.Warn("reconcile: failed to clean feature worktree", "feature", featureBranch, "error", cErr)
-			} else if committed {
-				o.logger.Info("reconcile: committed leftover changes in feature worktree", "feature", featureBranch)
+			stale, err := gitexec.WorktreeHeadDiffersFromBranchTip(context.Background(), featureDir, featureBranch)
+			if err != nil {
+				o.logger.Warn("reconcile: cannot verify feature worktree freshness", "feature", featureBranch, "error", err)
+				continue
+			}
+			if stale {
+				o.logger.Warn("reconcile: skipping orphan recovery on stale feature worktree", "feature", featureBranch, "feature_dir", featureDir)
+				continue
+			}
+
+			clean, err := gitexec.IsClean(context.Background(), featureDir)
+			if err != nil {
+				o.logger.Warn("reconcile: cannot inspect feature worktree cleanliness", "feature", featureBranch, "error", err)
+				continue
+			}
+			if !clean {
+				o.logger.Warn("reconcile: dirty feature worktree; refusing auto-commit during reconcile", "feature", featureBranch, "feature_dir", featureDir)
+				continue
 			}
 
 			hasCommits, err := gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch)

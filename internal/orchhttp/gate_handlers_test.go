@@ -16,6 +16,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/orchhttp"
+	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
@@ -411,6 +412,16 @@ func TestOrchestratorErrorReturns500(t *testing.T) {
 	resp, body := doJSON(t, http.MethodPost, approveURL(base, task.ID.String()), "")
 	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
 	require.Contains(t, decodeErr(t, body), "boom from orch")
+}
+
+func TestApproveStaleTransitionReturns409(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	fake.ErrPlanApproved = fmt.Errorf("%w: already approved", state.ErrStaleTransition)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "x", model.StatusPlanReview)
+
+	resp, body := doJSON(t, http.MethodPost, approveURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), "already approved")
 }
 
 // ------------------------------------------------------------------

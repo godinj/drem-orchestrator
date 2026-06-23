@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -154,6 +155,90 @@ func TestDispatchMerge_RecordsDurableAttemptWithoutCoderAttribution(t *testing.T
 	require.NoError(t, o.db.First(&spawn, "task_id = ? AND event_type = ?", task.ID, "worker_spawned").Error)
 	require.Equal(t, attempt.ID.String(), spawn.Details["attempt_id"])
 	require.Empty(t, spawn.Details["agent_id"])
+}
+
+func TestDispatchMerge_RecordsCurrentAttemptAndClearsStaleMergeContext(t *testing.T) {
+	o, fake := dispatchMergeTestRig(t)
+	fake.spawnResults = []spawnOutcome{{res: spawner.SpawnWorkerResult{ContainerID: "current-container"}}}
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "merge attempt context",
+		Status:         model.StatusMerging,
+		WorktreeBranch: "feature/merge-context",
+		Context: model.JSONField{
+			"merge_commit":              "stale-sha",
+			"merge_conflicts":           []string{"stale.txt"},
+			"merge_failure_reason":      "conflict",
+			"merge_test_output":         "old output",
+			"merge_result_attempt_id":   uuid.NewString(),
+			"merge_result_container_id": "old-container",
+		},
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	_, err := o.dispatchMerge(context.Background(), task)
+	require.NoError(t, err)
+
+	var attempt model.WorkerAttempt
+	require.NoError(t, o.db.First(&attempt, "task_id = ? AND agent_type = ?", task.ID, string(model.AgentMerger)).Error)
+	var saved model.Task
+	require.NoError(t, o.db.First(&saved, "id = ?", task.ID).Error)
+	require.Equal(t, attempt.ID.String(), saved.Context["current_merge_attempt_id"])
+	require.Equal(t, "current-container", saved.Context["current_merge_container_id"])
+	require.NotEmpty(t, saved.Context["current_merge_worker_id"])
+	require.NotContains(t, saved.Context, "merge_commit")
+	require.NotContains(t, saved.Context, "merge_conflicts")
+	require.NotContains(t, saved.Context, "merge_failure_reason")
+	require.NotContains(t, saved.Context, "merge_test_output")
+	require.NotContains(t, saved.Context, "merge_result_attempt_id")
+	require.NotContains(t, saved.Context, "merge_result_container_id")
+}
+
+func TestDispatchMerge_IgnoresMergeContextFromDifferentAttempt(t *testing.T) {
+	o, fake := dispatchMergeTestRig(t)
+	fake.spawnResults = []spawnOutcome{{res: spawner.SpawnWorkerResult{ContainerID: "current-container"}}}
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "stale merge result context",
+		Status:         model.StatusMerging,
+		WorktreeBranch: "feature/stale-merge-result",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	done := make(chan struct{})
+	var result *MergeResult
+	var dispatchErr error
+	go func() {
+		defer close(done)
+		result, dispatchErr = o.dispatchMerge(context.Background(), task)
+	}()
+
+	require.Eventually(t, func() bool {
+		var count int64
+		require.NoError(t, o.db.Model(&model.WorkerAttempt{}).Where("task_id = ?", task.ID).Count(&count).Error)
+		return count == 1
+	}, 3*time.Second, 20*time.Millisecond)
+	require.NoError(t, o.db.Model(&model.Task{}).Where("id = ?", task.ID).Update("context", model.JSONField{
+		"current_merge_attempt_id":   uuid.NewString(),
+		"current_merge_container_id": "other-container",
+		"current_merge_worker_id":    "other-worker",
+		"merge_result_attempt_id":    uuid.NewString(),
+		"merge_result_container_id":  "other-container",
+		"merge_commit":               "stale-sha",
+		"merge_conflicts":            []string{"stale.txt"},
+	}).Error)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("dispatchMerge did not finish")
+	}
+	require.NoError(t, dispatchErr)
+	require.NotNil(t, result)
+	require.Empty(t, result.MergeCommit)
+	require.Empty(t, result.Conflicts)
 }
 
 // TestDispatchMerge_OmitsPromptAndCredsMounts documents that merger,

@@ -120,12 +120,20 @@ type WorkerAttempt struct {
 	ContainerID             string     `gorm:"index"`
 	AgentType               string
 	Image                   string
-	PromptAssetVersionsJSON string `gorm:"type:text"`
+	State                   string     `gorm:"not null;default:'reserved';index"`
+	CompletedAt             *time.Time `gorm:"index"`
+	PromptAssetVersionsJSON string     `gorm:"type:text"`
 	RenderedPromptHash      string
 	RenderedPromptPath      string
 	CreatedAt               time.Time
 	UpdatedAt               time.Time
 }
+
+const (
+	WorkerAttemptReserved = "reserved"
+	WorkerAttemptRunning  = "running"
+	WorkerAttemptFailed   = "failed"
+)
 
 // TaskEvent records a status change or other significant event on a task.
 type TaskEvent struct {

@@ -63,6 +63,7 @@ func Init(dbPath string, logPath ...string) (*gorm.DB, error) {
 	// with a direction modifier, so the migration is declared here as
 	// raw SQL alongside the existing tmux back-fill.
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at DESC)")
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_attempt_active_task_role ON worker_attempts(task_id, agent_type) WHERE completed_at IS NULL")
 
 	return db, nil
 }

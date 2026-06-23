@@ -305,7 +305,22 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 		Branch:      task.WorktreeBranch,
 	})
 	if recordErr != nil {
-		o.logger.Error("dispatchMerge: record identity", "task_id", task.ID, "error", recordErr)
+		return nil, fmt.Errorf("dispatchMerge: record merger identity: %w", recordErr)
+	}
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context["current_merge_attempt_id"] = handle.AttemptID.String()
+	task.Context["current_merge_container_id"] = res.ContainerID
+	task.Context["current_merge_worker_id"] = workerID
+	delete(task.Context, "merge_commit")
+	delete(task.Context, "merge_conflicts")
+	delete(task.Context, "merge_failure_reason")
+	delete(task.Context, "merge_test_output")
+	delete(task.Context, "merge_result_attempt_id")
+	delete(task.Context, "merge_result_container_id")
+	if err := o.db.Model(task).Update("context", task.Context).Error; err != nil {
+		return nil, fmt.Errorf("dispatchMerge: record current merge attempt context: %w", err)
 	}
 	o.recordSpawnEventWithWorkerID(task, "merger", res.ContainerID, params.Image, workerID, handle.AttemptID)
 
@@ -322,6 +337,17 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 	}
 	if err := o.db.First(task, "id = ?", task.ID).Error; err != nil {
 		return nil, fmt.Errorf("dispatchMerge: reload task after merger exit: %w", err)
+	}
+	ctxAttempt, _ := task.Context["merge_result_attempt_id"].(string)
+	ctxContainer, _ := task.Context["merge_result_container_id"].(string)
+	if ctxAttempt != handle.AttemptID.String() || ctxContainer != res.ContainerID {
+		o.logger.Warn("dispatchMerge: ignoring merge context from non-current attempt",
+			"task_id", task.ID,
+			"attempt_id", handle.AttemptID,
+			"container_id", res.ContainerID,
+			"context_attempt_id", ctxAttempt,
+			"context_container_id", ctxContainer)
+		return result, nil
 	}
 	// Pull any agentmon-populated merge context off the task (merger's
 	// structured output is ingested into task.Context by agentmon during
