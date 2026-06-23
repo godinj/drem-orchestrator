@@ -21,6 +21,9 @@ func (o *Orchestrator) SetExperimentScheduling(maxConcurrent int) {
 }
 
 func (o *Orchestrator) processTestWriting(parent *model.Task) error {
+	if err := o.ensureFeatureWorktree(parent, "process test writing"); err != nil {
+		return err
+	}
 	if parent.Context == nil {
 		parent.Context = make(model.JSONField)
 	}

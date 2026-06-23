@@ -84,17 +84,8 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 
 	// 1. If plan already exists, evaluate for clarification needs.
 	if task.Plan != nil {
-		if task.WorktreeBranch == "" {
-			featureName := taskFeatureName(task)
-			wtInfo, err := o.worktree.CreateFeature(featureName)
-			if err != nil {
-				return fmt.Errorf("process planning: create feature for existing plan: %w", err)
-			}
-			o.worktree.GenerateRepoMapAsync(wtInfo.Path)
-			task.WorktreeBranch = wtInfo.Branch
-			if err := o.db.Save(task).Error; err != nil {
-				return fmt.Errorf("process planning: save worktree branch for existing plan: %w", err)
-			}
+		if err := o.ensureFeatureWorktree(task, "process planning"); err != nil {
+			return err
 		}
 
 		dec := o.decideClarification(task)
@@ -286,6 +277,23 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 	o.publishAgentStatus(task.ID.String(), ag.ID.String(), string(model.AgentPlanner), string(model.AgentWorking))
 	o.logger.Info("planner spawned", "task_id", task.ID, "agent_id", ag.ID,
 		"total_planner_spawns", totalSpawns+1)
+	return nil
+}
+
+func (o *Orchestrator) ensureFeatureWorktree(task *model.Task, caller string) error {
+	if task.WorktreeBranch != "" {
+		return nil
+	}
+	featureName := taskFeatureName(task)
+	wtInfo, err := o.worktree.CreateFeature(featureName)
+	if err != nil {
+		return fmt.Errorf("%s: create feature: %w", caller, err)
+	}
+	o.worktree.GenerateRepoMapAsync(wtInfo.Path)
+	task.WorktreeBranch = wtInfo.Branch
+	if err := o.db.Save(task).Error; err != nil {
+		return fmt.Errorf("%s: save worktree branch: %w", caller, err)
+	}
 	return nil
 }
 

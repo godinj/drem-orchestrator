@@ -90,6 +90,53 @@ func TestProcessTestWriting_IgnoresSupersededRejectedRevisions(t *testing.T) {
 // processTestWriting tests
 // ---------------------------------------------------------------------------
 
+func TestProcessTestWriting_CreatesMissingFeatureWorktree(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent missing branch",
+		Description: "parent in test_writing with reused plan",
+		Status:      model.StatusTestWriting,
+		Plan:        makePlan(1),
+		Context:     model.JSONField{"baseline_tests_checked": true},
+	}
+	db.Create(&parent)
+
+	sub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "write tests",
+		Description:  "test subtask",
+		Status:       model.StatusBacklog,
+		Phase:        "test",
+	}
+	db.Create(&sub)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("processTestWriting: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	expectedBranch := "feature/" + taskFeatureName(&parent)
+	if updated.WorktreeBranch != expectedBranch {
+		t.Fatalf("expected worktree branch %q, got %q", expectedBranch, updated.WorktreeBranch)
+	}
+	featureName := strings.TrimPrefix(expectedBranch, "feature/")
+	if _, ok := wt.Features[featureName]; !ok {
+		t.Fatalf("expected feature %q to be created, got %v", featureName, wt.Features)
+	}
+}
+
 func TestProcessTestWriting_SchedulesOnlyTestPhaseSubtasks(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
