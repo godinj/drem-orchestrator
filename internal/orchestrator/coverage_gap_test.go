@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -326,6 +327,7 @@ func TestHandlePaused_CascadesToSubtasks(t *testing.T) {
 
 func TestProcessPlanning_PlanExists_TransitionsToPlanReview(t *testing.T) {
 	o, db := setupLifecycleTest(t)
+	wt := o.worktree.(*FakeWorktreeManager)
 
 	plan := makePlan(2)
 	task := model.Task{
@@ -347,6 +349,14 @@ func TestProcessPlanning_PlanExists_TransitionsToPlanReview(t *testing.T) {
 	db.First(&updated, "id = ?", task.ID)
 	if updated.Status != model.StatusPlanReview {
 		t.Errorf("expected plan_review, got %s", updated.Status)
+	}
+	expectedBranch := "feature/" + taskFeatureName(&task)
+	if updated.WorktreeBranch != expectedBranch {
+		t.Fatalf("expected worktree branch %q, got %q", expectedBranch, updated.WorktreeBranch)
+	}
+	featureName := strings.TrimPrefix(expectedBranch, "feature/")
+	if _, ok := wt.Features[featureName]; !ok {
+		t.Fatalf("expected feature %q to be created, got %v", featureName, wt.Features)
 	}
 }
 

@@ -84,6 +84,19 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 
 	// 1. If plan already exists, evaluate for clarification needs.
 	if task.Plan != nil {
+		if task.WorktreeBranch == "" {
+			featureName := taskFeatureName(task)
+			wtInfo, err := o.worktree.CreateFeature(featureName)
+			if err != nil {
+				return fmt.Errorf("process planning: create feature for existing plan: %w", err)
+			}
+			o.worktree.GenerateRepoMapAsync(wtInfo.Path)
+			task.WorktreeBranch = wtInfo.Branch
+			if err := o.db.Save(task).Error; err != nil {
+				return fmt.Errorf("process planning: save worktree branch for existing plan: %w", err)
+			}
+		}
+
 		dec := o.decideClarification(task)
 		if dec.CapReached {
 			// Round cap hit — record it for observability then fall through to plan_review.
