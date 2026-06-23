@@ -101,7 +101,7 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 		// Content-aware dedup: if the subtask's estimated files already
 		// appear in the integration branch and commit messages match,
 		// fast-track to done without spawning an agent.
-		if estimatedFiles := getEstimatedFiles(sub.Context); len(estimatedFiles) > 0 {
+		if estimatedFiles := getEstimatedFiles(sub.Context); len(estimatedFiles) > 0 && !skipExistingWorkDedup(sub.Context) {
 			featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
 			featureDir := o.worktree.FeatureWorktreePath(featureName)
 			changedFiles, diffErr := getChangedFiles(featureDir, o.worktree.DefaultBranchName())
@@ -360,6 +360,14 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 	}
 
 	return nil
+}
+
+func skipExistingWorkDedup(ctx model.JSONField) bool {
+	if ctx == nil {
+		return false
+	}
+	skip, _ := ctx["skip_existing_work_dedup"].(bool)
+	return skip
 }
 
 func (o *Orchestrator) recordSubtaskDispatchBlocked(parent *model.Task, filterPhase string, decisions []DispatchDecision) {

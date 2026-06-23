@@ -122,6 +122,58 @@ func TestDedupScheduling_FastTrackedWhenWorkExists(t *testing.T) {
 	}
 }
 
+func TestDedupScheduling_SkipExistingWorkDedupPreventsFastTrack(t *testing.T) {
+	o, db, projectID, integrationDir := setupDedupSchedulingTest(t)
+
+	subtaskTitle := "Revise tests for auth"
+	os.MkdirAll(filepath.Join(integrationDir, "internal", "auth"), 0o755)
+	testutil.CommitFile(t, integrationDir,
+		"internal/auth/auth_test.go",
+		"package auth\n// stale tests\n",
+		subtaskTitle)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      projectID,
+		Title:          "Auth feature",
+		Description:    "parent feature task",
+		Status:         model.StatusTestWriting,
+		WorktreeBranch: "feature/dedup-test",
+	}
+	db.Create(&parent)
+
+	sub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    projectID,
+		ParentTaskID: &parentID,
+		Title:        subtaskTitle,
+		Description:  "Revise rejected tests",
+		Status:       model.StatusBacklog,
+		Phase:        "test",
+		Context: model.JSONField{
+			"estimated_files":                 []any{"internal/auth/auth_test.go"},
+			"agent_type":                      "coder",
+			"skip_existing_work_dedup":        true,
+			"skip_existing_work_dedup_reason": "test_review_rejected",
+		},
+	}
+	db.Create(&sub)
+
+	if err := o.scheduleSubtasks(&parent, "test"); err != nil {
+		t.Fatalf("scheduleSubtasks: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", sub.ID)
+	if updated.Status == model.StatusDone {
+		t.Errorf("expected skip_existing_work_dedup to prevent fast-track, but status is %q", updated.Status)
+	}
+	if updated.Status != model.StatusBacklog {
+		t.Errorf("expected subtask to remain %q, got %q", model.StatusBacklog, updated.Status)
+	}
+}
+
 // TestDedupScheduling_NotFastTrackedWhenNoWorkExists verifies that
 // scheduleSubtasks does NOT fast-track a subtask whose estimated_files
 // do not overlap with files changed on the integration branch.

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -137,6 +138,12 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 		delete(task.Context, "empty_work")
 		delete(task.Context, "constraint_violations")
 		delete(task.Context, "schedule")
+		delete(task.Context, "test_rejection_count")
+		for key := range task.Context {
+			if strings.HasPrefix(key, "test_rejection_feedback_") {
+				delete(task.Context, key)
+			}
+		}
 	}
 
 	// Unlink stale agents that still reference this task.

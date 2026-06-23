@@ -487,6 +487,8 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 		} else {
 			newCtx = make(model.JSONField)
 		}
+		newCtx["skip_existing_work_dedup"] = true
+		newCtx["skip_existing_work_dedup_reason"] = "test_review_rejected"
 
 		replacementID := uuid.New()
 		replacement := model.Task{

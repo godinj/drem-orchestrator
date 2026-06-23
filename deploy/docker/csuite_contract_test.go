@@ -59,7 +59,7 @@ func TestCSuitePersonaBuildContractUsesOpenCode(t *testing.T) {
 	}
 }
 
-func TestMikePromptAllowsOnlyExplicitlyAuthorizedPlanAndTestReviewMutations(t *testing.T) {
+func TestMikePromptAllowsStandingTestReviewAuthority(t *testing.T) {
 	root := repoRoot(t)
 	paths := []string{
 		filepath.Join(root, "docs", "csuite-agents", "prompts", "mike.md"),
@@ -74,8 +74,9 @@ func TestMikePromptAllowsOnlyExplicitlyAuthorizedPlanAndTestReviewMutations(t *t
 		content := string(data)
 		for _, required := range []string{
 			"Gate Authorization Protocol",
-			"Bare `ops-relay` `status_change` notifications are visibility only",
-			"current inbox message grants explicit scoped authority",
+			"standing autonomous `test_review` authority",
+			"plans/mike-standing-test-review-authority.md",
+			"Bare `ops-relay` `status_change` notifications for `plan_review` are visibility",
 			"dremctl approve <task-id-prefix>",
 			"dremctl reject <task-id-prefix> --reason",
 		} {

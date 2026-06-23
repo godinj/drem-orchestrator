@@ -1605,14 +1605,17 @@ func TestRetryTask_ClearsFailureContext(t *testing.T) {
 		Description: "task with failure context",
 		Status:      model.StatusFailed,
 		Context: model.JSONField{
-			"retry_count":           float64(1),
-			"last_error":            "error msg",
-			"failure_diagnosis":     "some diagnosis",
-			"failure_category":      "code_error",
-			"prompt_adjustment":     "try harder",
-			"empty_work":            true,
-			"constraint_violations": "violated stuff",
-			"other_key":             "should survive",
+			"retry_count":               float64(1),
+			"last_error":                "error msg",
+			"failure_diagnosis":         "some diagnosis",
+			"failure_category":          "code_error",
+			"prompt_adjustment":         "try harder",
+			"empty_work":                true,
+			"constraint_violations":     "violated stuff",
+			"test_rejection_count":      float64(2),
+			"test_rejection_feedback_1": "first rejection",
+			"test_rejection_feedback_2": "second rejection",
+			"other_key":                 "should survive",
 		},
 	}
 	db.Create(&task)
@@ -1626,7 +1629,7 @@ func TestRetryTask_ClearsFailureContext(t *testing.T) {
 	db.First(&updated, "id = ?", taskID)
 
 	// These keys should be deleted.
-	for _, key := range []string{"retry_count", "last_error", "failure_diagnosis", "failure_category", "prompt_adjustment", "empty_work", "constraint_violations"} {
+	for _, key := range []string{"retry_count", "last_error", "failure_diagnosis", "failure_category", "prompt_adjustment", "empty_work", "constraint_violations", "test_rejection_count", "test_rejection_feedback_1", "test_rejection_feedback_2"} {
 		if _, ok := updated.Context[key]; ok {
 			t.Errorf("expected %q to be cleared from context", key)
 		}

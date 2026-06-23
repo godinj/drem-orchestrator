@@ -190,6 +190,18 @@ func TestHandleTestReviewRejected_FirstRejection(t *testing.T) {
 			if r.Phase != "test" {
 				t.Errorf("expected replacement phase 'test', got %q", r.Phase)
 			}
+			if r.Context["agent_type"] != "coder" {
+				t.Errorf("expected replacement agent_type coder, got %v", r.Context["agent_type"])
+			}
+			if files := getEstimatedFiles(r.Context); len(files) != 1 || files[0] != "auth_test.go" {
+				t.Errorf("expected replacement estimated_files preserved, got %v", files)
+			}
+			if skip, ok := r.Context["skip_existing_work_dedup"].(bool); !ok || !skip {
+				t.Errorf("expected replacement skip_existing_work_dedup true, got %v", r.Context["skip_existing_work_dedup"])
+			}
+			if r.Context["skip_existing_work_dedup_reason"] != "test_review_rejected" {
+				t.Errorf("expected replacement skip reason test_review_rejected, got %v", r.Context["skip_existing_work_dedup_reason"])
+			}
 			if r.Description != "original description\n\n## Rejection Feedback\n\n"+feedback {
 				t.Errorf("unexpected replacement description: %s", r.Description)
 			}
