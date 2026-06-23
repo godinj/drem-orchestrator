@@ -161,7 +161,7 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 
 	if task.ParentTaskID == nil {
 		var staleChildren []model.Task
-		if err := o.db.Where("parent_task_id = ? AND status <> ?", task.ID, model.StatusDone).Find(&staleChildren).Error; err != nil {
+		if err := o.db.Where("parent_task_id = ?", task.ID).Find(&staleChildren).Error; err != nil {
 			return fmt.Errorf("retry task: load stale children: %w", err)
 		}
 		for i := range staleChildren {

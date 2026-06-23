@@ -1225,6 +1225,60 @@ func TestRetryTask(t *testing.T) {
 	}
 }
 
+func TestRetryTask_DetachesAllTopLevelChildren(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	parent := createLifecycleTask(t, db, o.projectID, "retry-parent", model.StatusFailed, nil)
+	doneChild := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parent.ID,
+		Title:        "done child",
+		Description:  "stale done child",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	failedChild := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parent.ID,
+		Title:        "failed child",
+		Description:  "stale failed child",
+		Status:       model.StatusFailed,
+		Phase:        "test",
+	}
+	db.Create(&doneChild)
+	db.Create(&failedChild)
+
+	if err := o.RetryTask(parent.ID); err != nil {
+		t.Fatalf("RetryTask: unexpected error: %v", err)
+	}
+
+	var attachedCount int64
+	db.Model(&model.Task{}).Where("parent_task_id = ?", parent.ID).Count(&attachedCount)
+	if attachedCount != 0 {
+		t.Fatalf("expected all stale children detached on top-level retry, got %d", attachedCount)
+	}
+
+	var reloadedDone model.Task
+	db.First(&reloadedDone, "id = ?", doneChild.ID)
+	if reloadedDone.ParentTaskID != nil {
+		t.Fatalf("expected done child parent detached, got %s", *reloadedDone.ParentTaskID)
+	}
+	if reloadedDone.Status != model.StatusCancelled {
+		t.Fatalf("expected done child cancelled, got %s", reloadedDone.Status)
+	}
+
+	var reloadedFailed model.Task
+	db.First(&reloadedFailed, "id = ?", failedChild.ID)
+	if reloadedFailed.ParentTaskID != nil {
+		t.Fatalf("expected failed child parent detached, got %s", *reloadedFailed.ParentTaskID)
+	}
+	if reloadedFailed.Status != model.StatusCancelled {
+		t.Fatalf("expected failed child cancelled, got %s", reloadedFailed.Status)
+	}
+}
+
 func TestRetryTask_WrongStatus(t *testing.T) {
 	o, db := setupLifecycleTest(t)
 
