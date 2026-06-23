@@ -73,6 +73,33 @@ func TestHandleTestReviewApproved_WrongStatus(t *testing.T) {
 	}
 }
 
+func TestOnAgentCompleted_ClearsAssignmentWhenMarkingDone(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+	task := model.Task{ID: uuid.New(), ProjectID: o.projectID, Title: "subtask", Description: "subtask", Status: model.StatusInProgress}
+	db.Create(&task)
+	ag := testutil.CreateAgent(t, db, task.ID, model.AgentCoder, model.AgentWorking)
+	task.AssignedAgentID = &ag.ID
+	db.Save(&task)
+
+	if err := o.onAgentCompleted(&ag, &task); err != nil {
+		t.Fatalf("onAgentCompleted: %v", err)
+	}
+
+	var reloaded model.Task
+	db.First(&reloaded, "id = ?", task.ID)
+	if reloaded.Status != model.StatusDone {
+		t.Fatalf("expected done, got %s", reloaded.Status)
+	}
+	if reloaded.AssignedAgentID != nil {
+		t.Fatalf("expected assignment cleared, got %s", *reloaded.AssignedAgentID)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // HandleTestReviewRejected tests
 // ---------------------------------------------------------------------------
@@ -170,6 +197,97 @@ func TestHandleTestReviewRejected_FirstRejection(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected replacement with title 'write tests for auth (revision 1)'")
+	}
+}
+
+func TestHandleTestReviewRejected_RepeatedRejectionUsesCanonicalTitle(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{ID: parentID, ProjectID: o.projectID, Title: "parent", Description: "parent", Status: model.StatusTestReview}
+	db.Create(&parent)
+
+	sub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "write tests for auth",
+		Description:  "tests",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	db.Create(&sub)
+
+	if err := o.HandleTestReviewRejected(parentID, "feedback 1"); err != nil {
+		t.Fatalf("first rejection: %v", err)
+	}
+
+	var rev1 model.Task
+	if err := db.Where("parent_task_id = ? AND title = ?", parentID, "write tests for auth (revision 1)").First(&rev1).Error; err != nil {
+		t.Fatalf("load revision 1: %v", err)
+	}
+	rev1.Status = model.StatusDone
+	db.Save(&rev1)
+
+	var reloadedParent model.Task
+	db.First(&reloadedParent, "id = ?", parentID)
+	reloadedParent.Status = model.StatusTestReview
+	db.Save(&reloadedParent)
+
+	if err := o.HandleTestReviewRejected(parentID, "feedback 2"); err != nil {
+		t.Fatalf("second rejection: %v", err)
+	}
+
+	var nestedCount int64
+	db.Model(&model.Task{}).Where("parent_task_id = ? AND title = ?", parentID, "write tests for auth (revision 1) (revision 2)").Count(&nestedCount)
+	if nestedCount != 0 {
+		t.Fatalf("nested revision title was created")
+	}
+
+	var rev2Count int64
+	db.Model(&model.Task{}).Where("parent_task_id = ? AND title = ?", parentID, "write tests for auth (revision 2)").Count(&rev2Count)
+	if rev2Count != 1 {
+		t.Fatalf("expected canonical revision 2 replacement, got %d", rev2Count)
+	}
+}
+
+func TestHandleTestReviewRejected_ClearsDoneSubtaskAssignment(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{ID: parentID, ProjectID: o.projectID, Title: "parent", Description: "parent", Status: model.StatusTestReview}
+	db.Create(&parent)
+	agentID := uuid.New()
+	sub := model.Task{
+		ID:              uuid.New(),
+		ProjectID:       o.projectID,
+		ParentTaskID:    &parentID,
+		Title:           "write tests",
+		Description:     "tests",
+		Status:          model.StatusDone,
+		Phase:           "test",
+		AssignedAgentID: &agentID,
+	}
+	db.Create(&sub)
+
+	if err := o.HandleTestReviewRejected(parentID, "feedback"); err != nil {
+		t.Fatalf("reject test review: %v", err)
+	}
+
+	var reloaded model.Task
+	db.First(&reloaded, "id = ?", sub.ID)
+	if reloaded.AssignedAgentID != nil {
+		t.Fatalf("expected rejected done subtask assignment cleared, got %s", *reloaded.AssignedAgentID)
 	}
 }
 

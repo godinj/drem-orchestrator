@@ -454,6 +454,7 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 		sub := &doneTestSubtasks[i]
 
 		sub.Status = model.StatusRejected
+		sub.AssignedAgentID = nil
 		sub.UpdatedAt = time.Now()
 		if err := o.db.Save(sub).Error; err != nil {
 			return fmt.Errorf("handle test review rejected: reject subtask %s: %w", sub.ID, err)
@@ -473,6 +474,7 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 			return fmt.Errorf("handle test review rejected: save reject event for %s: %w", sub.ID, err)
 		}
 
+		baseTitle := testWritingTitleKey(sub.Title)
 		revisionSuffix := fmt.Sprintf(" (revision %d)", rejectionCount)
 		newDescription := sub.Description + "\n\n## Rejection Feedback\n\n" + feedback
 
@@ -491,7 +493,7 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 			ID:            replacementID,
 			ProjectID:     sub.ProjectID,
 			ParentTaskID:  sub.ParentTaskID,
-			Title:         sub.Title + revisionSuffix,
+			Title:         baseTitle + revisionSuffix,
 			Description:   newDescription,
 			Status:        model.StatusBacklog,
 			Priority:      sub.Priority,

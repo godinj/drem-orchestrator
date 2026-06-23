@@ -235,11 +235,22 @@ func activeTestWritingSubtasks(subtasks []model.Task) []model.Task {
 }
 
 func testWritingTitleKey(title string) string {
-	idx := strings.LastIndex(title, " (revision ")
-	if idx < 0 || !strings.HasSuffix(title, ")") {
-		return title
+	for {
+		idx := strings.LastIndex(title, " (revision ")
+		if idx < 0 || !strings.HasSuffix(title, ")") {
+			return title
+		}
+		revision := title[idx+len(" (revision ") : len(title)-1]
+		if revision == "" {
+			return title
+		}
+		for _, r := range revision {
+			if r < '0' || r > '9' {
+				return title
+			}
+		}
+		title = title[:idx]
 	}
-	return title[:idx]
 }
 
 func (o *Orchestrator) hasPendingSourceLaneSubtasks(parentID uuid.UUID) (bool, error) {

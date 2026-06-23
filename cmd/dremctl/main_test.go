@@ -183,6 +183,78 @@ func TestLogsStreamsRawBody(t *testing.T) {
 	}
 }
 
+func TestHealthIssuesCommandHitsExpectedPath(t *testing.T) {
+	var got recordedRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = recordRequest(t, r)
+		writeJSONResponse(t, w, []map[string]any{{
+			"type":        "stale_assigned_worker",
+			"severity":    "warning",
+			"task_id":     testTaskID,
+			"worker_id":   "worker-1",
+			"status":      "in_progress",
+			"detected_at": rfc3339("2026-04-24T10:00:00Z"),
+			"message":     "assigned worker is dead",
+		}})
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"health", "issues"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if got.Path != "/projects/canvas/health/issues" {
+		t.Fatalf("path = %s, want /projects/canvas/health/issues", got.Path)
+	}
+	if !strings.Contains(out.String(), "stale_assigned_worker") || !strings.Contains(out.String(), "assigned worker is dead") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRecoverStaleAssignmentDryRunPostsExpectedBody(t *testing.T) {
+	var posts []recordedRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		req := recordRequest(t, r)
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks":
+			writeJSONResponse(t, w, []map[string]any{{"id": testTaskID, "title": "Fix it", "status": "in_progress", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z"), "assigned_worker": "worker-1"}})
+		case r.Method == http.MethodPost:
+			posts = append(posts, req)
+			writeJSONResponse(t, w, map[string]any{"task_id": testTaskID, "status": "in_progress", "assigned_worker": "worker-1", "worker_status": "dead", "classification": "dead_worker", "safe": true, "applied": false, "message": "assigned worker is dead"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"recover", "stale-assignment", "12345678", "--dry-run"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if len(posts) != 1 {
+		t.Fatalf("POST count = %d, want 1", len(posts))
+	}
+	if posts[0].Path != "/projects/canvas/tasks/"+testTaskID+"/recover/stale-assignment" {
+		t.Fatalf("path = %s", posts[0].Path)
+	}
+	for _, want := range []string{`"dry_run":true`, `"apply":false`, `"actor":"dremctl"`} {
+		if !strings.Contains(posts[0].Body, want) {
+			t.Fatalf("body %q missing %q", posts[0].Body, want)
+		}
+	}
+	if !strings.Contains(out.String(), "dry-run") || !strings.Contains(out.String(), "dead_worker") {
+		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
 func TestHistoryRendersMergeResultDetails(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/workers/container-1/history" {

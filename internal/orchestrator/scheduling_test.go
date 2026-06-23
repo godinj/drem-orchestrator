@@ -759,6 +759,39 @@ func TestFindCurrentGroup_FailedSubtasksTreatedAsTerminal(t *testing.T) {
 	}
 }
 
+func TestFindCurrentGroup_CancelledAndRejectedSubtasksTreatedAsTerminal(t *testing.T) {
+	o, db, projectID := setupSchedulingTest(t)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   projectID,
+		Title:       "parent-cancelled-rejected-subtasks",
+		Description: "test",
+		Status:      model.StatusInProgress,
+	}
+	db.Create(&parent)
+
+	sub1 := createTask(t, db, projectID, "sub-1-cancelled", model.StatusCancelled, &parentID)
+	sub2 := createTask(t, db, projectID, "sub-2-rejected", model.StatusRejected, &parentID)
+	sub3 := createTask(t, db, projectID, "sub-3-backlog", model.StatusBacklog, &parentID)
+
+	schedule := Schedule{
+		Groups: []SubtaskGroup{
+			{Order: 0, TaskIDs: []uuid.UUID{sub1.ID, sub2.ID}},
+			{Order: 1, TaskIDs: []uuid.UUID{sub3.ID}},
+		},
+	}
+
+	group := o.findCurrentGroup(&parent, schedule)
+	if group == nil {
+		t.Fatal("expected a non-nil group")
+	}
+	if group.Order != 1 {
+		t.Errorf("expected group 1, got group %d", group.Order)
+	}
+}
+
 func TestFindCurrentGroup_MultipleSubtasksInGroup(t *testing.T) {
 	o, db, projectID := setupSchedulingTest(t)
 

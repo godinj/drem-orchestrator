@@ -198,6 +198,20 @@ func (c *Client) AuditRecovery(ctx context.Context, project string, taskID uuid.
 	return out, nil
 }
 
+// RecoverStaleAssignment classifies or repairs one task's stale assignment.
+// The server refuses live working assignments with fresh heartbeats.
+func (c *Client) RecoverStaleAssignment(ctx context.Context, project string, taskID uuid.UUID, req orchdto.StaleAssignmentRecoveryRequest) (orchdto.StaleAssignmentRecoveryDTO, error) {
+	if req.DryRun == req.Apply {
+		return orchdto.StaleAssignmentRecoveryDTO{}, &ErrBadRequest{Message: "exactly one of dry_run or apply is required"}
+	}
+	var out orchdto.StaleAssignmentRecoveryDTO
+	path := gatePath(project, taskID, "recover/stale-assignment")
+	if err := c.postGate(ctx, path, req, &out); err != nil {
+		return orchdto.StaleAssignmentRecoveryDTO{}, err
+	}
+	return out, nil
+}
+
 // gatePath returns the HTTP path for a gate mutation verb on the given
 // task in the given project. The project name is URL-escaped; the UUID
 // is emitted in its canonical 36-char form which is already URL-safe.

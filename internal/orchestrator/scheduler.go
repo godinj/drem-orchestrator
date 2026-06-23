@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -40,12 +41,20 @@ type DispatchDecision struct {
 // resolved answer without needing to understand wave groups, file overlaps,
 // or dependency chains.
 type SchedulingPolicy struct {
-	db *gorm.DB
+	db                *gorm.DB
+	disableWaveGating bool
 }
 
 // NewSchedulingPolicy creates a SchedulingPolicy backed by the given database.
 func NewSchedulingPolicy(db *gorm.DB) *SchedulingPolicy {
 	return &SchedulingPolicy{db: db}
+}
+
+// WithoutWaveGating returns a policy copy that preserves dependency and file
+// conflict checks but ignores parent wave groups. This is used by phase-filtered
+// scheduling, where earlier wave tasks may be intentionally outside scope.
+func (sp *SchedulingPolicy) WithoutWaveGating() *SchedulingPolicy {
+	return &SchedulingPolicy{db: sp.db, disableWaveGating: true}
 }
 
 // EvaluateDispatch analyzes each candidate task against the set of currently
@@ -140,15 +149,17 @@ func (sp *SchedulingPolicy) evaluateCandidate(
 			return d
 		}
 		if !met {
-			d.Reason = "unmet dependencies"
+			d.Reason = fmt.Sprintf("unmet dependencies: %s", sp.describeDependencies(cand.DependencyIDs))
 			return d
 		}
 	}
 
 	// 2. Check wave group ordering.
-	if blocked, reason := sp.isWaveBlocked(cand, ipIDs); blocked {
-		d.Reason = reason
-		return d
+	if !sp.disableWaveGating {
+		if blocked, reason := sp.isWaveBlocked(cand, ipIDs); blocked {
+			d.Reason = reason
+			return d
+		}
 	}
 
 	// 3. Check file conflicts against in-progress tasks.
@@ -235,24 +246,56 @@ func (sp *SchedulingPolicy) isWaveBlocked(
 		}
 		for _, id := range g.TaskIDs {
 			if activeIDs[id] {
+				var task model.Task
+				status := model.StatusInProgress
+				if err := sp.db.Select("status").First(&task, "id = ?", id).Error; err == nil {
+					status = task.Status
+				}
 				return true, fmt.Sprintf(
-					"wave group %d blocked: group %d still has active tasks",
-					candGroup, g.Order)
+					"wave group %d blocked: group %d task %s is %s",
+					candGroup, g.Order, id, status)
 			}
 			var task model.Task
-			if err := sp.db.Select("status").
+			if err := sp.db.Select("id", "status").
 				First(&task, "id = ?", id).Error; err != nil {
 				continue
 			}
 			if !isTerminalWaveStatus(task.Status) {
 				return true, fmt.Sprintf(
-					"wave group %d blocked: group %d still has active tasks",
-					candGroup, g.Order)
+					"wave group %d blocked: group %d task %s is %s",
+					candGroup, g.Order, id, task.Status)
 			}
 		}
 	}
 
 	return false, ""
+}
+
+func (sp *SchedulingPolicy) describeDependencies(dependencyIDs []string) string {
+	if len(dependencyIDs) == 0 {
+		return "none"
+	}
+
+	var tasks []model.Task
+	if err := sp.db.Select("id", "status").Where("id IN ?", dependencyIDs).Find(&tasks).Error; err != nil {
+		return fmt.Sprintf("%v (status lookup failed: %v)", dependencyIDs, err)
+	}
+
+	statusByID := make(map[string]model.TaskStatus, len(tasks))
+	for _, task := range tasks {
+		statusByID[task.ID.String()] = task.Status
+	}
+
+	parts := make([]string, 0, len(dependencyIDs))
+	for _, id := range dependencyIDs {
+		status, ok := statusByID[id]
+		if !ok {
+			parts = append(parts, fmt.Sprintf("%s(missing)", id))
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s(%s)", id, status))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func isTerminalWaveStatus(status model.TaskStatus) bool {

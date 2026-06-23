@@ -339,9 +339,15 @@ func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
 		s.writeUpdatedTask(w, task.ID)
 		return
 	}
-	if !archiveAllowedStatus(task.Status) || task.AssignedAgentID != nil {
+	archiveAssignmentOK, err := s.archiveAssignmentOK(r, task)
+	if err != nil {
+		slog.Error("orchhttp: archive assignment check failed", "task_id", task.ID, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
+		return
+	}
+	if !archiveAllowedStatus(task.Status) || !archiveAssignmentOK {
 		writeJSONError(w, http.StatusConflict,
-			fmt.Sprintf("task in status %q or assigned to a worker; archive requires non-running unassigned work", task.Status))
+			fmt.Sprintf("task in status %q or assigned to a live worker; archive requires non-running or stale assigned work", task.Status))
 		return
 	}
 
@@ -351,12 +357,13 @@ func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
 		previousWorker = task.AssignedAgentID.String()
 	}
 	now := time.Now()
-	err := s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
+	err = s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
 		res := tx.Model(&model.Task{}).
-			Where("id = ? AND assigned_agent_id IS NULL AND status IN ?", task.ID, archiveAllowedStatuses()).
+			Where("id = ? AND status IN ?", task.ID, archiveAllowedStatuses()).
 			Updates(map[string]any{
-				"status":     model.StatusCancelled,
-				"updated_at": now,
+				"status":            model.StatusCancelled,
+				"assigned_agent_id": nil,
+				"updated_at":        now,
 			})
 		if res.Error != nil {
 			return res.Error
@@ -392,6 +399,25 @@ func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeUpdatedTask(w, task.ID)
+}
+
+func (s *Server) archiveAssignmentOK(r *http.Request, task model.Task) (bool, error) {
+	if task.AssignedAgentID == nil {
+		return true, nil
+	}
+
+	var ag model.Agent
+	err := s.DB.WithContext(r.Context()).Where("id = ?", *task.AssignedAgentID).First(&ag).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if ag.Status == model.AgentWorking {
+		return false, nil
+	}
+	return true, nil
 }
 
 func archiveAllowedStatus(status model.TaskStatus) bool {

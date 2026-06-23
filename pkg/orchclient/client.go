@@ -104,6 +104,15 @@ func (c *Client) ListWorkers(ctx context.Context, project string) ([]orchdto.Wor
 	return out, nil
 }
 
+// HealthIssues fetches operator-facing health findings for the named project.
+func (c *Client) HealthIssues(ctx context.Context, project string) ([]orchdto.HealthIssueDTO, error) {
+	var out []orchdto.HealthIssueDTO
+	if err := c.get(ctx, "/projects/"+url.PathEscape(project)+"/health/issues", nil, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // GetWorker fetches a single worker by UUID. A 404 from the server is
 // surfaced as an error whose string contains "not found".
 func (c *Client) GetWorker(ctx context.Context, id string) (orchdto.WorkerDTO, error) {

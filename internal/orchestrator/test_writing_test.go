@@ -34,6 +34,58 @@ func testOrchestratorWithRunner(t *testing.T, db *gorm.DB, wtManager WorktreeMan
 	return o
 }
 
+func TestTestWritingTitleKey_StripsRepeatedRevisionSuffixes(t *testing.T) {
+	got := testWritingTitleKey("write tests (revision 1) (revision 2)")
+	if got != "write tests" {
+		t.Fatalf("testWritingTitleKey = %q, want %q", got, "write tests")
+	}
+}
+
+func TestProcessTestWriting_IgnoresSupersededRejectedRevisions(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+	parentID := uuid.New()
+	parent := model.Task{ID: parentID, ProjectID: o.projectID, Title: "parent", Description: "parent", Status: model.StatusTestWriting}
+	db.Create(&parent)
+
+	oldRejected := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "write tests (revision 1)",
+		Description:  "old",
+		Status:       model.StatusRejected,
+		Phase:        "test",
+		CreatedAt:    time.Now().Add(-time.Hour),
+	}
+	newDone := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "write tests (revision 2)",
+		Description:  "new",
+		Status:       model.StatusDone,
+		Phase:        "test",
+		CreatedAt:    time.Now(),
+	}
+	db.Create(&oldRejected)
+	db.Create(&newDone)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("processTestWriting: %v", err)
+	}
+
+	var reloaded model.Task
+	db.First(&reloaded, "id = ?", parentID)
+	if reloaded.Status != model.StatusTestReview {
+		t.Fatalf("expected parent to reach test_review, got %s", reloaded.Status)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // processTestWriting tests
 // ---------------------------------------------------------------------------

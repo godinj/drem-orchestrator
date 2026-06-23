@@ -32,6 +32,7 @@ Commands:
   events [--since RFC3339] [--limit N]
   logs --container NAME [--follow] [--since RFC3339]
   status
+  health issues
   create --title TEXT --description TEXT
   create-task --title TEXT --description TEXT
   file-task --title TEXT --description TEXT
@@ -43,6 +44,7 @@ Commands:
   retry <task-id-prefix>
   archive <task-id-prefix> --reason TEXT [--actor TEXT]
   comment <task-id-prefix> --body TEXT
+  recover stale-assignment <task-id-prefix> (--dry-run|--apply)
   kyle recover [--mission-file PATH] (--dry-run|--apply)
 `
 
@@ -116,6 +118,11 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 			return err
 		}
 		return handleStatus(ctx, client, cfg, stdout)
+	case "health":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleHealth(ctx, client, cfg, commandArgs, stdout)
 	case "create", "create-task", "file-task":
 		if err := requireProject(cfg); err != nil {
 			return err
@@ -126,6 +133,11 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 			return err
 		}
 		return handleMutation(ctx, client, cfg, command, commandArgs, stdout)
+	case "recover":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleRecover(ctx, client, cfg, commandArgs, stdout)
 	case "kyle":
 		if err := requireProject(cfg); err != nil {
 			return err

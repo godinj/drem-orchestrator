@@ -306,6 +306,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			return fmt.Errorf("on agent completed: save event: %w", err)
 		}
 	}
+	task.AssignedAgentID = nil
 
 	if err := o.db.Save(task).Error; err != nil {
 		return fmt.Errorf("on agent completed: save task: %w", err)

@@ -323,7 +323,7 @@ func (o *Orchestrator) blockPlannerCapacityExhausted(task *model.Task, totalSpaw
 }
 
 // findCurrentGroup returns the earliest group that has subtasks not yet in a
-// terminal state (done or failed). Returns nil if all groups are complete.
+// terminal wave state. Returns nil if all groups are complete.
 // If a task ID in the schedule no longer exists (e.g. after replanning),
 // it is treated as terminal to avoid permanently blocking the wave.
 func (o *Orchestrator) findCurrentGroup(parent *model.Task, schedule Schedule) *SubtaskGroup {
@@ -339,7 +339,7 @@ func (o *Orchestrator) findCurrentGroup(parent *model.Task, schedule Schedule) *
 					"parent_id", parent.ID, "subtask_id", taskID)
 				continue
 			}
-			if sub.Status != model.StatusDone && sub.Status != model.StatusFailed {
+			if !isTerminalWaveStatus(sub.Status) {
 				allTerminal = false
 				break
 			}

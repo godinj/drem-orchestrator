@@ -137,6 +137,42 @@ type EventDTO struct {
 	Payload   json.RawMessage `json:"payload"`
 }
 
+// HealthIssueDTO is one operator-facing health finding from the orchestrator.
+// Findings are intentionally descriptive rather than prescriptive: recovery
+// mutations use separate, narrower endpoints.
+type HealthIssueDTO struct {
+	Type       string     `json:"type"`
+	Severity   string     `json:"severity"`
+	TaskID     string     `json:"task_id,omitempty"`
+	WorkerID   string     `json:"worker_id,omitempty"`
+	Status     string     `json:"status,omitempty"`
+	DetectedAt time.Time  `json:"detected_at"`
+	AgeSeconds int64      `json:"age_seconds,omitempty"`
+	LastEvent  *time.Time `json:"last_event,omitempty"`
+	Message    string     `json:"message"`
+}
+
+// StaleAssignmentRecoveryRequest asks the orchestrator to classify or repair a
+// single task assignment. Exactly one of DryRun or Apply must be true.
+type StaleAssignmentRecoveryRequest struct {
+	DryRun bool   `json:"dry_run"`
+	Apply  bool   `json:"apply"`
+	Actor  string `json:"actor,omitempty"`
+}
+
+// StaleAssignmentRecoveryDTO is returned by successful stale-assignment
+// recovery classification or repair. Unsafe live assignments return 409.
+type StaleAssignmentRecoveryDTO struct {
+	TaskID         string `json:"task_id"`
+	Status         string `json:"status"`
+	AssignedWorker string `json:"assigned_worker,omitempty"`
+	WorkerStatus   string `json:"worker_status,omitempty"`
+	Classification string `json:"classification"`
+	Safe           bool   `json:"safe"`
+	Applied        bool   `json:"applied"`
+	Message        string `json:"message"`
+}
+
 // RecoveryAuditRequest is the public payload accepted by Kyle's narrow
 // recovery audit endpoint. It records why an autonomous action was allowed and
 // what result it produced without exposing a generic task-event write surface.

@@ -136,6 +136,7 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 		delete(task.Context, "prompt_adjustment")
 		delete(task.Context, "empty_work")
 		delete(task.Context, "constraint_violations")
+		delete(task.Context, "schedule")
 	}
 
 	// Unlink stale agents that still reference this task.
@@ -150,6 +151,21 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 		}
 	}
 	task.AssignedAgentID = nil
+
+	if task.ParentTaskID == nil {
+		var staleChildren []model.Task
+		if err := o.db.Where("parent_task_id = ? AND status <> ?", task.ID, model.StatusDone).Find(&staleChildren).Error; err != nil {
+			return fmt.Errorf("retry task: load stale children: %w", err)
+		}
+		for i := range staleChildren {
+			staleChildren[i].Status = model.StatusCancelled
+			staleChildren[i].AssignedAgentID = nil
+			staleChildren[i].ParentTaskID = nil
+			if err := o.db.Save(&staleChildren[i]).Error; err != nil {
+				return fmt.Errorf("retry task: cancel stale child %s: %w", staleChildren[i].ID, err)
+			}
+		}
+	}
 
 	evt, err := state.TransitionTask(&task, model.StatusBacklog, "user", map[string]any{"action": "retry"})
 	if err != nil {

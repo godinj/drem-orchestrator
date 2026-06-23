@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"encoding/json"
 	"log/slog"
 	"testing"
 
@@ -36,6 +37,124 @@ func TestScheduleSubtasks_SkipsWhenNoCandidates(t *testing.T) {
 
 	// No events should have been emitted.
 	assert.Empty(t, events)
+}
+
+func TestScheduleSubtasks_TestPhaseIgnoresImplementationWaveBlock(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	o, fake, project, _, bareRepo := newContainerSubtaskRig(t)
+	pushTestFeatureBranch(t, bareRepo, "feature/test-phase-wave")
+
+	parentID := uuid.New()
+	implID := uuid.New()
+	testID := uuid.New()
+	schedule := Schedule{Groups: []SubtaskGroup{
+		{Order: 0, TaskIDs: []uuid.UUID{implID}},
+		{Order: 1, TaskIDs: []uuid.UUID{testID}},
+	}}
+	scheduleJSON, err := json.Marshal(schedule)
+	require.NoError(t, err)
+	var scheduleField any
+	require.NoError(t, json.Unmarshal(scheduleJSON, &scheduleField))
+
+	parent := model.Task{
+		ID:             parentID,
+		ProjectID:      project.ID,
+		Title:          "parent",
+		Description:    "test writing parent",
+		Status:         model.StatusTestWriting,
+		WorktreeBranch: "feature/test-phase-wave",
+		Context:        model.JSONField{"schedule": scheduleField},
+	}
+	require.NoError(t, o.db.Create(&parent).Error)
+
+	impl := model.Task{
+		ID:           implID,
+		ProjectID:    project.ID,
+		ParentTaskID: &parentID,
+		Title:        "implement first wave",
+		Description:  "implementation intentionally outside test scheduling scope",
+		Status:       model.StatusBacklog,
+		Phase:        "implementation",
+	}
+	testTask := model.Task{
+		ID:           testID,
+		ProjectID:    project.ID,
+		ParentTaskID: &parentID,
+		Title:        "write tests second wave",
+		Description:  "test task should not wait for impl wave group",
+		Status:       model.StatusBacklog,
+		Phase:        "test",
+		Context:      model.JSONField{"agent_type": "coder"},
+	}
+	require.NoError(t, o.db.Create(&impl).Error)
+	require.NoError(t, o.db.Create(&testTask).Error)
+	fake.spawnResults = []spawnOutcome{{res: spawner.SpawnWorkerResult{ContainerID: "container-test-wave"}}}
+
+	require.NoError(t, o.scheduleSubtasks(&parent, "test"))
+
+	require.Len(t, fake.spawnCalls, 1)
+	assert.Equal(t, testID.String(), fake.spawnCalls[0].Env["DREM_TASK_ID"])
+
+	var blockedCount int64
+	require.NoError(t, o.db.Model(&model.TaskEvent{}).
+		Where("task_id = ? AND event_type = ?", parentID, "subtask_dispatch_blocked").
+		Count(&blockedCount).Error)
+	assert.Equal(t, int64(0), blockedCount)
+}
+
+func TestScheduleSubtasks_TestPhaseUnmetImplementationDependencyRecordsDiagnostic(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/bare", "master")
+	events := make(chan Event, 100)
+	o := &Orchestrator{
+		db:        db,
+		projectID: project.ID,
+		logger:    slog.Default(),
+		events:    events,
+	}
+
+	parent := testutil.CreateTask(t, db, project.ID, "parent", model.StatusTestWriting)
+	impl := testutil.CreateTask(t, db, project.ID, "implementation dependency", model.StatusBacklog)
+	impl.ParentTaskID = &parent.ID
+	impl.Phase = "implementation"
+	require.NoError(t, db.Save(&impl).Error)
+	testTask := model.Task{
+		ID:            uuid.New(),
+		ProjectID:     project.ID,
+		ParentTaskID:  &parent.ID,
+		Title:         "test depends on impl",
+		Description:   "test should report unmet implementation dependency",
+		Status:        model.StatusBacklog,
+		Phase:         "test",
+		DependencyIDs: model.JSONArray{impl.ID.String()},
+	}
+	require.NoError(t, db.Create(&testTask).Error)
+
+	require.NoError(t, o.scheduleSubtasks(&parent, "test"))
+
+	var event model.TaskEvent
+	require.NoError(t, db.Where("task_id = ? AND event_type = ?", parent.ID, "subtask_dispatch_blocked").
+		First(&event).Error)
+	blocked, ok := event.Details["blocked"].([]any)
+	require.True(t, ok, "blocked details should be an array: %#v", event.Details["blocked"])
+	require.Len(t, blocked, 1)
+	entry, ok := blocked[0].(map[string]any)
+	require.True(t, ok, "blocked entry should be an object: %#v", blocked[0])
+	reason, _ := entry["reason"].(string)
+	assert.Contains(t, reason, "unmet dependencies")
+	assert.Contains(t, reason, impl.ID.String())
+	assert.Contains(t, reason, string(model.StatusBacklog))
+
+	select {
+	case evt := <-events:
+		assert.Equal(t, "subtask_dispatch_blocked", evt.Type)
+	default:
+		t.Fatal("expected subtask_dispatch_blocked event")
+	}
+
+	var reloaded model.Task
+	require.NoError(t, db.First(&reloaded, "id = ?", testTask.ID).Error)
+	assert.Equal(t, model.StatusBacklog, reloaded.Status)
 }
 
 // TestDispatchPendingSubtasks_SkipsTerminalParents verifies that

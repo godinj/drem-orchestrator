@@ -747,19 +747,53 @@ func TestArchiveTaskEndpoint_CancelsFailedTaskAndAudits(t *testing.T) {
 	require.Equal(t, "superseded", events[0].Details["reason"])
 }
 
-func TestArchiveTaskEndpoint_RejectsAssignedWork(t *testing.T) {
+func TestArchiveTaskEndpoint_RejectsLiveAssignedWork(t *testing.T) {
 	_, project, srv, base := setupGateHTTPTest(t)
 	task := testutil.CreateTask(t, srv.DB, project.ID, "assigned", model.StatusFailed)
-	agentID := uuid.New()
-	require.NoError(t, srv.DB.Model(&model.Task{}).Where("id = ?", task.ID).Update("assigned_agent_id", agentID).Error)
+	ag := testutil.CreateAgent(t, srv.DB, task.ID, model.AgentCoder, model.AgentWorking)
+	require.NoError(t, srv.DB.Model(&model.Task{}).Where("id = ?", task.ID).Update("assigned_agent_id", ag.ID).Error)
 
 	resp, body := doJSON(t, http.MethodPost, archiveURL(base, task.ID.String()), `{"reason":"obsolete"}`)
 	require.Equal(t, http.StatusConflict, resp.StatusCode)
-	require.Contains(t, decodeErr(t, body), "non-running unassigned")
+	require.Contains(t, decodeErr(t, body), "live worker")
 
 	var reloaded model.Task
 	require.NoError(t, srv.DB.First(&reloaded, "id = ?", task.ID).Error)
 	require.Equal(t, model.StatusFailed, reloaded.Status)
+}
+
+func TestArchiveTaskEndpoint_AllowsMissingAssignedAgent(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "stale missing", model.StatusRejected)
+	missingAgentID := uuid.New()
+	require.NoError(t, srv.DB.Model(&model.Task{}).Where("id = ?", task.ID).Update("assigned_agent_id", missingAgentID).Error)
+
+	resp, body := doJSON(t, http.MethodPost, archiveURL(base, task.ID.String()), `{"reason":"obsolete"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	var reloaded model.Task
+	require.NoError(t, srv.DB.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusCancelled, reloaded.Status)
+	require.Nil(t, reloaded.AssignedAgentID)
+
+	var event model.TaskEvent
+	require.NoError(t, srv.DB.Where("task_id = ? AND event_type = ?", task.ID, "task_archived").First(&event).Error)
+	require.Equal(t, missingAgentID.String(), event.Details["previous_worker_id"])
+}
+
+func TestArchiveTaskEndpoint_AllowsIdleAssignedAgent(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "stale idle", model.StatusFailed)
+	ag := testutil.CreateAgent(t, srv.DB, task.ID, model.AgentCoder, model.AgentIdle)
+	require.NoError(t, srv.DB.Model(&model.Task{}).Where("id = ?", task.ID).Update("assigned_agent_id", ag.ID).Error)
+
+	resp, body := doJSON(t, http.MethodPost, archiveURL(base, task.ID.String()), `{"reason":"obsolete"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, string(model.StatusCancelled), dto.Status)
+	require.Empty(t, dto.AssignedWorker)
 }
 
 func TestArchiveTaskEndpoint_IdempotentForCancelled(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -75,10 +76,23 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 
 	// Evaluate dispatch decisions: dependencies, wave groups, file conflicts.
 	policy := NewSchedulingPolicy(o.db)
+	if filterPhase != "" {
+		policy = policy.WithoutWaveGating()
+	}
 	decisions := policy.EvaluateDispatch(candidates, inProgress)
 	dispatchDecisions := make(map[uuid.UUID]DispatchDecision, len(decisions))
+	dispatchableCount := 0
+	blockedDecisions := make([]DispatchDecision, 0, len(decisions))
 	for _, d := range decisions {
 		dispatchDecisions[d.TaskID] = d
+		if d.Dispatchable {
+			dispatchableCount++
+		} else {
+			blockedDecisions = append(blockedDecisions, d)
+		}
+	}
+	if dispatchableCount == 0 && len(blockedDecisions) > 0 {
+		o.recordSubtaskDispatchBlocked(parent, filterPhase, blockedDecisions)
 	}
 
 	for i := range candidates {
@@ -346,6 +360,56 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 	}
 
 	return nil
+}
+
+func (o *Orchestrator) recordSubtaskDispatchBlocked(parent *model.Task, filterPhase string, decisions []DispatchDecision) {
+	counts := make(map[string]int)
+	details := make([]map[string]any, 0, len(decisions))
+	for _, d := range decisions {
+		reasonClass := classifyDispatchBlockReason(d.Reason)
+		counts[reasonClass]++
+		details = append(details, map[string]any{
+			"task_id": d.TaskID.String(),
+			"reason":  d.Reason,
+		})
+	}
+
+	event := &model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    parent.ID,
+		EventType: "subtask_dispatch_blocked",
+		OldValue:  string(parent.Status),
+		NewValue:  string(parent.Status),
+		Details: model.JSONField{
+			"phase_filter": filterPhase,
+			"counts":       counts,
+			"blocked":      details,
+		},
+		Actor:     "orchestrator",
+		CreatedAt: time.Now(),
+	}
+	if err := o.db.Create(event).Error; err != nil {
+		o.logger.Error("record subtask dispatch blocked event", "parent_id", parent.ID, "error", err)
+	}
+	o.emit("subtask_dispatch_blocked", map[string]any{
+		"task_id":      parent.ID,
+		"phase_filter": filterPhase,
+		"counts":       counts,
+		"blocked":      details,
+	})
+}
+
+func classifyDispatchBlockReason(reason string) string {
+	switch {
+	case strings.Contains(reason, "unmet dependencies"):
+		return "dependencies"
+	case strings.Contains(reason, "wave group"):
+		return "wave"
+	case strings.Contains(reason, "file conflict"):
+		return "file_conflict"
+	default:
+		return "other"
+	}
 }
 
 // dispatchSubtaskViaSpawner routes a single subtask through the
