@@ -90,7 +90,7 @@ func TestHandleTestPassed_WrongStatusRejected(t *testing.T) {
 	}
 }
 
-func TestRetryFailedParentThenApproveDoesNotDuplicateActiveSubtasksOrStaleSchedule(t *testing.T) {
+func TestRetryFailedParentWithChildrenIsRefusedWithoutMutation(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
@@ -123,35 +123,25 @@ func TestRetryFailedParentThenApproveDoesNotDuplicateActiveSubtasksOrStaleSchedu
 	}
 	db.Create(&staleChild)
 
-	if err := o.RetryTask(parentID); err != nil {
-		t.Fatalf("RetryTask: %v", err)
+	if err := o.RetryTask(parentID); err == nil {
+		t.Fatal("RetryTask: expected error for parent with child history, got nil")
+	} else if !errors.Is(err, ErrRetryParentHasChildren) {
+		t.Fatalf("RetryTask: expected ErrRetryParentHasChildren, got %v", err)
 	}
 
-	var retried model.Task
-	db.First(&retried, "id = ?", parentID)
-	if _, ok := retried.Context["schedule"]; ok {
-		t.Fatalf("expected stale schedule cleared on retry")
+	var reloadedParent model.Task
+	db.First(&reloadedParent, "id = ?", parentID)
+	if reloadedParent.Status != model.StatusFailed {
+		t.Fatalf("expected parent to remain failed, got %s", reloadedParent.Status)
 	}
-	var detached model.Task
-	db.First(&detached, "id = ?", staleChild.ID)
-	if detached.Status != model.StatusCancelled || detached.ParentTaskID != nil || detached.AssignedAgentID != nil {
-		t.Fatalf("expected stale child cancelled, detached, and unassigned; got status=%s parent=%v assigned=%v",
-			detached.Status, detached.ParentTaskID, detached.AssignedAgentID)
+	if _, ok := reloadedParent.Context["schedule"]; !ok {
+		t.Fatalf("expected stale schedule preserved when retry is refused")
 	}
-
-	retried.Status = model.StatusPlanReview
-	db.Save(&retried)
-	if err := o.HandlePlanApproved(parentID); err != nil {
-		t.Fatalf("HandlePlanApproved: %v", err)
-	}
-
-	var activeChildren []model.Task
-	db.Where("parent_task_id = ? AND status <> ?", parentID, model.StatusCancelled).Find(&activeChildren)
-	if len(activeChildren) != 1 {
-		t.Fatalf("expected exactly one active child after retry+approve, got %d", len(activeChildren))
-	}
-	if activeChildren[0].ID == staleChild.ID {
-		t.Fatalf("stale child was reused as active child")
+	var reloadedChild model.Task
+	db.First(&reloadedChild, "id = ?", staleChild.ID)
+	if reloadedChild.Status != model.StatusInProgress || reloadedChild.ParentTaskID == nil || *reloadedChild.ParentTaskID != parentID || reloadedChild.AssignedAgentID == nil {
+		t.Fatalf("expected stale child preserved; got status=%s parent=%v assigned=%v",
+			reloadedChild.Status, reloadedChild.ParentTaskID, reloadedChild.AssignedAgentID)
 	}
 }
 

@@ -21,8 +21,8 @@ const configTemplateName = "templates/project-drem.toml.tmpl"
 const configFilename = "drem.toml"
 
 // RenderConfig executes the drem.toml template with data and returns the
-// rendered bytes. Only BareRepoPath, Language, and ProjectName are read;
-// other TemplateData fields are ignored. The rendered file enables
+// rendered bytes. BareRepoPath and Language are required; language-derived
+// defaults are filled before rendering. The rendered file enables
 // direct-classifier and points the direct-tool endpoint at gq on drem-net,
 // which are the correct defaults for a containerized deployment.
 func RenderConfig(data TemplateData) ([]byte, error) {
@@ -32,6 +32,7 @@ func RenderConfig(data TemplateData) ([]byte, error) {
 	if data.Language == "" {
 		return nil, errors.New("RenderConfig: Language is required")
 	}
+	data = compileTemplateDefaults(data, "", "")
 	tmpl, err := template.ParseFS(configTemplateFS, configTemplateName)
 	if err != nil {
 		return nil, fmt.Errorf("parse drem.toml template: %w", err)

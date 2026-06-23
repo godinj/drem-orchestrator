@@ -9,6 +9,12 @@
 bare_repo_path = "{{.BareRepoPath}}"
 database_path  = "/var/lib/drem/drem.db"
 log_path       = "/var/lib/drem/drem.log"
+{{ if .TestCommand -}}
+test_command    = "{{.TestCommand}}"
+{{ end -}}
+{{ if .CompileCommand -}}
+compile_command = "{{.CompileCommand}}"
+{{ end -}}
 # Compatibility for currently deployed orch images that still read the
 # legacy top-level key in HTTP project metadata.
 project_language = "{{.Language}}"
@@ -37,6 +43,7 @@ project_language = "{{.Language}}"
 [direct_tool_agent]
   endpoint = "http://gq:8090/v1/chat/completions"
   model    = "gemma4-26b"
+  max_iterations = 50
 
 # Coder/reviewer/fixer work uses the GQ-fronted SGLang direct-tool path.
 [agents.coder]

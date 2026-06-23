@@ -105,5 +105,33 @@ func compileTemplateDefaults(data TemplateData, fallbackHome, fallbackProject st
 	if data.HostExecTokenPath == "" {
 		data.HostExecTokenPath = "/etc/drem/host-exec.token"
 	}
+	if data.TestCommand == "" {
+		data.TestCommand = defaultTestCommand(data.Language)
+	}
+	if data.CompileCommand == "" {
+		data.CompileCommand = defaultCompileCommand(data.Language)
+	}
 	return data
+}
+
+func defaultTestCommand(language string) string {
+	switch language {
+	case LanguageGo:
+		return "go test ./..."
+	case LanguageCpp:
+		return "cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure"
+	default:
+		return ""
+	}
+}
+
+func defaultCompileCommand(language string) string {
+	switch language {
+	case LanguageGo:
+		return "go vet ./..."
+	case LanguageCpp:
+		return "cmake -S . -B build && cmake --build build"
+	default:
+		return ""
+	}
 }

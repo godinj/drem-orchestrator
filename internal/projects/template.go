@@ -145,6 +145,13 @@ type TemplateData struct {
 	// see plans/host-exec-daemon-option-a.md §Addendum. Defaults to
 	// /etc/drem/host-exec.token when empty.
 	HostExecTokenPath string
+
+	// TestCommand is the merge/test gate command written to generated
+	// drem.toml. Defaults from Language when empty.
+	TestCommand string
+	// CompileCommand is the test-phase compile gate command written to
+	// generated drem.toml. Defaults from Language when empty.
+	CompileCommand string
 }
 
 // Default image tags for the orchestrator.

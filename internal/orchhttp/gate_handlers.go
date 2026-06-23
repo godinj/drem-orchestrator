@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
@@ -243,24 +244,15 @@ func (s *Server) handleAnswerTask(w http.ResponseWriter, r *http.Request) {
 // failed is accepted; any other status returns 409. Delegates to
 // Orchestrator.RetryTask, which does the failed→backlog transition,
 // clears retry_count/last_error/failure diagnostics, removes the stale feature
-// branch for top-level tasks, detaches stale children, unlinks stale agents,
-// and records a "user retried task" event. See
+// branch for standalone top-level tasks, unlinks stale agents, and records a
+// "user retried task" event. See
 // internal/orchestrator/task_api.go RetryTask for the full semantics.
 //
-// Parent re-animation cascade (Bug I #1 fix): when the target task is a
-// subtask (ParentTaskID != nil) and its parent is also in StatusFailed, we
-// first call RetryTask on the parent, then on the subtask. This re-animates
-// the parent via the canonical failed→backlog edge so the tick loop's
-// scheduleSubtasks(parent) path resumes and picks up the retried child on
-// the next tick. Without the cascade, the subtask transitions to backlog
-// but sits there forever because its parent stays at failed and the
-// scheduler's parent-state gate never invokes scheduleSubtasks(parent).
-//
-// We reuse the RetryTask primitive (not a direct failed→in_progress edge)
-// deliberately: the failed→backlog transition is where child-detach
-// / stale-agent-unlink logic lives, so cascading through the same entry
-// point means no drift between child-level and parent-level retry. A DONE
-// parent is left alone — the cascade is scoped to FAILED parents only.
+// Parent cascade: when the target task is a subtask whose parent is also in
+// StatusFailed, retry the parent first. Orchestrator.RetryTask refuses failed
+// parents with child history, so this returns 409 instead of destructively
+// detaching/cancelling the existing subtasks and replaying the parent plan. A
+// DONE parent is left alone.
 func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
 	if s.Orch == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "gate mutations not configured")
@@ -301,6 +293,10 @@ func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
 			if err := s.Orch.RetryTask(parent.ID); err != nil {
 				slog.Error("orchhttp: retry parent failed",
 					"task_id", task.ID, "parent_id", parent.ID, "err", err)
+				if errors.Is(err, orchestrator.ErrRetryParentHasChildren) {
+					writeJSONError(w, http.StatusConflict, err.Error())
+					return
+				}
 				writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
 				return
 			}
@@ -309,6 +305,10 @@ func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.Orch.RetryTask(task.ID); err != nil {
 		slog.Error("orchhttp: retry failed", "task_id", task.ID, "err", err)
+		if errors.Is(err, orchestrator.ErrRetryParentHasChildren) {
+			writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
 		return
 	}

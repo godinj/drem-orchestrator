@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	"github.com/godinj/drem-orchestrator/internal/orchhttp"
 	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
@@ -547,6 +548,16 @@ func TestServer_RetryTaskEndpoint_OrchError(t *testing.T) {
 	require.Contains(t, decodeErr(t, body), "retry blew up")
 }
 
+func TestServer_RetryTaskEndpoint_ParentWithChildrenReturnsConflict(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	fake.ErrRetryTask = orchestrator.ErrRetryParentHasChildren
+	task := testutil.CreateTask(t, srv.DB, project.ID, "parent", model.StatusFailed)
+
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), orchestrator.ErrRetryParentHasChildren.Error())
+}
+
 func TestServer_RetryTaskEndpoint_NoOrchReturns503(t *testing.T) {
 	db := testutil.NewTestDBWithModels(t)
 	project := testutil.CreateProject(t, db, projectName, "/tmp/repo.git", "master")
@@ -565,14 +576,9 @@ func TestServer_RetryTaskEndpoint_NoOrchReturns503(t *testing.T) {
 	require.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 }
 
-// TestRetrySubtask_ReAnimatesFailedParent covers Bug I #1: when the retry
-// endpoint targets a subtask whose parent is also in StatusFailed, the
-// handler must cascade RetryTask(parent) before RetryTask(child). Without
-// this cascade the child transitions to backlog but sits there forever —
-// scheduleSubtasks(parent) is the only path that dispatches backlog
-// subtasks, and it only runs when the parent is in a live status.
-func TestRetrySubtask_ReAnimatesFailedParent(t *testing.T) {
+func TestRetrySubtask_FailedParentReturnsConflict(t *testing.T) {
 	fake, project, srv, base := setupGateHTTPTest(t)
+	fake.ErrRetryTask = orchestrator.ErrRetryParentHasChildren
 
 	parent := testutil.CreateTask(t, srv.DB, project.ID, "parent", model.StatusFailed)
 	child := model.Task{
@@ -587,30 +593,18 @@ func TestRetrySubtask_ReAnimatesFailedParent(t *testing.T) {
 	require.NoError(t, srv.DB.Create(&child).Error)
 
 	resp, body := doJSON(t, http.MethodPost, retryURL(base, child.ID.String()), "")
-	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), orchestrator.ErrRetryParentHasChildren.Error())
 
-	// Response DTO reflects the child, not the parent.
-	var dto orchdto.TaskDTO
-	require.NoError(t, json.Unmarshal(body, &dto))
-	require.Equal(t, child.ID.String(), dto.ID)
-	require.Equal(t, string(model.StatusBacklog), dto.Status)
-
-	// Both rows in the DB are now BACKLOG.
 	var reloadedParent, reloadedChild model.Task
 	require.NoError(t, srv.DB.First(&reloadedParent, "id = ?", parent.ID).Error)
 	require.NoError(t, srv.DB.First(&reloadedChild, "id = ?", child.ID).Error)
-	require.Equal(t, model.StatusBacklog, reloadedParent.Status,
-		"parent must re-animate so the scheduler's parent-state gate opens")
-	require.Equal(t, model.StatusBacklog, reloadedChild.Status,
-		"child still transitions to backlog after the cascade")
+	require.Equal(t, model.StatusFailed, reloadedParent.Status)
+	require.Equal(t, model.StatusFailed, reloadedChild.Status)
 
-	// Exactly two RetryTask calls: parent first, then child.
-	require.Len(t, fake.Calls, 2)
+	require.Len(t, fake.Calls, 1)
 	require.Equal(t, "RetryTask", fake.Calls[0].Method)
-	require.Equal(t, parent.ID, fake.Calls[0].TaskID,
-		"parent retry must fire before child retry so the scheduler sees parent live when it picks up the child")
-	require.Equal(t, "RetryTask", fake.Calls[1].Method)
-	require.Equal(t, child.ID, fake.Calls[1].TaskID)
+	require.Equal(t, parent.ID, fake.Calls[0].TaskID)
 }
 
 // TestRetrySubtask_DoneParentLeftAlone proves the cascade is scoped to

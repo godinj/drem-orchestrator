@@ -350,6 +350,11 @@ per-project compose.yml + drem.toml from current master templates
 while preserving state that can't be regenerated from the registry
 alone (SharedToken above all).
 
+Generated `drem.toml` includes language-default gate commands. For C++
+projects, registration writes a CMake build-and-ctest `test_command`
+and a CMake build `compile_command`; existing projects pick these up by
+re-running `register --update`.
+
 ```bash
 # Review what would change (no writes, no side effects).
 drem project register --update drem-orchestrator --dry-run
@@ -359,6 +364,9 @@ drem project register --update drem-orchestrator --dry-run
 # overwrite them.
 drem project register --update drem-orchestrator
 drem project register --update drem-orchestrator --force
+
+# Apply the same template update to an existing C++ project.
+drem project register --update drem-canvas
 
 # Bring up the stack with the new template output.
 docker compose -f ~/.drem/projects/drem-orchestrator/compose.yml up -d

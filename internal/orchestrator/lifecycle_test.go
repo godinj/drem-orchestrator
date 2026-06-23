@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -1225,7 +1226,7 @@ func TestRetryTask(t *testing.T) {
 	}
 }
 
-func TestRetryTask_DetachesAllTopLevelChildren(t *testing.T) {
+func TestRetryTask_RefusesTopLevelParentWithChildren(t *testing.T) {
 	o, db := setupLifecycleTest(t)
 
 	parent := createLifecycleTask(t, db, o.projectID, "retry-parent", model.StatusFailed, nil)
@@ -1252,41 +1253,46 @@ func TestRetryTask_DetachesAllTopLevelChildren(t *testing.T) {
 	db.Create(&doneChild)
 	db.Create(&failedChild)
 
-	if err := o.RetryTask(parent.ID); err != nil {
-		t.Fatalf("RetryTask: unexpected error: %v", err)
+	if err := o.RetryTask(parent.ID); err == nil {
+		t.Fatal("RetryTask: expected error for parent with child history, got nil")
+	} else if !errors.Is(err, ErrRetryParentHasChildren) {
+		t.Fatalf("RetryTask: expected ErrRetryParentHasChildren, got %v", err)
 	}
 
 	var reloadedParent model.Task
 	db.First(&reloadedParent, "id = ?", parent.ID)
-	if reloadedParent.WorktreeBranch != "" {
-		t.Fatalf("expected stale parent worktree branch cleared, got %q", reloadedParent.WorktreeBranch)
+	if reloadedParent.Status != model.StatusFailed {
+		t.Fatalf("expected parent to remain failed, got %s", reloadedParent.Status)
 	}
-	if len(o.worktree.(*FakeWorktreeManager).RemovedFeatures) != 1 || o.worktree.(*FakeWorktreeManager).RemovedFeatures[0] != "stale-retry-parent" {
-		t.Fatalf("expected stale feature removed, got %v", o.worktree.(*FakeWorktreeManager).RemovedFeatures)
+	if reloadedParent.WorktreeBranch != "feature/stale-retry-parent" {
+		t.Fatalf("expected stale parent worktree branch preserved, got %q", reloadedParent.WorktreeBranch)
+	}
+	if len(o.worktree.(*FakeWorktreeManager).RemovedFeatures) != 0 {
+		t.Fatalf("expected no stale feature removal, got %v", o.worktree.(*FakeWorktreeManager).RemovedFeatures)
 	}
 
 	var attachedCount int64
 	db.Model(&model.Task{}).Where("parent_task_id = ?", parent.ID).Count(&attachedCount)
-	if attachedCount != 0 {
-		t.Fatalf("expected all stale children detached on top-level retry, got %d", attachedCount)
+	if attachedCount != 2 {
+		t.Fatalf("expected stale children to remain attached, got %d", attachedCount)
 	}
 
 	var reloadedDone model.Task
 	db.First(&reloadedDone, "id = ?", doneChild.ID)
-	if reloadedDone.ParentTaskID != nil {
-		t.Fatalf("expected done child parent detached, got %s", *reloadedDone.ParentTaskID)
+	if reloadedDone.ParentTaskID == nil || *reloadedDone.ParentTaskID != parent.ID {
+		t.Fatalf("expected done child parent preserved, got %v", reloadedDone.ParentTaskID)
 	}
-	if reloadedDone.Status != model.StatusCancelled {
-		t.Fatalf("expected done child cancelled, got %s", reloadedDone.Status)
+	if reloadedDone.Status != model.StatusDone {
+		t.Fatalf("expected done child status preserved, got %s", reloadedDone.Status)
 	}
 
 	var reloadedFailed model.Task
 	db.First(&reloadedFailed, "id = ?", failedChild.ID)
-	if reloadedFailed.ParentTaskID != nil {
-		t.Fatalf("expected failed child parent detached, got %s", *reloadedFailed.ParentTaskID)
+	if reloadedFailed.ParentTaskID == nil || *reloadedFailed.ParentTaskID != parent.ID {
+		t.Fatalf("expected failed child parent preserved, got %v", reloadedFailed.ParentTaskID)
 	}
-	if reloadedFailed.Status != model.StatusCancelled {
-		t.Fatalf("expected failed child cancelled, got %s", reloadedFailed.Status)
+	if reloadedFailed.Status != model.StatusFailed {
+		t.Fatalf("expected failed child status preserved, got %s", reloadedFailed.Status)
 	}
 }
 

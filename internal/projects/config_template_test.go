@@ -52,8 +52,9 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 			} `toml:"coder"`
 		} `toml:"agents"`
 		DirectToolAgent struct {
-			Endpoint string `toml:"endpoint"`
-			Model    string `toml:"model"`
+			Endpoint      string `toml:"endpoint"`
+			Model         string `toml:"model"`
+			MaxIterations int    `toml:"max_iterations"`
 		} `toml:"direct_tool_agent"`
 	}
 	require.NoError(t, toml.Unmarshal(out, &parsed))
@@ -63,6 +64,7 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 	require.Equal(t, "sglang-direct", parsed.Agents.Coder.Provider)
 	require.Equal(t, "gemma4-26b", parsed.Agents.Coder.Model)
 	require.Equal(t, "http://gq:8090/v1/chat/completions", parsed.DirectToolAgent.Endpoint)
+	require.Equal(t, 50, parsed.DirectToolAgent.MaxIterations)
 	// The warm-classifier endpoint must round-trip so orch picks it up on
 	// startup without needing DREM_CLASSIFIER_URL also set. See
 	// plans/warm-direct-classifier.md §3 (Modified files).
@@ -181,6 +183,31 @@ func TestRenderConfig_WorkerRolesPinSGLangGemma(t *testing.T) {
 		require.Equal(t, "sglang-direct", role.Provider, name)
 		require.Equal(t, "gemma4-26b", role.Model, name)
 	}
+}
+
+func TestRenderConfig_CppIncludesDefaultGateCommands(t *testing.T) {
+	out, err := projects.RenderConfig(projects.TemplateData{
+		ProjectName:  "drem-canvas",
+		Language:     projects.LanguageCpp,
+		BareRepoPath: "/home/dev/git/drem-canvas.git",
+	})
+	require.NoError(t, err)
+
+	var parsed struct {
+		TestCommand    string `toml:"test_command"`
+		CompileCommand string `toml:"compile_command"`
+		Project        struct {
+			Language string `toml:"language"`
+		} `toml:"project"`
+	}
+	require.NoError(t, toml.Unmarshal(out, &parsed))
+	require.Equal(t, projects.LanguageCpp, parsed.Project.Language)
+	require.Equal(t,
+		"cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure",
+		parsed.TestCommand)
+	require.Equal(t,
+		"cmake -S . -B build && cmake --build build",
+		parsed.CompileCommand)
 }
 
 // TestRenderConfig_RequiresBareRepoPath asserts the nil-guard on the

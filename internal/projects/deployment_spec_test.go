@@ -43,6 +43,23 @@ func TestCompileProjectDeploymentSpec_DerivesProjectLayoutAndTemplateDefaults(t 
 	require.Equal(t, spec.PlanPacketRoot, data.PlanPacketRoot)
 	require.Equal(t, filepath.Join(homeDir, ".drem", "csuite-watcher.token"), data.CsuiteWatcherTokenPath)
 	require.Equal(t, "/etc/drem/host-exec.token", data.HostExecTokenPath)
+	require.Equal(t, "go test ./...", data.TestCommand)
+	require.Equal(t, "go vet ./...", data.CompileCommand)
+}
+
+func TestCompileProjectDeploymentSpec_DefaultsCppGateCommands(t *testing.T) {
+	spec, err := compileProjectDeploymentSpec(t.TempDir(), "drem-canvas", TemplateData{
+		Language:     LanguageCpp,
+		BareRepoPath: "/srv/git/drem-canvas.git",
+	})
+	require.NoError(t, err)
+
+	require.Equal(t,
+		"cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure",
+		spec.TemplateData.TestCommand)
+	require.Equal(t,
+		"cmake -S . -B build && cmake --build build",
+		spec.TemplateData.CompileCommand)
 }
 
 func TestCompileProjectDeploymentSpec_IsolatesCsuiteRootPerProject(t *testing.T) {
@@ -80,6 +97,8 @@ func TestCompileProjectDeploymentSpec_PreservesExplicitDeploymentOverrides(t *te
 		PlanPacketRoot:         "/var/drem/plan-packets",
 		CsuiteWatcherTokenPath: "/run/drem/watcher.token",
 		HostExecTokenPath:      "/run/drem/host-exec.token",
+		TestCommand:            "make test",
+		CompileCommand:         "make build",
 	}
 
 	spec, err := compileProjectDeploymentSpec(homeDir, "directory-name", data)
@@ -108,4 +127,6 @@ func TestCompileProjectDeploymentSpec_PreservesExplicitDeploymentOverrides(t *te
 	require.Equal(t, data.PlanPacketRoot, compiled.PlanPacketRoot)
 	require.Equal(t, data.CsuiteWatcherTokenPath, compiled.CsuiteWatcherTokenPath)
 	require.Equal(t, data.HostExecTokenPath, compiled.HostExecTokenPath)
+	require.Equal(t, data.TestCommand, compiled.TestCommand)
+	require.Equal(t, data.CompileCommand, compiled.CompileCommand)
 }

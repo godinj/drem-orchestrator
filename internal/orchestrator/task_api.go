@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -9,6 +10,8 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/state"
 )
+
+var ErrRetryParentHasChildren = errors.New("retry task: refusing parent retry with existing child history")
 
 // AddComment creates a new comment on a task. Allowed for tasks in any status.
 func (o *Orchestrator) AddComment(taskID uuid.UUID, author, body string) error {
@@ -122,6 +125,15 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 
 	if task.Status != model.StatusFailed {
 		return fmt.Errorf("retry task: task %s is in %s, expected failed", taskID, task.Status)
+	}
+	if task.ParentTaskID == nil {
+		var childCount int64
+		if err := o.db.Model(&model.Task{}).Where("parent_task_id = ?", task.ID).Count(&childCount).Error; err != nil {
+			return fmt.Errorf("retry task: count children: %w", err)
+		}
+		if childCount > 0 {
+			return fmt.Errorf("%w for task %s", ErrRetryParentHasChildren, taskID)
+		}
 	}
 
 	// Reset retry count.
