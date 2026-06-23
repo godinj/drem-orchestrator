@@ -449,6 +449,8 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 	).Find(&doneTestSubtasks).Error; err != nil {
 		return fmt.Errorf("handle test review rejected: query test subtasks: %w", err)
 	}
+	replacementSourceIDs := testReviewReplacementSourceIDs(doneTestSubtasks)
+	clonedCount := 0
 
 	for i := range doneTestSubtasks {
 		sub := &doneTestSubtasks[i]
@@ -472,6 +474,10 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 		}
 		if err := o.db.Create(rejectEvt).Error; err != nil {
 			return fmt.Errorf("handle test review rejected: save reject event for %s: %w", sub.ID, err)
+		}
+
+		if !replacementSourceIDs[sub.ID] {
+			continue
 		}
 
 		baseTitle := testWritingTitleKey(sub.Title)
@@ -508,6 +514,7 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 		if err := o.db.Create(&replacement).Error; err != nil {
 			return fmt.Errorf("handle test review rejected: create replacement for %s: %w", sub.ID, err)
 		}
+		clonedCount++
 
 		o.logger.Info("test subtask rejected and replaced",
 			"original_id", sub.ID,
@@ -519,7 +526,7 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 		"action":          "test_review_rejected",
 		"rejection_count": rejectionCount,
 		"feedback":        feedback,
-		"subtasks_cloned": len(doneTestSubtasks),
+		"subtasks_cloned": clonedCount,
 	})
 	if err != nil {
 		return fmt.Errorf("handle test review rejected: transition to test_writing: %w", err)
@@ -536,8 +543,62 @@ func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback strin
 	o.logger.Info("test review rejected, back to test writing",
 		"task_id", task.ID,
 		"rejection_count", rejectionCount,
-		"subtasks_cloned", len(doneTestSubtasks))
+		"subtasks_cloned", clonedCount)
 	return nil
+}
+
+func testReviewReplacementSourceIDs(subtasks []model.Task) map[uuid.UUID]bool {
+	baseCounts := make(map[string]int)
+	baseHasRevision := make(map[string]bool)
+	for _, sub := range subtasks {
+		base := testWritingTitleKey(sub.Title)
+		baseCounts[base]++
+		if sub.Title != base {
+			baseHasRevision[base] = true
+		}
+	}
+
+	selectedByLane := make(map[string]model.Task)
+	for _, sub := range subtasks {
+		lane := testReviewReplacementLaneKey(sub, baseCounts, baseHasRevision)
+		selected, ok := selectedByLane[lane]
+		if !ok || testReviewReplacementSourceNewer(sub, selected) {
+			selectedByLane[lane] = sub
+		}
+	}
+
+	ids := make(map[uuid.UUID]bool, len(selectedByLane))
+	for _, sub := range selectedByLane {
+		ids[sub.ID] = true
+	}
+	return ids
+}
+
+func testReviewReplacementLaneKey(sub model.Task, baseCounts map[string]int, baseHasRevision map[string]bool) string {
+	base := testWritingTitleKey(sub.Title)
+	if len(sub.TestsFor) > 0 {
+		return base + "\x00tests_for:" + strings.Join([]string(sub.TestsFor), ",")
+	}
+	if baseCounts[base] > 1 && baseHasRevision[base] {
+		return base + "\x00revision_family"
+	}
+	return base + "\x00task:" + sub.ID.String()
+}
+
+func testReviewReplacementSourceNewer(candidate model.Task, selected model.Task) bool {
+	if candidate.CreatedAt.After(selected.CreatedAt) {
+		return true
+	}
+	if candidate.CreatedAt.Before(selected.CreatedAt) {
+		return false
+	}
+	if candidate.UpdatedAt.After(selected.UpdatedAt) {
+		return true
+	}
+	if candidate.UpdatedAt.Before(selected.UpdatedAt) {
+		return false
+	}
+	return candidate.ID.String() > selected.ID.String()
 }
 
 // planEntry is an intermediate struct for parsing plans from JSON that may

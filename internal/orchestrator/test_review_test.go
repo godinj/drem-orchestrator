@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -265,6 +266,164 @@ func TestHandleTestReviewRejected_RepeatedRejectionUsesCanonicalTitle(t *testing
 	db.Model(&model.Task{}).Where("parent_task_id = ? AND title = ?", parentID, "write tests for auth (revision 2)").Count(&rev2Count)
 	if rev2Count != 1 {
 		t.Fatalf("expected canonical revision 2 replacement, got %d", rev2Count)
+	}
+}
+
+func TestHandleTestReviewRejected_DeduplicatesCanonicalReplacementTitles(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{ID: parentID, ProjectID: o.projectID, Title: "parent", Description: "parent", Status: model.StatusTestReview}
+	db.Create(&parent)
+
+	olderID := uuid.New()
+	newerID := uuid.New()
+	older := model.Task{
+		ID:           olderID,
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "write tests for auth",
+		Description:  "older stale test attempt",
+		Status:       model.StatusDone,
+		Phase:        "test",
+		CreatedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	}
+	newer := model.Task{
+		ID:           newerID,
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "write tests for auth (revision 1) (revision 2)",
+		Description:  "newer stale test attempt",
+		Status:       model.StatusDone,
+		Phase:        "test",
+		CreatedAt:    time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC),
+	}
+	db.Create(&older)
+	db.Create(&newer)
+
+	if err := o.HandleTestReviewRejected(parentID, "needs fresh test evidence"); err != nil {
+		t.Fatalf("reject test review: %v", err)
+	}
+
+	var rejectedCount int64
+	db.Model(&model.Task{}).Where("id IN ? AND status = ?", []uuid.UUID{olderID, newerID}, model.StatusRejected).Count(&rejectedCount)
+	if rejectedCount != 2 {
+		t.Fatalf("expected both stale done subtasks rejected, got %d", rejectedCount)
+	}
+
+	var replacements []model.Task
+	db.Where("parent_task_id = ? AND status = ? AND title = ?", parentID, model.StatusBacklog, "write tests for auth (revision 1)").Find(&replacements)
+	if len(replacements) != 1 {
+		t.Fatalf("expected one canonical replacement, got %d", len(replacements))
+	}
+	if replacements[0].Description != "newer stale test attempt\n\n## Rejection Feedback\n\nneeds fresh test evidence" {
+		t.Fatalf("expected replacement to use newest stale attempt description, got %q", replacements[0].Description)
+	}
+
+	var event model.TaskEvent
+	if err := db.Where("task_id = ? AND event_type = ? AND new_value = ?", parentID, "status_change", string(model.StatusTestWriting)).First(&event).Error; err != nil {
+		t.Fatalf("load parent transition event: %v", err)
+	}
+	if event.Details["subtasks_cloned"] != float64(1) {
+		t.Fatalf("expected one cloned subtask in event details, got %v", event.Details["subtasks_cloned"])
+	}
+}
+
+func TestHandleTestReviewRejected_PreservesDistinctTestsForLanesWithSameTitle(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{ID: parentID, ProjectID: o.projectID, Title: "parent", Description: "parent", Status: model.StatusTestReview}
+	db.Create(&parent)
+
+	sub1 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "write tests for auth",
+		Description:  "tests for impl 0",
+		Status:       model.StatusDone,
+		Phase:        "test",
+		TestsFor:     model.JSONArray{"0"},
+	}
+	sub2 := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "write tests for auth",
+		Description:  "tests for impl 1",
+		Status:       model.StatusDone,
+		Phase:        "test",
+		TestsFor:     model.JSONArray{"1"},
+	}
+	db.Create(&sub1)
+	db.Create(&sub2)
+
+	if err := o.HandleTestReviewRejected(parentID, "needs coverage"); err != nil {
+		t.Fatalf("reject test review: %v", err)
+	}
+
+	var replacements []model.Task
+	db.Where("parent_task_id = ? AND status = ? AND title = ?", parentID, model.StatusBacklog, "write tests for auth (revision 1)").Find(&replacements)
+	if len(replacements) != 2 {
+		t.Fatalf("expected distinct TestsFor lanes preserved, got %d replacements", len(replacements))
+	}
+
+	found := map[string]bool{}
+	for _, replacement := range replacements {
+		if len(replacement.TestsFor) != 1 {
+			t.Fatalf("expected one TestsFor entry, got %v", replacement.TestsFor)
+		}
+		found[replacement.TestsFor[0]] = true
+	}
+	if !found["0"] || !found["1"] {
+		t.Fatalf("expected replacements for TestsFor 0 and 1, got %v", found)
+	}
+}
+
+func TestHandleTestReviewRejected_PreservesUnrevisedSameTitleWithoutLineage(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestrator(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{ID: parentID, ProjectID: o.projectID, Title: "parent", Description: "parent", Status: model.StatusTestReview}
+	db.Create(&parent)
+
+	for _, description := range []string{"first same-title lane", "second same-title lane"} {
+		sub := model.Task{
+			ID:           uuid.New(),
+			ProjectID:    o.projectID,
+			ParentTaskID: &parentID,
+			Title:        "write tests for auth",
+			Description:  description,
+			Status:       model.StatusDone,
+			Phase:        "test",
+		}
+		db.Create(&sub)
+	}
+
+	if err := o.HandleTestReviewRejected(parentID, "needs coverage"); err != nil {
+		t.Fatalf("reject test review: %v", err)
+	}
+
+	var replacementCount int64
+	db.Model(&model.Task{}).Where("parent_task_id = ? AND status = ? AND title = ?", parentID, model.StatusBacklog, "write tests for auth (revision 1)").Count(&replacementCount)
+	if replacementCount != 2 {
+		t.Fatalf("expected unrevised same-title lanes preserved, got %d replacements", replacementCount)
 	}
 }
 
