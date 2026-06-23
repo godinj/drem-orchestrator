@@ -1,0 +1,78 @@
+{
+  "artifact_type": "race_state_machine_edge_case_review",
+  "generated_at": "2026-06-22",
+  "status": "review_candidate",
+  "markdown": "plans/race-state-machine-edge-cases.md",
+  "review_inputs": [
+    "subagent:gate-api-status-audit",
+    "subagent:reconciliation-watchdog-agentmon-audit",
+    "subagent:container-registry-ws-control-audit"
+  ],
+  "summary": {
+    "total_findings": 41,
+    "by_severity": {
+      "P0": 7,
+      "P1": 19,
+      "P2": 15
+    },
+    "primary_invariants": [
+      "compare-and-swap task status transitions",
+      "atomic task status plus event persistence",
+      "container and ingest events scoped by current attempt/container",
+      "single active worker per task and role",
+      "classification plus recovery mutation guarded by same-state predicates",
+      "best-effort fanout isolated from authoritative state changes"
+    ]
+  },
+  "findings": [
+    {"id":"RACE-SM-001","slug":"gate-double-approve-duplicates-subtasks","severity":"P0","surfaces":["internal/orchhttp/gate_handlers.go","internal/orchestrator/handlers.go"],"category":"gate_transition","invariant":"Plan approval is exactly-once.","acceptance_test":"Concurrent approve for one plan-review task creates one subtask set and returns one 409."},
+    {"id":"RACE-SM-002","slug":"stale-die-kills-new-worker","severity":"P0","surfaces":["internal/orchestrator/docker_events.go"],"category":"container_event","invariant":"A container event mutates only the matching current attempt/container.","acceptance_test":"Deliver old container death after reassignment and assert current worker remains assigned."},
+    {"id":"RACE-SM-003","slug":"worker-death-respawns-wrong-role","severity":"P0","surfaces":["internal/orchestrator/docker_events.go"],"category":"recovery_transition","invariant":"Recovery preserves lifecycle role.","acceptance_test":"Parametrize dead role/status and assert replacement role is correct."},
+    {"id":"RACE-SM-004","slug":"late-merge-result-overwrites-current-attempt","severity":"P0","surfaces":["internal/orchhttp/handlers_internal.go","internal/orchestrator/merge_dispatch.go"],"category":"ingest_attempt_scope","invariant":"Merge result side effects are scoped to current attempt.","acceptance_test":"Old merge result arriving after retry is ignored."},
+    {"id":"RACE-SM-005","slug":"reconciler-stale-worktree-revert","severity":"P0","surfaces":["internal/orchestrator/reconcile.go","plans/reconciler-stale-worktree-fix.md"],"category":"git_reconciliation","invariant":"Reconciler never commits from stale host worktree.","acceptance_test":"Advanced bare ref plus stale host worktree does not create revert commit."},
+    {"id":"RACE-SM-006","slug":"spawn-db-orphan-container","severity":"P0","surfaces":["internal/orchestrator/worker_spawn.go","internal/workeridentity/workeridentity.go"],"category":"spawn_identity","invariant":"Live container has durable DB identity or is destroyed.","acceptance_test":"DB failure after spawn destroys container or records recovery state."},
+    {"id":"RACE-SM-007","slug":"double-spawn-same-task","severity":"P0","surfaces":["internal/orchestrator/session_spawning.go","internal/orchestrator/worker_spawn.go","internal/workeridentity/workeridentity.go"],"category":"spawn_concurrency","invariant":"At most one active worker per task and role.","acceptance_test":"Concurrent typed spawn starts only one container."},
+    {"id":"RACE-SM-008","slug":"stale-precheck-errors-become-500","severity":"P1","surfaces":["internal/orchhttp/gate_handlers.go"],"category":"error_mapping","invariant":"Stale gate conflicts return 409.","acceptance_test":"Status changes between precheck and delegate maps to 409."},
+    {"id":"RACE-SM-009","slug":"gate-mutations-non-atomic-partial-state","severity":"P1","surfaces":["internal/orchestrator/handlers.go","internal/orchestrator/task_api.go","internal/state/machine.go"],"category":"transactionality","invariant":"Lifecycle DB mutations are atomic or compensated.","acceptance_test":"Failure injection after side-row creation leaves no partial transition."},
+    {"id":"RACE-SM-010","slug":"archive-live-assignment-toctou","severity":"P1","surfaces":["internal/orchhttp/gate_handlers.go"],"category":"recovery_toctou","invariant":"Archive never cancels live assigned work.","acceptance_test":"Assignment becomes live between check and update; archive returns 409."},
+    {"id":"RACE-SM-011","slug":"stale-assignment-recovery-toctou","severity":"P1","surfaces":["internal/orchhttp/health_recovery.go"],"category":"recovery_toctou","invariant":"Recovery clears only the assignment classified safe.","acceptance_test":"Reassignment or heartbeat after classification prevents apply."},
+    {"id":"RACE-SM-012","slug":"heartbeat-events-do-not-refresh-agent","severity":"P1","surfaces":["internal/extract/parse_heartbeat.go","internal/orchhttp/handlers_internal.go","internal/orchhttp/health_recovery.go"],"category":"liveness","invariant":"Accepted heartbeat updates authoritative liveness.","acceptance_test":"Heartbeat ingest advances Agent.HeartbeatAt and blocks stale recovery."},
+    {"id":"RACE-SM-013","slug":"manual-retry-child-cascade-cancels-target","severity":"P1","surfaces":["internal/orchhttp/gate_handlers.go","internal/orchestrator/task_api.go"],"category":"parent_child_transition","invariant":"Parent-child retry is atomic or conflict-safe.","acceptance_test":"Retry failed child under failed parent leaves both in intended states or no mutation."},
+    {"id":"RACE-SM-014","slug":"agentmon-die-cancel-drops-tail-records","severity":"P1","surfaces":["internal/agentmon/docker_source.go","internal/agentmon/docker_tail.go"],"category":"log_ingest","invariant":"Shutdown drains final lifecycle logs.","acceptance_test":"Final merge_result survives die/cancel race."},
+    {"id":"RACE-SM-015","slug":"spawner-list-error-can-false-kill-seen-container","severity":"P1","surfaces":["internal/orchestrator/reconcile_stuck.go"],"category":"runtime_liveness","invariant":"List failure is not death evidence.","acceptance_test":"ListWorkers error plus seen container does not mark worker dead."},
+    {"id":"RACE-SM-016","slug":"merge-retry-backoff-not-enforced","severity":"P1","surfaces":["internal/orchestrator/merge_execution.go","internal/orchestrator/retry_policy.go"],"category":"retry_policy","invariant":"Merge retries obey backoff.","acceptance_test":"Tick before retry delay does not spawn merger."},
+    {"id":"RACE-SM-017","slug":"git-ensure-branch-race","severity":"P1","surfaces":["internal/gitref/git.go","internal/orchestrator/worker_spawn.go"],"category":"gitref","invariant":"Concurrent branch ensure is idempotent.","acceptance_test":"Two EnsureBranch calls for same ref both reach desired end state."},
+    {"id":"RACE-SM-018","slug":"gitref-register-after-spawn-not-enforced","severity":"P1","surfaces":["internal/orchestrator/worker_spawn.go","internal/gitref/registry.go"],"category":"gitref","invariant":"Live worker branch has one matching active owner.","acceptance_test":"Gitref already-active error prevents or destroys spawned container."},
+    {"id":"RACE-SM-019","slug":"registry-port-allocation-race","severity":"P1","surfaces":["internal/projects/registry.go"],"category":"project_registry","invariant":"Concurrent register cannot duplicate ports.","acceptance_test":"Concurrent project adds produce distinct ports or conflict."},
+    {"id":"RACE-SM-020","slug":"registry-lost-update","severity":"P1","surfaces":["internal/projects/registry.go"],"category":"project_registry","invariant":"Whole-file registry saves serialize or detect stale writes.","acceptance_test":"Two stale saves cannot lose one project."},
+    {"id":"RACE-SM-021","slug":"spawner-registry-volatile-after-restart","severity":"P1","surfaces":["internal/spawner/service.go","internal/spawner/methods.go"],"category":"spawner_registry","invariant":"ListWorkers is restart-aware or marked unsafe for destructive recovery.","acceptance_test":"Spawner restart recovers labeled running containers or exposes cold start."},
+    {"id":"RACE-SM-022","slug":"spawner-cancel-kills-inflight-spawns","severity":"P1","surfaces":["internal/spawner/service.go"],"category":"spawner_lifecycle","invariant":"Shutdown has bounded, reconciled in-flight operations.","acceptance_test":"Cancel during create/start leaves no orphan or records unknown outcome."},
+    {"id":"RACE-SM-023","slug":"ws-broadcast-head-of-line-blocking","severity":"P1","surfaces":["internal/serve/ws_hub.go","internal/serve/messages.go"],"category":"websocket","invariant":"One slow client cannot block hub delivery/mutation.","acceptance_test":"Blocked writer does not block broadcast beyond deadline."},
+    {"id":"RACE-SM-024","slug":"eventbus-poll-deliver-race","severity":"P1","surfaces":["internal/eventbus/eventbus.go"],"category":"event_delivery","invariant":"Delivery claim is atomic.","acceptance_test":"Concurrent poll/deliver produces one claimed delivery."},
+    {"id":"RACE-SM-025","slug":"persona-control-concurrent-compose-actions","severity":"P1","surfaces":["internal/personacontrol/control.go","internal/serve/persona_control.go"],"category":"persona_control","invariant":"Persona transitions serialize per service.","acceptance_test":"Overlapping stop/recreate returns 409 or queues deterministically."},
+    {"id":"RACE-SM-026","slug":"state-transition-not-atomic","severity":"P1","surfaces":["internal/state/machine.go"],"category":"state_machine","invariant":"Status transition plus event append is atomic compare-and-swap.","acceptance_test":"Conflicting transitions produce one event and one conflict."},
+    {"id":"RACE-SM-027","slug":"state-machine-cancelled-not-modeled","severity":"P2","surfaces":["internal/state/machine.go","internal/model/enums.go"],"category":"state_machine","invariant":"Every status is modeled explicitly.","acceptance_test":"All task statuses have transition-map entries."},
+    {"id":"RACE-SM-028","slug":"comments-can-orphan-on-delete-race","severity":"P2","surfaces":["internal/orchhttp/gate_handlers.go","internal/orchestrator/lifecycle.go"],"category":"comments","invariant":"Comments belong to existing tasks.","acceptance_test":"Concurrent delete/comment cannot create orphan."},
+    {"id":"RACE-SM-029","slug":"inbox-move-race-misclassified","severity":"P2","surfaces":["internal/serve/inbox.go","internal/csuite/diskstore/diskstore.go"],"category":"inbox","invariant":"Concurrent item processing returns conflict/not-found, not 500.","acceptance_test":"Parallel archive/ignore gives one success and one 404/409."},
+    {"id":"RACE-SM-030","slug":"inbox-archive-overwrite-risk","severity":"P2","surfaces":["internal/csuite/diskstore/diskstore.go"],"category":"inbox","invariant":"Archive never overwrites existing record.","acceptance_test":"Destination collision is refused or made unique."},
+    {"id":"RACE-SM-031","slug":"message-pagination-drops-same-second-items","severity":"P2","surfaces":["internal/csuite/diskstore/diskstore.go"],"category":"pagination","invariant":"Cursor pagination visits every message once.","acceptance_test":"Same-timestamp page traversal returns all IDs."},
+    {"id":"RACE-SM-032","slug":"orchclient-success-empty-body-decode","severity":"P2","surfaces":["pkg/orchclient/gate.go"],"category":"client_contract","invariant":"2xx body contract is explicit.","acceptance_test":"204 or empty 200 behavior is tested."},
+    {"id":"RACE-SM-033","slug":"health-recovery-clears-terminal-or-wrong-status","severity":"P2","surfaces":["internal/orchhttp/health_recovery.go"],"category":"recovery_scope","invariant":"Recovery applies only to intended statuses.","acceptance_test":"Terminal assigned task recovery is no-op/rejected/documented."},
+    {"id":"RACE-SM-034","slug":"replacement-cap-not-durable","severity":"P2","surfaces":["internal/orchestrator/docker_events.go"],"category":"recovery_policy","invariant":"Replacement cap survives restart or is documented best-effort.","acceptance_test":"Restart does not reset cap silently."},
+    {"id":"RACE-SM-035","slug":"ws-post-response-broadcast-can-hang-handler","severity":"P2","surfaces":["internal/serve/messages.go","internal/serve/ws_hub.go"],"category":"websocket","invariant":"HTTP response latency is decoupled from fanout.","acceptance_test":"POST returns promptly with blocked websocket."},
+    {"id":"RACE-SM-036","slug":"eventbus-ack-overwrites-acked-at","severity":"P2","surfaces":["internal/eventbus/eventbus.go"],"category":"event_delivery","invariant":"Ack preserves first acknowledgement timestamp.","acceptance_test":"Second ack does not change acked_at."},
+    {"id":"RACE-SM-037","slug":"persona-control-start-may-recreate-unintentionally","severity":"P2","surfaces":["internal/personacontrol/control.go"],"category":"persona_control","invariant":"Start does not implicitly recreate unless documented.","acceptance_test":"Start command is compose start or action is renamed/documented."},
+    {"id":"RACE-SM-038","slug":"gitref-merged-state-immediately-lost","severity":"P2","surfaces":["internal/merger/merger.go","internal/gitref/registry.go"],"category":"gitref","invariant":"Registry preserves merge outcome after deletion.","acceptance_test":"Successful merge leaves durable merged-deleted outcome."},
+    {"id":"RACE-SM-039","slug":"artifact-register-upsert-race","severity":"P2","surfaces":["internal/artifactregistry/registry.go"],"category":"artifact_registry","invariant":"Register same content URI is concurrency-idempotent.","acceptance_test":"Concurrent register succeeds with one row."},
+    {"id":"RACE-SM-040","slug":"artifact-supersede-partial-semantic-race","severity":"P2","surfaces":["internal/artifactregistry/registry.go"],"category":"artifact_registry","invariant":"Artifact has one current superseder unless conflict-modeled.","acceptance_test":"Concurrent supersede to different targets yields one conflict."},
+    {"id":"RACE-SM-041","slug":"test-fail-contract-drift","severity":"P1","surfaces":["internal/orchhttp/gate_handlers_test.go","internal/orchestrator/handlers.go","plans/orch-api-gate-mutations.md"],"category":"contract_drift","invariant":"Tests and fakes match production transition contract.","acceptance_test":"POST /fail real-orchestrator test asserts production status."}
+  ],
+  "open_verification_gaps": [
+    "No dynamic race tests were run for this artifact.",
+    "Production DB constraints and SQLite/GORM transaction settings were not fully verified.",
+    "Foreign-key enforcement for task comments was not confirmed.",
+    "Lifecycle-engine mode needs a separate equivalent-protection pass.",
+    "Docker status semantics for restart/paused/removing/dead need runtime validation.",
+    "Container sighting probe wiring in production was not confirmed."
+  ]
+}
