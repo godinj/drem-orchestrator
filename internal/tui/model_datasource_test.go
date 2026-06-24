@@ -173,7 +173,18 @@ func TestLoadTasks_FromFakeDataSource(t *testing.T) {
 	id := uuid.New()
 	ds := &fakeDataSource{
 		tasks: []orchdto.TaskDTO{
-			{ID: id.String(), Title: "Ship it", Status: "in_progress"},
+			{
+				ID:                 id.String(),
+				Title:              "Ship it",
+				Status:             "in_progress",
+				ActiveAttemptCount: 1,
+				ActiveAttempts: []orchdto.TaskAttemptLeaseDTO{{
+					AttemptID:  "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+					Role:       "coder",
+					Branch:     "feature/ship",
+					LeaseState: "running",
+				}},
+			},
 		},
 	}
 	m := Model{dataSource: ds}
@@ -186,6 +197,8 @@ func TestLoadTasks_FromFakeDataSource(t *testing.T) {
 	require.Len(t, loaded.tasks, 1)
 	require.Equal(t, "Ship it", loaded.tasks[0].Title)
 	require.Equal(t, id, loaded.tasks[0].ID)
+	require.Equal(t, "feature/ship", loaded.tasks[0].WorktreeBranch)
+	require.Equal(t, "running/coder/feature/ship/aaaaaaaa", renderActiveAttemptsSummary(loaded.tasks[0].Context))
 	require.Equal(t, 1, ds.taskCalls)
 }
 

@@ -149,6 +149,10 @@ func (sp *SchedulingPolicy) evaluateCandidate(
 			return d
 		}
 		if !met {
+			if reason := sp.describeMixedPhaseDependencyBlock(cand); reason != "" {
+				d.Reason = reason
+				return d
+			}
 			d.Reason = fmt.Sprintf("unmet dependencies: %s", sp.describeDependencies(cand.DependencyIDs))
 			return d
 		}
@@ -296,6 +300,27 @@ func (sp *SchedulingPolicy) describeDependencies(dependencyIDs []string) string 
 		parts = append(parts, fmt.Sprintf("%s(%s)", id, status))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func (sp *SchedulingPolicy) describeMixedPhaseDependencyBlock(cand model.Task) string {
+	if cand.Phase != "test" || len(cand.DependencyIDs) == 0 {
+		return ""
+	}
+
+	var blockers []string
+	for _, depID := range cand.DependencyIDs {
+		var dep model.Task
+		if err := sp.db.First(&dep, "id = ?", depID).Error; err != nil {
+			continue
+		}
+		if dep.Phase == "implementation" && dep.Status != model.StatusDone {
+			blockers = append(blockers, fmt.Sprintf("%s(%s: %s)", dep.ID, dep.Phase, dep.Status))
+		}
+	}
+	if len(blockers) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("mixed-phase dependency blocker: test-phase task depends on implementation-phase work that cannot run during test_writing: %s", strings.Join(blockers, ", "))
 }
 
 func isTerminalWaveStatus(status model.TaskStatus) bool {

@@ -20,11 +20,11 @@ func TestJSONFieldScan(t *testing.T) {
 	t.Run("malformed JSON string", func(t *testing.T) {
 		var j JSONField
 		err := j.Scan("{broken}")
-		if err == nil {
-			t.Fatal("expected error for malformed JSON, got nil")
+		if err != nil {
+			t.Fatalf("Scan(malformed) returned error: %v", err)
 		}
-		if !strings.Contains(err.Error(), "unmarshal") {
-			t.Errorf("error = %q, want it to contain %q", err.Error(), "unmarshal")
+		if j["diagnostic"] != "malformed_json_details" {
+			t.Errorf("diagnostic = %v, want malformed_json_details", j["diagnostic"])
 		}
 	})
 
@@ -125,11 +125,14 @@ func TestJSONFieldScanArray(t *testing.T) {
 		}
 	})
 
-	t.Run("truly malformed JSON still errors", func(t *testing.T) {
+	t.Run("truly malformed JSON is quarantined", func(t *testing.T) {
 		var j JSONField
 		err := j.Scan(`not json at all`)
-		if err == nil {
-			t.Fatal("expected error for non-JSON input")
+		if err != nil {
+			t.Fatalf("Scan(non-JSON) returned error: %v", err)
+		}
+		if j["diagnostic"] != "malformed_json_details" {
+			t.Errorf("diagnostic = %v, want malformed_json_details", j["diagnostic"])
 		}
 	})
 }

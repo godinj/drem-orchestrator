@@ -527,9 +527,23 @@ func renderTasks(w io.Writer, jsonMode bool, tasks []orchdto.TaskDTO) error {
 		return writeJSON(w, tasks)
 	}
 	for _, t := range tasks {
-		fmt.Fprintf(w, "%s\t%s\t%s\tworker=%s\n", shortID(t.ID), t.Status, t.Title, dash(t.AssignedWorker))
+		fmt.Fprintf(w, "%s\t%s\t%s\tworker=%s\tactive=%s\n", shortID(t.ID), t.Status, t.Title, dash(t.AssignedWorker), formatActiveAttempts(t.ActiveAttempts, t.ActiveAttemptCount))
 	}
 	return nil
+}
+
+func formatActiveAttempts(attempts []orchdto.TaskAttemptLeaseDTO, count int) string {
+	if count == 0 && len(attempts) == 0 {
+		return "-"
+	}
+	if len(attempts) == 0 {
+		return strconv.Itoa(count)
+	}
+	parts := make([]string, 0, len(attempts))
+	for _, attempt := range attempts {
+		parts = append(parts, fmt.Sprintf("%s/%s/%s/%s", dash(attempt.LeaseState), dash(attempt.Role), dash(attempt.Branch), shortIDOrDash(attempt.AttemptID)))
+	}
+	return strings.Join(parts, ",")
 }
 
 func renderWorkers(w io.Writer, jsonMode bool, workers []orchdto.WorkerDTO) error {

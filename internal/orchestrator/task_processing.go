@@ -316,7 +316,7 @@ func (o *Orchestrator) blockPlannerCapacityExhausted(task *model.Task, totalSpaw
 		return nil
 	}
 	now := time.Now()
-	if err := o.db.Create(&model.TaskEvent{
+	event := &model.TaskEvent{
 		ID:        uuid.New(),
 		TaskID:    task.ID,
 		EventType: "planner_capacity_exhausted",
@@ -330,7 +330,11 @@ func (o *Orchestrator) blockPlannerCapacityExhausted(task *model.Task, totalSpaw
 		},
 		Actor:     "orchestrator",
 		CreatedAt: now,
-	}).Error; err != nil {
+	}
+	if err := model.ValidateTaskEventDetails(event.Details); err != nil {
+		return fmt.Errorf("process planning: validate planner capacity event: %w", err)
+	}
+	if err := o.db.Create(event).Error; err != nil {
 		return fmt.Errorf("process planning: save planner capacity event: %w", err)
 	}
 	o.emit("planner_capacity_exhausted", map[string]any{
@@ -406,6 +410,18 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 	}
 
 	if allDone && parent.Status == model.StatusInProgress {
+		readiness, err := o.evaluateParentReadiness(parent, model.StatusTestingReady)
+		if err != nil {
+			return fmt.Errorf("check feature completion: parent readiness: %w", err)
+		}
+		if !readiness.Ready {
+			if err := o.recordParentReadinessBlocked(parent, model.StatusTestingReady, readiness); err != nil {
+				return fmt.Errorf("check feature completion: save readiness blockers: %w", err)
+			}
+			o.logger.Info("testing_ready blocked by parent readiness", "task_id", parent.ID, "blockers", readiness.Blockers)
+			return nil
+		}
+
 		// Verify the feature branch actually has changes before declaring
 		// testing ready. If all subtasks "completed" without producing commits,
 		// fail the parent so the user can replan.
@@ -446,6 +462,9 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		if err != nil {
 			return fmt.Errorf("check feature completion: transition to testing_ready: %w", err)
 		}
+		delete(parent.Context, "parent_readiness_target")
+		delete(parent.Context, "parent_readiness_blockers")
+		delete(parent.Context, "parent_readiness_blocker_count")
 		if err := o.db.Save(parent).Error; err != nil {
 			return fmt.Errorf("check feature completion: save parent: %w", err)
 		}

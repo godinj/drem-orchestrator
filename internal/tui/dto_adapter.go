@@ -21,6 +21,27 @@ func TaskFromDTO(d orchdto.TaskDTO) model.Task {
 		CreatedAt: d.CreatedAt,
 		UpdatedAt: d.UpdatedAt,
 	}
+	if len(d.ActiveAttempts) > 0 || d.ActiveAttemptCount > 0 {
+		t.Context = model.JSONField{"active_attempt_count": float64(d.ActiveAttemptCount)}
+		attempts := make([]any, 0, len(d.ActiveAttempts))
+		for _, attempt := range d.ActiveAttempts {
+			attempts = append(attempts, map[string]any{
+				"attempt_id":  attempt.AttemptID,
+				"worker_id":   attempt.WorkerID,
+				"agent_id":    attempt.AgentID,
+				"role":        attempt.Role,
+				"branch":      attempt.Branch,
+				"lease_state": attempt.LeaseState,
+			})
+		}
+		t.Context["active_attempts"] = attempts
+		if d.ActiveAttemptCount == 0 {
+			t.Context["active_attempt_count"] = float64(len(d.ActiveAttempts))
+		}
+		if len(d.ActiveAttempts) > 0 && d.ActiveAttempts[0].Branch != "" {
+			t.WorktreeBranch = d.ActiveAttempts[0].Branch
+		}
+	}
 	if id, err := uuid.Parse(d.ID); err == nil {
 		t.ID = id
 	}

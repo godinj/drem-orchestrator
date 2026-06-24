@@ -141,6 +141,38 @@ func TestListTasksHidesCancelledByDefault(t *testing.T) {
 	require.Equal(t, "archived", got[0].Title)
 }
 
+func TestListTasksIncludesActiveAttemptLeaseProjection(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "running task", model.StatusInProgress)
+	agentID := uuid.New()
+	attempt := model.WorkerAttempt{
+		ID:          uuid.New(),
+		TaskID:      task.ID,
+		AgentID:     &agentID,
+		WorkerID:    "worker-lease",
+		ContainerID: "container-lease",
+		AgentType:   string(model.AgentCoder),
+		Branch:      "feature/lease",
+		State:       model.WorkerAttemptRunning,
+	}
+	require.NoError(t, srv.DB.Create(&attempt).Error)
+
+	resp, err := http.Get(ts.URL + "/projects/" + projectName + "/tasks")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var got []orchdto.TaskDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	require.Len(t, got, 1)
+	require.Equal(t, 1, got[0].ActiveAttemptCount)
+	require.Len(t, got[0].ActiveAttempts, 1)
+	require.Equal(t, attempt.ID.String(), got[0].ActiveAttempts[0].AttemptID)
+	require.Equal(t, string(model.AgentCoder), got[0].ActiveAttempts[0].Role)
+	require.Equal(t, "feature/lease", got[0].ActiveAttempts[0].Branch)
+	require.Equal(t, model.WorkerAttemptRunning, got[0].ActiveAttempts[0].LeaseState)
+}
+
 func TestListTasksIncludesDiagnosticsFromContextAndEvents(t *testing.T) {
 	srv, ts, project := setupHTTPTest(t, nil)
 
@@ -769,8 +801,9 @@ func TestIngestLeavesUnmatchedMissingTaskIDUnattributed(t *testing.T) {
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 
 	var event model.TaskEvent
-	require.NoError(t, srv.DB.First(&event, "event_type = ?", "heartbeat").Error)
+	require.NoError(t, srv.DB.First(&event, "event_type = ?", model.TaskEventQuarantined).Error)
 	require.Equal(t, uuid.Nil, event.TaskID)
+	require.Equal(t, "heartbeat", event.Details["original_event_type"])
 }
 
 func TestIngestAcceptsMergeResultAndUpdatesTaskContext(t *testing.T) {
@@ -1025,6 +1058,56 @@ func TestListEventsWithoutSinceReturnsLatestFirst(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&events))
 	require.Len(t, events, 1)
 	require.Equal(t, "newer", events[0].Type)
+}
+
+func TestListEventsMalformedDetailsDoesNotBreak(t *testing.T) {
+	srv, ts, _ := setupHTTPTest(t, nil)
+	id := uuid.New()
+	taskID := uuid.New()
+	require.NoError(t, srv.DB.Exec(
+		"INSERT INTO task_events (id, task_id, event_type, actor, details, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+		id.String(), taskID.String(), "crash", "worker", "{not-json", time.Now().UTC(),
+	).Error)
+
+	resp, err := http.Get(ts.URL + "/events")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var events []orchdto.EventDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&events))
+	require.Len(t, events, 1)
+	require.Contains(t, string(events[0].Payload), "malformed_json_details")
+}
+
+func TestIngestZeroTaskIDIsQuarantinedAndIgnoredByHealth(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+	failed := testutil.CreateTask(t, srv.DB, project.ID, "failed without evidence", model.StatusFailed)
+
+	postIngestRecord(t, ts.URL, map[string]any{
+		"type":         "crash",
+		"container_id": "missing-container",
+		"worker_id":    "missing-worker",
+		"timestamp":    time.Now().UTC(),
+		"reason":       "uncorrelated failure",
+	})
+
+	var event model.TaskEvent
+	require.NoError(t, srv.DB.First(&event).Error)
+	require.Equal(t, model.TaskEventQuarantined, event.EventType)
+	require.Equal(t, uuid.Nil, event.TaskID)
+	require.Equal(t, "zero_task_id", event.Details["diagnostic"])
+
+	resp, err := http.Get(ts.URL + "/projects/" + projectName + "/health/issues")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var issues []orchdto.HealthIssueDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&issues))
+	require.Len(t, issues, 1)
+	require.Equal(t, "missing_failure_evidence", issues[0].Type)
+	require.Equal(t, failed.ID.String(), issues[0].TaskID)
 }
 
 func TestWorkerHistoryReturnsEvents(t *testing.T) {

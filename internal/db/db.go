@@ -63,7 +63,27 @@ func Init(dbPath string, logPath ...string) (*gorm.DB, error) {
 	// with a direction modifier, so the migration is declared here as
 	// raw SQL alongside the existing tmux back-fill.
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at DESC)")
-	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_attempt_active_task_role ON worker_attempts(task_id, agent_type) WHERE completed_at IS NULL")
+	db.Exec(`UPDATE worker_attempts
+		SET branch = COALESCE(
+			NULLIF((SELECT worktree_branch FROM agents WHERE agents.id = worker_attempts.agent_id), ''),
+			NULLIF((SELECT worktree_branch FROM tasks WHERE tasks.id = worker_attempts.task_id), ''),
+			''
+		)
+		WHERE branch = ''`)
+	db.Exec(`UPDATE worker_attempts
+		SET state = ?, completed_at = CURRENT_TIMESTAMP
+		WHERE completed_at IS NULL
+		AND id NOT IN (
+			SELECT id FROM worker_attempts keep
+			WHERE keep.completed_at IS NULL
+			AND keep.task_id = worker_attempts.task_id
+			AND keep.agent_type = worker_attempts.agent_type
+			AND keep.branch = worker_attempts.branch
+			ORDER BY keep.created_at DESC, keep.id DESC
+			LIMIT 1
+		)`, model.WorkerAttemptSuperseded)
+	db.Exec("DROP INDEX IF EXISTS idx_worker_attempt_active_task_role")
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_attempt_active_task_role_branch ON worker_attempts(task_id, agent_type, branch) WHERE completed_at IS NULL")
 
 	return db, nil
 }

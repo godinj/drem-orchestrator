@@ -212,6 +212,24 @@ func (c *Client) RecoverStaleAssignment(ctx context.Context, project string, tas
 	return out, nil
 }
 
+// RecoverTask classifies or applies one named break-glass recovery action.
+// Unsupported or unsafe actions return a refusal DTO rather than mutating.
+func (c *Client) RecoverTask(ctx context.Context, project string, taskID uuid.UUID, action string, req orchdto.TaskRecoveryRequest) (orchdto.TaskRecoveryDTO, error) {
+	if req.DryRun == req.Apply {
+		return orchdto.TaskRecoveryDTO{}, &ErrBadRequest{Message: "exactly one of dry_run or apply is required"}
+	}
+	action = strings.TrimSpace(action)
+	if action == "" {
+		return orchdto.TaskRecoveryDTO{}, &ErrBadRequest{Message: "recovery action is required"}
+	}
+	var out orchdto.TaskRecoveryDTO
+	path := gatePath(project, taskID, "recover/"+url.PathEscape(action))
+	if err := c.postGate(ctx, path, req, &out); err != nil {
+		return orchdto.TaskRecoveryDTO{}, err
+	}
+	return out, nil
+}
+
 // gatePath returns the HTTP path for a gate mutation verb on the given
 // task in the given project. The project name is URL-escaped; the UUID
 // is emitted in its canonical 36-char form which is already URL-safe.

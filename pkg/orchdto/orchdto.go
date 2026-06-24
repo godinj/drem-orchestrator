@@ -32,18 +32,37 @@ type ProjectDTO struct {
 // directly; the HTTP API intentionally returns a narrow shape so Kyle and
 // the TUI do not become coupled to every field on the GORM model.
 type TaskDTO struct {
-	ID                   string     `json:"id"`
-	Title                string     `json:"title"`
-	Status               string     `json:"status"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
-	AssignedWorker       string     `json:"assigned_worker"`
-	Category             string     `json:"category,omitempty"`
-	CurrentHealth        string     `json:"current_health,omitempty"`
-	LatestFailureSummary string     `json:"latest_failure_summary,omitempty"`
-	LatestFailureType    string     `json:"latest_failure_type,omitempty"`
-	LatestFailureAt      *time.Time `json:"latest_failure_at,omitempty"`
-	LatestFailureCurrent *bool      `json:"latest_failure_current,omitempty"`
+	ID                   string                `json:"id"`
+	Title                string                `json:"title"`
+	Status               string                `json:"status"`
+	CreatedAt            time.Time             `json:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at"`
+	AssignedWorker       string                `json:"assigned_worker"`
+	ActiveAttemptCount   int                   `json:"active_attempt_count,omitempty"`
+	ActiveAttempts       []TaskAttemptLeaseDTO `json:"active_attempts,omitempty"`
+	Category             string                `json:"category,omitempty"`
+	CurrentHealth        string                `json:"current_health,omitempty"`
+	LatestFailureSummary string                `json:"latest_failure_summary,omitempty"`
+	LatestFailureType    string                `json:"latest_failure_type,omitempty"`
+	LatestFailureAt      *time.Time            `json:"latest_failure_at,omitempty"`
+	LatestFailureCurrent *bool                 `json:"latest_failure_current,omitempty"`
+}
+
+// TaskAttemptLeaseDTO describes the currently active execution lease for a
+// task. It is intentionally small so task list consumers can distinguish a
+// live/reserved attempt from a historical assignment without fetching the full
+// attempt history endpoint.
+type TaskAttemptLeaseDTO struct {
+	AttemptID   string    `json:"attempt_id"`
+	TaskID      string    `json:"task_id,omitempty"`
+	WorkerID    string    `json:"worker_id,omitempty"`
+	AgentID     string    `json:"agent_id,omitempty"`
+	ContainerID string    `json:"container_id,omitempty"`
+	Role        string    `json:"role,omitempty"`
+	Branch      string    `json:"branch,omitempty"`
+	LeaseState  string    `json:"lease_state,omitempty"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
 }
 
 // TaskCommentDTO is the public projection returned after appending a task
@@ -141,23 +160,47 @@ type EventDTO struct {
 // Findings are intentionally descriptive rather than prescriptive: recovery
 // mutations use separate, narrower endpoints.
 type HealthIssueDTO struct {
-	Type       string     `json:"type"`
-	Severity   string     `json:"severity"`
-	TaskID     string     `json:"task_id,omitempty"`
-	WorkerID   string     `json:"worker_id,omitempty"`
-	Status     string     `json:"status,omitempty"`
-	DetectedAt time.Time  `json:"detected_at"`
-	AgeSeconds int64      `json:"age_seconds,omitempty"`
-	LastEvent  *time.Time `json:"last_event,omitempty"`
-	Message    string     `json:"message"`
+	Type                string                 `json:"type"`
+	Severity            string                 `json:"severity"`
+	TaskID              string                 `json:"task_id,omitempty"`
+	WorkerID            string                 `json:"worker_id,omitempty"`
+	Role                string                 `json:"role,omitempty"`
+	Branch              string                 `json:"branch,omitempty"`
+	AttemptIDs          []string               `json:"attempt_ids,omitempty"`
+	BlockedDependencies []BlockedDependencyDTO `json:"blocked_dependencies,omitempty"`
+	GateFailure         *GateFailureDTO        `json:"gate_failure,omitempty"`
+	Status              string                 `json:"status,omitempty"`
+	DetectedAt          time.Time              `json:"detected_at"`
+	AgeSeconds          int64                  `json:"age_seconds,omitempty"`
+	LastEvent           *time.Time             `json:"last_event,omitempty"`
+	Message             string                 `json:"message"`
+}
+
+// BlockedDependencyDTO is a structured parent-readiness blocker surfaced on
+// health issues so operators do not need to inspect task context JSON.
+type BlockedDependencyDTO struct {
+	TaskID       string `json:"task_id,omitempty"`
+	DependencyID string `json:"dependency_id,omitempty"`
+	Phase        string `json:"phase,omitempty"`
+	Status       string `json:"status,omitempty"`
+	Message      string `json:"message,omitempty"`
+}
+
+// GateFailureDTO describes current branch hygiene or acceptance gate evidence.
+type GateFailureDTO struct {
+	Gate    string `json:"gate,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 // StaleAssignmentRecoveryRequest asks the orchestrator to classify or repair a
 // single task assignment. Exactly one of DryRun or Apply must be true.
 type StaleAssignmentRecoveryRequest struct {
-	DryRun bool   `json:"dry_run"`
-	Apply  bool   `json:"apply"`
-	Actor  string `json:"actor,omitempty"`
+	DryRun            bool       `json:"dry_run"`
+	Apply             bool       `json:"apply"`
+	Actor             string     `json:"actor,omitempty"`
+	ObservedStatus    string     `json:"observed_status,omitempty"`
+	ObservedUpdatedAt *time.Time `json:"observed_updated_at,omitempty"`
 }
 
 // StaleAssignmentRecoveryDTO is returned by successful stale-assignment
@@ -171,6 +214,31 @@ type StaleAssignmentRecoveryDTO struct {
 	Safe           bool   `json:"safe"`
 	Applied        bool   `json:"applied"`
 	Message        string `json:"message"`
+}
+
+// TaskRecoveryRequest asks the orchestrator to classify or apply one narrow
+// break-glass recovery action. Unsupported actions return a refusal result.
+type TaskRecoveryRequest struct {
+	DryRun            bool       `json:"dry_run"`
+	Apply             bool       `json:"apply"`
+	Actor             string     `json:"actor,omitempty"`
+	ObservedStatus    string     `json:"observed_status,omitempty"`
+	ObservedUpdatedAt *time.Time `json:"observed_updated_at,omitempty"`
+}
+
+// TaskRecoveryDTO describes why a recovery action would apply or be refused.
+type TaskRecoveryDTO struct {
+	TaskID        string `json:"task_id"`
+	Status        string `json:"status"`
+	Action        string `json:"action"`
+	Safe          bool   `json:"safe"`
+	Applied       bool   `json:"applied"`
+	RefusalReason string `json:"refusal_reason,omitempty"`
+	Policy        string `json:"policy"`
+	Evidence      string `json:"evidence"`
+	Result        string `json:"result"`
+	Message       string `json:"message"`
+	AffectedCount int    `json:"affected_count,omitempty"`
 }
 
 // RecoveryAuditRequest is the public payload accepted by Kyle's narrow

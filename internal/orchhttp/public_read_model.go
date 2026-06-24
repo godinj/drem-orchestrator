@@ -69,9 +69,40 @@ func (m publicReadModel) ListTasks(ctx context.Context, query taskListQuery) ([]
 	if err != nil {
 		return nil, err
 	}
+	activeAttempts, err := m.activeTaskAttempts(ctx, tasks)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]orchdto.TaskDTO, 0, len(tasks))
 	for _, t := range tasks {
-		out = append(out, toTaskDTO(t, failureEvents[t.ID]))
+		d := toTaskDTO(t, failureEvents[t.ID])
+		if attempts := activeAttempts[t.ID]; len(attempts) > 0 {
+			d.ActiveAttempts = attempts
+			d.ActiveAttemptCount = len(attempts)
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+func (m publicReadModel) activeTaskAttempts(ctx context.Context, tasks []model.Task) (map[uuid.UUID][]orchdto.TaskAttemptLeaseDTO, error) {
+	out := map[uuid.UUID][]orchdto.TaskAttemptLeaseDTO{}
+	ids := make([]uuid.UUID, 0, len(tasks))
+	for _, t := range tasks {
+		ids = append(ids, t.ID)
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	var attempts []model.WorkerAttempt
+	if err := m.db.WithContext(ctx).
+		Where("task_id IN ? AND state IN ?", ids, []string{model.WorkerAttemptReserved, model.WorkerAttemptRunning}).
+		Order("created_at DESC").
+		Find(&attempts).Error; err != nil {
+		return nil, err
+	}
+	for _, attempt := range attempts {
+		out[attempt.TaskID] = append(out[attempt.TaskID], toTaskAttemptLeaseDTO(attempt))
 	}
 	return out, nil
 }
@@ -87,12 +118,15 @@ func (m publicReadModel) latestTaskFailureEvents(ctx context.Context, tasks []mo
 	}
 	var events []model.TaskEvent
 	if err := m.db.WithContext(ctx).
-		Where("task_id IN ? AND event_type IN ?", ids, []string{recordTypeCrash, recordTypeBuildError, recordTypeTestResult, recordTypeMergeResult}).
+		Where("task_id IN ? AND event_type IN ?", ids, []string{recordTypeCrash, recordTypeBuildError, recordTypeTestResult, recordTypeMergeResult, "container_died", "branch_acceptance_rejected"}).
 		Order("created_at DESC").
 		Find(&events).Error; err != nil {
 		return nil, err
 	}
 	for _, e := range events {
+		if e.EventType == model.TaskEventQuarantined || e.TaskID == uuid.Nil {
+			continue
+		}
 		if _, ok := out[e.TaskID]; ok {
 			continue
 		}
@@ -205,7 +239,7 @@ func (m publicReadModel) TaskAttempts(ctx context.Context, taskID uuid.UUID) ([]
 	if len(out) > 0 {
 		var failureEvents []model.TaskEvent
 		if err := m.db.WithContext(ctx).
-			Where("task_id = ? AND event_type IN ?", taskID, []string{recordTypeCrash, recordTypeBuildError, recordTypeTestResult}).
+			Where("task_id = ? AND event_type IN ?", taskID, []string{recordTypeCrash, recordTypeBuildError, recordTypeTestResult, "container_died", "branch_acceptance_rejected"}).
 			Order("created_at ASC").
 			Find(&failureEvents).Error; err != nil {
 			return nil, err
@@ -270,9 +304,13 @@ func applyTaskFailureDiagnostics(d *orchdto.TaskDTO, t model.Task, events ...mod
 	)
 	failureType := firstNonEmpty(
 		stringField(t.Context, "latest_failure_type"),
+		stringField(t.Context, "failure_class"),
 		stringField(t.Context, "failure_category"),
 	)
 	var failureAt *time.Time
+	if at := timeField(t.Context, "latest_failure_at"); !at.IsZero() {
+		failureAt = &at
+	}
 	for _, e := range events {
 		eventType, eventSummary := taskFailureFromEvent(e)
 		if eventType == "" || eventSummary == "" {
@@ -295,11 +333,16 @@ func applyTaskFailureDiagnostics(d *orchdto.TaskDTO, t model.Task, events ...mod
 	d.LatestFailureType = firstNonEmpty(failureType, "task_failure")
 	d.LatestFailureAt = failureAt
 	current := taskFailureIsCurrent(t, d.CurrentHealth)
+	if v, ok := boolField(t.Context, "latest_failure_current"); ok {
+		current = v
+	}
 	d.LatestFailureCurrent = &current
 }
 
 func taskFailureFromEvent(e model.TaskEvent) (string, string) {
 	switch e.EventType {
+	case "branch_acceptance_rejected":
+		return "branch_hygiene_gate_failure", firstNonEmpty(stringField(e.Details, "reason"), stringField(e.Details, "error"), e.NewValue)
 	case recordTypeMergeResult:
 		if success, ok := boolField(e.Details, "success"); ok && success {
 			return "", ""
@@ -423,6 +466,24 @@ func toWorkerAttemptDTOFromDurable(attempt model.WorkerAttempt, a model.Agent, h
 	return d
 }
 
+func toTaskAttemptLeaseDTO(attempt model.WorkerAttempt) orchdto.TaskAttemptLeaseDTO {
+	d := orchdto.TaskAttemptLeaseDTO{
+		AttemptID:   attempt.ID.String(),
+		TaskID:      attempt.TaskID.String(),
+		WorkerID:    attempt.WorkerID,
+		ContainerID: attempt.ContainerID,
+		Role:        attempt.AgentType,
+		Branch:      attempt.Branch,
+		LeaseState:  attempt.State,
+		StartedAt:   attempt.CreatedAt,
+		UpdatedAt:   attempt.UpdatedAt,
+	}
+	if attempt.AgentID != nil {
+		d.AgentID = attempt.AgentID.String()
+	}
+	return d
+}
+
 func toWorkerAttemptDTOFromSpawn(e model.TaskEvent, a model.Agent, hasAgent bool) orchdto.WorkerAttemptDTO {
 	d := orchdto.WorkerAttemptDTO{
 		AttemptID:   firstNonEmpty(stringField(e.Details, "attempt_id"), e.ID.String()),
@@ -486,8 +547,15 @@ func evidenceFromEvent(e model.TaskEvent) (string, string) {
 	switch e.EventType {
 	case recordTypeCrash:
 		return "crash", firstNonEmpty(stringField(e.Details, "reason"), e.NewValue)
+	case "container_died":
+		if exitCode, ok := intField(e.Details, "exit_code"); ok && exitCode == 0 && !jsonBoolField(e.Details, "oom_killed") {
+			return "", ""
+		}
+		return "container_exit", firstNonEmpty(stringField(e.Details, "normalized_reason"), e.NewValue)
 	case recordTypeBuildError:
 		return "build_error", firstNonEmpty(stringField(e.Details, "message"), e.NewValue)
+	case "branch_acceptance_rejected":
+		return "branch_hygiene_gate_failure", firstNonEmpty(stringField(e.Details, "reason"), stringField(e.Details, "error"), e.NewValue)
 	case recordTypeTestResult:
 		if success, ok := boolField(e.Details, "success"); ok && success {
 			return "", ""
@@ -495,6 +563,34 @@ func evidenceFromEvent(e model.TaskEvent) (string, string) {
 		return "test_failure", firstNonEmpty(stringField(e.Details, "summary"), e.NewValue)
 	}
 	return "", ""
+}
+
+func intField(fields model.JSONField, key string) (int, bool) {
+	if fields == nil {
+		return 0, false
+	}
+	switch v := fields[key].(type) {
+	case int:
+		return v, true
+	case int64:
+		return int(v), true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
+}
+
+func timeField(fields model.JSONField, key string) time.Time {
+	if fields == nil {
+		return time.Time{}
+	}
+	s, _ := fields[key].(string)
+	if s == "" {
+		return time.Time{}
+	}
+	t, _ := time.Parse(time.RFC3339Nano, s)
+	return t
 }
 
 func attemptMatchesEvent(a orchdto.WorkerAttemptDTO, e model.TaskEvent) bool {

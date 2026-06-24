@@ -162,10 +162,25 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 	}
 
 	if allDone {
+		readiness, err := o.evaluateParentReadiness(parent, model.StatusTestReview)
+		if err != nil {
+			return fmt.Errorf("process test writing: parent readiness: %w", err)
+		}
+		if !readiness.Ready {
+			if err := o.recordParentReadinessBlocked(parent, model.StatusTestReview, readiness); err != nil {
+				return fmt.Errorf("process test writing: save readiness blockers: %w", err)
+			}
+			o.logger.Info("test review blocked by parent readiness", "task_id", parent.ID, "blockers", readiness.Blockers)
+			return nil
+		}
+
 		// All test subtasks done -> transition to TEST_REVIEW.
 		// Clear any blocking flags that may have been set by prior failure handling.
 		delete(parent.Context, "baseline_tests_failed")
 		delete(parent.Context, "needs_human_review")
+		delete(parent.Context, "parent_readiness_target")
+		delete(parent.Context, "parent_readiness_blockers")
+		delete(parent.Context, "parent_readiness_blocker_count")
 
 		pendingSourceLane, err := o.hasPendingSourceLaneSubtasks(parent.ID)
 		if err != nil {

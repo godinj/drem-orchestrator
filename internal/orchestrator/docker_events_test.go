@@ -134,6 +134,8 @@ func TestDispatchEvent_OOMTriggersHandleWorkerDeath(t *testing.T) {
 	var evts []model.TaskEvent
 	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "container_died").Find(&evts).Error)
 	require.Len(t, evts, 1)
+	require.Equal(t, "infra_oom_killed", evts[0].Details["normalized_reason"])
+	require.Equal(t, attempt.ID.String(), evts[0].Details["attempt_id"])
 }
 
 func TestDispatchEvent_ExitZeroNoReplacement(t *testing.T) {
@@ -153,6 +155,114 @@ func TestDispatchEvent_ExitZeroNoReplacement(t *testing.T) {
 	o.dispatchEvent(context.Background(), ev, tracker)
 
 	require.Empty(t, fake.spawnCalls, "exit 0 must not respawn")
+}
+
+func TestDispatchEvent_ExitZeroCurrentAttemptCompletesTaskAndAttempt(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	task := seedInFlightTask(t, o)
+	task.WorktreeBranch = ""
+	require.NoError(t, o.db.Save(task).Error)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-ok", "c-ok")
+
+	o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *attempt, 0, false), newReplacementTracker())
+
+	require.Empty(t, fake.spawnCalls, "exit 0 must not respawn")
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusDone, reloaded.Status)
+	require.Nil(t, reloaded.AssignedAgentID)
+
+	var completed model.WorkerAttempt
+	require.NoError(t, o.db.First(&completed, "id = ?", attempt.ID).Error)
+	require.Equal(t, model.WorkerAttemptCompleted, completed.State)
+	require.NotNil(t, completed.CompletedAt)
+
+	var evidence model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_completion_evidence").First(&evidence).Error)
+	require.Equal(t, "accepted", evidence.Details["evidence"].(map[string]any)["reason"])
+}
+
+func TestDispatchEvent_ExitZeroCompletesThroughBranchAcceptance(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	o.skipConstraintGate = true
+	fwt := o.worktree.(*FakeWorktreeManager)
+	fwt.Default = testutil.GetDefaultBranch(t, fwt.BarePath)
+	featureDir := t.TempDir()
+	testutil.AddWorktree(t, fwt.BarePath, "feature/accepted-exit-zero", featureDir)
+	testutil.CommitFile(t, featureDir, "app.go", "package app\n", "add app")
+	fwt.Features = map[string]string{"accepted-exit-zero": featureDir}
+
+	task := seedInFlightTask(t, o)
+	task.WorktreeBranch = "feature/accepted-exit-zero"
+	task.Context = model.JSONField{"estimated_files": []any{"app.go"}}
+	require.NoError(t, o.db.Save(task).Error)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-ok-branch", "c-ok-branch")
+	attempt.Branch = task.WorktreeBranch
+	require.NoError(t, o.db.Save(attempt).Error)
+
+	o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *attempt, 0, false), newReplacementTracker())
+
+	require.Empty(t, fake.spawnCalls, "exit 0 must complete rather than respawn")
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusDone, reloaded.Status)
+	require.Nil(t, reloaded.AssignedAgentID)
+	require.Contains(t, reloaded.Context, "branch_acceptance")
+
+	var accepted model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "branch_acceptance_accepted").First(&accepted).Error)
+	require.Equal(t, "accepted_worker_completion", accepted.Details["reason"])
+
+	var completed model.WorkerAttempt
+	require.NoError(t, o.db.First(&completed, "id = ?", attempt.ID).Error)
+	require.Equal(t, model.WorkerAttemptCompleted, completed.State)
+	require.NotNil(t, completed.CompletedAt)
+
+	var evidence model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_completion_evidence").First(&evidence).Error)
+	evidenceMap := evidence.Details["evidence"].(map[string]any)
+	require.Equal(t, "accepted", evidenceMap["reason"])
+	require.Equal(t, "exit_zero_current_attempt", evidenceMap["normalized_reason"])
+}
+
+func TestDispatchEvent_ExitZeroStaleAttemptDoesNotMutateCurrentAssignment(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	task := seedInFlightTask(t, o)
+	oldAttempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-old-ok", "c-old-ok")
+	oldAgentID := *oldAttempt.AgentID
+	now := time.Now()
+	oldAttempt.State = model.WorkerAttemptFailed
+	oldAttempt.CompletedAt = &now
+	require.NoError(t, o.db.Save(oldAttempt).Error)
+	require.NoError(t, o.db.Model(&model.Agent{}).Where("id = ?", oldAgentID).Updates(map[string]any{
+		"status":          model.AgentDead,
+		"current_task_id": nil,
+		"completed_at":    now,
+	}).Error)
+	current := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-current-ok", "c-current-ok")
+
+	o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *oldAttempt, 0, false), newReplacementTracker())
+
+	require.Empty(t, fake.spawnCalls)
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusInProgress, reloaded.Status)
+	require.NotNil(t, reloaded.AssignedAgentID)
+	require.Equal(t, *current.AgentID, *reloaded.AssignedAgentID)
+
+	var currentAgent model.Agent
+	require.NoError(t, o.db.First(&currentAgent, "id = ?", *current.AgentID).Error)
+	require.Equal(t, model.AgentWorking, currentAgent.Status)
+
+	var stale model.WorkerAttempt
+	require.NoError(t, o.db.First(&stale, "id = ?", oldAttempt.ID).Error)
+	require.Equal(t, model.WorkerAttemptFailed, stale.State)
+
+	var evidence model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_completion_evidence").First(&evidence).Error)
+	evidenceMap := evidence.Details["evidence"].(map[string]any)
+	require.Equal(t, "ignored", evidenceMap["reason"])
+	require.Equal(t, "stale_attempt", evidenceMap["normalized_reason"])
 }
 
 func TestDispatchEvent_ReplacementCapExhaustsAfterThreeAttempts(t *testing.T) {
@@ -185,6 +295,45 @@ func TestDispatchEvent_ReplacementCapExhaustsAfterThreeAttempts(t *testing.T) {
 	require.Equal(t, model.StatusFailed, reloaded.Status)
 }
 
+func TestDispatchEvent_RepeatedToolLoopExhaustsDurableRetryBudget(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	task := seedInFlightTask(t, o)
+	seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-loop-0", "c-loop-0")
+	tracker := newReplacementTracker()
+
+	first := currentAssignedWorkerAttempt(t, o, task.ID)
+	firstEvent := workerDeathEvent(task.ID, first, 1, false)
+	firstEvent.Labels["drem.failure_class"] = "tool_loop"
+	o.dispatchEvent(context.Background(), firstEvent, tracker)
+	require.Len(t, fake.spawnCalls, 1)
+
+	second := currentAssignedWorkerAttempt(t, o, task.ID)
+	secondEvent := workerDeathEvent(task.ID, second, 1, false)
+	secondEvent.Labels["drem.failure_class"] = "tool_loop"
+	o.dispatchEvent(context.Background(), secondEvent, tracker)
+
+	require.Len(t, fake.spawnCalls, 1, "exhausted tool-loop budget must not respawn again")
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusFailed, reloaded.Status)
+	require.Equal(t, failureClassToolLoop, reloaded.Context["latest_failure_type"])
+	require.Equal(t, true, reloaded.Context["latest_failure_retry_exhausted"])
+
+	budgets, ok := reloaded.Context[retryBudgetsContextKey].(map[string]any)
+	require.True(t, ok)
+	var found bool
+	for _, raw := range budgets {
+		entry, ok := raw.(map[string]any)
+		if !ok || entry["class"] != failureClassToolLoop {
+			continue
+		}
+		found = true
+		require.Equal(t, float64(2), entry["attempts"])
+		require.Equal(t, true, entry["exhausted"])
+	}
+	require.True(t, found, "expected persisted tool-loop budget")
+}
+
 func TestDispatchEvent_StaleDeathDoesNotKillCurrentAssignedWorker(t *testing.T) {
 	o, _, fake := dockerEventsTestRig(t)
 	task := seedInFlightTask(t, o)
@@ -211,6 +360,11 @@ func TestDispatchEvent_StaleDeathDoesNotKillCurrentAssignedWorker(t *testing.T) 
 	var currentAgent model.Agent
 	require.NoError(t, o.db.First(&currentAgent, "id = ?", *current.AgentID).Error)
 	require.Equal(t, model.AgentWorking, currentAgent.Status)
+
+	var event model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "container_died").First(&event).Error)
+	require.Equal(t, oldAttempt.ID.String(), event.Details["attempt_id"])
+	require.Equal(t, "tool_exit_nonzero", event.Details["normalized_reason"])
 }
 
 func TestDispatchEvent_ReviewerDeathRespawnsReviewer(t *testing.T) {

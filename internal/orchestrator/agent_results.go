@@ -269,6 +269,29 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		task.Context["scores"] = scoreImplGate(implScorePassed, implScoreFailed, implChangedFiles, "")
 	}
 
+	if featureBranch != "" && o.worktree != nil {
+		fn := strings.TrimPrefix(featureBranch, "feature/")
+		featureDir := o.worktree.FeatureWorktreePath(fn)
+		accepted, acceptErr := o.acceptWorkerBranchCompletion(context.Background(), ag, task, featureDir)
+		if acceptErr != nil {
+			return fmt.Errorf("on agent completed: branch acceptance: %w", acceptErr)
+		}
+		if !accepted {
+			ag.Status = model.AgentIdle
+			ag.CurrentTaskID = nil
+			if err := o.db.Save(ag).Error; err != nil {
+				return fmt.Errorf("on agent completed: save agent after branch rejection: %w", err)
+			}
+			task.AssignedAgentID = nil
+			if err := o.db.Save(task).Error; err != nil {
+				return fmt.Errorf("on agent completed: save task after branch rejection: %w", err)
+			}
+			o.emit("task_updated", task)
+			o.logger.Warn("branch acceptance rejected worker completion", "task_id", task.ID, "agent_id", ag.ID)
+			return nil
+		}
+	}
+
 	// Merge succeeded — clean up agent worktree.
 	if ag.WorktreeBranch != "" {
 		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
@@ -296,7 +319,23 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		if task.Status == target {
 			continue // already at or past this state
 		}
-		evt, err := state.TransitionTask(task, target, "orchestrator", map[string]any{"reason": "auto-fasttrack"})
+		evt, err := state.GuardedTransitionTask(task, state.TransitionRequest{
+			Target:         target,
+			Actor:          "orchestrator",
+			ExpectedStatus: task.Status,
+			Evidence: state.Evidence{
+				TaskID:           task.ID,
+				Actor:            "orchestrator",
+				Source:           "agent_completion",
+				Reason:           "auto-fasttrack",
+				NormalizedReason: "accepted_worker_completion",
+				Timestamp:        time.Now(),
+				References: map[string]any{
+					"agent_id": ag.ID.String(),
+					"target":   string(target),
+				},
+			},
+		})
 		if err != nil {
 			// If the transition is invalid, skip (state machine protects us).
 			o.logger.Debug("fast-track skip", "task_id", task.ID, "from", task.Status, "to", target, "error", err)
@@ -365,6 +404,7 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	if err != nil {
 		o.logger.Warn("planner produced no plan.json, will retry", "task_id", task.ID, "agent_id", ag.ID, "error", err)
 		task.AssignedAgentID = nil
+		consumeRetryBudget(task, retryEdgeForTask(*task, string(model.AgentPlanner)), failureClassPlannerValidation, err.Error(), time.Now())
 		o.incrementRetryCount(task)
 		return o.db.Save(task).Error
 	}
@@ -376,6 +416,7 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	if err := json.Unmarshal(planData, &rawPlan); err != nil {
 		o.logger.Warn("planner plan.json parse failed, will retry", "task_id", task.ID, "error", err)
 		task.AssignedAgentID = nil
+		consumeRetryBudget(task, retryEdgeForTask(*task, string(model.AgentPlanner)), failureClassPlannerValidation, err.Error(), time.Now())
 		o.incrementRetryCount(task)
 		return o.db.Save(task).Error
 	}
@@ -383,6 +424,7 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	if len(rawPlan.Subtasks) == 0 {
 		o.logger.Warn("planner produced empty plan, will retry", "task_id", task.ID)
 		task.AssignedAgentID = nil
+		consumeRetryBudget(task, retryEdgeForTask(*task, string(model.AgentPlanner)), failureClassPlannerValidation, "planner produced empty plan", time.Now())
 		o.incrementRetryCount(task)
 		return o.db.Save(task).Error
 	}
@@ -458,6 +500,7 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 			o.logger.Warn("plan validation failed, will retry",
 				"task_id", task.ID, "errors", validation.Errors)
 			task.AssignedAgentID = nil
+			consumeRetryBudget(task, retryEdgeForTask(*task, string(model.AgentPlanner)), failureClassPlannerValidation, fmt.Sprintf("plan validation failed: %v", validation.Errors), time.Now())
 			o.incrementRetryCount(task)
 			return o.db.Save(task).Error
 		}

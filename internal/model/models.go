@@ -119,6 +119,7 @@ type WorkerAttempt struct {
 	WorkerID                string     `gorm:"index"`
 	ContainerID             string     `gorm:"index"`
 	AgentType               string
+	Branch                  string `gorm:"not null;default:'';index"`
 	Image                   string
 	State                   string     `gorm:"not null;default:'reserved';index"`
 	CompletedAt             *time.Time `gorm:"index"`
@@ -130,9 +131,12 @@ type WorkerAttempt struct {
 }
 
 const (
-	WorkerAttemptReserved = "reserved"
-	WorkerAttemptRunning  = "running"
-	WorkerAttemptFailed   = "failed"
+	WorkerAttemptReserved   = "reserved"
+	WorkerAttemptRunning    = "running"
+	WorkerAttemptCompleted  = "completed"
+	WorkerAttemptFailed     = "failed"
+	WorkerAttemptAborted    = "aborted"
+	WorkerAttemptSuperseded = "superseded"
 )
 
 // TaskEvent records a status change or other significant event on a task.

@@ -307,6 +307,8 @@ func (o *Orchestrator) spawnPlannerHTTP(task *model.Task, project *model.Project
 			"duration_ms", res.DurationMS,
 		)
 	} else {
+		failureClass := normalizeFailureClass(res.FailureReason, res.FailureReason)
+		budget := consumeRetryBudget(task, retryEdgeForTask(*task, string(model.AgentPlanner)), failureClass, res.FailureReason, time.Now())
 		o.logger.Warn("planner http: dispatch did not produce a valid plan",
 			"task_id", task.ID,
 			"failure_reason", res.FailureReason,
@@ -315,6 +317,11 @@ func (o *Orchestrator) spawnPlannerHTTP(task *model.Task, project *model.Project
 			"task_id":        task.ID,
 			"failure_reason": res.FailureReason,
 		})
+		if budget.Exhausted {
+			return o.failTaskWithFailureEvidence(task,
+				fmt.Sprintf("planner retry budget exhausted for %s after %d failure(s)", failureClass, budget.Attempts),
+				failureClass, res.FailureReason, budget.LastAt, budget)
+		}
 	}
 
 	if err := o.db.Save(task).Error; err != nil {

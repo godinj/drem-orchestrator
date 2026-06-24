@@ -152,6 +152,9 @@ func (d DetailModel) View() string {
 		}
 		infoParts = append(infoParts, fmt.Sprintf("Branch: %s", branch))
 	}
+	if active := renderActiveAttemptsSummary(d.task.Context); active != "" {
+		infoParts = append(infoParts, "Active: "+active)
+	}
 	sections = append(sections, strings.Join(infoParts, "  |  "))
 
 	// Dependencies.
@@ -555,4 +558,56 @@ func (m Model) renderStatusBar() string {
 		return subtitleStyle.Render("  No tasks")
 	}
 	return "  " + strings.Join(badges, " ")
+}
+
+func renderActiveAttemptsSummary(ctx model.JSONField) string {
+	if ctx == nil {
+		return ""
+	}
+	raw, ok := ctx["active_attempts"].([]any)
+	if !ok || len(raw) == 0 {
+		if count, ok := ctx["active_attempt_count"].(float64); ok && count > 0 {
+			return fmt.Sprintf("%.0f", count)
+		}
+		return ""
+	}
+	parts := make([]string, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		part := strings.Join(nonEmptyStrings(
+			stringFromAny(m["lease_state"]),
+			stringFromAny(m["role"]),
+			stringFromAny(m["branch"]),
+			shortAttemptID(stringFromAny(m["attempt_id"])),
+		), "/")
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func stringFromAny(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func nonEmptyStrings(values ...string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func shortAttemptID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }

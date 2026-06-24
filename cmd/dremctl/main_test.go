@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
 
 const testTaskID = "12345678-1234-1234-1234-123456789abc"
@@ -86,10 +88,10 @@ func TestReadCommandsHitExpectedPaths(t *testing.T) {
 		{
 			name:      "tasks",
 			args:      []string{"tasks", "--status", "failed", "--limit", "5", "--offset", "10", "--include-archived"},
-			response:  []map[string]any{{"id": testTaskID, "title": "Fix it", "status": "failed", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z"), "assigned_worker": "w1"}},
+			response:  []map[string]any{{"id": testTaskID, "title": "Fix it", "status": "failed", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z"), "assigned_worker": "w1", "active_attempt_count": 1, "active_attempts": []map[string]any{{"attempt_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "role": "coder", "branch": "feature/x", "lease_state": "running"}}}},
 			wantPath:  "/projects/canvas/tasks",
 			wantQuery: []string{"status=failed", "limit=5", "offset=10", "include_archived=true"},
-			wantOut:   "Fix it",
+			wantOut:   "running/coder/feature/x/aaaaaaaa",
 		},
 		{
 			name:     "workers",
@@ -188,13 +190,15 @@ func TestHealthIssuesCommandHitsExpectedPath(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = recordRequest(t, r)
 		writeJSONResponse(t, w, []map[string]any{{
-			"type":        "stale_assigned_worker",
+			"type":        "duplicate_active_attempts",
 			"severity":    "warning",
 			"task_id":     testTaskID,
-			"worker_id":   "worker-1",
+			"role":        "coder",
+			"branch":      "feature/x",
+			"attempt_ids": []string{"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"},
 			"status":      "in_progress",
 			"detected_at": rfc3339("2026-04-24T10:00:00Z"),
-			"message":     "assigned worker is dead",
+			"message":     "2 active attempts share task, role, and branch",
 		}})
 	}))
 	defer ts.Close()
@@ -210,8 +214,43 @@ func TestHealthIssuesCommandHitsExpectedPath(t *testing.T) {
 	if got.Path != "/projects/canvas/health/issues" {
 		t.Fatalf("path = %s, want /projects/canvas/health/issues", got.Path)
 	}
-	if !strings.Contains(out.String(), "stale_assigned_worker") || !strings.Contains(out.String(), "assigned worker is dead") {
+	if !strings.Contains(out.String(), "duplicate_active_attempts") || !strings.Contains(out.String(), "coder") || !strings.Contains(out.String(), "feature/x") || !strings.Contains(out.String(), "aaaaaaaa,bbbbbbbb") {
 		t.Fatalf("unexpected output: %q", out.String())
+	}
+}
+
+func TestRenderHealthIssuesIncludesBlockedDependencyAndGateFailure(t *testing.T) {
+	var out bytes.Buffer
+	err := renderHealthIssues(&out, false, []orchdto.HealthIssueDTO{
+		{
+			Type:     "parent_readiness_blocked",
+			Severity: "warning",
+			TaskID:   testTaskID,
+			Message:  "parent blocked",
+			BlockedDependencies: []orchdto.BlockedDependencyDTO{{
+				TaskID:       testTaskID,
+				DependencyID: "abcdef12-1234-1234-1234-123456789abc",
+				Status:       "in_progress",
+			}},
+		},
+		{
+			Type:     "branch_hygiene_gate_failure",
+			Severity: "warning",
+			TaskID:   testTaskID,
+			GateFailure: &orchdto.GateFailureDTO{
+				Gate:    "branch_hygiene",
+				Reason:  "branch_contamination",
+				Message: "trace file committed",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("renderHealthIssues returned error: %v", err)
+	}
+	for _, want := range []string{"dep=abcdef12", "status=in_progress", "gate_reason=branch_contamination"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("output %q missing %q", out.String(), want)
+		}
 	}
 }
 

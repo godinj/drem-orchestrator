@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -381,6 +382,28 @@ func (o *Orchestrator) recordSubtaskDispatchBlocked(parent *model.Task, filterPh
 			"reason":  d.Reason,
 		})
 	}
+	sort.Slice(details, func(i, j int) bool {
+		return fmt.Sprint(details[i]["task_id"]) < fmt.Sprint(details[j]["task_id"])
+	})
+	blockedState := model.JSONField{
+		"phase_filter": filterPhase,
+		"counts":       counts,
+		"blocked":      details,
+	}
+	signature := blockedEvidenceSignature(blockedState)
+	if parent.Context == nil {
+		parent.Context = make(model.JSONField)
+	}
+	previousSignature, _ := parent.Context["subtask_dispatch_blocked_signature"].(string)
+	parent.Context["subtask_dispatch_blocked"] = blockedState
+	parent.Context["subtask_dispatch_blocked_signature"] = signature
+	if err := o.db.Save(parent).Error; err != nil {
+		o.logger.Error("record subtask dispatch blocked state", "parent_id", parent.ID, "error", err)
+		return
+	}
+	if previousSignature == signature {
+		return
+	}
 
 	event := &model.TaskEvent{
 		ID:        uuid.New(),
@@ -396,6 +419,10 @@ func (o *Orchestrator) recordSubtaskDispatchBlocked(parent *model.Task, filterPh
 		Actor:     "orchestrator",
 		CreatedAt: time.Now(),
 	}
+	if err := model.ValidateTaskEventDetails(event.Details); err != nil {
+		o.logger.Error("record subtask dispatch blocked event validation", "parent_id", parent.ID, "error", err)
+		return
+	}
 	if err := o.db.Create(event).Error; err != nil {
 		o.logger.Error("record subtask dispatch blocked event", "parent_id", parent.ID, "error", err)
 	}
@@ -405,6 +432,14 @@ func (o *Orchestrator) recordSubtaskDispatchBlocked(parent *model.Task, filterPh
 		"counts":       counts,
 		"blocked":      details,
 	})
+}
+
+func blockedEvidenceSignature(fields model.JSONField) string {
+	b, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Sprint(fields)
+	}
+	return string(b)
 }
 
 func classifyDispatchBlockReason(reason string) string {

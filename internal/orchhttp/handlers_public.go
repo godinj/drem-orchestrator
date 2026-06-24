@@ -430,12 +430,16 @@ func (s *Server) handleListEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]orchdto.EventDTO, 0, len(events))
 	for _, e := range events {
+		details := e.Details
+		if details == nil && e.EventType == model.TaskEventQuarantined {
+			details = model.JSONField{"quarantined": true}
+		}
 		payload, _ := json.Marshal(map[string]any{
 			"task_id":   e.TaskID.String(),
 			"old_value": e.OldValue,
 			"new_value": e.NewValue,
 			"actor":     e.Actor,
-			"details":   e.Details,
+			"details":   details,
 		})
 		out = append(out, orchdto.EventDTO{
 			Timestamp: e.CreatedAt,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
 // replacementCap is the per-task maximum number of container replacements
@@ -110,9 +111,10 @@ func (o *Orchestrator) dispatchEvent(ctx context.Context, ev container.Event, tr
 		}
 		o.recordContainerLifecycleEvent(taskID, ev)
 
-		// Exit 0 is a normal completion: no replacement, no respawn.
-		// Authoritative OOMKilled flag overrides any zero exit code.
+		// Exit 0 is completion evidence for the current attempt. Authoritative
+		// OOMKilled flag overrides any zero exit code.
 		if ev.ExitCode == 0 && !ev.OOMKilled {
+			o.handleWorkerExitZero(ctx, taskID, ev)
 			return
 		}
 
@@ -143,6 +145,65 @@ func (o *Orchestrator) dispatchEvent(ctx context.Context, ev container.Event, tr
 		// Destroy is emitted post-Destroy; no state machine impact.
 		return
 	}
+}
+
+func (o *Orchestrator) handleWorkerExitZero(ctx context.Context, taskID uuid.UUID, ev container.Event) {
+	var task model.Task
+	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
+		o.logger.Warn("docker completion event: task not found", "task_id", taskID, "error", err)
+		return
+	}
+	if isTerminal(task.Status) {
+		o.recordWorkerCompletionEvidence(taskID, nil, ev, "ignored", "terminal_task")
+		return
+	}
+
+	attempt, ok := o.workerAttemptForDeathEvent(task.ID, ev)
+	if !ok {
+		o.recordWorkerCompletionEvidence(taskID, nil, ev, "ignored", "unmatched_attempt")
+		o.logger.Warn("docker completion event has no matching worker attempt",
+			"task_id", task.ID, "container_id", ev.ContainerID,
+			"worker_id", ev.Labels["drem.worker_id"])
+		return
+	}
+	if !currentAssignedAttempt(&task, attempt) {
+		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "ignored", "stale_attempt")
+		o.logger.Info("ignoring stale docker completion event for non-current attempt",
+			"task_id", task.ID, "container_id", ev.ContainerID,
+			"worker_id", ev.Labels["drem.worker_id"], "attempt_id", attempt.ID)
+		return
+	}
+	if attempt.AgentID == nil {
+		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "ignored", "attempt_without_agent")
+		return
+	}
+
+	if err := o.synthesizeCompletion(*attempt.AgentID); err != nil {
+		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "completion_synthesis_failed")
+		o.logger.Error("docker completion event: synthesize completion", "task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+		return
+	}
+
+	var accepted model.Task
+	if err := o.db.First(&accepted, "id = ?", taskID).Error; err != nil {
+		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "accepted_task_reload_failed")
+		o.logger.Error("docker completion event: reload accepted task", "task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+		return
+	}
+	if accepted.Status != model.StatusDone {
+		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "branch_acceptance_pending")
+		return
+	}
+	now := time.Now()
+	res := o.db.Model(&model.WorkerAttempt{}).
+		Where("id = ? AND task_id = ? AND completed_at IS NULL", attempt.ID, taskID).
+		Updates(map[string]any{"state": model.WorkerAttemptCompleted, "completed_at": &now})
+	if res.Error != nil {
+		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "attempt_completion_update_failed")
+		o.logger.Error("docker completion event: mark attempt completed", "task_id", task.ID, "attempt_id", attempt.ID, "error", res.Error)
+		return
+	}
+	o.recordWorkerCompletionEvidence(taskID, attempt, ev, "accepted", "exit_zero_current_attempt")
 }
 
 // parseTaskIDFromLabels extracts the drem.task_id label value as a UUID.
@@ -191,11 +252,25 @@ func currentAssignedAttempt(task *model.Task, attempt *model.WorkerAttempt) bool
 func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, attempt *model.WorkerAttempt, ev container.Event, tracker *replacementTracker) {
 	now := time.Now()
 	o.markWorkerAttemptDead(task, attempt, ev, now)
+	failureClass := normalizeFailureClass(normalizedDockerExitReason(ev), fmt.Sprintf("exit_code=%d oom=%t", ev.ExitCode, ev.OOMKilled))
+	budget := consumeRetryBudget(task, retryEdgeForTask(*task, attempt.AgentType), failureClass,
+		fmt.Sprintf("worker %s container %s exited with %s", attempt.AgentType, ev.ContainerID, failureClass), now)
+	if budget.Exhausted {
+		reason := fmt.Sprintf("retry budget exhausted for %s on %s after %d failure(s)", failureClass, budget.Edge, budget.Attempts)
+		if err := o.failTaskWithFailureEvidence(task, reason, failureClass, budget.LastSummary, now, budget); err != nil {
+			o.logger.Error("handle worker death: fail task after retry budget", "task_id", task.ID, "error", err)
+		}
+		return
+	}
+	if err := o.db.Save(task).Error; err != nil {
+		o.logger.Error("handle worker death: save retry budget", "task_id", task.ID, "error", err)
+		return
+	}
 	attempts := tracker.recordAndCount(task.ID, now)
 	if attempts > replacementCap {
 		reason := fmt.Sprintf("worker death cap exceeded (%d/%d in %s)",
 			attempts, replacementCap, replacementWindow)
-		if err := o.failTask(task, reason); err != nil {
+		if err := o.failTaskWithFailureEvidence(task, reason, failureClass, budget.LastSummary, now, budget); err != nil {
 			o.logger.Error("handle worker death: fail task", "task_id", task.ID, "error", err)
 		}
 		return
@@ -280,25 +355,100 @@ func (o *Orchestrator) markWorkerAttemptDead(task *model.Task, attempt *model.Wo
 // container death so the audit trail (user story 49 + Kyle's "what happened
 // when") is complete regardless of whether the death triggered a respawn.
 func (o *Orchestrator) recordContainerLifecycleEvent(taskID uuid.UUID, ev container.Event) {
+	attempt, _ := o.workerAttemptForDeathEvent(taskID, ev)
+	normalizedReason := normalizedDockerExitReason(ev)
 	detail := model.JSONField{
-		"container_id": ev.ContainerID,
-		"exit_code":    ev.ExitCode,
-		"oom_killed":   ev.OOMKilled,
-		"event_type":   string(ev.Type),
-		"worker_id":    ev.Labels["drem.worker_id"],
-		"agent_type":   ev.Labels["drem.agent_type"],
+		"container_id":      ev.ContainerID,
+		"exit_code":         ev.ExitCode,
+		"oom_killed":        ev.OOMKilled,
+		"event_type":        string(ev.Type),
+		"worker_id":         ev.Labels["drem.worker_id"],
+		"agent_type":        ev.Labels["drem.agent_type"],
+		"normalized_reason": normalizedReason,
+	}
+	if attempt != nil {
+		detail["attempt_id"] = attempt.ID.String()
+		detail["attempt_state"] = attempt.State
 	}
 	evt := &model.TaskEvent{
 		ID:        uuid.New(),
 		TaskID:    taskID,
 		EventType: "container_died",
 		OldValue:  "",
-		NewValue:  string(ev.Type),
+		NewValue:  normalizedReason,
 		Details:   detail,
 		Actor:     "docker-events",
 		CreatedAt: time.Now(),
 	}
 	if err := o.db.Create(evt).Error; err != nil {
 		o.logger.Error("record container death event", "task_id", taskID, "error", err)
+	}
+}
+
+func normalizedDockerExitReason(ev container.Event) string {
+	if labelReason := ev.Labels["drem.failure_class"]; labelReason != "" {
+		return normalizeFailureClass(labelReason, ev.Labels["drem.exit_summary"])
+	}
+	if ev.OOMKilled {
+		return "infra_oom_killed"
+	}
+	if ev.ExitCode == 0 {
+		return "exit_zero"
+	}
+	switch ev.ExitCode {
+	case 124:
+		return "infra_timeout"
+	case 126, 127:
+		return "tool_command_failure"
+	case 130, 137, 143:
+		return "infra_terminated"
+	default:
+		return "tool_exit_nonzero"
+	}
+}
+
+func (o *Orchestrator) recordWorkerCompletionEvidence(taskID uuid.UUID, attempt *model.WorkerAttempt, ev container.Event, outcome, normalizedReason string) {
+	evidence := state.Evidence{
+		TaskID:           taskID,
+		Actor:            "docker-events",
+		Source:           "docker_exit_zero",
+		Reason:           outcome,
+		NormalizedReason: normalizedReason,
+		Timestamp:        time.Now(),
+		References: map[string]any{
+			"container_id": ev.ContainerID,
+			"exit_code":    ev.ExitCode,
+			"worker_id":    ev.Labels["drem.worker_id"],
+			"agent_type":   ev.Labels["drem.agent_type"],
+			"outcome":      outcome,
+		},
+	}
+	if attempt != nil {
+		evidence.AttemptID = attempt.ID
+	}
+	evt := &model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    taskID,
+		EventType: "worker_completion_evidence",
+		Details: model.JSONField{
+			"evidence": map[string]any{
+				"task_id":           evidence.TaskID.String(),
+				"attempt_id":        evidence.AttemptID.String(),
+				"actor":             evidence.Actor,
+				"source":            evidence.Source,
+				"reason":            evidence.Reason,
+				"normalized_reason": evidence.NormalizedReason,
+				"timestamp":         evidence.Timestamp.Format(time.RFC3339Nano),
+				"references":        evidence.References,
+			},
+		},
+		Actor:     evidence.Actor,
+		CreatedAt: evidence.Timestamp,
+	}
+	if evidence.AttemptID == uuid.Nil {
+		evt.Details["evidence"].(map[string]any)["attempt_id"] = ""
+	}
+	if err := o.db.Create(evt).Error; err != nil {
+		o.logger.Error("record worker completion evidence", "task_id", taskID, "error", err)
 	}
 }

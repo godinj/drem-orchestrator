@@ -90,6 +90,11 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		if err := enrichIngestTaskIDs(tx, rows); err != nil {
 			return err
 		}
+		for i := range rows {
+			if err := model.ValidateTaskEventDetails(rows[i].Details); err != nil {
+				return err
+			}
+		}
 		if err := tx.Create(&rows).Error; err != nil {
 			return err
 		}

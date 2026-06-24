@@ -141,7 +141,8 @@ func TestScheduleSubtasks_TestPhaseUnmetImplementationDependencyRecordsDiagnosti
 	entry, ok := blocked[0].(map[string]any)
 	require.True(t, ok, "blocked entry should be an object: %#v", blocked[0])
 	reason, _ := entry["reason"].(string)
-	assert.Contains(t, reason, "unmet dependencies")
+	assert.Contains(t, reason, "mixed-phase dependency blocker")
+	assert.Contains(t, reason, "cannot run during test_writing")
 	assert.Contains(t, reason, impl.ID.String())
 	assert.Contains(t, reason, string(model.StatusBacklog))
 
@@ -155,6 +156,46 @@ func TestScheduleSubtasks_TestPhaseUnmetImplementationDependencyRecordsDiagnosti
 	var reloaded model.Task
 	require.NoError(t, db.First(&reloaded, "id = ?", testTask.ID).Error)
 	assert.Equal(t, model.StatusBacklog, reloaded.Status)
+}
+
+func TestScheduleSubtasks_UnchangedDispatchBlockersDoNotEmitDuplicateEvents(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	project := testutil.CreateProject(t, db, "test-project", "/tmp/bare", "master")
+	events := make(chan Event, 100)
+	o := &Orchestrator{
+		db:        db,
+		projectID: project.ID,
+		logger:    slog.Default(),
+		events:    events,
+	}
+
+	parent := testutil.CreateTask(t, db, project.ID, "parent", model.StatusInProgress)
+	dependency := testutil.CreateTask(t, db, project.ID, "dependency", model.StatusBacklog)
+	subtask := model.Task{
+		ID:            uuid.New(),
+		ProjectID:     project.ID,
+		ParentTaskID:  &parent.ID,
+		Title:         "blocked subtask",
+		Description:   "blocked subtask",
+		Status:        model.StatusBacklog,
+		DependencyIDs: model.JSONArray{dependency.ID.String()},
+	}
+	require.NoError(t, db.Create(&subtask).Error)
+
+	require.NoError(t, o.scheduleSubtasks(&parent))
+	require.NoError(t, o.scheduleSubtasks(&parent))
+
+	var count int64
+	require.NoError(t, db.Model(&model.TaskEvent{}).
+		Where("task_id = ? AND event_type = ?", parent.ID, "subtask_dispatch_blocked").
+		Count(&count).Error)
+	assert.EqualValues(t, 1, count)
+
+	var reloaded model.Task
+	require.NoError(t, db.First(&reloaded, "id = ?", parent.ID).Error)
+	blocked, ok := reloaded.Context["subtask_dispatch_blocked"].(map[string]any)
+	require.True(t, ok, "blocked evidence should be durable in context: %#v", reloaded.Context)
+	assert.NotEmpty(t, blocked["blocked"])
 }
 
 // TestDispatchPendingSubtasks_SkipsTerminalParents verifies that

@@ -292,7 +292,7 @@ func TestProcessTestWriting_AllTestSubtasksDone_TransitionsToTestReview(t *testi
 	}
 }
 
-func TestProcessTestWriting_FutureTestSubtasksDoNotBlockTestReview(t *testing.T) {
+func TestProcessTestWriting_FutureTestSubtasksBlockTestReview(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
@@ -350,8 +350,12 @@ func TestProcessTestWriting_FutureTestSubtasksDoNotBlockTestReview(t *testing.T)
 
 	var updated model.Task
 	db.First(&updated, "id = ?", parentID)
-	if updated.Status != model.StatusTestReview {
-		t.Errorf("expected parent status test_review, got %s", updated.Status)
+	if updated.Status != model.StatusTestWriting {
+		t.Errorf("expected parent status test_writing, got %s", updated.Status)
+	}
+	blockers, _ := updated.Context["parent_readiness_blockers"].(string)
+	if !strings.Contains(blockers, "dependency-blocked") || !strings.Contains(blockers, implSub.ID.String()) {
+		t.Fatalf("expected dependency blocker for future test subtask, got %q", blockers)
 	}
 }
 
@@ -2314,6 +2318,90 @@ func TestOnAgentCompleted_TestWritingParent_AllTestSubtasksDone(t *testing.T) {
 	db.First(&updatedParent, "id = ?", parentID)
 	if updatedParent.Status != model.StatusTestReview {
 		t.Errorf("expected parent status test_review, got %s", updatedParent.Status)
+	}
+}
+
+func TestProcessTestWriting_BlocksTestReviewWithDependencyBlockedTestChild(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	db.Create(&project)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID:          parentID,
+		ProjectID:   o.projectID,
+		Title:       "parent-tw-blocked",
+		Description: "parent in test_writing",
+		Status:      model.StatusTestWriting,
+	}
+	db.Create(&parent)
+
+	implSub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "impl dependency",
+		Description:  "implementation subtask",
+		Status:       model.StatusBacklog,
+		Phase:        "implementation",
+	}
+	db.Create(&implSub)
+
+	doneTest := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    o.projectID,
+		ParentTaskID: &parentID,
+		Title:        "test already done",
+		Description:  "test subtask",
+		Status:       model.StatusDone,
+		Phase:        "test",
+	}
+	db.Create(&doneTest)
+
+	blockedTest := model.Task{
+		ID:            uuid.New(),
+		ProjectID:     o.projectID,
+		ParentTaskID:  &parentID,
+		Title:         "test blocked by impl",
+		Description:   "test subtask",
+		Status:        model.StatusBacklog,
+		Phase:         "test",
+		DependencyIDs: model.JSONArray{implSub.ID.String()},
+	}
+	db.Create(&blockedTest)
+
+	if err := o.processTestWriting(&parent); err != nil {
+		t.Fatalf("processTestWriting error: %v", err)
+	}
+
+	var updated model.Task
+	db.First(&updated, "id = ?", parentID)
+	if updated.Status != model.StatusTestWriting {
+		t.Fatalf("expected parent to remain test_writing, got %s", updated.Status)
+	}
+	blockers, _ := updated.Context["parent_readiness_blockers"].(string)
+	if !strings.Contains(blockers, "dependency-blocked") || !strings.Contains(blockers, implSub.ID.String()) {
+		t.Fatalf("expected parent readiness blocker for impl dependency, got %q", blockers)
+	}
+
+	var event model.TaskEvent
+	if err := db.Where("task_id = ? AND event_type = ?", parentID, "subtask_dispatch_blocked").First(&event).Error; err != nil {
+		t.Fatalf("expected subtask_dispatch_blocked event: %v", err)
+	}
+	blocked, ok := event.Details["blocked"].([]any)
+	if !ok || len(blocked) != 1 {
+		t.Fatalf("expected one blocked dispatch detail, got %#v", event.Details["blocked"])
+	}
+	entry, ok := blocked[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected blocked entry object, got %#v", blocked[0])
+	}
+	reason, _ := entry["reason"].(string)
+	if !strings.Contains(reason, "mixed-phase dependency blocker") {
+		t.Fatalf("expected mixed-phase blocker reason, got %q", reason)
 	}
 }
 

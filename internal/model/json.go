@@ -49,7 +49,12 @@ func (j *JSONField) Scan(value any) error {
 		// and wrap in a map so the caller always gets map[string]any.
 		var arr []any
 		if arrErr := json.Unmarshal(data, &arr); arrErr != nil {
-			return fmt.Errorf("unmarshal JSONField: %w", err)
+			*j = map[string]any{
+				"quarantined": true,
+				"diagnostic":  "malformed_json_details",
+				"raw":         string(data),
+			}
+			return nil
 		}
 		*j = map[string]any{"items": arr}
 		return nil

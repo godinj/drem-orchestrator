@@ -145,6 +145,7 @@ func (s *Store) RecordSpawn(ctx context.Context, r SpawnRecord) (Handle, error) 
 		WorkerID:                r.WorkerID,
 		ContainerID:             r.ContainerID,
 		AgentType:               r.AgentType,
+		Branch:                  r.Branch,
 		Image:                   r.Image,
 		State:                   model.WorkerAttemptRunning,
 		PromptAssetVersionsJSON: r.PromptAssetVersionsJSON,
@@ -181,9 +182,9 @@ func (s *Store) ReserveSpawn(ctx context.Context, r SpawnRecord) (Reservation, e
 			return ErrTaskAlreadyClaimed
 		}
 		if err := tx.Model(&model.WorkerAttempt{}).
-			Where("task_id = ? AND agent_type = ? AND completed_at IS NULL", task.ID, r.AgentType).
+			Where("task_id = ? AND agent_type = ? AND branch = ? AND completed_at IS NULL", task.ID, r.AgentType, r.Branch).
 			Updates(map[string]any{
-				"state":        model.WorkerAttemptFailed,
+				"state":        model.WorkerAttemptSuperseded,
 				"completed_at": &now,
 			}).Error; err != nil {
 			return fmt.Errorf("close stale attempts: %w", err)
@@ -212,6 +213,7 @@ func (s *Store) ReserveSpawn(ctx context.Context, r SpawnRecord) (Reservation, e
 			AgentID:                 &ag.ID,
 			WorkerID:                r.WorkerID,
 			AgentType:               r.AgentType,
+			Branch:                  r.Branch,
 			Image:                   r.Image,
 			State:                   model.WorkerAttemptReserved,
 			PromptAssetVersionsJSON: r.PromptAssetVersionsJSON,
@@ -259,23 +261,23 @@ func (s *Store) FinalizeSpawn(ctx context.Context, res Reservation, containerID 
 		if err := tx.First(&ag, "id = ?", res.AgentID).Error; err != nil {
 			return fmt.Errorf("load agent: %w", err)
 		}
-		ag.TmuxSession = containerID
-		if err := tx.Save(&ag).Error; err != nil {
-			return fmt.Errorf("update agent: %w", err)
-		}
-
 		updates := map[string]any{
 			"container_id": containerID,
 			"state":        model.WorkerAttemptRunning,
 		}
 		result := tx.Model(&model.WorkerAttempt{}).
-			Where("id = ? AND state = ?", res.AttemptID, model.WorkerAttemptReserved).
+			Where("id = ? AND agent_id = ? AND task_id = ? AND state = ?", res.AttemptID, res.AgentID, res.TaskID, model.WorkerAttemptReserved).
 			Updates(updates)
 		if result.Error != nil {
 			return fmt.Errorf("update attempt: %w", result.Error)
 		}
 		if result.RowsAffected != 1 {
 			return fmt.Errorf("attempt is not reserved")
+		}
+
+		ag.TmuxSession = containerID
+		if err := tx.Save(&ag).Error; err != nil {
+			return fmt.Errorf("update agent: %w", err)
 		}
 		return nil
 	})
@@ -299,16 +301,20 @@ func (s *Store) AbortReservation(ctx context.Context, res Reservation, reason st
 	now := time.Now()
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		updates := map[string]any{
-			"state":        model.WorkerAttemptFailed,
+			"state":        model.WorkerAttemptAborted,
 			"completed_at": &now,
 		}
 		if reason != "" {
 			updates["container_id"] = ""
 		}
-		if err := tx.Model(&model.WorkerAttempt{}).
-			Where("id = ?", res.AttemptID).
-			Updates(updates).Error; err != nil {
-			return fmt.Errorf("mark attempt failed: %w", err)
+		attemptResult := tx.Model(&model.WorkerAttempt{}).
+			Where("id = ? AND agent_id = ? AND task_id = ? AND state IN ?", res.AttemptID, res.AgentID, res.TaskID, []string{model.WorkerAttemptReserved, model.WorkerAttemptRunning}).
+			Updates(updates)
+		if attemptResult.Error != nil {
+			return fmt.Errorf("mark attempt aborted: %w", attemptResult.Error)
+		}
+		if attemptResult.RowsAffected != 1 {
+			return nil
 		}
 
 		if err := tx.Model(&model.Agent{}).
@@ -365,6 +371,9 @@ func (s *Store) ForAgent(ctx context.Context, agentID uuid.UUID) (Handle, error)
 		if h.ContainerID == "" {
 			h.ContainerID = attempt.ContainerID
 		}
+		if h.Branch == "" {
+			h.Branch = attempt.Branch
+		}
 	}
 	return h, nil
 }
@@ -380,6 +389,7 @@ func (s *Store) ForAttempt(ctx context.Context, attemptID uuid.UUID) (Handle, er
 		WorkerID:    attempt.WorkerID,
 		ContainerID: attempt.ContainerID,
 		AgentType:   attempt.AgentType,
+		Branch:      attempt.Branch,
 		Image:       attempt.Image,
 		Runtime:     RuntimeContainer,
 	}
@@ -395,6 +405,9 @@ func (s *Store) ForAttempt(ctx context.Context, attemptID uuid.UUID) (Handle, er
 	agentHandle.Image = attempt.Image
 	if agentHandle.ContainerID == "" {
 		agentHandle.ContainerID = attempt.ContainerID
+	}
+	if agentHandle.Branch == "" {
+		agentHandle.Branch = attempt.Branch
 	}
 	return agentHandle, nil
 }

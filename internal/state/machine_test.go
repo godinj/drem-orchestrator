@@ -1,6 +1,7 @@
 package state
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -226,5 +227,121 @@ func TestTransitionTask_InvalidTransition(t *testing.T) {
 	}
 	if task.Status != model.StatusTestWriting {
 		t.Errorf("task.Status should remain %q after failed transition, got %q", model.StatusTestWriting, task.Status)
+	}
+}
+
+func TestGuardedTransitionTask_RecordsEvidenceEnvelope(t *testing.T) {
+	now := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	task := &model.Task{
+		ID:        uuid.New(),
+		Status:    model.StatusInProgress,
+		UpdatedAt: now.Add(-time.Minute),
+	}
+	attemptID := uuid.New()
+
+	event, err := GuardedTransitionTask(task, TransitionRequest{
+		Target:         model.StatusTestingReady,
+		ExpectedStatus: model.StatusInProgress,
+		Evidence: Evidence{
+			TaskID:           task.ID,
+			AttemptID:        attemptID,
+			Actor:            "orchestrator",
+			Source:           "docker-events",
+			Reason:           "container exited zero after watchdog push",
+			NormalizedReason: "worker_completed",
+			Timestamp:        now,
+			References: map[string]any{
+				"container_id": "container-1",
+				"branch":       "feature/task",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GuardedTransitionTask returned error: %v", err)
+	}
+
+	if task.Status != model.StatusTestingReady {
+		t.Fatalf("task.Status = %q, want %q", task.Status, model.StatusTestingReady)
+	}
+	if !task.UpdatedAt.Equal(now) {
+		t.Fatalf("task.UpdatedAt = %v, want %v", task.UpdatedAt, now)
+	}
+	if event.Actor != "orchestrator" {
+		t.Fatalf("event.Actor = %q, want orchestrator", event.Actor)
+	}
+	if !event.CreatedAt.Equal(now) {
+		t.Fatalf("event.CreatedAt = %v, want %v", event.CreatedAt, now)
+	}
+	evidence, ok := event.Details["evidence"].(map[string]any)
+	if !ok {
+		t.Fatalf("event details missing evidence envelope: %#v", event.Details)
+	}
+	if evidence["task_id"] != task.ID.String() {
+		t.Fatalf("evidence task_id = %v, want %s", evidence["task_id"], task.ID)
+	}
+	if evidence["attempt_id"] != attemptID.String() {
+		t.Fatalf("evidence attempt_id = %v, want %s", evidence["attempt_id"], attemptID)
+	}
+	if evidence["normalized_reason"] != "worker_completed" {
+		t.Fatalf("evidence normalized_reason = %v, want worker_completed", evidence["normalized_reason"])
+	}
+}
+
+func TestGuardedTransitionTask_RequiresEvidence(t *testing.T) {
+	task := &model.Task{ID: uuid.New(), Status: model.StatusInProgress}
+
+	_, err := GuardedTransitionTask(task, TransitionRequest{
+		Target: model.StatusTestingReady,
+		Evidence: Evidence{
+			TaskID: task.ID,
+			Actor:  "orchestrator",
+			Source: "docker-events",
+		},
+	})
+	if !errors.Is(err, ErrMissingEvidence) {
+		t.Fatalf("GuardedTransitionTask error = %v, want ErrMissingEvidence", err)
+	}
+	if task.Status != model.StatusInProgress {
+		t.Fatalf("task.Status = %q, want unchanged", task.Status)
+	}
+}
+
+func TestGuardedTransitionTask_RejectsStaleObservedStatus(t *testing.T) {
+	task := &model.Task{ID: uuid.New(), Status: model.StatusTestingReady}
+
+	_, err := GuardedTransitionTask(task, TransitionRequest{
+		Target:         model.StatusMerging,
+		ExpectedStatus: model.StatusInProgress,
+		Evidence: Evidence{
+			TaskID:           task.ID,
+			Actor:            "dremctl",
+			Source:           "recovery-api",
+			NormalizedReason: "operator_recovery",
+		},
+	})
+	if !errors.Is(err, ErrStaleTransition) {
+		t.Fatalf("GuardedTransitionTask error = %v, want ErrStaleTransition", err)
+	}
+	if task.Status != model.StatusTestingReady {
+		t.Fatalf("task.Status = %q, want unchanged", task.Status)
+	}
+}
+
+func TestGuardedTransitionTask_RejectsStaleObservedUpdatedAt(t *testing.T) {
+	observed := time.Date(2026, 6, 23, 12, 0, 0, 0, time.UTC)
+	task := &model.Task{ID: uuid.New(), Status: model.StatusInProgress, UpdatedAt: observed.Add(time.Second)}
+
+	_, err := GuardedTransitionTask(task, TransitionRequest{
+		Target:            model.StatusTestingReady,
+		ObservedUpdatedAt: &observed,
+		Evidence: Evidence{
+			TaskID:           task.ID,
+			Actor:            "orchestrator",
+			Source:           "completion-reconciler",
+			NormalizedReason: "worker_completed",
+		},
+	})
+	if !errors.Is(err, ErrStaleTransition) {
+		t.Fatalf("GuardedTransitionTask error = %v, want ErrStaleTransition", err)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/branchpolicy"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
@@ -167,6 +168,89 @@ func pushTestFeatureBranch(t *testing.T, bareRepo, branch string) {
 	work := t.TempDir()
 	testutil.AddWorktree(t, bareRepo, branch, work)
 	testutil.CommitFile(t, work, "seed.txt", "seed\n", "seed "+branch)
+}
+
+func TestSpawnCoder_PreflightRejectsNonWritableBranchMetadata(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
+	o, fake, bareRepo := workerSpawnTestRig(t)
+
+	refsHead := filepath.Join(bareRepo, "refs", "heads")
+	info, err := os.Stat(refsHead)
+	require.NoError(t, err)
+	oldMode := info.Mode().Perm()
+	require.NoError(t, os.Chmod(refsHead, oldMode&^0222))
+	t.Cleanup(func() { _ = os.Chmod(refsHead, oldMode) })
+
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "Implement feature X",
+		Description:    "desc",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/preflight-denied",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	err = o.spawnCoder(context.Background(), task)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), branchpolicy.ReasonBranchPermission)
+	require.Len(t, fake.spawnCalls, 0)
+
+	var evt model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_spawn_failed").First(&evt).Error)
+	require.Equal(t, branchpolicy.ReasonBranchPermission, evt.Details["reason"])
+}
+
+func TestSpawnCoder_ConcurrentDuplicateDoesNotLaunchSecondContainer(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
+	o, fake, _ := workerSpawnTestRig(t)
+	fake.spawnEntered = make(chan struct{}, 1)
+	fake.spawnRelease = make(chan struct{})
+	fake.spawnResults = []spawnOutcome{{res: spawner.SpawnWorkerResult{ContainerID: "container-first"}}}
+
+	task := &model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "Implement race guard",
+		Description:    "desc",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/race-guard",
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- o.spawnCoder(context.Background(), task) }()
+
+	select {
+	case <-fake.spawnEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first spawn did not reach fake spawner")
+	}
+
+	secondErr := o.spawnCoder(context.Background(), task)
+	require.Error(t, secondErr)
+	require.ErrorIs(t, secondErr, workeridentity.ErrTaskAlreadyClaimed)
+
+	close(fake.spawnRelease)
+	require.NoError(t, <-firstDone)
+
+	fake.mu.Lock()
+	spawnCalls := append([]spawner.SpawnWorkerParams(nil), fake.spawnCalls...)
+	fake.mu.Unlock()
+	require.Len(t, spawnCalls, 1, "duplicate reservation must fail before container launch")
+
+	var attempts []model.WorkerAttempt
+	require.NoError(t, o.db.Where("task_id = ?", task.ID).Find(&attempts).Error)
+	require.Len(t, attempts, 1)
+	require.Equal(t, model.WorkerAttemptRunning, attempts[0].State)
+	require.Equal(t, "container-first", attempts[0].ContainerID)
+
+	var failures []model.TaskEvent
+	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_spawn_failed").Find(&failures).Error)
+	require.Len(t, failures, 1)
+	require.Equal(t, "worker_already_active", failures[0].Details["reason"])
 }
 
 func TestSpawnCoder_BuildsExpectedParams(t *testing.T) {
@@ -358,7 +442,7 @@ func TestSpawnCoder_OnSpawnFailureReturnsError(t *testing.T) {
 
 	var attempt model.WorkerAttempt
 	require.NoError(t, o.db.First(&attempt, "task_id = ?", task.ID).Error)
-	require.Equal(t, model.WorkerAttemptFailed, attempt.State)
+	require.Equal(t, model.WorkerAttemptAborted, attempt.State)
 	require.NotNil(t, attempt.CompletedAt)
 
 	// A worker_spawn_failed audit event must exist (user story 49).
@@ -410,7 +494,7 @@ func TestSpawnCoder_FinalizeFailureDestroysContainerAndClearsReservation(t *test
 
 	var attempt model.WorkerAttempt
 	require.NoError(t, o.db.First(&attempt, "task_id = ?", task.ID).Error)
-	require.Equal(t, model.WorkerAttemptFailed, attempt.State)
+	require.Equal(t, model.WorkerAttemptAborted, attempt.State)
 	require.NotNil(t, attempt.CompletedAt)
 }
 

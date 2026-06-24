@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/branchpolicy"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
@@ -114,6 +115,10 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		reason := ""
 		if errors.Is(branchErr, errSubtaskParentBranchMissing) {
 			reason = spawnPolicyReasonBranchMissing
+		} else if strings.Contains(branchErr.Error(), branchpolicy.ReasonBranchPermission) {
+			reason = branchpolicy.ReasonBranchPermission
+		} else if strings.Contains(branchErr.Error(), branchpolicy.ReasonBranchOwnership) {
+			reason = branchpolicy.ReasonBranchOwnership
 		}
 		o.recordSpawnFailureEventWithReason(task, agentType, reason, branchErr)
 		return fmt.Errorf("spawn %s worker: %w", agentType, branchErr)
@@ -622,6 +627,9 @@ func (o *Orchestrator) ensureWorkerBranch(ctx context.Context, task *model.Task,
 	source, err := o.resolveBranchSource(ctx, task, swc.bareRepo)
 	if err != nil {
 		return err
+	}
+	if err := branchpolicy.Preflight(ctx, branchpolicy.PreflightRequest{BareRepo: swc.bareRepo, Branch: swc.branch, Source: source}); err != nil {
+		return fmt.Errorf("ensureWorkerBranch: preflight %s from %s: %w", swc.branch, source, err)
 	}
 	if err := gitref.EnsureBranch(ctx, swc.bareRepo, swc.branch, source); err != nil {
 		return fmt.Errorf("ensureWorkerBranch: create %s from %s: %w", swc.branch, source, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/experiment"
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
@@ -46,6 +47,12 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 		task.Context = make(model.JSONField)
 	}
 	task.Context["last_error"] = truncate(output, maxErrorSnippetLen)
+	failureClass := normalizeFailureClass(ag.ExitReason, output)
+	if failureClass == "" {
+		failureClass = normalizeFailureClass("agent_failed", output)
+	}
+	now := time.Now()
+	budget := consumeRetryBudget(task, retryEdgeForTask(*task, string(ag.AgentType)), failureClass, output, now)
 
 	// Before cleanup, check if the agent's work was already merged into the
 	// feature branch (e.g. merge succeeded on a prior attempt but DB update
@@ -123,8 +130,8 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 				if diagnosis.MaxAdditionalRetries > 0 {
 					maxRetries = retries + diagnosis.MaxAdditionalRetries
 				}
-				if retries >= maxRetries {
-					if err := o.failTask(task, fmt.Sprintf("agent failed after %d retries (supervisor: %s)", retries, diagnosis.RootCause)); err != nil {
+				if retries >= maxRetries || budget.Exhausted {
+					if err := o.failTaskWithFailureEvidence(task, fmt.Sprintf("agent failed after %d retries (supervisor: %s)", retries, diagnosis.RootCause), failureClass, output, now, budget); err != nil {
 						return err
 					}
 					o.emit("agent_failed", map[string]any{"task_id": task.ID, "agent_id": ag.ID, "diagnosis": diagnosis.RootCause})
@@ -153,8 +160,8 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 		// Planner failure: clear assignment and stay in PLANNING for retry.
 		task.AssignedAgentID = nil
 		retries := o.incrementRetryCount(task)
-		if retries >= MaxPlannerRetries {
-			if err := o.failTask(task, "planner failed after max retries"); err != nil {
+		if retries >= MaxPlannerRetries || budget.Exhausted {
+			if err := o.failTaskWithFailureEvidence(task, "planner failed after max retries", failureClass, output, now, budget); err != nil {
 				return err
 			}
 			o.emit("planner_failed", map[string]any{"task_id": task.ID, "error": "max retries exceeded"})
@@ -202,7 +209,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	}
 
 	// Coder/researcher failure: transition to FAILED.
-	if err := o.failTask(task, "agent exited with non-zero code"); err != nil {
+	if err := o.failTaskWithFailureEvidence(task, "agent exited with non-zero code", failureClass, output, now, budget); err != nil {
 		return err
 	}
 	o.emit("agent_failed", map[string]any{"task_id": task.ID, "agent_id": ag.ID})

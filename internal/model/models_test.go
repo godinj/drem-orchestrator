@@ -227,6 +227,40 @@ func TestTaskEventBeforeCreate(t *testing.T) {
 			t.Errorf("ID = %v, want %v", loaded.ID, presetID)
 		}
 	})
+
+	t.Run("requires event type", func(t *testing.T) {
+		db := testDB(t)
+		_, task := createProjectAndTask(t, db)
+		event := TaskEvent{TaskID: task.ID, Actor: "test"}
+		if err := db.Create(&event).Error; err == nil {
+			t.Fatal("expected missing event_type to fail")
+		}
+	})
+
+	t.Run("quarantines zero task id", func(t *testing.T) {
+		db := testDB(t)
+		event := TaskEvent{
+			EventType: "container_died",
+			Actor:     "docker-events",
+			Details:   JSONField{"container_id": "c-stale"},
+		}
+		if err := db.Create(&event).Error; err != nil {
+			t.Fatalf("create quarantined event: %v", err)
+		}
+		var loaded TaskEvent
+		if err := db.First(&loaded, "id = ?", event.ID).Error; err != nil {
+			t.Fatalf("load event: %v", err)
+		}
+		if loaded.EventType != TaskEventQuarantined {
+			t.Fatalf("EventType = %q, want %q", loaded.EventType, TaskEventQuarantined)
+		}
+		if loaded.Details["quarantined"] != true {
+			t.Fatalf("expected quarantined detail, got %#v", loaded.Details)
+		}
+		if loaded.Details["original_event_type"] != "container_died" {
+			t.Fatalf("expected original event type in details, got %#v", loaded.Details)
+		}
+	})
 }
 
 func TestMemoryBeforeCreate(t *testing.T) {
