@@ -88,6 +88,7 @@ type TestResult struct {
 	Passed       bool      `json:"passed"`
 	Output       string    `json:"output"` // truncated to last 5000 chars
 	ExitCode     int       `json:"exit_code"`
+	FailureClass string    `json:"failure_class,omitempty"`
 	RunAt        time.Time `json:"run_at"`
 	Duration     float64   `json:"duration_seconds"`
 	Command      string    `json:"command"`

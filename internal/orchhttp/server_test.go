@@ -592,6 +592,71 @@ func TestTaskAttemptsIncludesBoundedFailureEvidence(t *testing.T) {
 	require.NotContains(t, got[0].FirstError, "super-secret")
 }
 
+func TestTaskAttemptsProjectsDurableAttemptLifecycleMetadata(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "attempt metadata", model.StatusInProgress)
+	attemptID := uuid.New()
+	sourceEventID := uuid.New()
+	started := time.Date(2026, 6, 25, 10, 0, 0, 0, time.UTC)
+	leaseUntil := started.Add(15 * time.Minute)
+	failedAt := started.Add(10 * time.Minute)
+	completedAt := started.Add(12 * time.Minute)
+	require.NoError(t, srv.DB.Create(&model.WorkerAttempt{
+		ID:                    attemptID,
+		TaskID:                task.ID,
+		Source:                "scheduler",
+		SourceEventID:         &sourceEventID,
+		WorkerID:              "worker-metadata",
+		ContainerID:           "container-metadata",
+		AgentType:             string(model.AgentCoder),
+		Branch:                "feature/metadata",
+		State:                 model.WorkerAttemptFailed,
+		LeaseOwner:            "worker-metadata",
+		LeaseExpiresAt:        &leaseUntil,
+		FailureClassification: "test_failure",
+		FirstError:            "unit test failed",
+		FailedAt:              &failedAt,
+		TokensIn:              123,
+		TokensOut:             45,
+		TotalCostUSD:          0.67,
+		FinalContextPct:       82,
+		ArtifactURI:           "file:///tmp/attempt-artifact.json",
+		CompletedAt:           &completedAt,
+		CreatedAt:             started,
+	}).Error)
+
+	resp, err := http.Get(ts.URL + "/tasks/" + task.ID.String() + "/attempts")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Contains(t, string(body), `"lease_owner":"worker-metadata"`)
+	require.Contains(t, string(body), `"failure_classification":"test_failure"`)
+	require.Contains(t, string(body), `"artifact_uri":"file:///tmp/attempt-artifact.json"`)
+
+	var got []orchdto.WorkerAttemptDTO
+	require.NoError(t, json.Unmarshal(body, &got))
+	require.Len(t, got, 1)
+	require.Equal(t, attemptID.String(), got[0].AttemptID)
+	require.Equal(t, "scheduler", got[0].Source)
+	require.Equal(t, sourceEventID.String(), got[0].SourceEventID)
+	require.Equal(t, model.WorkerAttemptFailed, got[0].LeaseState)
+	require.Equal(t, "worker-metadata", got[0].LeaseOwner)
+	require.NotNil(t, got[0].LeaseUntil)
+	require.Equal(t, leaseUntil, got[0].LeaseUntil.UTC())
+	require.Equal(t, "test_failure", got[0].FailureClassification)
+	require.Equal(t, "unit test failed", got[0].FirstError)
+	require.NotNil(t, got[0].FailedAt)
+	require.Equal(t, failedAt, got[0].FailedAt.UTC())
+	require.Equal(t, 123, got[0].TokensIn)
+	require.Equal(t, 45, got[0].TokensOut)
+	require.Equal(t, 0.67, got[0].TotalCostUSD)
+	require.Equal(t, 82, got[0].FinalContextPct)
+	require.Equal(t, "file:///tmp/attempt-artifact.json", got[0].ArtifactURI)
+}
+
 func TestGetLogsInvokesStreamer(t *testing.T) {
 	streamer := &fakeLogStreamer{payload: "hello logs\n"}
 	_, ts, _ := setupHTTPTest(t, streamer)

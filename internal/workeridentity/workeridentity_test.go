@@ -63,6 +63,9 @@ func TestRecordSpawnCreatesAgentAttemptAndHandle(t *testing.T) {
 	require.Equal(t, "container-1", attempt.ContainerID)
 	require.Equal(t, "feature/task", attempt.Branch)
 	require.Equal(t, model.WorkerAttemptRunning, attempt.State)
+	require.Equal(t, "worker-1", attempt.LeaseOwner)
+	require.NotNil(t, attempt.LeaseExpiresAt)
+	require.Equal(t, now.Add(DefaultLeaseTTL), attempt.LeaseExpiresAt.UTC())
 }
 
 func TestReserveSpawn_SecondReservationForSameTaskAndRoleFails(t *testing.T) {
@@ -189,6 +192,74 @@ func TestReserveFinalizeSpawnCreatesRunningHandle(t *testing.T) {
 	require.Equal(t, model.WorkerAttemptRunning, attempt.State)
 	require.Nil(t, attempt.CompletedAt)
 	require.Equal(t, "container-1", attempt.ContainerID)
+	require.Equal(t, "worker-1", attempt.LeaseOwner)
+	require.NotNil(t, attempt.LeaseExpiresAt)
+}
+
+func TestRenewLeaseFencesOwnerAndExpiredAttempts(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	projectID := uuid.New()
+	task := model.Task{ID: uuid.New(), ProjectID: projectID, Title: "Fix bug", Description: "desc", Status: model.StatusInProgress}
+	require.NoError(t, db.Create(&task).Error)
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	store := NewStore(db)
+	res, err := store.ReserveSpawn(context.Background(), SpawnRecord{
+		Task:      &task,
+		ProjectID: projectID,
+		AgentType: "coder",
+		WorkerID:  "worker-1",
+		Image:     "worker:latest",
+		Branch:    "feature/task",
+		Now:       now,
+	})
+	require.NoError(t, err)
+
+	renewedAt := now.Add(30 * time.Second)
+	require.NoError(t, store.RenewLease(context.Background(), res.AttemptID, "worker-1", time.Minute, renewedAt))
+	var attempt model.WorkerAttempt
+	require.NoError(t, db.First(&attempt, "id = ?", res.AttemptID).Error)
+	require.NotNil(t, attempt.LeaseExpiresAt)
+	require.Equal(t, renewedAt.Add(time.Minute), attempt.LeaseExpiresAt.UTC())
+
+	err = store.RenewLease(context.Background(), res.AttemptID, "worker-2", time.Minute, renewedAt.Add(time.Second))
+	require.ErrorIs(t, err, ErrLeaseConflict)
+
+	err = store.RenewLease(context.Background(), res.AttemptID, "worker-1", time.Minute, renewedAt.Add(2*time.Minute))
+	require.ErrorIs(t, err, ErrLeaseExpired)
+}
+
+func TestFinishAttemptFencesOwnerAndMarksTerminal(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	projectID := uuid.New()
+	task := model.Task{ID: uuid.New(), ProjectID: projectID, Title: "Fix bug", Description: "desc", Status: model.StatusInProgress}
+	require.NoError(t, db.Create(&task).Error)
+	now := time.Date(2026, 6, 25, 12, 0, 0, 0, time.UTC)
+	store := NewStore(db)
+	res, err := store.ReserveSpawn(context.Background(), SpawnRecord{
+		Task:      &task,
+		ProjectID: projectID,
+		AgentType: "coder",
+		WorkerID:  "worker-1",
+		Image:     "worker:latest",
+		Branch:    "feature/task",
+		Now:       now,
+	})
+	require.NoError(t, err)
+
+	finishAt := now.Add(time.Minute)
+	err = store.FinishAttempt(context.Background(), res.AttemptID, "worker-2", model.WorkerAttemptFailed, "wrong owner", finishAt)
+	require.ErrorIs(t, err, ErrLeaseConflict)
+
+	require.NoError(t, store.FinishAttempt(context.Background(), res.AttemptID, "worker-1", model.WorkerAttemptFailed, "tool loop", finishAt))
+	var attempt model.WorkerAttempt
+	require.NoError(t, db.First(&attempt, "id = ?", res.AttemptID).Error)
+	require.Equal(t, model.WorkerAttemptFailed, attempt.State)
+	require.NotNil(t, attempt.CompletedAt)
+	require.NotNil(t, attempt.FailedAt)
+	require.Equal(t, "tool loop", attempt.FirstError)
+
+	err = store.RenewLease(context.Background(), res.AttemptID, "worker-1", time.Minute, finishAt.Add(time.Second))
+	require.ErrorIs(t, err, ErrAttemptTerminal)
 }
 
 func TestWorkerAttempt_ActiveUniqueIndexPreventsDuplicateTaskRoleBranch(t *testing.T) {

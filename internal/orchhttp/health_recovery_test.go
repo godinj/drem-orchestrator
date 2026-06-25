@@ -55,6 +55,67 @@ func TestHealthIssuesDoesNotReportMissingFailureEvidenceForSupportedContextEvide
 	requireNoIssueType(t, issues, "missing_failure_evidence")
 }
 
+func TestHealthIssuesReportsFailedTaskWithActiveAttemptRecoveryAction(t *testing.T) {
+	fake, project, _, baseURL := setupGateHTTPTest(t)
+	db := fake.db
+	failed := testutil.CreateTask(t, db, project.ID, "failed with live attempt", model.StatusFailed)
+	attemptID := uuid.New()
+	require.NoError(t, db.Create(&model.WorkerAttempt{
+		ID:        attemptID,
+		TaskID:    failed.ID,
+		WorkerID:  "worker-failed-active",
+		AgentType: string(model.AgentCoder),
+		Branch:    "feature/failed-active",
+		State:     model.WorkerAttemptRunning,
+	}).Error)
+
+	resp, body := doJSON(t, http.MethodGet, baseURL+"/projects/"+projectName+"/health/issues", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	var issues []orchdto.HealthIssueDTO
+	require.NoError(t, json.Unmarshal(body, &issues))
+	issue := findIssueType(t, issues, "failed_task_active_attempt")
+	require.Equal(t, failed.ID.String(), issue.TaskID)
+	require.Equal(t, []string{attemptID.String()}, issue.AttemptIDs)
+	require.Contains(t, issue.Message, "failed task still has 1 reserved/running worker attempt")
+	require.Contains(t, issue.RecommendedAction, "dremctl recover exited-container "+failed.ID.String()+" --dry-run")
+}
+
+func TestHealthIssuesReportsMissingAssignedAgentRecoveryAction(t *testing.T) {
+	fake, project, _, baseURL := setupGateHTTPTest(t)
+	db := fake.db
+	task := testutil.CreateTask(t, db, project.ID, "missing assigned agent", model.StatusInProgress)
+	missingAgentID := uuid.New()
+	task.AssignedAgentID = &missingAgentID
+	require.NoError(t, db.Save(&task).Error)
+
+	resp, body := doJSON(t, http.MethodGet, baseURL+"/projects/"+projectName+"/health/issues", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	var issues []orchdto.HealthIssueDTO
+	require.NoError(t, json.Unmarshal(body, &issues))
+	issue := findIssueType(t, issues, "stale_assigned_worker")
+	require.Equal(t, task.ID.String(), issue.TaskID)
+	require.Equal(t, missingAgentID.String(), issue.WorkerID)
+	require.Contains(t, issue.Message, "assigned worker row is missing")
+	require.Contains(t, issue.RecommendedAction, "dremctl recover stale-assignment "+task.ID.String()+" --dry-run")
+}
+
+func TestHealthIssuesDoesNotRecommendDeadAssignedAgentRecoveryForTerminalTask(t *testing.T) {
+	fake, project, _, baseURL := setupGateHTTPTest(t)
+	db := fake.db
+	task := testutil.CreateTask(t, db, project.ID, "terminal with dead assignment", model.StatusDone)
+	heartbeat := time.Now().Add(-time.Hour)
+	agent := model.Agent{ID: uuid.New(), ProjectID: project.ID, AgentType: model.AgentCoder, Status: model.AgentDead, CurrentTaskID: &task.ID, HeartbeatAt: &heartbeat}
+	require.NoError(t, db.Create(&agent).Error)
+	task.AssignedAgentID = &agent.ID
+	require.NoError(t, db.Save(&task).Error)
+
+	resp, body := doJSON(t, http.MethodGet, baseURL+"/projects/"+projectName+"/health/issues", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	var issues []orchdto.HealthIssueDTO
+	require.NoError(t, json.Unmarshal(body, &issues))
+	requireNoIssueType(t, issues, "dead_assigned_agent")
+}
+
 func TestHealthIssuesReportsDuplicateAttemptsBlockedDependenciesAndBranchGate(t *testing.T) {
 	fake, project, _, baseURL := setupGateHTTPTest(t)
 	db := fake.db

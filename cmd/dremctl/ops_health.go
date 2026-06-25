@@ -103,9 +103,9 @@ func renderHealthIssues(w io.Writer, jsonMode bool, issues []orchdto.HealthIssue
 		return healthIssueRank(issues[i].Type) < healthIssueRank(issues[j].Type)
 	})
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "TYPE\tSEVERITY\tTASK\tWORKER\tROLE\tBRANCH\tATTEMPTS\tSTATUS\tAGE\tMESSAGE")
+	fmt.Fprintln(tw, "TYPE\tSEVERITY\tTASK\tWORKER\tROLE\tBRANCH\tATTEMPTS\tSTATUS\tAGE\tMESSAGE\tRECOMMENDED_ACTION")
 	for _, issue := range issues {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 			issue.Type,
 			issue.Severity,
 			shortIDOrDash(issue.TaskID),
@@ -116,6 +116,7 @@ func renderHealthIssues(w io.Writer, jsonMode bool, issues []orchdto.HealthIssue
 			dash(issue.Status),
 			formatIssueAge(issue.AgeSeconds),
 			singleLine(formatHealthMessage(issue)),
+			dash(issue.RecommendedAction),
 		)
 	}
 	return tw.Flush()

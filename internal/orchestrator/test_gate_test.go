@@ -137,6 +137,38 @@ func TestVerifyTestsBeforeMerge_AllRetriesFail(t *testing.T) {
 	}
 }
 
+func TestVerifyTestsBeforeMerge_MissingToolClassifiesRuntimeMissingTool(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestrator(t, db, wt)
+	o.testGate = TestGateConfig{
+		TestCommand: "definitely-not-a-real-test-tool-42 --version",
+		TestTimeout: 30 * time.Second,
+	}
+
+	subtask := &model.Task{
+		ID:          uuid.New(),
+		ProjectID:   o.projectID,
+		Title:       "test subtask",
+		Description: "desc",
+		Status:      model.StatusInProgress,
+	}
+
+	result, err := o.verifyTestsBeforeMerge(subtask, t.TempDir())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Passed {
+		t.Fatal("expected missing tool to fail the gate")
+	}
+	if result.ExitCode != 127 {
+		t.Fatalf("expected shell exit 127, got %d with output %q", result.ExitCode, result.Output)
+	}
+	if result.FailureClass != "runtime_missing_tool" {
+		t.Fatalf("expected runtime_missing_tool, got %q", result.FailureClass)
+	}
+}
+
 func TestVerifyTestsBeforeMerge_NoTestCommand(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}

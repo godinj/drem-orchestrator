@@ -460,7 +460,7 @@ func TestRunDirectToolAgent_MaxIterations(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exceeded max iterations (3)")
 	require.NotNil(t, result)
-	assert.Equal(t, "max_iterations", result.StopReason)
+	assert.Equal(t, DirectToolStopReasonMaxIterations, result.StopReason)
 }
 
 func TestRunDirectToolAgent_NoProgressStopsRepeatedIdenticalToolCalls(t *testing.T) {
@@ -497,8 +497,59 @@ func TestRunDirectToolAgent_NoProgressStopsRepeatedIdenticalToolCalls(t *testing
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no progress")
 	require.NotNil(t, result)
-	assert.Equal(t, "no_progress", result.StopReason)
+	assert.Equal(t, DirectToolStopReasonNoProgress, result.StopReason)
 	assert.Less(t, result.Iterations, cfg.MaxIterations)
+}
+
+func TestRunDirectToolAgent_MaxTokensStopReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := toolChatResponse{
+			Choices: []toolChatChoice{{
+				Message:      toolChatMsg{Role: "assistant", Content: "partial"},
+				FinishReason: "length",
+			}},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			}{PromptTokens: 50, CompletionTokens: 8, TotalTokens: 58},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.MaxTokens = 8
+
+	result, err := RunDirectToolAgent(cfg, "You are a coder.", "Do something.", ToolsForRole("coder"), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "response truncated at max_tokens=8")
+	require.NotNil(t, result)
+	assert.Equal(t, DirectToolStopReasonMaxTokens, result.StopReason)
+	assert.Equal(t, "partial", result.Output)
+	assert.Equal(t, 50, result.TokensIn)
+	assert.Equal(t, 8, result.TokensOut)
+}
+
+func TestRunDirectToolAgent_TimeoutStopReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.Timeout = time.Nanosecond
+
+	result, err := RunDirectToolAgent(cfg, "You are a coder.", "Do something.", nil, "")
+	require.Error(t, err)
+	require.NotNil(t, result)
+	assert.Equal(t, DirectToolStopReasonTimeout, result.StopReason)
+	assert.Equal(t, 0, result.Iterations)
 }
 
 func TestRunDirectToolAgent_WritesOutputFile(t *testing.T) {

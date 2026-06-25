@@ -292,7 +292,7 @@ func TestProcessTestWriting_AllTestSubtasksDone_TransitionsToTestReview(t *testi
 	}
 }
 
-func TestProcessTestWriting_FutureTestSubtasksBlockTestReview(t *testing.T) {
+func TestProcessTestWriting_FutureImplementationBlockedTestSubtasksDoNotBlockTestReview(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
@@ -350,12 +350,12 @@ func TestProcessTestWriting_FutureTestSubtasksBlockTestReview(t *testing.T) {
 
 	var updated model.Task
 	db.First(&updated, "id = ?", parentID)
-	if updated.Status != model.StatusTestWriting {
-		t.Errorf("expected parent status test_writing, got %s", updated.Status)
+	if updated.Status != model.StatusTestReview {
+		t.Errorf("expected parent status test_review, got %s", updated.Status)
 	}
 	blockers, _ := updated.Context["parent_readiness_blockers"].(string)
-	if !strings.Contains(blockers, "dependency-blocked") || !strings.Contains(blockers, implSub.ID.String()) {
-		t.Fatalf("expected dependency blocker for future test subtask, got %q", blockers)
+	if blockers != "" {
+		t.Fatalf("expected future implementation dependency not to block test_review, got %q", blockers)
 	}
 }
 
@@ -2321,7 +2321,7 @@ func TestOnAgentCompleted_TestWritingParent_AllTestSubtasksDone(t *testing.T) {
 	}
 }
 
-func TestProcessTestWriting_BlocksTestReviewWithDependencyBlockedTestChild(t *testing.T) {
+func TestProcessTestWriting_AllowsTestReviewWithFutureImplementationBlockedTestChild(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestratorWithRunner(t, db, wt)
@@ -2379,12 +2379,12 @@ func TestProcessTestWriting_BlocksTestReviewWithDependencyBlockedTestChild(t *te
 
 	var updated model.Task
 	db.First(&updated, "id = ?", parentID)
-	if updated.Status != model.StatusTestWriting {
-		t.Fatalf("expected parent to remain test_writing, got %s", updated.Status)
+	if updated.Status != model.StatusTestReview {
+		t.Fatalf("expected parent to advance to test_review, got %s", updated.Status)
 	}
 	blockers, _ := updated.Context["parent_readiness_blockers"].(string)
-	if !strings.Contains(blockers, "dependency-blocked") || !strings.Contains(blockers, implSub.ID.String()) {
-		t.Fatalf("expected parent readiness blocker for impl dependency, got %q", blockers)
+	if blockers != "" {
+		t.Fatalf("expected future implementation dependency not to block parent readiness, got %q", blockers)
 	}
 
 	var event model.TaskEvent

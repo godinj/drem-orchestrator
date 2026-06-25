@@ -97,6 +97,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Task{},
 		&model.Agent{},
 		&model.WorkerAttempt{},
+		&model.AttemptEvent{},
 		&model.TaskEvent{},
 		&model.Memory{},
 		&model.TaskComment{},

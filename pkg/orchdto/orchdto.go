@@ -53,16 +53,18 @@ type TaskDTO struct {
 // live/reserved attempt from a historical assignment without fetching the full
 // attempt history endpoint.
 type TaskAttemptLeaseDTO struct {
-	AttemptID   string    `json:"attempt_id"`
-	TaskID      string    `json:"task_id,omitempty"`
-	WorkerID    string    `json:"worker_id,omitempty"`
-	AgentID     string    `json:"agent_id,omitempty"`
-	ContainerID string    `json:"container_id,omitempty"`
-	Role        string    `json:"role,omitempty"`
-	Branch      string    `json:"branch,omitempty"`
-	LeaseState  string    `json:"lease_state,omitempty"`
-	StartedAt   time.Time `json:"started_at,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+	AttemptID   string     `json:"attempt_id"`
+	TaskID      string     `json:"task_id,omitempty"`
+	WorkerID    string     `json:"worker_id,omitempty"`
+	AgentID     string     `json:"agent_id,omitempty"`
+	ContainerID string     `json:"container_id,omitempty"`
+	Role        string     `json:"role,omitempty"`
+	Branch      string     `json:"branch,omitempty"`
+	LeaseState  string     `json:"lease_state,omitempty"`
+	LeaseOwner  string     `json:"lease_owner,omitempty"`
+	LeaseUntil  *time.Time `json:"lease_until,omitempty"`
+	StartedAt   time.Time  `json:"started_at,omitempty"`
+	UpdatedAt   time.Time  `json:"updated_at,omitempty"`
 }
 
 // TaskCommentDTO is the public projection returned after appending a task
@@ -109,10 +111,15 @@ type WorkerAttemptDTO struct {
 	TaskID                string     `json:"task_id"`
 	WorkerID              string     `json:"worker_id"`
 	AgentID               string     `json:"agent_id"`
+	Source                string     `json:"source,omitempty"`
+	SourceEventID         string     `json:"source_event_id,omitempty"`
 	ContainerID           string     `json:"container_id"`
 	WorkerLabel           string     `json:"worker_label"`
 	AgentType             string     `json:"agent_type"`
 	Branch                string     `json:"branch"`
+	LeaseState            string     `json:"lease_state,omitempty"`
+	LeaseOwner            string     `json:"lease_owner,omitempty"`
+	LeaseUntil            *time.Time `json:"lease_until,omitempty"`
 	Provider              string     `json:"provider"`
 	ModelID               string     `json:"model_id"`
 	Effort                string     `json:"effort"`
@@ -123,11 +130,13 @@ type WorkerAttemptDTO struct {
 	ExitReason            string     `json:"exit_reason"`
 	FailureClassification string     `json:"failure_classification"`
 	FirstError            string     `json:"first_error"`
+	FailedAt              *time.Time `json:"failed_at,omitempty"`
 	TokensIn              int        `json:"tokens_in"`
 	TokensOut             int        `json:"tokens_out"`
 	TotalCostUSD          float64    `json:"total_cost_usd"`
 	FinalContextPct       int        `json:"final_context_pct"`
 	ConstraintViolations  int        `json:"constraint_violations"`
+	ArtifactURI           string     `json:"artifact_uri,omitempty"`
 }
 
 // WorkerHistoryDTO wraps a worker's recent state transitions and exit
@@ -157,8 +166,8 @@ type EventDTO struct {
 }
 
 // HealthIssueDTO is one operator-facing health finding from the orchestrator.
-// Findings are intentionally descriptive rather than prescriptive: recovery
-// mutations use separate, narrower endpoints.
+// Findings are intentionally read-only. RecommendedAction may name a narrow
+// dry-run recovery or inspection step; mutations use separate endpoints.
 type HealthIssueDTO struct {
 	Type                string                 `json:"type"`
 	Severity            string                 `json:"severity"`
@@ -174,6 +183,7 @@ type HealthIssueDTO struct {
 	AgeSeconds          int64                  `json:"age_seconds,omitempty"`
 	LastEvent           *time.Time             `json:"last_event,omitempty"`
 	Message             string                 `json:"message"`
+	RecommendedAction   string                 `json:"recommended_action,omitempty"`
 }
 
 // BlockedDependencyDTO is a structured parent-readiness blocker surfaced on

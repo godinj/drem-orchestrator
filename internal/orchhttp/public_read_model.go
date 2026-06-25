@@ -443,15 +443,32 @@ func toWorkerAttemptDTOFromAgent(taskID uuid.UUID, a model.Agent) orchdto.Worker
 
 func toWorkerAttemptDTOFromDurable(attempt model.WorkerAttempt, a model.Agent, hasAgent bool) orchdto.WorkerAttemptDTO {
 	d := orchdto.WorkerAttemptDTO{
-		AttemptID:   attempt.ID.String(),
-		TaskID:      attempt.TaskID.String(),
-		WorkerID:    attempt.WorkerID,
-		ContainerID: attempt.ContainerID,
-		AgentType:   attempt.AgentType,
-		StartedAt:   attempt.CreatedAt,
+		AttemptID:             attempt.ID.String(),
+		TaskID:                attempt.TaskID.String(),
+		WorkerID:              attempt.WorkerID,
+		Source:                attempt.Source,
+		ContainerID:           attempt.ContainerID,
+		AgentType:             attempt.AgentType,
+		Branch:                attempt.Branch,
+		LeaseState:            attempt.State,
+		LeaseOwner:            attempt.LeaseOwner,
+		LeaseUntil:            attempt.LeaseExpiresAt,
+		StartedAt:             attempt.CreatedAt,
+		CompletedAt:           attempt.CompletedAt,
+		FailureClassification: attempt.FailureClassification,
+		FirstError:            boundFailureEvidence(attempt.FirstError),
+		FailedAt:              attempt.FailedAt,
+		TokensIn:              attempt.TokensIn,
+		TokensOut:             attempt.TokensOut,
+		TotalCostUSD:          attempt.TotalCostUSD,
+		FinalContextPct:       attempt.FinalContextPct,
+		ArtifactURI:           attempt.ArtifactURI,
 	}
 	if attempt.AgentID != nil {
 		d.AgentID = attempt.AgentID.String()
+	}
+	if attempt.SourceEventID != nil {
+		d.SourceEventID = attempt.SourceEventID.String()
 	}
 	if hasAgent {
 		fromAgent := toWorkerAttemptDTOFromAgent(attempt.TaskID, a)
@@ -460,7 +477,22 @@ func toWorkerAttemptDTOFromDurable(attempt model.WorkerAttempt, a model.Agent, h
 		fromAgent.AgentID = firstNonEmpty(d.AgentID, fromAgent.AgentID)
 		fromAgent.ContainerID = firstNonEmpty(d.ContainerID, fromAgent.ContainerID)
 		fromAgent.AgentType = firstNonEmpty(d.AgentType, fromAgent.AgentType)
+		fromAgent.Branch = firstNonEmpty(d.Branch, fromAgent.Branch)
+		fromAgent.Source = d.Source
+		fromAgent.SourceEventID = d.SourceEventID
+		fromAgent.LeaseState = d.LeaseState
+		fromAgent.LeaseOwner = d.LeaseOwner
+		fromAgent.LeaseUntil = d.LeaseUntil
 		fromAgent.StartedAt = d.StartedAt
+		fromAgent.CompletedAt = firstTimePtr(d.CompletedAt, fromAgent.CompletedAt)
+		fromAgent.FailureClassification = firstNonEmpty(d.FailureClassification, fromAgent.FailureClassification)
+		fromAgent.FirstError = firstNonEmpty(d.FirstError, fromAgent.FirstError)
+		fromAgent.FailedAt = d.FailedAt
+		fromAgent.TokensIn = firstNonZeroInt(d.TokensIn, fromAgent.TokensIn)
+		fromAgent.TokensOut = firstNonZeroInt(d.TokensOut, fromAgent.TokensOut)
+		fromAgent.TotalCostUSD = firstNonZeroFloat(d.TotalCostUSD, fromAgent.TotalCostUSD)
+		fromAgent.FinalContextPct = firstNonZeroInt(d.FinalContextPct, fromAgent.FinalContextPct)
+		fromAgent.ArtifactURI = d.ArtifactURI
 		return fromAgent
 	}
 	return d
@@ -475,6 +507,8 @@ func toTaskAttemptLeaseDTO(attempt model.WorkerAttempt) orchdto.TaskAttemptLease
 		Role:        attempt.AgentType,
 		Branch:      attempt.Branch,
 		LeaseState:  attempt.State,
+		LeaseOwner:  attempt.LeaseOwner,
+		LeaseUntil:  attempt.LeaseExpiresAt,
 		StartedAt:   attempt.CreatedAt,
 		UpdatedAt:   attempt.UpdatedAt,
 	}
@@ -669,4 +703,31 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func firstTimePtr(values ...*time.Time) *time.Time {
+	for _, v := range values {
+		if v != nil && !v.IsZero() {
+			return v
+		}
+	}
+	return nil
+}
+
+func firstNonZeroInt(values ...int) int {
+	for _, v := range values {
+		if v != 0 {
+			return v
+		}
+	}
+	return 0
+}
+
+func firstNonZeroFloat(values ...float64) float64 {
+	for _, v := range values {
+		if v != 0 {
+			return v
+		}
+	}
+	return 0
 }

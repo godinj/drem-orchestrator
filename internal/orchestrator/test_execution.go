@@ -362,6 +362,7 @@ func (o *Orchestrator) verifyTestsBeforeMerge(subtask *model.Task, worktreePath 
 			Passed:       cmdResult.ExitCode == 0,
 			Output:       truncate(cmdResult.Output, maxCmdOutputLen),
 			ExitCode:     cmdResult.ExitCode,
+			FailureClass: classifyTestGateFailure(cmdResult.ExitCode, cmdResult.Output),
 			RunAt:        time.Now(),
 			Duration:     cmdResult.Duration.Seconds(),
 			Command:      testCmd,
@@ -401,12 +402,24 @@ func (o *Orchestrator) verifyCompilationBeforeMerge(subtask *model.Task, worktre
 		Passed:       cmdResult.ExitCode == 0,
 		Output:       truncate(cmdResult.Output, maxCmdOutputLen),
 		ExitCode:     cmdResult.ExitCode,
+		FailureClass: classifyTestGateFailure(cmdResult.ExitCode, cmdResult.Output),
 		RunAt:        time.Now(),
 		Duration:     cmdResult.Duration.Seconds(),
 		Command:      compileCmd,
 		Scoped:       false,
 		AttemptCount: 1,
 	}, nil
+}
+
+func classifyTestGateFailure(exitCode int, output string) string {
+	if exitCode == 0 {
+		return ""
+	}
+	lower := strings.ToLower(output)
+	if exitCode == 127 || strings.Contains(lower, "command not found") {
+		return "runtime_missing_tool"
+	}
+	return ""
 }
 
 // scopeTestsForSubtask derives changed packages from the agent's diff and

@@ -30,6 +30,9 @@ const (
 	duplicateActiveAttempts = "duplicate_active_attempts"
 	parentReadinessBlocked  = "parent_readiness_blocked"
 	branchGateFailure       = "branch_hygiene_gate_failure"
+	failedTaskActiveAttempt = "failed_task_active_attempt"
+	staleActiveAttempt      = "stale_active_attempt"
+	deadAssignedAgent       = "dead_assigned_agent"
 )
 
 func (s *Server) handleHealthIssues(w http.ResponseWriter, r *http.Request) {
@@ -82,6 +85,10 @@ func (m publicReadModel) HealthIssues(ctx context.Context, now time.Time) ([]orc
 
 	issues := make([]orchdto.HealthIssueDTO, 0)
 	for _, task := range tasks {
+		for _, issue := range activeAttemptHealthIssues(task, activeAttempts[task.ID], agentsByID, now) {
+			issues = append(issues, issue)
+		}
+
 		for _, issue := range duplicateAttemptIssues(task, activeAttempts[task.ID], now) {
 			issues = append(issues, issue)
 		}
@@ -95,20 +102,35 @@ func (m publicReadModel) HealthIssues(ctx context.Context, now time.Time) ([]orc
 		}
 
 		if task.AssignedAgentID != nil {
-			classification, err := m.classifyAssignmentWithEvidence(ctx, task, agentsByID[*task.AssignedAgentID], agentsByID, now)
+			agent, hasAgent := agentsByID[*task.AssignedAgentID]
+			if hasAgent && agent.Status == model.AgentDead && !terminalForHealth(task.Status) {
+				issues = append(issues, orchdto.HealthIssueDTO{
+					Type:              deadAssignedAgent,
+					Severity:          "warning",
+					TaskID:            task.ID.String(),
+					WorkerID:          task.AssignedAgentID.String(),
+					Status:            string(task.Status),
+					DetectedAt:        now,
+					AgeSeconds:        assignmentAgeSeconds(agent, now),
+					Message:           "task is assigned to a dead agent",
+					RecommendedAction: recommendedRecoveryAction("stale-assignment", task.ID),
+				})
+			}
+			classification, err := m.classifyAssignmentWithEvidence(ctx, task, agent, agentsByID, now)
 			if err != nil {
 				return nil, err
 			}
 			if classification.Safe {
 				issues = append(issues, orchdto.HealthIssueDTO{
-					Type:       staleAssignedWorker,
-					Severity:   "warning",
-					TaskID:     task.ID.String(),
-					WorkerID:   task.AssignedAgentID.String(),
-					Status:     string(task.Status),
-					DetectedAt: now,
-					AgeSeconds: assignmentAgeSeconds(classification.Worker, now),
-					Message:    classification.Message,
+					Type:              staleAssignedWorker,
+					Severity:          "warning",
+					TaskID:            task.ID.String(),
+					WorkerID:          task.AssignedAgentID.String(),
+					Status:            string(task.Status),
+					DetectedAt:        now,
+					AgeSeconds:        assignmentAgeSeconds(classification.Worker, now),
+					Message:           classification.Message,
+					RecommendedAction: recommendedRecoveryAction("stale-assignment", task.ID),
 				})
 			}
 		}
@@ -185,6 +207,79 @@ func (m publicReadModel) HealthIssues(ctx context.Context, now time.Time) ([]orc
 		return issues[i].Type < issues[j].Type
 	})
 	return issues, nil
+}
+
+func activeAttemptHealthIssues(task model.Task, attempts []model.WorkerAttempt, agentsByID map[uuid.UUID]model.Agent, now time.Time) []orchdto.HealthIssueDTO {
+	out := make([]orchdto.HealthIssueDTO, 0)
+	if len(attempts) == 0 {
+		return out
+	}
+	if task.Status == model.StatusFailed {
+		out = append(out, orchdto.HealthIssueDTO{
+			Type:              failedTaskActiveAttempt,
+			Severity:          "warning",
+			TaskID:            task.ID.String(),
+			AttemptIDs:        attemptIDs(attempts),
+			Status:            string(task.Status),
+			DetectedAt:        now,
+			Message:           fmt.Sprintf("failed task still has %d reserved/running worker attempt(s)", len(attempts)),
+			RecommendedAction: recommendedRecoveryAction("exited-container", task.ID),
+		})
+	}
+	for _, attempt := range attempts {
+		if attempt.AgentID == nil {
+			out = append(out, staleAttemptIssue(task, attempt, now, "active worker_attempt has no agent_id"))
+			continue
+		}
+		agent, ok := agentsByID[*attempt.AgentID]
+		if !ok {
+			out = append(out, staleAttemptIssue(task, attempt, now, "active worker_attempt references a missing agent"))
+			continue
+		}
+		if agent.Status == model.AgentDead {
+			out = append(out, staleAttemptIssue(task, attempt, now, "active worker_attempt is owned by a dead agent"))
+		}
+	}
+	return out
+}
+
+func staleAttemptIssue(task model.Task, attempt model.WorkerAttempt, now time.Time, message string) orchdto.HealthIssueDTO {
+	return orchdto.HealthIssueDTO{
+		Type:              staleActiveAttempt,
+		Severity:          "warning",
+		TaskID:            task.ID.String(),
+		WorkerID:          attemptWorkerID(attempt),
+		Role:              attempt.AgentType,
+		Branch:            attempt.Branch,
+		AttemptIDs:        []string{attempt.ID.String()},
+		Status:            string(task.Status),
+		DetectedAt:        now,
+		AgeSeconds:        int64(now.Sub(attempt.UpdatedAt).Seconds()),
+		Message:           message,
+		RecommendedAction: recommendedRecoveryAction("exited-container", task.ID),
+	}
+}
+
+func attemptIDs(attempts []model.WorkerAttempt) []string {
+	ids := make([]string, 0, len(attempts))
+	for _, attempt := range attempts {
+		ids = append(ids, attempt.ID.String())
+	}
+	return ids
+}
+
+func attemptWorkerID(attempt model.WorkerAttempt) string {
+	if attempt.WorkerID != "" {
+		return attempt.WorkerID
+	}
+	if attempt.AgentID != nil {
+		return attempt.AgentID.String()
+	}
+	return ""
+}
+
+func recommendedRecoveryAction(action string, taskID uuid.UUID) string {
+	return fmt.Sprintf("dremctl recover %s %s --dry-run", action, taskID.String())
 }
 
 func (m publicReadModel) activeWorkerAttempts(ctx context.Context, tasks []model.Task) (map[uuid.UUID][]model.WorkerAttempt, error) {

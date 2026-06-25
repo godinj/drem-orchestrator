@@ -157,7 +157,8 @@ func rejectReason(path, status string, scopes []string) string {
 }
 
 func isWorkerTrace(path string) bool {
-	return strings.HasPrefix(path, ".drem/traces/") || strings.HasPrefix(path, ".drem/workers/") || strings.HasPrefix(path, ".drem/attempts/") || strings.Contains(path, "worker-trace") || strings.Contains(path, "attempt-trace")
+	base := filepath.Base(path)
+	return strings.HasPrefix(path, ".drem/traces/") || strings.HasPrefix(path, ".drem/workers/") || strings.HasPrefix(path, ".drem/attempts/") || strings.HasPrefix(path, ".drem/attempt-") || strings.HasPrefix(base, "agent-trace-") || base == "agent-push-diagnostic.json" || strings.Contains(path, "worker-trace") || strings.Contains(path, "attempt-trace")
 }
 
 func isPromptArtifact(path string) bool {
@@ -171,7 +172,7 @@ func isPlanArtifact(path string) bool {
 
 func isCredentialOrConfig(path string) bool {
 	base := filepath.Base(path)
-	return strings.HasPrefix(path, ".claude/") || strings.HasPrefix(path, ".config/") || base == ".env" || strings.Contains(path, "credential") || strings.Contains(path, "token")
+	return strings.HasPrefix(path, ".claude/") || strings.HasPrefix(path, ".config/") || strings.HasPrefix(path, ".ssh/") || strings.HasPrefix(path, ".aws/") || strings.HasPrefix(path, ".gnupg/") || strings.HasPrefix(path, ".docker/") || base == ".env" || strings.HasPrefix(base, ".env.") || strings.Contains(path, "credential") || strings.Contains(path, "token") || strings.Contains(path, "secret")
 }
 
 func normalizeScopes(scopes []string) []string {

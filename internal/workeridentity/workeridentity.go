@@ -24,7 +24,14 @@ type Store struct {
 	db *gorm.DB
 }
 
-var ErrTaskAlreadyClaimed = errors.New("task already has an active worker reservation")
+const DefaultLeaseTTL = 2 * time.Minute
+
+var (
+	ErrTaskAlreadyClaimed = errors.New("task already has an active worker reservation")
+	ErrLeaseConflict      = errors.New("worker attempt lease is not held by owner")
+	ErrLeaseExpired       = errors.New("worker attempt lease is expired")
+	ErrAttemptTerminal    = errors.New("worker attempt is terminal")
+)
 
 func NewStore(db *gorm.DB) *Store {
 	return &Store{db: db}
@@ -148,6 +155,8 @@ func (s *Store) RecordSpawn(ctx context.Context, r SpawnRecord) (Handle, error) 
 		Branch:                  r.Branch,
 		Image:                   r.Image,
 		State:                   model.WorkerAttemptRunning,
+		LeaseOwner:              r.WorkerID,
+		LeaseExpiresAt:          ptrTime(now.Add(DefaultLeaseTTL)),
 		PromptAssetVersionsJSON: r.PromptAssetVersionsJSON,
 		RenderedPromptHash:      r.RenderedPromptHash,
 		RenderedPromptPath:      r.RenderedPromptPath,
@@ -216,6 +225,8 @@ func (s *Store) ReserveSpawn(ctx context.Context, r SpawnRecord) (Reservation, e
 			Branch:                  r.Branch,
 			Image:                   r.Image,
 			State:                   model.WorkerAttemptReserved,
+			LeaseOwner:              r.WorkerID,
+			LeaseExpiresAt:          ptrTime(now.Add(DefaultLeaseTTL)),
 			PromptAssetVersionsJSON: r.PromptAssetVersionsJSON,
 			RenderedPromptHash:      r.RenderedPromptHash,
 			RenderedPromptPath:      r.RenderedPromptPath,
@@ -262,8 +273,9 @@ func (s *Store) FinalizeSpawn(ctx context.Context, res Reservation, containerID 
 			return fmt.Errorf("load agent: %w", err)
 		}
 		updates := map[string]any{
-			"container_id": containerID,
-			"state":        model.WorkerAttemptRunning,
+			"container_id":     containerID,
+			"state":            model.WorkerAttemptRunning,
+			"lease_expires_at": time.Now().Add(DefaultLeaseTTL),
 		}
 		result := tx.Model(&model.WorkerAttempt{}).
 			Where("id = ? AND agent_id = ? AND task_id = ? AND state = ?", res.AttemptID, res.AgentID, res.TaskID, model.WorkerAttemptReserved).
@@ -338,6 +350,82 @@ func (s *Store) AbortReservation(ctx context.Context, res Reservation, reason st
 		return fmt.Errorf("workeridentity.AbortReservation: %w", err)
 	}
 	return nil
+}
+
+func (s *Store) RenewLease(ctx context.Context, attemptID uuid.UUID, owner string, ttl time.Duration, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if ttl <= 0 {
+		ttl = DefaultLeaseTTL
+	}
+	res := s.db.WithContext(ctx).Model(&model.WorkerAttempt{}).
+		Where("id = ? AND lease_owner = ? AND state IN ? AND completed_at IS NULL AND (lease_expires_at IS NULL OR lease_expires_at > ?)", attemptID, owner, activeAttemptStates(), now).
+		Updates(map[string]any{"lease_expires_at": now.Add(ttl), "updated_at": now})
+	if res.Error != nil {
+		return fmt.Errorf("workeridentity.RenewLease: %w", res.Error)
+	}
+	if res.RowsAffected == 1 {
+		return nil
+	}
+	return s.classifyLeaseMiss(ctx, attemptID, owner, now)
+}
+
+func (s *Store) FinishAttempt(ctx context.Context, attemptID uuid.UUID, owner, state, firstError string, now time.Time) error {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	updates := map[string]any{
+		"state":            state,
+		"completed_at":     &now,
+		"updated_at":       now,
+		"lease_expires_at": &now,
+	}
+	if state == model.WorkerAttemptFailed {
+		updates["failed_at"] = &now
+	}
+	if firstError != "" {
+		updates["first_error"] = firstError
+	}
+	res := s.db.WithContext(ctx).Model(&model.WorkerAttempt{}).
+		Where("id = ? AND lease_owner = ? AND state IN ? AND completed_at IS NULL AND (lease_expires_at IS NULL OR lease_expires_at > ?)", attemptID, owner, activeAttemptStates(), now).
+		Updates(updates)
+	if res.Error != nil {
+		return fmt.Errorf("workeridentity.FinishAttempt: %w", res.Error)
+	}
+	if res.RowsAffected == 1 {
+		return nil
+	}
+	return s.classifyLeaseMiss(ctx, attemptID, owner, now)
+}
+
+func (s *Store) classifyLeaseMiss(ctx context.Context, attemptID uuid.UUID, owner string, now time.Time) error {
+	var attempt model.WorkerAttempt
+	if err := s.db.WithContext(ctx).First(&attempt, "id = ?", attemptID).Error; err != nil {
+		return ErrLeaseConflict
+	}
+	if attempt.CompletedAt != nil || !isActiveAttemptState(attempt.State) {
+		return ErrAttemptTerminal
+	}
+	if attempt.LeaseOwner != owner {
+		return ErrLeaseConflict
+	}
+	if attempt.LeaseExpiresAt != nil && !attempt.LeaseExpiresAt.After(now) {
+		return ErrLeaseExpired
+	}
+	return ErrLeaseConflict
+}
+
+func activeAttemptStates() []string {
+	return []string{model.WorkerAttemptReserved, model.WorkerAttemptRunning}
+}
+
+func isActiveAttemptState(state string) bool {
+	return state == model.WorkerAttemptReserved || state == model.WorkerAttemptRunning
+}
+
+func ptrTime(t time.Time) *time.Time {
+	return &t
 }
 
 func (s *Store) ForTask(ctx context.Context, task *model.Task) (Handle, error) {

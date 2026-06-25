@@ -116,12 +116,25 @@ type WorkerAttempt struct {
 	ID                      uuid.UUID  `gorm:"type:text;primaryKey"`
 	TaskID                  uuid.UUID  `gorm:"type:text;not null;index"`
 	AgentID                 *uuid.UUID `gorm:"type:text;index"`
+	Source                  string     `gorm:"not null;default:'';index"`
+	SourceEventID           *uuid.UUID `gorm:"type:text;index"`
 	WorkerID                string     `gorm:"index"`
 	ContainerID             string     `gorm:"index"`
 	AgentType               string
 	Branch                  string `gorm:"not null;default:'';index"`
 	Image                   string
 	State                   string     `gorm:"not null;default:'reserved';index"`
+	LeaseOwner              string     `gorm:"not null;default:'';index"`
+	LeaseExpiresAt          *time.Time `gorm:"index"`
+	FailureClassification   string     `gorm:"not null;default:'';index"`
+	FirstError              string     `gorm:"type:text"`
+	FailedAt                *time.Time `gorm:"index"`
+	TokensIn                int        `gorm:"default:0"`
+	TokensOut               int        `gorm:"default:0"`
+	TotalCostUSD            float64    `gorm:"type:float"`
+	FinalContextPct         int        `gorm:"default:0"`
+	ArtifactURI             string     `gorm:"not null;default:''"`
+	ArtifactMetadataJSON    string     `gorm:"type:text"`
 	CompletedAt             *time.Time `gorm:"index"`
 	PromptAssetVersionsJSON string     `gorm:"type:text"`
 	RenderedPromptHash      string
@@ -138,6 +151,20 @@ const (
 	WorkerAttemptAborted    = "aborted"
 	WorkerAttemptSuperseded = "superseded"
 )
+
+// AttemptEvent records lifecycle events for a specific worker attempt. TaskID is
+// duplicated intentionally so callers can query either a task's full attempt
+// timeline or a single attempt without joining through worker_attempts.
+type AttemptEvent struct {
+	ID        uuid.UUID `gorm:"type:text;primaryKey"`
+	TaskID    uuid.UUID `gorm:"type:text;not null;index;index:idx_attempt_events_task_created,priority:1"`
+	AttemptID uuid.UUID `gorm:"type:text;not null;index;index:idx_attempt_events_attempt_created,priority:1"`
+	State     string    `gorm:"not null;default:'';index;index:idx_attempt_events_state_created,priority:1"`
+	Type      string    `gorm:"not null;index;index:idx_attempt_events_type_created,priority:1"`
+	Details   JSONField `gorm:"type:text"`
+	Actor     string    `gorm:"not null;default:''"`
+	CreatedAt time.Time `gorm:"index;index:idx_attempt_events_task_created,priority:2;index:idx_attempt_events_attempt_created,priority:2;index:idx_attempt_events_state_created,priority:2;index:idx_attempt_events_type_created,priority:2"`
+}
 
 // TaskEvent records a status change or other significant event on a task.
 type TaskEvent struct {

@@ -7,10 +7,13 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -116,6 +119,15 @@ type DirectToolAgentResult struct {
 	// "context_limit", "max_iterations", or "no_progress".
 	StopReason string
 }
+
+// Structured stop reasons emitted by DirectToolAgentResult.StopReason.
+const (
+	DirectToolStopReasonContextLimit  = "context_limit"
+	DirectToolStopReasonMaxIterations = "max_iterations"
+	DirectToolStopReasonNoProgress    = "no_progress"
+	DirectToolStopReasonMaxTokens     = "max_tokens"
+	DirectToolStopReasonTimeout       = "timeout"
+)
 
 // ---------------------------------------------------------------------------
 // Tool schemas
@@ -271,12 +283,17 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 
 		resp, err := callToolAPI(cfg, messages, tools)
 		if err != nil {
+			stopReason := ""
+			if isTimeoutError(err) {
+				stopReason = DirectToolStopReasonTimeout
+			}
 			return &DirectToolAgentResult{
 				TokensIn:        totalTokensIn,
 				TokensOut:       totalTokensOut,
 				Iterations:      iteration,
 				Duration:        time.Since(start),
 				FinalContextPct: finalPct,
+				StopReason:      stopReason,
 			}, fmt.Errorf("API call failed at iteration %d: %w", iteration, err)
 		}
 
@@ -378,7 +395,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				Iterations:      iteration + 1,
 				Duration:        time.Since(start),
 				FinalContextPct: finalPct,
-				StopReason:      "context_limit",
+				StopReason:      DirectToolStopReasonContextLimit,
 			}, nil
 		}
 
@@ -511,7 +528,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 							Iterations:      iteration + 1,
 							Duration:        time.Since(start),
 							FinalContextPct: finalPct,
-							StopReason:      "no_progress",
+							StopReason:      DirectToolStopReasonNoProgress,
 						}, fmt.Errorf("agent made no progress after %d repeated %s tool calls", consecutiveRepeats+1, tc.Function.Name)
 					}
 					if consecutiveRepeats >= 3 {
@@ -597,6 +614,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					Iterations:      iteration + 1,
 					Duration:        time.Since(start),
 					FinalContextPct: finalPct,
+					StopReason:      DirectToolStopReasonMaxTokens,
 				}, fmt.Errorf("response truncated at max_tokens=%d (iteration %d); increase MaxTokens or reduce tool-call payload size",
 					cfg.MaxTokens, iteration)
 		}
@@ -623,8 +641,19 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		Iterations:      maxIter,
 		Duration:        time.Since(start),
 		FinalContextPct: finalPct,
-		StopReason:      "max_iterations",
+		StopReason:      DirectToolStopReasonMaxIterations,
 	}, fmt.Errorf("exceeded max iterations (%d)", maxIter)
+}
+
+func isTimeoutError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if os.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // truncateForStub clamps a result string to n characters so dedup stubs do

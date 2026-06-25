@@ -81,6 +81,9 @@ func requiredSubtasksForParentTarget(subtasks []model.Task, target model.TaskSta
 			}
 		}
 		for _, sub := range activeTestWritingSubtasks(testSubtasks) {
+			if isFutureTestSubtaskBlockedByImplementation(sub, byID) {
+				continue
+			}
 			required[sub.ID.String()] = true
 		}
 		for changed := true; changed; {
@@ -101,6 +104,19 @@ func requiredSubtasksForParentTarget(subtasks []model.Task, target model.TaskSta
 		}
 	}
 	return required
+}
+
+func isFutureTestSubtaskBlockedByImplementation(sub model.Task, byID map[string]model.Task) bool {
+	if sub.Phase != "test" || sub.Status != model.StatusBacklog {
+		return false
+	}
+	for _, depID := range sub.DependencyIDs {
+		dep, ok := byID[depID]
+		if ok && dep.Phase == "implementation" && dep.Status != model.StatusDone {
+			return true
+		}
+	}
+	return false
 }
 
 func (o *Orchestrator) recordParentReadinessBlocked(parent *model.Task, target model.TaskStatus, readiness parentReadiness) error {

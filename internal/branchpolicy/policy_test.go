@@ -58,6 +58,54 @@ func TestAcceptRejectsPromptPlanAndCredentials(t *testing.T) {
 	assertRejected(t, res, "credentials_or_config")
 }
 
+func TestAcceptRejectsContaminatedArtifactDiffsWithStructuredReasons(t *testing.T) {
+	tests := []struct {
+		name   string
+		path   string
+		reason string
+	}{
+		{name: "agent trace", path: "agent-trace-task.json", reason: "worker_trace"},
+		{name: "agent push diagnostic", path: "agent-push-diagnostic.json", reason: "worker_trace"},
+		{name: "drem attempt artifact", path: ".drem/attempt-123/output.json", reason: "worker_trace"},
+		{name: "high risk config", path: ".ssh/config", reason: "credentials_or_config"},
+		{name: "credential secret", path: "config/client-secret.json", reason: "credentials_or_config"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := newRepo(t)
+			writeCommit(t, repo, "README.md", "base\n")
+			base := branch(t, repo, "base")
+			runGit(t, repo, "checkout", "-b", "feature")
+			writeCommit(t, repo, tt.path, "artifact\n")
+
+			res, err := Accept(context.Background(), AcceptanceRequest{RepoDir: repo, BaseRef: base})
+			if err != nil {
+				t.Fatalf("accept: %v", err)
+			}
+			assertRejectedPath(t, res, tt.path, "A", tt.reason)
+		})
+	}
+}
+
+func TestAcceptRejectsPlanJSONDeletionWithStructuredReason(t *testing.T) {
+	repo := newRepo(t)
+	writeFile(t, repo, "plan.json", "{}\n")
+	commit(t, repo, "base")
+	base := branch(t, repo, "base")
+	runGit(t, repo, "checkout", "-b", "feature")
+	if err := os.Remove(filepath.Join(repo, "plan.json")); err != nil {
+		t.Fatal(err)
+	}
+	commit(t, repo, "delete plan")
+
+	res, err := Accept(context.Background(), AcceptanceRequest{RepoDir: repo, BaseRef: base})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	assertRejectedPath(t, res, "plan.json", "D", "plan_artifact")
+}
+
 func TestAcceptRejectsUnrelatedDeletion(t *testing.T) {
 	repo := newRepo(t)
 	writeFile(t, repo, "allowed.go", "package p\n")
@@ -107,6 +155,19 @@ func assertRejected(t *testing.T, res AcceptanceResult, reason string) {
 		}
 	}
 	t.Fatalf("expected rejection %q in %+v", reason, res.Rejected)
+}
+
+func assertRejectedPath(t *testing.T, res AcceptanceResult, path, status, reason string) {
+	t.Helper()
+	if res.Accepted {
+		t.Fatalf("expected rejection %q for %s, got accepted %+v", reason, path, res)
+	}
+	for _, rej := range res.Rejected {
+		if rej.Path == path && rej.Status == status && rej.Reason == reason {
+			return
+		}
+	}
+	t.Fatalf("expected rejection path=%q status=%q reason=%q in %+v", path, status, reason, res.Rejected)
 }
 
 func newRepo(t *testing.T) string {
