@@ -84,6 +84,7 @@ func postMutation(t *testing.T, url, body string) *http.Response {
 	require.NoError(t, err)
 	req.Header.Set("Authorization", "Bearer secret-token")
 	req.Header.Set("X-Drem-Actor", "codex:test")
+	req.Header.Set("Idempotency-Key", uuid.NewString())
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
@@ -255,7 +256,7 @@ func TestCreateTaskCreatesClassifyingTask(t *testing.T) {
 	srv, ts, project := setupHTTPTest(t, nil)
 
 	resp := postMutation(t, ts.URL+"/projects/"+projectName+"/tasks",
-		`{"title":"File supported task","description":"Create through orchestrator HTTP","actor":"kyle"}`)
+		`{"title":"File supported task","description":"Create through orchestrator HTTP","actor":"codex:test"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
@@ -273,24 +274,56 @@ func TestCreateTaskCreatesClassifyingTask(t *testing.T) {
 
 	var event model.TaskEvent
 	require.NoError(t, srv.DB.First(&event, "task_id = ? AND event_type = ?", task.ID, "task_created").Error)
-	require.Equal(t, "kyle", event.Actor)
+	require.Equal(t, "codex:test", event.Actor)
 	require.Equal(t, string(model.StatusClassifying), event.NewValue)
 }
 
-func TestCreateTaskDefaultsActorToCSuite(t *testing.T) {
+func TestCreateTaskReplaysAtomicallyByIdempotencyKey(t *testing.T) {
 	srv, ts, _ := setupHTTPTest(t, nil)
+	post := func(body string) (*http.Response, []byte) {
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/projects/"+projectName+"/tasks", strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer secret-token")
+		req.Header.Set("X-Drem-Actor", "codex:thread-42")
+		req.Header.Set("Idempotency-Key", "create-replay-1")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		raw, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		return resp, raw
+	}
 
-	resp := postMutation(t, ts.URL+"/projects/"+projectName+"/tasks",
-		`{"title":"Default actor","description":"No actor supplied"}`)
+	first, firstBody := post(`{"title":"Create once","description":"Replay safely"}`)
+	require.Equal(t, http.StatusCreated, first.StatusCode, string(firstBody))
+	second, secondBody := post(`{"title":"Create once","description":"Replay safely"}`)
+	require.Equal(t, http.StatusCreated, second.StatusCode, string(secondBody))
+	require.Equal(t, "true", second.Header.Get("X-Drem-Idempotent-Replay"))
+	require.Equal(t, firstBody, secondBody)
+
+	var taskCount, recordCount int64
+	require.NoError(t, srv.DB.Model(&model.Task{}).Where("title = ?", "Create once").Count(&taskCount).Error)
+	require.NoError(t, srv.DB.Model(&model.TaskMutationRecord{}).Where("idempotency_key = ?", "create-replay-1").Count(&recordCount).Error)
+	require.Equal(t, int64(1), taskCount)
+	require.Equal(t, int64(1), recordCount)
+
+	conflict, conflictBody := post(`{"title":"Different","description":"Replay safely"}`)
+	require.Equal(t, http.StatusConflict, conflict.StatusCode, string(conflictBody))
+}
+
+func TestCreateTaskRequiresAuthenticatedActorInsteadOfDefaulting(t *testing.T) {
+	_, ts, _ := setupHTTPTest(t, nil)
+
+	req, err := http.NewRequest(http.MethodPost, ts.URL+"/projects/"+projectName+"/tasks",
+		strings.NewReader(`{"title":"Default actor","description":"No actor supplied"}`))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Idempotency-Key", uuid.NewString())
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-
-	var dto orchdto.TaskDTO
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&dto))
-
-	var event model.TaskEvent
-	require.NoError(t, srv.DB.First(&event, "task_id = ? AND event_type = ?", dto.ID, "task_created").Error)
-	require.Equal(t, "csuite", event.Actor)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 func TestCreateTaskMissingTitleOrDescriptionReturns400(t *testing.T) {

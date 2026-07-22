@@ -95,6 +95,7 @@ type Server struct {
 	Project     ProjectInfo
 	Orch        GateOrchestrator
 	taskSpecMu  sync.Mutex
+	mutationMu  sync.Mutex
 }
 
 // New constructs a Server. A nil DockerLogs is permitted when the caller
@@ -122,6 +123,7 @@ func (s *Server) Routes() http.Handler {
 	// Public project endpoints.
 	mux.HandleFunc("GET /projects", s.handleListProjects)
 	mux.HandleFunc("GET /projects/{name}/tasks", s.handleListTasks)
+	mux.HandleFunc("GET /projects/{name}/tasks/{id}", s.handleGetTask)
 	mux.HandleFunc("GET /projects/{name}/tasks/{id}/artifact", s.handleGetDeliveryArtifact)
 	mux.Handle("POST /projects/{name}/tasks", mutation(s.handleCreateTask))
 	mux.HandleFunc("GET /projects/{name}/workers", s.handleListWorkers)
@@ -134,17 +136,17 @@ func (s *Server) Routes() http.Handler {
 
 	// Gate mutation endpoints — delegate to the in-process orchestrator so
 	// the container remains the sole writer to the project DB.
-	mux.Handle("POST /projects/{name}/tasks/{id}/approve", mutation(s.handleApproveTask))
-	mux.Handle("POST /projects/{name}/tasks/{id}/reject", mutation(s.handleRejectTask))
+	mux.Handle("POST /projects/{name}/tasks/{id}/approve", mutation(s.guardTaskMutation("approve", s.handleApproveTask)))
+	mux.Handle("POST /projects/{name}/tasks/{id}/reject", mutation(s.guardTaskMutation("reject", s.handleRejectTask)))
 	mux.Handle("POST /projects/{name}/tasks/{id}/pass", mutation(s.handlePassTask))
 	mux.Handle("POST /projects/{name}/tasks/{id}/fail", mutation(s.handleFailTask))
-	mux.Handle("POST /projects/{name}/tasks/{id}/answer", mutation(s.handleAnswerTask))
-	mux.Handle("POST /projects/{name}/tasks/{id}/retry", mutation(s.handleRetryTask))
-	mux.Handle("POST /projects/{name}/tasks/{id}/archive", mutation(s.handleArchiveTask))
-	mux.Handle("POST /projects/{name}/tasks/{id}/comments", mutation(s.handleCommentTask))
-	mux.Handle("POST /projects/{name}/tasks/{id}/audit-events", mutation(s.handleRecoveryAuditTask))
-	mux.Handle("POST /projects/{name}/tasks/{id}/recover/stale-assignment", mutation(s.handleRecoverStaleAssignment))
-	mux.Handle("POST /projects/{name}/tasks/{id}/recover/{action}", mutation(s.handleTaskRecovery))
+	mux.Handle("POST /projects/{name}/tasks/{id}/answer", mutation(s.guardTaskMutation("answer", s.handleAnswerTask)))
+	mux.Handle("POST /projects/{name}/tasks/{id}/retry", mutation(s.guardTaskMutation("retry", s.handleRetryTask)))
+	mux.Handle("POST /projects/{name}/tasks/{id}/archive", mutation(s.guardTaskMutation("archive", s.handleArchiveTask)))
+	mux.Handle("POST /projects/{name}/tasks/{id}/comments", mutation(s.guardTaskMutation("comment", s.handleCommentTask)))
+	mux.Handle("POST /projects/{name}/tasks/{id}/audit-events", mutation(s.guardTaskMutation("recovery-audit", s.handleRecoveryAuditTask)))
+	mux.Handle("POST /projects/{name}/tasks/{id}/recover/stale-assignment", mutation(s.guardRecoveryMutation("recover-stale-assignment", s.handleRecoverStaleAssignment)))
+	mux.Handle("POST /projects/{name}/tasks/{id}/recover/{action}", mutation(s.guardRecoveryMutation("recover-task", s.handleTaskRecovery)))
 	mux.Handle("POST /projects/{name}/tasks/{id}/verify", mutation(s.handleVerifyDelivery))
 	mux.Handle("POST /projects/{name}/tasks/{id}/integrate", mutation(s.handleIntegrateDelivery))
 	mux.Handle("POST /projects/{name}/tasks/{id}/request-rework", mutation(s.handleRequestDeliveryRework))

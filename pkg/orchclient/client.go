@@ -21,6 +21,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
 
@@ -105,6 +107,17 @@ func (c *Client) ListTasks(ctx context.Context, project string, filter TaskFilte
 	var out []orchdto.TaskDTO
 	if err := c.get(ctx, "/projects/"+url.PathEscape(project)+"/tasks", q, &out); err != nil {
 		return nil, err
+	}
+	return out, nil
+}
+
+// Task fetches one authoritative task snapshot, including the state version
+// required by guarded mutations.
+func (c *Client) Task(ctx context.Context, project string, taskID uuid.UUID) (orchdto.TaskDTO, error) {
+	var out orchdto.TaskDTO
+	path := "/projects/" + url.PathEscape(project) + "/tasks/" + taskID.String()
+	if err := c.get(ctx, path, nil, &out); err != nil {
+		return orchdto.TaskDTO{}, err
 	}
 	return out, nil
 }

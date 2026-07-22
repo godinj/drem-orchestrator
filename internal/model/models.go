@@ -333,6 +333,26 @@ type MergeCompletion struct {
 	CreatedAt                  time.Time
 }
 
+// TaskMutationRecord is the replay ledger for authenticated public task
+// mutations. A pending row is a fail-closed claim; completed rows retain the
+// exact response returned to the original caller.
+type TaskMutationRecord struct {
+	ID                   uuid.UUID `gorm:"type:text;primaryKey"`
+	TaskID               uuid.UUID `gorm:"type:text;not null;index"`
+	Operation            string    `gorm:"not null;index"`
+	Actor                string    `gorm:"not null;index"`
+	ObservedStateVersion uint64    `gorm:"not null"`
+	ResultStateVersion   uint64
+	IdempotencyKey       string `gorm:"not null;uniqueIndex"`
+	RequestHash          string `gorm:"not null"`
+	Outcome              string `gorm:"not null;index"`
+	HTTPStatus           int
+	ResourceID           string
+	ResponseJSON         string `gorm:"type:text"`
+	CreatedAt            time.Time
+	CompletedAt          *time.Time
+}
+
 // Agent represents a Claude Code agent working on tasks.
 type Agent struct {
 	ID             uuid.UUID   `gorm:"type:text;primaryKey"`

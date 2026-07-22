@@ -37,6 +37,9 @@ func handleRecover(ctx context.Context, client *orchclient.Client, cfg cliConfig
 	if len(rest) != 1 || (dryRun == apply) {
 		return errors.New(usage)
 	}
+	if apply && strings.TrimSpace(cfg.actor) == "" {
+		return errors.New("--actor or DREM_ACTOR is required for recovery apply")
+	}
 	taskID, err := resolveTaskUUID(ctx, client, cfg.project, rest[0])
 	if err != nil {
 		return err
@@ -45,7 +48,7 @@ func handleRecover(ctx context.Context, client *orchclient.Client, cfg cliConfig
 		result, err := client.RecoverTask(ctx, cfg.project, taskID, recoverAPIAction(action), orchdto.TaskRecoveryRequest{
 			DryRun: dryRun,
 			Apply:  apply,
-			Actor:  "dremctl",
+			Actor:  cfg.actor,
 		})
 		if err != nil {
 			return err
@@ -55,7 +58,7 @@ func handleRecover(ctx context.Context, client *orchclient.Client, cfg cliConfig
 	result, err := client.RecoverStaleAssignment(ctx, cfg.project, taskID, orchdto.StaleAssignmentRecoveryRequest{
 		DryRun: dryRun,
 		Apply:  apply,
-		Actor:  "dremctl",
+		Actor:  cfg.actor,
 	})
 	if err != nil {
 		return err

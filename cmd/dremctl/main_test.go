@@ -241,6 +241,7 @@ func TestReadCommandsHitExpectedPaths(t *testing.T) {
 			err := run(t.Context(), tt.args, mapEnv(map[string]string{
 				"DREM_ORCH_URL": ts.URL,
 				"DREM_PROJECT":  "canvas",
+				"DREM_ACTOR":    "codex:test-thread",
 			}), &out, &errOut)
 			if err != nil {
 				t.Fatalf("run returned error: %v", err)
@@ -388,7 +389,7 @@ func TestRecoverStaleAssignmentDryRunPostsExpectedBody(t *testing.T) {
 	if posts[0].Path != "/projects/canvas/tasks/"+testTaskID+"/recover/stale-assignment" {
 		t.Fatalf("path = %s", posts[0].Path)
 	}
-	for _, want := range []string{`"dry_run":true`, `"apply":false`, `"actor":"dremctl"`} {
+	for _, want := range []string{`"dry_run":true`, `"apply":false`} {
 		if !strings.Contains(posts[0].Body, want) {
 			t.Fatalf("body %q missing %q", posts[0].Body, want)
 		}
@@ -607,7 +608,7 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 		{name: "fail", args: []string{"fail", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/fail", wantOut: "in_progress"},
 		{name: "answer", args: []string{"answer", "12345678", "--body", "use port 9090"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/answer", wantBody: `{"body":"use port 9090"}`, wantOut: "in_progress"},
 		{name: "retry", args: []string{"retry", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/retry", wantOut: "in_progress"},
-		{name: "archive", args: []string{"archive", "12345678", "--reason", "superseded", "--actor", "kyle"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/archive", wantBody: `{"actor":"kyle","reason":"superseded","mode":"obsolete"}`, wantOut: "in_progress"},
+		{name: "archive", args: []string{"archive", "12345678", "--reason", "superseded", "--actor", "codex:kyle:test"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/archive", wantBody: `{"actor":"codex:kyle:test","reason":"superseded","mode":"obsolete"}`, wantOut: "in_progress"},
 		{name: "comment", args: []string{"comment", "12345678", "--body", "supersede from current base"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/comments", wantBody: `{"body":"supersede from current base"}`, wantOut: "comment"},
 	}
 
@@ -620,7 +621,10 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks":
 					gets = append(gets, rec)
-					writeJSONResponse(t, w, []map[string]any{{"id": testTaskID, "title": "A", "status": "plan_review", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")}})
+					writeJSONResponse(t, w, []map[string]any{{"id": testTaskID, "title": "A", "status": "plan_review", "state_version": 1, "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")}})
+				case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks/"+testTaskID:
+					gets = append(gets, rec)
+					writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": "A", "status": "plan_review", "state_version": 1, "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")})
 				case r.Method == http.MethodPost:
 					posts = append(posts, rec)
 					if strings.HasSuffix(r.URL.Path, "/comments") {
@@ -638,12 +642,17 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 			err := run(t.Context(), tt.args, mapEnv(map[string]string{
 				"DREM_ORCH_URL": ts.URL,
 				"DREM_PROJECT":  "canvas",
+				"DREM_ACTOR":    "codex:test-thread",
 			}), &out, &errOut)
 			if err != nil {
 				t.Fatalf("run returned error: %v", err)
 			}
-			if len(gets) != 1 {
-				t.Fatalf("got %d prefix-resolution GETs, want 1", len(gets))
+			wantGets := 2
+			if tt.name == "pass" || tt.name == "fail" {
+				wantGets = 1
+			}
+			if len(gets) != wantGets {
+				t.Fatalf("got %d task GETs, want %d", len(gets), wantGets)
 			}
 			if len(posts) != 1 {
 				t.Fatalf("got %d POSTs, want 1", len(posts))
@@ -665,7 +674,7 @@ func TestFullUUIDMutationSkipsPrefixResolution(t *testing.T) {
 	var got []recordedRequest
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got = append(got, recordRequest(t, r))
-		writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": "A", "status": "in_progress", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")})
+		writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": "A", "status": "in_progress", "state_version": 1, "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")})
 	}))
 	defer ts.Close()
 
@@ -673,12 +682,13 @@ func TestFullUUIDMutationSkipsPrefixResolution(t *testing.T) {
 	err := run(t.Context(), []string{"approve", testTaskID}, mapEnv(map[string]string{
 		"DREM_ORCH_URL": ts.URL,
 		"DREM_PROJECT":  "canvas",
+		"DREM_ACTOR":    "codex:test-thread",
 	}), &out, &errOut)
 	if err != nil {
 		t.Fatalf("run returned error: %v", err)
 	}
-	if len(got) != 1 || got[0].Method != http.MethodPost {
-		t.Fatalf("full UUID should skip prefix GET, got %#v", got)
+	if len(got) != 2 || got[0].Method != http.MethodGet || got[0].Path != "/projects/canvas/tasks/"+testTaskID || got[1].Method != http.MethodPost {
+		t.Fatalf("full UUID should skip list resolution but fetch guarded state, got %#v", got)
 	}
 }
 
@@ -709,6 +719,7 @@ func TestCreateTaskCommandsPostExpectedBodyAndRenderMutationOutput(t *testing.T)
 			err := run(t.Context(), tt.args, mapEnv(map[string]string{
 				"DREM_ORCH_URL": ts.URL,
 				"DREM_PROJECT":  "canvas",
+				"DREM_ACTOR":    "codex:test-thread",
 			}), &out, &errOut)
 			if err != nil {
 				t.Fatalf("run returned error: %v", err)

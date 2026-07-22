@@ -75,6 +75,10 @@ func requireMutationActor(w http.ResponseWriter, r *http.Request) (string, bool)
 		writeJSONError(w, http.StatusBadRequest, "X-Drem-Actor is required")
 		return "", false
 	}
+	if genericMutationActor(actor) {
+		writeJSONError(w, http.StatusBadRequest, "a stable, specific mutation actor is required; generic actor "+actor+" is not allowed")
+		return "", false
+	}
 	return actor, true
 }
 
@@ -333,9 +337,8 @@ func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
 		return
 	}
-	req.Actor = strings.TrimSpace(req.Actor)
-	if req.Actor == "" {
-		req.Actor = "operator"
+	if req.Actor = strings.TrimSpace(req.Actor); req.Actor == "" {
+		req.Actor = strings.TrimSpace(r.Header.Get(mutationActorHeader))
 	}
 	req.Reason = strings.TrimSpace(req.Reason)
 	if req.Reason == "" {
@@ -506,7 +509,7 @@ func (s *Server) handleCommentTask(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Author = strings.TrimSpace(req.Author)
 	if req.Author == "" {
-		req.Author = "csuite"
+		req.Author = strings.TrimSpace(r.Header.Get(mutationActorHeader))
 	}
 
 	comment := model.TaskComment{
@@ -515,7 +518,22 @@ func (s *Server) handleCommentTask(w http.ResponseWriter, r *http.Request) {
 		Author: req.Author,
 		Body:   req.Body,
 	}
-	if err := s.DB.WithContext(r.Context()).Create(&comment).Error; err != nil {
+	err := s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&model.Task{}).Where("id = ? AND state_version = ?", task.ID, task.StateVersion).
+			Updates(map[string]any{"state_version": task.StateVersion + 1, "updated_at": time.Now()})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return state.ErrStaleTransition
+		}
+		return tx.Create(&comment).Error
+	})
+	if errors.Is(err, state.ErrStaleTransition) {
+		writeJSONError(w, http.StatusConflict, "task changed while commenting; refresh and retry")
+		return
+	}
+	if err != nil {
 		slog.Error("orchhttp: comment failed", "task_id", task.ID, "err", err)
 		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
 		return
@@ -571,7 +589,22 @@ func (s *Server) handleRecoveryAuditTask(w http.ResponseWriter, r *http.Request)
 		Actor:     req.Actor,
 		CreatedAt: now,
 	}
-	if err := s.DB.WithContext(r.Context()).Create(&event).Error; err != nil {
+	err := s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&model.Task{}).Where("id = ? AND state_version = ?", task.ID, task.StateVersion).
+			Updates(map[string]any{"state_version": task.StateVersion + 1, "updated_at": now})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected != 1 {
+			return state.ErrStaleTransition
+		}
+		return tx.Create(&event).Error
+	})
+	if errors.Is(err, state.ErrStaleTransition) {
+		writeJSONError(w, http.StatusConflict, "task changed while recording recovery audit; refresh and retry")
+		return
+	}
+	if err != nil {
 		slog.Error("orchhttp: recovery audit failed", "task_id", task.ID, "err", err)
 		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
 		return

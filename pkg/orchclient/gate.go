@@ -15,6 +15,7 @@ package orchclient
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -328,34 +329,52 @@ func gatePath(project string, taskID uuid.UUID, verb string) string {
 // closed so the HTTP connection can be reused.
 func (c *Client) postGate(ctx context.Context, path string, body any, out any) error {
 	var (
-		reader      io.Reader
+		rawBody     []byte
 		contentType string
 	)
 	if body != nil {
-		buf, err := json.Marshal(body)
+		var err error
+		rawBody, err = json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("orchclient: marshal request body: %w", err)
 		}
-		reader = bytes.NewReader(buf)
 		contentType = "application/json"
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.url(path, nil), reader)
+	observed, idempotencyKey, guarded, err := c.legacyMutationMetadata(ctx, path, rawBody)
 	if err != nil {
 		return err
 	}
-	if contentType != "" {
-		req.Header.Set("Content-Type", contentType)
-	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
-	}
-	if c.actor != "" {
-		req.Header.Set("X-Drem-Actor", c.actor)
-	}
-	req.Header.Set("Accept", "application/json")
+	var resp *http.Response
+	for attempt := 0; attempt < 2; attempt++ {
+		var reader io.Reader
+		if len(rawBody) != 0 {
+			reader = bytes.NewReader(rawBody)
+		}
+		req, requestErr := http.NewRequestWithContext(ctx, http.MethodPost, c.url(path, nil), reader)
+		if requestErr != nil {
+			return requestErr
+		}
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		if c.token != "" {
+			req.Header.Set("Authorization", "Bearer "+c.token)
+		}
+		if c.actor != "" {
+			req.Header.Set("X-Drem-Actor", c.actor)
+		}
+		if guarded {
+			req.Header.Set("X-Drem-Observed-State-Version", fmt.Sprint(observed))
+			req.Header.Set("Idempotency-Key", idempotencyKey)
+		}
+		req.Header.Set("Accept", "application/json")
 
-	resp, err := c.http.Do(req)
+		resp, err = c.http.Do(req)
+		if err == nil || !guarded || ctx.Err() != nil || attempt == 1 {
+			break
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -395,6 +414,56 @@ func (c *Client) postGate(ctx context.Context, path string, body any, out any) e
 	default:
 		return fmt.Errorf("orchclient: POST %s: unexpected status %d: %s", path, resp.StatusCode, msg)
 	}
+}
+
+// legacyMutationMetadata upgrades convenience APIs to the guarded wire
+// contract. A deterministic key plus one same-request transport retry covers
+// the common lost-response case without duplicating a write.
+func (c *Client) legacyMutationMetadata(ctx context.Context, path string, body []byte) (uint64, string, bool, error) {
+	if c.actor == "" {
+		return 0, "", false, nil
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 4 && parts[0] == "projects" && parts[2] == "tasks" && parts[3] == "" {
+		return 0, "create-" + uuid.NewString(), true, nil
+	}
+	if len(parts) == 3 && parts[0] == "projects" && parts[2] == "tasks" {
+		return 0, "create-" + uuid.NewString(), true, nil
+	}
+	if len(parts) < 5 || parts[0] != "projects" || parts[2] != "tasks" {
+		return 0, "", false, nil
+	}
+	verb := strings.Join(parts[4:], "/")
+	guarded := map[string]bool{
+		"approve": true, "reject": true, "answer": true, "retry": true,
+		"archive": true, "comments": true, "audit-events": true,
+	}
+	if strings.HasPrefix(verb, "recover/") {
+		var mode struct {
+			Apply bool `json:"apply"`
+		}
+		guarded[verb] = json.Unmarshal(body, &mode) == nil && mode.Apply
+	}
+	if !guarded[verb] {
+		return 0, "", false, nil
+	}
+	project, err := url.PathUnescape(parts[1])
+	if err != nil {
+		return 0, "", false, err
+	}
+	taskID, err := uuid.Parse(parts[3])
+	if err != nil {
+		return 0, "", false, nil
+	}
+	task, err := c.Task(ctx, project, taskID)
+	if err != nil {
+		return 0, "", false, err
+	}
+	if task.StateVersion == 0 {
+		return 0, "", false, &ErrBadRequest{Message: "task response omitted state_version"}
+	}
+	sum := sha256.Sum256([]byte(strings.Join([]string{c.actor, path, fmt.Sprint(task.StateVersion), string(body)}, "\x00")))
+	return task.StateVersion, fmt.Sprintf("legacy-%x", sum[:]), true, nil
 }
 
 // parseErrorEnvelope extracts the "error" field from the server's

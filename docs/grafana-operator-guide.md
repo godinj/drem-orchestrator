@@ -106,14 +106,14 @@ docker exec drem-orchestrator-csuite-kyle-1 dremctl events --limit 80
 Approve or reject a gate only after reviewing the task evidence:
 
 ```bash
-docker exec drem-orchestrator-csuite-kyle-1 dremctl approve <task-id>
-docker exec drem-orchestrator-csuite-kyle-1 dremctl reject <task-id> --reason "<reason>"
+docker exec -e DREM_ACTOR='operator:<name-or-session>' drem-orchestrator-csuite-kyle-1 dremctl approve <task-id>
+docker exec -e DREM_ACTOR='operator:<name-or-session>' drem-orchestrator-csuite-kyle-1 dremctl reject <task-id> --reason "<reason>"
 ```
 
 Retry failed work only when the failure mode is understood:
 
 ```bash
-docker exec drem-orchestrator-csuite-kyle-1 dremctl retry <task-id>
+docker exec -e DREM_ACTOR='operator:<name-or-session>' drem-orchestrator-csuite-kyle-1 dremctl retry <task-id>
 ```
 
 ## Common Interpretations
@@ -121,7 +121,8 @@ docker exec drem-orchestrator-csuite-kyle-1 dremctl retry <task-id>
 | Symptom | Likely meaning | Next check |
 |---------|----------------|------------|
 | `in_progress` count grows but completions stop | Workers may be failing, stuck, or unable to report results. | Check `dremctl tasks`, `dremctl events`, and agentmon/orch logs. |
-| `testing_ready` count grows | The operator or delegated reviewer needs to pass/reject gates. | Inspect evidence, then use `dremctl pass` or reject with a reason. |
+| `testing_ready` count grows | Deterministic gate preparation is not draining. | Inspect gate/worker events; do not manufacture verification with `pass`. |
+| `verification_ready` count grows | Exact artifacts are waiting for native evidence. | Use `dremctl artifact`, verify the exact binary with Computer Use, then submit `dremctl verify`. |
 | `failed` count spikes after retry activity | Scheduler, merge, test, or dependency failure may be systemic. | Ask Mike/Seth to investigate the failure pattern before mass retries. |
 | Cost rises without completions | Agents may be retrying, looping, or producing rejected work. | Compare `Cost Over Time`, token panels, and exit reasons. |
 | Context percent trends high before failures | Tasks may be too large or prompts may be accumulating irrelevant context. | Break work into smaller slices or route a prompt/context investigation. |

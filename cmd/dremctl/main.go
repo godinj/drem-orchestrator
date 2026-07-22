@@ -425,6 +425,9 @@ func handleCreateTask(ctx context.Context, client *orchclient.Client, cfg cliCon
 		if err != nil {
 			return err
 		}
+		if strings.TrimSpace(cfg.actor) == "" {
+			return errors.New("--actor or DREM_ACTOR is required for task creation")
+		}
 		dto, err := client.CreateTaskSpec(ctx, cfg.project, spec)
 		if err != nil {
 			return err
@@ -439,6 +442,9 @@ func handleCreateTask(ctx context.Context, client *orchclient.Client, cfg cliCon
 	}
 	if len(args) != 0 {
 		return fmt.Errorf("usage: dremctl %s", mutationUsage(command))
+	}
+	if strings.TrimSpace(cfg.actor) == "" {
+		return errors.New("--actor or DREM_ACTOR is required for task creation")
 	}
 	dto, err := client.CreateTask(ctx, cfg.project, title, description)
 	if err != nil {
@@ -496,6 +502,9 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 	}
 	if len(args) != 1 {
 		return fmt.Errorf("usage: dremctl %s", mutationUsage(command))
+	}
+	if command != "pass" && command != "fail" && strings.TrimSpace(actor) == "" {
+		return errors.New("--actor or DREM_ACTOR is required for task mutations")
 	}
 
 	taskID, err := resolveTaskUUID(ctx, client, cfg.project, args[0])

@@ -20,7 +20,7 @@ func testDB(t *testing.T) *gorm.DB {
 	if err != nil {
 		t.Fatalf("open test db: %v", err)
 	}
-	if err := db.AutoMigrate(&Project{}, &Task{}, &TaskSpecification{}, &TaskAcceptanceCriterion{}, &Agent{}, &WorkerAttempt{}, &AttemptEvent{}, &TaskEvent{}, &Memory{}, &TaskComment{}, &BranchAcceptanceRecord{}, &PreliminaryGateRun{}, &DeliveryArtifact{}, &VerificationRecord{}, &VerificationInteraction{}, &IntegrationAuthorization{}, &DeliveryReworkRecord{}, &HostReworkSession{}, &HostReworkSubmission{}, &MergeIntent{}, &MergeCompletion{}, &BugReport{}, &BugReportComment{}); err != nil {
+	if err := db.AutoMigrate(&Project{}, &Task{}, &TaskSpecification{}, &TaskAcceptanceCriterion{}, &Agent{}, &WorkerAttempt{}, &AttemptEvent{}, &TaskEvent{}, &Memory{}, &TaskComment{}, &BranchAcceptanceRecord{}, &PreliminaryGateRun{}, &DeliveryArtifact{}, &VerificationRecord{}, &VerificationInteraction{}, &IntegrationAuthorization{}, &DeliveryReworkRecord{}, &HostReworkSession{}, &HostReworkSubmission{}, &MergeIntent{}, &MergeCompletion{}, &TaskMutationRecord{}, &BugReport{}, &BugReportComment{}); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
 	// Register UUID callback (mirrors db.registerUUIDCallback).

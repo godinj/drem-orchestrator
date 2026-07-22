@@ -8,7 +8,9 @@ records typed pass/failure evidence, and never launches a generic fixer.
 Computer Use results are retained per acceptance criterion and every host edit
 returns through a new commit, gate run, artifact version, and verification.
 The surrounding protocol is still partial: workspace-setup failures are not
-yet recorded as typed gate runs, and mutation attribution is not yet uniform.
+yet recorded as typed gate runs. Mutation attribution and replay are now
+uniform across task creation, legacy gates, comments/audits, archive, recovery
+apply, delivery verification/rework, and integration.
 Merge completion no longer depends on telemetry: an immutable intent is
 created before `merging`, and reconciliation proves the accepted artifact is
 contained in the authoritative target ref before it writes `done`.
@@ -247,10 +249,12 @@ the same commands as operators; they never edit SQLite directly:
   for delivery states with a pointer to `verify`; they cannot manufacture the
   missing exact-SHA evidence.
 
-Mutation endpoints require the project bearer token. Gate and delivery
-mutations also carry `X-Drem-Actor`; delivery request bodies must match that
-claimed actor. This is attribution within the single-user project trust
-boundary, not per-thread cryptographic identity.
+Mutation endpoints require the project bearer token and a stable identity in
+`X-Drem-Actor`; generic identities are refused. Existing-task mutations also
+carry `X-Drem-Observed-State-Version` and `Idempotency-Key`. Delivery request
+bodies must match the claimed actor and carry their typed state/artifact
+guards. This is attribution within the single-user project trust boundary,
+not per-thread cryptographic identity.
 
 Extend that surface with guarded, compare-and-swap delivery operations:
 
@@ -278,14 +282,17 @@ Extend that surface with guarded, compare-and-swap delivery operations:
   delivery work. It invalidates the current artifact atomically; it never
   treats cancellation as successful verification or integration.
 
-Every mutation carries an actor, idempotency key, observed task state version,
-artifact version, and (where applicable) exact commit SHA. Replaying the same
-idempotency key returns its original result. Reusing it with a different
-payload is a conflict. Stale acknowledgements return a conflict and do not
-mutate state. The authenticated actor claim must match the body actor, generic
-identities such as `user` are rejected, and archive/cancel follows the same
-compare-and-swap and idempotency contract rather than being a privileged
-exception.
+Every existing-task mutation carries an actor, idempotency key, and observed
+task state version; delivery mutations additionally carry artifact version and
+(where applicable) exact commit SHA. Task creation has no prior state version,
+but atomically records its actor, idempotency key, task, event, and original
+response. Replaying the same key returns the original result. Reusing it with a
+different payload is a conflict. Stale acknowledgements return a conflict and
+do not mutate state. A pending replay claim after a crash fails closed for
+operator reconciliation. The authenticated actor claim must match any body
+actor; generic identities such as `user`, `operator`, `csuite`, and `dremctl`
+are rejected. Archive, comments, recovery audit/apply, and task creation are no
+longer privileged exceptions.
 
 ## Codex-facing operating model
 
@@ -417,7 +424,7 @@ deterministic orchestration checkpoints.
 11. Make merger completion recover from typed merge intent plus authoritative
     target-ref state; make telemetry/report delivery optional for correctness.
 12. Apply actor/idempotency/version requirements uniformly to archive and all
-    remaining mutations.
+    remaining mutations. **Complete.**
 13. Run a read-only inference canary, then a no-op branch-delivery canary, and
     finally a non-integrating multi-tweak Computer Use canary before authorizing
     a Canvas writer.
@@ -443,8 +450,14 @@ artifact, passing verification, authorization, feature ref, target ref, and
 verified base. The orchestrator reconciles target Git state before and after
 each merger dispatch, completes already-pushed work without redispatch, and
 refuses unrelated target advances. Agentmon reporting is optional telemetry;
-historical completion rows remain migration-compatible. Typed recording for
-workspace-setup failures and uniform mutation guards remain partial.
+historical completion rows remain migration-compatible. Step 12 is implemented
+through a shared HTTP mutation ledger: actor/header agreement, optimistic task
+version checks, exact-response replay, payload-conflict refusal, and
+fail-closed pending claims apply to all remaining writes. Comments, audits,
+and recovery repairs now increment the task state version; simple task creation
+records its replay result in the same transaction. The recovery implementation
+was split below the repository's file ceiling. Typed recording for
+workspace-setup failures remains partial.
 Reconciliation no longer infers `done`: even when a
 recorded branch base proves the feature advanced and Git proves it is already
 on the default branch, the task returns through `testing_ready` for an exact

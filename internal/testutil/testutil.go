@@ -64,6 +64,7 @@ func NewTestDB(t *testing.T) *gorm.DB {
 		&model.HostReworkSubmission{},
 		&model.MergeIntent{},
 		&model.MergeCompletion{},
+		&model.TaskMutationRecord{},
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
@@ -110,6 +111,7 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 		&model.HostReworkSubmission{},
 		&model.MergeIntent{},
 		&model.MergeCompletion{},
+		&model.TaskMutationRecord{},
 	}
 	allModels := append(coreModels, extraModels...)
 	if err := db.AutoMigrate(allModels...); err != nil {
@@ -181,6 +183,7 @@ func NewSharedTestDB(t *testing.T) *gorm.DB {
 		&model.HostReworkSubmission{},
 		&model.MergeIntent{},
 		&model.MergeCompletion{},
+		&model.TaskMutationRecord{},
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -253,13 +254,82 @@ func doJSON(t *testing.T, method, url, body string) (*http.Response, []byte) {
 	}
 	require.NoError(t, err)
 	r.Header.Set("Authorization", "Bearer secret-token")
-	r.Header.Set("X-Drem-Actor", "codex:test-thread")
+	actor := "codex:test-thread"
+	var identity struct {
+		Actor string `json:"actor"`
+	}
+	actorBodyRoute := strings.Contains(url, "/archive") || strings.Contains(url, "/audit-events") || strings.Contains(url, "/recover/")
+	if actorBodyRoute && json.Unmarshal([]byte(body), &identity) == nil && strings.TrimSpace(identity.Actor) != "" {
+		actor = strings.TrimSpace(identity.Actor)
+	}
+	r.Header.Set("X-Drem-Actor", actor)
+	if method == http.MethodPost {
+		observed := uint64(1)
+		var envelope struct {
+			Observed uint64 `json:"observed_state_version"`
+		}
+		if json.Unmarshal([]byte(body), &envelope) == nil && envelope.Observed != 0 {
+			observed = envelope.Observed
+		} else if taskURL := taskResourceURL(url); taskURL != "" {
+			getReq, getErr := http.NewRequest(http.MethodGet, taskURL, nil)
+			if getErr == nil {
+				if getResp, getErr := http.DefaultClient.Do(getReq); getErr == nil {
+					var task orchdto.TaskDTO
+					if json.NewDecoder(getResp.Body).Decode(&task) == nil && task.StateVersion != 0 {
+						observed = task.StateVersion
+					}
+					_ = getResp.Body.Close()
+				}
+			}
+		}
+		r.Header.Set("X-Drem-Observed-State-Version", fmt.Sprint(observed))
+		r.Header.Set("Idempotency-Key", uuid.NewString())
+	}
 	resp, err := http.DefaultClient.Do(r)
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	buf := new(bytes.Buffer)
 	_, _ = buf.ReadFrom(resp.Body)
 	return resp, buf.Bytes()
+}
+
+func taskResourceURL(rawURL string) string {
+	marker := "/tasks/"
+	idx := strings.Index(rawURL, marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := rawURL[idx+len(marker):]
+	if slash := strings.Index(rest, "/"); slash >= 0 {
+		rest = rest[:slash]
+	}
+	if rest == "" {
+		return ""
+	}
+	return rawURL[:idx+len(marker)] + rest
+}
+
+func doGuardedJSON(t *testing.T, method, rawURL, body, actor, key string, observed uint64) (*http.Response, []byte) {
+	t.Helper()
+	var reader io.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	}
+	req, err := http.NewRequest(method, rawURL, reader)
+	require.NoError(t, err)
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("X-Drem-Actor", actor)
+	req.Header.Set("X-Drem-Observed-State-Version", fmt.Sprint(observed))
+	req.Header.Set("Idempotency-Key", key)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return resp, raw
 }
 
 func decodeErr(t *testing.T, body []byte) string {
@@ -938,13 +1008,16 @@ func TestCommentTaskEndpoint_Happy(t *testing.T) {
 	var dto orchdto.TaskCommentDTO
 	require.NoError(t, json.Unmarshal(body, &dto))
 	require.Equal(t, task.ID.String(), dto.TaskID)
-	require.Equal(t, "csuite", dto.Author)
+	require.Equal(t, "codex:test-thread", dto.Author)
 	require.Equal(t, "supersede candidate from current base", dto.Body)
 
 	var comments []model.TaskComment
 	require.NoError(t, srv.DB.Where("task_id = ?", task.ID).Find(&comments).Error)
 	require.Len(t, comments, 1)
 	require.Equal(t, dto.ID, comments[0].ID.String())
+	var updated model.Task
+	require.NoError(t, srv.DB.First(&updated, "id = ?", task.ID).Error)
+	require.Equal(t, task.StateVersion+1, updated.StateVersion)
 }
 
 func TestCommentTaskEndpoint_EmptyBodyReturns400(t *testing.T) {
@@ -1130,6 +1203,69 @@ func TestArchiveTaskEndpoint_RequiresReason(t *testing.T) {
 	resp, body := doJSON(t, http.MethodPost, archiveURL(base, task.ID.String()), `{"reason":"   "}`)
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	require.Contains(t, decodeErr(t, body), "reason is required")
+}
+
+func TestMutationGuardReplaysExactResponseWithoutRedispatch(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "guarded", model.StatusPlanReview)
+	url := approveURL(base, task.ID.String())
+
+	first, firstBody := doGuardedJSON(t, http.MethodPost, url, `{}`, "codex:thread-42", "approve-replay-1", task.StateVersion)
+	require.Equal(t, http.StatusOK, first.StatusCode, string(firstBody))
+	second, secondBody := doGuardedJSON(t, http.MethodPost, url, `{}`, "codex:thread-42", "approve-replay-1", task.StateVersion)
+	require.Equal(t, http.StatusOK, second.StatusCode, string(secondBody))
+	require.Equal(t, "true", second.Header.Get("X-Drem-Idempotent-Replay"))
+	require.Equal(t, firstBody, secondBody)
+	require.Len(t, fake.Calls, 1)
+
+	var records []model.TaskMutationRecord
+	require.NoError(t, srv.DB.Where("task_id = ?", task.ID).Find(&records).Error)
+	require.Len(t, records, 1)
+	require.Equal(t, "succeeded", records[0].Outcome)
+	require.Equal(t, "codex:thread-42", records[0].Actor)
+	require.Equal(t, task.StateVersion, records[0].ObservedStateVersion)
+}
+
+func TestMutationGuardRejectsStaleGenericAndConflictingRequests(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "guarded", model.StatusPlanReview)
+	url := approveURL(base, task.ID.String())
+
+	resp, body := doGuardedJSON(t, http.MethodPost, url, `{}`, "codex:thread-42", "stale-1", task.StateVersion+1)
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Empty(t, fake.Calls)
+
+	resp, body = doGuardedJSON(t, http.MethodPost, url, `{}`, "user", "generic-1", task.StateVersion)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "specific mutation actor")
+
+	resp, body = doGuardedJSON(t, http.MethodPost, url, `{}`, "codex:thread-42", "conflict-1", task.StateVersion)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	resp, body = doGuardedJSON(t, http.MethodPost, url, `{"different":true}`, "codex:thread-42", "conflict-1", task.StateVersion)
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "different mutation")
+	require.Len(t, fake.Calls, 1)
+}
+
+func TestMutationGuardFailsClosedForPendingClaimAndActorMismatch(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "guarded", model.StatusPlanReview)
+	url := approveURL(base, task.ID.String())
+
+	resp, body := doGuardedJSON(t, http.MethodPost, url, `{"actor":"kyle:loop-1"}`, "codex:thread-42", "actor-mismatch-1", task.StateVersion)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "does not match")
+
+	resp, body = doGuardedJSON(t, http.MethodPost, url, `{}`, "codex:thread-42", "pending-1", task.StateVersion)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	var record model.TaskMutationRecord
+	require.NoError(t, srv.DB.Where("idempotency_key = ?", "pending-1").First(&record).Error)
+	require.NoError(t, srv.DB.Model(&record).Updates(map[string]any{"outcome": "pending", "completed_at": nil}).Error)
+
+	resp, body = doGuardedJSON(t, http.MethodPost, url, `{}`, "codex:thread-42", "pending-1", task.StateVersion)
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "uncertain")
+	require.Len(t, fake.Calls, 1)
 }
 
 // Extra: orch nil should degrade to 503 (safety: don't crash).

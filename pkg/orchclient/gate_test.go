@@ -272,6 +272,37 @@ func TestArchiveEmptyReasonReturnsBadRequestWithoutNetwork(t *testing.T) {
 	require.Equal(t, int32(0), atomic.LoadInt32(&h.calls))
 }
 
+func TestGuardedConvenienceMutationFetchesVersionAndSendsStableEnvelope(t *testing.T) {
+	id := uuid.New()
+	var postCalls int32
+	var observed, key, actor, authorization string
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			dto := sampleDTO(id, "failed")
+			dto.StateVersion = 7
+			_ = json.NewEncoder(w).Encode(dto)
+			return
+		}
+		atomic.AddInt32(&postCalls, 1)
+		observed = r.Header.Get("X-Drem-Observed-State-Version")
+		key = r.Header.Get("Idempotency-Key")
+		actor = r.Header.Get("X-Drem-Actor")
+		authorization = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(orchdto.TaskCommentDTO{ID: uuid.NewString(), TaskID: id.String(), Author: actor, Body: "note"})
+	})
+	c, _ := newGateClient(t, h)
+	c.WithToken("secret").WithActor("codex:thread-42")
+
+	_, err := c.Comment(context.Background(), "canvas", id, "note")
+	require.NoError(t, err)
+	require.Equal(t, int32(1), atomic.LoadInt32(&postCalls))
+	require.Equal(t, "7", observed)
+	require.Equal(t, "codex:thread-42", actor)
+	require.Equal(t, "Bearer secret", authorization)
+	require.True(t, strings.HasPrefix(key, "legacy-"))
+	require.Len(t, key, len("legacy-")+64)
+}
+
 // -- Pass ----------------------------------------------------------------
 
 func TestPassHappyPath(t *testing.T) {

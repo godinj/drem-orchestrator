@@ -2,8 +2,10 @@ package orchhttp
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -125,6 +127,29 @@ func (s *Server) handleListTasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleGetTask returns one precise task snapshot for optimistic mutation
+// guards. Unlike list filtering, this endpoint cannot omit archived tasks.
+func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
+	if !s.requireProject(w, r) {
+		return
+	}
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid task id: "+r.PathValue("id"))
+		return
+	}
+	var task model.Task
+	if err := s.DB.WithContext(r.Context()).Where("id = ?", id).First(&task).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			writeJSONError(w, http.StatusNotFound, "task not found")
+			return
+		}
+		writeDBError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toTaskDTO(task))
+}
+
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if name != s.Project.Name {
@@ -158,11 +183,40 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "description is required")
 		return
 	}
-	if req.Actor == "" {
-		req.Actor = "csuite"
+	actor, ok := requireMutationActor(w, r)
+	if !ok {
+		return
+	}
+	if req.Actor != "" && req.Actor != actor {
+		writeJSONError(w, http.StatusBadRequest, "request actor does not match "+mutationActorHeader)
+		return
+	}
+	req.Actor = actor
+	key := strings.TrimSpace(r.Header.Get(mutationIdempotencyHeader))
+	if key == "" || len(key) > 200 {
+		writeJSONError(w, http.StatusBadRequest, mutationIdempotencyHeader+" is required and must be at most 200 characters")
+		return
+	}
+	hashBytes := sha256.Sum256([]byte(strings.Join([]string{name, req.Title, req.Description, actor}, "\x00")))
+	requestHash := fmt.Sprintf("%x", hashBytes[:])
+
+	s.taskSpecMu.Lock()
+	defer s.taskSpecMu.Unlock()
+	var existing model.TaskMutationRecord
+	if err := s.DB.WithContext(r.Context()).Where("idempotency_key = ?", key).First(&existing).Error; err == nil {
+		if existing.Operation != "create-task" || existing.RequestHash != requestHash {
+			writeJSONError(w, http.StatusConflict, "idempotency key was already used for a different mutation")
+			return
+		}
+		replayMutationResponse(w, existing)
+		return
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		writeDBError(w, err)
+		return
 	}
 
 	var task model.Task
+	var responseJSON string
 	err := s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
 		var project model.Project
 		if err := tx.Where("name = ?", name).First(&project).Error; err != nil {
@@ -182,7 +236,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 
-		return tx.Create(&model.TaskEvent{
+		if err := tx.Create(&model.TaskEvent{
 			ID:        uuid.New(),
 			TaskID:    task.ID,
 			EventType: "task_created",
@@ -193,6 +247,21 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 			},
 			Actor:     req.Actor,
 			CreatedAt: now,
+		}).Error; err != nil {
+			return err
+		}
+		payload, err := json.Marshal(toTaskDTO(task))
+		if err != nil {
+			return err
+		}
+		responseJSON = string(payload) + "\n"
+		completed := now
+		return tx.Create(&model.TaskMutationRecord{
+			ID: uuid.New(), TaskID: task.ID, Operation: "create-task", Actor: actor,
+			ObservedStateVersion: 0, ResultStateVersion: task.StateVersion,
+			IdempotencyKey: key, RequestHash: requestHash, Outcome: mutationSucceeded,
+			HTTPStatus: http.StatusCreated, ResponseJSON: responseJSON,
+			CreatedAt: now, CompletedAt: &completed,
 		}).Error
 	})
 	if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -204,7 +273,9 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, toTaskDTO(task))
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusCreated)
+	_, _ = io.WriteString(w, responseJSON)
 }
 
 // writeTasksTimeout surfaces a /tasks DB timeout as 503 + Retry-After: 1

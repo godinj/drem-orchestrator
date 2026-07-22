@@ -265,7 +265,7 @@ func TestRecoverStaleAssignmentDryRunAndApplyClearsDeadWorker(t *testing.T) {
 	require.True(t, dry.Safe)
 	require.False(t, dry.Applied)
 
-	resp, body = doJSON(t, http.MethodPost, url, `{"apply":true,"actor":"operator"}`)
+	resp, body = doJSON(t, http.MethodPost, url, `{"apply":true,"actor":"codex:operator:test"}`)
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 	var applied orchdto.StaleAssignmentRecoveryDTO
 	require.NoError(t, json.Unmarshal(body, &applied))
@@ -274,12 +274,16 @@ func TestRecoverStaleAssignmentDryRunAndApplyClearsDeadWorker(t *testing.T) {
 	var updated model.Task
 	require.NoError(t, db.First(&updated, "id = ?", task.ID).Error)
 	require.Nil(t, updated.AssignedAgentID)
+	require.Equal(t, task.StateVersion+1, updated.StateVersion)
 	var updatedAgent model.Agent
 	require.NoError(t, db.First(&updatedAgent, "id = ?", agent.ID).Error)
 	require.Nil(t, updatedAgent.CurrentTaskID)
 	var events int64
 	require.NoError(t, db.Model(&model.TaskEvent{}).Where("task_id = ? AND event_type = ?", task.ID, "stale_assignment_recovered").Count(&events).Error)
 	require.Equal(t, int64(1), events)
+	var mutations int64
+	require.NoError(t, db.Model(&model.TaskMutationRecord{}).Where("task_id = ? AND operation LIKE ? AND outcome = ?", task.ID, "recover-stale-assignment%", "succeeded").Count(&mutations).Error)
+	require.Equal(t, int64(1), mutations)
 }
 
 func TestRecoverContaminatedBranchFailGateMarksTaskFailed(t *testing.T) {
@@ -297,7 +301,7 @@ func TestRecoverContaminatedBranchFailGateMarksTaskFailed(t *testing.T) {
 	require.True(t, dry.Safe)
 	require.Contains(t, dry.Message, "would mark")
 
-	resp, body = doJSON(t, http.MethodPost, url, `{"apply":true,"actor":"operator"}`)
+	resp, body = doJSON(t, http.MethodPost, url, `{"apply":true,"actor":"codex:operator:test"}`)
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 	var applied orchdto.TaskRecoveryDTO
 	require.NoError(t, json.Unmarshal(body, &applied))
