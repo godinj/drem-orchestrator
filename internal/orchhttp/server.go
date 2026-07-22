@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,9 +77,9 @@ type ProjectInfo struct {
 // Server bundles everything the HTTP handlers need: a read-only GORM
 // handle, the per-project shared token that guards /internal/*, a log
 // streamer for GET /logs, and the project's static identity. Server is
-// safe for concurrent use — handlers only perform reads (plus a single
-// transactional write in the ingest handler) via the *gorm.DB which is
-// already goroutine-safe.
+// safe for concurrent use — handlers use the goroutine-safe *gorm.DB and the
+// typed task-specification create path serializes its replay/dedup/create
+// critical section before issuing transactional writes.
 //
 // Orch is the optional gate-mutation hook. When set, POST /approve,
 // /reject, /pass, /fail, /answer delegate to it; when nil those endpoints
@@ -93,6 +94,7 @@ type Server struct {
 	DockerLogs  LogStreamer
 	Project     ProjectInfo
 	Orch        GateOrchestrator
+	taskSpecMu  sync.Mutex
 }
 
 // New constructs a Server. A nil DockerLogs is permitted when the caller

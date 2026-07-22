@@ -465,6 +465,34 @@ func TestClient_CreateTask_EmptyDescriptionGuardsNetwork(t *testing.T) {
 	require.Equal(t, int32(0), atomic.LoadInt32(&h.calls), "expected no network call for empty description")
 }
 
+func TestClient_CreateTaskSpec_PostsTypedContract(t *testing.T) {
+	id := uuid.New()
+	h := &gateHandler{status: http.StatusCreated, respBody: sampleDTOJSON(t, id, "classifying")}
+	c, _ := newGateClient(t, h)
+	spec := orchdto.TaskSpecDTO{
+		Title:          "Observed task",
+		IdempotencyKey: "observation-1",
+		Observation:    &orchdto.ReferenceObservationDTO{SessionID: "session-1"},
+	}
+
+	got, err := c.CreateTaskSpec(context.Background(), "canvas local", spec)
+	require.NoError(t, err)
+	require.Equal(t, id.String(), got.ID)
+	require.Equal(t, "/projects/canvas local/tasks", h.path)
+	var payload orchdto.TaskSpecDTO
+	require.NoError(t, json.Unmarshal(h.rawBody, &payload))
+	require.Equal(t, "observation-1", payload.IdempotencyKey)
+	require.Equal(t, "session-1", payload.Observation.SessionID)
+}
+
+func TestClient_CreateTaskSpec_GuardsMissingObservation(t *testing.T) {
+	h := &gateHandler{status: http.StatusOK, respBody: `{}`}
+	c, _ := newGateClient(t, h)
+	_, err := c.CreateTaskSpec(context.Background(), "canvas", orchdto.TaskSpecDTO{Title: "x", IdempotencyKey: "key"})
+	require.Error(t, err)
+	require.Equal(t, int32(0), atomic.LoadInt32(&h.calls))
+}
+
 // -- Comment -------------------------------------------------------------
 
 func TestClient_Comment_Success(t *testing.T) {

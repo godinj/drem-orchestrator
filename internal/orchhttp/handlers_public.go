@@ -132,13 +132,19 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req struct {
-		Title       string `json:"title"`
-		Description string `json:"description"`
-		Actor       string `json:"actor"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req orchdto.TaskSpecDTO
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: expected one object")
+		return
+	}
+	if isTaskSpecRequest(req) {
+		s.handleCreateTaskSpec(w, r, req)
 		return
 	}
 	req.Title = strings.TrimSpace(req.Title)

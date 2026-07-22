@@ -9,9 +9,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
@@ -759,6 +762,80 @@ func TestCreateTaskRequiresTitleAndDescriptionBeforeNetwork(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateTaskSpecReadsFileAndPostsTypedBody(t *testing.T) {
+	specPath := filepath.Join(t.TempDir(), "cubase-task.json")
+	spec := orchdto.TaskSpecDTO{
+		Title:          "Observed Cubase task",
+		Description:    "Match the reference behavior.",
+		Actor:          "codex:test",
+		IdempotencyKey: "cubase-observation-1",
+		Observation: &orchdto.ReferenceObservationDTO{
+			SessionID:          "session-1",
+			Product:            "Cubase Pro",
+			ProductVersion:     "15",
+			OS:                 "Windows 11",
+			DisplayEnvironment: "1920x1080",
+			ObservedAt:         time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC),
+			ObserverActor:      "codex:computer-use:test",
+			Preconditions:      []string{"Project open"},
+			Steps:              []orchdto.ReferenceWorkflowStepDTO{{Action: "Click", ExpectedVisibleResult: "Panel opens"}},
+			ExpectedBehavior:   []string{"Panel opens"},
+			NegativeBehavior:   []string{"Project remains unchanged"},
+			Evidence: []orchdto.ObservationEvidenceDTO{{
+				ArtifactID: "capture-1",
+				SHA256:     strings.Repeat("a", 64),
+				MediaType:  "image/png",
+				Purpose:    "Visible result",
+			}},
+		},
+		AcceptanceCriteria: []orchdto.TaskAcceptanceCriterionDTO{{
+			ID:                "panel-opens",
+			Description:       "The panel opens.",
+			VerificationSteps: []string{"Click control"},
+			ExpectedBehavior:  []string{"Panel visible"},
+		}},
+		ProposedScope: []string{"panel"},
+		Exclusions:    []string{"persistence"},
+	}
+	raw, err := json.Marshal(spec)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(specPath, raw, 0o600))
+
+	var got recordedRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = recordRequest(t, r)
+		writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": spec.Title, "status": "classifying", "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")})
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err = run(t.Context(), []string{"--actor", "codex:test", "create", "--spec", specPath}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	require.NoError(t, err)
+	require.Equal(t, "codex:test", got.Actor)
+	var posted orchdto.TaskSpecDTO
+	require.NoError(t, json.Unmarshal([]byte(got.Body), &posted))
+	require.Equal(t, spec.IdempotencyKey, posted.IdempotencyKey)
+	require.Contains(t, out.String(), "task 12345678 -> classifying")
+}
+
+func TestCreateTaskSpecRejectsUnknownFieldBeforeNetwork(t *testing.T) {
+	called := false
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	defer ts.Close()
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"create", "--spec", `{"title":"x","unknown":true}`}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL,
+		"DREM_PROJECT":  "canvas",
+	}), &out, &errOut)
+	require.ErrorContains(t, err, "unknown field")
+	require.False(t, called)
 }
 
 func TestKyleRecoverDryRunClassifiesTestingReadyBlockers(t *testing.T) {

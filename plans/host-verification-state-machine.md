@@ -423,6 +423,11 @@ uses typed branch acceptance plus an orchestrator-owned disposable worktree;
 passing gate evidence and the artifact freeze commit atomically. Step 10 now
 routes deterministic command failures without launching a generic fixer: code
 returns to `in_progress`, while configuration and infrastructure classes park.
+Step 8 is implemented through the authenticated task endpoint and
+`dremctl create --spec`: normalized reference observations and independently
+addressable criteria are retained as typed records, media stays behind
+content-addressed references, replay is idempotent, equivalent active work is
+deduplicated, and unresolved questions enter `needs_clarification`.
 Typed recording for workspace-setup failures, merge-result ownership, and
 uniform mutation guards remain partial.
 Reconciliation no longer infers `done`: even when a

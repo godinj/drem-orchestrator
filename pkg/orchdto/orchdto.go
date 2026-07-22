@@ -49,6 +49,61 @@ type TaskDTO struct {
 	LatestFailureCurrent *bool                 `json:"latest_failure_current,omitempty"`
 }
 
+// TaskSpecDTO is the authenticated task-creation contract used by Codex after
+// observing a reference workflow. It intentionally carries artifact
+// identifiers and hashes, never local media paths or media bodies.
+type TaskSpecDTO struct {
+	Title              string                       `json:"title"`
+	Description        string                       `json:"description"`
+	Actor              string                       `json:"actor"`
+	IdempotencyKey     string                       `json:"idempotency_key"`
+	Observation        *ReferenceObservationDTO     `json:"observation"`
+	AcceptanceCriteria []TaskAcceptanceCriterionDTO `json:"acceptance_criteria"`
+	ProposedScope      []string                     `json:"proposed_scope"`
+	Exclusions         []string                     `json:"exclusions"`
+	Dependencies       []string                     `json:"dependencies,omitempty"`
+	Uncertainty        []string                     `json:"uncertainty,omitempty"`
+	OpenQuestions      []string                     `json:"open_questions,omitempty"`
+}
+
+// ReferenceObservationDTO captures the reproducible Cubase workflow that
+// motivates a Canvas task. Steps are ordered by their position in the slice.
+type ReferenceObservationDTO struct {
+	SessionID          string                     `json:"session_id"`
+	Product            string                     `json:"product"`
+	ProductVersion     string                     `json:"product_version"`
+	OS                 string                     `json:"os"`
+	DisplayEnvironment string                     `json:"display_environment"`
+	ObservedAt         time.Time                  `json:"observed_at"`
+	ObserverActor      string                     `json:"observer_actor"`
+	Preconditions      []string                   `json:"preconditions"`
+	Steps              []ReferenceWorkflowStepDTO `json:"steps"`
+	ExpectedBehavior   []string                   `json:"expected_behavior"`
+	NegativeBehavior   []string                   `json:"negative_behavior"`
+	Evidence           []ObservationEvidenceDTO   `json:"evidence"`
+}
+
+type ReferenceWorkflowStepDTO struct {
+	Action                string `json:"action"`
+	Target                string `json:"target,omitempty"`
+	ExpectedVisibleResult string `json:"expected_visible_result"`
+}
+
+type ObservationEvidenceDTO struct {
+	ArtifactID string `json:"artifact_id"`
+	SHA256     string `json:"sha256"`
+	MediaType  string `json:"media_type"`
+	Purpose    string `json:"purpose"`
+}
+
+type TaskAcceptanceCriterionDTO struct {
+	ID                string   `json:"id"`
+	Description       string   `json:"description"`
+	VerificationSteps []string `json:"verification_steps"`
+	ExpectedBehavior  []string `json:"expected_behavior"`
+	NegativeBehavior  []string `json:"negative_behavior,omitempty"`
+}
+
 // CommandEvidenceDTO is one auditable command invocation used by the delivery
 // protocol. Times are caller-observed and retained with the verification.
 type CommandEvidenceDTO struct {

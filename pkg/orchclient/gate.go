@@ -178,6 +178,27 @@ func (c *Client) CreateTask(ctx context.Context, project, title, description str
 	return out, nil
 }
 
+// CreateTaskSpec files a task backed by a typed reference observation. The
+// server is authoritative for validation, idempotency, and active-task
+// deduplication; this guard only prevents obviously incomplete local calls.
+func (c *Client) CreateTaskSpec(ctx context.Context, project string, spec orchdto.TaskSpecDTO) (orchdto.TaskDTO, error) {
+	if strings.TrimSpace(spec.Title) == "" {
+		return orchdto.TaskDTO{}, &ErrBadRequest{Message: "task title is required"}
+	}
+	if strings.TrimSpace(spec.IdempotencyKey) == "" {
+		return orchdto.TaskDTO{}, &ErrBadRequest{Message: "task idempotency_key is required"}
+	}
+	if spec.Observation == nil {
+		return orchdto.TaskDTO{}, &ErrBadRequest{Message: "task observation is required"}
+	}
+	var out orchdto.TaskDTO
+	path := "/projects/" + url.PathEscape(project) + "/tasks"
+	if err := c.postGate(ctx, path, spec, &out); err != nil {
+		return orchdto.TaskDTO{}, err
+	}
+	return out, nil
+}
+
 // Archive marks obsolete non-running work as cancelled through the
 // orchestrator's no-spawn archival endpoint. reason is required by the server;
 // actor is optional and defaults server-side when empty.

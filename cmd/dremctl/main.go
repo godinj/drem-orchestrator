@@ -34,9 +34,9 @@ Commands:
   logs --container NAME [--follow] [--since RFC3339]
   status
   health issues
-  create --title TEXT --description TEXT
-  create-task --title TEXT --description TEXT
-  file-task --title TEXT --description TEXT
+  create (--title TEXT --description TEXT | --spec FILE|JSON)
+  create-task (--title TEXT --description TEXT | --spec FILE|JSON)
+  file-task (--title TEXT --description TEXT | --spec FILE|JSON)
   approve <task-id-prefix>
   reject <task-id-prefix> [--reason TEXT]
   artifact <task-id-prefix>
@@ -390,6 +390,10 @@ func listAllTasks(ctx context.Context, client *orchclient.Client, project string
 }
 
 func handleCreateTask(ctx context.Context, client *orchclient.Client, cfg cliConfig, command string, args []string, stdout io.Writer) error {
+	specSource, args, err := parseStringOption(args, "spec")
+	if err != nil {
+		return err
+	}
 	title, args, err := parseStringOption(args, "title")
 	if err != nil {
 		return err
@@ -397,6 +401,23 @@ func handleCreateTask(ctx context.Context, client *orchclient.Client, cfg cliCon
 	description, args, err := parseStringOption(args, "description")
 	if err != nil {
 		return err
+	}
+	if strings.TrimSpace(specSource) != "" {
+		if strings.TrimSpace(title) != "" || strings.TrimSpace(description) != "" {
+			return errors.New("--spec cannot be combined with --title or --description")
+		}
+		if len(args) != 0 {
+			return fmt.Errorf("usage: dremctl %s", mutationUsage(command))
+		}
+		spec, err := readTaskSpec(specSource)
+		if err != nil {
+			return err
+		}
+		dto, err := client.CreateTaskSpec(ctx, cfg.project, spec)
+		if err != nil {
+			return err
+		}
+		return renderMutatedTask(stdout, cfg.json, dto)
 	}
 	if strings.TrimSpace(title) == "" {
 		return errors.New("--title is required")
@@ -412,6 +433,27 @@ func handleCreateTask(ctx context.Context, client *orchclient.Client, cfg cliCon
 		return err
 	}
 	return renderMutatedTask(stdout, cfg.json, dto)
+}
+
+func readTaskSpec(source string) (orchdto.TaskSpecDTO, error) {
+	raw := []byte(source)
+	if !strings.HasPrefix(strings.TrimSpace(source), "{") {
+		var err error
+		raw, err = os.ReadFile(source)
+		if err != nil {
+			return orchdto.TaskSpecDTO{}, fmt.Errorf("read --spec %s: %w", source, err)
+		}
+	}
+	var spec orchdto.TaskSpecDTO
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&spec); err != nil {
+		return orchdto.TaskSpecDTO{}, fmt.Errorf("decode --spec: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return orchdto.TaskSpecDTO{}, errors.New("decode --spec: expected one JSON object")
+	}
+	return spec, nil
 }
 
 func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfig, command string, args []string, stdout io.Writer) error {
@@ -686,8 +728,8 @@ func mutationUsage(command string) string {
 		return "archive <task-id-prefix> --reason TEXT [--actor TEXT]"
 	case "answer", "comment":
 		return command + " <task-id-prefix> --body TEXT"
-	case "create", "file-task":
-		return command + " --title TEXT --description TEXT"
+	case "create", "create-task", "file-task":
+		return command + " (--title TEXT --description TEXT | --spec FILE|JSON)"
 	default:
 		return command + " <task-id-prefix>"
 	}

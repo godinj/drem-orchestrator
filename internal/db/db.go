@@ -98,6 +98,8 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.Project{},
 		&model.ProjectPromptAsset{},
 		&model.Task{},
+		&model.TaskSpecification{},
+		&model.TaskAcceptanceCriterion{},
 		&model.Agent{},
 		&model.WorkerAttempt{},
 		&model.AttemptEvent{},

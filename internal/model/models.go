@@ -80,6 +80,45 @@ type Task struct {
 	Comments      []TaskComment `gorm:"foreignKey:TaskID"`
 }
 
+// TaskSpecification is the immutable provenance record for a task created
+// from an observed reference-product workflow. SpecJSON is the normalized
+// public wire contract; indexed columns support attribution, replay, and
+// active-task deduplication without interpreting mutable Task.Context.
+type TaskSpecification struct {
+	ID                   uuid.UUID `gorm:"type:text;primaryKey"`
+	TaskID               uuid.UUID `gorm:"type:text;not null;uniqueIndex"`
+	ProjectID            uuid.UUID `gorm:"type:text;not null;index;uniqueIndex:idx_task_spec_project_idempotency,priority:1"`
+	ObservationSessionID string    `gorm:"not null;index"`
+	Product              string    `gorm:"not null;index"`
+	ProductVersion       string    `gorm:"not null"`
+	OperatingSystem      string    `gorm:"not null"`
+	DisplayEnvironment   string    `gorm:"not null"`
+	ObservedAt           time.Time `gorm:"not null;index"`
+	ObserverActor        string    `gorm:"not null;index"`
+	CreatorActor         string    `gorm:"not null;index"`
+	IdempotencyKey       string    `gorm:"not null;uniqueIndex:idx_task_spec_project_idempotency,priority:2"`
+	RequestHash          string    `gorm:"not null"`
+	SpecFingerprint      string    `gorm:"not null;index"`
+	SpecJSON             string    `gorm:"type:text;not null"`
+	CreatedAt            time.Time
+}
+
+// TaskAcceptanceCriterion keeps each verification boundary independently
+// addressable while preserving the exact normalized JSON arrays submitted by
+// the observer.
+type TaskAcceptanceCriterion struct {
+	ID                    uuid.UUID `gorm:"type:text;primaryKey"`
+	SpecificationID       uuid.UUID `gorm:"type:text;not null;index;uniqueIndex:idx_task_criterion_spec_key,priority:1"`
+	TaskID                uuid.UUID `gorm:"type:text;not null;index"`
+	CriterionKey          string    `gorm:"not null;uniqueIndex:idx_task_criterion_spec_key,priority:2"`
+	Position              int       `gorm:"not null"`
+	Description           string    `gorm:"type:text;not null"`
+	VerificationStepsJSON string    `gorm:"type:text;not null"`
+	ExpectedBehaviorJSON  string    `gorm:"type:text;not null"`
+	NegativeBehaviorJSON  string    `gorm:"type:text;not null"`
+	CreatedAt             time.Time
+}
+
 // BranchAcceptanceRecord is append-only typed evidence of the worker branch
 // admission decision. Task.Context may mirror it for compatibility but is not
 // authoritative for delivery.

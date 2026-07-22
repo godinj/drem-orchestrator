@@ -45,6 +45,8 @@ func NewTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.Project{},
 		&model.Task{},
+		&model.TaskSpecification{},
+		&model.TaskAcceptanceCriterion{},
 		&model.Agent{},
 		&model.WorkerAttempt{},
 		&model.AttemptEvent{},
@@ -84,6 +86,8 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 	coreModels := []any{
 		&model.Project{},
 		&model.Task{},
+		&model.TaskSpecification{},
+		&model.TaskAcceptanceCriterion{},
 		&model.Agent{},
 		&model.WorkerAttempt{},
 		&model.AttemptEvent{},
@@ -148,6 +152,8 @@ func NewSharedTestDB(t *testing.T) *gorm.DB {
 	if err := db.AutoMigrate(
 		&model.Project{},
 		&model.Task{},
+		&model.TaskSpecification{},
+		&model.TaskAcceptanceCriterion{},
 		&model.Agent{},
 		&model.WorkerAttempt{},
 		&model.AttemptEvent{},
