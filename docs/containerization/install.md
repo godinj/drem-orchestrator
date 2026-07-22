@@ -359,6 +359,12 @@ and integration authority remain local. A successful worker parks an exact
 artifact at `verification_ready`; it cannot advance the default branch without
 native evidence and explicit integration authorization.
 
+Before enabling a Canvas writer, run the repository-free inference,
+non-integrating delivery, and repeated Computer Use stages in
+[`docs/host-verification-canary.md`](../host-verification-canary.md). The first
+stage is directly executable with `scripts/drem-remote-inference-canary.sh` and
+does not read a checkout or mutate orchestration state.
+
 Codex tasks and operators advance approval gates through the same HTTP-only
 CLI. No gate mutation should edit `drem.db` directly:
 

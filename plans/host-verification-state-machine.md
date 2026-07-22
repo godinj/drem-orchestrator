@@ -19,9 +19,12 @@ This specification also defines two local Codex responsibilities that the
 original protocol left implicit: turning Cubase observations into durable
 tasks, and performing repeated Computer Use verification/tweak cycles without
 bypassing orchestration. The read-only remote-inference canary remains
-externally blocked because the remote GQ listener has no running SGLang
-upstream. A live remote-inference Canvas writer remains disabled until that
-repository-free inference canary passes.
+externally blocked: on 2026-07-22 no loopback tunnel was listening at
+`127.0.0.1:18090`. A read-only remote audit found GQ metrics healthy but
+`/v1/models` returning 502, with no SGLang listener/container upstream. The
+canary is now an executable repository-free probe with deterministic JSON
+evidence. A live remote-inference Canvas writer remains disabled until it
+passes.
 
 ## Problem
 
@@ -462,9 +465,16 @@ Reconciliation no longer infers `done`: even when a
 recorded branch base proves the feature advanced and Git proves it is already
 on the default branch, the task returns through `testing_ready` for an exact
 artifact freeze and verification. The earlier delivery half of step 13 passed
-on 2026-07-22. Its inference half remains blocked by remote upstream
-availability; the multi-tweak canary has not yet run. No remote service was
-restarted and no live Canvas writer was authorized.
+on 2026-07-22; the local canary API still shows four disposable delivery tasks
+cancelled after verification, with no integration. The repository-free
+inference probe and its tests now exist, but its live run returned a transport
+block because the loopback tunnel is absent. The repeated-tweak state-machine
+canary passes deterministically: two Computer Use failures create two distinct
+actor-owned host-rework sessions, commits, submissions, and replacement
+artifacts before a third artifact passes into `integration_ready`, with no
+active worker attempt. The live native Canvas/Computer Use version remains
+blocked behind the inference stage. No remote service was restarted and no
+live Canvas writer was authorized.
 
 ## Operational hardening discovered by the canary
 

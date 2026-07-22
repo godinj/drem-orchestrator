@@ -6,6 +6,7 @@ set -euo pipefail
 
 DREM_ORCH_URL="${DREM_ORCH_URL:-http://127.0.0.1:8080}"
 DREM_PROJECT="${DREM_PROJECT:-drem-orchestrator}"
+CANARY_ACTOR="${DREM_ACTOR:-}"
 if [ -n "${DREMCTL_BIN:-}" ]; then
     DREMCTL_BIN="$DREMCTL_BIN"
 elif [ -x "./deploy/docker/context/dremctl" ]; then
@@ -25,6 +26,7 @@ usage() {
 usage: drem-capacity-canary.sh [--count N] [--timeout DURATION] [--interval DURATION]
 
 Requires DREM_CAPACITY_CANARY_CONFIRM=yes before creating tasks.
+Confirmed runs also require a stable, specific DREM_ACTOR.
 Durations support Ns, Nm, Nh, or bare seconds.
 EOF
 }
@@ -128,6 +130,10 @@ main() {
         emit_refusal_json
         return 2
     fi
+    if [ -z "$CANARY_ACTOR" ]; then
+        echo "DREM_ACTOR is required for a confirmed capacity canary" >&2
+        return 2
+    fi
     case "$CANARY_COUNT" in
         ''|*[!0-9]*) echo "count must be a positive integer" >&2; return 2 ;;
     esac
@@ -146,7 +152,7 @@ main() {
         title="capacity-canary-${start_epoch}-${i}"
 		metadata_path=".drem/capacity-canary-${start_epoch}-${i}.json"
 		description="Tiny controlled capacity canary task ${i}/${CANARY_COUNT}. Do not search. Read README.md once, then create ${metadata_path} containing JSON with keys canary_title, exercised_path, and timestamp_utc. Set exercised_path to gq-sglang-direct. Do not run tests for this metadata-only artifact. Commit only that smallest repo-local artifact metadata change and complete normally."
-        create_out="$("$DREMCTL_BIN" --orch-url "$DREM_ORCH_URL" --project "$DREM_PROJECT" --json create --title "$title" --description "$description")"
+        create_out="$("$DREMCTL_BIN" --orch-url "$DREM_ORCH_URL" --project "$DREM_PROJECT" --actor "$CANARY_ACTOR" --json create --title "$title" --description "$description")"
         task_id="$(extract_json_string_field id "$create_out")"
         if [ -z "$task_id" ]; then
             echo "dremctl create did not return a JSON id" >&2

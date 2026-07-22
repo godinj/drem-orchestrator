@@ -6,6 +6,7 @@ set -euo pipefail
 
 DREM_ORCH_URL="${DREM_ORCH_URL:-http://127.0.0.1:8080}"
 DREM_PROJECT="${DREM_PROJECT:-drem-orchestrator}"
+DREM_ACTOR="${DREM_ACTOR:-}"
 DREM_KYLE_URL="${DREM_KYLE_URL:-http://127.0.0.1:8095}"
 if [ -n "${DREMCTL_BIN:-}" ]; then
     DREMCTL_BIN="$DREMCTL_BIN"
@@ -27,6 +28,7 @@ usage: drem-pipeline-reliability-canary.sh [--mode MODE] [--timeout DURATION] [-
 
 Modes: all, quickfix, standard, kyle, failure
 Safe default: prints a JSON plan unless DREM_PIPELINE_CANARY_CONFIRM=yes.
+Mutating confirmed modes also require a stable, specific DREM_ACTOR.
 The failure canary is a non-mutating placeholder unless both confirmations are set:
   DREM_PIPELINE_CANARY_CONFIRM=yes
   DREM_PIPELINE_CANARY_FAILURE_CONFIRM=yes
@@ -182,7 +184,7 @@ emit_plan_json() {
 
 create_task() {
     local title="$1" description="$2" create_out task_id
-    create_out="$("$DREMCTL_BIN" --orch-url "$DREM_ORCH_URL" --project "$DREM_PROJECT" --json create --title "$title" --description "$description")"
+    create_out="$("$DREMCTL_BIN" --orch-url "$DREM_ORCH_URL" --project "$DREM_PROJECT" --actor "$DREM_ACTOR" --json create --title "$title" --description "$description")"
     task_id="$(extract_json_string_field id "$create_out")"
     if [ -z "$task_id" ]; then
         echo "dremctl create did not return a JSON id" >&2
@@ -316,6 +318,10 @@ main() {
     if [ "${DREM_PIPELINE_CANARY_CONFIRM:-}" != "yes" ]; then
         emit_plan_json
         return 0
+    fi
+    if { include_mode quickfix || include_mode standard || { include_mode failure && [ "${DREM_PIPELINE_CANARY_FAILURE_CONFIRM:-}" = "yes" ]; }; } && [ -z "$DREM_ACTOR" ]; then
+        echo "DREM_ACTOR is required for mutating pipeline canaries" >&2
+        return 2
     fi
 
     if include_mode quickfix; then

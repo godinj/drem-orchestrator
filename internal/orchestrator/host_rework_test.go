@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -144,6 +145,89 @@ func TestComputerUseFailureHostReworkSubmissionRequiresFreshArtifact(t *testing.
 	require.EqualValues(t, 2, artifacts)
 	require.EqualValues(t, 2, verifications)
 	require.EqualValues(t, 2, interactions)
+}
+
+func TestRepeatedComputerUseTweaksReenterFreshArtifactCycle(t *testing.T) {
+	orch, task, snapshot := deliveryFixture(t)
+	seedAcceptanceCriterion(t, orch, task, "range-selection")
+	artifact, err := orch.FreezeDeliveryArtifact(task.ID, snapshot)
+	require.NoError(t, err)
+	owner := "codex:canvas-canary:multi-tweak"
+	now := time.Now()
+
+	for cycle := 1; cycle <= 2; cycle++ {
+		cycleID := strconv.Itoa(cycle)
+		var current model.Task
+		require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+		binarySHA := strings.Repeat(string(rune('a'+cycle)), 64)
+		interaction := failedInteraction(binarySHA)
+		interaction.Discrepancy = "bounded mismatch cycle " + cycleID
+		_, err := orch.VerifyDelivery(VerifyDeliveryRequest{
+			TaskID: task.ID, ObservedStateVersion: current.StateVersion,
+			ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
+			Actor: owner, Source: "multi-tweak-canary", EnvironmentFingerprint: "macOS-arm64-canary",
+			CommandEvidence: []CommandEvidence{{Command: "scripts/dev build", Passed: true, ExitCode: 0, StartedAt: now, FinishedAt: now}},
+			BinarySHA256:    binarySHA, Result: model.VerificationFailed,
+			Interactions: []VerificationInteractionEvidence{interaction},
+			FailureMode:  model.DeliveryReworkHostDirect, FailureReason: interaction.Discrepancy,
+			AllowedScope: []string{"delivery.txt"}, HostDirectAttestation: completeHostAttestation(),
+			IdempotencyKey: "multi-tweak-fail-" + cycleID,
+		})
+		require.NoError(t, err)
+
+		var session model.HostReworkSession
+		require.NoError(t, orch.db.Where("task_id = ? AND disposition = ?", task.ID, model.HostReworkActive).First(&session).Error)
+		require.Equal(t, owner, session.OwnerActor)
+		featureDir := orch.resolveIntegrationWorktree(&task)
+		writeFile(t, featureDir, "delivery.txt", "bounded correction cycle "+cycleID)
+		runGitCmd(t, featureDir, "add", "delivery.txt")
+		runGitCmd(t, featureDir, "commit", "-m", "bounded correction cycle "+cycleID)
+		replacementSHA := runGitCmd(t, featureDir, "rev-parse", "HEAD")
+		require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+		_, err = orch.SubmitHostRework(SubmitHostReworkRequest{
+			TaskID: task.ID, ObservedStateVersion: current.StateVersion, SessionID: session.ID,
+			CommitSHA: replacementSHA, Actor: owner, Source: "multi-tweak-canary",
+			IdempotencyKey: "multi-tweak-submit-" + cycleID,
+		})
+		require.NoError(t, err)
+		snapshot.CommitSHA = replacementSHA
+		snapshot.GateWorkspaceID = "multi-tweak-gate-" + cycleID
+		artifact, err = orch.FreezeDeliveryArtifact(task.ID, snapshot)
+		require.NoError(t, err)
+		require.Equal(t, uint64(cycle+1), artifact.ArtifactVersion)
+	}
+
+	var current model.Task
+	require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+	passing := failedInteraction(strings.Repeat("f", 64))
+	passing.Result = model.VerificationPassed
+	passing.Discrepancy = ""
+	passing.ObservedResult = "The second bounded correction satisfies the criterion."
+	_, err = orch.VerifyDelivery(VerifyDeliveryRequest{
+		TaskID: task.ID, ObservedStateVersion: current.StateVersion,
+		ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
+		Actor: owner, Source: "multi-tweak-canary", EnvironmentFingerprint: "macOS-arm64-canary",
+		CommandEvidence: snapshot.PreliminaryEvidence, BinarySHA256: strings.Repeat("f", 64),
+		Result: model.VerificationPassed, Interactions: []VerificationInteractionEvidence{passing},
+		IdempotencyKey: "multi-tweak-pass",
+	})
+	require.NoError(t, err)
+	require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusIntegrationReady, current.Status)
+
+	var artifacts, verifications, interactions, sessions, submissions, activeAttempts int64
+	require.NoError(t, orch.db.Model(&model.DeliveryArtifact{}).Where("task_id = ?", task.ID).Count(&artifacts).Error)
+	require.NoError(t, orch.db.Model(&model.VerificationRecord{}).Where("task_id = ?", task.ID).Count(&verifications).Error)
+	require.NoError(t, orch.db.Model(&model.VerificationInteraction{}).Where("task_id = ?", task.ID).Count(&interactions).Error)
+	require.NoError(t, orch.db.Model(&model.HostReworkSession{}).Where("task_id = ?", task.ID).Count(&sessions).Error)
+	require.NoError(t, orch.db.Model(&model.HostReworkSubmission{}).Where("task_id = ?", task.ID).Count(&submissions).Error)
+	require.NoError(t, orch.db.Model(&model.WorkerAttempt{}).Where("task_id = ? AND state IN ?", task.ID, []string{model.WorkerAttemptReserved, model.WorkerAttemptRunning}).Count(&activeAttempts).Error)
+	require.EqualValues(t, 3, artifacts)
+	require.EqualValues(t, 3, verifications)
+	require.EqualValues(t, 3, interactions)
+	require.EqualValues(t, 2, sessions)
+	require.EqualValues(t, 2, submissions)
+	require.Zero(t, activeAttempts)
 }
 
 func TestHostDirectReworkRefusesActiveWorkerAndOutOfScopeSubmission(t *testing.T) {

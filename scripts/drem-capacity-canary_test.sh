@@ -73,13 +73,13 @@ cmd=""
 prev=""
 for arg in "$@"; do
     case "$prev" in
-        --orch-url|--project|--title|--description|--limit|--since)
+        --orch-url|--project|--actor|--title|--description|--limit|--since)
             prev=""
             continue
             ;;
     esac
     case "$arg" in
-        --orch-url|--project|--title|--description|--limit|--since|--json)
+        --orch-url|--project|--actor|--title|--description|--limit|--since|--json)
             prev="$arg"
             ;;
         create|tasks|events)
@@ -144,6 +144,7 @@ run_canary() {
     PATH="$TMPDIR_ROOT/bin:$PATH" \
     DREM_ORCH_URL="http://fake-orch" \
     DREM_PROJECT="canvas" \
+	DREM_ACTOR="canary:capacity:test" \
     DREMCTL_BIN="dremctl" \
     DREMCTL_LOG="$log_file" \
     DREM_CAPACITY_CANARY_CONFIRM="$confirm" \
