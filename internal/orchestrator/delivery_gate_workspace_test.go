@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -75,6 +76,57 @@ func TestAcceptedDeliveryGateRejectsCommandMutationAndCleansWorkspace(t *testing
 	require.NoDirExists(t, filepath.Join(os.TempDir(), result.WorkspaceID))
 }
 
+func TestProcessTestingReadyRecordsUnavailableWorktreeManager(t *testing.T) {
+	o, task, snapshot := deliveryFixture(t)
+	persistAcceptedSnapshot(t, o, task, snapshot)
+	o.worktree = nil
+
+	require.NoError(t, o.processTestingReady(&task))
+
+	var updated model.Task
+	require.NoError(t, o.db.First(&updated, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusPaused, updated.Status)
+	gateRun := loadOnlyPreliminaryGateRun(t, o, task.ID)
+	require.Equal(t, model.PreliminaryGateConfiguration, gateRun.Outcome)
+	require.Contains(t, string(mustJSON(t, gateRun.CommandEvidence)), "delivery-gate:worktree-manager")
+	var artifacts int64
+	require.NoError(t, o.db.Model(&model.DeliveryArtifact{}).Where("task_id = ?", task.ID).Count(&artifacts).Error)
+	require.Zero(t, artifacts)
+}
+
+func TestProcessTestingReadyRecordsAcceptedCheckoutMutation(t *testing.T) {
+	o, task, snapshot := deliveryFixture(t)
+	persistAcceptedSnapshot(t, o, task, snapshot)
+	o.testGate.TestCommand = "touch generated-by-gate"
+
+	require.NoError(t, o.processTestingReady(&task))
+
+	var updated model.Task
+	require.NoError(t, o.db.First(&updated, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusInProgress, updated.Status)
+	gateRun := loadOnlyPreliminaryGateRun(t, o, task.ID)
+	require.Equal(t, model.PreliminaryGateCodeFailure, gateRun.Outcome)
+	require.Contains(t, string(mustJSON(t, gateRun.CommandEvidence)), "delivery-gate:checkout-post-command")
+	var artifacts int64
+	require.NoError(t, o.db.Model(&model.DeliveryArtifact{}).Where("task_id = ?", task.ID).Count(&artifacts).Error)
+	require.Zero(t, artifacts)
+}
+
+func TestProcessTestingReadyRecordsWorkspaceCreationFailure(t *testing.T) {
+	o, task, snapshot := deliveryFixture(t)
+	persistAcceptedSnapshot(t, o, task, snapshot)
+	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
+
+	require.NoError(t, o.processTestingReady(&task))
+
+	var updated model.Task
+	require.NoError(t, o.db.First(&updated, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusPaused, updated.Status)
+	gateRun := loadOnlyPreliminaryGateRun(t, o, task.ID)
+	require.Equal(t, model.PreliminaryGateInfraFailure, gateRun.Outcome)
+	require.Contains(t, string(mustJSON(t, gateRun.CommandEvidence)), "delivery-gate:workspace-root")
+}
+
 func TestAcceptedDeliveryGateFailsClosedWithoutCompleteAcceptance(t *testing.T) {
 	task := model.Task{ID: uuid.New(), WorktreeBranch: "feature/example", Context: model.JSONField{
 		"branch_acceptance": map[string]any{"accepted": true, "head_sha": strings.Repeat("a", 40)},
@@ -106,4 +158,30 @@ func deliveryGateFixture(t *testing.T) (*Orchestrator, model.Task, string, strin
 	return o, task, featureDir,
 		runGitCmd(t, featureDir, "rev-parse", "HEAD"),
 		runGitCmd(t, featureDir, "rev-parse", "main")
+}
+
+func persistAcceptedSnapshot(t *testing.T, o *Orchestrator, task model.Task, snapshot ArtifactSnapshot) {
+	t.Helper()
+	record := model.BranchAcceptanceRecord{
+		ID: uuid.New(), TaskID: task.ID, AgentID: uuid.New(),
+		Branch: snapshot.Branch, Accepted: true,
+		BaseBranch: snapshot.BaseBranch, BaseSHA: snapshot.BaseSHA, HeadSHA: snapshot.CommitSHA,
+		Details: model.JSONField{"accepted": true}, Actor: "test", Source: "test",
+	}
+	require.NoError(t, o.db.Create(&record).Error)
+}
+
+func loadOnlyPreliminaryGateRun(t *testing.T, o *Orchestrator, taskID uuid.UUID) model.PreliminaryGateRun {
+	t.Helper()
+	var runs []model.PreliminaryGateRun
+	require.NoError(t, o.db.Where("task_id = ?", taskID).Find(&runs).Error)
+	require.Len(t, runs, 1)
+	return runs[0]
+}
+
+func mustJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	require.NoError(t, err)
+	return raw
 }

@@ -30,7 +30,25 @@ type deliveryGateResult struct {
 	Evidence               CommandEvidence
 	Outcome                model.PreliminaryGateOutcome
 	Passed                 bool
+	FailureStage           deliveryGateFailureStage
+	FailureStartedAt       time.Time
 }
+
+type deliveryGateFailureStage string
+
+const (
+	deliveryGateFailureWorktreeManager deliveryGateFailureStage = "worktree-manager"
+	deliveryGateFailureBareRepository  deliveryGateFailureStage = "bare-repository"
+	deliveryGateFailureAcceptedRef     deliveryGateFailureStage = "accepted-ref"
+	deliveryGateFailureAcceptedHead    deliveryGateFailureStage = "accepted-head"
+	deliveryGateFailureAcceptedBase    deliveryGateFailureStage = "accepted-base"
+	deliveryGateFailureAncestry        deliveryGateFailureStage = "accepted-ancestry"
+	deliveryGateFailureWorkspaceRoot   deliveryGateFailureStage = "workspace-root"
+	deliveryGateFailureWorktreeAdd     deliveryGateFailureStage = "worktree-add"
+	deliveryGateFailureCheckoutBefore  deliveryGateFailureStage = "checkout-pre-command"
+	deliveryGateFailureCheckoutAfter   deliveryGateFailureStage = "checkout-post-command"
+	deliveryGateFailureCleanup         deliveryGateFailureStage = "cleanup"
+)
 
 func (r deliveryGateResult) artifactSnapshot() ArtifactSnapshot {
 	return ArtifactSnapshot{
@@ -54,25 +72,73 @@ func gateEnvironmentFingerprint() string {
 	return fmt.Sprintf("%s/%s;%s;%s", runtime.GOOS, runtime.GOARCH, runtime.Version(), host)
 }
 
+// closeExecutionFailure converts an execution error that occurred after
+// exact candidate resolution into durable preliminary-gate evidence. Errors
+// before candidate resolution cannot be attributed to a specific delivery and
+// deliberately remain fail-closed orchestration errors.
+func (r *deliveryGateResult) closeExecutionFailure(err error) bool {
+	if err == nil || r.FailureStage == "" || r.Candidate.Branch == "" ||
+		!validObjectID(r.Candidate.CommitSHA) || !validObjectID(r.Candidate.BaseSHA) ||
+		strings.TrimSpace(r.WorkspaceID) == "" || strings.TrimSpace(r.EnvironmentFingerprint) == "" {
+		return false
+	}
+	finishedAt := time.Now()
+	startedAt := r.FailureStartedAt
+	if startedAt.IsZero() || finishedAt.Before(startedAt) {
+		startedAt = finishedAt
+	}
+	r.Passed = false
+	r.Outcome = preliminaryGateFailureOutcome(r.FailureStage)
+	r.Evidence = CommandEvidence{
+		Command:    "delivery-gate:" + string(r.FailureStage),
+		Passed:     false,
+		ExitCode:   -1,
+		Output:     truncate(err.Error(), maxTestOutputLen),
+		StartedAt:  startedAt,
+		FinishedAt: finishedAt,
+	}
+	return true
+}
+
+func preliminaryGateFailureOutcome(stage deliveryGateFailureStage) model.PreliminaryGateOutcome {
+	switch stage {
+	case deliveryGateFailureWorktreeManager, deliveryGateFailureBareRepository,
+		deliveryGateFailureAcceptedRef, deliveryGateFailureAcceptedHead,
+		deliveryGateFailureAcceptedBase, deliveryGateFailureAncestry:
+		return model.PreliminaryGateConfiguration
+	case deliveryGateFailureCheckoutAfter:
+		return model.PreliminaryGateCodeFailure
+	default:
+		return model.PreliminaryGateInfraFailure
+	}
+}
+
 // runAcceptedDeliveryGate executes the preliminary gate in a temporary,
 // detached worktree created directly from the bare repository at the exact
 // head accepted from the worker. Cleanup completes before the result is
 // returned, so artifact freezing never depends on a live mutable checkout.
 func (o *Orchestrator) runAcceptedDeliveryGate(ctx context.Context, task *model.Task) (result deliveryGateResult, retErr error) {
-	if o.worktree == nil {
-		return result, errors.New("delivery gate: worktree manager is unavailable")
-	}
 	candidate, err := o.acceptedDeliveryCandidate(task)
 	if err != nil {
 		return result, err
 	}
 	result.Candidate = candidate
+	result.WorkspaceID = "setup-" + uuid.NewString()
+	result.EnvironmentFingerprint = gateEnvironmentFingerprint()
+	result.FailureStartedAt = time.Now()
 
+	result.FailureStage = deliveryGateFailureWorktreeManager
+	if o.worktree == nil {
+		return result, errors.New("delivery gate: worktree manager is unavailable")
+	}
+
+	result.FailureStage = deliveryGateFailureBareRepository
 	bareRepo := strings.TrimSpace(o.worktree.BareRepo())
 	if bareRepo == "" {
 		return result, errors.New("delivery gate: bare repository is unavailable")
 	}
 	branchRef := "refs/heads/" + candidate.Branch
+	result.FailureStage = deliveryGateFailureAcceptedRef
 	branchSHA, err := gitexec.RunGit(ctx, bareRepo, "rev-parse", "--verify", branchRef)
 	if err != nil {
 		return result, fmt.Errorf("delivery gate: resolve accepted branch %s: %w", candidate.Branch, err)
@@ -81,21 +147,27 @@ func (o *Orchestrator) runAcceptedDeliveryGate(ctx context.Context, task *model.
 		return result, fmt.Errorf("delivery gate: accepted ref drift: branch %s is %s, accepted %s", candidate.Branch, strings.TrimSpace(branchSHA), candidate.CommitSHA)
 	}
 	for label, sha := range map[string]string{"head": candidate.CommitSHA, "base": candidate.BaseSHA} {
+		if label == "head" {
+			result.FailureStage = deliveryGateFailureAcceptedHead
+		} else {
+			result.FailureStage = deliveryGateFailureAcceptedBase
+		}
 		if _, err := gitexec.RunGit(ctx, bareRepo, "cat-file", "-e", sha+"^{commit}"); err != nil {
 			return result, fmt.Errorf("delivery gate: accepted %s %s is not a commit: %w", label, sha, err)
 		}
 	}
+	result.FailureStage = deliveryGateFailureAncestry
 	if _, err := gitexec.RunGit(ctx, bareRepo, "merge-base", "--is-ancestor", candidate.BaseSHA, candidate.CommitSHA); err != nil {
 		return result, fmt.Errorf("delivery gate: accepted base %s is not an ancestor of head %s: %w", candidate.BaseSHA, candidate.CommitSHA, err)
 	}
 
+	result.FailureStage = deliveryGateFailureWorkspaceRoot
 	root, err := os.MkdirTemp("", "drem-delivery-gate-")
 	if err != nil {
 		return result, fmt.Errorf("delivery gate: create workspace root: %w", err)
 	}
 	checkout := filepath.Join(root, "checkout")
 	result.WorkspaceID = filepath.Base(root)
-	result.EnvironmentFingerprint = gateEnvironmentFingerprint()
 	added := false
 	defer func() {
 		var cleanupErr error
@@ -108,6 +180,7 @@ func (o *Orchestrator) runAcceptedDeliveryGate(ctx context.Context, task *model.
 			cleanupErr = fmt.Errorf("remove workspace root: %w", err)
 		}
 		if cleanupErr != nil {
+			result.FailureStage = deliveryGateFailureCleanup
 			if retErr == nil {
 				retErr = fmt.Errorf("delivery gate cleanup: %w", cleanupErr)
 			} else {
@@ -116,10 +189,12 @@ func (o *Orchestrator) runAcceptedDeliveryGate(ctx context.Context, task *model.
 		}
 	}()
 
+	result.FailureStage = deliveryGateFailureWorktreeAdd
 	if _, err := gitexec.RunGit(ctx, bareRepo, "worktree", "add", "--detach", checkout, candidate.CommitSHA); err != nil {
 		return result, fmt.Errorf("delivery gate: create detached worktree: %w", err)
 	}
 	added = true
+	result.FailureStage = deliveryGateFailureCheckoutBefore
 	if err := verifyDeliveryGateCheckout(ctx, checkout, candidate.CommitSHA); err != nil {
 		return result, err
 	}
@@ -145,9 +220,11 @@ func (o *Orchestrator) runAcceptedDeliveryGate(ctx context.Context, task *model.
 	}
 	result.Passed = result.Evidence.Passed
 	result.Outcome = classifyPreliminaryGateOutcome(result.Evidence)
+	result.FailureStage = deliveryGateFailureCheckoutAfter
 	if err := verifyDeliveryGateCheckout(ctx, checkout, candidate.CommitSHA); err != nil {
 		return result, err
 	}
+	result.FailureStage = ""
 	return result, nil
 }
 

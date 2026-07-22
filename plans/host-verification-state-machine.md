@@ -4,13 +4,13 @@ Status: the exact-SHA artifact, verification, authorization, merge-preflight,
 typed Cubase task ingestion, and actor-owned host-rework loop are complete. A
 non-integrating Canvas delivery canary also passed. The preliminary gate
 consumes typed branch acceptance, runs in a disposable exact-SHA worktree,
-records typed pass/failure evidence, and never launches a generic fixer.
+records typed pass/failure evidence (including setup, ref-validation, checkout,
+and cleanup failures), and never launches a generic fixer.
 Computer Use results are retained per acceptance criterion and every host edit
 returns through a new commit, gate run, artifact version, and verification.
-The surrounding protocol is still partial: workspace-setup failures are not
-yet recorded as typed gate runs. Mutation attribution and replay are now
-uniform across task creation, legacy gates, comments/audits, archive, recovery
-apply, delivery verification/rework, and integration.
+Mutation attribution and replay are uniform across task creation, legacy gates,
+comments/audits, archive, recovery apply, delivery verification/rework, and
+integration.
 Merge completion no longer depends on telemetry: an immutable intent is
 created before `merging`, and reconciliation proves the accepted artifact is
 contained in the authoritative target ref before it writes `done`.
@@ -459,8 +459,11 @@ version checks, exact-response replay, payload-conflict refusal, and
 fail-closed pending claims apply to all remaining writes. Comments, audits,
 and recovery repairs now increment the task state version; simple task creation
 records its replay result in the same transaction. The recovery implementation
-was split below the repository's file ceiling. Typed recording for
-workspace-setup failures remains partial.
+was split below the repository's file ceiling. Delivery-gate execution failures
+after exact candidate resolution now close as typed `configuration`, `infra`,
+or `code` gate runs: operator/configuration failures pause without spending
+model tokens, while an accepted checkout mutated by the gate returns to normal
+implementation without freezing an artifact.
 Reconciliation no longer infers `done`: even when a
 recorded branch base proves the feature advanced and Git proves it is already
 on the default branch, the task returns through `testing_ready` for an exact

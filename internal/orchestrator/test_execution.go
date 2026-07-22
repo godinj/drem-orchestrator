@@ -35,6 +35,20 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 
 	gate, err := o.runAcceptedDeliveryGate(context.Background(), parent)
 	if err != nil {
+		if gate.closeExecutionFailure(err) {
+			if recordErr := o.RecordPreliminaryGateFailure(parent.ID, gate); recordErr != nil {
+				return fmt.Errorf("processTestingReady: record %s failure: %w", gate.FailureStage, recordErr)
+			}
+			o.emit("preliminary_gate_failed", map[string]any{
+				"task_id": parent.ID,
+				"outcome": gate.Outcome,
+				"stage":   gate.FailureStage,
+			})
+			o.logger.Warn("preliminary gate execution failed", "task_id", parent.ID,
+				"outcome", gate.Outcome, "stage", gate.FailureStage,
+				"summary", conciseFailureSummary(gate.Evidence.Output))
+			return nil
+		}
 		return fmt.Errorf("processTestingReady: %w", err)
 	}
 	testsPassed := gate.Passed
