@@ -161,6 +161,23 @@ func TestRemoteInferenceOverride_RoutesClassifierToHost(t *testing.T) {
 	assert.Contains(t, svc.ExtraHosts, "host.docker.internal:host-gateway")
 }
 
+// TestHostSGLangOverride_RoutesGQToHost verifies the GPU-host overlay keeps
+// GQ containerized without pulling up the compose-managed SGLang service.
+func TestHostSGLangOverride_RoutesGQToHost(t *testing.T) {
+	data := readComposeYAML(t, "host-sglang.override.yml")
+	var doc composeDoc
+	require.NoError(t, yaml.Unmarshal(data, &doc))
+
+	svc, ok := doc.Services["gq"]
+	require.True(t, ok, "host SGLang override must configure GQ")
+	assert.Empty(t, dependsOnServices(svc.DependsOn), "override must remove the container SGLang dependency")
+	assert.Equal(t,
+		"${DREM_HOST_SGLANG_ENDPOINT:-http://host.docker.internal:8081}",
+		svc.Environment["GQ_UPSTREAM"],
+	)
+	assert.Contains(t, svc.ExtraHosts, "host.docker.internal:host-gateway")
+}
+
 // readGlobalYAML resolves the absolute path to global.yml regardless of
 // which directory `go test` was invoked from, then reads the bytes.
 func readGlobalYAML(t *testing.T) []byte {

@@ -9,6 +9,11 @@ It leaves SGLang/GQ on a remote GPU host and routes the local warm classifier
 through a loopback SSH tunnel exposed to containers as
 `host.docker.internal`. See `docs/containerization/install.md` §5c.
 
+`host-sglang.override.yml` is the matching GPU-host overlay when SGLang runs
+from the host-native launcher and only GQ remains containerized. It routes GQ
+through the Docker host gateway and removes the dependency on the
+compose-managed SGLang container.
+
 Per `docs/prd-containerization.md` §Compose topology (Global compose) and
 §Phased rollout step 1.
 

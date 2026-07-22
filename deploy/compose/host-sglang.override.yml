@@ -1,0 +1,11 @@
+# Overlay for a GPU host that runs SGLang as a native host process while GQ
+# remains containerized. Start only GQ with --no-deps; this overlay removes the
+# base compose dependency that would otherwise start the SGLang container.
+
+services:
+  gq:
+    environment:
+      GQ_UPSTREAM: "${DREM_HOST_SGLANG_ENDPOINT:-http://host.docker.internal:8081}"
+    depends_on: !reset []
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

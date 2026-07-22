@@ -28,6 +28,10 @@ scripts/remote-inference-tunnel.sh
 ```
 
 No canary script starts or restarts SGLang, GQ, Docker, or SSH on its own.
+When the GPU host runs SGLang natively but GQ in Docker, use
+`deploy/compose/host-sglang.override.yml` as documented in the containerization
+guide; otherwise GQ's default `sglang:8081` Docker upstream cannot reach the
+host process.
 
 ## 2. Non-integrating delivery
 

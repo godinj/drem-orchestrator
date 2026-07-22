@@ -359,6 +359,26 @@ and integration authority remain local. A successful worker parks an exact
 artifact at `verification_ready`; it cannot advance the default branch without
 native evidence and explicit integration authorization.
 
+#### GPU host with native SGLang and containerized GQ
+
+The GPU host may retain its canonical host-native SGLang launcher instead of
+building the SGLang container. After the operator starts SGLang and verifies
+`http://127.0.0.1:8081/v1/models`, recreate only GQ with the host overlay:
+
+```bash
+export DREM_HOST_SGLANG_ENDPOINT=http://host.docker.internal:8081
+docker compose \
+  -f deploy/compose/global.yml \
+  -f deploy/compose/host-sglang.override.yml \
+  up -d --no-deps gq
+curl -fsS http://127.0.0.1:8090/v1/models
+```
+
+The override removes GQ's dependency on the compose-managed SGLang service and
+adds the Linux Docker host-gateway mapping. It does not start, stop, or restart
+the host inference process. Keep the GQ ports loopback-only, then use the SSH
+tunnel and local control-plane commands above unchanged.
+
 Before enabling a Canvas writer, run the repository-free inference,
 non-integrating delivery, and repeated Computer Use stages in
 [`docs/host-verification-canary.md`](../host-verification-canary.md). The first
