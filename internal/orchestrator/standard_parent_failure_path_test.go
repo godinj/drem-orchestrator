@@ -1,8 +1,7 @@
 package orchestrator
 
 import (
-	"os"
-	"path/filepath"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -61,12 +60,10 @@ func TestStandardParent_FailedChildDoesNotAdvance(t *testing.T) {
 func TestStandardParent_TestingReadyFailureRecordsSummaryAndDoesNotMerge(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	featureName := "testing-ready-fails"
-	featureDir := filepath.Join(t.TempDir(), "feature", featureName, "integration")
-	if err := os.MkdirAll(featureDir, 0o755); err != nil {
-		t.Fatalf("create feature dir: %v", err)
-	}
+	bareRepo := setupTestRepoWithMainBranch(t)
+	featureDir := createFeatureWorktree(t, bareRepo, featureName)
 	wt := &FakeWorktreeManager{
-		BarePath: t.TempDir(),
+		BarePath: bareRepo,
 		Default:  "main",
 		Features: map[string]string{featureName: featureDir},
 	}
@@ -84,9 +81,11 @@ func TestStandardParent_TestingReadyFailureRecordsSummaryAndDoesNotMerge(t *test
 		Category:       model.CategoryStandard,
 		WorktreeBranch: "feature/" + featureName,
 	}
+	recordBranchAcceptanceForTest(t, &parent, featureDir, "main")
 	if err := db.Create(&parent).Error; err != nil {
 		t.Fatalf("create parent: %v", err)
 	}
+	persistBranchAcceptanceForTest(t, db, &parent)
 
 	if err := o.processTestingReady(&parent); err != nil {
 		t.Fatalf("processTestingReady: %v", err)
@@ -96,24 +95,21 @@ func TestStandardParent_TestingReadyFailureRecordsSummaryAndDoesNotMerge(t *test
 	if err := db.First(&updated, "id = ?", parent.ID).Error; err != nil {
 		t.Fatalf("load parent: %v", err)
 	}
-	if updated.Status != model.StatusTestingReady {
-		t.Fatalf("status = %s, want testing_ready", updated.Status)
+	if updated.Status != model.StatusInProgress {
+		t.Fatalf("status = %s, want in_progress", updated.Status)
 	}
 	if merger.calls != 0 {
 		t.Fatalf("merger calls = %d, want 0 before testing_ready passes", merger.calls)
 	}
-	summary, _ := updated.Context["testing_ready_failure_summary"].(string)
-	if summary == "" {
-		t.Fatal("testing_ready_failure_summary not recorded")
+	var gateRun model.PreliminaryGateRun
+	if err := db.Where("task_id = ?", parent.ID).First(&gateRun).Error; err != nil {
+		t.Fatalf("load typed gate failure: %v", err)
 	}
-	if !strings.Contains(summary, "compile-failed") {
-		t.Fatalf("summary = %q, want first failing output line", summary)
+	if gateRun.Outcome != model.PreliminaryGateCodeFailure {
+		t.Fatalf("outcome = %s, want code", gateRun.Outcome)
 	}
-	if strings.Contains(summary, "\n") {
-		t.Fatalf("summary should be concise single-line text, got %q", summary)
-	}
-	if _, ok := updated.Context["automated_gate_passed"].(bool); ok {
-		t.Fatal("automated_gate_passed should not be set after failed tests")
+	if !strings.Contains(fmt.Sprint(gateRun.CommandEvidence), "compile-failed") {
+		t.Fatalf("gate evidence = %v, want compile-failed", gateRun.CommandEvidence)
 	}
 }
 
@@ -149,8 +145,12 @@ func TestStandardParent_MergerTestsFailedRecordsTerminalFailure(t *testing.T) {
 	if err := db.Where("task_id = ? AND new_value = ?", task.ID, string(model.StatusFailed)).First(&event).Error; err != nil {
 		t.Fatalf("load failed transition event: %v", err)
 	}
-	if got, _ := event.Details["reason"].(string); got != "merge aborted: pre-push tests failed" {
+	evidence, _ := event.Details["evidence"].(map[string]any)
+	if got, _ := evidence["reason"].(string); got != "merge aborted: pre-push tests failed" {
 		t.Fatalf("event reason = %q, want pre-push test failure", got)
+	}
+	if got, _ := evidence["source"].(string); got != "failure_policy" {
+		t.Fatalf("event source = %q, want failure_policy", got)
 	}
 }
 

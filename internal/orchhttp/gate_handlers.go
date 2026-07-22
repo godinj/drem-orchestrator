@@ -69,8 +69,17 @@ type archiveRequest struct {
 	Mode   string `json:"mode"`
 }
 
-// handleApproveTask dispatches POST /projects/{name}/tasks/{id}/approve to
-// HandlePlanApproved or HandleTestReviewApproved based on current status.
+func requireMutationActor(w http.ResponseWriter, r *http.Request) (string, bool) {
+	actor := strings.TrimSpace(r.Header.Get("X-Drem-Actor"))
+	if actor == "" {
+		writeJSONError(w, http.StatusBadRequest, "X-Drem-Actor is required")
+		return "", false
+	}
+	return actor, true
+}
+
+// handleApproveTask advances review gates. Delivery verification uses the
+// evidence-bearing /verify endpoint; testing_ready is not an approval gate.
 func (s *Server) handleApproveTask(w http.ResponseWriter, r *http.Request) {
 	if s.Orch == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "gate mutations not configured")
@@ -83,13 +92,17 @@ func (s *Server) handleApproveTask(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	actor, ok := requireMutationActor(w, r)
+	if !ok {
+		return
+	}
 
 	var err error
 	switch task.Status {
 	case model.StatusPlanReview:
-		err = s.Orch.HandlePlanApproved(task.ID)
+		err = s.Orch.HandlePlanApprovedBy(task.ID, actor)
 	case model.StatusTestReview:
-		err = s.Orch.HandleTestReviewApproved(task.ID)
+		err = s.Orch.HandleTestReviewApprovedBy(task.ID, actor)
 	default:
 		writeJSONError(w, http.StatusConflict,
 			fmt.Sprintf("task in status %q, expected one of [plan_review, test_review]", task.Status))
@@ -107,9 +120,9 @@ func (s *Server) handleApproveTask(w http.ResponseWriter, r *http.Request) {
 	s.writeUpdatedTask(w, task.ID)
 }
 
-// handleRejectTask dispatches POST /projects/{name}/tasks/{id}/reject to
-// HandlePlanRejected or HandleTestReviewRejected. The body is optional; an
-// empty or missing body maps to reason="" (matching the CLI's default).
+// handleRejectTask rejects any approval gate. fail remains as a compatibility
+// alias for testing_ready. The body is optional; an empty or missing body maps
+// to reason="" (matching the CLI's default).
 func (s *Server) handleRejectTask(w http.ResponseWriter, r *http.Request) {
 	if s.Orch == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "gate mutations not configured")
@@ -119,6 +132,10 @@ func (s *Server) handleRejectTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, ok := s.loadTaskForMutation(w, r)
+	if !ok {
+		return
+	}
+	actor, ok := requireMutationActor(w, r)
 	if !ok {
 		return
 	}
@@ -132,12 +149,12 @@ func (s *Server) handleRejectTask(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch task.Status {
 	case model.StatusPlanReview:
-		err = s.Orch.HandlePlanRejected(task.ID)
+		err = s.Orch.HandlePlanRejectedBy(task.ID, actor)
 	case model.StatusTestReview:
-		err = s.Orch.HandleTestReviewRejected(task.ID, req.Reason)
+		err = s.Orch.HandleTestReviewRejectedBy(task.ID, req.Reason, actor)
 	default:
 		writeJSONError(w, http.StatusConflict,
-			fmt.Sprintf("task in status %q, expected one of [plan_review, test_review]", task.Status))
+			fmt.Sprintf("task in status %q, expected one of [plan_review, test_review]; use request-rework for delivery failures", task.Status))
 		return
 	}
 	if err != nil {
@@ -148,8 +165,8 @@ func (s *Server) handleRejectTask(w http.ResponseWriter, r *http.Request) {
 	s.writeUpdatedTask(w, task.ID)
 }
 
-// handlePassTask dispatches POST /projects/{name}/tasks/{id}/pass. Only
-// testing_ready is accepted.
+// handlePassTask recognizes the legacy endpoint but cannot safely manufacture
+// exact-SHA verification evidence, so it always fails closed for extant tasks.
 func (s *Server) handlePassTask(w http.ResponseWriter, r *http.Request) {
 	if s.Orch == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "gate mutations not configured")
@@ -162,21 +179,11 @@ func (s *Server) handlePassTask(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if task.Status != model.StatusTestingReady {
-		writeJSONError(w, http.StatusConflict,
-			fmt.Sprintf("task in status %q, expected one of [testing_ready]", task.Status))
-		return
-	}
-	if err := s.Orch.HandleTestPassed(task.ID); err != nil {
-		slog.Error("orchhttp: pass failed", "task_id", task.ID, "err", err)
-		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
-		return
-	}
-	s.writeUpdatedTask(w, task.ID)
+	writeJSONError(w, http.StatusConflict,
+		fmt.Sprintf("task in status %q; pass is deprecated, use artifact then verify with exact evidence", task.Status))
 }
 
-// handleFailTask dispatches POST /projects/{name}/tasks/{id}/fail. Only
-// testing_ready is accepted.
+// handleFailTask is the fail-closed legacy counterpart to handlePassTask.
 func (s *Server) handleFailTask(w http.ResponseWriter, r *http.Request) {
 	if s.Orch == nil {
 		writeJSONError(w, http.StatusServiceUnavailable, "gate mutations not configured")
@@ -189,17 +196,8 @@ func (s *Server) handleFailTask(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if task.Status != model.StatusTestingReady {
-		writeJSONError(w, http.StatusConflict,
-			fmt.Sprintf("task in status %q, expected one of [testing_ready]", task.Status))
-		return
-	}
-	if err := s.Orch.HandleTestFailed(task.ID); err != nil {
-		slog.Error("orchhttp: fail failed", "task_id", task.ID, "err", err)
-		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
-		return
-	}
-	s.writeUpdatedTask(w, task.ID)
+	writeJSONError(w, http.StatusConflict,
+		fmt.Sprintf("task in status %q; fail is deprecated, use verify --result fail with exact evidence", task.Status))
 }
 
 // handleAnswerTask dispatches POST /projects/{name}/tasks/{id}/answer. The
@@ -213,6 +211,10 @@ func (s *Server) handleAnswerTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, ok := s.loadTaskForMutation(w, r)
+	if !ok {
+		return
+	}
+	actor, ok := requireMutationActor(w, r)
 	if !ok {
 		return
 	}
@@ -232,7 +234,7 @@ func (s *Server) handleAnswerTask(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("task in status %q, expected one of [needs_clarification]", task.Status))
 		return
 	}
-	if err := s.Orch.HandleClarificationAnswer(task.ID, req.Body); err != nil {
+	if err := s.Orch.HandleClarificationAnswerBy(task.ID, req.Body, actor); err != nil {
 		slog.Error("orchhttp: answer failed", "task_id", task.ID, "err", err)
 		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
 		return
@@ -357,25 +359,33 @@ func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	previousStatus := task.Status
 	previousWorker := ""
 	if task.AssignedAgentID != nil {
 		previousWorker = task.AssignedAgentID.String()
 	}
 	now := time.Now()
 	err = s.DB.WithContext(r.Context()).Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(&model.Task{}).
-			Where("id = ? AND status IN ?", task.ID, archiveAllowedStatuses()).
-			Updates(map[string]any{
-				"status":            model.StatusCancelled,
-				"assigned_agent_id": nil,
-				"updated_at":        now,
-			})
-		if res.Error != nil {
-			return res.Error
+		previousStatus := task.Status
+		if task.Status == model.StatusVerificationReady || task.Status == model.StatusIntegrationReady {
+			res := tx.Model(&model.DeliveryArtifact{}).
+				Where("task_id = ? AND invalidated_at IS NULL", task.ID).
+				Updates(map[string]any{"invalidated_at": now, "invalidation_reason": "task_archived"})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected != 1 {
+				return fmt.Errorf("archive delivery task: expected exactly one current artifact, got %d", res.RowsAffected)
+			}
 		}
-		if res.RowsAffected == 0 {
-			return gorm.ErrInvalidTransaction
+		task.AssignedAgentID = nil
+		if err := orchestrator.GuardedTaskTransitionTx(tx, &task, model.StatusCancelled, req.Actor,
+			"archive_api", req.Reason, map[string]any{
+				"mode": req.Mode, "obsolete": true, "previous_worker_id": previousWorker,
+			}); err != nil {
+			if errors.Is(err, state.ErrStaleTransition) {
+				return gorm.ErrInvalidTransaction
+			}
+			return err
 		}
 		return tx.Create(&model.TaskEvent{
 			ID:        uuid.New(),
@@ -442,6 +452,9 @@ func archiveAllowedStatuses() []model.TaskStatus {
 		model.StatusNeedsClarification,
 		model.StatusPlanReview,
 		model.StatusTestReview,
+		model.StatusTestingReady,
+		model.StatusVerificationReady,
+		model.StatusIntegrationReady,
 		model.StatusPaused,
 		model.StatusFailed,
 		model.StatusRejected,

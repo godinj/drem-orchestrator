@@ -10,6 +10,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
@@ -24,6 +25,8 @@ const replacementCap = 3
 // recoverable.
 const replacementWindow = time.Hour
 
+const workerLifecycleInspectTimeout = 2 * time.Second
+
 // replacementTracker records recent respawn timestamps per task so the
 // per-hour cap can be enforced without a database round-trip on every
 // event. Entries older than replacementWindow are dropped on access.
@@ -36,6 +39,13 @@ type replacementTracker struct {
 // newReplacementTracker creates a fresh tracker ready for use.
 func newReplacementTracker() *replacementTracker {
 	return &replacementTracker{timestamps: make(map[uuid.UUID][]time.Time)}
+}
+
+func (o *Orchestrator) replacementTracker() *replacementTracker {
+	if o.workerReplacements == nil {
+		o.workerReplacements = newReplacementTracker()
+	}
+	return o.workerReplacements
 }
 
 // recordAndCount appends now to the task's slice after pruning expired
@@ -77,7 +87,6 @@ func (o *Orchestrator) watchDockerEvents(ctx context.Context) error {
 		return fmt.Errorf("subscribe docker events: %w", err)
 	}
 
-	tracker := newReplacementTracker()
 	o.logger.Info("docker event watcher started", "project_id", o.projectID)
 
 	for {
@@ -89,8 +98,85 @@ func (o *Orchestrator) watchDockerEvents(ctx context.Context) error {
 				o.logger.Info("docker event channel closed")
 				return nil
 			}
-			o.dispatchEvent(ctx, ev, tracker)
+			o.dispatchEvent(ctx, ev, o.replacementTracker())
 		}
+	}
+}
+
+// reconcileWorkerAttemptLifecycles consumes terminal worker state from the
+// spawner during the normal tick. The spawner is the sole Docker owner in the
+// containerized deployment, so waiting for stale leases to infer a worker's
+// completion throws away an authoritative fact that is already available.
+//
+// ListWorkers is the cheap project-wide status sample. InspectWorker is used
+// only for terminal entries because it carries the exact exit code, timestamps,
+// and OOM bit. Missing or temporarily uninspectable containers are left to the
+// recovery reconciler; absence is not proof of death.
+func (o *Orchestrator) reconcileWorkerAttemptLifecycles(ctx context.Context) {
+	if o.Spawner == nil {
+		return
+	}
+
+	var attempts []model.WorkerAttempt
+	if err := o.db.Table("worker_attempts").
+		Joins("JOIN tasks ON tasks.id = worker_attempts.task_id").
+		Where("tasks.project_id = ? AND worker_attempts.state IN ? AND worker_attempts.container_id <> ''",
+			o.projectID, []string{model.WorkerAttemptReserved, model.WorkerAttemptRunning}).
+		Find(&attempts).Error; err != nil {
+		o.logger.Error("worker lifecycle poll: query active attempts", "error", err)
+		return
+	}
+	if len(attempts) == 0 {
+		return
+	}
+
+	// Bound the entire remote sample, not every container independently. A
+	// slow spawner must not stretch one orchestrator tick by N×timeout.
+	pollCtx, cancel := context.WithTimeout(ctx, workerLifecycleInspectTimeout)
+	defer cancel()
+	live, err := o.Spawner.ListWorkers(pollCtx, spawner.ListWorkersParams{ProjectID: o.projectID.String()})
+	if err != nil {
+		o.logger.Warn("worker lifecycle poll: list workers", "error", err)
+		return
+	}
+
+	terminal := make(map[string]spawner.WorkerInfo)
+	for _, worker := range live.Workers {
+		if worker.Status == string(container.StatusExited) || worker.Status == string(container.StatusDead) {
+			terminal[worker.ContainerID] = worker
+		}
+	}
+	if len(terminal) == 0 {
+		return
+	}
+
+	for i := range attempts {
+		attempt := &attempts[i]
+		if _, ok := terminal[attempt.ContainerID]; !ok {
+			continue
+		}
+		state, inspectErr := o.Spawner.InspectWorker(pollCtx, spawner.InspectWorkerParams{ContainerID: attempt.ContainerID})
+		if inspectErr != nil {
+			o.logger.Warn("worker lifecycle poll: inspect terminal worker",
+				"attempt_id", attempt.ID, "container_id", attempt.ContainerID, "error", inspectErr)
+			continue
+		}
+		if state.Status != string(container.StatusExited) && state.Status != string(container.StatusDead) {
+			continue
+		}
+		ev := container.Event{
+			Type:        container.EventDie,
+			ContainerID: attempt.ContainerID,
+			ExitCode:    state.ExitCode,
+			OOMKilled:   state.OOMKilled,
+			Timestamp:   state.FinishedAt,
+			Labels: map[string]string{
+				"drem.task_id":    attempt.TaskID.String(),
+				"drem.worker_id":  attempt.WorkerID,
+				"drem.agent_type": attempt.AgentType,
+			},
+		}
+		o.dispatchEvent(ctx, ev, o.replacementTracker())
 	}
 }
 
@@ -98,6 +184,9 @@ func (o *Orchestrator) watchDockerEvents(ctx context.Context) error {
 // EventStart is a no-op; EventDie with non-zero exit or OOMKilled triggers
 // handleWorkerDeath; EventDie with exit 0 records normal completion.
 func (o *Orchestrator) dispatchEvent(ctx context.Context, ev container.Event, tracker *replacementTracker) {
+	o.workerLifecycleMu.Lock()
+	defer o.workerLifecycleMu.Unlock()
+
 	switch ev.Type {
 	case container.EventStart:
 		// Nothing to do — spawns already record their own audit row.
@@ -140,6 +229,11 @@ func (o *Orchestrator) dispatchEvent(ctx context.Context, ev container.Event, tr
 				"worker_id", ev.Labels["drem.worker_id"], "attempt_id", attempt.ID)
 			return
 		}
+		if !activeWorkerAttempt(attempt) {
+			o.logger.Info("ignoring duplicate docker death event for finalized attempt",
+				"task_id", task.ID, "container_id", ev.ContainerID, "attempt_id", attempt.ID)
+			return
+		}
 		o.handleWorkerDeath(ctx, &task, attempt, ev, tracker)
 	case container.EventDestroy:
 		// Destroy is emitted post-Destroy; no state machine impact.
@@ -173,6 +267,10 @@ func (o *Orchestrator) handleWorkerExitZero(ctx context.Context, taskID uuid.UUI
 			"worker_id", ev.Labels["drem.worker_id"], "attempt_id", attempt.ID)
 		return
 	}
+	if !activeWorkerAttempt(attempt) {
+		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "ignored", "finalized_attempt")
+		return
+	}
 	if attempt.AgentID == nil {
 		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "ignored", "attempt_without_agent")
 		return
@@ -190,7 +288,7 @@ func (o *Orchestrator) handleWorkerExitZero(ctx context.Context, taskID uuid.UUI
 		o.logger.Error("docker completion event: reload accepted task", "task_id", task.ID, "attempt_id", attempt.ID, "error", err)
 		return
 	}
-	if accepted.Status != model.StatusDone {
+	if accepted.Status != model.StatusDone && accepted.Status != model.StatusTestingReady {
 		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "branch_acceptance_pending")
 		return
 	}
@@ -247,6 +345,13 @@ func currentAssignedAttempt(task *model.Task, attempt *model.WorkerAttempt) bool
 		return false
 	}
 	return *task.AssignedAgentID == *attempt.AgentID
+}
+
+func activeWorkerAttempt(attempt *model.WorkerAttempt) bool {
+	if attempt == nil || attempt.CompletedAt != nil {
+		return false
+	}
+	return attempt.State == model.WorkerAttemptReserved || attempt.State == model.WorkerAttemptRunning
 }
 
 func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, attempt *model.WorkerAttempt, ev container.Event, tracker *replacementTracker) {

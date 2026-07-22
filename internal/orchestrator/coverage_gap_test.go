@@ -2184,8 +2184,8 @@ func TestProcessTestingReady_AlreadyPassed(t *testing.T) {
 	db.Create(&parent)
 
 	err := o.processTestingReady(&parent)
-	if err != nil {
-		t.Fatalf("processTestingReady error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "canonical feature branch") {
+		t.Fatalf("processTestingReady should fail closed without accepted branch: %v", err)
 	}
 
 	// Should be a no-op since already passed.
@@ -2196,7 +2196,7 @@ func TestProcessTestingReady_AlreadyPassed(t *testing.T) {
 	}
 }
 
-func TestProcessTestingReady_NoWorktree(t *testing.T) {
+func TestProcessTestingReady_NoAcceptedBranchFailsClosed(t *testing.T) {
 	o, db := setupLifecycleTest(t)
 
 	parentID := uuid.New()
@@ -2210,8 +2210,8 @@ func TestProcessTestingReady_NoWorktree(t *testing.T) {
 	db.Create(&parent)
 
 	err := o.processTestingReady(&parent)
-	if err != nil {
-		t.Fatalf("processTestingReady error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "canonical feature branch") {
+		t.Fatalf("processTestingReady should fail closed: %v", err)
 	}
 
 	// No worktree -> no-op.
@@ -2437,7 +2437,7 @@ func TestCheckForCompilableTests_NonexistentDir(t *testing.T) {
 // processTestingReady with actual test suite run
 // ---------------------------------------------------------------------------
 
-func TestProcessTestingReady_FixerAlreadyAttempted(t *testing.T) {
+func TestProcessTestingReady_CodeFailureReturnsToImplementation(t *testing.T) {
 	orch, db, bareRepo := setupReconcileTest(t)
 
 	featureName := "testing-ready-fixer"
@@ -2458,11 +2458,12 @@ func TestProcessTestingReady_FixerAlreadyAttempted(t *testing.T) {
 		WorktreeBranch: "feature/" + featureName,
 		Context:        model.JSONField{"testing_ready_fixer_attempted": true},
 	}
+	recordBranchAcceptanceForTest(t, &parent, featureDir, "main")
 	db.Create(&parent)
+	persistBranchAcceptanceForTest(t, db, &parent)
 
-	// runTestSuite will run `go test ./...` in the feature dir which
-	// has no Go files, so it will fail. Since fixer already attempted,
-	// it should flag for human review.
+	// The isolated command fails because the fixture is not a Go project.
+	// Legacy fixer flags must not change deterministic failure routing.
 	err := orch.processTestingReady(&parent)
 	if err != nil {
 		t.Fatalf("processTestingReady error: %v", err)
@@ -2470,11 +2471,15 @@ func TestProcessTestingReady_FixerAlreadyAttempted(t *testing.T) {
 
 	var updated model.Task
 	db.First(&updated, "id = ?", parentID)
-	if updated.Context == nil {
-		t.Fatal("expected context")
+	if updated.Status != model.StatusInProgress {
+		t.Fatalf("expected code failure to return to in_progress, got %s", updated.Status)
 	}
-	if v, ok := updated.Context["needs_human_review"].(bool); !ok || !v {
-		t.Error("expected needs_human_review=true after fixer already attempted")
+	var gateRun model.PreliminaryGateRun
+	if err := db.Where("task_id = ?", parent.ID).First(&gateRun).Error; err != nil {
+		t.Fatalf("load preliminary gate run: %v", err)
+	}
+	if gateRun.Outcome != model.PreliminaryGateCodeFailure {
+		t.Fatalf("expected code outcome, got %s", gateRun.Outcome)
 	}
 }
 
@@ -3553,6 +3558,7 @@ func TestCheckFeatureCompletion_AllDoneAlreadyMergedToDefault(t *testing.T) {
 
 	mainDir := filepath.Join(bareRepo, "main")
 	runGitCmd(t, bareRepo, "worktree", "add", mainDir, "main")
+	baseSHA := runGitCmd(t, mainDir, "rev-parse", "HEAD")
 
 	featureName := "already-merged-parent"
 	featureDir := createFeatureWorktree(t, bareRepo, featureName)
@@ -3563,12 +3569,13 @@ func TestCheckFeatureCompletion_AllDoneAlreadyMergedToDefault(t *testing.T) {
 
 	parentID := uuid.New()
 	parent := model.Task{
-		ID:             parentID,
-		ProjectID:      orch.projectID,
-		Title:          "already-merged-parent",
-		Description:    "parent",
-		Status:         model.StatusInProgress,
-		WorktreeBranch: "feature/" + featureName,
+		ID:              parentID,
+		ProjectID:       orch.projectID,
+		Title:           "already-merged-parent",
+		Description:     "parent",
+		Status:          model.StatusInProgress,
+		WorktreeBranch:  "feature/" + featureName,
+		WorktreeBaseSHA: baseSHA,
 	}
 	db.Create(&parent)
 
@@ -3587,8 +3594,8 @@ func TestCheckFeatureCompletion_AllDoneAlreadyMergedToDefault(t *testing.T) {
 
 	var updated model.Task
 	db.First(&updated, "id = ?", parentID)
-	if updated.Status != model.StatusDone {
-		t.Fatalf("expected done for already-merged feature branch, got %s", updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Fatalf("expected testing_ready so already-merged work still receives delivery verification, got %s", updated.Status)
 	}
 
 	var failedEvents int64
@@ -3597,6 +3604,13 @@ func TestCheckFeatureCompletion_AllDoneAlreadyMergedToDefault(t *testing.T) {
 	).Count(&failedEvents)
 	if failedEvents != 0 {
 		t.Fatalf("expected no transient failed event, got %d", failedEvents)
+	}
+	var testingReadyEvents int64
+	db.Model(&model.TaskEvent{}).Where(
+		"task_id = ? AND new_value = ?", parentID, string(model.StatusTestingReady),
+	).Count(&testingReadyEvents)
+	if testingReadyEvents != 1 {
+		t.Fatalf("expected one testing_ready event, got %d", testingReadyEvents)
 	}
 }
 

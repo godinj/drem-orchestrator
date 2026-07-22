@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,7 +27,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
@@ -73,6 +73,12 @@ type TestGateConfig struct {
 	CompileCommand string        `toml:"compile_command"` // e.g. "go vet ./..."
 	ScopedTests    bool          `toml:"scoped_tests"`    // default true — scope tests to changed packages
 	TestTimeout    time.Duration `toml:"test_timeout"`    // default 5m
+}
+
+// DeliveryPolicyConfig controls host verification and integration behavior.
+type DeliveryPolicyConfig struct {
+	IntegrationPolicy  model.IntegrationPolicy
+	VerificationPolicy model.VerificationPolicy
 }
 
 // defaultTestGateConfig returns a TestGateConfig with sensible defaults.
@@ -122,6 +128,10 @@ type Orchestrator struct {
 	bugreport                   *bugreport.Service     // nil disables bug report ingestion
 	bugreportDir                string                 // path to .drem/bug-reports/ drop directory
 	testGate                    TestGateConfig
+	deliveryPolicy              DeliveryPolicyConfig
+	deliveryMu                  sync.Mutex // serializes the sole-writer delivery protocol
+	workerLifecycleMu           sync.Mutex // serializes duplicate poll/event observations for one worker lifecycle
+	workerReplacements          *replacementTracker
 	projectID                   uuid.UUID
 	projectName                 string // human-readable label; pairs with projectID on worker labels (see plans/dual-label-worker-spawn.md)
 	events                      chan<- Event
@@ -250,27 +260,45 @@ func New(
 		fixerPct = contextFixerPct[0]
 	}
 	o := &Orchestrator{
-		db:              db,
-		dbPath:          dbPath,
-		runner:          runner,
-		worktree:        wt,
-		memory:          mem,
-		supervisor:      sup,
-		bugreport:       bugSvc,
-		bugreportDir:    bugDir,
-		testGate:        defaultTestGateConfig(),
-		projectID:       projectID,
-		projectName:     projectName,
-		events:          events,
-		tick:            tickInterval,
-		stale:           staleTimeout,
-		contextWarnPct:  contextWarnPct,
-		contextStopPct:  contextStopPct,
-		contextFixerPct: fixerPct,
-		logger:          slog.Default().With("component", "orchestrator", "project_id", projectID),
+		db:           db,
+		dbPath:       dbPath,
+		runner:       runner,
+		worktree:     wt,
+		memory:       mem,
+		supervisor:   sup,
+		bugreport:    bugSvc,
+		bugreportDir: bugDir,
+		testGate:     defaultTestGateConfig(),
+		deliveryPolicy: DeliveryPolicyConfig{
+			IntegrationPolicy:  model.IntegrationAutoMerge,
+			VerificationPolicy: model.VerificationLocalAutomated,
+		},
+		projectID:          projectID,
+		projectName:        projectName,
+		events:             events,
+		tick:               tickInterval,
+		stale:              staleTimeout,
+		contextWarnPct:     contextWarnPct,
+		contextStopPct:     contextStopPct,
+		contextFixerPct:    fixerPct,
+		logger:             slog.Default().With("component", "orchestrator", "project_id", projectID),
+		workerReplacements: newReplacementTracker(),
 	}
 	o.lifecycle = newOrchestratorLifecycleEngine(o)
 	return o
+}
+
+// SetDeliveryPolicyConfig installs a validated delivery policy. Invalid zero
+// values are rejected instead of silently inferring behavior from host traits.
+func (o *Orchestrator) SetDeliveryPolicyConfig(cfg DeliveryPolicyConfig) error {
+	if _, err := model.ParseIntegrationPolicy(string(cfg.IntegrationPolicy)); err != nil {
+		return fmt.Errorf("integration policy: %w", err)
+	}
+	if _, err := model.ParseVerificationPolicy(string(cfg.VerificationPolicy)); err != nil {
+		return fmt.Errorf("verification policy: %w", err)
+	}
+	o.deliveryPolicy = cfg
+	return nil
 }
 
 // SetTestGateConfig updates the test gate configuration. Call this after
@@ -507,6 +535,11 @@ func (o *Orchestrator) Run(ctx context.Context) {
 // classified and promoted into tasks. Errors are logged and do not halt the tick.
 // doTick is a single iteration of the orchestrator loop.
 func (o *Orchestrator) doTick(ctx context.Context) {
+	// Container state is a control-plane fact, not something to infer after a
+	// lease expires. The spawner owns Docker, so consume its authoritative
+	// terminal state before advancing task phases. Reconciliation and leases
+	// remain recovery paths for an unavailable spawner.
+	o.reconcileWorkerAttemptLifecycles(ctx)
 	if o.lifecycle != nil {
 		if _, err := o.lifecycle.Tick(ctx, TickScope{
 			ProjectID: o.projectID,
@@ -622,7 +655,7 @@ func (o *Orchestrator) doTickLegacy(ctx context.Context) {
 						o.logger.Error("quickfix respawn", "task_id", task.ID, "error", err)
 					}
 				} else {
-					if err := o.transitionQuickFixToMerging(task); err != nil {
+					if err := o.prepareQuickFixDelivery(task); err != nil {
 						o.logger.Error("quickfix to merging", "task_id", task.ID, "error", err)
 					}
 				}
@@ -649,6 +682,34 @@ func (o *Orchestrator) doTickLegacy(ctx context.Context) {
 		for i := range testingReadyTasks {
 			if err := o.processTestingReady(&testingReadyTasks[i]); err != nil {
 				o.logger.Error("doTick: processTestingReady", "task_id", testingReadyTasks[i].ID, "error", err)
+			}
+		}
+	}
+
+	// 4d. Verification is external-acknowledged or locally automated according
+	// to explicit project policy. External verification never runs here.
+	var verificationReadyTasks []model.Task
+	if err := o.db.Where("project_id = ? AND status = ? AND parent_task_id IS NULL",
+		o.projectID, model.StatusVerificationReady).Find(&verificationReadyTasks).Error; err != nil {
+		o.logger.Error("doTick: query verification_ready tasks", "error", err)
+	} else {
+		for i := range verificationReadyTasks {
+			if err := o.processVerificationReady(&verificationReadyTasks[i]); err != nil {
+				o.logger.Error("doTick: processVerificationReady", "task_id", verificationReadyTasks[i].ID, "error", err)
+			}
+		}
+	}
+
+	// 4e. Auto-merge policy records integration authorization; prepare_branch
+	// remains parked until the supported control surface authorizes it.
+	var integrationReadyTasks []model.Task
+	if err := o.db.Where("project_id = ? AND status = ? AND parent_task_id IS NULL",
+		o.projectID, model.StatusIntegrationReady).Find(&integrationReadyTasks).Error; err != nil {
+		o.logger.Error("doTick: query integration_ready tasks", "error", err)
+	} else {
+		for i := range integrationReadyTasks {
+			if err := o.processIntegrationReady(&integrationReadyTasks[i]); err != nil {
+				o.logger.Error("doTick: processIntegrationReady", "task_id", integrationReadyTasks[i].ID, "error", err)
 			}
 		}
 	}
@@ -943,19 +1004,13 @@ func (o *Orchestrator) failTask(task *model.Task, reason string) error {
 	}
 	task.Context["failure_reason"] = reason
 
-	evt, err := state.TransitionTask(task, model.StatusFailed, "orchestrator", map[string]any{"reason": reason})
-	if err != nil {
+	oldStatus := task.Status
+	if err := o.transitionTaskAtomic(task, model.StatusFailed, "orchestrator", "failure_policy", reason, nil); err != nil {
 		return fmt.Errorf("fail task: transition: %w", err)
-	}
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("fail task: save task: %w", err)
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("fail task: save event: %w", err)
 	}
 
 	o.emit("task_failed", map[string]any{"task_id": task.ID, "reason": reason})
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, reason)
+	o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), reason)
 	o.logger.Warn("task failed", "task_id", task.ID, "reason", reason)
 	return nil
 }

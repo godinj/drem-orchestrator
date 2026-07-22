@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -12,6 +13,20 @@ func TestDefaultConfigTmuxSocket(t *testing.T) {
 	cfg := DefaultConfig()
 	if cfg.TmuxSocket != "drem" {
 		t.Errorf("TmuxSocket: got %q, want %q", cfg.TmuxSocket, "drem")
+	}
+}
+
+func TestRuntimeProjectNamePrefersExplicitContainerIdentity(t *testing.T) {
+	t.Setenv("DREM_PROJECT", "canvas-local-canary")
+	if got := runtimeProjectName("/srv/git/drem-canvas.git"); got != "canvas-local-canary" {
+		t.Fatalf("runtimeProjectName = %q, want explicit registration name", got)
+	}
+}
+
+func TestRuntimeProjectNameFallsBackToBareRepoName(t *testing.T) {
+	t.Setenv("DREM_PROJECT", "")
+	if got := runtimeProjectName("/srv/git/drem-canvas.git"); got != "drem-canvas" {
+		t.Fatalf("runtimeProjectName = %q, want bare-repository basename", got)
 	}
 }
 
@@ -71,6 +86,41 @@ func TestLoadConfigTmuxDefaults(t *testing.T) {
 	// Verify the explicit override still applied.
 	if cfg.DatabasePath != "./other.db" {
 		t.Errorf("DatabasePath: got %q, want %q", cfg.DatabasePath, "./other.db")
+	}
+}
+
+func TestLoadConfigDeliveryPoliciesDefaultForLegacyConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(`database_path = "./legacy.db"`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Delivery.IntegrationPolicy != model.IntegrationAutoMerge {
+		t.Errorf("IntegrationPolicy: got %q, want %q", cfg.Delivery.IntegrationPolicy, model.IntegrationAutoMerge)
+	}
+	if cfg.Delivery.VerificationPolicy != model.VerificationLocalAutomated {
+		t.Errorf("VerificationPolicy: got %q, want %q", cfg.Delivery.VerificationPolicy, model.VerificationLocalAutomated)
+	}
+}
+
+func TestLoadConfigRejectsUnknownExplicitDeliveryPolicy(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(`[delivery]
+integration_policy = "maybe_merge"
+verification_policy = "local_automated"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := LoadConfig(cfgPath)
+	if err == nil || !strings.Contains(err.Error(), "delivery.integration_policy") {
+		t.Fatalf("LoadConfig error = %v, want integration-policy validation error", err)
 	}
 }
 

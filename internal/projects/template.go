@@ -43,6 +43,15 @@ type TemplateData struct {
 	// BareRepoPath is the absolute path to the project's bare repository
 	// on the host, mounted into the orchestrator container.
 	BareRepoPath string
+	// InferenceEndpoint is the OpenAI-compatible chat-completions URL used
+	// by direct local-model roles. The default resolves the in-stack GQ
+	// service; Mac control-plane deployments override it with the
+	// host.docker.internal URL of an SSH-forwarded remote GQ endpoint.
+	InferenceEndpoint string
+	// IntegrationPolicy is written to [delivery].integration_policy.
+	IntegrationPolicy string
+	// VerificationPolicy is written to [delivery].verification_policy.
+	VerificationPolicy string
 	// SharedToken authenticates agentmon POST /internal/logs requests for
 	// this project. Generated once per registration via NewSharedToken.
 	SharedToken string

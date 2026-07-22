@@ -10,7 +10,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/state"
+	"gorm.io/gorm"
 )
 
 // ReconcileResult describes the fixes applied by a single Reconcile run.
@@ -190,10 +190,9 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 			// Agent record missing — reset subtask for rescheduling.
 			o.logger.Warn("reconcile: assigned agent not found, resetting subtask",
 				"subtask_id", sub.ID, "agent_id", sub.AssignedAgentID)
-			sub.Status = model.StatusBacklog
 			sub.AssignedAgentID = nil
-			sub.UpdatedAt = time.Now()
-			if err := o.db.Save(sub).Error; err != nil {
+			if err := o.transitionTaskAtomic(sub, model.StatusBacklog, "orchestrator", "orphan_reconciliation",
+				"assigned agent record is missing; subtask rescheduled", nil); err != nil {
 				o.logger.Error("reconcile: save subtask", "subtask_id", sub.ID, "error", err)
 			}
 			fixed++
@@ -224,27 +223,11 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 			if o.isWorkAlreadyMerged(sub, featureDir) {
 				o.logger.Info("reconcile: work already merged, transitioning to quality gate",
 					"subtask_id", sub.ID, "agent_id", ag.ID)
-				// Fast-track subtask to done (matches onAgentCompleted / scheduleSubtasks).
-				transitions := []model.TaskStatus{
-					model.StatusTestingReady,
-					model.StatusMerging,
-					model.StatusDone,
-				}
-				for _, target := range transitions {
-					if sub.Status == target {
-						continue
-					}
-					evt, tErr := state.TransitionTask(sub, target, "orchestrator",
-						map[string]any{"reason": "reconcile-already-merged"})
-					if tErr != nil {
-						continue
-					}
-					if err := o.db.Create(evt).Error; err != nil {
-						o.logger.Error("reconcile: save event", "subtask_id", sub.ID, "error", err)
-						break
-					}
-				}
-				if err := o.db.Save(sub).Error; err != nil {
+				if err := o.db.Transaction(func(tx *gorm.DB) error {
+					return casSubtaskCompletion(tx, sub, "orchestrator", map[string]any{
+						"agent_id": ag.ID.String(), "reason": "reconcile_already_merged",
+					})
+				}); err != nil {
 					o.logger.Error("reconcile: save subtask", "subtask_id", sub.ID, "error", err)
 				}
 				// Clean up agent worktree since work is merged.
@@ -333,30 +316,11 @@ func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
 			}
 		}
 
-		// Fast-track subtask to done (matches onAgentCompleted / scheduleSubtasks).
-		transitions := []model.TaskStatus{
-			model.StatusTestingReady,
-			model.StatusMerging,
-			model.StatusDone,
-		}
-		for _, target := range transitions {
-			if sub.Status == target {
-				continue
-			}
-			evt, err := state.TransitionTask(sub, target, "orchestrator",
-				map[string]any{"reason": "reconcile-merged"})
-			if err != nil {
-				o.logger.Debug("reconcile transition skip",
-					"subtask_id", sub.ID, "from", sub.Status, "to", target, "error", err)
-				continue
-			}
-			if err := o.db.Create(evt).Error; err != nil {
-				o.logger.Error("reconcile: save event", "subtask_id", sub.ID, "error", err)
-				break
-			}
-		}
-
-		if err := o.db.Save(sub).Error; err != nil {
+		if err := o.db.Transaction(func(tx *gorm.DB) error {
+			return casSubtaskCompletion(tx, sub, "orchestrator", map[string]any{
+				"agent_id": ag.ID.String(), "reason": "reconcile_merged",
+			})
+		}); err != nil {
 			o.logger.Error("reconcile: save subtask", "subtask_id", sub.ID, "error", err)
 			continue
 		}
@@ -393,16 +357,22 @@ func (o *Orchestrator) reconcileEmptyFeatures() (int, error) {
 		if hasMeaningfulWorkPaths(changed) {
 			continue
 		}
+		if o.featureBranchAlreadyMergedToDefault(task) {
+			o.logger.Info("reconcile: branch already integrated; preserving testing_ready for evidence freeze",
+				"task_id", task.ID, "branch", task.WorktreeBranch)
+			continue
+		}
 
-		o.logger.Warn("reconcile: failing testing_ready task with empty feature branch",
+		o.logger.Warn("reconcile: returning empty testing_ready task to implementation",
 			"task_id", task.ID)
 		if task.Context == nil {
 			task.Context = make(model.JSONField)
 		}
 		task.Context["empty_feature"] = true
 		task.Context["reconciled"] = true
-		if err := o.failTask(task, "feature branch has no changes (detected by reconcile)"); err != nil {
-			o.logger.Error("reconcile: fail empty feature task", "task_id", task.ID, "error", err)
+		if err := o.transitionTaskAtomic(task, model.StatusInProgress, "orchestrator", "empty_feature_recovery",
+			"feature branch has no changes; implementation must produce an artifact", nil); err != nil {
+			o.logger.Error("reconcile: rework empty feature task", "task_id", task.ID, "error", err)
 			continue
 		}
 		fixed++

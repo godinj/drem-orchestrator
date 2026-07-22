@@ -19,13 +19,13 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/promptassets"
-	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
 // shouldUseDirectToolAgent decides whether the given task should run inside
@@ -89,6 +89,8 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 		return nil
 	}
 	toolCfg := *o.directToolAgentCfg
+	toolCfg.GQCaller = "coder"
+	toolCfg.GQPriority = "normal"
 	toolCfg.WorkDir = featureDir
 	o.applyContextThresholds(&toolCfg)
 
@@ -118,33 +120,24 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 		ModelID:       toolCfg.Model,
 		HeartbeatAt:   &now,
 	}
-	if err := o.db.Create(ag).Error; err != nil {
-		return fmt.Errorf("direct coder: create agent record: %w", err)
-	}
-
-	// Fast-track subtask: BACKLOG -> PLANNING -> PLAN_REVIEW -> IN_PROGRESS.
-	// Without this, the subtask stays in BACKLOG and scheduleSubtasks re-selects
-	// it on the next tick, spawning duplicate agents for the same work.
-	fastTrack := []model.TaskStatus{
-		model.StatusPlanning,
-		model.StatusPlanReview,
-		model.StatusInProgress,
-	}
-	for _, target := range fastTrack {
-		evt, tErr := state.TransitionTask(sub, target, "orchestrator",
-			map[string]any{"reason": "direct-coder-dispatch"})
-		if tErr != nil {
-			continue
+	originalAssignment := sub.AssignedAgentID
+	if err := o.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(ag).Error; err != nil {
+			return fmt.Errorf("create agent record: %w", err)
 		}
-		if err := o.db.Create(evt).Error; err != nil {
-			o.logger.Error("direct coder: save transition event", "subtask_id", sub.ID, "error", err)
-			break
+		switch sub.Status {
+		case model.StatusBacklog:
+			sub.AssignedAgentID = &ag.ID
+			return casTaskTransition(tx, sub, model.StatusBacklog, model.StatusInProgress, "orchestrator",
+				"direct_coder_dispatch", "direct coder claimed backlog subtask", map[string]any{"agent_id": ag.ID.String()})
+		case model.StatusInProgress:
+			return casClaimInProgressSubtask(tx, sub, ag.ID, "orchestrator", "direct_coder_dispatch")
+		default:
+			return fmt.Errorf("direct coder cannot claim subtask in %s", sub.Status)
 		}
-	}
-
-	sub.AssignedAgentID = &ag.ID
-	if err := o.db.Save(sub).Error; err != nil {
-		return fmt.Errorf("direct coder: save subtask: %w", err)
+	}); err != nil {
+		sub.AssignedAgentID = originalAssignment
+		return fmt.Errorf("direct coder: claim subtask: %w", err)
 	}
 
 	parentCtx := map[string]any{
@@ -291,6 +284,8 @@ func (o *Orchestrator) dispatchQuickFixDirect(task *model.Task, event *model.Tas
 	}
 
 	toolCfg := *o.directToolAgentCfg
+	toolCfg.GQCaller = "coder"
+	toolCfg.GQPriority = "normal"
 	toolCfg.WorkDir = featureDir
 	o.applyContextThresholds(&toolCfg)
 
@@ -407,6 +402,8 @@ func (o *Orchestrator) processReviewerDirect(task *model.Task) error {
 
 	worktreePath := o.resolveReviewerWorkDir(task)
 	toolCfg := *o.directToolAgentCfg
+	toolCfg.GQCaller = "reviewer"
+	toolCfg.GQPriority = "normal"
 	toolCfg.WorkDir = worktreePath
 	o.applyContextThresholds(&toolCfg)
 
@@ -484,6 +481,8 @@ func (o *Orchestrator) processFixerDirect(task *model.Task) error {
 
 	worktreePath := o.resolveReviewerWorkDir(task)
 	toolCfg := *o.directToolAgentCfg
+	toolCfg.GQCaller = "fixer"
+	toolCfg.GQPriority = "normal"
 	toolCfg.WorkDir = worktreePath
 	o.applyContextThresholds(&toolCfg)
 

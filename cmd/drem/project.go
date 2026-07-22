@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/projects"
 )
 
@@ -63,6 +64,9 @@ func splitPositional(args []string) (string, []string) {
 		"--bare": true, "-bare": true,
 		"--language": true, "-language": true,
 		"--orch-url": true, "-orch-url": true,
+		"--inference-endpoint": true, "-inference-endpoint": true,
+		"--integration-policy": true, "-integration-policy": true,
+		"--verification-policy": true, "-verification-policy": true,
 	}
 	var positional string
 	var remaining []string
@@ -184,6 +188,9 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 	bare := fs.String("bare", "", "bare repo path (required for fresh register)")
 	language := fs.String("language", "", "project language: go or cpp (required for fresh register)")
 	orchURL := fs.String("orch-url", "", "orchestrator HTTP URL (required for fresh register)")
+	inferenceEndpoint := fs.String("inference-endpoint", "", "OpenAI-compatible chat-completions URL for direct workers")
+	integrationPolicy := fs.String("integration-policy", string(model.IntegrationAutoMerge), "delivery integration policy: auto_merge or prepare_branch")
+	verificationPolicy := fs.String("verification-policy", string(model.VerificationLocalAutomated), "delivery verification policy: local_automated or external_ack")
 	homeDir := fs.String("home-dir", "", "override $HOME (testing)")
 	update := fs.Bool("update", false, "regenerate per-project compose.yml + drem.toml from current templates (preserves SharedToken)")
 	dryRun := fs.Bool("dry-run", false, "print what would change without writing (implies --update)")
@@ -220,11 +227,20 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 		return err
 	}
 
+	if _, err := model.ParseIntegrationPolicy(*integrationPolicy); err != nil {
+		return err
+	}
+	if _, err := model.ParseVerificationPolicy(*verificationPolicy); err != nil {
+		return err
+	}
 	p := projects.Project{
-		Name:         *name,
-		BareRepoPath: *bare,
-		Language:     *language,
-		OrchURL:      *orchURL,
+		Name:               *name,
+		BareRepoPath:       *bare,
+		Language:           *language,
+		OrchURL:            *orchURL,
+		InferenceEndpoint:  strings.TrimSpace(*inferenceEndpoint),
+		IntegrationPolicy:  strings.TrimSpace(*integrationPolicy),
+		VerificationPolicy: strings.TrimSpace(*verificationPolicy),
 	}
 	if err := reg.Add(p); err != nil {
 		return err
@@ -463,15 +479,32 @@ func templateDataFor(p projects.Project) projects.TemplateData {
 		}
 	}
 	return projects.TemplateData{
-		ProjectName:  p.Name,
-		OrchURL:      p.OrchURL,
-		Language:     p.Language,
-		WorkerImage:  workerImage,
-		MergerImage:  mergerImage,
-		CsuiteImages: csuiteImages,
-		BareRepoPath: p.BareRepoPath,
-		SharedToken:  uuid.NewString(),
+		ProjectName:        p.Name,
+		OrchURL:            p.OrchURL,
+		Language:           p.Language,
+		WorkerImage:        workerImage,
+		MergerImage:        mergerImage,
+		CsuiteImages:       csuiteImages,
+		BareRepoPath:       p.BareRepoPath,
+		InferenceEndpoint:  p.InferenceEndpoint,
+		IntegrationPolicy:  effectiveIntegrationPolicy(p.IntegrationPolicy),
+		VerificationPolicy: effectiveVerificationPolicy(p.VerificationPolicy),
+		SharedToken:        uuid.NewString(),
 	}
+}
+
+func effectiveIntegrationPolicy(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return string(model.IntegrationAutoMerge)
+	}
+	return raw
+}
+
+func effectiveVerificationPolicy(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return string(model.VerificationLocalAutomated)
+	}
+	return raw
 }
 
 // defaultWorkerImage returns the per-language worker image tag.
@@ -567,6 +600,11 @@ func cmdProjectShow(args []string, stdout io.Writer) error {
 	fmt.Fprintf(&b, "Language:      %s\n", p.Language)
 	fmt.Fprintf(&b, "BareRepoPath:  %s\n", p.BareRepoPath)
 	fmt.Fprintf(&b, "OrchURL:       %s\n", p.OrchURL)
+	inferenceEndpoint := p.InferenceEndpoint
+	if inferenceEndpoint == "" {
+		inferenceEndpoint = projects.DefaultInferenceEndpoint
+	}
+	fmt.Fprintf(&b, "Inference:     %s\n", inferenceEndpoint)
 	if len(p.ContainerImageOverrides) > 0 {
 		fmt.Fprintln(&b, "ContainerImageOverrides:")
 		for k, v := range p.ContainerImageOverrides {

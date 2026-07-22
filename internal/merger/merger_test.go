@@ -3,6 +3,7 @@ package merger_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -108,6 +109,8 @@ type featureScenario struct {
 	Integration string
 	Feature     string
 	WorkDir     string
+	BaseSHA     string
+	FeatureSHA  string
 }
 
 // setupFeatureScenario creates a bare repo, clones it, adds a diverging
@@ -141,12 +144,18 @@ func setupFeatureScenario(t *testing.T, featureContent, featureFile string) feat
 
 	_, err = testutil.RunGit([]string{"push", "origin", feature}, prep)
 	require.NoError(t, err, "push feature")
+	baseSHA, err := testutil.RunGit([]string{"rev-parse", integration}, bareRepo)
+	require.NoError(t, err, "resolve integration sha")
+	featureSHA, err := testutil.RunGit([]string{"rev-parse", feature}, bareRepo)
+	require.NoError(t, err, "resolve feature sha")
 
 	return featureScenario{
 		BareRepo:    bareRepo,
 		Integration: integration,
 		Feature:     feature,
 		WorkDir:     filepath.Join(t.TempDir(), "work"),
+		BaseSHA:     baseSHA,
+		FeatureSHA:  featureSHA,
 	}
 }
 
@@ -203,6 +212,38 @@ func TestMerger_HappyPath_MergesAndDeletesFeature(t *testing.T) {
 	require.True(t, rep.Calls()[0].Result.Success)
 	require.Equal(t, "drem", rep.Calls()[0].Project)
 	require.Equal(t, "task-1", rep.Calls()[0].TaskID)
+}
+
+func TestMerger_RejectsDriftFromAuthorizedSHAsBeforeMutation(t *testing.T) {
+	t.Run("base", func(t *testing.T) {
+		scn := setupFeatureScenario(t, "hello\n", "feature.txt")
+		m := &merger.Merger{WorkDir: scn.WorkDir, BareRepo: scn.BareRepo, TestCmd: "true"}
+		res, err := m.Merge(context.Background(), merger.MergeRequest{
+			FeatureBranch: scn.Feature, IntegrationBranch: scn.Integration,
+			Project: "drem", TaskID: "base-drift",
+			ExpectedFeatureSHA: scn.FeatureSHA, ExpectedBaseSHA: strings.Repeat("f", 40),
+		})
+		require.ErrorContains(t, err, "integration base drift")
+		require.Equal(t, "stale_evidence", res.FailureReason)
+		got, gitErr := testutil.RunGit([]string{"rev-parse", scn.Integration}, scn.BareRepo)
+		require.NoError(t, gitErr)
+		require.Equal(t, scn.BaseSHA, got)
+	})
+
+	t.Run("feature", func(t *testing.T) {
+		scn := setupFeatureScenario(t, "hello\n", "feature.txt")
+		m := &merger.Merger{WorkDir: scn.WorkDir, BareRepo: scn.BareRepo, TestCmd: "true"}
+		res, err := m.Merge(context.Background(), merger.MergeRequest{
+			FeatureBranch: scn.Feature, IntegrationBranch: scn.Integration,
+			Project: "drem", TaskID: "feature-drift",
+			ExpectedFeatureSHA: strings.Repeat("f", 40), ExpectedBaseSHA: scn.BaseSHA,
+		})
+		require.ErrorContains(t, err, "feature commit drift")
+		require.Equal(t, "stale_evidence", res.FailureReason)
+		got, gitErr := testutil.RunGit([]string{"rev-parse", scn.Integration}, scn.BareRepo)
+		require.NoError(t, gitErr)
+		require.Equal(t, scn.BaseSHA, got)
+	})
 }
 
 func TestMerger_MergeConflict_ReportsWithoutDeleting(t *testing.T) {

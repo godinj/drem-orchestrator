@@ -7,7 +7,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
-	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
 // MaxQuickFixRetries is the number of times the orchestrator will retry a
@@ -70,22 +69,19 @@ func (o *Orchestrator) processQuickFix(task *model.Task) error {
 		o.worktree.GenerateRepoMapAsync(wtInfo.Path)
 
 		task.WorktreeBranch = wtInfo.Branch
+		task.WorktreeBaseSHA = wtInfo.Head
 		if err := o.db.Save(task).Error; err != nil {
 			return fmt.Errorf("process quick fix: save worktree branch: %w", err)
 		}
 	}
 
 	// 4. Transition backlog → in_progress.
-	event, err := state.TransitionTask(task, model.StatusInProgress, "orchestrator", map[string]any{"reason": "quickfix-direct"})
-	if err != nil {
+	oldStatus := task.Status
+	if err := o.transitionTaskAtomic(task, model.StatusInProgress, "orchestrator", "quickfix_dispatch",
+		"quick fix selected for direct implementation", nil); err != nil {
 		return fmt.Errorf("process quick fix: %w", err)
 	}
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("process quick fix: save task: %w", err)
-	}
-	if err := o.db.Create(event).Error; err != nil {
-		return fmt.Errorf("process quick fix: save event: %w", err)
-	}
+	event := &model.TaskEvent{TaskID: task.ID, OldValue: string(oldStatus), NewValue: string(task.Status)}
 
 	// 5. Dispatch: container mode first (o.Spawner wired), legacy runner
 	// fallback second. See plans/phase-3.5b-quickfix-migration.md for the

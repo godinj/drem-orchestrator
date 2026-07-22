@@ -6,10 +6,10 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
 // ---------------------------------------------------------------------------
@@ -344,31 +344,15 @@ func (o *Orchestrator) handleTestWritingFailure(subtask *model.Task, ag *model.A
 		}
 		subtask.Context["partial_tests"] = true
 
-		// Transition subtask to DONE (tests will be caught at TEST_REVIEW).
-		evt, err := state.TransitionTask(subtask, model.StatusTestingReady, "orchestrator",
-			map[string]any{"reason": "partial tests from exhausted test-writer"})
-		if err != nil {
-			return fmt.Errorf("handleTestWritingFailure: transition to testing_ready: %w", err)
-		}
-		if err := o.db.Create(evt).Error; err != nil {
-			return fmt.Errorf("handleTestWritingFailure: save event: %w", err)
-		}
-		// Fast-track through to DONE.
-		for _, target := range []model.TaskStatus{model.StatusMerging, model.StatusDone} {
-			if subtask.Status == target {
-				continue
-			}
-			ftEvt, ftErr := state.TransitionTask(subtask, target, "orchestrator",
-				map[string]any{"reason": "fast-track partial tests"})
-			if ftErr != nil {
-				continue
-			}
-			if err := o.db.Create(ftEvt).Error; err != nil {
-				return fmt.Errorf("handleTestWritingFailure: save fast-track event: %w", err)
-			}
-		}
-		if err := o.db.Save(subtask).Error; err != nil {
-			return fmt.Errorf("handleTestWritingFailure: save subtask: %w", err)
+		// A test-writing subtask is a child unit, not a delivery artifact. Record
+		// its partial completion directly instead of synthesizing parent-only
+		// testing and merge states.
+		if err := o.db.Transaction(func(tx *gorm.DB) error {
+			return casSubtaskCompletion(tx, subtask, "orchestrator", map[string]any{
+				"reason": "partial tests from exhausted test-writer", "agent_id": ag.ID.String(),
+			})
+		}); err != nil {
+			return fmt.Errorf("handleTestWritingFailure: accept partial test subtask: %w", err)
 		}
 		o.emit("task_updated", subtask)
 		return nil

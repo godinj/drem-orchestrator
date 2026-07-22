@@ -291,6 +291,9 @@ func (o *Orchestrator) SpawnFixerSession(taskID uuid.UUID) (string, error) {
 	}
 
 	// Generate prompt.
+	if o.runner == nil {
+		return "", fmt.Errorf("spawn fixer: no spawner or runner configured")
+	}
 	comments, _ := o.GetComments(task.ID)
 	fixerPrompt := prompt.Generate(prompt.Opts{
 		Task:          &task,

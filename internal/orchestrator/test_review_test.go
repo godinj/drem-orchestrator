@@ -81,7 +81,10 @@ func TestOnAgentCompleted_ClearsAssignmentWhenMarkingDone(t *testing.T) {
 
 	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
 	db.Create(&project)
-	task := model.Task{ID: uuid.New(), ProjectID: o.projectID, Title: "subtask", Description: "subtask", Status: model.StatusInProgress}
+	parentID := uuid.New()
+	parent := model.Task{ID: parentID, ProjectID: o.projectID, Title: "parent", Description: "parent", Status: model.StatusInProgress}
+	db.Create(&parent)
+	task := model.Task{ID: uuid.New(), ProjectID: o.projectID, ParentTaskID: &parentID, Title: "subtask", Description: "subtask", Status: model.StatusInProgress}
 	db.Create(&task)
 	ag := testutil.CreateAgent(t, db, task.ID, model.AgentCoder, model.AgentWorking)
 	task.AssignedAgentID = &ag.ID
@@ -329,8 +332,10 @@ func TestHandleTestReviewRejected_DeduplicatesCanonicalReplacementTitles(t *test
 	if err := db.Where("task_id = ? AND event_type = ? AND new_value = ?", parentID, "status_change", string(model.StatusTestWriting)).First(&event).Error; err != nil {
 		t.Fatalf("load parent transition event: %v", err)
 	}
-	if event.Details["subtasks_cloned"] != float64(1) {
-		t.Fatalf("expected one cloned subtask in event details, got %v", event.Details["subtasks_cloned"])
+	evidence, _ := event.Details["evidence"].(map[string]any)
+	references, _ := evidence["references"].(map[string]any)
+	if references["subtasks_cloned"] != float64(1) {
+		t.Fatalf("expected one cloned subtask in evidence references, got %v", references["subtasks_cloned"])
 	}
 }
 

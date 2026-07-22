@@ -24,9 +24,10 @@ type composeDoc struct {
 }
 
 type composeService struct {
-	Image         string            `yaml:"image"`
-	ContainerName string            `yaml:"container_name"`
-	Networks      []string          `yaml:"networks"`
+	Image         string   `yaml:"image"`
+	ContainerName string   `yaml:"container_name"`
+	Networks      []string `yaml:"networks"`
+	ExtraHosts    []string `yaml:"extra_hosts"`
 	// depends_on in compose accepts either a flat list of strings or a map
 	// keyed by service name. We unmarshal to `any` and normalize at
 	// assertion time.
@@ -142,15 +143,38 @@ func TestGlobalYAML_DeclaresDremPlanner(t *testing.T) {
 	assert.False(t, hasAPIKey, "drem-planner must NOT accept ANTHROPIC_API_KEY (subscription-only auth)")
 }
 
+// TestRemoteInferenceOverride_RoutesClassifierToHost verifies the Docker
+// Desktop override detaches the classifier from the local SGLang service and
+// sends inference through the host-side tunnel instead.
+func TestRemoteInferenceOverride_RoutesClassifierToHost(t *testing.T) {
+	data := readComposeYAML(t, "remote-inference.override.yml")
+	var doc composeDoc
+	require.NoError(t, yaml.Unmarshal(data, &doc))
+
+	svc, ok := doc.Services["drem-classifier"]
+	require.True(t, ok, "remote inference override must configure drem-classifier")
+	assert.Empty(t, dependsOnServices(svc.DependsOn), "override must remove the local SGLang dependency")
+	assert.Equal(t,
+		"${DREM_EXTERNAL_INFERENCE_ENDPOINT:?set DREM_EXTERNAL_INFERENCE_ENDPOINT to the container-visible chat-completions URL}",
+		svc.Environment["DREM_CLASSIFIER_UPSTREAM"],
+	)
+	assert.Contains(t, svc.ExtraHosts, "host.docker.internal:host-gateway")
+}
+
 // readGlobalYAML resolves the absolute path to global.yml regardless of
 // which directory `go test` was invoked from, then reads the bytes.
 func readGlobalYAML(t *testing.T) []byte {
 	t.Helper()
+	return readComposeYAML(t, "global.yml")
+}
+
+func readComposeYAML(t *testing.T, name string) []byte {
+	t.Helper()
 	// The test file sits next to global.yml, so CWD at test time is the
 	// package directory.
-	path := filepath.Join(".", "global.yml")
+	path := filepath.Join(".", name)
 	data, err := os.ReadFile(path)
-	require.NoError(t, err, "read global.yml")
+	require.NoError(t, err, "read %s", name)
 	return data
 }
 

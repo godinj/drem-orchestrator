@@ -45,6 +45,7 @@ type Task struct {
 	Title           string       `gorm:"not null"`
 	Description     string       `gorm:"not null"`
 	Status          TaskStatus   `gorm:"not null;default:backlog"`
+	StateVersion    uint64       `gorm:"not null;default:1"`
 	Category        TaskCategory `gorm:"not null;default:standard"`
 	Priority        int          `gorm:"default:0"`
 	ComplexityScore int          `gorm:"default:0"`
@@ -56,6 +57,7 @@ type Task struct {
 	TestPlan        string
 	TestFeedback    string
 	WorktreeBranch  string
+	WorktreeBaseSHA string
 	PRUrl           string
 
 	// TDD fields (used for subtasks)
@@ -76,6 +78,136 @@ type Task struct {
 	AssignedAgent *Agent        `gorm:"foreignKey:AssignedAgentID"`
 	Events        []TaskEvent   `gorm:"foreignKey:TaskID"`
 	Comments      []TaskComment `gorm:"foreignKey:TaskID"`
+}
+
+// BranchAcceptanceRecord is append-only typed evidence of the worker branch
+// admission decision. Task.Context may mirror it for compatibility but is not
+// authoritative for delivery.
+type BranchAcceptanceRecord struct {
+	ID         uuid.UUID `gorm:"type:text;primaryKey"`
+	TaskID     uuid.UUID `gorm:"type:text;not null;index"`
+	AgentID    uuid.UUID `gorm:"type:text;not null;index"`
+	Branch     string    `gorm:"not null;index"`
+	Accepted   bool      `gorm:"not null;index"`
+	BaseBranch string    `gorm:"not null"`
+	BaseSHA    string    `gorm:"not null"`
+	HeadSHA    string    `gorm:"not null;index"`
+	Details    JSONField `gorm:"type:text;not null"`
+	Actor      string    `gorm:"not null"`
+	Source     string    `gorm:"not null"`
+	CreatedAt  time.Time
+}
+
+// DeliveryArtifact freezes the exact branch commit and target base that move
+// from container-safe testing to host-authoritative verification. Artifact
+// versions are monotonic per task; invalidation is retained as audit history.
+type DeliveryArtifact struct {
+	ID                   uuid.UUID  `gorm:"type:text;primaryKey"`
+	TaskID               uuid.UUID  `gorm:"type:text;not null;index;uniqueIndex:idx_delivery_artifact_task_version"`
+	PreliminaryGateRunID *uuid.UUID `gorm:"type:text;index"` // nil only for pre-migration history
+	ArtifactVersion      uint64     `gorm:"not null;uniqueIndex:idx_delivery_artifact_task_version"`
+	Branch               string     `gorm:"not null"`
+	CommitSHA            string     `gorm:"not null;index"`
+	BaseBranch           string     `gorm:"not null"`
+	BaseSHA              string     `gorm:"not null"`
+	PreliminaryEvidence  JSONField  `gorm:"type:text;not null"`
+	CreatorActor         string     `gorm:"not null"`
+	CreatorSource        string     `gorm:"not null"`
+	InvalidationReason   string
+	InvalidatedAt        *time.Time `gorm:"index"`
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+}
+
+// PreliminaryGateRun is append-only evidence that the deterministic gate ran
+// in an isolated checkout at the exact accepted head and base. A passing run
+// is created in the same transaction as the artifact it authorizes.
+type PreliminaryGateRun struct {
+	ID                     uuid.UUID              `gorm:"type:text;primaryKey"`
+	TaskID                 uuid.UUID              `gorm:"type:text;not null;index"`
+	Branch                 string                 `gorm:"not null"`
+	CommitSHA              string                 `gorm:"not null;index"`
+	BaseBranch             string                 `gorm:"not null"`
+	BaseSHA                string                 `gorm:"not null"`
+	WorkspaceID            string                 `gorm:"not null"`
+	EnvironmentFingerprint string                 `gorm:"not null"`
+	CommandEvidence        JSONField              `gorm:"type:text;not null"`
+	Outcome                PreliminaryGateOutcome `gorm:"not null;index"`
+	Actor                  string                 `gorm:"not null"`
+	Source                 string                 `gorm:"not null"`
+	StartedAt              time.Time
+	FinishedAt             time.Time
+	CreatedAt              time.Time
+}
+
+// VerificationRecord is append-only native or automated verification
+// evidence for one immutable delivery artifact.
+type VerificationRecord struct {
+	ID                     uuid.UUID `gorm:"type:text;primaryKey"`
+	TaskID                 uuid.UUID `gorm:"type:text;not null;index"`
+	DeliveryArtifactID     uuid.UUID `gorm:"type:text;not null;index"`
+	ArtifactVersion        uint64    `gorm:"not null"`
+	CommitSHA              string    `gorm:"not null;index"`
+	VerifierActor          string    `gorm:"not null"`
+	EnvironmentFingerprint string    `gorm:"not null"`
+	CommandEvidence        JSONField `gorm:"type:text;not null"`
+	BinarySHA256           string
+	Result                 VerificationResult `gorm:"not null;index"`
+	Notes                  string
+	IdempotencyKey         string `gorm:"not null;uniqueIndex"`
+	RequestHash            string `gorm:"not null"`
+	CreatedAt              time.Time
+}
+
+// IntegrationAuthorization records the explicit decision to permit default
+// branch mutation for a verified artifact. Auto-merge policy creates the same
+// record with an orchestrator actor.
+type IntegrationAuthorization struct {
+	ID                   uuid.UUID `gorm:"type:text;primaryKey"`
+	TaskID               uuid.UUID `gorm:"type:text;not null;index"`
+	DeliveryArtifactID   uuid.UUID `gorm:"type:text;not null;index"`
+	VerificationRecordID uuid.UUID `gorm:"type:text;not null;index"`
+	ArtifactVersion      uint64    `gorm:"not null"`
+	CommitSHA            string    `gorm:"not null"`
+	BaseSHA              string    `gorm:"not null"`
+	Actor                string    `gorm:"not null"`
+	Source               string    `gorm:"not null"`
+	IdempotencyKey       string    `gorm:"not null;uniqueIndex"`
+	RequestHash          string    `gorm:"not null"`
+	CreatedAt            time.Time
+}
+
+// DeliveryReworkRecord is the append-only audit record for an explicit
+// decision to reject a current artifact without misrepresenting that decision
+// as a failed command-based verification.
+type DeliveryReworkRecord struct {
+	ID                 uuid.UUID `gorm:"type:text;primaryKey"`
+	TaskID             uuid.UUID `gorm:"type:text;not null;index"`
+	DeliveryArtifactID uuid.UUID `gorm:"type:text;not null;index"`
+	ArtifactVersion    uint64    `gorm:"not null"`
+	CommitSHA          string    `gorm:"not null"`
+	Actor              string    `gorm:"not null"`
+	Source             string    `gorm:"not null"`
+	Reason             string    `gorm:"not null"`
+	IdempotencyKey     string    `gorm:"not null;uniqueIndex"`
+	RequestHash        string    `gorm:"not null"`
+	CreatedAt          time.Time
+}
+
+// MergeCompletion is the immutable terminal link between the accepted
+// delivery evidence and the commit written to the integration branch.
+type MergeCompletion struct {
+	ID                         uuid.UUID `gorm:"type:text;primaryKey"`
+	TaskID                     uuid.UUID `gorm:"type:text;not null;uniqueIndex"`
+	DeliveryArtifactID         uuid.UUID `gorm:"type:text;not null;index"`
+	VerificationRecordID       uuid.UUID `gorm:"type:text;not null;index"`
+	IntegrationAuthorizationID uuid.UUID `gorm:"type:text;not null;index"`
+	ArtifactCommitSHA          string    `gorm:"not null"`
+	VerifiedBaseSHA            string    `gorm:"not null"`
+	MergeCommitSHA             string    `gorm:"not null;index"`
+	Actor                      string    `gorm:"not null"`
+	Source                     string    `gorm:"not null"`
+	CreatedAt                  time.Time
 }
 
 // Agent represents a Claude Code agent working on tasks.

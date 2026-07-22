@@ -110,6 +110,8 @@ func run(args []string, stderr io.Writer) error {
 		MaxTokens:   1024,
 		Temperature: 0.1,
 		Timeout:     cfg.timeout,
+		GQCaller:    "classifier",
+		GQPriority:  "high",
 	}
 
 	deps := Deps{

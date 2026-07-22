@@ -13,10 +13,13 @@ package projects
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
 // Supported project languages. Image selection is driven by this field, so
@@ -40,6 +43,15 @@ type Project struct {
 	// OrchURL is the HTTP endpoint that Kyle (and the TUI, eventually)
 	// uses to read live orchestrator state for this project.
 	OrchURL string `toml:"orch_url"`
+	// InferenceEndpoint is the OpenAI-compatible chat-completions endpoint
+	// injected into direct workers. Empty retains the in-stack GQ default.
+	InferenceEndpoint string `toml:"inference_endpoint,omitempty"`
+	// IntegrationPolicy controls whether a verified delivery is merged
+	// automatically or waits for explicit integration authorization.
+	IntegrationPolicy string `toml:"integration_policy,omitempty"`
+	// VerificationPolicy controls whether delivery verification is performed
+	// locally by the orchestrator or acknowledged by an external host verifier.
+	VerificationPolicy string `toml:"verification_policy,omitempty"`
 	// ContainerImageOverrides maps agent type ("coder", "merger",
 	// "csuite-mike", ...) to a specific image tag. Agent types without an
 	// override use the language-derived default.
@@ -214,12 +226,28 @@ func validateProject(p Project) error {
 	if p.OrchURL == "" {
 		return errors.New("orch_url is required")
 	}
+	if p.IntegrationPolicy != "" {
+		if _, err := model.ParseIntegrationPolicy(p.IntegrationPolicy); err != nil {
+			return err
+		}
+	}
+	if p.VerificationPolicy != "" {
+		if _, err := model.ParseVerificationPolicy(p.VerificationPolicy); err != nil {
+			return err
+		}
+	}
 	if !validLanguage(p.Language) {
 		return fmt.Errorf("unsupported language %q (want %q or %q)",
 			p.Language, LanguageGo, LanguageCpp)
 	}
 	if err := checkBareRepo(p.BareRepoPath); err != nil {
 		return err
+	}
+	if p.InferenceEndpoint != "" {
+		parsed, err := url.ParseRequestURI(p.InferenceEndpoint)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return fmt.Errorf("inference_endpoint must be an absolute http(s) URL")
+		}
 	}
 	return nil
 }

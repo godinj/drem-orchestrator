@@ -15,14 +15,14 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/container"
 )
 
-// startHarness stands up a Service on a Unix socket under t.TempDir()
+// startHarness stands up a Service on a short Unix socket path
 // backed by a FakeRuntime. The returned cleanup func blocks until the
 // Serve goroutine has exited so tests cannot accidentally race the
 // accept loop's shutdown against the test tear-down.
 func startHarness(t *testing.T) (*container.FakeRuntime, *Client, func()) {
 	t.Helper()
 	fake := container.NewFakeRuntime()
-	sockPath := filepath.Join(t.TempDir(), "spawner.sock")
+	sockPath := shortUnixSocketPath(t, "spawner.sock")
 	ln, err := net.Listen("unix", sockPath)
 	require.NoError(t, err)
 
@@ -600,7 +600,7 @@ func roundTripRaw(t *testing.T, body []byte) rpcResponse {
 	// does not expose it. For simplicity, spin up our own service here
 	// for the two "raw" tests; they don't share state with the others.
 	fake := container.NewFakeRuntime()
-	sockPath := filepath.Join(t.TempDir(), "raw.sock")
+	sockPath := shortUnixSocketPath(t, "raw.sock")
 	ln, err := net.Listen("unix", sockPath)
 	require.NoError(t, err)
 	ctx, cancel := context.WithCancel(context.Background())

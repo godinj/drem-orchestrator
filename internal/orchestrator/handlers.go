@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -174,6 +173,10 @@ func deleteSubtaskRowsWithDB(db *gorm.DB, sub *model.Task) error {
 // HandlePlanApproved creates subtask records from the plan and transitions the
 // task to IN_PROGRESS (or TEST_WRITING for TDD plans).
 func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
+	return o.HandlePlanApprovedBy(taskID, "orchestrator-internal")
+}
+
+func (o *Orchestrator) HandlePlanApprovedBy(taskID uuid.UUID, actor string) error {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
 		return fmt.Errorf("handle plan approved: load task: %w", err)
@@ -202,26 +205,13 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 	task.AssignedAgentID = nil
 
 	targetStatus := approvedPlanTargetStatus(planResult.Subtasks)
-	evt, err := state.TransitionTask(&task, targetStatus, "user", map[string]any{"action": "plan_approved"})
-	if err != nil {
-		return fmt.Errorf("handle plan approved: transition: %w", err)
-	}
+	oldStatus := task.Status
 
 	var committedTask model.Task
 	err = o.db.Transaction(func(tx *gorm.DB) error {
-		res := tx.Model(&model.Task{}).
-			Where("id = ? AND status = ?", task.ID, model.StatusPlanReview).
-			Updates(map[string]any{
-				"status":            task.Status,
-				"updated_at":        task.UpdatedAt,
-				"assigned_agent_id": nil,
-				"tdd_exceptions":    task.TDDExceptions,
-			})
-		if res.Error != nil {
-			return fmt.Errorf("handle plan approved: claim task: %w", res.Error)
-		}
-		if res.RowsAffected != 1 {
-			return fmt.Errorf("%w: task %s approval already claimed", state.ErrStaleTransition, task.ID)
+		if err := casTaskTransition(tx, &task, model.StatusPlanReview, targetStatus, actor,
+			"review_gate", "plan approved", map[string]any{"action": "plan_approved"}); err != nil {
+			return fmt.Errorf("handle plan approved: claim task: %w", err)
 		}
 
 		if _, _, err := o.materializeSubtasksWithDB(tx, &task, false); err != nil {
@@ -259,10 +249,6 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 			}).Error; err != nil {
 			return fmt.Errorf("handle plan approved: save task metadata: %w", err)
 		}
-		if err := tx.Create(evt).Error; err != nil {
-			return fmt.Errorf("handle plan approved: save event: %w", err)
-		}
-
 		if err := tx.First(&committedTask, "id = ?", task.ID).Error; err != nil {
 			return fmt.Errorf("handle plan approved: reload committed task: %w", err)
 		}
@@ -274,7 +260,7 @@ func (o *Orchestrator) HandlePlanApproved(taskID uuid.UUID) error {
 
 	o.writeApprovedPlanJSON(&committedTask)
 	o.emit("task_updated", &committedTask)
-	o.publishTaskTransition(committedTask.ID.String(), evt.OldValue, evt.NewValue, "plan approved")
+	o.publishTaskTransition(committedTask.ID.String(), string(oldStatus), string(committedTask.Status), "plan approved")
 	o.logger.Info("plan approved", "task_id", committedTask.ID, "subtask_count", subtaskCount)
 	return nil
 }
@@ -317,121 +303,67 @@ func (o *Orchestrator) writeApprovedPlanJSON(task *model.Task) {
 
 // HandlePlanRejected clears the plan and transitions back to PLANNING.
 func (o *Orchestrator) HandlePlanRejected(taskID uuid.UUID) error {
+	return o.HandlePlanRejectedBy(taskID, "orchestrator-internal")
+}
+
+func (o *Orchestrator) HandlePlanRejectedBy(taskID uuid.UUID, actor string) error {
 	var task model.Task
-	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
-		return fmt.Errorf("handle plan rejected: load task: %w", err)
+	err := o.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&task, "id = ?", taskID).Error; err != nil {
+			return fmt.Errorf("handle plan rejected: load task: %w", err)
+		}
+		if err := casTaskTransition(tx, &task, model.StatusPlanReview, model.StatusPlanning,
+			actor, "review_gate", "plan rejected", nil); err != nil {
+			return fmt.Errorf("handle plan rejected: transition: %w", err)
+		}
+		return tx.Model(&model.Task{}).Where("id = ?", task.ID).
+			Updates(map[string]any{"plan": nil, "assigned_agent_id": nil}).Error
+	})
+	if err != nil {
+		return err
 	}
-
-	if task.Status != model.StatusPlanReview {
-		return fmt.Errorf("handle plan rejected: task %s is in %s, expected plan_review", taskID, task.Status)
-	}
-
-	task.Plan = nil
-	// Record plan rejection metric before clearing assignment
 	if o.metrics != nil && task.AssignedAgentID != nil {
-		o.metrics.Record(*task.AssignedAgentID, "plan_rejected", 1.0, nil)
+		_ = o.metrics.Record(*task.AssignedAgentID, "plan_rejected", 1.0, nil)
 	}
+	task.Plan = nil
 	task.AssignedAgentID = nil
 
-	evt, err := state.TransitionTask(&task, model.StatusPlanning, "user", map[string]any{"action": "plan_rejected"})
-	if err != nil {
-		return fmt.Errorf("handle plan rejected: transition: %w", err)
-	}
-	if err := o.db.Save(&task).Error; err != nil {
-		return fmt.Errorf("handle plan rejected: save task: %w", err)
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("handle plan rejected: save event: %w", err)
-	}
-
 	o.emit("task_updated", &task)
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "plan rejected")
+	o.publishTaskTransition(task.ID.String(), string(model.StatusPlanReview), string(model.StatusPlanning), "plan rejected")
 	o.logger.Info("plan rejected", "task_id", task.ID)
 	return nil
 }
 
 // HandleTestPassed transitions from TESTING_READY to MERGING.
 func (o *Orchestrator) HandleTestPassed(taskID uuid.UUID) error {
-	var task model.Task
-	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
-		return fmt.Errorf("handle test passed: load task: %w", err)
-	}
-
-	if task.Status != model.StatusTestingReady {
-		return fmt.Errorf("handle test passed: task %s is in %s, expected testing_ready", taskID, task.Status)
-	}
-
-	evt, err := state.TransitionTask(&task, model.StatusMerging, "user", map[string]any{"action": "test_passed"})
-	if err != nil {
-		return fmt.Errorf("handle test passed: transition: %w", err)
-	}
-	if err := o.db.Save(&task).Error; err != nil {
-		return fmt.Errorf("handle test passed: save task: %w", err)
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("handle test passed: save event: %w", err)
-	}
-
-	o.emit("task_updated", &task)
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "test passed")
-	o.logger.Info("test passed, task merging", "task_id", task.ID)
-	return nil
+	return fmt.Errorf("handle test passed: deprecated evidence-free transition for task %s; use VerifyDelivery", taskID)
 }
 
 // HandleTestFailed transitions from TESTING_READY back to IN_PROGRESS.
 func (o *Orchestrator) HandleTestFailed(taskID uuid.UUID) error {
-	var task model.Task
-	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
-		return fmt.Errorf("handle test failed: load task: %w", err)
-	}
-
-	if task.Status != model.StatusTestingReady {
-		return fmt.Errorf("handle test failed: task %s is in %s, expected testing_ready", taskID, task.Status)
-	}
-
-	task.AssignedAgentID = nil
-
-	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_failed"})
-	if err != nil {
-		return fmt.Errorf("handle test failed: transition: %w", err)
-	}
-	if err := o.db.Save(&task).Error; err != nil {
-		return fmt.Errorf("handle test failed: save task: %w", err)
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("handle test failed: save event: %w", err)
-	}
-
-	o.emit("task_updated", &task)
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "test failed")
-	o.logger.Info("test failed, task back to in_progress", "task_id", task.ID)
-	return nil
+	return fmt.Errorf("handle test failed: deprecated evidence-free transition for task %s; use VerifyDelivery", taskID)
 }
 
 // HandleTestReviewApproved transitions a task from TEST_REVIEW to IN_PROGRESS.
 func (o *Orchestrator) HandleTestReviewApproved(taskID uuid.UUID) error {
+	return o.HandleTestReviewApprovedBy(taskID, "orchestrator-internal")
+}
+
+func (o *Orchestrator) HandleTestReviewApprovedBy(taskID uuid.UUID, actor string) error {
 	var task model.Task
-	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
-		return fmt.Errorf("handle test review approved: load task: %w", err)
-	}
-
-	if task.Status != model.StatusTestReview {
-		return fmt.Errorf("handle test review approved: task %s is in %s, expected test_review", taskID, task.Status)
-	}
-
-	evt, err := state.TransitionTask(&task, model.StatusInProgress, "user", map[string]any{"action": "test_review_approved"})
+	err := o.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&task, "id = ?", taskID).Error; err != nil {
+			return fmt.Errorf("handle test review approved: load task: %w", err)
+		}
+		return casTaskTransition(tx, &task, model.StatusTestReview, model.StatusInProgress,
+			actor, "review_gate", "test review approved", nil)
+	})
 	if err != nil {
-		return fmt.Errorf("handle test review approved: transition: %w", err)
-	}
-	if err := o.db.Save(&task).Error; err != nil {
-		return fmt.Errorf("handle test review approved: save task: %w", err)
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("handle test review approved: save event: %w", err)
+		return err
 	}
 
 	o.emit("task_updated", &task)
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "test review approved")
+	o.publishTaskTransition(task.ID.String(), string(model.StatusTestReview), string(model.StatusInProgress), "test review approved")
 	o.logger.Info("test review approved, scheduling implementation", "task_id", task.ID)
 	return nil
 }
@@ -440,171 +372,100 @@ func (o *Orchestrator) HandleTestReviewApproved(taskID uuid.UUID) error {
 // them with feedback, and transitions the parent back to TEST_WRITING.
 // After 3 rejection rounds, pauses the task and spawns a diagnostic agent.
 func (o *Orchestrator) HandleTestReviewRejected(taskID uuid.UUID, feedback string) error {
+	return o.HandleTestReviewRejectedBy(taskID, feedback, "orchestrator-internal")
+}
+
+func (o *Orchestrator) HandleTestReviewRejectedBy(taskID uuid.UUID, feedback, actor string) error {
 	var task model.Task
-	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
-		return fmt.Errorf("handle test review rejected: load task: %w", err)
+	var rejectionCount, clonedCount int
+	diagnostic := false
+	err := o.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&task, "id = ?", taskID).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: load task: %w", err)
+		}
+		if task.Status != model.StatusTestReview {
+			return fmt.Errorf("handle test review rejected: task %s is in %s, expected test_review", taskID, task.Status)
+		}
+		if task.Context == nil {
+			task.Context = make(model.JSONField)
+		}
+		if v, ok := task.Context["test_rejection_count"].(float64); ok {
+			rejectionCount = int(v)
+		}
+		rejectionCount++
+		task.Context["test_rejection_count"] = float64(rejectionCount)
+		task.Context[fmt.Sprintf("test_rejection_feedback_%d", rejectionCount)] = feedback
+
+		if rejectionCount >= maxPlanRejections {
+			if err := casTaskTransition(tx, &task, model.StatusTestReview, model.StatusTestWriting, actor,
+				"review_gate", "test review rejection threshold reached", nil); err != nil {
+				return err
+			}
+			task.Context["paused_from"] = string(model.StatusTestWriting)
+			task.Context["diagnostic_required"] = true
+			if err := casTaskTransition(tx, &task, model.StatusTestWriting, model.StatusPaused, actor,
+				"review_gate", "test rejection diagnostic required", nil); err != nil {
+				return err
+			}
+			diagnostic = true
+			return nil
+		}
+
+		var doneTestSubtasks []model.Task
+		if err := tx.Where("parent_task_id = ? AND phase = ? AND status = ?", task.ID, "test", model.StatusDone).
+			Find(&doneTestSubtasks).Error; err != nil {
+			return fmt.Errorf("handle test review rejected: query test subtasks: %w", err)
+		}
+		replacementSourceIDs := testReviewReplacementSourceIDs(doneTestSubtasks)
+		for i := range doneTestSubtasks {
+			sub := &doneTestSubtasks[i]
+			if err := casSupersedeCompletedTestSubtask(tx, sub, actor, map[string]any{
+				"action": "test_review_rejected", "feedback": feedback,
+			}); err != nil {
+				return fmt.Errorf("handle test review rejected: reject subtask %s: %w", sub.ID, err)
+			}
+			if !replacementSourceIDs[sub.ID] {
+				continue
+			}
+			newCtx := make(model.JSONField, len(sub.Context)+2)
+			for k, v := range sub.Context {
+				newCtx[k] = v
+			}
+			newCtx["skip_existing_work_dedup"] = true
+			newCtx["skip_existing_work_dedup_reason"] = "test_review_rejected"
+			replacement := model.Task{
+				ID: uuid.New(), ProjectID: sub.ProjectID, ParentTaskID: sub.ParentTaskID,
+				Title:       testWritingTitleKey(sub.Title) + fmt.Sprintf(" (revision %d)", rejectionCount),
+				Description: sub.Description + "\n\n## Rejection Feedback\n\n" + feedback,
+				Status:      model.StatusBacklog, Priority: sub.Priority, DependencyIDs: sub.DependencyIDs,
+				Phase: sub.Phase, TestsFor: sub.TestsFor, Context: newCtx,
+			}
+			if err := tx.Create(&replacement).Error; err != nil {
+				return fmt.Errorf("handle test review rejected: create replacement for %s: %w", sub.ID, err)
+			}
+			clonedCount++
+		}
+		return casTaskTransition(tx, &task, model.StatusTestReview, model.StatusTestWriting, actor,
+			"review_gate", "test review rejected", map[string]any{
+				"rejection_count": rejectionCount, "feedback": feedback, "subtasks_cloned": clonedCount,
+			})
+	})
+	if err != nil {
+		return err
 	}
 
-	if task.Status != model.StatusTestReview {
-		return fmt.Errorf("handle test review rejected: task %s is in %s, expected test_review", taskID, task.Status)
-	}
-
-	if task.Context == nil {
-		task.Context = make(model.JSONField)
-	}
-
-	rejectionCount := 0
-	if v, ok := task.Context["test_rejection_count"].(float64); ok {
-		rejectionCount = int(v)
-	}
-	rejectionCount++
-	task.Context["test_rejection_count"] = float64(rejectionCount)
-
-	feedbackKey := fmt.Sprintf("test_rejection_feedback_%d", rejectionCount)
-	task.Context[feedbackKey] = feedback
-
-	if rejectionCount >= maxPlanRejections {
-		evt1, err := state.TransitionTask(&task, model.StatusTestWriting, "user", map[string]any{
-			"action": "test_review_rejected_diagnostic",
-			"reason": "3 rejection rounds exceeded",
-		})
-		if err != nil {
-			return fmt.Errorf("handle test review rejected: transition to test_writing: %w", err)
-		}
-		if err := o.db.Create(evt1).Error; err != nil {
-			return fmt.Errorf("handle test review rejected: save event1: %w", err)
-		}
-
-		evt2, err := state.TransitionTask(&task, model.StatusPaused, "user", map[string]any{
-			"action": "test_review_rejected_paused",
-			"reason": "3 test rejection rounds exceeded, diagnostic required",
-		})
-		if err != nil {
-			return fmt.Errorf("handle test review rejected: transition to paused: %w", err)
-		}
-		task.Context["paused_from"] = string(model.StatusTestWriting)
-		task.Context["diagnostic_required"] = true
-
-		if err := o.db.Save(&task).Error; err != nil {
-			return fmt.Errorf("handle test review rejected: save task: %w", err)
-		}
-		if err := o.db.Create(evt2).Error; err != nil {
-			return fmt.Errorf("handle test review rejected: save event2: %w", err)
-		}
-
-		o.emit("task_updated", &task)
-		o.publishTaskTransition(task.ID.String(), evt1.OldValue, string(model.StatusPaused), "test review rejected 3 times, paused for diagnostic")
-		o.logger.Warn("test review rejected 3 times, task paused for diagnostic",
-			"task_id", task.ID, "rejection_count", rejectionCount)
-
+	o.emit("task_updated", &task)
+	if diagnostic {
+		o.publishTaskTransition(task.ID.String(), string(model.StatusTestReview), string(model.StatusPaused), "test review rejected 3 times, paused for diagnostic")
+		o.logger.Warn("test review rejected 3 times, task paused for diagnostic", "task_id", task.ID, "rejection_count", rejectionCount)
 		if err := o.spawnDiagnosticAgent(&task); err != nil {
 			o.logger.Warn("failed to spawn diagnostic agent", "task_id", task.ID, "error", err)
 		}
 		return nil
 	}
-
-	var doneTestSubtasks []model.Task
-	if err := o.db.Where(
-		"parent_task_id = ? AND phase = ? AND status = ?",
-		task.ID, "test", model.StatusDone,
-	).Find(&doneTestSubtasks).Error; err != nil {
-		return fmt.Errorf("handle test review rejected: query test subtasks: %w", err)
-	}
-	replacementSourceIDs := testReviewReplacementSourceIDs(doneTestSubtasks)
-	clonedCount := 0
-
-	for i := range doneTestSubtasks {
-		sub := &doneTestSubtasks[i]
-
-		sub.Status = model.StatusRejected
-		sub.AssignedAgentID = nil
-		sub.UpdatedAt = time.Now()
-		if err := o.db.Save(sub).Error; err != nil {
-			return fmt.Errorf("handle test review rejected: reject subtask %s: %w", sub.ID, err)
-		}
-
-		rejectEvt := &model.TaskEvent{
-			ID:        uuid.New(),
-			TaskID:    sub.ID,
-			EventType: "status_change",
-			OldValue:  string(model.StatusDone),
-			NewValue:  string(model.StatusRejected),
-			Details:   model.JSONField{"action": "test_review_rejected", "feedback": feedback},
-			Actor:     "user",
-			CreatedAt: time.Now(),
-		}
-		if err := o.db.Create(rejectEvt).Error; err != nil {
-			return fmt.Errorf("handle test review rejected: save reject event for %s: %w", sub.ID, err)
-		}
-
-		if !replacementSourceIDs[sub.ID] {
-			continue
-		}
-
-		baseTitle := testWritingTitleKey(sub.Title)
-		revisionSuffix := fmt.Sprintf(" (revision %d)", rejectionCount)
-		newDescription := sub.Description + "\n\n## Rejection Feedback\n\n" + feedback
-
-		var newCtx model.JSONField
-		if sub.Context != nil {
-			newCtx = make(model.JSONField, len(sub.Context))
-			for k, v := range sub.Context {
-				newCtx[k] = v
-			}
-		} else {
-			newCtx = make(model.JSONField)
-		}
-		newCtx["skip_existing_work_dedup"] = true
-		newCtx["skip_existing_work_dedup_reason"] = "test_review_rejected"
-
-		replacementID := uuid.New()
-		replacement := model.Task{
-			ID:            replacementID,
-			ProjectID:     sub.ProjectID,
-			ParentTaskID:  sub.ParentTaskID,
-			Title:         baseTitle + revisionSuffix,
-			Description:   newDescription,
-			Status:        model.StatusBacklog,
-			Priority:      sub.Priority,
-			DependencyIDs: sub.DependencyIDs,
-			Phase:         sub.Phase,
-			TestsFor:      sub.TestsFor,
-			Context:       newCtx,
-		}
-
-		if err := o.db.Create(&replacement).Error; err != nil {
-			return fmt.Errorf("handle test review rejected: create replacement for %s: %w", sub.ID, err)
-		}
-		clonedCount++
-
-		o.logger.Info("test subtask rejected and replaced",
-			"original_id", sub.ID,
-			"replacement_id", replacementID,
-			"revision", rejectionCount)
-	}
-
-	evt, err := state.TransitionTask(&task, model.StatusTestWriting, "user", map[string]any{
-		"action":          "test_review_rejected",
-		"rejection_count": rejectionCount,
-		"feedback":        feedback,
-		"subtasks_cloned": clonedCount,
-	})
-	if err != nil {
-		return fmt.Errorf("handle test review rejected: transition to test_writing: %w", err)
-	}
-	if err := o.db.Save(&task).Error; err != nil {
-		return fmt.Errorf("handle test review rejected: save task: %w", err)
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("handle test review rejected: save event: %w", err)
-	}
-
-	o.emit("task_updated", &task)
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "test review rejected")
-	o.logger.Info("test review rejected, back to test writing",
-		"task_id", task.ID,
-		"rejection_count", rejectionCount,
-		"subtasks_cloned", clonedCount)
+	o.publishTaskTransition(task.ID.String(), string(model.StatusTestReview), string(model.StatusTestWriting), "test review rejected")
+	o.logger.Info("test review rejected, back to test writing", "task_id", task.ID,
+		"rejection_count", rejectionCount, "subtasks_cloned", clonedCount)
 	return nil
 }
 
@@ -759,6 +620,17 @@ func parsePlan(planField model.JSONField) (*parsePlanResult, error) {
 // HandleClarificationAnswer processes a user's answer to a clarification question.
 // Called by the TUI when the user submits a comment on a NEEDS_CLARIFICATION task.
 func (o *Orchestrator) HandleClarificationAnswer(taskID uuid.UUID, answer string) error {
+	return o.HandleClarificationAnswerBy(taskID, answer, "operator")
+}
+
+// HandleClarificationAnswerBy records the identity that resolved the gate.
+// The legacy in-process entry point above uses the explicit operator identity;
+// HTTP callers supply their authenticated X-Drem-Actor value here.
+func (o *Orchestrator) HandleClarificationAnswerBy(taskID uuid.UUID, answer, actor string) error {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return fmt.Errorf("handle clarification answer: actor is required")
+	}
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
 		return fmt.Errorf("handle clarification answer: load task: %w", err)
@@ -794,20 +666,13 @@ func (o *Orchestrator) HandleClarificationAnswer(taskID uuid.UUID, answer string
 		// Clear the plan so the planner re-plans with clarification context.
 		task.Plan = nil
 
-		event, err := state.TransitionTask(&task, model.StatusPlanning, "user", map[string]any{
-			"action": "clarification_complete",
-		})
-		if err != nil {
+		oldStatus := task.Status
+		if err := o.transitionTaskAtomic(&task, model.StatusPlanning, actor, "clarification_answer",
+			"clarification complete; replanning requested", nil); err != nil {
 			return fmt.Errorf("handle clarification answer: transition to planning: %w", err)
 		}
-		if err := o.db.Save(&task).Error; err != nil {
-			return fmt.Errorf("handle clarification answer: save task: %w", err)
-		}
-		if err := o.db.Create(event).Error; err != nil {
-			return fmt.Errorf("handle clarification answer: save event: %w", err)
-		}
 		o.emit("task_updated", &task)
-		o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "clarification complete, replanning")
+		o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "clarification complete, replanning")
 		o.logger.Info("clarification complete, replanning", "task_id", task.ID)
 		return nil
 	}

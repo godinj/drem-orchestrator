@@ -19,10 +19,108 @@ import (
 const testTaskID = "12345678-1234-1234-1234-123456789abc"
 
 type recordedRequest struct {
-	Method string
-	Path   string
-	Query  string
-	Body   string
+	Method        string
+	Path          string
+	Query         string
+	Body          string
+	Authorization string
+	Actor         string
+}
+
+func TestRequestReworkUsesObservedArtifactAndAuthenticatedActor(t *testing.T) {
+	var post recordedRequest
+	sha := strings.Repeat("a", 40)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := recordRequest(t, r)
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/artifact"):
+			writeJSONResponse(t, w, orchdto.DeliveryEnvelopeDTO{
+				Task:     orchdto.TaskDTO{ID: testTaskID, Status: "integration_ready", StateVersion: 7},
+				Artifact: orchdto.DeliveryArtifactDTO{ID: "artifact-1", TaskID: testTaskID, ArtifactVersion: 3, CommitSHA: sha},
+			})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/request-rework"):
+			post = rec
+			writeJSONResponse(t, w, orchdto.DeliveryReworkRecordDTO{
+				ID: "87654321-1234-1234-1234-123456789abc", TaskID: testTaskID,
+				ArtifactVersion: 3, CommitSHA: sha, Reason: "native regression",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"request-rework", testTaskID, "--reason", "native regression"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL, "DREM_PROJECT": "canvas", "DREM_ORCH_TOKEN": "token-1", "DREM_ACTOR": "codex:thread-1",
+	}), &out, &errOut)
+	if err != nil {
+		t.Fatalf("run returned error: %v", err)
+	}
+	if post.Path != "/projects/canvas/tasks/"+testTaskID+"/request-rework" {
+		t.Fatalf("POST path = %s", post.Path)
+	}
+	if post.Authorization != "Bearer token-1" || post.Actor != "codex:thread-1" {
+		t.Fatalf("auth headers = %q / %q", post.Authorization, post.Actor)
+	}
+	var body orchdto.RequestDeliveryReworkRequest
+	if err := json.Unmarshal([]byte(post.Body), &body); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	if body.ObservedStateVersion != 7 || body.ArtifactVersion != 3 || body.CommitSHA != sha || body.Actor != "codex:thread-1" {
+		t.Fatalf("unexpected guarded request: %#v", body)
+	}
+	if !strings.Contains(out.String(), "native regression") {
+		t.Fatalf("output = %q", out.String())
+	}
+}
+
+func TestDeliveryCommandsAcceptDocumentedTaskFirstSyntax(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	for _, tc := range []struct {
+		name, verb string
+		args       []string
+	}{
+		{name: "verify", verb: "verify", args: []string{"verify", testTaskID, "--result", "pass", "--environment", "macos-arm64", "--command", "scripts/dev verify"}},
+		{name: "integrate", verb: "integrate", args: []string{"integrate", testTaskID}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var post recordedRequest
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/artifact"):
+					writeJSONResponse(t, w, orchdto.DeliveryEnvelopeDTO{
+						Task:               orchdto.TaskDTO{ID: testTaskID, Status: "verification_ready", StateVersion: 7},
+						Artifact:           orchdto.DeliveryArtifactDTO{ID: "artifact-1", TaskID: testTaskID, ArtifactVersion: 3, CommitSHA: sha},
+						LatestVerification: &orchdto.VerificationRecordDTO{ID: "87654321-1234-1234-1234-123456789abc", Result: "pass"},
+					})
+				case r.Method == http.MethodPost:
+					post = recordRequest(t, r)
+					if tc.verb == "verify" {
+						writeJSONResponse(t, w, orchdto.VerificationRecordDTO{ID: "87654321-1234-1234-1234-123456789abc", ArtifactVersion: 3, CommitSHA: sha, Result: "pass"})
+					} else {
+						writeJSONResponse(t, w, orchdto.IntegrationAuthorizationDTO{ID: "87654321-1234-1234-1234-123456789abc", ArtifactVersion: 3, CommitSHA: sha})
+					}
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer ts.Close()
+			var out, errOut bytes.Buffer
+			err := run(t.Context(), tc.args, mapEnv(map[string]string{
+				"DREM_ORCH_URL": ts.URL, "DREM_PROJECT": "canvas", "DREM_ORCH_TOKEN": "token-1", "DREM_ACTOR": "codex:thread-1",
+			}), &out, &errOut)
+			if err != nil {
+				t.Fatalf("run returned error: %v", err)
+			}
+			if !strings.HasSuffix(post.Path, "/"+tc.verb) {
+				t.Fatalf("POST path = %s", post.Path)
+			}
+			if post.Authorization != "Bearer token-1" || post.Actor != "codex:thread-1" {
+				t.Fatalf("auth headers = %q / %q", post.Authorization, post.Actor)
+			}
+		})
+	}
 }
 
 func TestEnvDefaultsAndFlagOverride(t *testing.T) {
@@ -1034,10 +1132,8 @@ func recordRequest(t *testing.T, r *http.Request) recordedRequest {
 		t.Fatalf("read body: %v", err)
 	}
 	return recordedRequest{
-		Method: r.Method,
-		Path:   r.URL.Path,
-		Query:  r.URL.RawQuery,
-		Body:   string(body),
+		Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: string(body),
+		Authorization: r.Header.Get("Authorization"), Actor: r.Header.Get("X-Drem-Actor"),
 	}
 }
 

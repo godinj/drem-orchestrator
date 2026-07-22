@@ -77,6 +77,7 @@ type fakeWorkerSpawner struct {
 
 	inspectResult spawner.InspectWorkerResult
 	inspectErr    error
+	inspectCalls  []spawner.InspectWorkerParams
 }
 
 type spawnOutcome struct {
@@ -119,9 +120,10 @@ func (f *fakeWorkerSpawner) ListWorkers(_ context.Context, _ spawner.ListWorkers
 	return f.listResult, f.listErr
 }
 
-func (f *fakeWorkerSpawner) InspectWorker(_ context.Context, _ spawner.InspectWorkerParams) (spawner.InspectWorkerResult, error) {
+func (f *fakeWorkerSpawner) InspectWorker(_ context.Context, p spawner.InspectWorkerParams) (spawner.InspectWorkerResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.inspectCalls = append(f.inspectCalls, p)
 	return f.inspectResult, f.inspectErr
 }
 
@@ -350,6 +352,8 @@ func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
 	require.Equal(t, "7", p.Env["DREM_DIRECT_MAX_ITERATIONS"])
 	require.Equal(t, "0.2", p.Env["DREM_DIRECT_TEMPERATURE"])
 	require.Equal(t, "30s", p.Env["DREM_DIRECT_TIMEOUT"])
+	require.Equal(t, "coder", p.Env["DREM_GQ_CALLER"])
+	require.Equal(t, "normal", p.Env["DREM_GQ_PRIORITY"])
 	require.Empty(t, p.CredsMount)
 	require.NotEmpty(t, p.PromptMount)
 }

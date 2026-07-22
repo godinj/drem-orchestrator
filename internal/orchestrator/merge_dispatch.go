@@ -121,7 +121,7 @@ type MergeResult struct {
 // failureReasonForExit maps a drem-merger process exit code to the typed
 // reason string that executeMerge routes on. Codes must match the
 // cmd/drem-merger/main.go exitCodeFor table: 0=success, 2=conflict,
-// 3=tests_failed, 4=push_failed, 1=misc; anything else is reported as
+// 3=tests_failed, 4=push_failed, 5=stale_evidence, 1=misc; anything else is reported as
 // "unknown" so unrecognized signals surface loudly rather than
 // silently retrying.
 func failureReasonForExit(code int) string {
@@ -134,6 +134,8 @@ func failureReasonForExit(code int) string {
 		return "tests_failed"
 	case 4:
 		return "push_failed"
+	case 5:
+		return "stale_evidence"
 	case 1:
 		return "misc"
 	default:
@@ -213,7 +215,11 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 		return nil, errMergerPreflightFailed
 	}
 
-	argv, err := buildMergerArgv(task, o.projectID.String(), defaultBranch, o.testGate.TestCommand, orchURL, agentmonToken)
+	artifact, err := currentArtifact(o.db, task.ID)
+	if err != nil {
+		return nil, fmt.Errorf("dispatchMerge: load authorized delivery artifact: %w", err)
+	}
+	argv, err := buildMergerArgv(task, o.projectID.String(), defaultBranch, o.testGate.TestCommand, orchURL, agentmonToken, artifact.CommitSHA, artifact.BaseSHA)
 	if err != nil {
 		// Fail-close: refuse to spawn drem-merger with argv it will
 		// reject at parseFlags. Transition the task to FAILED with a
@@ -398,7 +404,7 @@ var defaultIntegrationBranches = map[string]bool{
 // entirely. See plans/bug-h-merger-crash-on-v17-advance.md (Option A,
 // fail-close framing) — the library-side silent-skip contract in
 // internal/merger/merger.go is the complementary out-of-scope follow-up.
-func buildMergerArgv(task *model.Task, projectID, integrationBranch, testCmd, orchURL, agentmonToken string) ([]string, error) {
+func buildMergerArgv(task *model.Task, projectID, integrationBranch, testCmd, orchURL, agentmonToken, expectedFeatureSHA, expectedBaseSHA string) ([]string, error) {
 	if strings.TrimSpace(testCmd) == "" {
 		return nil, errMergerSpawnSkippedEmptyTestCmd
 	}
@@ -409,6 +415,8 @@ func buildMergerArgv(task *model.Task, projectID, integrationBranch, testCmd, or
 		"--test-cmd", testCmd,
 		"--orch-url", orchURL,
 		"--agentmon-token", agentmonToken,
+		"--expected-feature-sha", expectedFeatureSHA,
+		"--expected-base-sha", expectedBaseSHA,
 	}
 	// Only include --integration-branch when it differs from the merger's
 	// own default ("master"). For plain main / master the flag is

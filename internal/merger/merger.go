@@ -21,10 +21,12 @@ const defaultTestTimeout = 10 * time.Minute
 // MergeRequest is the input to a single container-local merge operation.
 // Fields marked required are validated up front by Merger.Merge.
 type MergeRequest struct {
-	FeatureBranch     string // required
-	IntegrationBranch string // required
-	Project           string // required (used in reports)
-	TaskID            string // required (used in reports)
+	FeatureBranch      string // required
+	IntegrationBranch  string // required
+	Project            string // required (used in reports)
+	TaskID             string // required (used in reports)
+	ExpectedFeatureSHA string // optional for library callers; required by drem-merger
+	ExpectedBaseSHA    string // optional for library callers; required by drem-merger
 }
 
 // MergeResult summarises the outcome of one merge attempt. Success is true
@@ -57,7 +59,8 @@ type MergeResult struct {
 
 	// FailureReason captures the high-level reason on failure paths so that
 	// downstream reporters can route without re-inferring from flags.
-	// Values: "conflict", "tests_failed", "push_failed", "other" (or "").
+	// Values: "conflict", "tests_failed", "push_failed", "stale_evidence",
+	// "other" (or "").
 	FailureReason string
 }
 
@@ -151,6 +154,17 @@ func (m *Merger) Merge(ctx context.Context, req MergeRequest) (*MergeResult, err
 		result.FailureReason = "other"
 		return result, fmt.Errorf("merger: clone integration: %w", err)
 	}
+	if req.ExpectedBaseSHA != "" {
+		actualBaseSHA, shaErr := headSHA(ctx, m.WorkDir)
+		if shaErr != nil {
+			result.FailureReason = "other"
+			return result, fmt.Errorf("merger: verify integration base: %w", shaErr)
+		}
+		if actualBaseSHA != req.ExpectedBaseSHA {
+			result.FailureReason = "stale_evidence"
+			return result, fmt.Errorf("merger: integration base drift: got %s, expected %s", actualBaseSHA, req.ExpectedBaseSHA)
+		}
+	}
 
 	// Idempotency: if the feature branch is already gone on origin, a prior
 	// merger invocation succeeded. Return success without re-merging.
@@ -175,6 +189,17 @@ func (m *Merger) Merge(ctx context.Context, req MergeRequest) (*MergeResult, err
 	if err := fetchBranch(ctx, m.WorkDir, req.FeatureBranch); err != nil {
 		result.FailureReason = "other"
 		return result, fmt.Errorf("merger: fetch feature: %w", err)
+	}
+	if req.ExpectedFeatureSHA != "" {
+		actualFeatureSHA, shaErr := refSHA(ctx, m.WorkDir, req.FeatureBranch)
+		if shaErr != nil {
+			result.FailureReason = "other"
+			return result, fmt.Errorf("merger: verify feature commit: %w", shaErr)
+		}
+		if actualFeatureSHA != req.ExpectedFeatureSHA {
+			result.FailureReason = "stale_evidence"
+			return result, fmt.Errorf("merger: feature commit drift: got %s, expected %s", actualFeatureSHA, req.ExpectedFeatureSHA)
+		}
 	}
 
 	mergeMsg := fmt.Sprintf("Merge branch '%s' into %s", req.FeatureBranch, req.IntegrationBranch)

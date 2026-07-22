@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,11 +50,26 @@ func setupMergeTest(t *testing.T, merger *stubMerger) (*Orchestrator, *gorm.DB, 
 	db := testutil.NewTestDB(t)
 	projectID := uuid.New()
 	events := make(chan Event, 100)
+	bareRepo := testutil.SetupBareRepo(t)
+	defaultBranch, err := testutil.RunGit([]string{"symbolic-ref", "--short", "HEAD"}, bareRepo)
+	if err != nil {
+		t.Fatalf("detect default branch: %v", err)
+	}
+	featureDir := filepath.Join(t.TempDir(), "feature-test-branch")
+	if _, err := testutil.RunGit([]string{"worktree", "add", "-b", "feature/test-branch", featureDir, defaultBranch}, bareRepo); err != nil {
+		t.Fatalf("create feature worktree: %v", err)
+	}
+	for i := range merger.results {
+		if merger.results[i].result != nil && merger.results[i].result.Success && !validObjectID(merger.results[i].result.MergeCommit) {
+			merger.results[i].result.MergeCommit = strings.Repeat("c", 40)
+		}
+	}
 
 	project := model.Project{
-		ID:           projectID,
-		Name:         "merge-test-" + projectID.String()[:8],
-		BareRepoPath: "/tmp/fake-bare-repo",
+		ID:            projectID,
+		Name:          "merge-test-" + projectID.String()[:8],
+		BareRepoPath:  bareRepo,
+		DefaultBranch: defaultBranch,
 	}
 	if err := db.Create(&project).Error; err != nil {
 		t.Fatalf("create project: %v", err)
@@ -62,7 +79,7 @@ func setupMergeTest(t *testing.T, merger *stubMerger) (*Orchestrator, *gorm.DB, 
 		db:              db,
 		projectID:       projectID,
 		mergeDispatcher: merger,
-		worktree:        &FakeWorktreeManager{BarePath: "/tmp/fake-bare-repo", Default: "main"},
+		worktree:        &FakeWorktreeManager{BarePath: bareRepo, Default: defaultBranch, Features: map[string]string{"test-branch": featureDir}},
 		events:          events,
 		logger:          slog.Default().With("component", "merge-test"),
 	}
@@ -83,7 +100,83 @@ func createMergingTask(t *testing.T, db *gorm.DB, projectID uuid.UUID, category 
 	if err := db.Create(task).Error; err != nil {
 		t.Fatalf("create merging task: %v", err)
 	}
+	var project model.Project
+	if err := db.First(&project, "id = ?", projectID).Error; err != nil {
+		t.Fatalf("load project: %v", err)
+	}
+	commitSHA, err := testutil.RunGit([]string{"rev-parse", task.WorktreeBranch}, project.BareRepoPath)
+	if err != nil {
+		t.Fatalf("resolve feature sha: %v", err)
+	}
+	baseSHA, err := testutil.RunGit([]string{"rev-parse", project.DefaultBranch}, project.BareRepoPath)
+	if err != nil {
+		t.Fatalf("resolve base sha: %v", err)
+	}
+	artifactID, verificationID := uuid.New(), uuid.New()
+	if err := db.Create(&model.DeliveryArtifact{
+		ID: artifactID, TaskID: task.ID, ArtifactVersion: 1, Branch: task.WorktreeBranch,
+		CommitSHA: commitSHA, BaseBranch: project.DefaultBranch, BaseSHA: baseSHA,
+		PreliminaryEvidence: model.JSONField{"commands": []string{"go test ./..."}}, CreatorActor: "test", CreatorSource: "test",
+	}).Error; err != nil {
+		t.Fatalf("create artifact: %v", err)
+	}
+	if err := db.Create(&model.VerificationRecord{
+		ID: verificationID, TaskID: task.ID, DeliveryArtifactID: artifactID, ArtifactVersion: 1,
+		CommitSHA: commitSHA, VerifierActor: "test", EnvironmentFingerprint: "test",
+		CommandEvidence: model.JSONField{"commands": []string{"go test ./..."}}, Result: model.VerificationPassed,
+		IdempotencyKey: "verify-" + task.ID.String(), RequestHash: "test",
+	}).Error; err != nil {
+		t.Fatalf("create verification: %v", err)
+	}
+	if err := db.Create(&model.IntegrationAuthorization{
+		ID: uuid.New(), TaskID: task.ID, DeliveryArtifactID: artifactID, VerificationRecordID: verificationID,
+		ArtifactVersion: 1, CommitSHA: commitSHA, BaseSHA: baseSHA, Actor: "test", Source: "test",
+		IdempotencyKey: "integrate-" + task.ID.String(), RequestHash: "test",
+	}).Error; err != nil {
+		t.Fatalf("create integration authorization: %v", err)
+	}
 	return task
+}
+
+func seedAuthorizedMergeEvidence(t *testing.T, o *Orchestrator, task *model.Task) {
+	t.Helper()
+	worktreePath := o.resolveIntegrationWorktree(task)
+	if worktreePath == "" {
+		t.Fatal("delivery worktree unavailable")
+	}
+	commitSHA, err := testutil.RunGit([]string{"rev-parse", task.WorktreeBranch}, worktreePath)
+	if err != nil {
+		t.Fatalf("resolve delivery commit: %v", err)
+	}
+	baseBranch := o.worktree.DefaultBranchName()
+	baseSHA, err := testutil.RunGit([]string{"rev-parse", baseBranch}, worktreePath)
+	if err != nil {
+		t.Fatalf("resolve delivery base: %v", err)
+	}
+	artifactID, verificationID := uuid.New(), uuid.New()
+	requireNoTestDBError(t, o.db.Create(&model.DeliveryArtifact{
+		ID: artifactID, TaskID: task.ID, ArtifactVersion: 1, Branch: task.WorktreeBranch,
+		CommitSHA: commitSHA, BaseBranch: baseBranch, BaseSHA: baseSHA,
+		PreliminaryEvidence: model.JSONField{"commands": []string{"go test ./..."}}, CreatorActor: "test", CreatorSource: "test",
+	}).Error)
+	requireNoTestDBError(t, o.db.Create(&model.VerificationRecord{
+		ID: verificationID, TaskID: task.ID, DeliveryArtifactID: artifactID, ArtifactVersion: 1,
+		CommitSHA: commitSHA, VerifierActor: "test", EnvironmentFingerprint: "test",
+		CommandEvidence: model.JSONField{"commands": []string{"go test ./..."}}, Result: model.VerificationPassed,
+		IdempotencyKey: "verify-" + task.ID.String(), RequestHash: "test",
+	}).Error)
+	requireNoTestDBError(t, o.db.Create(&model.IntegrationAuthorization{
+		ID: uuid.New(), TaskID: task.ID, DeliveryArtifactID: artifactID, VerificationRecordID: verificationID,
+		ArtifactVersion: 1, CommitSHA: commitSHA, BaseSHA: baseSHA, Actor: "test", Source: "test",
+		IdempotencyKey: "integrate-" + task.ID.String(), RequestHash: "test",
+	}).Error)
+}
+
+func requireNoTestDBError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("seed authorized delivery evidence: %v", err)
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -387,6 +480,7 @@ func TestExecuteMerge_ConflictFirstAttemptSpawnsResolver(t *testing.T) {
 	if err := o.db.Create(task).Error; err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	seedAuthorizedMergeEvidence(t, o, task)
 
 	if err := o.executeMerge(task); err != nil {
 		t.Fatalf("executeMerge: %v", err)

@@ -208,7 +208,11 @@ func TestQuickFix_MergeFailure_FlagsForHumanReview(t *testing.T) {
 		logger: slog.Default().With("component", "quickfix-merge-test"),
 	}
 
-	// Create a quickfix task in MERGING state with a feature branch that has
+	featureName := "quickfix-merge-failure"
+	if _, err := wt.CreateFeature(featureName); err != nil {
+		t.Fatalf("create quickfix feature: %v", err)
+	}
+	// Create a quickfix task in MERGING state with an authorized feature branch that has
 	// merge conflicts (per the stub above), which triggers the quickfix
 	// failure path.
 	task := model.Task{
@@ -218,11 +222,12 @@ func TestQuickFix_MergeFailure_FlagsForHumanReview(t *testing.T) {
 		Description:    "quick fix: broken import",
 		Status:         model.StatusMerging,
 		Category:       model.CategoryQuickFix,
-		WorktreeBranch: "feature/nonexistent-quickfix",
+		WorktreeBranch: "feature/" + featureName,
 	}
 	if err := db.Create(&task).Error; err != nil {
 		t.Fatalf("create task: %v", err)
 	}
+	seedAuthorizedMergeEvidence(t, o, &task)
 
 	// executeMerge should route conflict failures on quickfix tasks into
 	// the NeedsHumanReview + StatusFailed branch.
@@ -244,7 +249,7 @@ func TestQuickFix_MergeFailure_FlagsForHumanReview(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// transitionQuickFixToMerging tests
+// prepareQuickFixDelivery tests
 // ---------------------------------------------------------------------------
 
 func TestTransitionQuickFixToMerging_FastTracksThroughTestingReady(t *testing.T) {
@@ -252,20 +257,19 @@ func TestTransitionQuickFixToMerging_FastTracksThroughTestingReady(t *testing.T)
 
 	task := createQuickFixTask(t, db, projectID, "fix spacing issue", model.StatusInProgress)
 
-	// transitionQuickFixToMerging should fast-track through testing_ready
-	// to merging without constraint checks (no real worktree).
-	if err := o.transitionQuickFixToMerging(&task); err != nil {
-		t.Fatalf("transitionQuickFixToMerging: unexpected error: %v", err)
+	// prepareQuickFixDelivery stops at testing_ready for normal artifact handling.
+	if err := o.prepareQuickFixDelivery(&task); err != nil {
+		t.Fatalf("prepareQuickFixDelivery: unexpected error: %v", err)
 	}
 
-	// Reload and verify status is merging.
+	// Reload and verify status is testing_ready.
 	var updated model.Task
 	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
 		t.Fatalf("reload task: %v", err)
 	}
 
-	if updated.Status != model.StatusMerging {
-		t.Errorf("expected status %q, got %q", model.StatusMerging, updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected status %q, got %q", model.StatusTestingReady, updated.Status)
 	}
 
 	// Verify events were recorded for both transitions.
@@ -273,21 +277,14 @@ func TestTransitionQuickFixToMerging_FastTracksThroughTestingReady(t *testing.T)
 	db.Where("task_id = ?", task.ID).Find(&events)
 
 	hasTestingReady := false
-	hasMerging := false
 	for _, e := range events {
 		if e.NewValue == string(model.StatusTestingReady) {
 			hasTestingReady = true
-		}
-		if e.NewValue == string(model.StatusMerging) {
-			hasMerging = true
 		}
 	}
 
 	if !hasTestingReady {
 		t.Error("expected a testing_ready transition event")
-	}
-	if !hasMerging {
-		t.Error("expected a merging transition event")
 	}
 }
 
@@ -365,8 +362,8 @@ func TestTransitionQuickFixToMerging_ConstraintViolation_PausesTask(t *testing.T
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := o.transitionQuickFixToMerging(&task); err != nil {
-		t.Fatalf("transitionQuickFixToMerging: unexpected error: %v", err)
+	if err := o.prepareQuickFixDelivery(&task); err != nil {
+		t.Fatalf("prepareQuickFixDelivery: unexpected error: %v", err)
 	}
 
 	var updated model.Task
@@ -470,16 +467,16 @@ func TestTransitionQuickFixToMerging_BaselineOnlyConstraintViolationFastTracks(t
 		t.Fatalf("create task: %v", err)
 	}
 
-	if err := o.transitionQuickFixToMerging(&task); err != nil {
-		t.Fatalf("transitionQuickFixToMerging: unexpected error: %v", err)
+	if err := o.prepareQuickFixDelivery(&task); err != nil {
+		t.Fatalf("prepareQuickFixDelivery: unexpected error: %v", err)
 	}
 
 	var updated model.Task
 	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
 		t.Fatalf("reload task: %v", err)
 	}
-	if updated.Status != model.StatusMerging {
-		t.Errorf("expected status %q, got %q", model.StatusMerging, updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected status %q, got %q", model.StatusTestingReady, updated.Status)
 	}
 	if updated.NeedsHumanReview {
 		t.Error("expected baseline-only violations not to require human review")
@@ -514,9 +511,9 @@ func TestQuickFix_NeverEntersPlanningStates(t *testing.T) {
 		t.Fatalf("save in_progress: %v", err)
 	}
 
-	// Step 2: transitionQuickFixToMerging.
-	if err := o.transitionQuickFixToMerging(&task); err != nil {
-		t.Fatalf("transitionQuickFixToMerging: %v", err)
+	// Step 2: prepare quick-fix delivery.
+	if err := o.prepareQuickFixDelivery(&task); err != nil {
+		t.Fatalf("prepareQuickFixDelivery: %v", err)
 	}
 
 	// Verify no events reference planning states.
@@ -539,11 +536,11 @@ func TestQuickFix_NeverEntersPlanningStates(t *testing.T) {
 		}
 	}
 
-	// Reload and verify final status is merging.
+	// Reload and verify final status is testing_ready.
 	var updated model.Task
 	db.First(&updated, "id = ?", task.ID)
-	if updated.Status != model.StatusMerging {
-		t.Errorf("expected final status %q, got %q", model.StatusMerging, updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected final status %q, got %q", model.StatusTestingReady, updated.Status)
 	}
 }
 
@@ -751,9 +748,9 @@ func TestQuickFixInProgress_NoEmptyWork_WouldTransitionToMerging(t *testing.T) {
 	task := createQuickFixTask(t, db, projectID, "fix clean completion", model.StatusInProgress)
 	// No empty_work in context — agent completed normally.
 
-	// transitionQuickFixToMerging should fast-track to merging.
-	if err := o.transitionQuickFixToMerging(&task); err != nil {
-		t.Fatalf("transitionQuickFixToMerging: unexpected error: %v", err)
+	// prepareQuickFixDelivery should stop at testing_ready.
+	if err := o.prepareQuickFixDelivery(&task); err != nil {
+		t.Fatalf("prepareQuickFixDelivery: unexpected error: %v", err)
 	}
 
 	var updated model.Task
@@ -761,8 +758,8 @@ func TestQuickFixInProgress_NoEmptyWork_WouldTransitionToMerging(t *testing.T) {
 		t.Fatalf("reload task: %v", err)
 	}
 
-	if updated.Status != model.StatusMerging {
-		t.Errorf("expected status %q for clean completion, got %q", model.StatusMerging, updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected status %q for clean completion, got %q", model.StatusTestingReady, updated.Status)
 	}
 }
 

@@ -144,13 +144,18 @@ func (l *Loop) heartbeat() {
 		HeartbeatPrefix, l.AgentID, l.now().UTC().Format(time.RFC3339))
 }
 
-// finalFlush runs one last commit-and-push attempt on shutdown with a
-// short bounded timeout so that a slow remote does not delay container
-// exit. Errors are logged and swallowed — the caller is exiting anyway.
+// finalFlush runs one last commit-and-push attempt on shutdown with a short
+// bounded timeout so that a slow remote does not delay container exit. The
+// push is unconditional: the harness may already have committed a clean tree
+// after the watchdog's last tick, and that commit is still delivery-critical.
+// Errors are logged and swallowed — the caller is exiting anyway.
 func (l *Loop) finalFlush() {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := l.tickCommit(ctx); err != nil {
 		fmt.Fprintf(l.out(), "watchdog: final flush error: %v\n", err)
+	}
+	if err := pushBranch(ctx, l.Repo, l.Remote, l.Branch); err != nil {
+		fmt.Fprintf(l.out(), "watchdog: final push error: %v\n", err)
 	}
 }

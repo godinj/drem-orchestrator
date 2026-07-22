@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -19,7 +20,7 @@ import (
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
 
-const usage = `usage: dremctl [--orch-url URL] [--project NAME] [--json] <command> [args]
+const usage = `usage: dremctl [--orch-url URL] [--orch-token TOKEN] [--actor ID] [--project NAME] [--json] <command> [args]
 
 HTTP-only C-Suite persona CLI. Defaults come from DREM_ORCH_URL and DREM_PROJECT.
 
@@ -38,8 +39,12 @@ Commands:
   file-task --title TEXT --description TEXT
   approve <task-id-prefix>
   reject <task-id-prefix> [--reason TEXT]
-  pass <task-id-prefix>
-  fail <task-id-prefix>
+  artifact <task-id-prefix>
+  verify <task-id-prefix> --result pass|fail --actor ID --environment FINGERPRINT --command CMD [...]
+  integrate <task-id-prefix> --actor ID
+  request-rework <task-id-prefix> --actor ID --reason TEXT
+  pass <task-id-prefix>                         deprecated; delivery states fail closed
+  fail <task-id-prefix>                         deprecated; delivery states fail closed
   answer <task-id-prefix> --body TEXT
   retry <task-id-prefix>
   archive <task-id-prefix> --reason TEXT [--actor TEXT]
@@ -51,9 +56,11 @@ Commands:
 const taskPageLimit = 500
 
 type cliConfig struct {
-	orchURL string
-	project string
-	json    bool
+	orchURL   string
+	orchToken string
+	actor     string
+	project   string
+	json      bool
 }
 
 type envLookup func(string) string
@@ -82,7 +89,7 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 		return errors.New("DREM_ORCH_URL is required, or pass --orch-url")
 	}
 
-	client := orchclient.New(cfg.orchURL)
+	client := orchclient.New(cfg.orchURL).WithToken(cfg.orchToken).WithActor(cfg.actor)
 	command, commandArgs := rest[0], rest[1:]
 	switch command {
 	case "projects":
@@ -133,6 +140,26 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 			return err
 		}
 		return handleMutation(ctx, client, cfg, command, commandArgs, stdout)
+	case "artifact":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleArtifact(ctx, client, cfg, commandArgs, stdout)
+	case "verify":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleVerifyDelivery(ctx, client, cfg, commandArgs, stdout)
+	case "integrate":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleIntegrateDelivery(ctx, client, cfg, commandArgs, stdout)
+	case "request-rework":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleRequestDeliveryRework(ctx, client, cfg, commandArgs, stdout)
 	case "recover":
 		if err := requireProject(cfg); err != nil {
 			return err
@@ -150,8 +177,10 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 
 func parseGlobalFlags(args []string, getenv envLookup) (cliConfig, []string, error) {
 	cfg := cliConfig{
-		orchURL: getenv("DREM_ORCH_URL"),
-		project: getenv("DREM_PROJECT"),
+		orchURL:   getenv("DREM_ORCH_URL"),
+		orchToken: getenv("DREM_ORCH_TOKEN"),
+		actor:     getenv("DREM_ACTOR"),
+		project:   getenv("DREM_PROJECT"),
 	}
 	var rest []string
 	for i := 0; i < len(args); i++ {
@@ -167,6 +196,22 @@ func parseGlobalFlags(args []string, getenv envLookup) (cliConfig, []string, err
 			cfg.orchURL = args[i]
 		case strings.HasPrefix(arg, "--orch-url="):
 			cfg.orchURL = strings.TrimPrefix(arg, "--orch-url=")
+		case arg == "--orch-token":
+			i++
+			if i >= len(args) {
+				return cfg, nil, errors.New("--orch-token requires a value")
+			}
+			cfg.orchToken = args[i]
+		case strings.HasPrefix(arg, "--orch-token="):
+			cfg.orchToken = strings.TrimPrefix(arg, "--orch-token=")
+		case arg == "--actor":
+			i++
+			if i >= len(args) {
+				return cfg, nil, errors.New("--actor requires a value")
+			}
+			cfg.actor = args[i]
+		case strings.HasPrefix(arg, "--actor="):
+			cfg.actor = strings.TrimPrefix(arg, "--actor=")
 		case arg == "--project":
 			i++
 			if i >= len(args) {
@@ -371,7 +416,7 @@ func handleCreateTask(ctx context.Context, client *orchclient.Client, cfg cliCon
 
 func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfig, command string, args []string, stdout io.Writer) error {
 	reason := ""
-	actor := ""
+	actor := cfg.actor
 	body := ""
 	var err error
 
@@ -382,10 +427,6 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 		}
 	}
 	if command == "archive" {
-		actor, args, err = parseStringOption(args, "actor")
-		if err != nil {
-			return err
-		}
 		if strings.TrimSpace(reason) == "" {
 			return errors.New("--reason is required")
 		}
@@ -437,6 +478,204 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 		return err
 	}
 	return renderMutatedTask(stdout, cfg.json, dto)
+}
+
+func handleArtifact(ctx context.Context, client *orchclient.Client, cfg cliConfig, args []string, stdout io.Writer) error {
+	if len(args) != 1 {
+		return errors.New("usage: dremctl artifact <task-id-prefix>")
+	}
+	taskID, err := resolveTaskUUID(ctx, client, cfg.project, args[0])
+	if err != nil {
+		return err
+	}
+	envelope, err := client.DeliveryArtifact(ctx, cfg.project, taskID)
+	if err != nil {
+		return err
+	}
+	return renderDeliveryEnvelope(stdout, cfg.json, envelope)
+}
+
+type stringListFlag []string
+
+func (f *stringListFlag) String() string { return strings.Join(*f, ",") }
+func (f *stringListFlag) Set(value string) error {
+	if strings.TrimSpace(value) == "" {
+		return errors.New("command must not be empty")
+	}
+	*f = append(*f, value)
+	return nil
+}
+
+func handleVerifyDelivery(ctx context.Context, client *orchclient.Client, cfg cliConfig, args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: dremctl verify <task-id-prefix> --result pass|fail --actor ID --environment FINGERPRINT --command CMD [...]")
+	}
+	taskArg := args[0]
+	fs := newFlagSet("verify")
+	result := fs.String("result", "", "pass or fail")
+	environment := fs.String("environment", "", "verification environment fingerprint")
+	binarySHA := fs.String("binary-sha256", "", "verified application binary SHA-256")
+	notes := fs.String("notes", "", "verification notes")
+	output := fs.String("output", "", "bounded command output summary")
+	exitCode := fs.Int("exit-code", 0, "command exit code")
+	idempotencyKey := fs.String("idempotency-key", "", "stable request idempotency key")
+	var commands stringListFlag
+	fs.Var(&commands, "command", "verified command (repeatable)")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || (*result != "pass" && *result != "fail") || strings.TrimSpace(cfg.actor) == "" || strings.TrimSpace(*environment) == "" || len(commands) == 0 {
+		return errors.New("usage: dremctl verify <task-id-prefix> --result pass|fail --actor ID --environment FINGERPRINT --command CMD [...]")
+	}
+	taskID, err := resolveTaskUUID(ctx, client, cfg.project, taskArg)
+	if err != nil {
+		return err
+	}
+	envelope, err := client.DeliveryArtifact(ctx, cfg.project, taskID)
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	evidence := make([]orchdto.CommandEvidenceDTO, 0, len(commands))
+	for _, command := range commands {
+		evidence = append(evidence, orchdto.CommandEvidenceDTO{
+			Command: command, Passed: *result == "pass" && *exitCode == 0, ExitCode: *exitCode,
+			Output: *output, StartedAt: now, FinishedAt: now,
+		})
+	}
+	req := orchdto.VerifyDeliveryRequest{
+		ObservedStateVersion: envelope.Task.StateVersion,
+		ArtifactVersion:      envelope.Artifact.ArtifactVersion,
+		CommitSHA:            envelope.Artifact.CommitSHA,
+		Actor:                cfg.actor, EnvironmentFingerprint: *environment, Commands: evidence,
+		BinarySHA256: *binarySHA, Result: *result, Notes: *notes,
+	}
+	if strings.TrimSpace(*idempotencyKey) == "" {
+		req.IdempotencyKey = deterministicMutationKey("verify", taskID, req)
+	} else {
+		req.IdempotencyKey = *idempotencyKey
+	}
+	record, err := client.VerifyDelivery(ctx, cfg.project, taskID, req)
+	if err != nil {
+		return err
+	}
+	if cfg.json {
+		return writeJSON(stdout, record)
+	}
+	fmt.Fprintf(stdout, "verification %s artifact=%d commit=%s result=%s\n", shortID(record.ID), record.ArtifactVersion, record.CommitSHA, record.Result)
+	return nil
+}
+
+func handleIntegrateDelivery(ctx context.Context, client *orchclient.Client, cfg cliConfig, args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: dremctl integrate <task-id-prefix> --actor ID")
+	}
+	taskArg := args[0]
+	fs := newFlagSet("integrate")
+	idempotencyKey := fs.String("idempotency-key", "", "stable request idempotency key")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(cfg.actor) == "" {
+		return errors.New("usage: dremctl integrate <task-id-prefix> --actor ID")
+	}
+	taskID, err := resolveTaskUUID(ctx, client, cfg.project, taskArg)
+	if err != nil {
+		return err
+	}
+	envelope, err := client.DeliveryArtifact(ctx, cfg.project, taskID)
+	if err != nil {
+		return err
+	}
+	if envelope.LatestVerification == nil || envelope.LatestVerification.Result != "pass" {
+		return errors.New("current artifact has no passing verification record")
+	}
+	req := orchdto.IntegrateDeliveryRequest{
+		ObservedStateVersion: envelope.Task.StateVersion,
+		ArtifactVersion:      envelope.Artifact.ArtifactVersion,
+		CommitSHA:            envelope.Artifact.CommitSHA,
+		VerificationRecordID: envelope.LatestVerification.ID,
+		Actor:                cfg.actor,
+	}
+	if strings.TrimSpace(*idempotencyKey) == "" {
+		req.IdempotencyKey = deterministicMutationKey("integrate", taskID, req)
+	} else {
+		req.IdempotencyKey = *idempotencyKey
+	}
+	auth, err := client.IntegrateDelivery(ctx, cfg.project, taskID, req)
+	if err != nil {
+		return err
+	}
+	if cfg.json {
+		return writeJSON(stdout, auth)
+	}
+	fmt.Fprintf(stdout, "integration authorized %s artifact=%d commit=%s\n", shortID(auth.ID), auth.ArtifactVersion, auth.CommitSHA)
+	return nil
+}
+
+func handleRequestDeliveryRework(ctx context.Context, client *orchclient.Client, cfg cliConfig, args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: dremctl request-rework <task-id-prefix> --actor ID --reason TEXT")
+	}
+	taskArg := args[0]
+	fs := newFlagSet("request-rework")
+	reason := fs.String("reason", "", "why the exact artifact needs rework")
+	idempotencyKey := fs.String("idempotency-key", "", "stable request idempotency key")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(cfg.actor) == "" || strings.TrimSpace(*reason) == "" {
+		return errors.New("usage: dremctl request-rework <task-id-prefix> --actor ID --reason TEXT")
+	}
+	taskID, err := resolveTaskUUID(ctx, client, cfg.project, taskArg)
+	if err != nil {
+		return err
+	}
+	envelope, err := client.DeliveryArtifact(ctx, cfg.project, taskID)
+	if err != nil {
+		return err
+	}
+	req := orchdto.RequestDeliveryReworkRequest{
+		ObservedStateVersion: envelope.Task.StateVersion,
+		ArtifactVersion:      envelope.Artifact.ArtifactVersion,
+		CommitSHA:            envelope.Artifact.CommitSHA,
+		Actor:                cfg.actor,
+		Reason:               *reason,
+	}
+	if strings.TrimSpace(*idempotencyKey) == "" {
+		req.IdempotencyKey = deterministicMutationKey("request-rework", taskID, req)
+	} else {
+		req.IdempotencyKey = *idempotencyKey
+	}
+	record, err := client.RequestDeliveryRework(ctx, cfg.project, taskID, req)
+	if err != nil {
+		return err
+	}
+	if cfg.json {
+		return writeJSON(stdout, record)
+	}
+	fmt.Fprintf(stdout, "rework requested %s artifact=%d commit=%s reason=%s\n", shortID(record.ID), record.ArtifactVersion, record.CommitSHA, record.Reason)
+	return nil
+}
+
+func deterministicMutationKey(verb string, taskID uuid.UUID, request any) string {
+	raw, _ := json.Marshal(request)
+	sum := sha256.Sum256(append([]byte(verb+":"+taskID.String()+":"), raw...))
+	return fmt.Sprintf("dremctl-%s-%x", verb, sum[:])
+}
+
+func renderDeliveryEnvelope(w io.Writer, jsonMode bool, envelope orchdto.DeliveryEnvelopeDTO) error {
+	if jsonMode {
+		return writeJSON(w, envelope)
+	}
+	fmt.Fprintf(w, "task: %s\nstatus: %s\nstate_version: %d\nartifact_version: %d\nbranch: %s\ncommit: %s\nbase: %s@%s\n",
+		shortID(envelope.Task.ID), envelope.Task.Status, envelope.Task.StateVersion,
+		envelope.Artifact.ArtifactVersion, envelope.Artifact.Branch, envelope.Artifact.CommitSHA,
+		envelope.Artifact.BaseBranch, envelope.Artifact.BaseSHA)
+	if envelope.LatestVerification != nil {
+		fmt.Fprintf(w, "latest_verification: %s result=%s actor=%s\n", shortID(envelope.LatestVerification.ID), envelope.LatestVerification.Result, envelope.LatestVerification.VerifierActor)
+	}
+	return nil
 }
 
 func mutationUsage(command string) string {

@@ -46,20 +46,22 @@ var ErrMissingEvidence = errors.New("missing transition evidence")
 // ValidTransitions defines which status transitions are allowed. Each key
 // maps to the set of statuses a task may transition to from that state.
 var ValidTransitions = map[model.TaskStatus][]model.TaskStatus{
-	model.StatusClassifying:        {model.StatusBacklog, model.StatusFailed, model.StatusPaused},
-	model.StatusBacklog:            {model.StatusPlanning, model.StatusInProgress, model.StatusFailed, model.StatusPaused},
-	model.StatusPlanning:           {model.StatusNeedsClarification, model.StatusPlanReview, model.StatusFailed, model.StatusPaused},
-	model.StatusNeedsClarification: {model.StatusPlanning, model.StatusPlanReview},
-	model.StatusPlanReview:         {model.StatusTestWriting, model.StatusInProgress, model.StatusPlanning},
-	model.StatusTestWriting:        {model.StatusTestReview, model.StatusFailed, model.StatusPaused, model.StatusPlanning},
-	model.StatusTestReview:         {model.StatusInProgress, model.StatusTestWriting, model.StatusPlanning},
-	model.StatusInProgress:         {model.StatusTestingReady, model.StatusFailed, model.StatusPaused},
-	model.StatusTestingReady:       {model.StatusMerging, model.StatusInProgress, model.StatusPlanning},
-	model.StatusMerging:            {model.StatusDone, model.StatusFailed},
-	model.StatusPaused:             {model.StatusClassifying, model.StatusBacklog, model.StatusPlanning, model.StatusInProgress, model.StatusTestWriting, model.StatusNeedsClarification},
+	model.StatusClassifying:        {model.StatusBacklog, model.StatusFailed, model.StatusPaused, model.StatusCancelled},
+	model.StatusBacklog:            {model.StatusPlanning, model.StatusInProgress, model.StatusFailed, model.StatusPaused, model.StatusCancelled},
+	model.StatusPlanning:           {model.StatusNeedsClarification, model.StatusPlanReview, model.StatusFailed, model.StatusPaused, model.StatusCancelled},
+	model.StatusNeedsClarification: {model.StatusPlanning, model.StatusPlanReview, model.StatusCancelled},
+	model.StatusPlanReview:         {model.StatusTestWriting, model.StatusInProgress, model.StatusPlanning, model.StatusCancelled},
+	model.StatusTestWriting:        {model.StatusTestReview, model.StatusFailed, model.StatusPaused, model.StatusPlanning, model.StatusCancelled},
+	model.StatusTestReview:         {model.StatusInProgress, model.StatusTestWriting, model.StatusPlanning, model.StatusFailed, model.StatusCancelled},
+	model.StatusInProgress:         {model.StatusBacklog, model.StatusTestingReady, model.StatusFailed, model.StatusPaused, model.StatusCancelled},
+	model.StatusTestingReady:       {model.StatusVerificationReady, model.StatusInProgress, model.StatusPlanning, model.StatusFailed, model.StatusPaused, model.StatusCancelled},
+	model.StatusVerificationReady:  {model.StatusIntegrationReady, model.StatusInProgress, model.StatusCancelled},
+	model.StatusIntegrationReady:   {model.StatusMerging, model.StatusInProgress, model.StatusCancelled},
+	model.StatusMerging:            {model.StatusDone, model.StatusFailed, model.StatusTestingReady, model.StatusIntegrationReady, model.StatusInProgress, model.StatusCancelled},
+	model.StatusPaused:             {model.StatusClassifying, model.StatusBacklog, model.StatusPlanning, model.StatusInProgress, model.StatusTestWriting, model.StatusNeedsClarification, model.StatusCancelled},
 	model.StatusDone:               {},
-	model.StatusFailed:             {model.StatusClassifying, model.StatusBacklog, model.StatusInProgress, model.StatusTestWriting},
-	model.StatusRejected:           {},
+	model.StatusFailed:             {model.StatusClassifying, model.StatusBacklog, model.StatusInProgress, model.StatusTestWriting, model.StatusCancelled},
+	model.StatusRejected:           {model.StatusCancelled},
 	model.StatusCancelled:          {},
 }
 
@@ -137,6 +139,91 @@ func GuardedTransitionTask(task *model.Task, req TransitionRequest) (*model.Task
 	return transitionTaskAt(task, req.Target, actor, evidenceDetails(req.Evidence), evidenceTimestamp(req.Evidence))
 }
 
+// GuardedCompleteSubtask records worker completion without routing a child
+// through the parent-only delivery states. Top-level tasks are rejected so
+// this cannot bypass artifact verification.
+func GuardedCompleteSubtask(task *model.Task, req TransitionRequest) (*model.TaskEvent, error) {
+	if task == nil {
+		return nil, fmt.Errorf("task is nil")
+	}
+	if task.ParentTaskID == nil {
+		return nil, errors.New("only subtasks may use direct completion")
+	}
+	if req.Target != model.StatusDone {
+		return nil, errors.New("subtask completion target must be done")
+	}
+	if req.ExpectedStatus != "" && task.Status != req.ExpectedStatus {
+		return nil, fmt.Errorf("%w: task in status %q, expected %q", ErrStaleTransition, task.Status, req.ExpectedStatus)
+	}
+	if task.Status != model.StatusInProgress && task.Status != model.StatusTestWriting {
+		return nil, fmt.Errorf("subtask in status %q cannot complete directly", task.Status)
+	}
+	if err := validateEvidence(task.ID, req); err != nil {
+		return nil, err
+	}
+	actor := req.Actor
+	if actor == "" {
+		actor = req.Evidence.Actor
+	}
+	return transitionTaskUncheckedAt(task, model.StatusDone, actor, evidenceDetails(req.Evidence), evidenceTimestamp(req.Evidence)), nil
+}
+
+// GuardedAcceptExistingSubtask records that a parent-scoped unit of work is
+// already present on the feature branch. It is intentionally separate from
+// worker completion so deduplication never synthesizes parent delivery states.
+func GuardedAcceptExistingSubtask(task *model.Task, req TransitionRequest) (*model.TaskEvent, error) {
+	if task == nil || task.ParentTaskID == nil {
+		return nil, errors.New("only subtasks may accept existing work")
+	}
+	if req.Target != model.StatusDone {
+		return nil, errors.New("existing-work acceptance target must be done")
+	}
+	if req.ExpectedStatus != "" && task.Status != req.ExpectedStatus {
+		return nil, fmt.Errorf("%w: task in status %q, expected %q", ErrStaleTransition, task.Status, req.ExpectedStatus)
+	}
+	if task.Status != model.StatusBacklog && task.Status != model.StatusPlanning && task.Status != model.StatusInProgress {
+		return nil, fmt.Errorf("subtask in status %q cannot accept existing work", task.Status)
+	}
+	if req.Evidence.Source != "dedup_existing_work" {
+		return nil, fmt.Errorf("%w: dedup_existing_work source is required", ErrMissingEvidence)
+	}
+	if err := validateEvidence(task.ID, req); err != nil {
+		return nil, err
+	}
+	actor := req.Actor
+	if actor == "" {
+		actor = req.Evidence.Actor
+	}
+	return transitionTaskUncheckedAt(task, model.StatusDone, actor, evidenceDetails(req.Evidence), evidenceTimestamp(req.Evidence)), nil
+}
+
+// GuardedSupersedeCompletedTestSubtask is the sole exception to DONE being
+// terminal: a completed test-writing child may be superseded when its parent
+// test review is rejected. The rejected record remains immutable history and
+// the orchestrator creates a new backlog revision rather than reopening it.
+func GuardedSupersedeCompletedTestSubtask(task *model.Task, req TransitionRequest) (*model.TaskEvent, error) {
+	if task == nil || task.ParentTaskID == nil || task.Phase != "test" {
+		return nil, errors.New("only completed test subtasks may be superseded")
+	}
+	if task.Status != model.StatusDone || req.Target != model.StatusRejected {
+		return nil, errors.New("test subtask supersession requires done to rejected")
+	}
+	if req.ExpectedStatus != "" && req.ExpectedStatus != model.StatusDone {
+		return nil, fmt.Errorf("%w: expected status must be done", ErrStaleTransition)
+	}
+	if req.Evidence.Source != "review_gate" {
+		return nil, fmt.Errorf("%w: review_gate source is required", ErrMissingEvidence)
+	}
+	if err := validateEvidence(task.ID, req); err != nil {
+		return nil, err
+	}
+	actor := req.Actor
+	if actor == "" {
+		actor = req.Evidence.Actor
+	}
+	return transitionTaskUncheckedAt(task, model.StatusRejected, actor, evidenceDetails(req.Evidence), evidenceTimestamp(req.Evidence)), nil
+}
+
 func validateEvidence(taskID uuid.UUID, req TransitionRequest) error {
 	e := req.Evidence
 	if e.TaskID == uuid.Nil {
@@ -196,10 +283,13 @@ func transitionTaskAt(task *model.Task, target model.TaskStatus, actor string, d
 		return nil, err
 	}
 
+	return transitionTaskUncheckedAt(task, target, actor, details, now), nil
+}
+
+func transitionTaskUncheckedAt(task *model.Task, target model.TaskStatus, actor string, details map[string]any, now time.Time) *model.TaskEvent {
 	oldStatus := task.Status
 	task.Status = target
 	task.UpdatedAt = now
-
 	return &model.TaskEvent{
 		ID:        uuid.New(),
 		TaskID:    task.ID,
@@ -209,5 +299,5 @@ func transitionTaskAt(task *model.Task, target model.TaskStatus, actor string, d
 		Details:   model.JSONField(details),
 		Actor:     actor,
 		CreatedAt: now,
-	}, nil
+	}
 }

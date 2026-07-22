@@ -98,9 +98,9 @@ func main() {
 		log.Printf("model capability warnings:\n%s", result.Summary())
 	}
 
-	// Derive session name.
-	projectName := filepath.Base(cfg.BareRepoPath)
-	projectName = strings.TrimSuffix(projectName, ".git")
+	// Containerized registrations provide an explicit project identity. Keep
+	// the historical bare-repository basename only as a host-dev fallback.
+	projectName := runtimeProjectName(cfg.BareRepoPath)
 
 	// Handle --import: create tasks from Markdown file and exit.
 	if *importPath != "" {
@@ -170,11 +170,19 @@ func main() {
 			log.Fatalf("create project: %v", err)
 		}
 	} else {
+		projectChanged := false
+		if project.Name != projectName {
+			project.Name = projectName
+			projectChanged = true
+		}
 		language := cfg.EffectiveProjectLanguage()
 		if language != "" && project.Language != language {
 			project.Language = language
+			projectChanged = true
+		}
+		if projectChanged {
 			if err := database.Save(&project).Error; err != nil {
-				log.Fatalf("update project language: %v", err)
+				log.Fatalf("update project identity: %v", err)
 			}
 		}
 	}
@@ -329,6 +337,8 @@ func main() {
 		classifierDirect
 	if prepDirect {
 		pcfg := agent.DirectPrepConfig{DirectToolAgentConfig: agent.DefaultDirectToolAgentConfig()}
+		pcfg.GQCaller = "prep"
+		pcfg.GQPriority = "high"
 		// Prep does tool loops, so allow more output tokens than the classifier.
 		// The DirectToolAgent default (2048) is reasonable; raise to 4096 to
 		// give the model room for the final PrepOutput JSON after several
@@ -368,6 +378,12 @@ func main() {
 		ScopedTests:    scopedTests,
 		TestTimeout:    cfg.TestTimeout,
 	})
+	if err := orch.SetDeliveryPolicyConfig(orchestrator.DeliveryPolicyConfig{
+		IntegrationPolicy:  cfg.Delivery.IntegrationPolicy,
+		VerificationPolicy: cfg.Delivery.VerificationPolicy,
+	}); err != nil {
+		log.Fatalf("configure delivery policy: %v", err)
+	}
 	// When drem.toml leaves test_command empty, infer it from the main
 	// worktree (go.mod → "go test ./...", package.json → "npm test",
 	// etc.). Prevents drem-merger crash-looping with
@@ -496,7 +512,7 @@ func main() {
 	//
 	// See plans/orch-api-gate-mutations.md "Phase 3" and
 	// internal/tui/http_orchestrator.go.
-	tuiOrch := tui.NewHTTPOrchestrator(orchclient.New(resolvedOrchURL), project.Name).WithFallback(orch)
+	tuiOrch := tui.NewHTTPOrchestrator(orchclient.New(resolvedOrchURL).WithToken(cfg.AgentmonToken).WithActor("tui:operator"), project.Name).WithFallback(orch)
 
 	// Register our own signal handler so we control shutdown — not
 	// Bubble Tea.  WithoutSignalHandler() prevents Bubble Tea from

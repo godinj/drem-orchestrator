@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -52,6 +53,24 @@ func dispatchMergeTestRig(t *testing.T) (*Orchestrator, *fakeWorkerSpawner) {
 	return o, fake
 }
 
+func seedDispatchArtifact(t *testing.T, o *Orchestrator, task *model.Task) model.DeliveryArtifact {
+	t.Helper()
+	artifact := model.DeliveryArtifact{
+		ID:                  uuid.New(),
+		TaskID:              task.ID,
+		ArtifactVersion:     1,
+		Branch:              task.WorktreeBranch,
+		CommitSHA:           strings.Repeat("a", 40),
+		BaseBranch:          o.worktree.DefaultBranchName(),
+		BaseSHA:             strings.Repeat("b", 40),
+		PreliminaryEvidence: model.JSONField{"commands": []string{"go test ./..."}},
+		CreatorActor:        "test",
+		CreatorSource:       "test",
+	}
+	require.NoError(t, o.db.Create(&artifact).Error)
+	return artifact
+}
+
 // findFlagValue walks an argv slice returning the value that follows the
 // first occurrence of flag and reports whether it was present.
 func findFlagValue(argv []string, flag string) (string, bool) {
@@ -77,6 +96,7 @@ func TestDispatchMerge_BuildsRequiredArgv(t *testing.T) {
 		WorktreeBranch: "feature/argv-test",
 	}
 	require.NoError(t, o.db.Create(task).Error)
+	artifact := seedDispatchArtifact(t, o, task)
 
 	_, err := o.dispatchMerge(context.Background(), task)
 	require.NoError(t, err)
@@ -86,12 +106,14 @@ func TestDispatchMerge_BuildsRequiredArgv(t *testing.T) {
 	require.NotEmpty(t, cmd, "Cmd must be populated with merger argv")
 
 	want := map[string]string{
-		"--feature-branch": "feature/argv-test",
-		"--project":        o.projectID.String(),
-		"--task-id":        task.ID.String(),
-		"--test-cmd":       "go test ./...",
-		"--orch-url":       "http://orch:8080",
-		"--agentmon-token": "test-token-abc",
+		"--feature-branch":       "feature/argv-test",
+		"--project":              o.projectID.String(),
+		"--task-id":              task.ID.String(),
+		"--test-cmd":             "go test ./...",
+		"--orch-url":             "http://orch:8080",
+		"--agentmon-token":       "test-token-abc",
+		"--expected-feature-sha": artifact.CommitSHA,
+		"--expected-base-sha":    artifact.BaseSHA,
 	}
 	for flag, expected := range want {
 		got, ok := findFlagValue(cmd, flag)
@@ -112,6 +134,7 @@ func TestDispatchMerge_SetsBareRepoReadWrite(t *testing.T) {
 		WorktreeBranch: "feature/rw-test",
 	}
 	require.NoError(t, o.db.Create(task).Error)
+	seedDispatchArtifact(t, o, task)
 
 	_, err := o.dispatchMerge(context.Background(), task)
 	require.NoError(t, err)
@@ -141,6 +164,7 @@ func TestDispatchMerge_RecordsDurableAttemptWithoutCoderAttribution(t *testing.T
 		AssignedAgentID: &agentID,
 	}
 	require.NoError(t, o.db.Create(task).Error)
+	seedDispatchArtifact(t, o, task)
 
 	_, err := o.dispatchMerge(context.Background(), task)
 	require.NoError(t, err)
@@ -176,6 +200,7 @@ func TestDispatchMerge_RecordsCurrentAttemptAndClearsStaleMergeContext(t *testin
 		},
 	}
 	require.NoError(t, o.db.Create(task).Error)
+	seedDispatchArtifact(t, o, task)
 
 	_, err := o.dispatchMerge(context.Background(), task)
 	require.NoError(t, err)
@@ -206,6 +231,7 @@ func TestDispatchMerge_IgnoresMergeContextFromDifferentAttempt(t *testing.T) {
 		WorktreeBranch: "feature/stale-merge-result",
 	}
 	require.NoError(t, o.db.Create(task).Error)
+	seedDispatchArtifact(t, o, task)
 
 	done := make(chan struct{})
 	var result *MergeResult
@@ -258,6 +284,7 @@ func TestDispatchMerge_OmitsPromptAndCredsMounts(t *testing.T) {
 		WorktreeBranch: "feature/merger-mounts",
 	}
 	require.NoError(t, o.db.Create(task).Error)
+	seedDispatchArtifact(t, o, task)
 
 	_, err := o.dispatchMerge(context.Background(), task)
 	require.NoError(t, err)
@@ -284,6 +311,7 @@ func TestDispatchMerge_DefaultIntegrationBranch_OmitsFlag(t *testing.T) {
 		WorktreeBranch: "feature/default-integration",
 	}
 	require.NoError(t, o.db.Create(task).Error)
+	seedDispatchArtifact(t, o, task)
 
 	_, err := o.dispatchMerge(context.Background(), task)
 	require.NoError(t, err)
@@ -307,6 +335,7 @@ func TestDispatchMerge_NonDefaultIntegrationBranch_IncludesFlag(t *testing.T) {
 		WorktreeBranch: "feature/custom-integration",
 	}
 	require.NoError(t, o.db.Create(task).Error)
+	seedDispatchArtifact(t, o, task)
 
 	_, err := o.dispatchMerge(context.Background(), task)
 	require.NoError(t, err)
@@ -332,6 +361,7 @@ func TestDispatchMerge_ExitCodeMapping(t *testing.T) {
 		{2, "conflict", false},
 		{3, "tests_failed", false},
 		{4, "push_failed", false},
+		{5, "stale_evidence", false},
 		{99, "unknown", false},
 	}
 	for _, tc := range cases {
@@ -350,6 +380,7 @@ func TestDispatchMerge_ExitCodeMapping(t *testing.T) {
 				WorktreeBranch: "feature/exit-" + itoaExit(tc.exit),
 			}
 			require.NoError(t, o.db.Create(task).Error)
+			seedDispatchArtifact(t, o, task)
 
 			res, err := o.dispatchMerge(context.Background(), task)
 			require.NoError(t, err)
@@ -438,7 +469,7 @@ func TestBuildMergerArgv_EmptyTestCmdRejected(t *testing.T) {
 		} {
 			tc := tc
 			t.Run(tc.name, func(t *testing.T) {
-				argv, err := buildMergerArgv(task, "proj-id", "main", tc.testCmd, "http://orch", "tok")
+				argv, err := buildMergerArgv(task, "proj-id", "main", tc.testCmd, "http://orch", "tok", strings.Repeat("a", 40), strings.Repeat("b", 40))
 				require.Nil(t, argv)
 				require.ErrorIs(t, err, errMergerSpawnSkippedEmptyTestCmd)
 			})
@@ -450,7 +481,7 @@ func TestBuildMergerArgv_EmptyTestCmdRejected(t *testing.T) {
 			ID:             uuid.New(),
 			WorktreeBranch: "feature/ok",
 		}
-		argv, err := buildMergerArgv(task, "proj-id", "main", "go test ./...", "http://orch", "tok")
+		argv, err := buildMergerArgv(task, "proj-id", "main", "go test ./...", "http://orch", "tok", strings.Repeat("a", 40), strings.Repeat("b", 40))
 		require.NoError(t, err)
 		require.NotEmpty(t, argv)
 	})
@@ -470,6 +501,7 @@ func TestBuildMergerArgv_EmptyTestCmdRejected(t *testing.T) {
 			WorktreeBranch: "feature/no-test-cmd",
 		}
 		require.NoError(t, o.db.Create(task).Error)
+		seedDispatchArtifact(t, o, task)
 
 		res, err := o.dispatchMerge(context.Background(), task)
 		require.Nil(t, res)

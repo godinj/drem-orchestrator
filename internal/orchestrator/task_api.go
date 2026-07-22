@@ -54,19 +54,13 @@ func (o *Orchestrator) PauseTask(taskID uuid.UUID) error {
 	}
 	task.Context["paused_from"] = string(task.Status)
 
-	evt, err := state.TransitionTask(&task, model.StatusPaused, "user", map[string]any{"action": "pause"})
-	if err != nil {
+	oldStatus := task.Status
+	if err := o.transitionTaskAtomic(&task, model.StatusPaused, "operator", "task_api", "task paused", nil); err != nil {
 		return fmt.Errorf("pause task: transition: %w", err)
-	}
-	if err := o.db.Save(&task).Error; err != nil {
-		return fmt.Errorf("pause task: save task: %w", err)
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("pause task: save event: %w", err)
 	}
 
 	o.emit("task_updated", &task)
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "user paused task")
+	o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "user paused task")
 	o.logger.Info("task paused", "task_id", task.ID)
 	return nil
 }
@@ -93,25 +87,18 @@ func (o *Orchestrator) ResumeTask(taskID uuid.UUID) error {
 		}
 	}
 
-	// Validate the resume transition is allowed from PAUSED.
-	evt, err := state.TransitionTask(&task, resumeTo, "user", map[string]any{"action": "resume"})
-	if err != nil {
-		// If the original status isn't reachable from PAUSED, fall back to BACKLOG.
-		evt, err = state.TransitionTask(&task, model.StatusBacklog, "user", map[string]any{"action": "resume", "fallback": true})
-		if err != nil {
-			return fmt.Errorf("resume task: transition: %w", err)
-		}
+	oldStatus := task.Status
+	reason := "task resumed"
+	if state.ValidateTransition(task.Status, resumeTo) != nil {
+		resumeTo = model.StatusBacklog
+		reason = "task resumed with backlog fallback"
 	}
-
-	if err := o.db.Save(&task).Error; err != nil {
-		return fmt.Errorf("resume task: save task: %w", err)
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("resume task: save event: %w", err)
+	if err := o.transitionTaskAtomic(&task, resumeTo, "operator", "task_api", reason, nil); err != nil {
+		return fmt.Errorf("resume task: transition: %w", err)
 	}
 
 	o.emit("task_updated", &task)
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "user resumed task")
+	o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "user resumed task")
 	o.logger.Info("task resumed", "task_id", task.ID, "status", task.Status)
 	return nil
 }
@@ -178,6 +165,7 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 				return fmt.Errorf("retry task: remove stale feature %s: %w", task.WorktreeBranch, err)
 			}
 			task.WorktreeBranch = ""
+			task.WorktreeBaseSHA = ""
 		}
 
 		var staleChildren []model.Task
@@ -185,28 +173,22 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 			return fmt.Errorf("retry task: load stale children: %w", err)
 		}
 		for i := range staleChildren {
-			staleChildren[i].Status = model.StatusCancelled
 			staleChildren[i].AssignedAgentID = nil
 			staleChildren[i].ParentTaskID = nil
-			if err := o.db.Save(&staleChildren[i]).Error; err != nil {
+			if err := o.transitionTaskAtomic(&staleChildren[i], model.StatusCancelled, "operator", "parent_retry",
+				"stale child detached during parent retry", map[string]any{"parent_task_id": task.ID.String()}); err != nil {
 				return fmt.Errorf("retry task: cancel stale child %s: %w", staleChildren[i].ID, err)
 			}
 		}
 	}
 
-	evt, err := state.TransitionTask(&task, model.StatusBacklog, "user", map[string]any{"action": "retry"})
-	if err != nil {
+	oldStatus := task.Status
+	if err := o.transitionTaskAtomic(&task, model.StatusBacklog, "operator", "task_retry", "failed task retried", nil); err != nil {
 		return fmt.Errorf("retry task: transition: %w", err)
-	}
-	if err := o.db.Save(&task).Error; err != nil {
-		return fmt.Errorf("retry task: save task: %w", err)
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("retry task: save event: %w", err)
 	}
 
 	o.emit("task_updated", &task)
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "user retried task")
+	o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "user retried task")
 	o.logger.Info("task retried", "task_id", task.ID)
 	return nil
 }
@@ -246,12 +228,12 @@ func (o *Orchestrator) OverrideClassification(taskID uuid.UUID, category model.T
 		return fmt.Errorf("override classification: task %s is in %s, not classifying", taskID, task.Status)
 	}
 
-	task.Status = model.StatusBacklog
 	task.Category = category
 	task.ComplexityScore = complexityScore
 
-	if err := o.db.Save(&task).Error; err != nil {
-		return fmt.Errorf("override classification: save task: %w", err)
+	if err := o.transitionTaskAtomic(&task, model.StatusBacklog, "operator", "classification_override",
+		"classification overridden", map[string]any{"category": string(category), "complexity_score": complexityScore}); err != nil {
+		return fmt.Errorf("override classification: transition: %w", err)
 	}
 
 	o.emit("task_updated", &task)

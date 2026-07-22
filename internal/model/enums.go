@@ -17,6 +17,8 @@ const (
 	StatusTestReview         TaskStatus = "test_review"
 	StatusInProgress         TaskStatus = "in_progress"
 	StatusTestingReady       TaskStatus = "testing_ready"
+	StatusVerificationReady  TaskStatus = "verification_ready"
+	StatusIntegrationReady   TaskStatus = "integration_ready"
 	StatusMerging            TaskStatus = "merging"
 	StatusPaused             TaskStatus = "paused"
 	StatusDone               TaskStatus = "done"
@@ -36,6 +38,8 @@ var allTaskStatuses = []TaskStatus{
 	StatusTestReview,
 	StatusInProgress,
 	StatusTestingReady,
+	StatusVerificationReady,
+	StatusIntegrationReady,
 	StatusMerging,
 	StatusPaused,
 	StatusDone,
@@ -53,18 +57,19 @@ func (s TaskStatus) String() string {
 // automated action (scheduling agents, merging, etc.).
 func (s TaskStatus) IsActionable() bool {
 	switch s {
-	case StatusClassifying, StatusBacklog, StatusPlanning, StatusInProgress, StatusTestWriting, StatusMerging:
+	case StatusClassifying, StatusBacklog, StatusPlanning, StatusInProgress, StatusTestWriting, StatusTestingReady, StatusIntegrationReady, StatusMerging:
 		return true
 	default:
 		return false
 	}
 }
 
-// IsHumanGate returns true for statuses that require human approval before
-// the task can proceed.
-func (s TaskStatus) IsHumanGate() bool {
+// IsApprovalGate returns true for statuses that require an explicit approval
+// decision before the task can proceed. The approver may be an operator,
+// Codex task, or another policy-authorized agent.
+func (s TaskStatus) IsApprovalGate() bool {
 	switch s {
-	case StatusPlanReview, StatusTestReview, StatusTestingReady, StatusNeedsClarification:
+	case StatusPlanReview, StatusTestReview, StatusVerificationReady, StatusNeedsClarification:
 		return true
 	default:
 		return false

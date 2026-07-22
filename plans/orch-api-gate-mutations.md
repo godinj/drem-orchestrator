@@ -38,10 +38,10 @@ first, keeping the server API unambiguous.
 
 | Method | Path | Body | On-success transitions |
 |--------|------|------|------------------------|
-| `POST` | `/projects/{name}/tasks/{id}/approve` | *(empty)* | `plan_review → in_progress` *(or `test_writing` when TDD subtasks exist)*; `test_review → in_progress` |
-| `POST` | `/projects/{name}/tasks/{id}/reject` | `{"reason":"..."}` (optional) | `plan_review → rejected/planning`; `test_review → test_writing` with feedback persisted |
-| `POST` | `/projects/{name}/tasks/{id}/pass` | *(empty)* | `testing_ready → merging` |
-| `POST` | `/projects/{name}/tasks/{id}/fail` | *(empty)* | `testing_ready → in_progress` |
+| `POST` | `/projects/{name}/tasks/{id}/approve` | *(empty)* | `plan_review → in_progress` *(or `test_writing` when TDD subtasks exist)*; `test_review → in_progress`; `testing_ready → merging` |
+| `POST` | `/projects/{name}/tasks/{id}/reject` | `{"reason":"..."}` (optional) | `plan_review → rejected/planning`; `test_review → test_writing` with feedback persisted; `testing_ready → in_progress` |
+| `POST` | `/projects/{name}/tasks/{id}/pass` | *(empty)* | Compatibility alias for `approve` at `testing_ready` |
+| `POST` | `/projects/{name}/tasks/{id}/fail` | *(empty)* | Compatibility alias for `reject` at `testing_ready` |
 | `POST` | `/projects/{name}/tasks/{id}/answer` | `{"body":"..."}` (required, non-empty) | `needs_clarification → planning` (when all Qs answered) |
 
 ### Request shape
@@ -144,11 +144,12 @@ left in place as a transition tool.
 
 1. `approve` happy path `plan_review → in_progress`
 2. `approve` happy path `test_review → in_progress`
-3. `approve` wrong status (409)
+3. `approve` advances `testing_ready`; wrong statuses return 409
 4. `approve` unknown task (404)
 5. `approve` malformed UUID (400)
 6. `reject` plan_review happy (no reason)
-7. `reject` test_review happy (with reason forwarded)
+7. `reject` test_review happy (with reason forwarded) and returns
+   `testing_ready` to implementation
 8. `reject` missing body is 200 with empty reason
 9. `answer` happy with body
 10. `answer` missing/empty body → 400

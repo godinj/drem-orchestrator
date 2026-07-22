@@ -12,7 +12,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
-	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
 // processBacklog transitions a task from BACKLOG to PLANNING.
@@ -49,18 +48,13 @@ func (o *Orchestrator) processBacklog(task *model.Task) error {
 		}
 	}
 
-	event, err := state.TransitionTask(task, model.StatusPlanning, "orchestrator", nil)
-	if err != nil {
+	oldStatus := task.Status
+	if err := o.transitionTaskAtomic(task, model.StatusPlanning, "orchestrator", "backlog_processor",
+		"task selected for planning", nil); err != nil {
 		return fmt.Errorf("process backlog: %w", err)
 	}
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("process backlog: save task: %w", err)
-	}
-	if err := o.db.Create(event).Error; err != nil {
-		return fmt.Errorf("process backlog: save event: %w", err)
-	}
 	o.emit("task_updated", task)
-	o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "")
+	o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "")
 	o.logger.Info("task transitioned to planning", "task_id", task.ID, "title", task.Title)
 	return nil
 }
@@ -108,34 +102,24 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 				task.Context["clarification_current_question"] = dec.Questions[0]
 			}
 			task.Context["clarification_rounds"] = float64(dec.Rounds + 1)
-			event, transErr := state.TransitionTask(task, model.StatusNeedsClarification, "orchestrator", nil)
-			if transErr != nil {
-				return fmt.Errorf("process planning: transition to needs_clarification: %w", transErr)
-			}
-			if err := o.db.Save(task).Error; err != nil {
-				return fmt.Errorf("process planning: save task: %w", err)
-			}
-			if err := o.db.Create(event).Error; err != nil {
-				return fmt.Errorf("process planning: save event: %w", err)
+			oldStatus := task.Status
+			if err := o.transitionTaskAtomic(task, model.StatusNeedsClarification, "orchestrator",
+				"clarification_decision", "planner requires clarification", map[string]any{"questions": dec.Questions}); err != nil {
+				return fmt.Errorf("process planning: transition to needs_clarification: %w", err)
 			}
 			o.emit("needs_clarification", map[string]any{"task_id": task.ID, "questions": dec.Questions})
-			o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "needs clarification")
+			o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "needs clarification")
 			return nil
 		}
 
 		// No clarification needed (or cap reached) — proceed to plan_review.
-		event, err := state.TransitionTask(task, model.StatusPlanReview, "orchestrator", nil)
-		if err != nil {
+		oldStatus := task.Status
+		if err := o.transitionTaskAtomic(task, model.StatusPlanReview, "orchestrator", "planning_complete",
+			"plan ready for review", nil); err != nil {
 			return fmt.Errorf("process planning: transition to plan_review: %w", err)
 		}
-		if err := o.db.Save(task).Error; err != nil {
-			return fmt.Errorf("process planning: save task: %w", err)
-		}
-		if err := o.db.Create(event).Error; err != nil {
-			return fmt.Errorf("process planning: save event: %w", err)
-		}
 		o.emit("plan_ready", map[string]any{"task_id": task.ID})
-		o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "plan ready for review")
+		o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "plan ready for review")
 		return nil
 	}
 
@@ -209,6 +193,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 		o.worktree.GenerateRepoMapAsync(wtInfo.Path)
 
 		task.WorktreeBranch = wtInfo.Branch
+		task.WorktreeBaseSHA = wtInfo.Head
 		if err := o.db.Save(task).Error; err != nil {
 			return fmt.Errorf("process planning: save worktree branch: %w", err)
 		}
@@ -291,6 +276,7 @@ func (o *Orchestrator) ensureFeatureWorktree(task *model.Task, caller string) er
 	}
 	o.worktree.GenerateRepoMapAsync(wtInfo.Path)
 	task.WorktreeBranch = wtInfo.Branch
+	task.WorktreeBaseSHA = wtInfo.Head
 	if err := o.db.Save(task).Error; err != nil {
 		return fmt.Errorf("%s: save worktree branch: %w", caller, err)
 	}
@@ -434,15 +420,17 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 			if changeErr != nil {
 				o.logger.Warn("failed to check feature branch changes", "task_id", parent.ID, "error", changeErr)
 			} else if len(changed) == 0 {
-				if o.featureBranchAlreadyMergedToDefault(parent.WorktreeBranch) {
-					return o.markFeatureAlreadyMergedDone(parent)
+				if o.featureBranchAlreadyMergedToDefault(parent) {
+					o.logger.Info("feature branch already present on default; continuing through delivery verification",
+						"task_id", parent.ID, "branch", parent.WorktreeBranch)
+				} else {
+					o.logger.Warn("all subtasks done but feature branch has no changes, failing parent", "task_id", parent.ID)
+					if parent.Context == nil {
+						parent.Context = make(model.JSONField)
+					}
+					parent.Context["empty_feature"] = true
+					return o.failTask(parent, "all subtasks completed but no changes were committed to the feature branch")
 				}
-				o.logger.Warn("all subtasks done but feature branch has no changes, failing parent", "task_id", parent.ID)
-				if parent.Context == nil {
-					parent.Context = make(model.JSONField)
-				}
-				parent.Context["empty_feature"] = true
-				return o.failTask(parent, "all subtasks completed but no changes were committed to the feature branch")
 			}
 		}
 
@@ -458,21 +446,16 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 			}
 		}
 
-		evt, err := state.TransitionTask(parent, model.StatusTestingReady, "orchestrator", map[string]any{"reason": "all subtasks done"})
-		if err != nil {
-			return fmt.Errorf("check feature completion: transition to testing_ready: %w", err)
-		}
 		delete(parent.Context, "parent_readiness_target")
 		delete(parent.Context, "parent_readiness_blockers")
 		delete(parent.Context, "parent_readiness_blocker_count")
-		if err := o.db.Save(parent).Error; err != nil {
-			return fmt.Errorf("check feature completion: save parent: %w", err)
-		}
-		if err := o.db.Create(evt).Error; err != nil {
-			return fmt.Errorf("check feature completion: save event: %w", err)
+		oldStatus := parent.Status
+		if err := o.transitionTaskAtomic(parent, model.StatusTestingReady, "orchestrator", "subtask_completion",
+			"all subtasks completed", nil); err != nil {
+			return fmt.Errorf("check feature completion: transition to testing_ready: %w", err)
 		}
 		o.emit("testing_ready", map[string]any{"task_id": parent.ID})
-		o.publishTaskTransition(parent.ID.String(), evt.OldValue, evt.NewValue, "all subtasks done, testing ready")
+		o.publishTaskTransition(parent.ID.String(), string(oldStatus), string(parent.Status), "all subtasks done, testing ready")
 		o.logger.Info("all subtasks done, testing ready", "task_id", parent.ID)
 	} else if allTerminal && anyFailed && parent.Status == model.StatusInProgress {
 		// All subtasks finished but some failed -> parent fails.

@@ -69,8 +69,10 @@ func main() {
 	cfg.ContextWarnPct = envInt("DREM_DIRECT_CONTEXT_WARN_PCT", cfg.ContextWarnPct)
 	cfg.ContextStopPct = envInt("DREM_DIRECT_CONTEXT_STOP_PCT", cfg.ContextStopPct)
 	cfg.ChatTemplateKwargs = envJSONMap("DREM_DIRECT_CHAT_TEMPLATE_KWARGS")
+	cfg.GQCaller = envDefault("DREM_GQ_CALLER", *role)
+	cfg.GQPriority = strings.TrimSpace(os.Getenv("DREM_GQ_PRIORITY"))
 
-	traceFile, err := openTrace(*workDir)
+	traceFile, err := openTrace()
 	if err != nil {
 		log.Printf("trace disabled: %v", err)
 	} else if traceFile != nil {
@@ -104,13 +106,20 @@ func systemPromptForRole(role string) string {
 	}
 }
 
-func openTrace(workDir string) (io.WriteCloser, error) {
+func openTrace() (io.WriteCloser, error) {
 	agentID := envDefault("DREM_AGENT_ID", "direct")
 	shortID := agentID
 	if len(shortID) > 8 {
 		shortID = shortID[:8]
 	}
-	path := filepath.Join(workDir, "agent-trace-"+shortID+".jsonl")
+	// Traces are runtime evidence, not source artifacts. Keeping them outside
+	// the checkout prevents the watchdog or finalizeGit from committing an
+	// observability file when an agent exits early.
+	traceDir := envDefault("DREM_TRACE_DIR", filepath.Join(os.TempDir(), "drem-agent-traces"))
+	if err := os.MkdirAll(traceDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create trace directory: %w", err)
+	}
+	path := filepath.Join(traceDir, "agent-trace-"+shortID+".jsonl")
 	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 }
 

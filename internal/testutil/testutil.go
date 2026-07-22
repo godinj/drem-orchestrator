@@ -51,10 +51,18 @@ func NewTestDB(t *testing.T) *gorm.DB {
 		&model.TaskEvent{},
 		&model.Memory{},
 		&model.TaskComment{},
+		&model.BranchAcceptanceRecord{},
+		&model.PreliminaryGateRun{},
+		&model.DeliveryArtifact{},
+		&model.VerificationRecord{},
+		&model.IntegrationAuthorization{},
+		&model.DeliveryReworkRecord{},
+		&model.MergeCompletion{},
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
 	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_attempt_active_task_role_branch ON worker_attempts(task_id, agent_type, branch) WHERE completed_at IS NULL")
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_artifact_current_task ON delivery_artifacts(task_id) WHERE invalidated_at IS NULL")
 	return db
 }
 
@@ -82,6 +90,13 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 		&model.TaskEvent{},
 		&model.Memory{},
 		&model.TaskComment{},
+		&model.BranchAcceptanceRecord{},
+		&model.PreliminaryGateRun{},
+		&model.DeliveryArtifact{},
+		&model.VerificationRecord{},
+		&model.IntegrationAuthorization{},
+		&model.DeliveryReworkRecord{},
+		&model.MergeCompletion{},
 	}
 	allModels := append(coreModels, extraModels...)
 	if err := db.AutoMigrate(allModels...); err != nil {
@@ -93,6 +108,7 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 	// DESC direction; declare it explicitly.
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at DESC)")
 	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_attempt_active_task_role_branch ON worker_attempts(task_id, agent_type, branch) WHERE completed_at IS NULL")
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_artifact_current_task ON delivery_artifacts(task_id) WHERE invalidated_at IS NULL")
 	return db
 }
 
@@ -138,6 +154,13 @@ func NewSharedTestDB(t *testing.T) *gorm.DB {
 		&model.TaskEvent{},
 		&model.Memory{},
 		&model.TaskComment{},
+		&model.BranchAcceptanceRecord{},
+		&model.PreliminaryGateRun{},
+		&model.DeliveryArtifact{},
+		&model.VerificationRecord{},
+		&model.IntegrationAuthorization{},
+		&model.DeliveryReworkRecord{},
+		&model.MergeCompletion{},
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}

@@ -54,6 +54,11 @@ type DirectToolAgentConfig struct {
 	WorkDir       string        // Working directory; tools restricted to paths under this
 	BashTimeout   time.Duration // Timeout for bash commands (default 30s)
 	TraceWriter   io.Writer     // Optional: JSON-lines trace, one TraceEvent per iteration
+	// GQCaller and GQPriority identify this request to a GQ admission proxy.
+	// They are harmless when the endpoint is SGLang directly because unknown
+	// HTTP headers are ignored.
+	GQCaller   string
+	GQPriority string
 	// ChatTemplateKwargs is forwarded to SGLang as `chat_template_kwargs` in the
 	// request body. Use for model-specific template flags (e.g. Gemma-4's
 	// `enable_thinking: true`). Nil/empty ⇒ field omitted.

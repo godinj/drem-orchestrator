@@ -10,9 +10,9 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // dispatchMerges queries all MERGING tasks and calls executeMerge for each.
@@ -35,6 +35,13 @@ func (o *Orchestrator) dispatchMerges() {
 // dispatchMerge (the merger-container path); the legacy in-process
 // mergerClient has been retired.
 func (o *Orchestrator) executeMerge(task *model.Task) error {
+	ready, err := o.preflightMergeArtifact(task)
+	if err != nil {
+		return fmt.Errorf("execute merge: delivery preflight: %w", err)
+	}
+	if !ready {
+		return nil
+	}
 	if o.hasActiveMergeConflictResolver(task) {
 		return nil
 	}
@@ -52,19 +59,13 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 	}
 
 	if result.Success {
-		evt, err := state.TransitionTask(task, model.StatusDone, "orchestrator", map[string]any{"merge_commit": result.MergeCommit})
+		completion, err := o.completeAuthorizedMerge(task.ID, result.MergeCommit)
 		if err != nil {
-			return fmt.Errorf("execute merge: transition to done: %w", err)
-		}
-		if err := o.db.Save(task).Error; err != nil {
-			return fmt.Errorf("execute merge: save task: %w", err)
-		}
-		if err := o.db.Create(evt).Error; err != nil {
-			return fmt.Errorf("execute merge: save event: %w", err)
+			return fmt.Errorf("execute merge: complete authorized merge: %w", err)
 		}
 		o.emit("merge_complete", map[string]any{"task_id": task.ID})
-		o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "merge complete")
-		o.logger.Info("merge complete", "task_id", task.ID)
+		o.publishTaskTransition(task.ID.String(), string(model.StatusMerging), string(model.StatusDone), "merge complete")
+		o.logger.Info("merge complete", "task_id", task.ID, "merge_completion_id", completion.ID)
 
 		// Regenerate the repo map for the main branch so the next batch of
 		// workers sees updated package/function signatures.
@@ -90,6 +91,12 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 		// existing retry branch below — a bumped remote typically heals
 		// on the next attempt.
 		switch result.FailureReason {
+		case "stale_evidence":
+			artifact, artifactErr := currentArtifact(o.db, task.ID)
+			if artifactErr != nil {
+				return fmt.Errorf("load stale delivery artifact: %w", artifactErr)
+			}
+			return o.rewindMerging(task.ID, model.StatusInProgress, artifact.ID, "merger_detected_delivery_drift")
 		case "tests_failed":
 			reason := "merge aborted: pre-push tests failed"
 			markTerminalMergerFailure(task, terminalMergerFailureTestsFailed)
@@ -220,10 +227,9 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 	return nil
 }
 
-// transitionQuickFixToMerging transitions a completed quick fix task from
-// IN_PROGRESS to MERGING. It runs constraint checks and fast-tracks through
-// the TESTING_READY state (quickfix tasks skip human test review).
-func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
+// prepareQuickFixDelivery stops at TESTING_READY. Quick fixes skip
+// planning/TDD review, never the delivery artifact and verification protocol.
+func (o *Orchestrator) prepareQuickFixDelivery(task *model.Task) error {
 	// Run constraint checks on the feature worktree.
 	if task.WorktreeBranch != "" && !o.skipConstraintGate {
 		fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
@@ -266,16 +272,9 @@ func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
 						}
 						task.Context["constraint_violations"] = constraints.FormatReport(report)
 
-						pauseEvt, pauseErr := state.TransitionTask(task, model.StatusPaused, "orchestrator",
-							map[string]any{"reason": "constraint-violations"})
-						if pauseErr != nil {
-							return fmt.Errorf("transition quickfix to merging: pause on constraint violation: %w", pauseErr)
-						}
-						if err := o.db.Save(task).Error; err != nil {
-							return fmt.Errorf("transition quickfix to merging: save constraint violations: %w", err)
-						}
-						if err := o.db.Create(pauseEvt).Error; err != nil {
-							return fmt.Errorf("transition quickfix to merging: save pause event: %w", err)
+						if err := o.transitionTaskAtomic(task, model.StatusPaused, "orchestrator", "constraint_gate",
+							"constraint violations require review", nil); err != nil {
+							return fmt.Errorf("transition quickfix to merging: pause on constraint violation: %w", err)
 						}
 
 						o.emit("quickfix_constraint_failed", map[string]any{
@@ -290,34 +289,24 @@ func (o *Orchestrator) transitionQuickFixToMerging(task *model.Task) error {
 		}
 	}
 
-	// Fast-track: in_progress → testing_ready → merging.
-	evt1, err := state.TransitionTask(task, model.StatusTestingReady, "orchestrator",
-		map[string]any{"reason": "quickfix-fast-track"})
-	if err != nil {
-		return fmt.Errorf("transition quickfix to merging: to testing_ready: %w", err)
-	}
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("transition quickfix to merging: save testing_ready: %w", err)
-	}
-	if err := o.db.Create(evt1).Error; err != nil {
-		return fmt.Errorf("transition quickfix to merging: save testing_ready event: %w", err)
-	}
-
-	evt2, err := state.TransitionTask(task, model.StatusMerging, "orchestrator",
-		map[string]any{"reason": "quickfix-fast-track"})
-	if err != nil {
-		return fmt.Errorf("transition quickfix to merging: to merging: %w", err)
-	}
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("transition quickfix to merging: save merging: %w", err)
-	}
-	if err := o.db.Create(evt2).Error; err != nil {
-		return fmt.Errorf("transition quickfix to merging: save merging event: %w", err)
+	if err := o.db.Transaction(func(tx *gorm.DB) error {
+		var current model.Task
+		if err := tx.First(&current, "id = ?", task.ID).Error; err != nil {
+			return err
+		}
+		if err := casTaskTransition(tx, &current, model.StatusInProgress, model.StatusTestingReady,
+			"orchestrator", "quickfix_completion", "quick fix implementation complete", nil); err != nil {
+			return err
+		}
+		*task = current
+		return nil
+	}); err != nil {
+		return fmt.Errorf("transition quickfix to testing_ready: %w", err)
 	}
 
-	o.emit("quickfix_merging", map[string]any{"task_id": task.ID})
-	o.publishTaskTransition(task.ID.String(), evt1.OldValue, string(task.Status), "quickfix fast-tracked to merging")
-	o.logger.Info("quickfix transitioning to merging", "task_id", task.ID)
+	o.emit("quickfix_testing_ready", map[string]any{"task_id": task.ID})
+	o.publishTaskTransition(task.ID.String(), string(model.StatusInProgress), string(model.StatusTestingReady), "quick fix ready for delivery preparation")
+	o.logger.Info("quickfix transitioning to testing_ready", "task_id", task.ID)
 	return nil
 }
 

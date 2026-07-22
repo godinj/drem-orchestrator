@@ -806,19 +806,14 @@ func TestReconcileEmptyFeatures_Empty(t *testing.T) {
 		t.Fatalf("reconcileEmptyFeatures() error: %v", err)
 	}
 
-	// The state machine does not allow testing_ready -> failed directly,
-	// so failTask returns an error and the fix is not counted.
-	// This documents the current behavior; a state machine update may
-	// be needed to allow this transition.
-	if fixes != 0 {
-		t.Errorf("expected 0 fixes (state machine blocks testing_ready->failed), got %d", fixes)
+	if fixes != 1 {
+		t.Errorf("expected 1 rework transition for empty feature, got %d", fixes)
 	}
 
 	var updated model.Task
 	db.First(&updated, "id = ?", taskID)
-	// Task stays testing_ready because the state transition was rejected.
-	if updated.Status != model.StatusTestingReady {
-		t.Errorf("expected task to stay testing_ready (blocked transition), got %s", updated.Status)
+	if updated.Status != model.StatusInProgress {
+		t.Errorf("expected empty feature to return to in_progress, got %s", updated.Status)
 	}
 }
 
@@ -1266,8 +1261,8 @@ func TestReconcileStuckAgents_ContainerFeatureBranchCommit_Completes(t *testing.
 
 	var updated model.Task
 	db.First(&updated, "id = ?", taskID)
-	if updated.Status != model.StatusDone {
-		t.Fatalf("expected task status done, got %s", updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Fatalf("expected task status testing_ready, got %s", updated.Status)
 	}
 }
 
@@ -1281,6 +1276,7 @@ func TestReconcileAlreadyMergedFeatures_Merged(t *testing.T) {
 	// Create a main worktree so MainWorktreePath() works.
 	mainDir := filepath.Join(bareRepo, "main")
 	runGitCmd(t, bareRepo, "worktree", "add", mainDir, "main")
+	baseSHA := runGitCmd(t, mainDir, "rev-parse", "HEAD")
 
 	// Create a feature branch with a commit.
 	featureName := "already-merged"
@@ -1297,12 +1293,13 @@ func TestReconcileAlreadyMergedFeatures_Merged(t *testing.T) {
 
 	// Create a FAILED parent task pointing to the (now-merged) feature branch.
 	task := model.Task{
-		ID:             uuid.New(),
-		ProjectID:      orch.projectID,
-		Title:          "already-merged-task",
-		Description:    "task whose branch was merged by supervisor",
-		Status:         model.StatusFailed,
-		WorktreeBranch: "feature/" + featureName,
+		ID:              uuid.New(),
+		ProjectID:       orch.projectID,
+		Title:           "already-merged-task",
+		Description:     "task whose branch was merged by supervisor",
+		Status:          model.StatusFailed,
+		WorktreeBranch:  "feature/" + featureName,
+		WorktreeBaseSHA: baseSHA,
 	}
 	db.Create(&task)
 
@@ -1314,18 +1311,55 @@ func TestReconcileAlreadyMergedFeatures_Merged(t *testing.T) {
 		t.Errorf("expected 1 fix, got %d", fixes)
 	}
 
-	// Task should be transitioned to DONE.
+	// Already-integrated work must still pass through the typed delivery
+	// evidence flow instead of being reconciled directly to DONE.
 	var updated model.Task
 	db.First(&updated, "id = ?", task.ID)
-	if updated.Status != model.StatusDone {
-		t.Errorf("expected task status done, got %s", updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected task status testing_ready, got %s", updated.Status)
 	}
 
 	// Verify a status_change event was recorded.
 	var event model.TaskEvent
-	db.Where("task_id = ? AND new_value = ?", task.ID, string(model.StatusDone)).First(&event)
+	db.Where("task_id = ? AND new_value = ?", task.ID, string(model.StatusTestingReady)).First(&event)
 	if event.ID == uuid.Nil {
-		t.Error("expected a status_change event to done")
+		t.Error("expected a status_change event to testing_ready")
+	}
+}
+
+func TestReconcileAlreadyMergedFeatures_LegacyTaskWithoutBaseFailsClosed(t *testing.T) {
+	orch, db, bareRepo := setupReconcileTest(t)
+
+	mainDir := filepath.Join(bareRepo, "main")
+	runGitCmd(t, bareRepo, "worktree", "add", mainDir, "main")
+	featureName := "legacy-already-merged"
+	featureDir := createFeatureWorktree(t, bareRepo, featureName)
+	testFile := filepath.Join(featureDir, "legacy-work.txt")
+	if err := os.WriteFile(testFile, []byte("legacy work"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCmd(t, featureDir, "add", ".")
+	runGitCmd(t, featureDir, "commit", "-m", "legacy feature work")
+	runGitCmd(t, mainDir, "merge", "feature/"+featureName, "--no-edit")
+
+	task := model.Task{
+		ID: uuid.New(), ProjectID: orch.projectID,
+		Title: "legacy task without provenance", Description: "base SHA was never recorded",
+		Status: model.StatusFailed, WorktreeBranch: "feature/" + featureName,
+	}
+	db.Create(&task)
+
+	fixes, err := orch.reconcileAlreadyMergedFeatures()
+	if err != nil {
+		t.Fatalf("reconcileAlreadyMergedFeatures() error: %v", err)
+	}
+	if fixes != 0 {
+		t.Fatalf("expected no inferred recovery without a recorded branch base, got %d", fixes)
+	}
+	var updated model.Task
+	db.First(&updated, "id = ?", task.ID)
+	if updated.Status != model.StatusFailed {
+		t.Fatalf("expected legacy task to remain failed, got %s", updated.Status)
 	}
 }
 

@@ -1,0 +1,14 @@
+# Overlay for a local Docker control plane that sends inference to an
+# OpenAI-compatible endpoint exposed through the host (normally an SSH tunnel
+# to a remote GQ instance). Use with global.yml and start only the explicitly
+# documented control-plane services with `up --no-deps`.
+
+services:
+  drem-classifier:
+    environment:
+      DREM_CLASSIFIER_UPSTREAM: "${DREM_EXTERNAL_INFERENCE_ENDPOINT:?set DREM_EXTERNAL_INFERENCE_ENDPOINT to the container-visible chat-completions URL}"
+    # The base service waits for the local SGLang container. External mode has
+    # no local SGLang service, so remove that dependency instead of starting it.
+    depends_on: !reset []
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

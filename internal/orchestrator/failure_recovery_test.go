@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -577,7 +578,9 @@ func TestProcessTestingReady_TestsPass(t *testing.T) {
 		Status:         model.StatusTestingReady,
 		WorktreeBranch: "feature/" + featureName,
 	}
+	recordBranchAcceptanceForTest(t, &parent, featureDir, "main")
 	db.Create(&parent)
+	persistBranchAcceptanceForTest(t, db, &parent)
 
 	// Verify the worktree exists.
 	_ = featureDir
@@ -673,10 +676,10 @@ func TestProcessTestingReady_FixerSucceeds(t *testing.T) {
 	}
 	db.Create(&parent)
 
-	// With automated_gate_passed=true, processTestingReady should skip.
+	// Compatibility flags cannot substitute for accepted branch evidence.
 	err := o.processTestingReady(&parent)
-	if err != nil {
-		t.Fatalf("processTestingReady failed: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "typed branch acceptance is missing") {
+		t.Fatalf("processTestingReady should fail closed: %v", err)
 	}
 
 	var updated model.Task
@@ -769,14 +772,14 @@ func TestHandleTestFailed_TransitionsToInProgress(t *testing.T) {
 	db.Create(&task)
 
 	err := o.HandleTestFailed(taskID)
-	if err != nil {
-		t.Fatalf("HandleTestFailed failed: %v", err)
+	if err == nil {
+		t.Fatal("HandleTestFailed should reject evidence-free delivery mutation")
 	}
 
 	var updated model.Task
 	db.First(&updated, "id = ?", taskID)
-	if updated.Status != model.StatusInProgress {
-		t.Errorf("expected status in_progress, got %s", updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected status testing_ready, got %s", updated.Status)
 	}
 }
 

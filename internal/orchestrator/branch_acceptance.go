@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/branchpolicy"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -37,6 +38,13 @@ func (o *Orchestrator) acceptWorkerBranchCompletion(ctx context.Context, ag *mod
 		task.Context = make(model.JSONField)
 	}
 	task.Context["branch_acceptance"] = detail
+	record := &model.BranchAcceptanceRecord{
+		ID: uuid.New(), TaskID: task.ID, AgentID: ag.ID,
+		Branch: task.WorktreeBranch, Accepted: res.Accepted,
+		BaseBranch: res.BaseRef, BaseSHA: res.BaseSHA, HeadSHA: res.HeadSHA,
+		Details: detail, Actor: "orchestrator", Source: "worker_branch_acceptance",
+		CreatedAt: time.Now(),
+	}
 
 	eventType := "branch_acceptance_accepted"
 	if !res.Accepted {
@@ -50,7 +58,12 @@ func (o *Orchestrator) acceptWorkerBranchCompletion(ctx context.Context, ag *mod
 		Actor:     "orchestrator",
 		CreatedAt: time.Now(),
 	}
-	if err := o.db.Create(evt).Error; err != nil {
+	if err := o.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(record).Error; err != nil {
+			return fmt.Errorf("create typed branch acceptance: %w", err)
+		}
+		return tx.Create(evt).Error
+	}); err != nil {
 		return false, fmt.Errorf("record branch acceptance: %w", err)
 	}
 	if !res.Accepted {

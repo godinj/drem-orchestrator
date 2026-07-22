@@ -54,6 +54,7 @@ func setupAgentAndTask(t *testing.T, o *Orchestrator) (uuid.UUID, uuid.UUID) {
 	t.Helper()
 	agentID := uuid.New()
 	taskID := uuid.New()
+	parentID := uuid.New()
 
 	agnt := model.Agent{
 		ID:        agentID,
@@ -63,13 +64,17 @@ func setupAgentAndTask(t *testing.T, o *Orchestrator) (uuid.UUID, uuid.UUID) {
 		Status:    model.AgentWorking,
 	}
 	o.db.Create(&agnt)
+	o.db.Create(&model.Task{
+		ID: parentID, ProjectID: o.projectID, Title: "parent", Description: "parent", Status: model.StatusInProgress,
+	})
 
 	task := model.Task{
-		ID:          taskID,
-		ProjectID:   o.projectID,
-		Title:       "test-task",
-		Description: "test description",
-		Status:      model.StatusInProgress,
+		ID:           taskID,
+		ProjectID:    o.projectID,
+		Title:        "test-task",
+		Description:  "test description",
+		Status:       model.StatusInProgress,
+		ParentTaskID: &parentID,
 	}
 	o.db.Create(&task)
 

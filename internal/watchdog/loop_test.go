@@ -132,6 +132,24 @@ func TestTickCommitDirtyTreeCommitsAndPushesOnce(t *testing.T) {
 		"follow-up clean tick must not create another commit")
 }
 
+func TestFinalFlushPushesHarnessCommittedCleanTree(t *testing.T) {
+	clone, bare := setupRepoClone(t, "feat-harness-commit")
+	l := newLoop(clone, "feat-harness-commit", nil)
+
+	require.NoError(t, os.WriteFile(filepath.Join(clone, "completed.txt"), []byte("done"), 0o644))
+	_, err := testutil.RunGit([]string{"add", "completed.txt"}, clone)
+	require.NoError(t, err)
+	_, err = testutil.RunGit([]string{"commit", "-m", "harness committed work"}, clone)
+	require.NoError(t, err)
+
+	localHead, err := testutil.RunGit([]string{"rev-parse", "HEAD"}, clone)
+	require.NoError(t, err)
+	require.NotEqual(t, localHead, branchHead(t, bare, "feat-harness-commit"), "fixture must start ahead of the bare ref")
+
+	l.finalFlush()
+	require.Equal(t, localHead, branchHead(t, bare, "feat-harness-commit"), "final flush must push an already-committed clean tree")
+}
+
 func TestTickTestPassingForcesCommitAndPush(t *testing.T) {
 	clone, bare := setupRepoClone(t, "feat-testpass")
 	l := newLoop(clone, "feat-testpass", nil)

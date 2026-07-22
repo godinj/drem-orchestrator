@@ -42,8 +42,8 @@ func (c *Client) Approve(ctx context.Context, project string, taskID uuid.UUID) 
 	return out, nil
 }
 
-// Reject transitions a task away from its plan_review or test_review
-// gate. reason is optional — pass "" to reject without feedback; the
+// Reject transitions a task away from its plan_review or test_review gate.
+// Delivery failures use Verify with result=fail. reason is optional — pass "" to reject without feedback; the
 // request body is always {"reason": "..."} so the server can
 // distinguish "no reason given" from "field missing".
 //
@@ -60,7 +60,8 @@ func (c *Client) Reject(ctx context.Context, project string, taskID uuid.UUID, r
 	return out, nil
 }
 
-// Pass transitions a testing_ready task to merging.
+// Pass is a deprecated compatibility call. Evidence-bearing delivery flows
+// should use Verify; servers fail this call closed for testing_ready tasks.
 //
 // See plans/orch-api-gate-mutations.md for the full spec.
 func (c *Client) Pass(ctx context.Context, project string, taskID uuid.UUID) (orchdto.TaskDTO, error) {
@@ -72,7 +73,8 @@ func (c *Client) Pass(ctx context.Context, project string, taskID uuid.UUID) (or
 	return out, nil
 }
 
-// Fail transitions a testing_ready task to failed.
+// Fail returns a testing_ready task to implementation. It is retained as a
+// compatibility alias; new operator and Codex workflows should use Reject.
 //
 // See plans/orch-api-gate-mutations.md for the full spec.
 func (c *Client) Fail(ctx context.Context, project string, taskID uuid.UUID) (orchdto.TaskDTO, error) {
@@ -80,6 +82,41 @@ func (c *Client) Fail(ctx context.Context, project string, taskID uuid.UUID) (or
 	path := gatePath(project, taskID, "fail")
 	if err := c.postGate(ctx, path, nil, &out); err != nil {
 		return orchdto.TaskDTO{}, err
+	}
+	return out, nil
+}
+
+// DeliveryArtifact returns the exact immutable handoff plus the current task
+// state version needed for guarded verification and integration mutations.
+func (c *Client) DeliveryArtifact(ctx context.Context, project string, taskID uuid.UUID) (orchdto.DeliveryEnvelopeDTO, error) {
+	var out orchdto.DeliveryEnvelopeDTO
+	path := gatePath(project, taskID, "artifact")
+	if err := c.get(ctx, path, nil, &out); err != nil {
+		return orchdto.DeliveryEnvelopeDTO{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) VerifyDelivery(ctx context.Context, project string, taskID uuid.UUID, req orchdto.VerifyDeliveryRequest) (orchdto.VerificationRecordDTO, error) {
+	var out orchdto.VerificationRecordDTO
+	if err := c.postGate(ctx, gatePath(project, taskID, "verify"), req, &out); err != nil {
+		return orchdto.VerificationRecordDTO{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) IntegrateDelivery(ctx context.Context, project string, taskID uuid.UUID, req orchdto.IntegrateDeliveryRequest) (orchdto.IntegrationAuthorizationDTO, error) {
+	var out orchdto.IntegrationAuthorizationDTO
+	if err := c.postGate(ctx, gatePath(project, taskID, "integrate"), req, &out); err != nil {
+		return orchdto.IntegrationAuthorizationDTO{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) RequestDeliveryRework(ctx context.Context, project string, taskID uuid.UUID, req orchdto.RequestDeliveryReworkRequest) (orchdto.DeliveryReworkRecordDTO, error) {
+	var out orchdto.DeliveryReworkRecordDTO
+	if err := c.postGate(ctx, gatePath(project, taskID, "request-rework"), req, &out); err != nil {
+		return orchdto.DeliveryReworkRecordDTO{}, err
 	}
 	return out, nil
 }
@@ -267,6 +304,12 @@ func (c *Client) postGate(ctx context.Context, path string, body any, out any) e
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if c.actor != "" {
+		req.Header.Set("X-Drem-Actor", c.actor)
+	}
 	req.Header.Set("Accept", "application/json")
 
 	resp, err := c.http.Do(req)
@@ -298,6 +341,8 @@ func (c *Client) postGate(ctx context.Context, path string, body any, out any) e
 	switch resp.StatusCode {
 	case http.StatusBadRequest:
 		return &ErrBadRequest{Message: msg}
+	case http.StatusUnauthorized:
+		return &ErrUnauthorized{Message: msg}
 	case http.StatusNotFound:
 		return &ErrNotFound{Message: msg}
 	case http.StatusConflict:

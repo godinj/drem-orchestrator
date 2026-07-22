@@ -292,6 +292,8 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		env["DREM_AGENT_HARNESS"] = "codex"
 	case model.ProviderSGLangDirect:
 		env["DREM_AGENT_HARNESS"] = "sglang-direct"
+		env["DREM_GQ_CALLER"] = agentType
+		env["DREM_GQ_PRIORITY"] = "normal"
 		if o.directToolAgentCfg != nil {
 			env["DREM_DIRECT_ENDPOINT"] = o.directToolAgentCfg.Endpoint
 			if o.directToolAgentCfg.MaxTokens > 0 {

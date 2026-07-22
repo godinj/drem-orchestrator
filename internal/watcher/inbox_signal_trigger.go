@@ -126,16 +126,20 @@ func (t *InboxSignalTrigger) poll() {
 		agentDir := filepath.Dir(inboxDir)
 		agentName := filepath.Base(agentDir)
 
-		ev := TriggerEvent{AgentName: agentName, Source: inboxSignalSource, Timestamp: time.Now()}
+		// Consume the signal before publishing its event. Consumers may act as
+		// soon as they receive from Events, so publishing first creates a race
+		// where the same signal is still visible on disk. If removal fails, do
+		// not emit: leaving the file in place lets a later poll retry safely.
+		if err := os.Remove(match); err != nil && !os.IsNotExist(err) {
+			log.Printf("%s: remove %s: %v", inboxSignalSource, match, err)
+			continue
+		}
 
+		ev := TriggerEvent{AgentName: agentName, Source: inboxSignalSource, Timestamp: time.Now()}
 		select {
 		case t.events <- ev:
 		default:
 			log.Printf("%s: event channel full, dropping wake event for agent %s", inboxSignalSource, agentName)
-		}
-
-		if err := os.Remove(match); err != nil && !os.IsNotExist(err) {
-			log.Printf("%s: remove %s: %v", inboxSignalSource, match, err)
 		}
 	}
 }

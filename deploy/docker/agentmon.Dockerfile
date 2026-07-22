@@ -20,6 +20,9 @@
 # ---------- build stage ----------
 FROM golang:1.25-alpine AS build
 
+ARG TARGETOS
+ARG TARGETARCH
+
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
@@ -32,7 +35,7 @@ COPY . .
 
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/drem-agentmon ./cmd/drem-agentmon
 
 # ---------- runtime stage ----------

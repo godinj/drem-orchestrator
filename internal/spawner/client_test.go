@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"net"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -27,7 +28,7 @@ type mockServer struct {
 
 func newMockServer(t *testing.T, reply []byte) *mockServer {
 	t.Helper()
-	sock := filepath.Join(t.TempDir(), "mock.sock")
+	sock := shortUnixSocketPath(t, "mock.sock")
 	ln, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	m := &mockServer{
@@ -44,6 +45,14 @@ func newMockServer(t *testing.T, reply []byte) *mockServer {
 		<-m.done
 	})
 	return m
+}
+
+func shortUnixSocketPath(t *testing.T, name string) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("/tmp", "drem-spawner-")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, os.RemoveAll(dir)) })
+	return filepath.Join(dir, name)
 }
 
 func (m *mockServer) loop() {

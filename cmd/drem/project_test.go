@@ -78,6 +78,7 @@ func TestProjectShow(t *testing.T) {
 		"--bare", bareRepo,
 		"--language", "cpp",
 		"--orch-url", "http://localhost:8081",
+		"--inference-endpoint", "http://host.docker.internal:18090/v1/chat/completions",
 		"--home-dir", homeDir,
 	}, io.Discard, io.Discard)
 	require.NoError(t, err)
@@ -90,6 +91,7 @@ func TestProjectShow(t *testing.T) {
 	require.Contains(t, s, "cpp")
 	require.Contains(t, s, bareRepo)
 	require.Contains(t, s, "http://localhost:8081")
+	require.Contains(t, s, "http://host.docker.internal:18090/v1/chat/completions")
 	require.Contains(t, s, "compose.yml")
 }
 

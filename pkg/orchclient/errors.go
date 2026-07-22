@@ -34,6 +34,12 @@ type ErrNotFound struct{ Message string }
 
 func (e *ErrNotFound) Error() string { return "orchclient: not found: " + e.Message }
 
+// ErrUnauthorized is returned when a mutation omits or supplies the wrong
+// project Bearer token.
+type ErrUnauthorized struct{ Message string }
+
+func (e *ErrUnauthorized) Error() string { return "orchclient: unauthorized: " + e.Message }
+
 // ErrWrongStatus is returned for 409 responses — the task exists but
 // is in a status that cannot accept the requested transition, for
 // example calling Approve on a task that is still in backlog.

@@ -262,6 +262,7 @@ func toTaskDTO(t model.Task, events ...model.TaskEvent) orchdto.TaskDTO {
 		ID:             t.ID.String(),
 		Title:          t.Title,
 		Status:         string(t.Status),
+		StateVersion:   t.StateVersion,
 		CreatedAt:      t.CreatedAt,
 		UpdatedAt:      t.UpdatedAt,
 		AssignedWorker: assigned,
@@ -286,7 +287,7 @@ func taskCurrentHealth(t model.Task) string {
 	if t.Status == model.StatusFailed {
 		return "failed"
 	}
-	if t.NeedsHumanReview || t.Status.IsHumanGate() {
+	if t.NeedsHumanReview || t.Status.IsApprovalGate() {
 		return "needs_attention"
 	}
 	return ""

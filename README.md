@@ -97,7 +97,7 @@ Kyle and the C-Suite services sit beside this flow. Their job is to report on th
 
 ## Requirements
 
-For the current containerized path, expect:
+For the all-in-one containerized path, expect:
 
 - Linux.
 - Docker Engine and Docker Compose V2.
@@ -106,6 +106,11 @@ For the current containerized path, expect:
 - NVIDIA GPU support and `nvidia-container-toolkit` if running the SGLang service locally.
 - Local model weights for SGLang, by default under `$HOME/sglang-models`.
 - Subscription-based Claude/OpenCode/Codex authentication mounted as local credentials where the containers expect it. Do not configure Claude API tokens for this repo.
+
+A bounded Docker Desktop/macOS control-plane topology is also supported: build
+the service and worker images locally for Linux/arm64, keep project Git and
+native verification on the Mac, and route only inference through an SSH tunnel
+to a remote GQ/SGLang host. See the install guide's remote-inference section.
 
 The exact install steps are in `docs/containerization/install.md`.
 
@@ -136,7 +141,9 @@ Register a project:
   --name my-project \
   --bare /path/to/my-project.git \
   --language go \
-  --orch-url http://127.0.0.1:8080
+  --orch-url http://127.0.0.1:8080 \
+  --integration-policy auto_merge \
+  --verification-policy local_automated
 ```
 
 Run the TUI against a project orchestrator:
@@ -175,6 +182,10 @@ To exit the dashboard, close or kill the tmux pane/session that owns it. The `q`
 | `./drem cli approve TASK_ID` | Approve a gate such as a reviewed plan. |
 | `./drem cli reject TASK_ID --reason=...` | Reject a gate and give a reason. |
 | `./drem cli retry TASK_ID` | Retry failed work. |
+| `dremctl artifact TASK_ID` | Show the immutable branch/commit/base delivery envelope. |
+| `dremctl verify TASK_ID ...` | Record evidence for the exact current artifact. |
+| `dremctl request-rework TASK_ID --reason ...` | Invalidate the current artifact and return it to implementation. |
+| `dremctl integrate TASK_ID` | Authorize an externally verified prepared branch for integration. |
 
 ## Project Registration
 
@@ -190,7 +201,9 @@ Each registered project gets generated files under:
 ~/.drem/projects/<project-name>/
 ```
 
-Registration records the project's name, bare repository path, language, and orchestrator URL. It also generates per-project Compose and Drem configuration files.
+Registration records the project's name, bare repository path, language,
+orchestrator URL, and optional external inference endpoint. It also generates
+per-project Compose and Drem configuration files.
 
 Supported project languages currently include:
 
@@ -215,6 +228,7 @@ Common settings include:
 | `[project].language` | Project language used to choose worker images. |
 | `[agents.*]` | Per-agent provider, model, effort, endpoint, or container image overrides. |
 | `[direct_tool_agent]` | Optional direct local-model tool-agent path. |
+| `inference_endpoint` in the project registry | Optional OpenAI-compatible endpoint injected into generated direct-tool configuration. |
 
 Older tmux settings may still be accepted by the config loader for compatibility, but they are ignored by the current production path.
 

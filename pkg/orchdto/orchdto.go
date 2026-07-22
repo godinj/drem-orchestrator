@@ -35,6 +35,7 @@ type TaskDTO struct {
 	ID                   string                `json:"id"`
 	Title                string                `json:"title"`
 	Status               string                `json:"status"`
+	StateVersion         uint64                `json:"state_version"`
 	CreatedAt            time.Time             `json:"created_at"`
 	UpdatedAt            time.Time             `json:"updated_at"`
 	AssignedWorker       string                `json:"assigned_worker"`
@@ -46,6 +47,98 @@ type TaskDTO struct {
 	LatestFailureType    string                `json:"latest_failure_type,omitempty"`
 	LatestFailureAt      *time.Time            `json:"latest_failure_at,omitempty"`
 	LatestFailureCurrent *bool                 `json:"latest_failure_current,omitempty"`
+}
+
+// CommandEvidenceDTO is one auditable command invocation used by the delivery
+// protocol. Times are caller-observed and retained with the verification.
+type CommandEvidenceDTO struct {
+	Command    string    `json:"command"`
+	Passed     bool      `json:"passed"`
+	ExitCode   int       `json:"exit_code"`
+	Output     string    `json:"output,omitempty"`
+	StartedAt  time.Time `json:"started_at"`
+	FinishedAt time.Time `json:"finished_at"`
+}
+
+type DeliveryArtifactDTO struct {
+	ID              string               `json:"id"`
+	TaskID          string               `json:"task_id"`
+	ArtifactVersion uint64               `json:"artifact_version"`
+	Branch          string               `json:"branch"`
+	CommitSHA       string               `json:"commit_sha"`
+	BaseBranch      string               `json:"base_branch"`
+	BaseSHA         string               `json:"base_sha"`
+	Preliminary     []CommandEvidenceDTO `json:"preliminary_evidence"`
+	CreatorActor    string               `json:"creator_actor"`
+	CreatorSource   string               `json:"creator_source"`
+	CreatedAt       time.Time            `json:"created_at"`
+}
+
+type VerificationRecordDTO struct {
+	ID                     string               `json:"id"`
+	ArtifactID             string               `json:"artifact_id"`
+	ArtifactVersion        uint64               `json:"artifact_version"`
+	CommitSHA              string               `json:"commit_sha"`
+	VerifierActor          string               `json:"verifier_actor"`
+	EnvironmentFingerprint string               `json:"environment_fingerprint"`
+	Commands               []CommandEvidenceDTO `json:"commands"`
+	BinarySHA256           string               `json:"binary_sha256,omitempty"`
+	Result                 string               `json:"result"`
+	Notes                  string               `json:"notes,omitempty"`
+	CreatedAt              time.Time            `json:"created_at"`
+}
+
+// DeliveryEnvelopeDTO is the single read contract a host verifier needs.
+type DeliveryEnvelopeDTO struct {
+	Task               TaskDTO                `json:"task"`
+	Artifact           DeliveryArtifactDTO    `json:"artifact"`
+	LatestVerification *VerificationRecordDTO `json:"latest_verification,omitempty"`
+}
+
+type VerifyDeliveryRequest struct {
+	ObservedStateVersion   uint64               `json:"observed_state_version"`
+	ArtifactVersion        uint64               `json:"artifact_version"`
+	CommitSHA              string               `json:"commit_sha"`
+	Actor                  string               `json:"actor"`
+	EnvironmentFingerprint string               `json:"environment_fingerprint"`
+	Commands               []CommandEvidenceDTO `json:"commands"`
+	BinarySHA256           string               `json:"binary_sha256,omitempty"`
+	Result                 string               `json:"result"`
+	Notes                  string               `json:"notes,omitempty"`
+	IdempotencyKey         string               `json:"idempotency_key"`
+}
+
+type IntegrateDeliveryRequest struct {
+	ObservedStateVersion uint64 `json:"observed_state_version"`
+	ArtifactVersion      uint64 `json:"artifact_version"`
+	CommitSHA            string `json:"commit_sha"`
+	VerificationRecordID string `json:"verification_record_id"`
+	Actor                string `json:"actor"`
+	IdempotencyKey       string `json:"idempotency_key"`
+}
+
+type IntegrationAuthorizationDTO struct {
+	ID              string `json:"integration_authorization_id"`
+	TaskID          string `json:"task_id"`
+	ArtifactVersion uint64 `json:"artifact_version"`
+	CommitSHA       string `json:"commit_sha"`
+}
+
+type RequestDeliveryReworkRequest struct {
+	ObservedStateVersion uint64 `json:"observed_state_version"`
+	ArtifactVersion      uint64 `json:"artifact_version"`
+	CommitSHA            string `json:"commit_sha"`
+	Actor                string `json:"actor"`
+	Reason               string `json:"reason"`
+	IdempotencyKey       string `json:"idempotency_key"`
+}
+
+type DeliveryReworkRecordDTO struct {
+	ID              string `json:"rework_record_id"`
+	TaskID          string `json:"task_id"`
+	ArtifactVersion uint64 `json:"artifact_version"`
+	CommitSHA       string `json:"commit_sha"`
+	Reason          string `json:"reason"`
 }
 
 // TaskAttemptLeaseDTO describes the currently active execution lease for a

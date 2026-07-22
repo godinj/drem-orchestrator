@@ -9,8 +9,8 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/experiment"
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
+	"gorm.io/gorm"
 )
 
 // onAgentFailed handles a failed agent. Uses supervisor diagnosis for smart
@@ -98,7 +98,6 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 			if task.AssignedAgentID != nil && *task.AssignedAgentID == ag.ID {
 				task.AssignedAgentID = nil
 			}
-			task.Status = model.StatusMerging
 			task.Context[contextKeyMergeConflictResolverState] = "failed"
 			if err := o.db.Save(task).Error; err != nil {
 				return fmt.Errorf("on agent failed: save resolver task: %w", err)
@@ -178,33 +177,38 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 	// but DB update failed on a prior attempt). Uses the result cached before
 	// worktree cleanup because RemoveAgentWorktree deletes the branch ref.
 	if earlyAlreadyMerged {
-		o.logger.Info("agent failed but work already merged, fast-tracking to done",
+		o.logger.Info("agent failed but work already merged, accepting completion",
 			"task_id", task.ID, "agent_id", ag.ID)
-		// Fast-track subtask through states to DONE.
-		preStatus := string(task.Status)
-		transitions := []model.TaskStatus{
-			model.StatusTestingReady,
-			model.StatusMerging,
-			model.StatusDone,
+		preStatus := task.Status
+		target := model.StatusTestingReady
+		if task.ParentTaskID != nil {
+			target = model.StatusDone
 		}
-		for _, target := range transitions {
-			if task.Status == target {
-				continue
+		if err := o.db.Transaction(func(tx *gorm.DB) error {
+			var current model.Task
+			if err := tx.First(&current, "id = ?", task.ID).Error; err != nil {
+				return err
 			}
-			evt, tErr := state.TransitionTask(task, target, "orchestrator",
-				map[string]any{"reason": "already-merged-on-failure"})
-			if tErr != nil {
-				continue
+			current.Context = task.Context
+			current.AssignedAgentID = nil
+			if current.ParentTaskID != nil {
+				if err := casSubtaskCompletion(tx, &current, "orchestrator", map[string]any{
+					"agent_id": ag.ID.String(), "reason": "already_merged_on_failure",
+				}); err != nil {
+					return err
+				}
+			} else if err := casTaskTransition(tx, &current, current.Status, model.StatusTestingReady,
+				"orchestrator", "agent_failure_recovery", "failed worker changes already accepted",
+				map[string]any{"agent_id": ag.ID.String()}); err != nil {
+				return err
 			}
-			if err := o.db.Create(evt).Error; err != nil {
-				return fmt.Errorf("on agent failed: save event: %w", err)
-			}
-		}
-		if err := o.db.Save(task).Error; err != nil {
-			return fmt.Errorf("on agent failed: save task: %w", err)
+			*task = current
+			return nil
+		}); err != nil {
+			return fmt.Errorf("on agent failed: accept already merged work: %w", err)
 		}
 		o.emit("task_updated", task)
-		o.publishTaskTransition(task.ID.String(), preStatus, string(task.Status), "already merged, fast-tracked to done")
+		o.publishTaskTransition(task.ID.String(), string(preStatus), string(target), "already merged work accepted")
 		return nil
 	}
 
@@ -247,32 +251,21 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 	// no new commits to produce). Mirror the pattern in onAgentFailed.
 	featureDir := o.resolveFeatureWorktree(task)
 	if featureDir != "" && o.isWorkAlreadyMerged(task, featureDir) {
-		o.logger.Info("agent produced no commits but work already merged, fast-tracking to done",
+		o.logger.Info("agent produced no commits but work already merged, accepting implementation",
 			"task_id", task.ID, "agent_id", ag.ID)
 		preStatus := string(task.Status)
-		transitions := []model.TaskStatus{
-			model.StatusTestingReady,
-			model.StatusMerging,
-			model.StatusDone,
-		}
-		for _, target := range transitions {
-			if task.Status == target {
-				continue
+		if err := o.db.Transaction(func(tx *gorm.DB) error {
+			refs := map[string]any{"reason": "already-merged-on-empty-work", "agent_id": ag.ID.String()}
+			if task.ParentTaskID != nil {
+				return casAcceptedExistingSubtask(tx, task, refs)
 			}
-			evt, tErr := state.TransitionTask(task, target, "orchestrator",
-				map[string]any{"reason": "already-merged-on-empty-work"})
-			if tErr != nil {
-				continue
-			}
-			if err := o.db.Create(evt).Error; err != nil {
-				return fmt.Errorf("on agent empty work: save event: %w", err)
-			}
-		}
-		if err := o.db.Save(task).Error; err != nil {
-			return fmt.Errorf("on agent empty work: save task after fast-track: %w", err)
+			return casTaskTransition(tx, task, task.Status, model.StatusTestingReady, "orchestrator",
+				"existing_work_completion", "top-level implementation already present", refs)
+		}); err != nil {
+			return fmt.Errorf("on agent empty work: accept existing implementation: %w", err)
 		}
 		o.emit("task_updated", task)
-		o.publishTaskTransition(task.ID.String(), preStatus, string(task.Status), "already merged, fast-tracked to done")
+		o.publishTaskTransition(task.ID.String(), preStatus, string(task.Status), "already merged, implementation accepted")
 		return nil
 	}
 
@@ -297,28 +290,15 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 			// Fast-track if supervisor determines work is already complete.
 			if isWorkAlreadyCompleteCategory(diagnosis.Category) {
 				task.Context["done_no_work"] = true
-				// Fast-track to DONE.
-				transitions := []model.TaskStatus{
-					model.StatusTestingReady,
-					model.StatusMerging,
-					model.StatusDone,
-				}
-				for _, target := range transitions {
-					if task.Status == target {
-						continue
+				if err := o.db.Transaction(func(tx *gorm.DB) error {
+					refs := map[string]any{"reason": "already-complete-no-work", "agent_id": ag.ID.String()}
+					if task.ParentTaskID != nil {
+						return casAcceptedExistingSubtask(tx, task, refs)
 					}
-					evt, tErr := state.TransitionTask(task, target, "orchestrator",
-						map[string]any{"reason": "already-complete-no-work"})
-					if tErr != nil {
-						continue
-					}
-					if err := o.db.Create(evt).Error; err != nil {
-						o.logger.Error("empty work fast-track event", "task_id", task.ID, "error", err)
-						break
-					}
-				}
-				if err := o.db.Save(task).Error; err != nil {
-					return fmt.Errorf("on agent empty work: save task after fast-track: %w", err)
+					return casTaskTransition(tx, task, task.Status, model.StatusTestingReady, "orchestrator",
+						"existing_work_completion", "supervisor confirmed implementation already complete", refs)
+				}); err != nil {
+					return fmt.Errorf("on agent empty work: accept supervisor completion: %w", err)
 				}
 				o.emit("task_updated", task)
 				return nil
@@ -426,7 +406,6 @@ func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task
 	}
 
 	failureReason := "merge into feature branch failed, agent branch preserved"
-	publishReason := "merge into feature branch failed"
 	if result != nil {
 		var parts []string
 		if len(result.Conflicts) > 0 {
@@ -437,22 +416,11 @@ func (o *Orchestrator) handleAgentMergeFailure(ag *model.Agent, task *model.Task
 		}
 		if len(parts) > 0 {
 			failureReason = fmt.Sprintf("merge into feature branch failed (%s), agent branch preserved", strings.Join(parts, "; "))
-			publishReason = fmt.Sprintf("merge into feature branch failed (%s)", strings.Join(parts, "; "))
 		}
 	}
 
-	evt, err := state.TransitionTask(task, model.StatusFailed, "orchestrator",
-		map[string]any{"reason": failureReason})
-	if err != nil {
+	if err := o.failTask(task, failureReason); err != nil {
 		o.logger.Warn("failed to transition task to failed after merge failure", "task_id", task.ID, "error", err)
-	} else {
-		if err := o.db.Save(task).Error; err != nil {
-			return fmt.Errorf("on agent completed: save task after merge failure: %w", err)
-		}
-		if err := o.db.Create(evt).Error; err != nil {
-			return fmt.Errorf("on agent completed: save merge-failure event: %w", err)
-		}
-		o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, publishReason)
 	}
 
 	// Check if this task belongs to an experiment variant

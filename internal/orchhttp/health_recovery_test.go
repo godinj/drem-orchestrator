@@ -306,9 +306,15 @@ func TestRecoverContaminatedBranchFailGateMarksTaskFailed(t *testing.T) {
 	var reloaded model.Task
 	require.NoError(t, db.First(&reloaded, "id = ?", task.ID).Error)
 	require.Equal(t, model.StatusFailed, reloaded.Status)
+	require.Equal(t, task.StateVersion+1, reloaded.StateVersion)
 	var events int64
 	require.NoError(t, db.Model(&model.TaskEvent{}).Where("task_id = ? AND event_type = ?", task.ID, "operator_recovery_applied").Count(&events).Error)
 	require.Equal(t, int64(1), events)
+	var transition model.TaskEvent
+	require.NoError(t, db.Where("task_id = ? AND event_type = ? AND new_value = ?",
+		task.ID, "status_change", model.StatusFailed).First(&transition).Error)
+	evidence, _ := transition.Details["evidence"].(map[string]any)
+	require.Equal(t, "operator_recovery", evidence["source"])
 }
 
 func TestRecoverUnsupportedBreakGlassCaseReturnsRefusalDTO(t *testing.T) {

@@ -12,6 +12,8 @@ func TestParseTaskStatus(t *testing.T) {
 		{"plan_review", StatusPlanReview},
 		{"in_progress", StatusInProgress},
 		{"testing_ready", StatusTestingReady},
+		{"verification_ready", StatusVerificationReady},
+		{"integration_ready", StatusIntegrationReady},
 		{"merging", StatusMerging},
 		{"paused", StatusPaused},
 		{"done", StatusDone},
@@ -101,10 +103,12 @@ func TestIsActionable(t *testing.T) {
 		{StatusInProgress, true},
 		{StatusTestWriting, true},
 		{StatusMerging, true},
+		{StatusTestingReady, true},
+		{StatusIntegrationReady, true},
 		{StatusTestReview, false},
 		{StatusRejected, false},
 		{StatusPlanReview, false},
-		{StatusTestingReady, false},
+		{StatusVerificationReady, false},
 		{StatusDone, false},
 		{StatusFailed, false},
 		{StatusPaused, false},
@@ -119,18 +123,20 @@ func TestIsActionable(t *testing.T) {
 	}
 }
 
-func TestIsHumanGate(t *testing.T) {
+func TestIsApprovalGate(t *testing.T) {
 	tests := []struct {
 		status TaskStatus
 		want   bool
 	}{
 		{StatusPlanReview, true},
 		{StatusTestReview, true},
-		{StatusTestingReady, true},
+		{StatusVerificationReady, true},
 		{StatusBacklog, false},
 		{StatusPlanning, false},
 		{StatusTestWriting, false},
 		{StatusInProgress, false},
+		{StatusTestingReady, false},
+		{StatusIntegrationReady, false},
 		{StatusMerging, false},
 		{StatusDone, false},
 		{StatusFailed, false},
@@ -139,9 +145,9 @@ func TestIsHumanGate(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(string(tc.status), func(t *testing.T) {
-			got := tc.status.IsHumanGate()
+			got := tc.status.IsApprovalGate()
 			if got != tc.want {
-				t.Errorf("IsHumanGate(%q) = %v, want %v", tc.status, got, tc.want)
+				t.Errorf("IsApprovalGate(%q) = %v, want %v", tc.status, got, tc.want)
 			}
 		})
 	}

@@ -157,6 +157,12 @@ func callToolAPI(cfg DirectToolAgentConfig, messages []toolChatMsg, tools []tool
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if cfg.GQCaller != "" {
+		httpReq.Header.Set("X-GQ-Caller", cfg.GQCaller)
+	}
+	if cfg.GQPriority != "" {
+		httpReq.Header.Set("X-GQ-Priority", cfg.GQPriority)
+	}
 
 	client := &http.Client{Timeout: cfg.Timeout}
 	resp, err := client.Do(httpReq)

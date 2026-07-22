@@ -10,7 +10,6 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
 // SetExperimentScheduling enables experiment-aware scheduling on the
@@ -115,12 +114,9 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 				"task_id", parent.ID, "count", len(oldSubtasks))
 		}
 
-		if evt, err := state.TransitionTask(parent, model.StatusPlanning, "orchestrator", map[string]any{"reason": "empty test subtasks, replanning"}); err != nil {
+		if err := o.transitionTaskAtomic(parent, model.StatusPlanning, "orchestrator", "test_subtask_recovery",
+			"empty test subtasks require replanning", nil); err != nil {
 			return fmt.Errorf("process test writing: replan transition: %w", err)
-		} else if saveErr := o.db.Save(parent).Error; saveErr != nil {
-			return fmt.Errorf("process test writing: save replan: %w", saveErr)
-		} else {
-			_ = o.db.Create(evt).Error
 		}
 		o.emit("task_replan", map[string]any{"task_id": parent.ID})
 		return nil
@@ -200,16 +196,9 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 			}
 		}
 
-		evt, err := state.TransitionTask(parent, model.StatusTestReview, "orchestrator",
-			map[string]any{"reason": "all test subtasks done"})
-		if err != nil {
+		if err := o.transitionTaskAtomic(parent, model.StatusTestReview, "orchestrator", "test_subtask_completion",
+			"all test subtasks completed", nil); err != nil {
 			return fmt.Errorf("process test writing: transition to test_review: %w", err)
-		}
-		if err := o.db.Save(parent).Error; err != nil {
-			return fmt.Errorf("process test writing: save parent: %w", err)
-		}
-		if err := o.db.Create(evt).Error; err != nil {
-			return fmt.Errorf("process test writing: save event: %w", err)
 		}
 		o.emit("test_review_ready", map[string]any{"task_id": parent.ID})
 		o.logger.Info("all test subtasks done, test review ready", "task_id", parent.ID)

@@ -860,7 +860,7 @@ func TestExecuteMerge_Success(t *testing.T) {
 	// Stub the MergeDispatcher to return a successful merge without
 	// spawning a real merger container.
 	o.mergeDispatcher = &stubMerger{results: []stubMergeResult{
-		{result: &MergeResult{Success: true, MergeCommit: "fake-merge-commit"}, err: nil},
+		{result: &MergeResult{Success: true, MergeCommit: strings.Repeat("c", 40)}, err: nil},
 	}}
 
 	taskID := uuid.New()
@@ -873,6 +873,7 @@ func TestExecuteMerge_Success(t *testing.T) {
 		WorktreeBranch: "feature/" + featureName,
 	}
 	o.db.Create(&task)
+	seedAuthorizedMergeEvidence(t, o, &task)
 
 	err := o.executeMerge(&task)
 	if err != nil {
@@ -919,8 +920,13 @@ func TestExecuteMerge_NoMerger(t *testing.T) {
 	o.db.Create(&task)
 
 	err := o.executeMerge(&task)
-	if err == nil {
-		t.Fatal("expected error when neither mergeDispatcher nor Spawner is configured")
+	if err != nil {
+		t.Fatalf("legacy merge task should rewind without dispatch: %v", err)
+	}
+	var updated model.Task
+	o.db.First(&updated, "id = ?", task.ID)
+	if updated.Status != model.StatusTestingReady {
+		t.Fatalf("legacy merge task status = %s, want testing_ready", updated.Status)
 	}
 }
 

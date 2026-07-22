@@ -41,11 +41,12 @@ func TestValidateTransition(t *testing.T) {
 		{"paused to planning is valid", model.StatusPaused, model.StatusPlanning, false},
 		{"paused to in_progress is valid", model.StatusPaused, model.StatusInProgress, false},
 
-		// REJECTED is terminal
+		// REJECTED work can only be archived as cancelled.
 		{"rejected to backlog is INVALID", model.StatusRejected, model.StatusBacklog, true},
 		{"rejected to planning is INVALID", model.StatusRejected, model.StatusPlanning, true},
 		{"rejected to in_progress is INVALID", model.StatusRejected, model.StatusInProgress, true},
 		{"rejected to test_writing is INVALID", model.StatusRejected, model.StatusTestWriting, true},
+		{"rejected to cancelled archive", model.StatusRejected, model.StatusCancelled, false},
 
 		// NEEDS_CLARIFICATION transitions
 		{"planning to needs_clarification is valid", model.StatusPlanning, model.StatusNeedsClarification, false},
@@ -62,18 +63,28 @@ func TestValidateTransition(t *testing.T) {
 		{"planning to failed", model.StatusPlanning, model.StatusFailed, false},
 		{"planning to paused", model.StatusPlanning, model.StatusPaused, false},
 		{"in_progress to testing_ready", model.StatusInProgress, model.StatusTestingReady, false},
+		{"in_progress to backlog recovery", model.StatusInProgress, model.StatusBacklog, false},
 		{"in_progress to failed", model.StatusInProgress, model.StatusFailed, false},
 		{"in_progress to paused", model.StatusInProgress, model.StatusPaused, false},
-		{"testing_ready to merging", model.StatusTestingReady, model.StatusMerging, false},
+		{"testing_ready to merging is invalid", model.StatusTestingReady, model.StatusMerging, true},
+		{"testing_ready to verification_ready", model.StatusTestingReady, model.StatusVerificationReady, false},
 		{"testing_ready to in_progress", model.StatusTestingReady, model.StatusInProgress, false},
 		{"testing_ready to planning", model.StatusTestingReady, model.StatusPlanning, false},
+		{"testing_ready to failed gate", model.StatusTestingReady, model.StatusFailed, false},
+		{"testing_ready to paused runner failure", model.StatusTestingReady, model.StatusPaused, false},
+		{"verification_ready to integration_ready", model.StatusVerificationReady, model.StatusIntegrationReady, false},
+		{"verification_ready to in_progress", model.StatusVerificationReady, model.StatusInProgress, false},
+		{"integration_ready to merging", model.StatusIntegrationReady, model.StatusMerging, false},
+		{"integration_ready to in_progress", model.StatusIntegrationReady, model.StatusInProgress, false},
 		{"merging to done", model.StatusMerging, model.StatusDone, false},
 		{"merging to failed", model.StatusMerging, model.StatusFailed, false},
 		{"done is terminal", model.StatusDone, model.StatusBacklog, true},
 		{"failed to backlog", model.StatusFailed, model.StatusBacklog, false},
 		{"failed to in_progress", model.StatusFailed, model.StatusInProgress, false},
+		{"failed to cancelled archive", model.StatusFailed, model.StatusCancelled, false},
 		{"failed to done is INVALID", model.StatusFailed, model.StatusDone, true},
 		{"cancelled is terminal", model.StatusCancelled, model.StatusBacklog, true},
+		{"active task may be cancelled", model.StatusPlanning, model.StatusCancelled, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,6 +110,8 @@ func TestValidTransitionsModelsEveryKnownTaskStatus(t *testing.T) {
 		model.StatusTestReview,
 		model.StatusInProgress,
 		model.StatusTestingReady,
+		model.StatusVerificationReady,
+		model.StatusIntegrationReady,
 		model.StatusMerging,
 		model.StatusPaused,
 		model.StatusDone,
@@ -158,6 +171,82 @@ func TestTransitionTask_TestWritingToTestReview(t *testing.T) {
 	}
 }
 
+func TestGuardedCompleteSubtaskCannotBypassTopLevelDelivery(t *testing.T) {
+	task := &model.Task{ID: uuid.New(), Status: model.StatusInProgress}
+	request := TransitionRequest{
+		Target: model.StatusDone, ExpectedStatus: model.StatusInProgress,
+		Evidence: Evidence{TaskID: task.ID, Actor: "orchestrator", Source: "test", Reason: "complete"},
+	}
+	if _, err := GuardedCompleteSubtask(task, request); err == nil {
+		t.Fatal("top-level task must not complete without delivery states")
+	}
+	parentID := uuid.New()
+	task.ParentTaskID = &parentID
+	if _, err := GuardedCompleteSubtask(task, request); err != nil {
+		t.Fatalf("subtask completion failed: %v", err)
+	}
+	if task.Status != model.StatusDone {
+		t.Fatalf("subtask status = %q, want done", task.Status)
+	}
+}
+
+func TestGuardedAcceptExistingSubtaskRequiresExplicitDedupEvidence(t *testing.T) {
+	parentID := uuid.New()
+	task := &model.Task{ID: uuid.New(), ParentTaskID: &parentID, Status: model.StatusBacklog}
+	request := TransitionRequest{
+		Target: model.StatusDone, ExpectedStatus: model.StatusBacklog,
+		Evidence: Evidence{TaskID: task.ID, Actor: "orchestrator", Source: "worker_completion", Reason: "already present"},
+	}
+	if _, err := GuardedAcceptExistingSubtask(task, request); !errors.Is(err, ErrMissingEvidence) {
+		t.Fatalf("wrong evidence source error = %v, want ErrMissingEvidence", err)
+	}
+	if task.Status != model.StatusBacklog {
+		t.Fatalf("rejected transition mutated task to %q", task.Status)
+	}
+
+	request.Evidence.Source = "dedup_existing_work"
+	event, err := GuardedAcceptExistingSubtask(task, request)
+	if err != nil {
+		t.Fatalf("accept existing subtask: %v", err)
+	}
+	if task.Status != model.StatusDone || event.OldValue != string(model.StatusBacklog) || event.NewValue != string(model.StatusDone) {
+		t.Fatalf("unexpected accepted transition: status=%q event=%#v", task.Status, event)
+	}
+
+	topLevel := &model.Task{ID: uuid.New(), Status: model.StatusBacklog}
+	request.Evidence.TaskID = topLevel.ID
+	if _, err := GuardedAcceptExistingSubtask(topLevel, request); err == nil {
+		t.Fatal("top-level task must not use existing-subtask acceptance")
+	}
+}
+
+func TestGuardedSupersedeCompletedTestSubtaskIsNarrow(t *testing.T) {
+	parentID := uuid.New()
+	task := &model.Task{ID: uuid.New(), ParentTaskID: &parentID, Phase: "test", Status: model.StatusDone}
+	request := TransitionRequest{
+		Target: model.StatusRejected, ExpectedStatus: model.StatusDone,
+		Evidence: Evidence{TaskID: task.ID, Actor: "codex:reviewer", Source: "review_gate", Reason: "tests need revision"},
+	}
+	event, err := GuardedSupersedeCompletedTestSubtask(task, request)
+	if err != nil {
+		t.Fatalf("supersede completed test subtask: %v", err)
+	}
+	if task.Status != model.StatusRejected || event.OldValue != string(model.StatusDone) || event.NewValue != string(model.StatusRejected) {
+		t.Fatalf("unexpected supersession: status=%q event=%#v", task.Status, event)
+	}
+
+	implementation := &model.Task{ID: uuid.New(), ParentTaskID: &parentID, Phase: "implementation", Status: model.StatusDone}
+	request.Evidence.TaskID = implementation.ID
+	if _, err := GuardedSupersedeCompletedTestSubtask(implementation, request); err == nil {
+		t.Fatal("completed implementation subtask must remain terminal")
+	}
+	topLevel := &model.Task{ID: uuid.New(), Phase: "test", Status: model.StatusDone}
+	request.Evidence.TaskID = topLevel.ID
+	if _, err := GuardedSupersedeCompletedTestSubtask(topLevel, request); err == nil {
+		t.Fatal("top-level done task must remain terminal")
+	}
+}
+
 func TestValidateTransition_TestWritingToPlanning(t *testing.T) {
 	// The recovery path for empty test subtasks requires test_writing → planning
 	// to be a valid transition so the orchestrator can send the task back
@@ -169,9 +258,9 @@ func TestValidateTransition_TestWritingToPlanning(t *testing.T) {
 	}
 }
 
-func TestNeedsClarification_IsHumanGate(t *testing.T) {
-	if !model.StatusNeedsClarification.IsHumanGate() {
-		t.Error("StatusNeedsClarification.IsHumanGate() = false, want true")
+func TestNeedsClarification_IsApprovalGate(t *testing.T) {
+	if !model.StatusNeedsClarification.IsApprovalGate() {
+		t.Error("StatusNeedsClarification.IsApprovalGate() = false, want true")
 	}
 }
 

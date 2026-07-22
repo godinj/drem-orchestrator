@@ -374,7 +374,8 @@ limit = 5
 		if evt.EventType == "status_change" && evt.NewValue == "failed" {
 			// Check the event details contain the constraint reason.
 			if evt.Details != nil {
-				if reason, ok := evt.Details["reason"]; ok {
+				evidence, _ := evt.Details["evidence"].(map[string]any)
+				if reason, ok := evidence["reason"]; ok {
 					if reasonStr, ok := reason.(string); ok && strings.Contains(reasonStr, "constraint violations") {
 						foundConstraintEvent = true
 					}

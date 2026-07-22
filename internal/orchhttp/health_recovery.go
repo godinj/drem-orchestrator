@@ -13,6 +13,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/godinj/drem-orchestrator/internal/orchestrator"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
 
@@ -846,7 +847,14 @@ func (s *Server) applyTaskRecovery(ctx context.Context, task model.Task, result 
 				return err
 			}
 		case "contaminated-branch-fail-gate":
-			if err := tx.Model(&model.Task{}).Where("id = ? AND status = ?", current.ID, current.Status).Updates(map[string]any{"status": model.StatusFailed, "updated_at": now}).Error; err != nil {
+			if current.Context == nil {
+				current.Context = make(model.JSONField)
+			}
+			current.Context["failure_reason"] = result.Evidence
+			if err := orchestrator.GuardedTaskTransitionTx(tx, &current, model.StatusFailed, actor,
+				"operator_recovery", "contaminated branch gate failed", map[string]any{
+					"policy": result.Policy, "action": result.Action, "evidence": result.Evidence,
+				}); err != nil {
 				return err
 			}
 		default:

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -13,6 +14,13 @@ import (
 )
 
 var profileNameRE = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func runtimeProjectName(bareRepoPath string) string {
+	if explicit := strings.TrimSpace(os.Getenv("DREM_PROJECT")); explicit != "" {
+		return explicit
+	}
+	return projectNameFromBareRepo(bareRepoPath)
+}
 
 // AgentConfig holds per-agent-type CLI flags for agent invocations.
 type AgentConfig struct {
@@ -108,6 +116,13 @@ type DirectToolAgentTOMLConfig struct {
 	ContextLimit  int           `toml:"context_limit"`
 }
 
+// DeliveryTOMLConfig selects the explicit delivery and verification policy.
+// Defaults preserve the all-in-one behavior while still using typed evidence.
+type DeliveryTOMLConfig struct {
+	IntegrationPolicy  model.IntegrationPolicy  `toml:"integration_policy"`
+	VerificationPolicy model.VerificationPolicy `toml:"verification_policy"`
+}
+
 // Config holds all runtime configuration for the Drem Orchestrator.
 type Config struct {
 	DatabasePath        string        `toml:"database_path"`
@@ -155,6 +170,7 @@ type Config struct {
 	Project         ProjectTOMLConfig         `toml:"project"`
 	Agents          AgentsConfig              `toml:"agents"`
 	DirectToolAgent DirectToolAgentTOMLConfig `toml:"direct_tool_agent"`
+	Delivery        DeliveryTOMLConfig        `toml:"delivery"`
 	Profiles        map[string]ProfileConfig  `toml:"profiles"`
 	// Tmux is accepted but ignored for one release so existing drem.toml
 	// files that still carry a [tmux] table keep loading. Prompt 17
@@ -224,6 +240,10 @@ func DefaultConfig() Config {
 		DispatchWindow:      ratelimit.DefaultDispatchWindow,
 		OrchHTTPPort:        "8080",
 		ProjectLanguage:     "go",
+		Delivery: DeliveryTOMLConfig{
+			IntegrationPolicy:  model.IntegrationAutoMerge,
+			VerificationPolicy: model.VerificationLocalAutomated,
+		},
 		Agents: AgentsConfig{
 			Classifier:            AgentConfig{Effort: "medium"},
 			Planner:               AgentConfig{Effort: "medium"},
@@ -255,6 +275,12 @@ func LoadConfig(path string) (Config, error) {
 
 	if err := toml.Unmarshal(data, &cfg); err != nil {
 		return cfg, fmt.Errorf("parse config %q: %w", path, err)
+	}
+	if _, err := model.ParseIntegrationPolicy(string(cfg.Delivery.IntegrationPolicy)); err != nil {
+		return cfg, fmt.Errorf("delivery.integration_policy: %w", err)
+	}
+	if _, err := model.ParseVerificationPolicy(string(cfg.Delivery.VerificationPolicy)); err != nil {
+		return cfg, fmt.Errorf("delivery.verification_policy: %w", err)
 	}
 
 	for name := range cfg.Profiles {

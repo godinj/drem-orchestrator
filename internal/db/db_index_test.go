@@ -100,3 +100,78 @@ func TestAttemptEventsMigrationCreatesQueryIndexes(t *testing.T) {
 		require.Contains(t, indexes, name)
 	}
 }
+
+func TestDeliveryArtifactMigrationCreatesCurrentArtifactConstraint(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "test.db")
+	gdb, err := db.Init(dbPath)
+	require.NoError(t, err)
+
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+
+	var definition string
+	require.NoError(t, sqlDB.QueryRow(`
+		SELECT sql FROM sqlite_master
+		WHERE type = 'index' AND name = 'idx_delivery_artifact_current_task'
+	`).Scan(&definition))
+	require.Contains(t, definition, "CREATE UNIQUE INDEX")
+	require.Contains(t, definition, "delivery_artifacts(task_id)")
+	require.Contains(t, definition, "WHERE invalidated_at IS NULL")
+}
+
+func TestTaskMigrationBackfillsStateVersion(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "legacy.db")
+	legacyGDB, err := db.Init(dbPath)
+	require.NoError(t, err)
+	legacy, err := legacyGDB.DB()
+	require.NoError(t, err)
+	_, err = legacy.Exec(`
+		INSERT INTO projects(id, name, bare_repo_path)
+		VALUES ('project-1', 'legacy', '/tmp/legacy.git');
+		INSERT INTO tasks(id, project_id, title, description, status)
+		VALUES ('task-1', 'project-1', 'legacy task', 'before state CAS', 'backlog');
+		ALTER TABLE tasks DROP COLUMN state_version;
+	`)
+	require.NoError(t, err)
+	require.NoError(t, legacy.Close())
+
+	gdb, err := db.Init(dbPath)
+	require.NoError(t, err)
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+
+	var version uint64
+	require.NoError(t, sqlDB.QueryRow(`SELECT state_version FROM tasks WHERE id = 'task-1'`).Scan(&version))
+	require.Equal(t, uint64(1), version)
+}
+
+func TestDatabaseStartupFailsClosedOnMultipleCurrentArtifacts(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "invalid-delivery.db")
+	gdb, err := db.Init(dbPath)
+	require.NoError(t, err)
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+
+	_, err = sqlDB.Exec(`
+		INSERT INTO projects(id, name, bare_repo_path)
+		VALUES ('project-1', 'invalid-delivery', '/tmp/invalid-delivery.git');
+		INSERT INTO tasks(id, project_id, title, description, status)
+		VALUES ('task-1', 'project-1', 'invalid delivery', 'duplicate current artifacts', 'verification_ready');
+		DROP INDEX idx_delivery_artifact_current_task;
+		INSERT INTO delivery_artifacts(
+			id, task_id, artifact_version, branch, commit_sha, base_branch, base_sha,
+			preliminary_evidence, creator_actor, creator_source, created_at, updated_at
+		) VALUES
+			('artifact-1', 'task-1', 1, 'feature/one', '1111111111111111111111111111111111111111',
+			 'master', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '{}', 'orchestrator', 'test', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+			('artifact-2', 'task-1', 2, 'feature/two', '2222222222222222222222222222222222222222',
+			 'master', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', '{}', 'orchestrator', 'test', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP);
+	`)
+	require.NoError(t, err)
+	require.NoError(t, sqlDB.Close())
+
+	_, err = db.Init(dbPath)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "create current delivery artifact index")
+}

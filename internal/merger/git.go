@@ -190,6 +190,14 @@ func headSHA(ctx context.Context, workDir string) (string, error) {
 	return strings.TrimSpace(out.Stdout), nil
 }
 
+func refSHA(ctx context.Context, workDir, ref string) (string, error) {
+	out := runGit(ctx, workDir, "rev-parse", ref)
+	if out.Err != nil {
+		return "", fmt.Errorf("git rev-parse %s: %w: %s", ref, out.Err, out.Combined())
+	}
+	return strings.TrimSpace(out.Stdout), nil
+}
+
 // remoteBranchExists returns true when `git ls-remote --heads origin <branch>`
 // reports a matching ref. Used for the idempotency check: a second merger
 // invocation on an already-merged branch short-circuits to success without

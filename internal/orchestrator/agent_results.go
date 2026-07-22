@@ -14,8 +14,8 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/experiment"
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // MaxEmptyWorkRetries is the maximum reschedule count after an agent commits nothing.
@@ -239,19 +239,10 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 							if err := o.db.Save(ag).Error; err != nil {
 								return fmt.Errorf("on agent completed: save agent after constraint fail: %w", err)
 							}
-							evt, err := state.TransitionTask(task, model.StatusFailed, "orchestrator",
-								map[string]any{"reason": "new constraint violations after merge", "violations": violations})
-							if err != nil {
+							if err := o.failTask(task, "new constraint violations after merge"); err != nil {
 								o.logger.Warn("failed to transition task after constraint violation", "task_id", task.ID, "error", err)
 								return nil
 							}
-							if err := o.db.Save(task).Error; err != nil {
-								return fmt.Errorf("on agent completed: save task after constraint fail: %w", err)
-							}
-							if err := o.db.Create(evt).Error; err != nil {
-								return fmt.Errorf("on agent completed: save constraint-fail event: %w", err)
-							}
-							o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "new constraint violations after merge")
 							return nil
 						}
 						if len(delta.Comparison.NewViolations) == 0 && len(delta.Comparison.Worsened) == 0 {
@@ -299,61 +290,53 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		}
 	}
 
-	// Update agent status to IDLE.
-	ag.Status = model.AgentIdle
-	ag.CurrentTaskID = nil
-	if err := o.db.Save(ag).Error; err != nil {
-		return fmt.Errorf("on agent completed: save agent: %w", err)
-	}
-
-	// Fast-track subtask through states to DONE.
-	transitions := []model.TaskStatus{
-		model.StatusTestingReady,
-		model.StatusMerging,
-		model.StatusDone,
-	}
-
-	// The subtask might be in IN_PROGRESS; fast-track through the rest.
-	preStatus := string(task.Status)
-	for _, target := range transitions {
-		if task.Status == target {
-			continue // already at or past this state
+	preStatus := task.Status
+	targetStatus := model.StatusDone
+	err := o.db.Transaction(func(tx *gorm.DB) error {
+		var currentTask model.Task
+		if err := tx.First(&currentTask, "id = ?", task.ID).Error; err != nil {
+			return err
 		}
-		evt, err := state.GuardedTransitionTask(task, state.TransitionRequest{
-			Target:         target,
-			Actor:          "orchestrator",
-			ExpectedStatus: task.Status,
-			Evidence: state.Evidence{
-				TaskID:           task.ID,
-				Actor:            "orchestrator",
-				Source:           "agent_completion",
-				Reason:           "auto-fasttrack",
-				NormalizedReason: "accepted_worker_completion",
-				Timestamp:        time.Now(),
-				References: map[string]any{
-					"agent_id": ag.ID.String(),
-					"target":   string(target),
-				},
-			},
-		})
-		if err != nil {
-			// If the transition is invalid, skip (state machine protects us).
-			o.logger.Debug("fast-track skip", "task_id", task.ID, "from", task.Status, "to", target, "error", err)
-			continue
+		currentTask.Context = task.Context
+		var currentAgent model.Agent
+		if err := tx.First(&currentAgent, "id = ?", ag.ID).Error; err != nil {
+			return err
 		}
-		if err := o.db.Create(evt).Error; err != nil {
-			return fmt.Errorf("on agent completed: save event: %w", err)
+		currentAgent.Config = ag.Config
+		currentAgent.CompletedAt = ag.CompletedAt
+		currentAgent.ExitReason = ag.ExitReason
+		currentAgent.TotalCostUSD = ag.TotalCostUSD
+		currentAgent.FinalContextPct = ag.FinalContextPct
+		currentAgent.TokensIn = ag.TokensIn
+		currentAgent.TokensOut = ag.TokensOut
+		currentAgent.Status = model.AgentIdle
+		currentAgent.CurrentTaskID = nil
+		if err := tx.Save(&currentAgent).Error; err != nil {
+			return err
 		}
-	}
-	task.AssignedAgentID = nil
-
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("on agent completed: save task: %w", err)
+		currentTask.AssignedAgentID = nil
+		if currentTask.ParentTaskID != nil {
+			if err := casSubtaskCompletion(tx, &currentTask, "orchestrator", map[string]any{"agent_id": ag.ID.String()}); err != nil {
+				return err
+			}
+		} else {
+			targetStatus = model.StatusTestingReady
+			if err := casTaskTransition(tx, &currentTask, currentTask.Status, targetStatus, "orchestrator",
+				"agent_completion", "top-level worker completion accepted", map[string]any{"agent_id": ag.ID.String()}); err != nil {
+				return err
+			}
+		}
+		*task = currentTask
+		*ag = currentAgent
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("on agent completed: commit completion: %w", err)
 	}
 
 	o.emit("task_updated", task)
-	o.publishTaskTransition(task.ID.String(), preStatus, string(task.Status), "subtask completed, fast-tracked to done")
-	o.logger.Info("subtask completed", "task_id", task.ID, "agent_id", ag.ID)
+	o.publishTaskTransition(task.ID.String(), string(preStatus), string(targetStatus), "worker completion accepted")
+	o.logger.Info("worker completion accepted", "task_id", task.ID, "agent_id", ag.ID, "target", targetStatus)
 
 	// Check if parent's subtasks are all done.
 	if task.ParentTaskID != nil {
@@ -528,19 +511,14 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 	// Transition to PLAN_REVIEW. Keep AssignedAgentID so the TUI can still
 	// jump to the agent's tmux session for plan review. The assignment is
 	// cleared when the plan is approved or rejected.
-	evt, err := state.TransitionTask(task, model.StatusPlanReview, "orchestrator", nil)
-	if err != nil {
+	oldStatus := task.Status
+	if err := o.transitionTaskAtomic(task, model.StatusPlanReview, "orchestrator", "planner_completion",
+		"planner produced a reviewable plan", nil); err != nil {
 		return fmt.Errorf("on planner completed: transition to plan_review: %w", err)
-	}
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("on planner completed: save task: %w", err)
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return fmt.Errorf("on planner completed: save event: %w", err)
 	}
 
 	o.emit("plan_ready", map[string]any{"task_id": task.ID, "subtask_count": len(rawPlan.Subtasks)})
-	o.publishTaskTransition(task.ID.String(), evt.OldValue, evt.NewValue, "plan ready for review")
+	o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "plan ready for review")
 	o.logger.Info("plan ready for review", "task_id", task.ID, "subtasks", len(rawPlan.Subtasks))
 	return nil
 }
@@ -601,7 +579,6 @@ func (o *Orchestrator) onFixerCompleted(ag *model.Agent, task *model.Task) error
 			if task.AssignedAgentID != nil && *task.AssignedAgentID == ag.ID {
 				task.AssignedAgentID = nil
 			}
-			task.Status = model.StatusMerging
 			task.Context[contextKeyMergeConflictResolverState] = "completed"
 			if err := o.db.Save(task).Error; err != nil {
 				return fmt.Errorf("on fixer completed: save resolver task: %w", err)

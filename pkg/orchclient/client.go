@@ -36,6 +36,20 @@ const DefaultTimeout = 30 * time.Second
 type Client struct {
 	baseURL string
 	http    *http.Client
+	token   string
+	actor   string
+}
+
+// WithToken configures the Bearer token used for state-changing requests.
+func (c *Client) WithToken(token string) *Client {
+	c.token = strings.TrimSpace(token)
+	return c
+}
+
+// WithActor configures the stable identity attached to mutation requests.
+func (c *Client) WithActor(actor string) *Client {
+	c.actor = strings.TrimSpace(actor)
+	return c
 }
 
 // New builds a Client pointed at baseURL (for example

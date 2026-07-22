@@ -4,19 +4,15 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
 // reconcileAlreadyMergedFeatures finds FAILED parent tasks whose feature
-// branch is already an ancestor of the default branch (i.e. was merged
-// manually or by a supervisor). These tasks are transitioned directly to DONE
-// since their work is already on the default branch.
+// branch provably advanced from its recorded creation base and is already an
+// ancestor of the default branch. It routes those tasks back through delivery
+// verification; integration inferred from branch topology is not completion.
 func (o *Orchestrator) reconcileAlreadyMergedFeatures() (int, error) {
 	var tasks []model.Task
 	if err := o.db.Where(
@@ -45,20 +41,13 @@ func (o *Orchestrator) reconcileAlreadyMergedFeatures() (int, error) {
 			continue // not merged yet
 		}
 
-		// A branch created from HEAD with zero commits is also an ancestor of
-		// HEAD. If the task failed specifically because no commits were produced,
-		// do not let this reconciler mask the startup/empty-work failure as done.
+		// An ancestor relation alone is insufficient: an empty branch created
+		// from the default branch is also an ancestor. Require the typed creation
+		// base and prove that this feature ref advanced beyond it.
 		branchHead, branchErr := gitexec.RunGit(context.Background(), mainWorktree, "rev-parse", task.WorktreeBranch)
-		defaultHead, headErr := gitexec.RunGit(context.Background(), mainWorktree, "rev-parse", "HEAD")
-		if branchErr == nil && headErr == nil && strings.TrimSpace(branchHead) == strings.TrimSpace(defaultHead) {
-			var emptyWorkFailures int64
-			o.db.Model(&model.TaskEvent{}).Where(
-				"task_id = ? AND new_value = ? AND details LIKE ?",
-				task.ID, string(model.StatusFailed), "%without producing commits%",
-			).Count(&emptyWorkFailures)
-			if emptyWorkFailures > 0 {
-				continue
-			}
+		if branchErr != nil || task.WorktreeBaseSHA == "" ||
+			strings.TrimSpace(branchHead) == strings.TrimSpace(task.WorktreeBaseSHA) {
+			continue
 		}
 
 		// Guard: if the task has subtasks but none completed, the feature
@@ -76,96 +65,51 @@ func (o *Orchestrator) reconcileAlreadyMergedFeatures() (int, error) {
 			}
 		}
 
-		o.logger.Info("reconcile: failed task's feature branch already merged to default, transitioning to done",
+		o.logger.Info("reconcile: failed task's feature branch already merged; routing through delivery verification",
 			"task_id", task.ID, "branch", task.WorktreeBranch)
-
-		// Bypass the state machine (failed -> done is not a valid transition)
-		// since the work is provably on the default branch.
-		now := time.Now()
-		event := &model.TaskEvent{
-			ID:        uuid.New(),
-			TaskID:    task.ID,
-			EventType: "status_change",
-			OldValue:  string(task.Status),
-			NewValue:  string(model.StatusDone),
-			Details:   model.JSONField{"reason": "reconcile-already-merged-to-default"},
-			Actor:     "orchestrator",
-			CreatedAt: now,
-		}
-		task.Status = model.StatusDone
-		task.UpdatedAt = now
-
-		if err := o.db.Save(task).Error; err != nil {
-			o.logger.Error("reconcile: save already-merged task", "task_id", task.ID, "error", err)
+		if err := o.transitionTaskAtomic(task, model.StatusInProgress, "orchestrator", "out_of_band_merge_recovery",
+			"feature branch is already present on default; verification still required", nil); err != nil {
+			o.logger.Error("reconcile: recover already-merged task", "task_id", task.ID, "error", err)
 			continue
 		}
-		if err := o.db.Create(event).Error; err != nil {
-			o.logger.Error("reconcile: save event for already-merged task", "task_id", task.ID, "error", err)
-			continue
-		}
-
-		// Clean up the feature worktree since the branch is merged.
-		featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
-		if featureName != "" {
-			if err := o.worktree.RemoveFeature(featureName); err != nil {
-				o.logger.Warn("reconcile: cleanup merged feature worktree", "task_id", task.ID, "error", err)
+		if totalSubs == 0 {
+			if err := o.transitionTaskAtomic(task, model.StatusTestingReady, "orchestrator", "out_of_band_merge_recovery",
+				"already-integrated implementation requires evidence freeze", nil); err != nil {
+				o.logger.Error("reconcile: prepare already-merged task delivery", "task_id", task.ID, "error", err)
+				continue
 			}
+		} else if err := o.checkFeatureCompletion(task); err != nil {
+			o.logger.Error("reconcile: evaluate already-merged parent", "task_id", task.ID, "error", err)
+			continue
 		}
 
 		o.emit("task_updated", task)
-		o.publishTaskTransition(task.ID.String(), string(model.StatusFailed), string(model.StatusDone), "reconcile: feature already merged to default")
+		o.publishTaskTransition(task.ID.String(), string(model.StatusFailed), string(task.Status), "reconcile: feature already merged; verification required")
 		fixed++
 	}
 	return fixed, nil
 }
 
-func (o *Orchestrator) featureBranchAlreadyMergedToDefault(branch string) bool {
+func (o *Orchestrator) featureBranchAlreadyMergedToDefault(task *model.Task) bool {
+	if task == nil || task.WorktreeBranch == "" || task.WorktreeBaseSHA == "" {
+		return false
+	}
 	mainWorktree, err := o.worktree.MainWorktreePath()
 	if err != nil {
 		return false
 	}
+	branchHead, err := gitexec.RunGit(context.Background(), mainWorktree, "rev-parse", task.WorktreeBranch)
+	if err != nil {
+		return false
+	}
+	if strings.TrimSpace(branchHead) == strings.TrimSpace(task.WorktreeBaseSHA) {
+		return false
+	}
 	_, err = gitexec.RunGit(
 		context.Background(), mainWorktree,
-		"merge-base", "--is-ancestor", branch, "HEAD",
+		"merge-base", "--is-ancestor", task.WorktreeBranch, "HEAD",
 	)
 	return err == nil
-}
-
-func (o *Orchestrator) markFeatureAlreadyMergedDone(task *model.Task) error {
-	o.logger.Info("feature branch already merged to default, transitioning task to done",
-		"task_id", task.ID, "branch", task.WorktreeBranch)
-
-	now := time.Now()
-	event := &model.TaskEvent{
-		ID:        uuid.New(),
-		TaskID:    task.ID,
-		EventType: "status_change",
-		OldValue:  string(task.Status),
-		NewValue:  string(model.StatusDone),
-		Details:   model.JSONField{"reason": "reconcile-already-merged-to-default"},
-		Actor:     "orchestrator",
-		CreatedAt: now,
-	}
-	task.Status = model.StatusDone
-	task.UpdatedAt = now
-
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("mark already-merged task done: save: %w", err)
-	}
-	if err := o.db.Create(event).Error; err != nil {
-		return fmt.Errorf("mark already-merged task done: save event: %w", err)
-	}
-
-	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
-	if featureName != "" {
-		if err := o.worktree.RemoveFeature(featureName); err != nil {
-			o.logger.Warn("cleanup merged feature worktree", "task_id", task.ID, "error", err)
-		}
-	}
-
-	o.emit("task_updated", task)
-	o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "reconcile: feature already merged to default")
-	return nil
 }
 
 // parentReconcilePolicy defines how to reconcile parent tasks in a specific
@@ -251,18 +195,12 @@ func (o *Orchestrator) reconcileCompletedParents() (int, error) {
 // recoverFailedParent transitions a failed parent to in_progress via the state
 // machine so checkFeatureCompletion can evaluate quality gates.
 func recoverFailedParent(o *Orchestrator, parent *model.Task) error {
-	evt, err := state.TransitionTask(parent, model.StatusInProgress, "orchestrator",
-		map[string]any{"reason": "reconcile-failed-parent-all-subtasks-done"})
-	if err != nil {
+	oldStatus := parent.Status
+	if err := o.transitionTaskAtomic(parent, model.StatusInProgress, "orchestrator", "parent_reconciliation",
+		"failed parent has completed subtasks and requires delivery evaluation", nil); err != nil {
 		return err
 	}
-	if err := o.db.Save(parent).Error; err != nil {
-		return err
-	}
-	if err := o.db.Create(evt).Error; err != nil {
-		return err
-	}
-	o.publishTaskTransition(parent.ID.String(), evt.OldValue, evt.NewValue, "reconcile: recovering failed parent")
+	o.publishTaskTransition(parent.ID.String(), string(oldStatus), string(parent.Status), "reconcile: recovering failed parent")
 	return nil
 }
 

@@ -78,6 +78,18 @@ func postIngestRecord(t *testing.T, baseURL string, record map[string]any) {
 	require.Equal(t, http.StatusAccepted, resp.StatusCode)
 }
 
+func postMutation(t *testing.T, url, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("X-Drem-Actor", "codex:test")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
 func TestListProjectsReturnsProjectInfo(t *testing.T) {
 	_, ts, _ := setupHTTPTest(t, nil)
 
@@ -242,9 +254,8 @@ func TestListTasksUnknownProjectReturns404(t *testing.T) {
 func TestCreateTaskCreatesClassifyingTask(t *testing.T) {
 	srv, ts, project := setupHTTPTest(t, nil)
 
-	resp, err := http.Post(ts.URL+"/projects/"+projectName+"/tasks", "application/json",
-		strings.NewReader(`{"title":"File supported task","description":"Create through orchestrator HTTP","actor":"kyle"}`))
-	require.NoError(t, err)
+	resp := postMutation(t, ts.URL+"/projects/"+projectName+"/tasks",
+		`{"title":"File supported task","description":"Create through orchestrator HTTP","actor":"kyle"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
@@ -269,9 +280,8 @@ func TestCreateTaskCreatesClassifyingTask(t *testing.T) {
 func TestCreateTaskDefaultsActorToCSuite(t *testing.T) {
 	srv, ts, _ := setupHTTPTest(t, nil)
 
-	resp, err := http.Post(ts.URL+"/projects/"+projectName+"/tasks", "application/json",
-		strings.NewReader(`{"title":"Default actor","description":"No actor supplied"}`))
-	require.NoError(t, err)
+	resp := postMutation(t, ts.URL+"/projects/"+projectName+"/tasks",
+		`{"title":"Default actor","description":"No actor supplied"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode)
 
@@ -286,15 +296,11 @@ func TestCreateTaskDefaultsActorToCSuite(t *testing.T) {
 func TestCreateTaskMissingTitleOrDescriptionReturns400(t *testing.T) {
 	_, ts, _ := setupHTTPTest(t, nil)
 
-	resp, err := http.Post(ts.URL+"/projects/"+projectName+"/tasks", "application/json",
-		strings.NewReader(`{"description":"missing title"}`))
-	require.NoError(t, err)
+	resp := postMutation(t, ts.URL+"/projects/"+projectName+"/tasks", `{"description":"missing title"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 
-	resp, err = http.Post(ts.URL+"/projects/"+projectName+"/tasks", "application/json",
-		strings.NewReader(`{"title":"missing description"}`))
-	require.NoError(t, err)
+	resp = postMutation(t, ts.URL+"/projects/"+projectName+"/tasks", `{"title":"missing description"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
@@ -302,9 +308,7 @@ func TestCreateTaskMissingTitleOrDescriptionReturns400(t *testing.T) {
 func TestCreateTaskWrongProjectReturns404(t *testing.T) {
 	_, ts, _ := setupHTTPTest(t, nil)
 
-	resp, err := http.Post(ts.URL+"/projects/nope/tasks", "application/json",
-		strings.NewReader(`{"title":"x","description":"y"}`))
-	require.NoError(t, err)
+	resp := postMutation(t, ts.URL+"/projects/nope/tasks", `{"title":"x","description":"y"}`)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }

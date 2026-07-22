@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -59,6 +61,66 @@ func createLifecycleTask(t *testing.T, db *gorm.DB, projectID uuid.UUID, title s
 		t.Fatalf("create task %q: %v", title, err)
 	}
 	return task
+}
+
+func authorizeTestDelivery(t *testing.T, o *Orchestrator, taskID uuid.UUID) (*model.DeliveryArtifact, *model.VerificationRecord, *model.IntegrationAuthorization) {
+	t.Helper()
+	bareRepo := setupTestRepoWithMainBranch(t)
+	featureName := "test-" + taskID.String()[:8]
+	featureDir := createFeatureWorktree(t, bareRepo, featureName)
+	writeFile(t, featureDir, "delivery.txt", "lifecycle delivery")
+	runGitCmd(t, featureDir, "add", "delivery.txt")
+	runGitCmd(t, featureDir, "commit", "-m", "lifecycle delivery")
+	branch := "feature/" + featureName
+	commitSHA := runGitCmd(t, featureDir, "rev-parse", "HEAD")
+	baseSHA := runGitCmd(t, featureDir, "rev-parse", "main")
+	o.worktree = NewHostManager(bareRepo, "main").AsInterface()
+	var deliveryTask model.Task
+	if err := o.db.First(&deliveryTask, "id = ?", taskID).Error; err != nil {
+		t.Fatalf("load delivery task: %v", err)
+	}
+	deliveryTask.WorktreeBranch = branch
+	deliveryTask.WorktreeBaseSHA = baseSHA
+	if err := o.db.Save(&deliveryTask).Error; err != nil {
+		t.Fatalf("save delivery task refs: %v", err)
+	}
+	now := time.Now()
+	evidence := []CommandEvidence{{Command: "go test ./...", Passed: true, StartedAt: now, FinishedAt: now}}
+	artifact, err := o.FreezeDeliveryArtifact(taskID, ArtifactSnapshot{
+		Branch: branch, CommitSHA: commitSHA, BaseBranch: "main", BaseSHA: baseSHA,
+		GateWorkspaceID: "test-gate-workspace", EnvironmentFingerprint: "test-environment",
+		PreliminaryEvidence: evidence, Actor: "orchestrator", Source: "test",
+	})
+	if err != nil {
+		t.Fatalf("freeze delivery: %v", err)
+	}
+	var verificationReady model.Task
+	if err := o.db.First(&verificationReady, "id = ?", taskID).Error; err != nil {
+		t.Fatalf("load verification-ready task: %v", err)
+	}
+	verification, err := o.VerifyDelivery(VerifyDeliveryRequest{
+		TaskID: taskID, ObservedStateVersion: verificationReady.StateVersion,
+		ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
+		Actor: "test:verifier", Source: "test", EnvironmentFingerprint: "test",
+		CommandEvidence: evidence, Result: model.VerificationPassed, IdempotencyKey: "verify-" + taskID.String(),
+	})
+	if err != nil {
+		t.Fatalf("verify delivery: %v", err)
+	}
+	var integrationReady model.Task
+	if err := o.db.First(&integrationReady, "id = ?", taskID).Error; err != nil {
+		t.Fatalf("load integration-ready task: %v", err)
+	}
+	auth, err := o.AuthorizeIntegration(IntegrateDeliveryRequest{
+		TaskID: taskID, ObservedStateVersion: integrationReady.StateVersion,
+		ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
+		VerificationRecordID: verification.ID, Actor: "test:integrator", Source: "test",
+		IdempotencyKey: "integrate-" + taskID.String(),
+	})
+	if err != nil {
+		t.Fatalf("authorize integration: %v", err)
+	}
+	return artifact, verification, auth
 }
 
 // makePlan creates a valid plan JSONField with the given number of subtasks.
@@ -526,14 +588,14 @@ func TestHandleTestPassed(t *testing.T) {
 
 	task := createLifecycleTask(t, db, o.projectID, "test-passed", model.StatusTestingReady, nil)
 
-	if err := o.HandleTestPassed(task.ID); err != nil {
-		t.Fatalf("HandleTestPassed: unexpected error: %v", err)
+	if err := o.HandleTestPassed(task.ID); err == nil {
+		t.Fatal("HandleTestPassed: expected deprecated transition error")
 	}
 
 	var updated model.Task
 	db.First(&updated, "id = ?", task.ID)
-	if updated.Status != model.StatusMerging {
-		t.Errorf("expected status %q, got %q", model.StatusMerging, updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected status %q, got %q", model.StatusTestingReady, updated.Status)
 	}
 }
 
@@ -553,14 +615,14 @@ func TestHandleTestFailed(t *testing.T) {
 
 	task := createLifecycleTask(t, db, o.projectID, "test-failed", model.StatusTestingReady, makePlan(1))
 
-	if err := o.HandleTestFailed(task.ID); err != nil {
-		t.Fatalf("HandleTestFailed: unexpected error: %v", err)
+	if err := o.HandleTestFailed(task.ID); err == nil {
+		t.Fatal("HandleTestFailed: expected deprecated transition error")
 	}
 
 	var updated model.Task
 	db.First(&updated, "id = ?", task.ID)
-	if updated.Status != model.StatusInProgress {
-		t.Errorf("expected status %q, got %q", model.StatusInProgress, updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Errorf("expected status %q, got %q", model.StatusTestingReady, updated.Status)
 	}
 }
 
@@ -941,9 +1003,7 @@ func TestTaskLifecycle_TestPassedToMerging(t *testing.T) {
 
 	task := createLifecycleTask(t, db, o.projectID, "test-to-merge", model.StatusTestingReady, nil)
 
-	if err := o.HandleTestPassed(task.ID); err != nil {
-		t.Fatalf("HandleTestPassed: %v", err)
-	}
+	authorizeTestDelivery(t, o, task.ID)
 
 	var updated model.Task
 	db.First(&updated, "id = ?", task.ID)
@@ -1022,9 +1082,7 @@ func TestTaskLifecycle_HappyPathToDone(t *testing.T) {
 		t.Fatalf("expected testing_ready, got %s", afterTestingReady.Status)
 	}
 
-	if err := o.HandleTestPassed(task.ID); err != nil {
-		t.Fatalf("HandleTestPassed: %v", err)
-	}
+	_, _, _ = authorizeTestDelivery(t, o, task.ID)
 
 	var afterMerging model.Task
 	if err := db.First(&afterMerging, "id = ?", task.ID).Error; err != nil {
@@ -1034,9 +1092,8 @@ func TestTaskLifecycle_HappyPathToDone(t *testing.T) {
 		t.Fatalf("expected merging, got %s", afterMerging.Status)
 	}
 
-	o.SetMergeDispatcher(&stubMerger{results: []stubMergeResult{{result: &MergeResult{Success: true, MergeCommit: "abc123"}, err: nil}}})
-	if err := o.executeMerge(&afterMerging); err != nil {
-		t.Fatalf("executeMerge: %v", err)
+	if _, err := o.completeAuthorizedMerge(task.ID, strings.Repeat("c", 40)); err != nil {
+		t.Fatalf("completeAuthorizedMerge: %v", err)
 	}
 
 	var final model.Task
@@ -1053,8 +1110,28 @@ func TestTaskLifecycle_TestFailedBackToPlanning(t *testing.T) {
 
 	task := createLifecycleTask(t, db, o.projectID, "test-fail-replan", model.StatusTestingReady, makePlan(1))
 
-	if err := o.HandleTestFailed(task.ID); err != nil {
-		t.Fatalf("HandleTestFailed: %v", err)
+	now := time.Now()
+	artifact, err := o.FreezeDeliveryArtifact(task.ID, ArtifactSnapshot{
+		Branch: "feature/test-fail", CommitSHA: strings.Repeat("a", 40), BaseBranch: "main", BaseSHA: strings.Repeat("b", 40),
+		GateWorkspaceID: "test-gate-workspace", EnvironmentFingerprint: "test-environment",
+		PreliminaryEvidence: []CommandEvidence{{Command: "go test ./...", Passed: true, StartedAt: now, FinishedAt: now}},
+		Actor:               "orchestrator", Source: "test",
+	})
+	if err != nil {
+		t.Fatalf("freeze delivery: %v", err)
+	}
+	var verificationReady model.Task
+	db.First(&verificationReady, "id = ?", task.ID)
+	verifiedAt := time.Now()
+	_, err = o.VerifyDelivery(VerifyDeliveryRequest{
+		TaskID: task.ID, ObservedStateVersion: verificationReady.StateVersion,
+		ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
+		Actor: "test:verifier", Source: "test", EnvironmentFingerprint: "test",
+		CommandEvidence: []CommandEvidence{{Command: "native verify", Passed: false, ExitCode: 1, StartedAt: verifiedAt, FinishedAt: verifiedAt}},
+		Result:          model.VerificationFailed, IdempotencyKey: "failed-" + task.ID.String(),
+	})
+	if err != nil {
+		t.Fatalf("failed verification: %v", err)
 	}
 
 	var updated model.Task

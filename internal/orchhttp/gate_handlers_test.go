@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -40,6 +41,8 @@ type fakeGateOrch struct {
 	ErrTestFailed         error
 	ErrClarification      error
 	ErrRetryTask          error
+	ErrVerifyDelivery     error
+	ErrIntegrateDelivery  error
 
 	// Call log for assertion.
 	Calls []fakeCall
@@ -63,12 +66,20 @@ func (f *fakeGateOrch) HandlePlanApproved(taskID uuid.UUID) error {
 	return f.transition(taskID, model.StatusInProgress)
 }
 
+func (f *fakeGateOrch) HandlePlanApprovedBy(taskID uuid.UUID, actor string) error {
+	return f.HandlePlanApproved(taskID)
+}
+
 func (f *fakeGateOrch) HandlePlanRejected(taskID uuid.UUID) error {
 	f.logCall("HandlePlanRejected", taskID, "")
 	if f.ErrPlanRejected != nil {
 		return f.ErrPlanRejected
 	}
 	return f.transition(taskID, model.StatusRejected)
+}
+
+func (f *fakeGateOrch) HandlePlanRejectedBy(taskID uuid.UUID, actor string) error {
+	return f.HandlePlanRejected(taskID)
 }
 
 func (f *fakeGateOrch) HandleTestReviewApproved(taskID uuid.UUID) error {
@@ -79,12 +90,20 @@ func (f *fakeGateOrch) HandleTestReviewApproved(taskID uuid.UUID) error {
 	return f.transition(taskID, model.StatusInProgress)
 }
 
+func (f *fakeGateOrch) HandleTestReviewApprovedBy(taskID uuid.UUID, actor string) error {
+	return f.HandleTestReviewApproved(taskID)
+}
+
 func (f *fakeGateOrch) HandleTestReviewRejected(taskID uuid.UUID, feedback string) error {
 	f.logCall("HandleTestReviewRejected", taskID, feedback)
 	if f.ErrTestReviewRejected != nil {
 		return f.ErrTestReviewRejected
 	}
 	return f.transition(taskID, model.StatusTestWriting)
+}
+
+func (f *fakeGateOrch) HandleTestReviewRejectedBy(taskID uuid.UUID, feedback, actor string) error {
+	return f.HandleTestReviewRejected(taskID, feedback)
 }
 
 func (f *fakeGateOrch) HandleTestPassed(taskID uuid.UUID) error {
@@ -111,12 +130,61 @@ func (f *fakeGateOrch) HandleClarificationAnswer(taskID uuid.UUID, answer string
 	return f.transition(taskID, model.StatusPlanning)
 }
 
+func (f *fakeGateOrch) HandleClarificationAnswerBy(taskID uuid.UUID, answer, actor string) error {
+	return f.HandleClarificationAnswer(taskID, answer)
+}
+
 func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error {
 	f.logCall("RetryTask", taskID, "")
 	if f.ErrRetryTask != nil {
 		return f.ErrRetryTask
 	}
 	return f.transition(taskID, model.StatusBacklog)
+}
+
+func (f *fakeGateOrch) VerifyDelivery(req orchestrator.VerifyDeliveryRequest) (*model.VerificationRecord, error) {
+	f.logCall("VerifyDelivery", req.TaskID, req.Actor)
+	if f.ErrVerifyDelivery != nil {
+		return nil, f.ErrVerifyDelivery
+	}
+	target := model.StatusIntegrationReady
+	if req.Result == model.VerificationFailed {
+		target = model.StatusInProgress
+	}
+	if err := f.transition(req.TaskID, target); err != nil {
+		return nil, err
+	}
+	return &model.VerificationRecord{
+		ID: uuid.New(), TaskID: req.TaskID, DeliveryArtifactID: uuid.New(),
+		ArtifactVersion: req.ArtifactVersion, CommitSHA: req.CommitSHA,
+		VerifierActor: req.Actor, EnvironmentFingerprint: req.EnvironmentFingerprint,
+		Result: req.Result, Notes: req.Notes, CreatedAt: time.Now(),
+	}, nil
+}
+
+func (f *fakeGateOrch) AuthorizeIntegration(req orchestrator.IntegrateDeliveryRequest) (*model.IntegrationAuthorization, error) {
+	f.logCall("AuthorizeIntegration", req.TaskID, req.Actor)
+	if f.ErrIntegrateDelivery != nil {
+		return nil, f.ErrIntegrateDelivery
+	}
+	if err := f.transition(req.TaskID, model.StatusMerging); err != nil {
+		return nil, err
+	}
+	return &model.IntegrationAuthorization{
+		ID: uuid.New(), TaskID: req.TaskID, ArtifactVersion: req.ArtifactVersion,
+		CommitSHA: req.CommitSHA, VerificationRecordID: req.VerificationRecordID,
+	}, nil
+}
+
+func (f *fakeGateOrch) RequestDeliveryRework(req orchestrator.RequestDeliveryReworkRequest) (*model.DeliveryReworkRecord, error) {
+	f.logCall("RequestDeliveryRework", req.TaskID, req.Reason)
+	if err := f.transition(req.TaskID, model.StatusInProgress); err != nil {
+		return nil, err
+	}
+	return &model.DeliveryReworkRecord{
+		ID: uuid.New(), TaskID: req.TaskID, ArtifactVersion: req.ArtifactVersion,
+		CommitSHA: req.CommitSHA, Actor: req.Actor, Reason: req.Reason,
+	}, nil
 }
 
 // transition mutates the task's Status directly on the underlying DB. Real
@@ -156,6 +224,8 @@ func doJSON(t *testing.T, method, url, body string) (*http.Response, []byte) {
 		r.Header.Set("Content-Type", "application/json")
 	}
 	require.NoError(t, err)
+	r.Header.Set("Authorization", "Bearer secret-token")
+	r.Header.Set("X-Drem-Actor", "codex:test-thread")
 	resp, err := http.DefaultClient.Do(r)
 	require.NoError(t, err)
 	defer resp.Body.Close()
@@ -200,6 +270,18 @@ func commentURL(base, task string) string {
 func auditURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/audit-events", base, projectName, task)
 }
+func artifactURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/artifact", base, projectName, task)
+}
+func verifyURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/verify", base, projectName, task)
+}
+func integrateURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/integrate", base, projectName, task)
+}
+func reworkURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/request-rework", base, projectName, task)
+}
 
 // ------------------------------------------------------------------
 // 1. Approve happy path, plan_review → in_progress.
@@ -222,6 +304,18 @@ func TestApprovePlanReviewHappy(t *testing.T) {
 	require.Equal(t, task.ID, fake.Calls[0].TaskID)
 }
 
+func TestMutationRequiresProjectBearerToken(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "protected", model.StatusPlanReview)
+	req, err := http.NewRequest(http.MethodPost, approveURL(base, task.ID.String()), nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	require.Empty(t, fake.Calls)
+}
+
 // ------------------------------------------------------------------
 // 2. Approve happy path, test_review → in_progress.
 // ------------------------------------------------------------------
@@ -238,6 +332,16 @@ func TestApproveTestReviewHappy(t *testing.T) {
 
 	require.Len(t, fake.Calls, 1)
 	require.Equal(t, "HandleTestReviewApproved", fake.Calls[0].Method)
+}
+
+func TestApproveTestingReadyFailsClosed(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "verify me", model.StatusTestingReady)
+
+	resp, body := doJSON(t, http.MethodPost, approveURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "testing_ready")
+	require.Empty(t, fake.Calls)
 }
 
 // ------------------------------------------------------------------
@@ -320,6 +424,16 @@ func TestRejectTestReviewMissingBody(t *testing.T) {
 	require.Equal(t, "", fake.Calls[0].Body)
 }
 
+func TestRejectTestingReadyFailsClosed(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "needs rework", model.StatusTestingReady)
+
+	resp, body := doJSON(t, http.MethodPost, rejectURL(base, task.ID.String()), `{"reason":"native verification failed"}`)
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "request-rework")
+	require.Empty(t, fake.Calls)
+}
+
 // ------------------------------------------------------------------
 // 9. Answer with body → 200.
 // ------------------------------------------------------------------
@@ -333,6 +447,19 @@ func TestAnswerHappy(t *testing.T) {
 	require.Len(t, fake.Calls, 1)
 	require.Equal(t, "HandleClarificationAnswer", fake.Calls[0].Method)
 	require.Equal(t, "my clarifying response", fake.Calls[0].Body)
+}
+
+func TestAnswerRequiresAttributedActor(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "q", model.StatusNeedsClarification)
+	req, err := http.NewRequest(http.MethodPost, answerURL(base, task.ID.String()), strings.NewReader(`{"body":"answer"}`))
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 // ------------------------------------------------------------------
@@ -354,39 +481,112 @@ func TestAnswerMissingBodyReturns400(t *testing.T) {
 }
 
 // ------------------------------------------------------------------
-// 11. Pass testing_ready → 200.
+// 11. Legacy pass fails closed because it carries no artifact evidence.
 // ------------------------------------------------------------------
 func TestPassHappy(t *testing.T) {
 	fake, project, srv, base := setupGateHTTPTest(t)
 	task := testutil.CreateTask(t, srv.DB, project.ID, "ready", model.StatusTestingReady)
 
 	resp, body := doJSON(t, http.MethodPost, passURL(base, task.ID.String()), "")
-	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
-
-	var dto orchdto.TaskDTO
-	require.NoError(t, json.Unmarshal(body, &dto))
-	require.Equal(t, string(model.StatusMerging), dto.Status)
-
-	require.Len(t, fake.Calls, 1)
-	require.Equal(t, "HandleTestPassed", fake.Calls[0].Method)
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "deprecated")
+	require.Empty(t, fake.Calls)
 }
 
 // ------------------------------------------------------------------
-// 12. Fail testing_ready → 200 and returns to implementation.
+// 12. Legacy fail also fails closed.
 // ------------------------------------------------------------------
 func TestFailHappy(t *testing.T) {
 	fake, project, srv, base := setupGateHTTPTest(t)
 	task := testutil.CreateTask(t, srv.DB, project.ID, "ready", model.StatusTestingReady)
 
 	resp, body := doJSON(t, http.MethodPost, failURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "deprecated")
+	require.Empty(t, fake.Calls)
+}
+
+func createDeliveryArtifact(t *testing.T, srv *orchhttp.Server, project model.Project, status model.TaskStatus) (model.Task, model.DeliveryArtifact) {
+	t.Helper()
+	task := testutil.CreateTask(t, srv.DB, project.ID, "native verification", status)
+	artifact := model.DeliveryArtifact{
+		ID: uuid.New(), TaskID: task.ID, ArtifactVersion: 1,
+		Branch: "feature/native", CommitSHA: strings.Repeat("a", 40),
+		BaseBranch: "main", BaseSHA: strings.Repeat("b", 40),
+		PreliminaryEvidence: model.JSONField{"commands": []any{map[string]any{"command": "go test ./...", "passed": true}}},
+		CreatorActor:        "orchestrator", CreatorSource: "testing_ready",
+	}
+	require.NoError(t, srv.DB.Create(&artifact).Error)
+	require.NoError(t, srv.DB.First(&task, "id = ?", task.ID).Error)
+	return task, artifact
+}
+
+func TestDeliveryArtifactReadContract(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task, artifact := createDeliveryArtifact(t, srv, project, model.StatusVerificationReady)
+	resp, body := doJSON(t, http.MethodGet, artifactURL(base, task.ID.String()), "")
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	var envelope orchdto.DeliveryEnvelopeDTO
+	require.NoError(t, json.Unmarshal(body, &envelope))
+	require.Equal(t, task.StateVersion, envelope.Task.StateVersion)
+	require.Equal(t, artifact.CommitSHA, envelope.Artifact.CommitSHA)
+	require.Equal(t, artifact.BaseSHA, envelope.Artifact.BaseSHA)
+}
 
-	var dto orchdto.TaskDTO
-	require.NoError(t, json.Unmarshal(body, &dto))
-	require.Equal(t, string(model.StatusInProgress), dto.Status)
-
+func TestVerifyDeliveryRoutesExactObservedEvidence(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task, artifact := createDeliveryArtifact(t, srv, project, model.StatusVerificationReady)
+	body := fmt.Sprintf(`{"observed_state_version":%d,"artifact_version":1,"commit_sha":%q,"actor":"codex:test-thread","environment_fingerprint":"macos-arm64","commands":[{"command":"scripts/dev verify","passed":true,"exit_code":0,"started_at":"2026-07-22T00:00:00Z","finished_at":"2026-07-22T00:01:00Z"}],"result":"pass","idempotency_key":"verify-1"}`,
+		task.StateVersion, artifact.CommitSHA)
+	resp, responseBody := doJSON(t, http.MethodPost, verifyURL(base, task.ID.String()), body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(responseBody))
 	require.Len(t, fake.Calls, 1)
-	require.Equal(t, "HandleTestFailed", fake.Calls[0].Method)
+	require.Equal(t, "VerifyDelivery", fake.Calls[0].Method)
+	require.Equal(t, "codex:test-thread", fake.Calls[0].Body)
+}
+
+func TestVerifyDeliveryStaleArtifactReturnsConflict(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task, artifact := createDeliveryArtifact(t, srv, project, model.StatusVerificationReady)
+	fake.ErrVerifyDelivery = fmt.Errorf("%w: changed", orchestrator.ErrStaleArtifact)
+	body := fmt.Sprintf(`{"observed_state_version":%d,"artifact_version":1,"commit_sha":%q,"actor":"codex:test-thread","environment_fingerprint":"macos-arm64","commands":[{"command":"verify","passed":true}],"result":"pass","idempotency_key":"verify-stale"}`,
+		task.StateVersion, artifact.CommitSHA)
+	resp, responseBody := doJSON(t, http.MethodPost, verifyURL(base, task.ID.String()), body)
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(responseBody))
+}
+
+func TestVerifyDeliveryRejectsActorSpoofing(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task, artifact := createDeliveryArtifact(t, srv, project, model.StatusVerificationReady)
+	body := fmt.Sprintf(`{"observed_state_version":%d,"artifact_version":1,"commit_sha":%q,"actor":"different-actor","environment_fingerprint":"macos-arm64","commands":[{"command":"verify","passed":true}],"result":"pass","idempotency_key":"verify-spoof"}`,
+		task.StateVersion, artifact.CommitSHA)
+	resp, responseBody := doJSON(t, http.MethodPost, verifyURL(base, task.ID.String()), body)
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode, string(responseBody))
+	require.Empty(t, fake.Calls)
+}
+
+func TestIntegrateDeliveryRoutesAcceptedVerification(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task, artifact := createDeliveryArtifact(t, srv, project, model.StatusIntegrationReady)
+	verificationID := uuid.New()
+	body := fmt.Sprintf(`{"observed_state_version":%d,"artifact_version":1,"commit_sha":%q,"verification_record_id":%q,"actor":"codex:test-thread","idempotency_key":"integrate-1"}`,
+		task.StateVersion, artifact.CommitSHA, verificationID.String())
+	resp, responseBody := doJSON(t, http.MethodPost, integrateURL(base, task.ID.String()), body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(responseBody))
+	require.Len(t, fake.Calls, 1)
+	require.Equal(t, "AuthorizeIntegration", fake.Calls[0].Method)
+}
+
+func TestRequestDeliveryReworkRoutesExactArtifactAndReason(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task, artifact := createDeliveryArtifact(t, srv, project, model.StatusIntegrationReady)
+	body := fmt.Sprintf(`{"observed_state_version":%d,"artifact_version":1,"commit_sha":%q,"actor":"codex:test-thread","reason":"native regression","idempotency_key":"rework-1"}`,
+		task.StateVersion, artifact.CommitSHA)
+	resp, responseBody := doJSON(t, http.MethodPost, reworkURL(base, task.ID.String()), body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(responseBody))
+	require.Len(t, fake.Calls, 1)
+	require.Equal(t, "RequestDeliveryRework", fake.Calls[0].Method)
+	require.Equal(t, "native regression", fake.Calls[0].Body)
 }
 
 // ------------------------------------------------------------------
@@ -742,6 +942,7 @@ func TestArchiveTaskEndpoint_CancelsFailedTaskAndAudits(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &dto))
 	require.Equal(t, task.ID.String(), dto.ID)
 	require.Equal(t, string(model.StatusCancelled), dto.Status)
+	require.Equal(t, task.StateVersion+1, dto.StateVersion)
 
 	var events []model.TaskEvent
 	require.NoError(t, srv.DB.Where("task_id = ? AND event_type = ?", task.ID, "task_archived").Find(&events).Error)
@@ -750,6 +951,23 @@ func TestArchiveTaskEndpoint_CancelsFailedTaskAndAudits(t *testing.T) {
 	require.Equal(t, string(model.StatusFailed), events[0].OldValue)
 	require.Equal(t, string(model.StatusCancelled), events[0].NewValue)
 	require.Equal(t, "superseded", events[0].Details["reason"])
+	var transition model.TaskEvent
+	require.NoError(t, srv.DB.Where("task_id = ? AND event_type = ? AND new_value = ?",
+		task.ID, "status_change", model.StatusCancelled).First(&transition).Error)
+	evidence, _ := transition.Details["evidence"].(map[string]any)
+	require.Equal(t, "archive_api", evidence["source"])
+}
+
+func TestArchiveTaskEndpoint_CancelsUnassignedTestingReadyTask(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "obsolete delivery gate", model.StatusTestingReady)
+
+	resp, body := doJSON(t, http.MethodPost, archiveURL(base, task.ID.String()), `{"actor":"codex:canary","reason":"canary complete","mode":"obsolete"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, string(model.StatusCancelled), dto.Status)
 }
 
 func TestArchiveTaskEndpoint_RejectsLiveAssignedWork(t *testing.T) {
@@ -799,6 +1017,32 @@ func TestArchiveTaskEndpoint_AllowsIdleAssignedAgent(t *testing.T) {
 	require.NoError(t, json.Unmarshal(body, &dto))
 	require.Equal(t, string(model.StatusCancelled), dto.Status)
 	require.Empty(t, dto.AssignedWorker)
+}
+
+func TestArchiveTaskEndpoint_InvalidatesParkedDeliveryArtifact(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "parked delivery", model.StatusIntegrationReady)
+	artifact := model.DeliveryArtifact{
+		ID: uuid.New(), TaskID: task.ID, ArtifactVersion: 1,
+		Branch: "feature/canary", CommitSHA: strings.Repeat("a", 40),
+		BaseBranch: "main", BaseSHA: strings.Repeat("b", 40),
+		PreliminaryEvidence: model.JSONField{"commands": []any{map[string]any{"command": "git diff --check", "passed": true}}},
+		CreatorActor:        "orchestrator", CreatorSource: "testing_ready",
+	}
+	require.NoError(t, srv.DB.Create(&artifact).Error)
+
+	resp, body := doJSON(t, http.MethodPost, archiveURL(base, task.ID.String()),
+		`{"actor":"codex:canary","reason":"canary complete","mode":"obsolete"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+
+	var reloadedTask model.Task
+	require.NoError(t, srv.DB.First(&reloadedTask, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusCancelled, reloadedTask.Status)
+	require.Equal(t, task.StateVersion+1, reloadedTask.StateVersion)
+	var reloadedArtifact model.DeliveryArtifact
+	require.NoError(t, srv.DB.First(&reloadedArtifact, "id = ?", artifact.ID).Error)
+	require.NotNil(t, reloadedArtifact.InvalidatedAt)
+	require.Equal(t, "task_archived", reloadedArtifact.InvalidationReason)
 }
 
 func TestArchiveTaskEndpoint_IdempotentForCancelled(t *testing.T) {

@@ -31,13 +31,20 @@ func (f *fakeGateOrch) HandlePlanApproved(taskID uuid.UUID) error {
 	f.approved = true
 	return nil
 }
-func (f *fakeGateOrch) HandlePlanRejected(taskID uuid.UUID) error         { return nil }
-func (f *fakeGateOrch) HandleTestReviewApproved(taskID uuid.UUID) error   { return nil }
-func (f *fakeGateOrch) HandleTestReviewRejected(uuid.UUID, string) error  { return nil }
-func (f *fakeGateOrch) HandleTestPassed(taskID uuid.UUID) error           { return nil }
-func (f *fakeGateOrch) HandleTestFailed(taskID uuid.UUID) error           { return nil }
-func (f *fakeGateOrch) HandleClarificationAnswer(uuid.UUID, string) error { return nil }
-func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error                  { return nil }
+func (f *fakeGateOrch) HandlePlanApprovedBy(taskID uuid.UUID, actor string) error {
+	return f.HandlePlanApproved(taskID)
+}
+func (f *fakeGateOrch) HandlePlanRejected(taskID uuid.UUID) error                       { return nil }
+func (f *fakeGateOrch) HandlePlanRejectedBy(taskID uuid.UUID, actor string) error       { return nil }
+func (f *fakeGateOrch) HandleTestReviewApproved(taskID uuid.UUID) error                 { return nil }
+func (f *fakeGateOrch) HandleTestReviewApprovedBy(taskID uuid.UUID, actor string) error { return nil }
+func (f *fakeGateOrch) HandleTestReviewRejected(uuid.UUID, string) error                { return nil }
+func (f *fakeGateOrch) HandleTestReviewRejectedBy(uuid.UUID, string, string) error      { return nil }
+func (f *fakeGateOrch) HandleTestPassed(taskID uuid.UUID) error                         { return nil }
+func (f *fakeGateOrch) HandleTestFailed(taskID uuid.UUID) error                         { return nil }
+func (f *fakeGateOrch) HandleClarificationAnswer(uuid.UUID, string) error               { return nil }
+func (f *fakeGateOrch) HandleClarificationAnswerBy(uuid.UUID, string, string) error     { return nil }
+func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error                                { return nil }
 
 // TestCLIApproveAgainstRealOrchHTTP is the end-to-end regression test
 // for Phase 2 of the orch API gate-mutation pivot. It wires a real
@@ -85,7 +92,7 @@ func TestCLIApproveAgainstRealOrchHTTP(t *testing.T) {
 	// against the resolved URL. cli.Run then dispatches the approve
 	// subcommand through DispatchGate, which is the production code path
 	// cmd/drem/cli_cmd.go wires.
-	client := orchclient.New(ts.URL)
+	client := orchclient.New(ts.URL).WithToken("test-token").WithActor("codex:test")
 	var buf bytes.Buffer
 	err := cli.Run(db, []string{"approve", task.ID.String()[:8]}, &buf, false, client, projectName)
 	require.NoError(t, err)
@@ -112,7 +119,7 @@ func TestCLIApproveJSONMode(t *testing.T) {
 	ts := httptest.NewServer(srv.Routes())
 	defer ts.Close()
 
-	client := orchclient.New(ts.URL)
+	client := orchclient.New(ts.URL).WithToken("test-token").WithActor("codex:test")
 	var buf bytes.Buffer
 	err := cli.Run(db, []string{"approve", task.ID.String()[:8]}, &buf, true, client, projectName)
 	require.NoError(t, err)

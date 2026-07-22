@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -83,6 +84,37 @@ func createFeatureWorktree(t *testing.T, bareRepoPath, featureName string) strin
 	testutil.RunGit([]string{"config", "user.email", "test@test.com"}, featureDir)
 	testutil.RunGit([]string{"config", "user.name", "Test"}, featureDir)
 	return featureDir
+}
+
+func recordBranchAcceptanceForTest(t *testing.T, task *model.Task, repoDir, baseRef string) {
+	t.Helper()
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context["branch_acceptance"] = map[string]any{
+		"accepted": true,
+		"base_ref": baseRef,
+		"base_sha": runGitCmd(t, repoDir, "rev-parse", baseRef),
+		"head_sha": runGitCmd(t, repoDir, "rev-parse", task.WorktreeBranch),
+	}
+}
+
+func persistBranchAcceptanceForTest(t *testing.T, db *gorm.DB, task *model.Task) {
+	t.Helper()
+	raw, ok := task.Context["branch_acceptance"].(map[string]any)
+	if !ok {
+		t.Fatal("test task has no branch acceptance compatibility evidence")
+	}
+	record := model.BranchAcceptanceRecord{
+		ID: uuid.New(), TaskID: task.ID, AgentID: uuid.New(),
+		Branch: task.WorktreeBranch, Accepted: true,
+		BaseBranch: fmt.Sprint(raw["base_ref"]), BaseSHA: fmt.Sprint(raw["base_sha"]),
+		HeadSHA: fmt.Sprint(raw["head_sha"]), Details: model.JSONField(raw),
+		Actor: "test", Source: "test",
+	}
+	if err := db.Create(&record).Error; err != nil {
+		t.Fatalf("persist typed branch acceptance: %v", err)
+	}
 }
 
 // createAgentBranch creates an agent branch off the feature branch

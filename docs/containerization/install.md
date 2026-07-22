@@ -293,6 +293,44 @@ Expect seven containers: `registry`, `sglang`, `gq`, `spawner`, `kyle`,
 `sglang: service_healthy` before starting, and `drem-classifier` in
 turn waits on `sglang: service_healthy` before serving /classify.
 
+### 5c — Docker Desktop control plane with remote GQ/SGLang
+
+This topology keeps the orchestrator, spawner, worker containers, project
+database, and bare repository on the local machine. Only inference crosses an
+SSH tunnel to a remote GQ. It is the supported path for native macOS project
+verification; SGLang itself remains on the GPU host.
+
+Open the loopback-only tunnel in a supervised foreground process:
+
+```bash
+export DREM_INFERENCE_SSH_HOST=user@gpu-host
+export DREM_INFERENCE_SSH_PORT=22
+export DREM_INFERENCE_SSH_IDENTITY="$HOME/.ssh/id_ed25519"
+scripts/remote-inference-tunnel.sh
+```
+
+Verify GQ through the host endpoint before starting containers:
+
+```bash
+curl -fsS http://127.0.0.1:18090/v1/models
+```
+
+Docker Desktop containers reach that tunnel through
+`host.docker.internal`. Start only the control-plane services; `--no-deps` is
+required so Compose never starts the local SGLang/GQ pair:
+
+```bash
+export DREM_EXTERNAL_INFERENCE_ENDPOINT=http://host.docker.internal:18090/v1/chat/completions
+docker compose \
+  -f deploy/compose/global.yml \
+  -f deploy/compose/remote-inference.override.yml \
+  up -d --no-deps registry spawner drem-classifier drem-planner
+```
+
+On Apple Silicon, build the Drem and worker images locally so copied Go
+binaries and image layers target Linux/arm64. Do not copy x86_64 worker images
+from the GPU host.
+
 ## Step 6 — Register the first project
 
 ```bash
@@ -302,6 +340,50 @@ drem project register \
   --language go
 drem project list
 ```
+
+For the remote-inference topology, add the container-visible endpoint:
+
+```bash
+drem project register \
+  --name drem-canvas \
+  --bare /Users/operator/git/drem-canvas.git \
+  --language cpp \
+  --orch-url http://127.0.0.1:8080 \
+  --inference-endpoint http://host.docker.internal:18090/v1/chat/completions \
+  --integration-policy prepare_branch \
+  --verification-policy external_ack
+```
+
+This keeps inference remote while project Git, build artifacts, verification,
+and integration authority remain local. A successful worker parks an exact
+artifact at `verification_ready`; it cannot advance the default branch without
+native evidence and explicit integration authorization.
+
+Codex tasks and operators advance approval gates through the same HTTP-only
+CLI. No gate mutation should edit `drem.db` directly:
+
+```bash
+export DREM_ORCH_URL=http://127.0.0.1:8080
+export DREM_PROJECT=drem-canvas
+export DREM_ORCH_TOKEN='<project shared token>'
+export DREM_ACTOR='codex:<task-or-thread-id>'
+dremctl tasks --status plan_review
+dremctl approve <task-id-prefix>
+dremctl reject <task-id-prefix> --reason "specific evidence-backed rework"
+
+dremctl artifact <task-id-prefix>
+dremctl verify <task-id-prefix> \
+  --result pass \
+  --environment 'macos-arm64:xcode' \
+  --command 'scripts/dev verify' \
+  --binary-sha256 '<sha256-if-produced>'
+dremctl integrate <task-id-prefix>
+```
+
+`approve` works only for `plan_review` and `test_review`. `testing_ready` is an
+automated preparation state. The older `pass` and `fail` commands remain
+recognized but fail closed for delivery states; use `verify --result pass`,
+`verify --result fail`, or `request-rework --reason ...`.
 
 Writes `~/.drem/projects.toml` and generates
 `~/.drem/projects/drem-orchestrator/compose.yml` from

@@ -22,6 +22,7 @@ import (
 type fakeSGLangServer struct {
 	*httptest.Server
 	lastRequestBody []byte
+	lastHeader      http.Header
 }
 
 func newFakeSGLangServer(t *testing.T, contentJSON string, tokensIn, tokensOut int) *fakeSGLangServer {
@@ -31,6 +32,7 @@ func newFakeSGLangServer(t *testing.T, contentJSON string, tokensIn, tokensOut i
 		body := make([]byte, r.ContentLength)
 		_, _ = r.Body.Read(body)
 		f.lastRequestBody = body
+		f.lastHeader = r.Header.Clone()
 
 		resp := map[string]any{
 			"choices": []map[string]any{
@@ -68,6 +70,8 @@ func TestClassify_HappyPath(t *testing.T) {
 		MaxTokens:   256,
 		Temperature: 0.1,
 		Timeout:     5 * time.Second,
+		GQCaller:    "classifier",
+		GQPriority:  "high",
 	}
 
 	result, err := Classify(context.Background(), cfg, ClassifyInput{
@@ -81,6 +85,8 @@ func TestClassify_HappyPath(t *testing.T) {
 	assert.Equal(t, 812, result.TokensIn)
 	assert.Equal(t, 48, result.TokensOut)
 	assert.NotZero(t, result.Duration)
+	assert.Equal(t, "classifier", srv.lastHeader.Get("X-GQ-Caller"))
+	assert.Equal(t, "high", srv.lastHeader.Get("X-GQ-Priority"))
 
 	// Result JSON must be parseable and preserve the classifier decision fields.
 	var parsed map[string]any

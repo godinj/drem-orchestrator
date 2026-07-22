@@ -12,9 +12,8 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
-// TestHandleTestPassed_AtomicUpdate verifies that HandleTestPassed transitions
-// a task from TESTING_READY to MERGING and persists a status_change event with
-// the correct old/new values.
+// TestHandleTestPassed_AtomicUpdate verifies that the legacy evidence-free
+// mutation fails closed and leaves both task and event history unchanged.
 func TestHandleTestPassed_AtomicUpdate(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
@@ -32,28 +31,24 @@ func TestHandleTestPassed_AtomicUpdate(t *testing.T) {
 	}
 	db.Create(&task)
 
-	if err := o.HandleTestPassed(task.ID); err != nil {
-		t.Fatalf("HandleTestPassed: unexpected error: %v", err)
+	if err := o.HandleTestPassed(task.ID); err == nil {
+		t.Fatal("HandleTestPassed: expected deprecated transition error")
 	}
 
 	var updated model.Task
 	if err := db.First(&updated, "id = ?", task.ID).Error; err != nil {
 		t.Fatalf("load task: %v", err)
 	}
-	if updated.Status != model.StatusMerging {
-		t.Fatalf("expected task status %q, got %q", model.StatusMerging, updated.Status)
+	if updated.Status != model.StatusTestingReady {
+		t.Fatalf("expected task status %q, got %q", model.StatusTestingReady, updated.Status)
 	}
 
-	var event model.TaskEvent
-	if err := db.Where("task_id = ? AND event_type = ?", task.ID, "status_change").
-		First(&event).Error; err != nil {
-		t.Fatalf("load status_change event: %v", err)
+	var count int64
+	if err := db.Model(&model.TaskEvent{}).Where("task_id = ? AND event_type = ?", task.ID, "status_change").Count(&count).Error; err != nil {
+		t.Fatalf("count status_change events: %v", err)
 	}
-	if event.OldValue != string(model.StatusTestingReady) {
-		t.Errorf("event.OldValue = %q, want %q", event.OldValue, model.StatusTestingReady)
-	}
-	if event.NewValue != string(model.StatusMerging) {
-		t.Errorf("event.NewValue = %q, want %q", event.NewValue, model.StatusMerging)
+	if count != 0 {
+		t.Fatalf("unexpected status_change events: %d", count)
 	}
 }
 

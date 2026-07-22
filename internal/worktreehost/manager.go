@@ -351,7 +351,7 @@ func (m *Manager) ListAgentWorktrees(featureName string) ([]AgentWorktreeInfo, e
 	}
 	wtByPath := make(map[string]WorktreeInfo, len(allWorktrees))
 	for _, wt := range allWorktrees {
-		wtByPath[wt.Path] = wt
+		wtByPath[canonicalExistingPath(wt.Path)] = wt
 	}
 
 	entries, err := os.ReadDir(groupDir)
@@ -367,7 +367,7 @@ func (m *Manager) ListAgentWorktrees(featureName string) ([]AgentWorktreeInfo, e
 
 		agentDir := filepath.Join(groupDir, entry.Name())
 
-		wt, ok := wtByPath[agentDir]
+		wt, ok := wtByPath[canonicalExistingPath(agentDir)]
 		if !ok {
 			continue
 		}
@@ -385,6 +385,18 @@ func (m *Manager) ListAgentWorktrees(featureName string) ([]AgentWorktreeInfo, e
 	}
 
 	return agents, nil
+}
+
+func canonicalExistingPath(path string) string {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved
+	}
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		return abs
+	}
+	return filepath.Clean(path)
 }
 
 // MergeBranch merges a source branch into the target worktree.

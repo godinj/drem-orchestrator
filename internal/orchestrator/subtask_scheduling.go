@@ -12,7 +12,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
-	"github.com/godinj/drem-orchestrator/internal/state"
+	"gorm.io/gorm"
 )
 
 // scheduleSubtasks looks for BACKLOG subtasks — and IN_PROGRESS subtasks
@@ -111,29 +111,11 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 				if logErr == nil && hasExistingWork(estimatedFiles, changedFiles, commitMsgs, sub.Title) {
 					o.logger.Info("schedule: dedup detected existing work, fast-tracking to done",
 						"subtask_id", sub.ID)
-					transitions := []model.TaskStatus{
-						model.StatusPlanning,
-						model.StatusPlanReview,
-						model.StatusInProgress,
-						model.StatusTestingReady,
-						model.StatusMerging,
-						model.StatusDone,
-					}
-					for _, target := range transitions {
-						if sub.Status == target {
-							continue
-						}
-						evt, tErr := state.TransitionTask(sub, target, "orchestrator",
-							map[string]any{"reason": "dedup-existing-work"})
-						if tErr != nil {
-							continue
-						}
-						if err := o.db.Create(evt).Error; err != nil {
-							o.logger.Error("schedule: save event", "subtask_id", sub.ID, "error", err)
-							break
-						}
-					}
-					if err := o.db.Save(sub).Error; err != nil {
+					if err := o.db.Transaction(func(tx *gorm.DB) error {
+						return casAcceptedExistingSubtask(tx, sub, map[string]any{
+							"estimated_files": estimatedFiles, "changed_files": changedFiles,
+						})
+					}); err != nil {
 						o.logger.Error("schedule: save subtask", "subtask_id", sub.ID, "error", err)
 					}
 					continue
@@ -149,31 +131,10 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 			if o.isWorkAlreadyMerged(sub, featureDir) {
 				o.logger.Info("schedule: work already merged, fast-tracking to done",
 					"subtask_id", sub.ID)
-				// Fast-track to done.
-				transitions := []model.TaskStatus{
-					model.StatusPlanning,
-					model.StatusPlanReview,
-					model.StatusInProgress,
-					model.StatusTestingReady,
-					model.StatusMerging,
-					model.StatusDone,
-				}
-				for _, target := range transitions {
-					if sub.Status == target {
-						continue
-					}
-					evt, tErr := state.TransitionTask(sub, target, "orchestrator",
-						map[string]any{"reason": "already-merged-skip-spawn"})
-					if tErr != nil {
-						continue
-					}
-					if err := o.db.Create(evt).Error; err != nil {
-						o.logger.Error("schedule: save event", "subtask_id", sub.ID, "error", err)
-						break
-					}
-				}
-				if err := o.db.Save(sub).Error; err != nil {
-					o.logger.Error("schedule: save subtask", "subtask_id", sub.ID, "error", err)
+				if err := o.db.Transaction(func(tx *gorm.DB) error {
+					return casAcceptedExistingSubtask(tx, sub, map[string]any{"reason": "already-merged-skip-spawn"})
+				}); err != nil {
+					o.logger.Error("schedule: accept already-merged subtask", "subtask_id", sub.ID, "error", err)
 				}
 				continue
 			}
@@ -328,26 +289,10 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 			continue
 		}
 
-		// Fast-track subtask: BACKLOG -> PLANNING -> PLAN_REVIEW -> IN_PROGRESS.
-		fastTrack := []model.TaskStatus{
-			model.StatusPlanning,
-			model.StatusPlanReview,
-			model.StatusInProgress,
-		}
-		for _, target := range fastTrack {
-			evt, err := state.TransitionTask(sub, target, "orchestrator", map[string]any{"reason": "auto-schedule"})
-			if err != nil {
-				o.logger.Debug("fast-track subtask skip", "subtask_id", sub.ID, "to", target, "error", err)
-				continue
-			}
-			if err := o.db.Create(evt).Error; err != nil {
-				return fmt.Errorf("schedule subtasks: save event: %w", err)
-			}
-		}
-
 		sub.AssignedAgentID = &ag.ID
-		if err := o.db.Save(sub).Error; err != nil {
-			return fmt.Errorf("schedule subtasks: save subtask: %w", err)
+		if err := o.transitionTaskAtomic(sub, model.StatusInProgress, "orchestrator", "worker_dispatch",
+			"worker claimed subtask", map[string]any{"agent_id": ag.ID.String(), "agent_type": string(agentType)}); err != nil {
+			return fmt.Errorf("schedule subtasks: claim subtask: %w", err)
 		}
 
 		o.emit("subtask_scheduled", map[string]any{
@@ -504,26 +449,9 @@ func (o *Orchestrator) dispatchSubtaskViaSpawner(sub *model.Task, agentType mode
 		return fmt.Errorf("agent assignment missing after container spawn for subtask %s", sub.ID)
 	}
 
-	// Fast-track subtask: BACKLOG -> PLANNING -> PLAN_REVIEW -> IN_PROGRESS.
-	fastTrack := []model.TaskStatus{
-		model.StatusPlanning,
-		model.StatusPlanReview,
-		model.StatusInProgress,
-	}
-	for _, target := range fastTrack {
-		evt, tErr := state.TransitionTask(sub, target, "orchestrator",
-			map[string]any{"reason": "auto-schedule"})
-		if tErr != nil {
-			o.logger.Debug("fast-track subtask skip",
-				"subtask_id", sub.ID, "to", target, "error", tErr)
-			continue
-		}
-		if err := o.db.Create(evt).Error; err != nil {
-			return fmt.Errorf("save transition event: %w", err)
-		}
-	}
-	if err := o.db.Save(sub).Error; err != nil {
-		return fmt.Errorf("save subtask after fast-track: %w", err)
+	if err := o.transitionTaskAtomic(sub, model.StatusInProgress, "orchestrator", "worker_dispatch",
+		"container worker claimed subtask", map[string]any{"agent_id": launch.AgentID.String(), "agent_type": string(agentType)}); err != nil {
+		return fmt.Errorf("claim subtask after container spawn: %w", err)
 	}
 
 	o.emit("subtask_scheduled", map[string]any{
@@ -567,9 +495,9 @@ func (o *Orchestrator) dispatchPendingSubtasks() {
 			continue
 		}
 
-		// Skip terminal, paused, and human-gated parents — their subtasks
+		// Skip terminal, paused, and approval-gated parents — their subtasks
 		// should not be dispatched until the gate is explicitly advanced.
-		if isTerminal(parent.Status) || parent.Status == model.StatusPaused || parent.Status.IsHumanGate() {
+		if isTerminal(parent.Status) || parent.Status == model.StatusPaused || parent.Status.IsApprovalGate() {
 			continue
 		}
 

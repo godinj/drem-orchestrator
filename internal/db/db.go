@@ -84,6 +84,9 @@ func Init(dbPath string, logPath ...string) (*gorm.DB, error) {
 		)`, model.WorkerAttemptSuperseded)
 	db.Exec("DROP INDEX IF EXISTS idx_worker_attempt_active_task_role")
 	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_attempt_active_task_role_branch ON worker_attempts(task_id, agent_type, branch) WHERE completed_at IS NULL")
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_artifact_current_task ON delivery_artifacts(task_id) WHERE invalidated_at IS NULL").Error; err != nil {
+		return nil, fmt.Errorf("create current delivery artifact index: %w", err)
+	}
 
 	return db, nil
 }
@@ -101,6 +104,13 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.TaskEvent{},
 		&model.Memory{},
 		&model.TaskComment{},
+		&model.BranchAcceptanceRecord{},
+		&model.PreliminaryGateRun{},
+		&model.DeliveryArtifact{},
+		&model.VerificationRecord{},
+		&model.IntegrationAuthorization{},
+		&model.DeliveryReworkRecord{},
+		&model.MergeCompletion{},
 		&model.BugReport{},
 		&model.BugReportComment{},
 		&metrics.Metric{},

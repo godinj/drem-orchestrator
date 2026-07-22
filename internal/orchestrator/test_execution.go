@@ -15,13 +15,12 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"github.com/godinj/drem-orchestrator/internal/state"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 )
 
-// processTestingReady runs the automated test gate at TESTING_READY.
-// It checks for an existing fixer/reviewer agent, runs the test suite,
-// and either transitions to MERGING or spawns a fixer.
+// processTestingReady runs the automated preliminary gate at TESTING_READY.
+// The command executes only in a disposable checkout at the exact accepted
+// worker SHA. A passing result freezes that candidate for verification.
 func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 	// Check if a reviewer or fixer is already running for this task.
 	var busy model.Agent
@@ -34,202 +33,34 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 		return nil
 	}
 
-	// Check if we already ran the automated gate and it passed.
-	if parent.Context != nil {
-		if passed, ok := parent.Context["automated_gate_passed"].(bool); ok && passed {
-			return nil
-		}
+	gate, err := o.runAcceptedDeliveryGate(context.Background(), parent)
+	if err != nil {
+		return fmt.Errorf("processTestingReady: %w", err)
 	}
-
-	// Resolve integration worktree.
-	worktreePath := o.resolveIntegrationWorktree(parent)
-	if worktreePath == "" {
-		o.logger.Warn("processTestingReady: no integration worktree", "task_id", parent.ID)
-		return nil
-	}
-
-	// Run the test suite.
-	testsPassed, testOutput := o.runTestSuite(worktreePath)
+	testsPassed := gate.Passed
+	testOutput := gate.Evidence.Output
 
 	if testsPassed {
-		// Tests pass → transition to MERGING.
-		if parent.Context == nil {
-			parent.Context = make(model.JSONField)
-		}
-		parent.Context["automated_gate_passed"] = true
-
-		evt, err := state.TransitionTask(parent, model.StatusMerging, "orchestrator",
-			map[string]any{"reason": "automated test gate passed"})
+		artifact, err := o.FreezeDeliveryArtifact(parent.ID, gate.artifactSnapshot())
 		if err != nil {
-			return fmt.Errorf("processTestingReady: transition to merging: %w", err)
-		}
-		if err := o.db.Save(parent).Error; err != nil {
-			return fmt.Errorf("processTestingReady: save parent: %w", err)
-		}
-		if err := o.db.Create(evt).Error; err != nil {
-			return fmt.Errorf("processTestingReady: save event: %w", err)
+			return fmt.Errorf("processTestingReady: freeze delivery artifact: %w", err)
 		}
 
-		o.emit("testing_ready_passed", map[string]any{"task_id": parent.ID})
-		o.publishTaskTransition(parent.ID.String(), evt.OldValue, evt.NewValue, "automated test gate passed")
-		o.logger.Info("automated test gate passed, transitioning to merging", "task_id", parent.ID)
+		o.emit("delivery_artifact_ready", map[string]any{"task_id": parent.ID, "artifact_id": artifact.ID, "artifact_version": artifact.ArtifactVersion})
+		o.publishTaskTransition(parent.ID.String(), string(model.StatusTestingReady), string(model.StatusVerificationReady), "preliminary gate passed and artifact frozen")
+		o.logger.Info("preliminary gate passed, delivery artifact frozen", "task_id", parent.ID, "artifact_id", artifact.ID, "commit", artifact.CommitSHA)
 		return nil
 	}
 
-	// Tests failed — check if a fixer already attempted and failed.
-	if parent.Context == nil {
-		parent.Context = make(model.JSONField)
+	if err := o.RecordPreliminaryGateFailure(parent.ID, gate); err != nil {
+		return fmt.Errorf("processTestingReady: record preliminary gate failure: %w", err)
 	}
-	parent.Context["testing_ready_failure_summary"] = conciseFailureSummary(testOutput)
-
-	fixerAttempted := false
-	if v, ok := parent.Context["testing_ready_fixer_attempted"].(bool); ok && v {
-		fixerAttempted = true
-	}
-
-	if fixerAttempted {
-		// Fixer already tried and failed → flag for human review.
-		parent.Context["needs_human_review"] = true
-		parent.Context["testing_ready_failure"] = truncate(testOutput, maxTestFailureLen)
-		if err := o.db.Save(parent).Error; err != nil {
-			return fmt.Errorf("processTestingReady: save parent after fixer failure: %w", err)
-		}
-		o.emit("testing_ready_needs_human", map[string]any{
-			"task_id": parent.ID,
-			"reason":  "fixer failed to resolve test failures",
-		})
-		o.logger.Warn("testing_ready fixer failed, needs human review", "task_id", parent.ID)
-		return nil
-	}
-
-	// Spawn a fixer agent on the integration worktree.
-	parent.Context["testing_ready_fixer_attempted"] = true
-	parent.Context["test_failure_output"] = truncate(testOutput, maxTestFailureLen)
-
-	// Get the diff between feature branch and default branch.
-	var gitDiff string
-	diff, diffErr := gitexec.RunGit(
-		context.Background(), worktreePath,
-		"diff", o.worktree.DefaultBranchName()+"...HEAD",
-	)
-	if diffErr == nil {
-		gitDiff = truncate(diff, maxGitDiffLen)
-	}
-
-	fixerPrompt := fmt.Sprintf(`Fix the integration failures. Prefer fixing implementation code over modifying tests.
-
-## Test Failure Output
-%s
-
-## Changes (diff vs %s)
-%s
-
-## Task
-Title: %s
-Description: %s
-`, truncate(testOutput, maxTestOutputLen), o.worktree.DefaultBranchName(), gitDiff, parent.Title, parent.Description)
-
-	// Container-mode dispatch: when o.Spawner is wired, the fixer
-	// runs in a worker container. The detailed fixerPrompt built above
-	// (with test failure output + diff) is NOT plumbed through
-	// buildSpawnContext yet — see
-	// plans/phase-3.5-subtask-dispatch-migration.md §"Open questions"
-	// Q2. The container-path prompt carries only the default
-	// prompt.Opts (task title + description + project context); the
-	// test-failure output flows through parent.Context (saved below)
-	// and the worker can read it via the DREM_TASK_ID → GET
-	// /tasks/{id} HTTP path. This is a deliberate narrowing for
-	// dispatch-migration-unblocking; plumb the prompt enrichment in
-	// a separate follow-up.
-	// See plans/phase-3.5-subtask-dispatch-migration.md Commit 5.
-	if o.Spawner != nil {
-		// Save parent.Context updates (testing_ready_fixer_attempted,
-		// test_failure_output) BEFORE the spawn so the worker sees them
-		// when it reads the task back from orch.
-		if err := o.db.Save(parent).Error; err != nil {
-			return fmt.Errorf("processTestingReady: save parent context before spawn: %w", err)
-		}
-		// spawnFixer expects a clean AssignedAgentID — clear any prior
-		// coder assignment so worker identity recording creates a fresh
-		// fixer Agent row. The legacy runner.SpawnAgentInWorktree path
-		// creates a new Agent row unconditionally; the container path
-		// needs this explicit clear because worker identity recording
-		// updates rather than replaces.
-		prevAgentID := parent.AssignedAgentID
-		parent.AssignedAgentID = nil
-		if err := o.db.Save(parent).Error; err != nil {
-			return fmt.Errorf("processTestingReady: clear assignment before spawn: %w", err)
-		}
-		if err := o.spawnFixer(context.Background(), parent); err != nil {
-			o.logger.Error("processTestingReady: spawn fixer failed via spawner",
-				"task_id", parent.ID, "error", err)
-			// Restore the prior assignment so reconciliation still
-			// tracks the originating worker before we gate for human
-			// review.
-			parent.AssignedAgentID = prevAgentID
-			parent.Context["needs_human_review"] = true
-			if err := o.db.Save(parent).Error; err != nil {
-				return fmt.Errorf("processTestingReady: save parent after failed container spawn: %w", err)
-			}
-			return nil
-		}
-		// Reload to pick up AssignedAgentID written by
-		// worker identity recording.
-		if err := o.db.First(parent, "id = ?", parent.ID).Error; err != nil {
-			return fmt.Errorf("processTestingReady: reload parent after container spawn: %w", err)
-		}
-		if parent.AssignedAgentID == nil {
-			o.logger.Error("processTestingReady: no agent assignment after container spawn",
-				"task_id", parent.ID)
-			parent.Context["needs_human_review"] = true
-			if err := o.db.Save(parent).Error; err != nil {
-				return fmt.Errorf("processTestingReady: save parent after missing assignment: %w", err)
-			}
-			return nil
-		}
-		// Silences "declared and not used" — fixerPrompt is retained
-		// verbatim so the legacy fallback block below continues to
-		// build and consume it without duplicating the prompt
-		// construction. The container path intentionally does not
-		// consume fixerPrompt; see §Q2.
-		_ = fixerPrompt
-		o.emit("testing_ready_fixer_spawned", map[string]any{
-			"task_id":  parent.ID,
-			"agent_id": *parent.AssignedAgentID,
-		})
-		o.logger.Info("testing_ready: fixer spawned via spawner for test failures",
-			"task_id", parent.ID, "fixer_id", *parent.AssignedAgentID)
-		return nil
-	}
-
-	if o.runner == nil {
-		o.logger.Error("processTestingReady: runner is nil, cannot spawn fixer", "task_id", parent.ID)
-		parent.Context["needs_human_review"] = true
-		if err := o.db.Save(parent).Error; err != nil {
-			return fmt.Errorf("processTestingReady: save parent: %w", err)
-		}
-		return nil
-	}
-	fixerAg, spawnErr := o.runner.SpawnAgentInWorktree(parent, worktreePath, model.AgentFixer, fixerPrompt)
-	if spawnErr != nil {
-		o.logger.Error("processTestingReady: spawn fixer failed", "task_id", parent.ID, "error", spawnErr)
-		parent.Context["needs_human_review"] = true
-		if err := o.db.Save(parent).Error; err != nil {
-			return fmt.Errorf("processTestingReady: save parent: %w", err)
-		}
-		return nil
-	}
-
-	if err := o.db.Save(parent).Error; err != nil {
-		return fmt.Errorf("processTestingReady: save parent: %w", err)
-	}
-
-	o.emit("testing_ready_fixer_spawned", map[string]any{
-		"task_id":  parent.ID,
-		"agent_id": fixerAg.ID,
+	o.emit("preliminary_gate_failed", map[string]any{
+		"task_id": parent.ID,
+		"outcome": gate.Outcome,
 	})
-	o.logger.Info("testing_ready: fixer spawned for test failures",
-		"task_id", parent.ID, "fixer_id", fixerAg.ID)
+	o.logger.Warn("preliminary gate failed", "task_id", parent.ID, "outcome", gate.Outcome,
+		"summary", conciseFailureSummary(testOutput))
 	return nil
 }
 

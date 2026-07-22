@@ -173,6 +173,12 @@ Tests will be written for every new module:
 - **Extraction.** Pure function tests. Given a log line or a batch of log lines, assert that the correct typed event is emitted (or nil). No fixtures beyond string inputs.
 - **Git reference registry.** Tests assert CRUD correctness on branch records in SQLite and integration with the bare repository (branch exists, branch not found, concurrent registration). Uses existing `testutil.NewTestDB` and `testutil.SetupBareRepo` helpers.
 - **Orchestrator HTTP API.** Integration tests that spin up the orchestrator against a test database, issue HTTP requests, and assert JSON response shape and content. A client-library test uses an `httptest.Server` to stub the server side.
+- **Host-authoritative delivery.** `testing_ready` freezes an exact branch,
+  commit, base, and preliminary evidence record. External verification and
+  integration are authenticated, versioned, idempotent mutations; the merger
+  re-checks the authorized SHAs inside its container before changing the
+  integration branch, and `done` atomically links the resulting merge commit
+  to the accepted evidence chain.
 - **Spawner RPC.** Tests use the fake container runtime and assert that each RPC produces the expected runtime calls and returns the expected response.
 - **Watchdog.** Tests exercise the commit-and-push loop against a bare repository, asserting that commits appear on the feature branch when the working tree has diffs and that the loop is a no-op when there are no diffs or the test command has not yet passed.
 
@@ -183,7 +189,10 @@ Prior art conventions from the existing codebase should be preserved: database f
 - **Remote host deployment.** The first cut assumes every container runs on the single developer host. Multi-host scheduling, cross-host networking, and shared state across hosts are deferred.
 - **Remote image registry.** The first cut uses a local registry container. Pushing to GHCR, Docker Hub, or another remote registry is a follow-up.
 - **GPU scheduling across projects.** A single SGLang container is shared, with GQ serializing access. Fine-grained per-project GPU allocation is deferred.
-- **Windows or macOS host support.** Linux only.
+- **Windows host support.** Linux remains the primary all-in-one deployment.
+  A bounded macOS Docker Desktop topology is supported when inference is
+  supplied by a remote GQ/SGLang host and final project verification runs
+  natively on the Mac; see `plans/macos-remote-inference-control-plane.md`.
 - **Multi-user or multi-tenant isolation.** The entire stack runs under a single operating-system user.
 - **Secrets management.** Environment variables in compose files are acceptable for the first cut. A vault integration is a follow-up.
 - **Hot reload for the orchestrator in development.** Restart-on-rebuild is sufficient. Automatic reload (for example via `air` or `reflex`) is optional and can be added later.

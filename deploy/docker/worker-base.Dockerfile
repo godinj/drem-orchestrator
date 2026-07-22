@@ -74,6 +74,13 @@ RUN apt-get update \
         xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
+# The host bare repository is mounted at /bare. On macOS its files normally
+# retain the host user's UID, which differs from the container's drem user and
+# triggers Git's dubious-ownership protection before clone. Trust only this
+# fixed, orchestrator-owned mount point rather than disabling the check
+# globally.
+RUN git config --system --add safe.directory /bare
+
 # ---- Node.js + npm (NodeSource) -------------------------------------------
 # The claude CLI is shipped as an npm package. Pin the Node major line via
 # NODE_MAJOR so image rebuilds are deterministic even when NodeSource updates

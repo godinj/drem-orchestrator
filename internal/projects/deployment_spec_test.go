@@ -34,6 +34,9 @@ func TestCompileProjectDeploymentSpec_DerivesProjectLayoutAndTemplateDefaults(t 
 	require.Equal(t, homeDir, data.HostHome)
 	require.Equal(t, DefaultOrchImage, data.OrchImage)
 	require.Equal(t, DefaultOrchHostPort, data.OrchHostPort)
+	require.Equal(t, DefaultInferenceEndpoint, data.InferenceEndpoint)
+	require.Equal(t, "auto_merge", data.IntegrationPolicy)
+	require.Equal(t, "local_automated", data.VerificationPolicy)
 	require.Equal(t, spec.ConfigPath, data.ConfigFilePath)
 	require.Equal(t, filepath.Join(homeDir, ".claude", ".credentials.json"), data.WorkerCredsPath)
 	require.Equal(t, filepath.Join(homeDir, ".codex", "auth.json"), data.WorkerCodexAuthPath)
@@ -99,6 +102,7 @@ func TestCompileProjectDeploymentSpec_PreservesExplicitDeploymentOverrides(t *te
 		HostExecTokenPath:      "/run/drem/host-exec.token",
 		TestCommand:            "make test",
 		CompileCommand:         "make build",
+		InferenceEndpoint:      "http://host.docker.internal:18090/v1/chat/completions",
 	}
 
 	spec, err := compileProjectDeploymentSpec(homeDir, "directory-name", data)
@@ -129,4 +133,5 @@ func TestCompileProjectDeploymentSpec_PreservesExplicitDeploymentOverrides(t *te
 	require.Equal(t, data.HostExecTokenPath, compiled.HostExecTokenPath)
 	require.Equal(t, data.TestCommand, compiled.TestCommand)
 	require.Equal(t, data.CompileCommand, compiled.CompileCommand)
+	require.Equal(t, data.InferenceEndpoint, compiled.InferenceEndpoint)
 }

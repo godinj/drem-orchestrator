@@ -60,6 +60,15 @@ func compileProjectDeploymentSpec(homeDir, projectName string, data TemplateData
 }
 
 func compileTemplateDefaults(data TemplateData, fallbackHome, fallbackProject string) TemplateData {
+	if data.IntegrationPolicy == "" {
+		data.IntegrationPolicy = "auto_merge"
+	}
+	if data.VerificationPolicy == "" {
+		data.VerificationPolicy = "local_automated"
+	}
+	if data.InferenceEndpoint == "" {
+		data.InferenceEndpoint = DefaultInferenceEndpoint
+	}
 	if data.OrchImage == "" {
 		if data.DevMode {
 			data.OrchImage = DefaultOrchDevImage
@@ -113,6 +122,10 @@ func compileTemplateDefaults(data TemplateData, fallbackHome, fallbackProject st
 	}
 	return data
 }
+
+// DefaultInferenceEndpoint is the in-stack GQ endpoint used by normal Linux
+// deployments. External-inference deployments set an explicit project value.
+const DefaultInferenceEndpoint = "http://gq:8090/v1/chat/completions"
 
 func defaultTestCommand(language string) string {
 	switch language {

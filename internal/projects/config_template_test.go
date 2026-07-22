@@ -84,6 +84,37 @@ func TestRenderConfig_ContainsWarmClassifierEndpoint(t *testing.T) {
 	require.Contains(t, string(out), `endpoint = "http://drem-classifier:8090/classify"`)
 }
 
+func TestRenderConfig_UsesExternalInferenceEndpoint(t *testing.T) {
+	out, err := projects.RenderConfig(projects.TemplateData{
+		BareRepoPath:      "/tmp/canvas.git",
+		Language:          projects.LanguageCpp,
+		InferenceEndpoint: "http://host.docker.internal:18090/v1/chat/completions",
+	})
+	require.NoError(t, err)
+	require.Contains(t, string(out),
+		`endpoint = "http://host.docker.internal:18090/v1/chat/completions"`)
+}
+
+func TestRenderConfig_WritesExplicitDeliveryPolicies(t *testing.T) {
+	out, err := projects.RenderConfig(projects.TemplateData{
+		BareRepoPath:       "/tmp/canvas.git",
+		Language:           projects.LanguageCpp,
+		IntegrationPolicy:  "prepare_branch",
+		VerificationPolicy: "external_ack",
+	})
+	require.NoError(t, err)
+
+	var parsed struct {
+		Delivery struct {
+			IntegrationPolicy  string `toml:"integration_policy"`
+			VerificationPolicy string `toml:"verification_policy"`
+		} `toml:"delivery"`
+	}
+	require.NoError(t, toml.Unmarshal(out, &parsed))
+	require.Equal(t, "prepare_branch", parsed.Delivery.IntegrationPolicy)
+	require.Equal(t, "external_ack", parsed.Delivery.VerificationPolicy)
+}
+
 // TestRenderConfig_PlannerPinsCodex asserts the generated drem.toml routes
 // planning through the Codex-backed warm planner container.
 func TestRenderConfig_PlannerPinsCodex(t *testing.T) {

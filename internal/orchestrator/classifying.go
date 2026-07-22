@@ -17,7 +17,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/bugreport"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/prompt"
-	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
 // ClassifierOutput represents the structured JSON output produced by a
@@ -473,18 +472,13 @@ func (o *Orchestrator) applyClassification(task *model.Task, output *ClassifierO
 	task.Context["target_files"] = files
 	task.Context["rationale"] = output.Rationale
 
-	event, err := state.TransitionTask(task, model.StatusBacklog, "classifier", nil)
-	if err != nil {
+	oldStatus := task.Status
+	if err := o.transitionTaskAtomic(task, model.StatusBacklog, "classifier", "classification_result",
+		"classification completed", map[string]any{"category": string(task.Category), "complexity_score": task.ComplexityScore}); err != nil {
 		return fmt.Errorf("apply classification: transition to backlog: %w", err)
 	}
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("apply classification: save task: %w", err)
-	}
-	if err := o.db.Create(event).Error; err != nil {
-		return fmt.Errorf("apply classification: save event: %w", err)
-	}
 	o.emit("task_updated", task)
-	o.publishTaskTransition(task.ID.String(), event.OldValue, event.NewValue, "classifier completed")
+	o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "classifier completed")
 	o.logger.Info("classifier completed, task moved to backlog",
 		"task_id", task.ID, "category", task.Category, "complexity", task.ComplexityScore)
 	return nil

@@ -45,12 +45,17 @@ type LogStreamer interface {
 // orchestrator.
 type GateOrchestrator interface {
 	HandlePlanApproved(taskID uuid.UUID) error
+	HandlePlanApprovedBy(taskID uuid.UUID, actor string) error
 	HandlePlanRejected(taskID uuid.UUID) error
+	HandlePlanRejectedBy(taskID uuid.UUID, actor string) error
 	HandleTestReviewApproved(taskID uuid.UUID) error
+	HandleTestReviewApprovedBy(taskID uuid.UUID, actor string) error
 	HandleTestReviewRejected(taskID uuid.UUID, feedback string) error
+	HandleTestReviewRejectedBy(taskID uuid.UUID, feedback, actor string) error
 	HandleTestPassed(taskID uuid.UUID) error
 	HandleTestFailed(taskID uuid.UUID) error
 	HandleClarificationAnswer(taskID uuid.UUID, answer string) error
+	HandleClarificationAnswerBy(taskID uuid.UUID, answer, actor string) error
 	// RetryTask transitions a task in StatusFailed back to StatusBacklog so
 	// the scheduler can redispatch it. Used by POST /tasks/{id}/retry and
 	// the TUI's retry action. Returns an error if the task is not in
@@ -110,11 +115,13 @@ func New(db *gorm.DB, token string, logs LogStreamer, project ProjectInfo) *Serv
 // standalone or behind their own router.
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
+	mutation := func(handler http.HandlerFunc) http.Handler { return s.requireMutationToken(handler) }
 
 	// Public project endpoints.
 	mux.HandleFunc("GET /projects", s.handleListProjects)
 	mux.HandleFunc("GET /projects/{name}/tasks", s.handleListTasks)
-	mux.HandleFunc("POST /projects/{name}/tasks", s.handleCreateTask)
+	mux.HandleFunc("GET /projects/{name}/tasks/{id}/artifact", s.handleGetDeliveryArtifact)
+	mux.Handle("POST /projects/{name}/tasks", mutation(s.handleCreateTask))
 	mux.HandleFunc("GET /projects/{name}/workers", s.handleListWorkers)
 	mux.HandleFunc("GET /projects/{name}/health/issues", s.handleHealthIssues)
 	mux.HandleFunc("GET /tasks/{id}/attempts", s.handleTaskAttempts)
@@ -125,17 +132,20 @@ func (s *Server) Routes() http.Handler {
 
 	// Gate mutation endpoints — delegate to the in-process orchestrator so
 	// the container remains the sole writer to the project DB.
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/approve", s.handleApproveTask)
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/reject", s.handleRejectTask)
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/pass", s.handlePassTask)
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/fail", s.handleFailTask)
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/answer", s.handleAnswerTask)
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/retry", s.handleRetryTask)
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/archive", s.handleArchiveTask)
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/comments", s.handleCommentTask)
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/audit-events", s.handleRecoveryAuditTask)
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/recover/stale-assignment", s.handleRecoverStaleAssignment)
-	mux.HandleFunc("POST /projects/{name}/tasks/{id}/recover/{action}", s.handleTaskRecovery)
+	mux.Handle("POST /projects/{name}/tasks/{id}/approve", mutation(s.handleApproveTask))
+	mux.Handle("POST /projects/{name}/tasks/{id}/reject", mutation(s.handleRejectTask))
+	mux.Handle("POST /projects/{name}/tasks/{id}/pass", mutation(s.handlePassTask))
+	mux.Handle("POST /projects/{name}/tasks/{id}/fail", mutation(s.handleFailTask))
+	mux.Handle("POST /projects/{name}/tasks/{id}/answer", mutation(s.handleAnswerTask))
+	mux.Handle("POST /projects/{name}/tasks/{id}/retry", mutation(s.handleRetryTask))
+	mux.Handle("POST /projects/{name}/tasks/{id}/archive", mutation(s.handleArchiveTask))
+	mux.Handle("POST /projects/{name}/tasks/{id}/comments", mutation(s.handleCommentTask))
+	mux.Handle("POST /projects/{name}/tasks/{id}/audit-events", mutation(s.handleRecoveryAuditTask))
+	mux.Handle("POST /projects/{name}/tasks/{id}/recover/stale-assignment", mutation(s.handleRecoverStaleAssignment))
+	mux.Handle("POST /projects/{name}/tasks/{id}/recover/{action}", mutation(s.handleTaskRecovery))
+	mux.Handle("POST /projects/{name}/tasks/{id}/verify", mutation(s.handleVerifyDelivery))
+	mux.Handle("POST /projects/{name}/tasks/{id}/integrate", mutation(s.handleIntegrateDelivery))
+	mux.Handle("POST /projects/{name}/tasks/{id}/request-rework", mutation(s.handleRequestDeliveryRework))
 
 	// Internal ingestion endpoint — protected by header auth.
 	mux.Handle("POST /internal/logs", s.requireAgentmonToken(http.HandlerFunc(s.handleIngest)))
@@ -153,6 +163,16 @@ func (s *Server) Routes() http.Handler {
 // every POST /internal/logs request. The value is compared for exact
 // byte-wise equality against Server.SharedToken.
 const agentmonTokenHeader = "X-Drem-Agentmon-Token"
+
+func (s *Server) requireMutationToken(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.SharedToken == "" || r.Header.Get("Authorization") != "Bearer "+s.SharedToken {
+			writeJSONError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 // requireAgentmonToken is a middleware that returns 401 Unauthorized for
 // any request whose X-Drem-Agentmon-Token header does not match the

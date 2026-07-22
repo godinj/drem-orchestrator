@@ -4,6 +4,11 @@ This directory holds the authoritative global docker-compose stack for
 drem-orchestrator. It brings up the shared services every per-project compose
 depends on: a host-local Docker registry, SGLang, and GQ.
 
+`remote-inference.override.yml` is the Docker Desktop control-plane overlay.
+It leaves SGLang/GQ on a remote GPU host and routes the local warm classifier
+through a loopback SSH tunnel exposed to containers as
+`host.docker.internal`. See `docs/containerization/install.md` §5c.
+
 Per `docs/prd-containerization.md` §Compose topology (Global compose) and
 §Phased rollout step 1.
 

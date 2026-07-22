@@ -19,6 +19,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -45,16 +46,18 @@ func main() {
 }
 
 type flags struct {
-	workDir           string
-	bareRepo          string
-	featureBranch     string
-	integrationBranch string
-	project           string
-	taskID            string
-	testCmd           string
-	orchURL           string
-	agentmonToken     string
-	dbDSN             string
+	workDir            string
+	bareRepo           string
+	featureBranch      string
+	integrationBranch  string
+	project            string
+	taskID             string
+	testCmd            string
+	orchURL            string
+	agentmonToken      string
+	dbDSN              string
+	expectedFeatureSHA string
+	expectedBaseSHA    string
 }
 
 func parseFlags(args []string) (flags, error) {
@@ -70,6 +73,8 @@ func parseFlags(args []string) (flags, error) {
 	fs.StringVar(&f.orchURL, "orch-url", "", "orchestrator base URL for /internal/logs (required)")
 	fs.StringVar(&f.agentmonToken, "agentmon-token", "", "bearer token for /internal/logs (required)")
 	fs.StringVar(&f.dbDSN, "gitref-db", "", "optional SQLite DSN for the gitref registry")
+	fs.StringVar(&f.expectedFeatureSHA, "expected-feature-sha", "", "authorized feature commit SHA (required)")
+	fs.StringVar(&f.expectedBaseSHA, "expected-base-sha", "", "verified integration base SHA (required)")
 	if err := fs.Parse(args); err != nil {
 		return f, err
 	}
@@ -92,10 +97,30 @@ func parseFlags(args []string) (flags, error) {
 	if f.agentmonToken == "" {
 		missing = append(missing, "--agentmon-token")
 	}
+	if f.expectedFeatureSHA == "" {
+		missing = append(missing, "--expected-feature-sha")
+	}
+	if f.expectedBaseSHA == "" {
+		missing = append(missing, "--expected-base-sha")
+	}
 	if len(missing) > 0 {
 		return f, fmt.Errorf("missing required flags: %v", missing)
 	}
+	if !isFullGitSHA(f.expectedFeatureSHA) {
+		return f, fmt.Errorf("--expected-feature-sha must be a full 40- or 64-character hexadecimal SHA")
+	}
+	if !isFullGitSHA(f.expectedBaseSHA) {
+		return f, fmt.Errorf("--expected-base-sha must be a full 40- or 64-character hexadecimal SHA")
+	}
 	return f, nil
+}
+
+func isFullGitSHA(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 // run executes a single merge. It returns the desired process exit code and
@@ -135,10 +160,12 @@ func run(ctx context.Context, args []string) (int, error) {
 	}
 
 	result, mergeErr := m.Merge(ctx, merger.MergeRequest{
-		FeatureBranch:     f.featureBranch,
-		IntegrationBranch: f.integrationBranch,
-		Project:           f.project,
-		TaskID:            f.taskID,
+		FeatureBranch:      f.featureBranch,
+		IntegrationBranch:  f.integrationBranch,
+		Project:            f.project,
+		TaskID:             f.taskID,
+		ExpectedFeatureSHA: f.expectedFeatureSHA,
+		ExpectedBaseSHA:    f.expectedBaseSHA,
 	})
 	if mergeErr != nil {
 		logger.Error("merge failed", "error", mergeErr)
@@ -170,6 +197,8 @@ func exitCodeFor(r *merger.MergeResult) int {
 		return 3
 	case "push_failed":
 		return 4
+	case "stale_evidence":
+		return 5
 	default:
 		return 1
 	}

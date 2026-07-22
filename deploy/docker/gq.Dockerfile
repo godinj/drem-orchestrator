@@ -19,6 +19,9 @@
 # ---------- build stage ----------
 FROM golang:1.25-alpine AS build
 
+ARG TARGETOS
+ARG TARGETARCH
+
 RUN apk add --no-cache git ca-certificates
 
 WORKDIR /src
@@ -33,7 +36,7 @@ COPY . .
 # Build a fully static binary so the final stage can be distroless/static.
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags="-s -w" -o /out/gq ./cmd/gq
 
 # ---------- runtime stage ----------

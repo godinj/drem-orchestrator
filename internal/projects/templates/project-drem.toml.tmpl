@@ -22,6 +22,10 @@ project_language = "{{.Language}}"
 [project]
   language = "{{.Language}}"
 
+[delivery]
+  integration_policy  = "{{.IntegrationPolicy}}"
+  verification_policy = "{{.VerificationPolicy}}"
+
 # Classifier routes through the warm drem-classifier container on drem-net.
 # - `direct=true` bypasses the legacy OpenCode subprocess path (unavailable
 #   inside the headless orch container; kept here so the inline-fallback
@@ -41,7 +45,7 @@ project_language = "{{.Language}}"
 # orch itself inside the container and therefore fails; gq on drem-net
 # forwards to sglang on drem-net.
 [direct_tool_agent]
-  endpoint = "http://gq:8090/v1/chat/completions"
+  endpoint = "{{.InferenceEndpoint}}"
   model    = "gemma4-26b"
   max_iterations = 50
 

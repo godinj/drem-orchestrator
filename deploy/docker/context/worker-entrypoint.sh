@@ -14,8 +14,9 @@
 #      recovery, user stories 17, 18).
 #   3. Spawn drem-watchdog in the background; it auto-commits and pushes
 #      every --interval and immediately after any --test-cmd returns 0.
-#   4. Exec the configured harness (claude, opencode, or codex) so the harness
-#      becomes PID 1 from tini's perspective and receives signals directly.
+#   4. Run the configured harness (claude, opencode, codex, or the direct
+#      agent), preserve its exit code, then synchronously stop the watchdog so
+#      its final commit-and-push completes before the container exits.
 #
 # Environment contract (set by the spawner in Spec.Env):
 #
@@ -31,9 +32,8 @@
 #   DREM_REMOTE_URL      optional override; defaults to /bare
 #   DREM_MODEL           optional model override forwarded to the harness
 #
-# The script deliberately avoids set -e around the harness exec so that a
-# harness that exits non-zero still allows tini to report the exit code
-# cleanly instead of being masked by shell error handling.
+# The script deliberately avoids set -e around the harness so that its exit
+# code is preserved even when watchdog finalization also needs to run.
 
 set -uo pipefail
 
@@ -129,16 +129,56 @@ fi
 log "starting drem-watchdog (agent=${DREM_AGENT_ID} branch=${DREM_BRANCH})"
 /usr/local/bin/drem-watchdog "${watchdog_args[@]}" &
 WATCHDOG_PID=$!
+HARNESS_PID=""
 
-# Forward SIGTERM/SIGINT to the watchdog before exiting so the final
-# commit-and-push attempt has a chance to run. tini will reap the watchdog
-# process once this shell exits.
-trap 'kill -TERM "${WATCHDOG_PID}" 2>/dev/null || true' TERM INT
+# Keep the entrypoint shell alive as the supervisor. A fast harness can finish
+# before the watchdog's first interval; synchronously terminating and waiting
+# for the watchdog is what guarantees its bounded final flush runs.
+stop_watchdog() {
+    if [[ -n "${WATCHDOG_PID:-}" ]]; then
+        kill -TERM "${WATCHDOG_PID}" 2>/dev/null || true
+        wait "${WATCHDOG_PID}" 2>/dev/null
+        WATCHDOG_EXIT=$?
+        WATCHDOG_PID=""
+        if [[ "${WATCHDOG_EXIT}" -ne 0 ]]; then
+            log "warning: drem-watchdog exited with status ${WATCHDOG_EXIT}"
+        fi
+    fi
+}
 
-# ---------- harness exec ---------------------------------------------------
-# The harness becomes the foreground process; its exit code is what the
-# orchestrator sees via Docker inspect. The watchdog remains a background
-# child of this shell until the trap above forwards the signal.
+forward_termination() {
+    if [[ -n "${HARNESS_PID:-}" ]]; then
+        kill -TERM "${HARNESS_PID}" 2>/dev/null || true
+    fi
+    if [[ -n "${WATCHDOG_PID:-}" ]]; then
+        kill -TERM "${WATCHDOG_PID}" 2>/dev/null || true
+    fi
+}
+
+run_harness() {
+    # Bash may attach /dev/null to an asynchronous command's stdin when job
+    # control is disabled. Apply the prompt redirection to the command that is
+    # actually backgrounded, rather than to this supervising function call.
+    if [[ -n "${HARNESS_STDIN_PATH:-}" ]]; then
+        "$@" < "${HARNESS_STDIN_PATH}" &
+    else
+        "$@" &
+    fi
+    HARNESS_PID=$!
+    wait "${HARNESS_PID}"
+    HARNESS_EXIT=$?
+    HARNESS_PID=""
+    log "harness exited with status ${HARNESS_EXIT}; finalizing watchdog"
+    stop_watchdog
+    exit "${HARNESS_EXIT}"
+}
+
+trap forward_termination TERM INT
+trap stop_watchdog EXIT
+
+# ---------- harness supervision -------------------------------------------
+# The harness is a child of this shell. run_harness preserves its exit code
+# while ensuring the watchdog has completed its final flush first.
 PROMPT_PATH="${DREM_PROMPT_PATH:-}"
 
 case "${HARNESS}" in
@@ -148,12 +188,12 @@ case "${HARNESS}" in
             claude_args+=(--model "${DREM_MODEL}")
         fi
         if [[ -n "${PROMPT_PATH}" && -f "${PROMPT_PATH}" ]]; then
-            log "execing claude with prompt from ${PROMPT_PATH}"
+            log "running claude with prompt from ${PROMPT_PATH}"
             # shellcheck disable=SC2094
-            exec claude "${claude_args[@]}" "$(cat "${PROMPT_PATH}")"
+            run_harness claude "${claude_args[@]}" "$(cat "${PROMPT_PATH}")"
         fi
-        log "execing claude in interactive mode (no DREM_PROMPT_PATH set)"
-        exec claude "${claude_args[@]}"
+        log "running claude in interactive mode (no DREM_PROMPT_PATH set)"
+        run_harness claude "${claude_args[@]}"
         ;;
 
     opencode)
@@ -162,9 +202,9 @@ case "${HARNESS}" in
             oc_args+=(--model "${DREM_MODEL}")
         fi
         if [[ -n "${PROMPT_PATH}" && -f "${PROMPT_PATH}" ]]; then
-            log "execing opencode with prompt from ${PROMPT_PATH}"
+            log "running opencode with prompt from ${PROMPT_PATH}"
             # shellcheck disable=SC2094
-            exec opencode "${oc_args[@]}" "$(cat "${PROMPT_PATH}")"
+            run_harness opencode "${oc_args[@]}" "$(cat "${PROMPT_PATH}")"
         fi
         die "opencode requires DREM_PROMPT_PATH (non-interactive harness)"
         ;;
@@ -178,16 +218,16 @@ case "${HARNESS}" in
             codex_args+=(-c "model_reasoning_effort=\"${DREM_EFFORT}\"")
         fi
         if [[ -n "${PROMPT_PATH}" && -f "${PROMPT_PATH}" ]]; then
-            log "execing codex with prompt from ${PROMPT_PATH}"
-            exec codex "${codex_args[@]}" - < "${PROMPT_PATH}"
+            log "running codex with prompt from ${PROMPT_PATH}"
+            HARNESS_STDIN_PATH="${PROMPT_PATH}" run_harness codex "${codex_args[@]}" -
         fi
         die "codex requires DREM_PROMPT_PATH (non-interactive harness)"
         ;;
 
     sglang-direct)
         if [[ -n "${PROMPT_PATH}" && -f "${PROMPT_PATH}" ]]; then
-            log "execing sglang-direct with prompt from ${PROMPT_PATH}"
-            exec drem-direct-agent --role "${DREM_AGENT:-coder}" --prompt "${PROMPT_PATH}" --workdir "${WORK_DIR}"
+            log "running sglang-direct with prompt from ${PROMPT_PATH}"
+            run_harness drem-direct-agent --role "${DREM_AGENT:-coder}" --prompt "${PROMPT_PATH}" --workdir "${WORK_DIR}"
         fi
         die "sglang-direct requires DREM_PROMPT_PATH (non-interactive harness)"
         ;;

@@ -49,7 +49,11 @@ func newContainerSessionRig(t *testing.T, featureName string) (*Orchestrator, *f
 	// Features map, returns the tempdir directly. Using a real dir so
 	// the os.Stat check inside resolveIntegrationWorktree succeeds.
 	integrationDir := filepath.Join(bare, "feature", featureName, "integration")
-	require.NoError(t, os.MkdirAll(integrationDir, 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Dir(integrationDir), 0o755))
+	_, err := testutil.RunGit([]string{"clone", "--branch", "feature/" + featureName, bare, integrationDir}, "")
+	require.NoError(t, err)
+	_, err = testutil.RunGit([]string{"branch", "main", "origin/main"}, integrationDir)
+	require.NoError(t, err)
 
 	fake := &fakeWorkerSpawner{}
 	o := &Orchestrator{

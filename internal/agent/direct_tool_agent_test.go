@@ -334,6 +334,27 @@ func TestRunDirectToolAgent_StopImmediately(t *testing.T) {
 	assert.Equal(t, 20, result.TokensOut)
 }
 
+func TestRunDirectToolAgent_SendsGQRoutingHeaders(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "coder", r.Header.Get("X-GQ-Caller"))
+		assert.Equal(t, "normal", r.Header.Get("X-GQ-Priority"))
+		resp := toolChatResponse{Choices: []toolChatChoice{{
+			Message: toolChatMsg{Role: "assistant", Content: "done"}, FinishReason: "stop",
+		}}}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.GQCaller = "coder"
+	cfg.GQPriority = "normal"
+	_, err := RunDirectToolAgent(cfg, "system", "task", nil, "")
+	require.NoError(t, err)
+}
+
 func TestRunDirectToolAgent_ToolCallLoop(t *testing.T) {
 	dir := t.TempDir()
 	// Create a file that the agent will "read".

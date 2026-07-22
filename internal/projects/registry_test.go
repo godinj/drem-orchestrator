@@ -35,10 +35,11 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		Path: path,
 		Projects: []projects.Project{
 			{
-				Name:         "drem-orchestrator",
-				BareRepoPath: bareRepo,
-				Language:     projects.LanguageGo,
-				OrchURL:      "http://localhost:8080",
+				Name:              "drem-orchestrator",
+				BareRepoPath:      bareRepo,
+				Language:          projects.LanguageGo,
+				OrchURL:           "http://localhost:8080",
+				InferenceEndpoint: "http://host.docker.internal:18090/v1/chat/completions",
 				ContainerImageOverrides: map[string]string{
 					"coder": "drem-worker-go:v1.2.3",
 				},
@@ -55,6 +56,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	require.Equal(t, bareRepo, got.BareRepoPath)
 	require.Equal(t, projects.LanguageGo, got.Language)
 	require.Equal(t, "http://localhost:8080", got.OrchURL)
+	require.Equal(t, "http://host.docker.internal:18090/v1/chat/completions", got.InferenceEndpoint)
 	require.Equal(t, "drem-worker-go:v1.2.3", got.ContainerImageOverrides["coder"])
 }
 
@@ -91,6 +93,21 @@ func TestAdd_RejectsInvalidLanguage(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "unsupported language")
+}
+
+func TestAdd_RejectsInvalidInferenceEndpoint(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	r := &projects.Registry{Path: filepath.Join(t.TempDir(), "projects.toml")}
+
+	err := r.Add(projects.Project{
+		Name:              "bad-endpoint",
+		BareRepoPath:      bareRepo,
+		Language:          projects.LanguageGo,
+		OrchURL:           "http://localhost:8080",
+		InferenceEndpoint: "host.docker.internal:18090",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "absolute http(s) URL")
 }
 
 // TestAdd_RejectsNonBareRepo verifies that BareRepoPath must actually be

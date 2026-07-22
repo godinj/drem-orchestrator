@@ -32,6 +32,8 @@ type DirectClassifierConfig struct {
 	MaxTokens   int           // Maximum tokens in the response
 	Temperature float64       // Sampling temperature (low = deterministic)
 	Timeout     time.Duration // HTTP request timeout
+	GQCaller    string        // GQ caller identity; ignored by direct SGLang
+	GQPriority  string        // GQ priority lane; ignored by direct SGLang
 }
 
 // DefaultDirectClassifierConfig returns a config targeting the local SGLang
@@ -43,6 +45,8 @@ func DefaultDirectClassifierConfig() DirectClassifierConfig {
 		MaxTokens:   1024,
 		Temperature: 0.1,
 		Timeout:     60 * time.Second,
+		GQCaller:    "classifier",
+		GQPriority:  "high",
 	}
 }
 
@@ -267,6 +271,12 @@ func Classify(ctx context.Context, cfg DirectClassifierConfig, in ClassifyInput)
 		return nil, fmt.Errorf("direct classifier: create request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if cfg.GQCaller != "" {
+		httpReq.Header.Set("X-GQ-Caller", cfg.GQCaller)
+	}
+	if cfg.GQPriority != "" {
+		httpReq.Header.Set("X-GQ-Priority", cfg.GQPriority)
+	}
 
 	client := &http.Client{Timeout: cfg.Timeout}
 	resp, err := client.Do(httpReq)

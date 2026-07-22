@@ -173,7 +173,13 @@ func (o *Orchestrator) reconcileStuckAgents() (int, error) {
 				// dispatch loop (e.g. processClassifyingTasks) re-picks
 				// the task. Only in_progress subtasks reset to backlog.
 				if task.Status == model.StatusInProgress {
-					task.Status = model.StatusBacklog
+					if err := o.transitionTaskAtomic(task, model.StatusBacklog, "orchestrator", "dead_agent_recovery",
+						"dead agent task rescheduled", map[string]any{"retry_count": retryCount + 1}); err != nil {
+						o.logger.Error("reconcile stuck: transition task for retry", "task_id", task.ID, "error", err)
+						continue
+					}
+					fixed++
+					continue
 				}
 				task.UpdatedAt = time.Now()
 				if err := o.db.Save(task).Error; err != nil {

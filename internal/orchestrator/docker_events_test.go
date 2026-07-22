@@ -169,7 +169,7 @@ func TestDispatchEvent_ExitZeroCurrentAttemptCompletesTaskAndAttempt(t *testing.
 	require.Empty(t, fake.spawnCalls, "exit 0 must not respawn")
 	var reloaded model.Task
 	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
-	require.Equal(t, model.StatusDone, reloaded.Status)
+	require.Equal(t, model.StatusTestingReady, reloaded.Status)
 	require.Nil(t, reloaded.AssignedAgentID)
 
 	var completed model.WorkerAttempt
@@ -180,6 +180,64 @@ func TestDispatchEvent_ExitZeroCurrentAttemptCompletesTaskAndAttempt(t *testing.
 	var evidence model.TaskEvent
 	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_completion_evidence").First(&evidence).Error)
 	require.Equal(t, "accepted", evidence.Details["evidence"].(map[string]any)["reason"])
+}
+
+func TestReconcileWorkerAttemptLifecycles_ConsumesSpawnerExitWithoutLeaseDelay(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	task := seedInFlightTask(t, o)
+	task.WorktreeBranch = ""
+	require.NoError(t, o.db.Save(task).Error)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-polled", "c-polled")
+	fake.listResult = spawner.ListWorkersResult{Workers: []spawner.WorkerInfo{{
+		ContainerID: attempt.ContainerID,
+		ProjectID:   o.projectID.String(),
+		WorkerID:    attempt.WorkerID,
+		Status:      string(container.StatusExited),
+	}}}
+	fake.inspectResult = spawner.InspectWorkerResult{
+		Status:     string(container.StatusExited),
+		ExitCode:   0,
+		FinishedAt: time.Now(),
+	}
+
+	o.reconcileWorkerAttemptLifecycles(context.Background())
+
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusTestingReady, reloaded.Status)
+	require.Nil(t, reloaded.AssignedAgentID)
+	var completed model.WorkerAttempt
+	require.NoError(t, o.db.First(&completed, "id = ?", attempt.ID).Error)
+	require.Equal(t, model.WorkerAttemptCompleted, completed.State)
+	require.NotNil(t, completed.CompletedAt)
+	require.Equal(t, []spawner.InspectWorkerParams{{ContainerID: attempt.ContainerID}}, fake.inspectCalls)
+}
+
+func TestReconcileWorkerAttemptLifecycles_IgnoresRunningAndDuplicateTerminalObservations(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	task := seedInFlightTask(t, o)
+	task.WorktreeBranch = ""
+	require.NoError(t, o.db.Save(task).Error)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-polled-once", "c-polled-once")
+	fake.listResult = spawner.ListWorkersResult{Workers: []spawner.WorkerInfo{{
+		ContainerID: attempt.ContainerID,
+		ProjectID:   o.projectID.String(),
+		Status:      string(container.StatusRunning),
+	}}}
+
+	o.reconcileWorkerAttemptLifecycles(context.Background())
+	require.Empty(t, fake.inspectCalls, "running workers do not need an exact terminal inspect")
+
+	fake.listResult.Workers[0].Status = string(container.StatusExited)
+	fake.inspectResult = spawner.InspectWorkerResult{Status: string(container.StatusExited), ExitCode: 0}
+	o.reconcileWorkerAttemptLifecycles(context.Background())
+	o.reconcileWorkerAttemptLifecycles(context.Background())
+
+	require.Len(t, fake.inspectCalls, 1, "finalized attempts must not be consumed twice")
+	var evidenceCount int64
+	require.NoError(t, o.db.Model(&model.TaskEvent{}).
+		Where("task_id = ? AND event_type = ?", task.ID, "worker_completion_evidence").Count(&evidenceCount).Error)
+	require.Equal(t, int64(1), evidenceCount)
 }
 
 func TestDispatchEvent_ExitZeroCompletesThroughBranchAcceptance(t *testing.T) {
@@ -205,13 +263,17 @@ func TestDispatchEvent_ExitZeroCompletesThroughBranchAcceptance(t *testing.T) {
 	require.Empty(t, fake.spawnCalls, "exit 0 must complete rather than respawn")
 	var reloaded model.Task
 	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
-	require.Equal(t, model.StatusDone, reloaded.Status)
+	require.Equal(t, model.StatusTestingReady, reloaded.Status)
 	require.Nil(t, reloaded.AssignedAgentID)
 	require.Contains(t, reloaded.Context, "branch_acceptance")
 
 	var accepted model.TaskEvent
 	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "branch_acceptance_accepted").First(&accepted).Error)
 	require.Equal(t, "accepted_worker_completion", accepted.Details["reason"])
+	var typedAcceptance model.BranchAcceptanceRecord
+	require.NoError(t, o.db.Where("task_id = ? AND accepted = ?", task.ID, true).First(&typedAcceptance).Error)
+	require.Equal(t, task.WorktreeBranch, typedAcceptance.Branch)
+	require.Equal(t, accepted.Details["head_sha"], typedAcceptance.HeadSHA)
 
 	var completed model.WorkerAttempt
 	require.NoError(t, o.db.First(&completed, "id = ?", attempt.ID).Error)

@@ -7,10 +7,38 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/godinj/drem-orchestrator/internal/merger"
 )
+
+func TestParseFlagsRequiresFullAuthorizedSHAs(t *testing.T) {
+	base := []string{
+		"--feature-branch", "feature/x", "--project", "p", "--task-id", "t",
+		"--test-cmd", "true", "--orch-url", "http://orch", "--agentmon-token", "tok",
+	}
+	_, err := parseFlags(base)
+	if err == nil || !strings.Contains(err.Error(), "--expected-feature-sha") {
+		t.Fatalf("missing SHA flags error = %v", err)
+	}
+
+	valid := append(append([]string{}, base...),
+		"--expected-feature-sha", strings.Repeat("a", 40),
+		"--expected-base-sha", strings.Repeat("b", 40),
+	)
+	if _, err := parseFlags(valid); err != nil {
+		t.Fatalf("valid exact SHA flags rejected: %v", err)
+	}
+
+	invalid := append(append([]string{}, base...),
+		"--expected-feature-sha", "short",
+		"--expected-base-sha", strings.Repeat("b", 40),
+	)
+	if _, err := parseFlags(invalid); err == nil {
+		t.Fatal("abbreviated SHA unexpectedly accepted")
+	}
+}
 
 func TestHTTPReporterUsesAgentmonTokenHeader(t *testing.T) {
 	var gotHeader string
