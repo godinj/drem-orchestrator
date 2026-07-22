@@ -40,9 +40,11 @@ Commands:
   approve <task-id-prefix>
   reject <task-id-prefix> [--reason TEXT]
   artifact <task-id-prefix>
-  verify <task-id-prefix> --result pass|fail --actor ID --environment FINGERPRINT --command CMD [...]
+  verify <task-id-prefix> --result pass|fail --actor ID --environment FINGERPRINT --command CMD [...] [--interactions FILE]
   integrate <task-id-prefix> --actor ID
-  request-rework <task-id-prefix> --actor ID --reason TEXT
+  request-rework <task-id-prefix> --actor ID --mode orchestrated|host-direct --reason TEXT [--scope PATH ...]
+  submit-rework <task-id-prefix> --actor ID --session UUID --commit SHA
+  abandon-rework <task-id-prefix> --actor ID --session UUID --reason TEXT
   pass <task-id-prefix>                         deprecated; delivery states fail closed
   fail <task-id-prefix>                         deprecated; delivery states fail closed
   answer <task-id-prefix> --body TEXT
@@ -160,6 +162,16 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 			return err
 		}
 		return handleRequestDeliveryRework(ctx, client, cfg, commandArgs, stdout)
+	case "submit-rework":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleSubmitHostRework(ctx, client, cfg, commandArgs, stdout)
+	case "abandon-rework":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleAbandonHostRework(ctx, client, cfg, commandArgs, stdout)
 	case "recover":
 		if err := requireProject(cfg); err != nil {
 			return err
@@ -542,7 +554,7 @@ type stringListFlag []string
 func (f *stringListFlag) String() string { return strings.Join(*f, ",") }
 func (f *stringListFlag) Set(value string) error {
 	if strings.TrimSpace(value) == "" {
-		return errors.New("command must not be empty")
+		return errors.New("value must not be empty")
 	}
 	*f = append(*f, value)
 	return nil
@@ -561,8 +573,14 @@ func handleVerifyDelivery(ctx context.Context, client *orchclient.Client, cfg cl
 	output := fs.String("output", "", "bounded command output summary")
 	exitCode := fs.Int("exit-code", 0, "command exit code")
 	idempotencyKey := fs.String("idempotency-key", "", "stable request idempotency key")
+	interactionsFile := fs.String("interactions", "", "JSON file containing Computer Use interaction evidence")
+	failureMode := fs.String("failure-mode", "", "orchestrated or host-direct")
+	failureReason := fs.String("failure-reason", "", "verification discrepancy requiring rework")
+	hostDirectAttest := fs.Bool("host-direct-attest-bounded", false, "attest that host-direct semantic exclusions are satisfied")
 	var commands stringListFlag
+	var allowedScope stringListFlag
 	fs.Var(&commands, "command", "verified command (repeatable)")
+	fs.Var(&allowedScope, "scope", "allowed repository path for host-direct rework (repeatable)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
@@ -585,12 +603,24 @@ func handleVerifyDelivery(ctx context.Context, client *orchclient.Client, cfg cl
 			Output: *output, StartedAt: now, FinishedAt: now,
 		})
 	}
+	var interactions []orchdto.VerificationInteractionDTO
+	if strings.TrimSpace(*interactionsFile) != "" {
+		interactions, err = readVerificationInteractions(*interactionsFile)
+		if err != nil {
+			return err
+		}
+	}
 	req := orchdto.VerifyDeliveryRequest{
 		ObservedStateVersion: envelope.Task.StateVersion,
 		ArtifactVersion:      envelope.Artifact.ArtifactVersion,
 		CommitSHA:            envelope.Artifact.CommitSHA,
 		Actor:                cfg.actor, EnvironmentFingerprint: *environment, Commands: evidence,
-		BinarySHA256: *binarySHA, Result: *result, Notes: *notes,
+		BinarySHA256: *binarySHA, Result: *result, Notes: *notes, Interactions: interactions,
+		FailureMode: normalizeReworkMode(*failureMode), FailureReason: *failureReason,
+		AllowedScope: []string(allowedScope),
+	}
+	if *hostDirectAttest {
+		req.HostDirectAttestation = completeHostDirectAttestation()
 	}
 	if strings.TrimSpace(*idempotencyKey) == "" {
 		req.IdempotencyKey = deterministicMutationKey("verify", taskID, req)
@@ -657,17 +687,21 @@ func handleIntegrateDelivery(ctx context.Context, client *orchclient.Client, cfg
 
 func handleRequestDeliveryRework(ctx context.Context, client *orchclient.Client, cfg cliConfig, args []string, stdout io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: dremctl request-rework <task-id-prefix> --actor ID --reason TEXT")
+		return errors.New("usage: dremctl request-rework <task-id-prefix> --actor ID --mode orchestrated|host-direct --reason TEXT")
 	}
 	taskArg := args[0]
 	fs := newFlagSet("request-rework")
 	reason := fs.String("reason", "", "why the exact artifact needs rework")
+	mode := fs.String("mode", "", "orchestrated or host-direct")
+	hostDirectAttest := fs.Bool("host-direct-attest-bounded", false, "attest that host-direct semantic exclusions are satisfied")
 	idempotencyKey := fs.String("idempotency-key", "", "stable request idempotency key")
+	var allowedScope stringListFlag
+	fs.Var(&allowedScope, "scope", "allowed repository path for host-direct rework (repeatable)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 || strings.TrimSpace(cfg.actor) == "" || strings.TrimSpace(*reason) == "" {
-		return errors.New("usage: dremctl request-rework <task-id-prefix> --actor ID --reason TEXT")
+	if fs.NArg() != 0 || strings.TrimSpace(cfg.actor) == "" || strings.TrimSpace(*reason) == "" || (*mode != "orchestrated" && *mode != "host-direct") {
+		return errors.New("usage: dremctl request-rework <task-id-prefix> --actor ID --mode orchestrated|host-direct --reason TEXT")
 	}
 	taskID, err := resolveTaskUUID(ctx, client, cfg.project, taskArg)
 	if err != nil {
@@ -683,6 +717,11 @@ func handleRequestDeliveryRework(ctx context.Context, client *orchclient.Client,
 		CommitSHA:            envelope.Artifact.CommitSHA,
 		Actor:                cfg.actor,
 		Reason:               *reason,
+		Mode:                 normalizeReworkMode(*mode),
+		AllowedScope:         []string(allowedScope),
+	}
+	if *hostDirectAttest {
+		req.HostDirectAttestation = completeHostDirectAttestation()
 	}
 	if strings.TrimSpace(*idempotencyKey) == "" {
 		req.IdempotencyKey = deterministicMutationKey("request-rework", taskID, req)
@@ -696,8 +735,138 @@ func handleRequestDeliveryRework(ctx context.Context, client *orchclient.Client,
 	if cfg.json {
 		return writeJSON(stdout, record)
 	}
-	fmt.Fprintf(stdout, "rework requested %s artifact=%d commit=%s reason=%s\n", shortID(record.ID), record.ArtifactVersion, record.CommitSHA, record.Reason)
+	fmt.Fprintf(stdout, "rework requested %s artifact=%d commit=%s mode=%s reason=%s", shortID(record.ID), record.ArtifactVersion, record.CommitSHA, record.Mode, record.Reason)
+	if record.HostReworkSessionID != "" {
+		fmt.Fprintf(stdout, " session=%s", record.HostReworkSessionID)
+	}
+	fmt.Fprintln(stdout)
 	return nil
+}
+
+func handleSubmitHostRework(ctx context.Context, client *orchclient.Client, cfg cliConfig, args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: dremctl submit-rework <task-id-prefix> --actor ID --session UUID --commit SHA")
+	}
+	taskArg := args[0]
+	fs := newFlagSet("submit-rework")
+	sessionID := fs.String("session", "", "active host-rework session UUID")
+	commitSHA := fs.String("commit", "", "replacement commit SHA")
+	idempotencyKey := fs.String("idempotency-key", "", "stable request idempotency key")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(cfg.actor) == "" || strings.TrimSpace(*sessionID) == "" || strings.TrimSpace(*commitSHA) == "" {
+		return errors.New("usage: dremctl submit-rework <task-id-prefix> --actor ID --session UUID --commit SHA")
+	}
+	taskID, err := resolveTaskUUID(ctx, client, cfg.project, taskArg)
+	if err != nil {
+		return err
+	}
+	stateVersion, err := taskStateVersion(ctx, client, cfg.project, taskID)
+	if err != nil {
+		return err
+	}
+	req := orchdto.SubmitHostReworkRequest{
+		ObservedStateVersion: stateVersion, SessionID: *sessionID, CommitSHA: *commitSHA, Actor: cfg.actor,
+	}
+	if strings.TrimSpace(*idempotencyKey) == "" {
+		req.IdempotencyKey = deterministicMutationKey("submit-rework", taskID, req)
+	} else {
+		req.IdempotencyKey = *idempotencyKey
+	}
+	submission, err := client.SubmitHostRework(ctx, cfg.project, taskID, req)
+	if err != nil {
+		return err
+	}
+	if cfg.json {
+		return writeJSON(stdout, submission)
+	}
+	fmt.Fprintf(stdout, "host rework submitted %s session=%s commit=%s paths=%d\n", shortID(submission.ID), submission.SessionID, submission.ReplacementCommitSHA, len(submission.ChangedPaths))
+	return nil
+}
+
+func handleAbandonHostRework(ctx context.Context, client *orchclient.Client, cfg cliConfig, args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: dremctl abandon-rework <task-id-prefix> --actor ID --session UUID --reason TEXT")
+	}
+	taskArg := args[0]
+	fs := newFlagSet("abandon-rework")
+	sessionID := fs.String("session", "", "active host-rework session UUID")
+	reason := fs.String("reason", "", "why the correction must return to orchestrated work")
+	idempotencyKey := fs.String("idempotency-key", "", "stable request idempotency key")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || strings.TrimSpace(cfg.actor) == "" || strings.TrimSpace(*sessionID) == "" || strings.TrimSpace(*reason) == "" {
+		return errors.New("usage: dremctl abandon-rework <task-id-prefix> --actor ID --session UUID --reason TEXT")
+	}
+	taskID, err := resolveTaskUUID(ctx, client, cfg.project, taskArg)
+	if err != nil {
+		return err
+	}
+	stateVersion, err := taskStateVersion(ctx, client, cfg.project, taskID)
+	if err != nil {
+		return err
+	}
+	req := orchdto.AbandonHostReworkRequest{
+		ObservedStateVersion: stateVersion, SessionID: *sessionID, Actor: cfg.actor, Reason: *reason,
+	}
+	if strings.TrimSpace(*idempotencyKey) == "" {
+		req.IdempotencyKey = deterministicMutationKey("abandon-rework", taskID, req)
+	} else {
+		req.IdempotencyKey = *idempotencyKey
+	}
+	session, err := client.AbandonHostRework(ctx, cfg.project, taskID, req)
+	if err != nil {
+		return err
+	}
+	if cfg.json {
+		return writeJSON(stdout, session)
+	}
+	fmt.Fprintf(stdout, "host rework abandoned %s disposition=%s\n", session.ID, session.Disposition)
+	return nil
+}
+
+func taskStateVersion(ctx context.Context, client *orchclient.Client, project string, taskID uuid.UUID) (uint64, error) {
+	tasks, err := listAllTasks(ctx, client, project)
+	if err != nil {
+		return 0, err
+	}
+	for _, task := range tasks {
+		if task.ID == taskID.String() {
+			return task.StateVersion, nil
+		}
+	}
+	return 0, errors.New("task not found in active task list")
+}
+
+func readVerificationInteractions(file string) ([]orchdto.VerificationInteractionDTO, error) {
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return nil, fmt.Errorf("read --interactions %s: %w", file, err)
+	}
+	var interactions []orchdto.VerificationInteractionDTO
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&interactions); err != nil {
+		return nil, fmt.Errorf("decode --interactions: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("decode --interactions: expected one JSON array")
+	}
+	return interactions, nil
+}
+
+func normalizeReworkMode(mode string) string {
+	return strings.ReplaceAll(strings.TrimSpace(mode), "-", "_")
+}
+
+func completeHostDirectAttestation() orchdto.HostDirectAttestationDTO {
+	return orchdto.HostDirectAttestationDTO{
+		AcceptanceCriteriaUnchanged: true, DependencyShapeUnchanged: true,
+		NoPersistenceOrSchema: true, NoSecurityOrAuth: true,
+		NoCrossProcessOwnership: true, NoBuildOrReleasePolicy: true,
+	}
 }
 
 func deterministicMutationKey(verb string, taskID uuid.UUID, request any) string {

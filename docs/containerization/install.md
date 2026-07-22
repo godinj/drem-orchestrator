@@ -380,10 +380,46 @@ dremctl verify <task-id-prefix> \
 dremctl integrate <task-id-prefix>
 ```
 
+Computer Use evidence is supplied as a JSON array with one object per
+acceptance criterion. Each object records its criterion ID, scenario, ordered
+steps, observed result, content-addressed media references, exact binary hash,
+application version, host fingerprint, PID, result, and discrepancy. Pass the
+file with `verify --interactions interactions.json`. A failed verification must
+also choose its route explicitly:
+
+```bash
+# Return broad or architectural work to an orchestrated worker.
+dremctl verify <task-id-prefix> \
+  --result fail --environment 'macos-arm64:xcode' \
+  --command 'scripts/dev verify' --binary-sha256 '<canvas-binary-sha256>' \
+  --interactions interactions.json \
+  --failure-mode orchestrated --failure-reason 'acceptance contract changed'
+
+# Reserve a semantically bounded repair for this same Codex task.
+dremctl verify <task-id-prefix> \
+  --result fail --environment 'macos-arm64:xcode' \
+  --command 'scripts/dev verify' --binary-sha256 '<canvas-binary-sha256>' \
+  --interactions interactions.json \
+  --failure-mode host-direct --failure-reason 'toolbar hit target is offset' \
+  --scope src/ui/Toolbar.cpp --scope tests/gui/test_toolbar.cpp \
+  --host-direct-attest-bounded
+dremctl submit-rework <task-id-prefix> \
+  --session '<session-uuid>' --commit '<canonical-feature-ref-sha>'
+```
+
+The host-direct attestation asserts that the repair preserves acceptance
+criteria, dependency shape, persistence/schema, security/authentication,
+cross-process ownership, and build/release policy. The server enforces one
+actor-owned session, no active worker attempt, exact canonical-ref equality,
+allowed-path scope, and a clean worktree. Use `abandon-rework` to release the
+session to orchestrated implementation when any of those assumptions stops
+being true.
+
 `approve` works only for `plan_review` and `test_review`. `testing_ready` is an
 automated preparation state. The older `pass` and `fail` commands remain
 recognized but fail closed for delivery states; use `verify --result pass`,
-`verify --result fail`, or `request-rework --reason ...`.
+`verify --result fail`, or `request-rework --mode orchestrated|host-direct
+--reason ...`.
 
 Writes `~/.drem/projects.toml` and generates
 `~/.drem/projects/drem-orchestrator/compose.yml` from

@@ -130,17 +130,53 @@ type DeliveryArtifactDTO struct {
 }
 
 type VerificationRecordDTO struct {
-	ID                     string               `json:"id"`
-	ArtifactID             string               `json:"artifact_id"`
-	ArtifactVersion        uint64               `json:"artifact_version"`
-	CommitSHA              string               `json:"commit_sha"`
-	VerifierActor          string               `json:"verifier_actor"`
-	EnvironmentFingerprint string               `json:"environment_fingerprint"`
-	Commands               []CommandEvidenceDTO `json:"commands"`
-	BinarySHA256           string               `json:"binary_sha256,omitempty"`
-	Result                 string               `json:"result"`
-	Notes                  string               `json:"notes,omitempty"`
-	CreatedAt              time.Time            `json:"created_at"`
+	ID                     string                       `json:"id"`
+	ArtifactID             string                       `json:"artifact_id"`
+	ArtifactVersion        uint64                       `json:"artifact_version"`
+	CommitSHA              string                       `json:"commit_sha"`
+	VerifierActor          string                       `json:"verifier_actor"`
+	EnvironmentFingerprint string                       `json:"environment_fingerprint"`
+	Commands               []CommandEvidenceDTO         `json:"commands"`
+	BinarySHA256           string                       `json:"binary_sha256,omitempty"`
+	Result                 string                       `json:"result"`
+	Notes                  string                       `json:"notes,omitempty"`
+	Interactions           []VerificationInteractionDTO `json:"interactions,omitempty"`
+	CreatedAt              time.Time                    `json:"created_at"`
+}
+
+type InteractionStepDTO struct {
+	Action   string `json:"action"`
+	Observed string `json:"observed"`
+}
+
+type InteractionEvidenceRefDTO struct {
+	ArtifactID string `json:"artifact_id"`
+	SHA256     string `json:"sha256"`
+	MediaType  string `json:"media_type"`
+}
+
+type VerificationInteractionDTO struct {
+	ID                    string                      `json:"id,omitempty"`
+	AcceptanceCriterionID string                      `json:"acceptance_criterion_id"`
+	ScenarioName          string                      `json:"scenario_name"`
+	Steps                 []InteractionStepDTO        `json:"steps"`
+	ObservedResult        string                      `json:"observed_result"`
+	EvidenceRefs          []InteractionEvidenceRefDTO `json:"evidence_refs"`
+	ApplicationVersion    string                      `json:"application_version"`
+	HostEnvironment       string                      `json:"host_environment"`
+	RunPID                int                         `json:"run_pid"`
+	Result                string                      `json:"result"`
+	Discrepancy           string                      `json:"discrepancy,omitempty"`
+	CreatedAt             time.Time                   `json:"created_at,omitempty"`
+}
+
+type HostDirectAttestationDTO struct {
+	AcceptanceCriteriaUnchanged bool `json:"acceptance_criteria_unchanged"`
+	DependencyShapeUnchanged    bool `json:"dependency_shape_unchanged"`
+	NoPersistenceOrSchema       bool `json:"no_persistence_or_schema"`
+	NoSecurityOrAuth            bool `json:"no_security_or_auth"`
+	NoCrossProcessOwnership     bool `json:"no_cross_process_ownership"`
+	NoBuildOrReleasePolicy      bool `json:"no_build_or_release_policy"`
 }
 
 // DeliveryEnvelopeDTO is the single read contract a host verifier needs.
@@ -151,16 +187,21 @@ type DeliveryEnvelopeDTO struct {
 }
 
 type VerifyDeliveryRequest struct {
-	ObservedStateVersion   uint64               `json:"observed_state_version"`
-	ArtifactVersion        uint64               `json:"artifact_version"`
-	CommitSHA              string               `json:"commit_sha"`
-	Actor                  string               `json:"actor"`
-	EnvironmentFingerprint string               `json:"environment_fingerprint"`
-	Commands               []CommandEvidenceDTO `json:"commands"`
-	BinarySHA256           string               `json:"binary_sha256,omitempty"`
-	Result                 string               `json:"result"`
-	Notes                  string               `json:"notes,omitempty"`
-	IdempotencyKey         string               `json:"idempotency_key"`
+	ObservedStateVersion   uint64                       `json:"observed_state_version"`
+	ArtifactVersion        uint64                       `json:"artifact_version"`
+	CommitSHA              string                       `json:"commit_sha"`
+	Actor                  string                       `json:"actor"`
+	EnvironmentFingerprint string                       `json:"environment_fingerprint"`
+	Commands               []CommandEvidenceDTO         `json:"commands"`
+	BinarySHA256           string                       `json:"binary_sha256,omitempty"`
+	Result                 string                       `json:"result"`
+	Notes                  string                       `json:"notes,omitempty"`
+	Interactions           []VerificationInteractionDTO `json:"interactions,omitempty"`
+	FailureMode            string                       `json:"failure_mode,omitempty"`
+	FailureReason          string                       `json:"failure_reason,omitempty"`
+	AllowedScope           []string                     `json:"allowed_scope,omitempty"`
+	HostDirectAttestation  HostDirectAttestationDTO     `json:"host_direct_attestation,omitempty"`
+	IdempotencyKey         string                       `json:"idempotency_key"`
 }
 
 type IntegrateDeliveryRequest struct {
@@ -180,20 +221,61 @@ type IntegrationAuthorizationDTO struct {
 }
 
 type RequestDeliveryReworkRequest struct {
+	ObservedStateVersion  uint64                   `json:"observed_state_version"`
+	ArtifactVersion       uint64                   `json:"artifact_version"`
+	CommitSHA             string                   `json:"commit_sha"`
+	Actor                 string                   `json:"actor"`
+	Reason                string                   `json:"reason"`
+	Mode                  string                   `json:"mode"`
+	AllowedScope          []string                 `json:"allowed_scope,omitempty"`
+	HostDirectAttestation HostDirectAttestationDTO `json:"host_direct_attestation,omitempty"`
+	IdempotencyKey        string                   `json:"idempotency_key"`
+}
+
+type DeliveryReworkRecordDTO struct {
+	ID                  string `json:"rework_record_id"`
+	TaskID              string `json:"task_id"`
+	ArtifactVersion     uint64 `json:"artifact_version"`
+	CommitSHA           string `json:"commit_sha"`
+	Reason              string `json:"reason"`
+	Mode                string `json:"mode"`
+	HostReworkSessionID string `json:"host_rework_session_id,omitempty"`
+}
+
+type SubmitHostReworkRequest struct {
 	ObservedStateVersion uint64 `json:"observed_state_version"`
-	ArtifactVersion      uint64 `json:"artifact_version"`
+	SessionID            string `json:"session_id"`
 	CommitSHA            string `json:"commit_sha"`
+	Actor                string `json:"actor"`
+	IdempotencyKey       string `json:"idempotency_key"`
+}
+
+type HostReworkSubmissionDTO struct {
+	ID                   string    `json:"submission_id"`
+	SessionID            string    `json:"session_id"`
+	TaskID               string    `json:"task_id"`
+	PriorCommitSHA       string    `json:"prior_commit_sha"`
+	ReplacementCommitSHA string    `json:"replacement_commit_sha"`
+	ChangedPaths         []string  `json:"changed_paths"`
+	CreatedAt            time.Time `json:"created_at"`
+}
+
+type AbandonHostReworkRequest struct {
+	ObservedStateVersion uint64 `json:"observed_state_version"`
+	SessionID            string `json:"session_id"`
 	Actor                string `json:"actor"`
 	Reason               string `json:"reason"`
 	IdempotencyKey       string `json:"idempotency_key"`
 }
 
-type DeliveryReworkRecordDTO struct {
-	ID              string `json:"rework_record_id"`
-	TaskID          string `json:"task_id"`
-	ArtifactVersion uint64 `json:"artifact_version"`
-	CommitSHA       string `json:"commit_sha"`
-	Reason          string `json:"reason"`
+type HostReworkSessionDTO struct {
+	ID                   string     `json:"session_id"`
+	TaskID               string     `json:"task_id"`
+	OwnerActor           string     `json:"owner_actor"`
+	Disposition          string     `json:"disposition"`
+	PriorCommitSHA       string     `json:"prior_commit_sha"`
+	ReplacementCommitSHA string     `json:"replacement_commit_sha,omitempty"`
+	FinishedAt           *time.Time `json:"finished_at,omitempty"`
 }
 
 // TaskAttemptLeaseDTO describes the currently active execution lease for a

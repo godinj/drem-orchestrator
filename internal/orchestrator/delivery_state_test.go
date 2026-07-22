@@ -486,6 +486,7 @@ func TestRequestDeliveryReworkIsExactAtomicAndIdempotent(t *testing.T) {
 				TaskID: task.ID, ObservedStateVersion: current.StateVersion,
 				ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
 				Actor: "codex:reviewer", Source: "test", Reason: "native behavior differs",
+				Mode:           model.DeliveryReworkOrchestrated,
 				IdempotencyKey: "rework-" + name,
 			}
 			record, err := orch.RequestDeliveryRework(req)

@@ -198,6 +198,27 @@ type VerificationRecord struct {
 	CreatedAt              time.Time
 }
 
+// VerificationInteraction is append-only Computer Use evidence for one
+// independently verifiable acceptance criterion on one immutable artifact.
+type VerificationInteraction struct {
+	ID                     uuid.UUID          `gorm:"type:text;primaryKey"`
+	TaskID                 uuid.UUID          `gorm:"type:text;not null;index"`
+	VerificationRecordID   uuid.UUID          `gorm:"type:text;not null;index"`
+	DeliveryArtifactID     uuid.UUID          `gorm:"type:text;not null;index"`
+	AcceptanceCriterionKey string             `gorm:"not null;index"`
+	ScenarioName           string             `gorm:"not null"`
+	InteractionStepsJSON   string             `gorm:"type:text;not null"`
+	ObservedResult         string             `gorm:"type:text;not null"`
+	EvidenceRefsJSON       string             `gorm:"type:text;not null"`
+	BinarySHA256           string             `gorm:"not null"`
+	ApplicationVersion     string             `gorm:"not null"`
+	HostEnvironment        string             `gorm:"not null"`
+	RunPID                 int                `gorm:"not null"`
+	Result                 VerificationResult `gorm:"not null;index"`
+	Discrepancy            string             `gorm:"type:text"`
+	CreatedAt              time.Time
+}
+
 // IntegrationAuthorization records the explicit decision to permit default
 // branch mutation for a verified artifact. Auto-merge policy creates the same
 // record with an orchestrator actor.
@@ -220,17 +241,61 @@ type IntegrationAuthorization struct {
 // decision to reject a current artifact without misrepresenting that decision
 // as a failed command-based verification.
 type DeliveryReworkRecord struct {
-	ID                 uuid.UUID `gorm:"type:text;primaryKey"`
-	TaskID             uuid.UUID `gorm:"type:text;not null;index"`
-	DeliveryArtifactID uuid.UUID `gorm:"type:text;not null;index"`
-	ArtifactVersion    uint64    `gorm:"not null"`
-	CommitSHA          string    `gorm:"not null"`
-	Actor              string    `gorm:"not null"`
-	Source             string    `gorm:"not null"`
-	Reason             string    `gorm:"not null"`
-	IdempotencyKey     string    `gorm:"not null;uniqueIndex"`
-	RequestHash        string    `gorm:"not null"`
-	CreatedAt          time.Time
+	ID                  uuid.UUID          `gorm:"type:text;primaryKey"`
+	TaskID              uuid.UUID          `gorm:"type:text;not null;index"`
+	DeliveryArtifactID  uuid.UUID          `gorm:"type:text;not null;index"`
+	ArtifactVersion     uint64             `gorm:"not null"`
+	CommitSHA           string             `gorm:"not null"`
+	Actor               string             `gorm:"not null"`
+	Source              string             `gorm:"not null"`
+	Reason              string             `gorm:"not null"`
+	Mode                DeliveryReworkMode `gorm:"not null;default:orchestrated;index"`
+	HostReworkSessionID *uuid.UUID         `gorm:"type:text;index"`
+	IdempotencyKey      string             `gorm:"not null;uniqueIndex"`
+	RequestHash         string             `gorm:"not null"`
+	CreatedAt           time.Time
+}
+
+// HostReworkSession grants one actor temporary ownership of a bounded local
+// correction. The start record is immutable; terminal submission fields are
+// updated atomically with the replacement-SHA audit row and task transition.
+type HostReworkSession struct {
+	ID                     uuid.UUID             `gorm:"type:text;primaryKey"`
+	TaskID                 uuid.UUID             `gorm:"type:text;not null;index"`
+	DeliveryArtifactID     uuid.UUID             `gorm:"type:text;not null;index"`
+	PriorArtifactVersion   uint64                `gorm:"not null"`
+	PriorCommitSHA         string                `gorm:"not null"`
+	Branch                 string                `gorm:"not null"`
+	OwnerActor             string                `gorm:"not null;index"`
+	Reason                 string                `gorm:"type:text;not null"`
+	AllowedScope           JSONArray             `gorm:"type:text;not null"`
+	Attestation            JSONField             `gorm:"type:text;not null"`
+	StartIdempotencyKey    string                `gorm:"not null;uniqueIndex"`
+	StartRequestHash       string                `gorm:"not null"`
+	Disposition            HostReworkDisposition `gorm:"not null;index"`
+	ReplacementCommitSHA   string
+	TerminalActor          string
+	TerminalReason         string  `gorm:"type:text"`
+	TerminalIdempotencyKey *string `gorm:"uniqueIndex"`
+	TerminalRequestHash    string
+	StartedAt              time.Time
+	FinishedAt             *time.Time
+	UpdatedAt              time.Time
+}
+
+// HostReworkSubmission is the append-only idempotency and exact-SHA record for
+// a successful host-owned correction.
+type HostReworkSubmission struct {
+	ID                   uuid.UUID `gorm:"type:text;primaryKey"`
+	SessionID            uuid.UUID `gorm:"type:text;not null;uniqueIndex"`
+	TaskID               uuid.UUID `gorm:"type:text;not null;index"`
+	PriorCommitSHA       string    `gorm:"not null"`
+	ReplacementCommitSHA string    `gorm:"not null;index"`
+	Actor                string    `gorm:"not null"`
+	IdempotencyKey       string    `gorm:"not null;uniqueIndex"`
+	RequestHash          string    `gorm:"not null"`
+	ChangedPaths         JSONArray `gorm:"type:text;not null"`
+	CreatedAt            time.Time
 }
 
 // MergeCompletion is the immutable terminal link between the accepted

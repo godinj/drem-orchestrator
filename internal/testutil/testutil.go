@@ -57,14 +57,18 @@ func NewTestDB(t *testing.T) *gorm.DB {
 		&model.PreliminaryGateRun{},
 		&model.DeliveryArtifact{},
 		&model.VerificationRecord{},
+		&model.VerificationInteraction{},
 		&model.IntegrationAuthorization{},
 		&model.DeliveryReworkRecord{},
+		&model.HostReworkSession{},
+		&model.HostReworkSubmission{},
 		&model.MergeCompletion{},
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
 	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_attempt_active_task_role_branch ON worker_attempts(task_id, agent_type, branch) WHERE completed_at IS NULL")
 	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_artifact_current_task ON delivery_artifacts(task_id) WHERE invalidated_at IS NULL")
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_host_rework_active_task ON host_rework_sessions(task_id) WHERE disposition = 'active'")
 	return db
 }
 
@@ -98,8 +102,11 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 		&model.PreliminaryGateRun{},
 		&model.DeliveryArtifact{},
 		&model.VerificationRecord{},
+		&model.VerificationInteraction{},
 		&model.IntegrationAuthorization{},
 		&model.DeliveryReworkRecord{},
+		&model.HostReworkSession{},
+		&model.HostReworkSubmission{},
 		&model.MergeCompletion{},
 	}
 	allModels := append(coreModels, extraModels...)
@@ -113,6 +120,7 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 	db.Exec("CREATE INDEX IF NOT EXISTS idx_tasks_project_created ON tasks(project_id, created_at DESC)")
 	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_worker_attempt_active_task_role_branch ON worker_attempts(task_id, agent_type, branch) WHERE completed_at IS NULL")
 	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_artifact_current_task ON delivery_artifacts(task_id) WHERE invalidated_at IS NULL")
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_host_rework_active_task ON host_rework_sessions(task_id) WHERE disposition = 'active'")
 	return db
 }
 
@@ -164,12 +172,16 @@ func NewSharedTestDB(t *testing.T) *gorm.DB {
 		&model.PreliminaryGateRun{},
 		&model.DeliveryArtifact{},
 		&model.VerificationRecord{},
+		&model.VerificationInteraction{},
 		&model.IntegrationAuthorization{},
 		&model.DeliveryReworkRecord{},
+		&model.HostReworkSession{},
+		&model.HostReworkSubmission{},
 		&model.MergeCompletion{},
 	); err != nil {
 		t.Fatalf("auto migrate: %v", err)
 	}
+	db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_host_rework_active_task ON host_rework_sessions(task_id) WHERE disposition = 'active'")
 	return db
 }
 

@@ -54,7 +54,7 @@ func TestRequestReworkUsesObservedArtifactAndAuthenticatedActor(t *testing.T) {
 	defer ts.Close()
 
 	var out, errOut bytes.Buffer
-	err := run(t.Context(), []string{"request-rework", testTaskID, "--reason", "native regression"}, mapEnv(map[string]string{
+	err := run(t.Context(), []string{"request-rework", testTaskID, "--mode", "orchestrated", "--reason", "native regression"}, mapEnv(map[string]string{
 		"DREM_ORCH_URL": ts.URL, "DREM_PROJECT": "canvas", "DREM_ORCH_TOKEN": "token-1", "DREM_ACTOR": "codex:thread-1",
 	}), &out, &errOut)
 	if err != nil {
@@ -72,6 +72,9 @@ func TestRequestReworkUsesObservedArtifactAndAuthenticatedActor(t *testing.T) {
 	}
 	if body.ObservedStateVersion != 7 || body.ArtifactVersion != 3 || body.CommitSHA != sha || body.Actor != "codex:thread-1" {
 		t.Fatalf("unexpected guarded request: %#v", body)
+	}
+	if body.Mode != "orchestrated" {
+		t.Fatalf("rework mode = %q", body.Mode)
 	}
 	if !strings.Contains(out.String(), "native regression") {
 		t.Fatalf("output = %q", out.String())

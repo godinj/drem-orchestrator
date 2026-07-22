@@ -184,7 +184,10 @@ To exit the dashboard, close or kill the tmux pane/session that owns it. The `q`
 | `./drem cli retry TASK_ID` | Retry failed work. |
 | `dremctl artifact TASK_ID` | Show the immutable branch/commit/base delivery envelope. |
 | `dremctl verify TASK_ID ...` | Record evidence for the exact current artifact. |
-| `dremctl request-rework TASK_ID --reason ...` | Invalidate the current artifact and return it to implementation. |
+| `dremctl request-rework TASK_ID --mode orchestrated --reason ...` | Invalidate the current artifact and return it to an orchestrated worker. |
+| `dremctl request-rework TASK_ID --mode host-direct --scope PATH ...` | Reserve a bounded repair for the current Codex verifier. |
+| `dremctl submit-rework TASK_ID --session UUID --commit SHA` | Submit the host-owned replacement commit for fresh deterministic gates. |
+| `dremctl abandon-rework TASK_ID --session UUID --reason ...` | Release host ownership and return the task to orchestration. |
 | `dremctl integrate TASK_ID` | Authorize an externally verified prepared branch for integration. |
 
 ## Project Registration

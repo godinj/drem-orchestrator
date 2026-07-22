@@ -1,9 +1,6 @@
 package orchestrator
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -32,6 +29,39 @@ type CommandEvidence struct {
 	FinishedAt time.Time `json:"finished_at"`
 }
 
+type InteractionStep struct {
+	Action   string `json:"action"`
+	Observed string `json:"observed"`
+}
+
+type InteractionEvidenceRef struct {
+	ArtifactID string `json:"artifact_id"`
+	SHA256     string `json:"sha256"`
+	MediaType  string `json:"media_type"`
+}
+
+type VerificationInteractionEvidence struct {
+	AcceptanceCriterionKey string                   `json:"acceptance_criterion_id"`
+	ScenarioName           string                   `json:"scenario_name"`
+	Steps                  []InteractionStep        `json:"steps"`
+	ObservedResult         string                   `json:"observed_result"`
+	EvidenceRefs           []InteractionEvidenceRef `json:"evidence_refs"`
+	ApplicationVersion     string                   `json:"application_version"`
+	HostEnvironment        string                   `json:"host_environment"`
+	RunPID                 int                      `json:"run_pid"`
+	Result                 model.VerificationResult `json:"result"`
+	Discrepancy            string                   `json:"discrepancy,omitempty"`
+}
+
+type HostDirectAttestation struct {
+	AcceptanceCriteriaUnchanged bool `json:"acceptance_criteria_unchanged"`
+	DependencyShapeUnchanged    bool `json:"dependency_shape_unchanged"`
+	NoPersistenceOrSchema       bool `json:"no_persistence_or_schema"`
+	NoSecurityOrAuth            bool `json:"no_security_or_auth"`
+	NoCrossProcessOwnership     bool `json:"no_cross_process_ownership"`
+	NoBuildOrReleasePolicy      bool `json:"no_build_or_release_policy"`
+}
+
 // ArtifactSnapshot is resolved from Git before the database transaction. The
 // exact object IDs, not the branch names, are the verification contract.
 type ArtifactSnapshot struct {
@@ -58,6 +88,11 @@ type VerifyDeliveryRequest struct {
 	BinarySHA256           string
 	Result                 model.VerificationResult
 	Notes                  string
+	Interactions           []VerificationInteractionEvidence
+	FailureMode            model.DeliveryReworkMode
+	FailureReason          string
+	AllowedScope           []string
+	HostDirectAttestation  HostDirectAttestation
 	IdempotencyKey         string
 }
 
@@ -73,14 +108,17 @@ type IntegrateDeliveryRequest struct {
 }
 
 type RequestDeliveryReworkRequest struct {
-	TaskID               uuid.UUID
-	ObservedStateVersion uint64
-	ArtifactVersion      uint64
-	CommitSHA            string
-	Actor                string
-	Source               string
-	Reason               string
-	IdempotencyKey       string
+	TaskID                uuid.UUID
+	ObservedStateVersion  uint64
+	ArtifactVersion       uint64
+	CommitSHA             string
+	Actor                 string
+	Source                string
+	Reason                string
+	Mode                  model.DeliveryReworkMode
+	AllowedScope          []string
+	HostDirectAttestation HostDirectAttestation
+	IdempotencyKey        string
 }
 
 // FreezeDeliveryArtifact atomically creates a versioned immutable handoff and
@@ -221,6 +259,7 @@ func (o *Orchestrator) RecordPreliminaryGateFailure(taskID uuid.UUID, gate deliv
 func (o *Orchestrator) VerifyDelivery(req VerifyDeliveryRequest) (*model.VerificationRecord, error) {
 	o.deliveryMu.Lock()
 	defer o.deliveryMu.Unlock()
+	normalizeVerifyRequest(&req)
 	requestHash, err := hashRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("verify delivery: hash request: %w", err)
@@ -277,25 +316,59 @@ func (o *Orchestrator) VerifyDelivery(req VerifyDeliveryRequest) (*model.Verific
 		if err := tx.Create(&record).Error; err != nil {
 			return fmt.Errorf("verify delivery: create record: %w", err)
 		}
+		interactionIDs, err := persistVerificationInteractions(tx, task, artifact, record, req)
+		if err != nil {
+			return err
+		}
 
 		target := model.StatusIntegrationReady
 		reason := "delivery artifact verified"
+		var reworkRecordID, hostReworkSessionID uuid.UUID
 		if req.Result == model.VerificationFailed {
 			target = model.StatusInProgress
 			reason = "delivery artifact verification failed"
+			rework := model.DeliveryReworkRecord{
+				ID: uuid.New(), TaskID: task.ID, DeliveryArtifactID: artifact.ID,
+				ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
+				Actor: req.Actor, Source: req.Source, Reason: req.FailureReason, Mode: req.FailureMode,
+				IdempotencyKey: req.IdempotencyKey, RequestHash: requestHash,
+			}
+			if req.FailureMode == model.DeliveryReworkHostDirect {
+				session, err := createHostReworkSession(tx, task, artifact, req.Actor, req.FailureReason, req.AllowedScope, req.HostDirectAttestation, req.IdempotencyKey, requestHash)
+				if err != nil {
+					return err
+				}
+				target = model.StatusHostRework
+				hostReworkSessionID = session.ID
+				rework.HostReworkSessionID = &session.ID
+			}
+			if err := tx.Create(&rework).Error; err != nil {
+				return fmt.Errorf("verify delivery: create rework record: %w", err)
+			}
+			reworkRecordID = rework.ID
 			now := time.Now()
 			if err := tx.Model(&model.DeliveryArtifact{}).Where("id = ? AND invalidated_at IS NULL", artifact.ID).
 				Updates(map[string]any{"invalidated_at": now, "invalidation_reason": "verification_failed"}).Error; err != nil {
 				return fmt.Errorf("verify delivery: invalidate artifact: %w", err)
 			}
 		}
-		return casTaskTransition(tx, &task, model.StatusVerificationReady, target, req.Actor, req.Source, reason, map[string]any{
+		references := map[string]any{
 			"delivery_artifact_id":   artifact.ID.String(),
 			"verification_record_id": record.ID.String(),
 			"artifact_version":       artifact.ArtifactVersion,
 			"commit_sha":             artifact.CommitSHA,
 			"result":                 string(req.Result),
-		})
+		}
+		if len(interactionIDs) != 0 {
+			references["interaction_record_ids"] = interactionIDs
+		}
+		if reworkRecordID != uuid.Nil {
+			references["delivery_rework_record_id"] = reworkRecordID.String()
+		}
+		if hostReworkSessionID != uuid.Nil {
+			references["host_rework_session_id"] = hostReworkSessionID.String()
+		}
+		return casTaskTransition(tx, &task, model.StatusVerificationReady, target, req.Actor, req.Source, reason, references)
 	})
 	if err != nil {
 		return nil, err
@@ -443,8 +516,19 @@ func (o *Orchestrator) RequestDeliveryRework(req RequestDeliveryReworkRequest) (
 		record = model.DeliveryReworkRecord{
 			ID: uuid.New(), TaskID: task.ID, DeliveryArtifactID: artifact.ID,
 			ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
-			Actor: req.Actor, Source: req.Source, Reason: req.Reason,
+			Actor: req.Actor, Source: req.Source, Reason: req.Reason, Mode: req.Mode,
 			IdempotencyKey: req.IdempotencyKey, RequestHash: requestHash,
+		}
+		target := model.StatusInProgress
+		var hostReworkSessionID uuid.UUID
+		if req.Mode == model.DeliveryReworkHostDirect {
+			session, err := createHostReworkSession(tx, task, artifact, req.Actor, req.Reason, req.AllowedScope, req.HostDirectAttestation, req.IdempotencyKey, requestHash)
+			if err != nil {
+				return err
+			}
+			target = model.StatusHostRework
+			hostReworkSessionID = session.ID
+			record.HostReworkSessionID = &session.ID
 		}
 		if err := tx.Create(&record).Error; err != nil {
 			return fmt.Errorf("request delivery rework: create record: %w", err)
@@ -454,10 +538,11 @@ func (o *Orchestrator) RequestDeliveryRework(req RequestDeliveryReworkRequest) (
 			Updates(map[string]any{"invalidated_at": now, "invalidation_reason": "rework_requested"}).Error; err != nil {
 			return fmt.Errorf("request delivery rework: invalidate artifact: %w", err)
 		}
-		return casTaskTransition(tx, &task, task.Status, model.StatusInProgress, req.Actor, req.Source,
+		return casTaskTransition(tx, &task, task.Status, target, req.Actor, req.Source,
 			"delivery rework requested", map[string]any{
 				"delivery_artifact_id": artifact.ID.String(), "artifact_version": artifact.ArtifactVersion,
 				"commit_sha": artifact.CommitSHA, "rework_record_id": record.ID.String(), "reason": req.Reason,
+				"mode": string(req.Mode), "host_rework_session_id": hostReworkSessionID.String(),
 			})
 	})
 	if err != nil {
@@ -661,192 +746,4 @@ func casSupersedeCompletedTestSubtask(tx *gorm.DB, task *model.Task, actor strin
 	}
 	persisted = true
 	return nil
-}
-
-// casClaimInProgressSubtask attaches a worker to a recovered, unassigned
-// in-progress child without inventing an in_progress -> in_progress status
-// transition. Assignment, state version, and audit event remain one CAS
-// transaction so competing dispatchers cannot both claim the child.
-func casClaimInProgressSubtask(tx *gorm.DB, task *model.Task, agentID uuid.UUID, actor, source string) error {
-	if task == nil || task.ParentTaskID == nil || task.Status != model.StatusInProgress {
-		return errors.New("only an in-progress subtask may be claimed without a status transition")
-	}
-	if task.AssignedAgentID != nil {
-		return fmt.Errorf("%w: subtask is already assigned", state.ErrStaleTransition)
-	}
-	originalVersion := task.StateVersion
-	originalUpdatedAt := task.UpdatedAt
-	now := time.Now()
-	task.AssignedAgentID = &agentID
-	task.StateVersion = originalVersion + 1
-	task.UpdatedAt = now
-	persisted := false
-	defer func() {
-		if !persisted {
-			task.AssignedAgentID = nil
-			task.StateVersion = originalVersion
-			task.UpdatedAt = originalUpdatedAt
-		}
-	}()
-
-	res := tx.Model(&model.Task{}).
-		Where("id = ? AND status = ? AND state_version = ? AND assigned_agent_id IS NULL",
-			task.ID, model.StatusInProgress, originalVersion).
-		Updates(map[string]any{"assigned_agent_id": agentID, "state_version": task.StateVersion, "updated_at": now})
-	if res.Error != nil {
-		return res.Error
-	}
-	if res.RowsAffected != 1 {
-		return fmt.Errorf("%w: in-progress subtask claim was already taken", state.ErrStaleTransition)
-	}
-	event := &model.TaskEvent{
-		ID: uuid.New(), TaskID: task.ID, EventType: "subtask_claimed",
-		OldValue: string(model.StatusInProgress), NewValue: string(model.StatusInProgress),
-		Details: model.JSONField{"evidence": map[string]any{
-			"task_id": task.ID.String(), "actor": actor, "source": source,
-			"reason": "unassigned in-progress subtask claimed", "timestamp": now.Format(time.RFC3339Nano),
-			"references": map[string]any{"agent_id": agentID.String()},
-		}},
-		Actor: actor, CreatedAt: now,
-	}
-	if err := tx.Create(event).Error; err != nil {
-		return fmt.Errorf("persist in-progress subtask claim event: %w", err)
-	}
-	persisted = true
-	return nil
-}
-
-func currentArtifact(tx *gorm.DB, taskID uuid.UUID) (model.DeliveryArtifact, error) {
-	var artifact model.DeliveryArtifact
-	if err := tx.Where("task_id = ? AND invalidated_at IS NULL", taskID).First(&artifact).Error; err != nil {
-		return artifact, fmt.Errorf("current delivery artifact: %w", err)
-	}
-	return artifact, nil
-}
-
-func validateArtifactSnapshot(snapshot ArtifactSnapshot) error {
-	if strings.TrimSpace(snapshot.Branch) == "" || strings.TrimSpace(snapshot.BaseBranch) == "" {
-		return errors.New("delivery artifact: branch and base branch are required")
-	}
-	if !validObjectID(snapshot.CommitSHA) || !validObjectID(snapshot.BaseSHA) {
-		return errors.New("delivery artifact: commit and base must be full Git object IDs")
-	}
-	if strings.TrimSpace(snapshot.Actor) == "" || strings.TrimSpace(snapshot.Source) == "" {
-		return errors.New("delivery artifact: actor and source are required")
-	}
-	if strings.TrimSpace(snapshot.GateWorkspaceID) == "" || strings.TrimSpace(snapshot.EnvironmentFingerprint) == "" {
-		return errors.New("delivery artifact: gate workspace and environment fingerprint are required")
-	}
-	if len(snapshot.PreliminaryEvidence) == 0 {
-		return errors.New("delivery artifact: preliminary evidence is required")
-	}
-	if err := validateCommandEvidence(snapshot.PreliminaryEvidence, true); err != nil {
-		return fmt.Errorf("delivery artifact: %w", err)
-	}
-	return nil
-}
-
-func validateVerifyRequest(req VerifyDeliveryRequest) error {
-	if req.TaskID == uuid.Nil || req.ObservedStateVersion == 0 || req.ArtifactVersion == 0 {
-		return errors.New("verify delivery: task ID, observed state version, and artifact version are required")
-	}
-	if !validObjectID(req.CommitSHA) {
-		return errors.New("verify delivery: full commit SHA is required")
-	}
-	if strings.TrimSpace(req.Actor) == "" || strings.TrimSpace(req.Source) == "" || strings.TrimSpace(req.EnvironmentFingerprint) == "" || strings.TrimSpace(req.IdempotencyKey) == "" {
-		return errors.New("verify delivery: actor, source, environment fingerprint, and idempotency key are required")
-	}
-	if req.Result != model.VerificationPassed && req.Result != model.VerificationFailed {
-		return errors.New("verify delivery: result must be pass or fail")
-	}
-	if len(req.CommandEvidence) == 0 {
-		return errors.New("verify delivery: command evidence is required")
-	}
-	if err := validateCommandEvidence(req.CommandEvidence, req.Result == model.VerificationPassed); err != nil {
-		return fmt.Errorf("verify delivery: %w", err)
-	}
-	if req.BinarySHA256 != "" && !validSHA256(req.BinarySHA256) {
-		return errors.New("verify delivery: binary SHA-256 must be 64 hexadecimal characters")
-	}
-	return nil
-}
-
-func validateCommandEvidence(commands []CommandEvidence, requireAllPassed bool) error {
-	for i, command := range commands {
-		if strings.TrimSpace(command.Command) == "" {
-			return fmt.Errorf("command evidence %d has an empty command", i+1)
-		}
-		if command.StartedAt.IsZero() || command.FinishedAt.IsZero() || command.FinishedAt.Before(command.StartedAt) {
-			return fmt.Errorf("command evidence %d has invalid timestamps", i+1)
-		}
-		if requireAllPassed && (!command.Passed || command.ExitCode != 0) {
-			return fmt.Errorf("passing verification contains failed command evidence %d", i+1)
-		}
-	}
-	return nil
-}
-
-func validSHA256(raw string) bool {
-	raw = strings.TrimSpace(raw)
-	if len(raw) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(raw)
-	return err == nil
-}
-
-func validateIntegrateRequest(req IntegrateDeliveryRequest) error {
-	if req.TaskID == uuid.Nil || req.VerificationRecordID == uuid.Nil || req.ObservedStateVersion == 0 || req.ArtifactVersion == 0 {
-		return errors.New("authorize integration: task, verification record, observed state version, and artifact version are required")
-	}
-	if !validObjectID(req.CommitSHA) {
-		return errors.New("authorize integration: full commit SHA is required")
-	}
-	if strings.TrimSpace(req.Actor) == "" || strings.TrimSpace(req.Source) == "" || strings.TrimSpace(req.IdempotencyKey) == "" {
-		return errors.New("authorize integration: actor, source, and idempotency key are required")
-	}
-	return nil
-}
-
-func validateReworkRequest(req RequestDeliveryReworkRequest) error {
-	if req.TaskID == uuid.Nil || req.ObservedStateVersion == 0 || req.ArtifactVersion == 0 {
-		return errors.New("request delivery rework: task, observed state version, and artifact version are required")
-	}
-	if !validObjectID(req.CommitSHA) {
-		return errors.New("request delivery rework: full commit SHA is required")
-	}
-	if strings.TrimSpace(req.Actor) == "" || strings.TrimSpace(req.Source) == "" || strings.TrimSpace(req.Reason) == "" || strings.TrimSpace(req.IdempotencyKey) == "" {
-		return errors.New("request delivery rework: actor, source, reason, and idempotency key are required")
-	}
-	return nil
-}
-
-func validObjectID(raw string) bool {
-	raw = strings.TrimSpace(raw)
-	if len(raw) != 40 && len(raw) != 64 {
-		return false
-	}
-	_, err := hex.DecodeString(raw)
-	return err == nil
-}
-
-func commandEvidenceField(commands []CommandEvidence) (model.JSONField, error) {
-	raw, err := json.Marshal(commands)
-	if err != nil {
-		return nil, err
-	}
-	var normalized any
-	if err := json.Unmarshal(raw, &normalized); err != nil {
-		return nil, err
-	}
-	return model.JSONField{"commands": normalized}, nil
-}
-
-func hashRequest(v any) (string, error) {
-	raw, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]), nil
 }

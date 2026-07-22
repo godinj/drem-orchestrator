@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -491,6 +492,27 @@ func TestClient_CreateTaskSpec_GuardsMissingObservation(t *testing.T) {
 	_, err := c.CreateTaskSpec(context.Background(), "canvas", orchdto.TaskSpecDTO{Title: "x", IdempotencyKey: "key"})
 	require.Error(t, err)
 	require.Equal(t, int32(0), atomic.LoadInt32(&h.calls))
+}
+
+func TestClient_SubmitHostRework_PostsGuardedContract(t *testing.T) {
+	taskID := uuid.New()
+	sessionID := uuid.New()
+	response, err := json.Marshal(orchdto.HostReworkSubmissionDTO{
+		ID: uuid.NewString(), SessionID: sessionID.String(), TaskID: taskID.String(),
+		PriorCommitSHA: strings.Repeat("a", 40), ReplacementCommitSHA: strings.Repeat("b", 40),
+		ChangedPaths: []string{"src/ui.cpp"},
+	})
+	require.NoError(t, err)
+	h := &gateHandler{status: http.StatusOK, respBody: string(response)}
+	c, _ := newGateClient(t, h)
+	req := orchdto.SubmitHostReworkRequest{
+		ObservedStateVersion: 4, SessionID: sessionID.String(), CommitSHA: strings.Repeat("b", 40),
+		Actor: "codex:thread", IdempotencyKey: "submit-1",
+	}
+	got, err := c.SubmitHostRework(context.Background(), "canvas", taskID, req)
+	require.NoError(t, err)
+	require.Equal(t, req.CommitSHA, got.ReplacementCommitSHA)
+	require.Equal(t, "/projects/canvas/tasks/"+taskID.String()+"/submit-rework", h.path)
 }
 
 // -- Comment -------------------------------------------------------------

@@ -148,6 +148,8 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /projects/{name}/tasks/{id}/verify", mutation(s.handleVerifyDelivery))
 	mux.Handle("POST /projects/{name}/tasks/{id}/integrate", mutation(s.handleIntegrateDelivery))
 	mux.Handle("POST /projects/{name}/tasks/{id}/request-rework", mutation(s.handleRequestDeliveryRework))
+	mux.Handle("POST /projects/{name}/tasks/{id}/submit-rework", mutation(s.handleSubmitHostRework))
+	mux.Handle("POST /projects/{name}/tasks/{id}/abandon-rework", mutation(s.handleAbandonHostRework))
 
 	// Internal ingestion endpoint — protected by header auth.
 	mux.Handle("POST /internal/logs", s.requireAgentmonToken(http.HandlerFunc(s.handleIngest)))

@@ -377,10 +377,30 @@ func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {
 				return fmt.Errorf("archive delivery task: expected exactly one current artifact, got %d", res.RowsAffected)
 			}
 		}
+		hostReworkSessionID := ""
+		if task.Status == model.StatusHostRework {
+			var session model.HostReworkSession
+			if err := tx.Where("task_id = ? AND disposition = ?", task.ID, model.HostReworkActive).First(&session).Error; err != nil {
+				return fmt.Errorf("archive host rework session: %w", err)
+			}
+			res := tx.Model(&model.HostReworkSession{}).Where("id = ? AND disposition = ?", session.ID, model.HostReworkActive).
+				Updates(map[string]any{
+					"disposition": model.HostReworkCancelled, "terminal_actor": req.Actor,
+					"terminal_reason": req.Reason, "finished_at": now, "updated_at": now,
+				})
+			if res.Error != nil {
+				return res.Error
+			}
+			if res.RowsAffected != 1 {
+				return fmt.Errorf("archive host rework session: session changed")
+			}
+			hostReworkSessionID = session.ID.String()
+		}
 		task.AssignedAgentID = nil
 		if err := orchestrator.GuardedTaskTransitionTx(tx, &task, model.StatusCancelled, req.Actor,
 			"archive_api", req.Reason, map[string]any{
 				"mode": req.Mode, "obsolete": true, "previous_worker_id": previousWorker,
+				"host_rework_session_id": hostReworkSessionID,
 			}); err != nil {
 			if errors.Is(err, state.ErrStaleTransition) {
 				return gorm.ErrInvalidTransaction
@@ -454,6 +474,7 @@ func archiveAllowedStatuses() []model.TaskStatus {
 		model.StatusTestReview,
 		model.StatusTestingReady,
 		model.StatusVerificationReady,
+		model.StatusHostRework,
 		model.StatusIntegrationReady,
 		model.StatusPaused,
 		model.StatusFailed,

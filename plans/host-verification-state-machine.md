@@ -1,13 +1,15 @@
 # Host-authoritative delivery, verification, and Codex iteration state machine
 
-Status: the exact-SHA artifact, verification, authorization, and merge-preflight
-core and a non-integrating Canvas delivery canary are complete. The preliminary
-gate now consumes typed branch acceptance, runs in a disposable exact-SHA
-worktree, records typed pass/failure evidence, and never launches a generic
-fixer. The surrounding protocol is still partial: workspace-setup failures are
-not yet recorded as typed gate runs, merge completion depends on a report
-delivered through the telemetry endpoint, and mutation attribution is not yet
-uniform.
+Status: the exact-SHA artifact, verification, authorization, merge-preflight,
+typed Cubase task ingestion, and actor-owned host-rework loop are complete. A
+non-integrating Canvas delivery canary also passed. The preliminary gate
+consumes typed branch acceptance, runs in a disposable exact-SHA worktree,
+records typed pass/failure evidence, and never launches a generic fixer.
+Computer Use results are retained per acceptance criterion and every host edit
+returns through a new commit, gate run, artifact version, and verification.
+The surrounding protocol is still partial: workspace-setup failures are not
+yet recorded as typed gate runs, merge completion depends on a report delivered
+through the telemetry endpoint, and mutation attribution is not yet uniform.
 
 This specification also defines two local Codex responsibilities that the
 original protocol left implicit: turning Cubase observations into durable
@@ -428,6 +430,12 @@ Step 8 is implemented through the authenticated task endpoint and
 addressable criteria are retained as typed records, media stays behind
 content-addressed references, replay is idempotent, equivalent active work is
 deduplicated, and unresolved questions enter `needs_clarification`.
+Step 9 is implemented through explicit orchestrated/host-direct routing,
+single-owner host-rework sessions, semantic and path-scope attestation,
+canonical-ref exact-SHA submission, fresh artifact creation, and structured
+Computer Use interaction evidence. Host rework is non-actionable and refuses
+active worker attempts; its owner may submit, abandon, or cancel it without
+discarding prior evidence.
 Typed recording for workspace-setup failures, merge-result ownership, and
 uniform mutation guards remain partial.
 Reconciliation no longer infers `done`: even when a

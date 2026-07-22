@@ -121,6 +121,28 @@ func (c *Client) RequestDeliveryRework(ctx context.Context, project string, task
 	return out, nil
 }
 
+func (c *Client) SubmitHostRework(ctx context.Context, project string, taskID uuid.UUID, req orchdto.SubmitHostReworkRequest) (orchdto.HostReworkSubmissionDTO, error) {
+	if strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.CommitSHA) == "" || strings.TrimSpace(req.Actor) == "" || strings.TrimSpace(req.IdempotencyKey) == "" || req.ObservedStateVersion == 0 {
+		return orchdto.HostReworkSubmissionDTO{}, &ErrBadRequest{Message: "submit rework requires session, commit, actor, observed state version, and idempotency key"}
+	}
+	var out orchdto.HostReworkSubmissionDTO
+	if err := c.postGate(ctx, gatePath(project, taskID, "submit-rework"), req, &out); err != nil {
+		return orchdto.HostReworkSubmissionDTO{}, err
+	}
+	return out, nil
+}
+
+func (c *Client) AbandonHostRework(ctx context.Context, project string, taskID uuid.UUID, req orchdto.AbandonHostReworkRequest) (orchdto.HostReworkSessionDTO, error) {
+	if strings.TrimSpace(req.SessionID) == "" || strings.TrimSpace(req.Actor) == "" || strings.TrimSpace(req.Reason) == "" || strings.TrimSpace(req.IdempotencyKey) == "" || req.ObservedStateVersion == 0 {
+		return orchdto.HostReworkSessionDTO{}, &ErrBadRequest{Message: "abandon rework requires session, actor, reason, observed state version, and idempotency key"}
+	}
+	var out orchdto.HostReworkSessionDTO
+	if err := c.postGate(ctx, gatePath(project, taskID, "abandon-rework"), req, &out); err != nil {
+		return orchdto.HostReworkSessionDTO{}, err
+	}
+	return out, nil
+}
+
 // Answer supplies a clarification answer for a task in the
 // needs_clarification status. body must be non-empty; empty or
 // whitespace-only bodies are rejected client-side (no roundtrip) so

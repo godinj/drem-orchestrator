@@ -18,6 +18,7 @@ const (
 	StatusInProgress         TaskStatus = "in_progress"
 	StatusTestingReady       TaskStatus = "testing_ready"
 	StatusVerificationReady  TaskStatus = "verification_ready"
+	StatusHostRework         TaskStatus = "host_rework"
 	StatusIntegrationReady   TaskStatus = "integration_ready"
 	StatusMerging            TaskStatus = "merging"
 	StatusPaused             TaskStatus = "paused"
@@ -39,6 +40,7 @@ var allTaskStatuses = []TaskStatus{
 	StatusInProgress,
 	StatusTestingReady,
 	StatusVerificationReady,
+	StatusHostRework,
 	StatusIntegrationReady,
 	StatusMerging,
 	StatusPaused,
@@ -47,6 +49,22 @@ var allTaskStatuses = []TaskStatus{
 	StatusRejected,
 	StatusCancelled,
 }
+
+type DeliveryReworkMode string
+
+const (
+	DeliveryReworkOrchestrated DeliveryReworkMode = "orchestrated"
+	DeliveryReworkHostDirect   DeliveryReworkMode = "host_direct"
+)
+
+type HostReworkDisposition string
+
+const (
+	HostReworkActive       HostReworkDisposition = "active"
+	HostReworkSubmitted    HostReworkDisposition = "submitted"
+	HostReworkOrchestrated HostReworkDisposition = "orchestrated"
+	HostReworkCancelled    HostReworkDisposition = "cancelled"
+)
 
 // String returns the string representation of a TaskStatus.
 func (s TaskStatus) String() string {

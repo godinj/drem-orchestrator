@@ -87,6 +87,9 @@ func Init(dbPath string, logPath ...string) (*gorm.DB, error) {
 	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_artifact_current_task ON delivery_artifacts(task_id) WHERE invalidated_at IS NULL").Error; err != nil {
 		return nil, fmt.Errorf("create current delivery artifact index: %w", err)
 	}
+	if err := db.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_host_rework_active_task ON host_rework_sessions(task_id) WHERE disposition = 'active'").Error; err != nil {
+		return nil, fmt.Errorf("create active host rework session index: %w", err)
+	}
 
 	return db, nil
 }
@@ -110,8 +113,11 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.PreliminaryGateRun{},
 		&model.DeliveryArtifact{},
 		&model.VerificationRecord{},
+		&model.VerificationInteraction{},
 		&model.IntegrationAuthorization{},
 		&model.DeliveryReworkRecord{},
+		&model.HostReworkSession{},
+		&model.HostReworkSubmission{},
 		&model.MergeCompletion{},
 		&model.BugReport{},
 		&model.BugReportComment{},

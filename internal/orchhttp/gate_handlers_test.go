@@ -43,6 +43,8 @@ type fakeGateOrch struct {
 	ErrRetryTask          error
 	ErrVerifyDelivery     error
 	ErrIntegrateDelivery  error
+	LastVerify            *orchestrator.VerifyDeliveryRequest
+	LastRework            *orchestrator.RequestDeliveryReworkRequest
 
 	// Call log for assertion.
 	Calls []fakeCall
@@ -143,6 +145,7 @@ func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error {
 }
 
 func (f *fakeGateOrch) VerifyDelivery(req orchestrator.VerifyDeliveryRequest) (*model.VerificationRecord, error) {
+	f.LastVerify = &req
 	f.logCall("VerifyDelivery", req.TaskID, req.Actor)
 	if f.ErrVerifyDelivery != nil {
 		return nil, f.ErrVerifyDelivery
@@ -177,13 +180,38 @@ func (f *fakeGateOrch) AuthorizeIntegration(req orchestrator.IntegrateDeliveryRe
 }
 
 func (f *fakeGateOrch) RequestDeliveryRework(req orchestrator.RequestDeliveryReworkRequest) (*model.DeliveryReworkRecord, error) {
+	f.LastRework = &req
 	f.logCall("RequestDeliveryRework", req.TaskID, req.Reason)
 	if err := f.transition(req.TaskID, model.StatusInProgress); err != nil {
 		return nil, err
 	}
 	return &model.DeliveryReworkRecord{
 		ID: uuid.New(), TaskID: req.TaskID, ArtifactVersion: req.ArtifactVersion,
-		CommitSHA: req.CommitSHA, Actor: req.Actor, Reason: req.Reason,
+		CommitSHA: req.CommitSHA, Actor: req.Actor, Reason: req.Reason, Mode: req.Mode,
+	}, nil
+}
+
+func (f *fakeGateOrch) SubmitHostRework(req orchestrator.SubmitHostReworkRequest) (*model.HostReworkSubmission, error) {
+	f.logCall("SubmitHostRework", req.TaskID, req.Actor)
+	if err := f.transition(req.TaskID, model.StatusTestingReady); err != nil {
+		return nil, err
+	}
+	return &model.HostReworkSubmission{
+		ID: uuid.New(), SessionID: req.SessionID, TaskID: req.TaskID,
+		PriorCommitSHA: strings.Repeat("a", 40), ReplacementCommitSHA: req.CommitSHA,
+		Actor: req.Actor, IdempotencyKey: req.IdempotencyKey, ChangedPaths: model.JSONArray{"src/ui.cpp"},
+	}, nil
+}
+
+func (f *fakeGateOrch) AbandonHostRework(req orchestrator.AbandonHostReworkRequest) (*model.HostReworkSession, error) {
+	f.logCall("AbandonHostRework", req.TaskID, req.Actor)
+	if err := f.transition(req.TaskID, model.StatusInProgress); err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	return &model.HostReworkSession{
+		ID: req.SessionID, TaskID: req.TaskID, OwnerActor: req.Actor,
+		Disposition: model.HostReworkOrchestrated, PriorCommitSHA: strings.Repeat("a", 40), FinishedAt: &now,
 	}, nil
 }
 
@@ -281,6 +309,9 @@ func integrateURL(base, task string) string {
 }
 func reworkURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/request-rework", base, projectName, task)
+}
+func submitReworkURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/submit-rework", base, projectName, task)
 }
 
 // ------------------------------------------------------------------
@@ -545,6 +576,20 @@ func TestVerifyDeliveryRoutesExactObservedEvidence(t *testing.T) {
 	require.Equal(t, "codex:test-thread", fake.Calls[0].Body)
 }
 
+func TestVerifyDeliveryRoutesComputerUseEvidenceAndHostDirectDecision(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task, artifact := createDeliveryArtifact(t, srv, project, model.StatusVerificationReady)
+	body := fmt.Sprintf(`{"observed_state_version":%d,"artifact_version":1,"commit_sha":%q,"actor":"codex:test-thread","environment_fingerprint":"macos-arm64","commands":[{"command":"scripts/dev build","passed":false,"exit_code":1,"started_at":"2026-07-22T00:00:00Z","finished_at":"2026-07-22T00:01:00Z"}],"binary_sha256":%q,"result":"fail","failure_mode":"host_direct","failure_reason":"bounded mismatch","allowed_scope":["src/ui"],"host_direct_attestation":{"acceptance_criteria_unchanged":true,"dependency_shape_unchanged":true,"no_persistence_or_schema":true,"no_security_or_auth":true,"no_cross_process_ownership":true,"no_build_or_release_policy":true},"interactions":[{"acceptance_criterion_id":"criterion-1","scenario_name":"drag","steps":[{"action":"drag","observed":"wrong range"}],"observed_result":"wrong range","evidence_refs":[{"artifact_id":"capture-1","sha256":%q,"media_type":"image/png"}],"application_version":"0.1","host_environment":"macos-arm64","run_pid":42,"result":"fail","discrepancy":"wrong range"}],"idempotency_key":"verify-cu-1"}`,
+		task.StateVersion, artifact.CommitSHA, strings.Repeat("b", 64), strings.Repeat("c", 64))
+	resp, responseBody := doJSON(t, http.MethodPost, verifyURL(base, task.ID.String()), body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(responseBody))
+	require.NotNil(t, fake.LastVerify)
+	require.Len(t, fake.LastVerify.Interactions, 1)
+	require.Equal(t, model.DeliveryReworkHostDirect, fake.LastVerify.FailureMode)
+	require.Equal(t, []string{"src/ui"}, fake.LastVerify.AllowedScope)
+	require.True(t, fake.LastVerify.HostDirectAttestation.NoSecurityOrAuth)
+}
+
 func TestVerifyDeliveryStaleArtifactReturnsConflict(t *testing.T) {
 	fake, project, srv, base := setupGateHTTPTest(t)
 	task, artifact := createDeliveryArtifact(t, srv, project, model.StatusVerificationReady)
@@ -580,13 +625,30 @@ func TestIntegrateDeliveryRoutesAcceptedVerification(t *testing.T) {
 func TestRequestDeliveryReworkRoutesExactArtifactAndReason(t *testing.T) {
 	fake, project, srv, base := setupGateHTTPTest(t)
 	task, artifact := createDeliveryArtifact(t, srv, project, model.StatusIntegrationReady)
-	body := fmt.Sprintf(`{"observed_state_version":%d,"artifact_version":1,"commit_sha":%q,"actor":"codex:test-thread","reason":"native regression","idempotency_key":"rework-1"}`,
+	body := fmt.Sprintf(`{"observed_state_version":%d,"artifact_version":1,"commit_sha":%q,"actor":"codex:test-thread","reason":"native regression","mode":"orchestrated","idempotency_key":"rework-1"}`,
 		task.StateVersion, artifact.CommitSHA)
 	resp, responseBody := doJSON(t, http.MethodPost, reworkURL(base, task.ID.String()), body)
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(responseBody))
 	require.Len(t, fake.Calls, 1)
 	require.Equal(t, "RequestDeliveryRework", fake.Calls[0].Method)
 	require.Equal(t, "native regression", fake.Calls[0].Body)
+	require.Equal(t, model.DeliveryReworkOrchestrated, fake.LastRework.Mode)
+}
+
+func TestSubmitHostReworkRoutesActorOwnedExactSHA(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "host correction", model.StatusHostRework)
+	sessionID := uuid.New()
+	commitSHA := strings.Repeat("d", 40)
+	body := fmt.Sprintf(`{"observed_state_version":%d,"session_id":%q,"commit_sha":%q,"actor":"codex:test-thread","idempotency_key":"submit-1"}`,
+		task.StateVersion, sessionID.String(), commitSHA)
+	resp, responseBody := doJSON(t, http.MethodPost, submitReworkURL(base, task.ID.String()), body)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(responseBody))
+	require.Len(t, fake.Calls, 1)
+	require.Equal(t, "SubmitHostRework", fake.Calls[0].Method)
+	var dto orchdto.HostReworkSubmissionDTO
+	require.NoError(t, json.Unmarshal(responseBody, &dto))
+	require.Equal(t, commitSHA, dto.ReplacementCommitSHA)
 }
 
 // ------------------------------------------------------------------
