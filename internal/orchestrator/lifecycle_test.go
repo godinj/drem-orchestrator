@@ -1092,7 +1092,11 @@ func TestTaskLifecycle_HappyPathToDone(t *testing.T) {
 		t.Fatalf("expected merging, got %s", afterMerging.Status)
 	}
 
-	if _, err := o.completeAuthorizedMerge(task.ID, strings.Repeat("c", 40)); err != nil {
+	var intent model.MergeIntent
+	if err := db.Where("task_id = ?", task.ID).Order("created_at DESC").First(&intent).Error; err != nil {
+		t.Fatalf("load merge intent: %v", err)
+	}
+	if _, err := o.completeAuthorizedMerge(task.ID, intent.ID, strings.Repeat("c", 40), "test"); err != nil {
 		t.Fatalf("completeAuthorizedMerge: %v", err)
 	}
 

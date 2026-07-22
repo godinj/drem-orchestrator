@@ -23,8 +23,10 @@ import (
 // stubMerger implements MergeDispatcher, returning preconfigured results.
 // results is consumed in order; after exhaustion it returns the last result.
 type stubMerger struct {
-	results []stubMergeResult
-	calls   int
+	results            []stubMergeResult
+	calls              int
+	forceTargetAdvance bool
+	advanceTarget      func(*model.Task)
 }
 
 type stubMergeResult struct {
@@ -32,13 +34,17 @@ type stubMergeResult struct {
 	err    error
 }
 
-func (s *stubMerger) Dispatch(_ context.Context, _ *model.Task) (*MergeResult, error) {
+func (s *stubMerger) Dispatch(_ context.Context, task *model.Task) (*MergeResult, error) {
 	idx := s.calls
 	if idx >= len(s.results) {
 		idx = len(s.results) - 1
 	}
 	s.calls++
-	return s.results[idx].result, s.results[idx].err
+	selected := s.results[idx]
+	if s.advanceTarget != nil && selected.result != nil && (selected.result.Success || s.forceTargetAdvance) {
+		s.advanceTarget(task)
+	}
+	return selected.result, selected.err
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +64,12 @@ func setupMergeTest(t *testing.T, merger *stubMerger) (*Orchestrator, *gorm.DB, 
 	featureDir := filepath.Join(t.TempDir(), "feature-test-branch")
 	if _, err := testutil.RunGit([]string{"worktree", "add", "-b", "feature/test-branch", featureDir, defaultBranch}, bareRepo); err != nil {
 		t.Fatalf("create feature worktree: %v", err)
+	}
+	testutil.CommitFile(t, featureDir, "merge-feature.txt", "authorized feature\n", "authorized feature")
+	merger.advanceTarget = func(task *model.Task) {
+		if _, err := testutil.RunGit([]string{"update-ref", "refs/heads/" + defaultBranch, task.WorktreeBranch}, bareRepo); err != nil {
+			t.Fatalf("advance authoritative target ref: %v", err)
+		}
 	}
 	for i := range merger.results {
 		if merger.results[i].result != nil && merger.results[i].result.Success && !validObjectID(merger.results[i].result.MergeCommit) {
@@ -322,6 +334,92 @@ func TestExecuteMerge_SuccessOnFirstAttempt(t *testing.T) {
 	db.First(&updated, "id = ?", task.ID)
 	if updated.Status != model.StatusDone {
 		t.Errorf("status = %q, want %q", updated.Status, model.StatusDone)
+	}
+}
+
+func TestExecuteMerge_RecoversCompletionWhenTelemetryIsLostAfterPush(t *testing.T) {
+	merger := &stubMerger{
+		results:            []stubMergeResult{{result: &MergeResult{Success: false, FailureReason: "unknown"}}},
+		forceTargetAdvance: true,
+	}
+	o, db, projectID := setupMergeTest(t, merger)
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+
+	if err := o.executeMerge(task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+	var updated model.Task
+	requireNoTestDBError(t, db.First(&updated, "id = ?", task.ID).Error)
+	if updated.Status != model.StatusDone {
+		t.Fatalf("status = %q, want done", updated.Status)
+	}
+	var completion model.MergeCompletion
+	requireNoTestDBError(t, db.First(&completion, "task_id = ?", task.ID).Error)
+	if completion.Source != "authoritative_target_ref" {
+		t.Fatalf("completion source = %q", completion.Source)
+	}
+	var intent model.MergeIntent
+	requireNoTestDBError(t, db.First(&intent, "id = ?", completion.MergeIntentID).Error)
+	if completion.MergeCommitSHA != intent.ArtifactCommitSHA {
+		t.Fatalf("merge SHA = %s, want target SHA %s", completion.MergeCommitSHA, intent.ArtifactCommitSHA)
+	}
+}
+
+func TestExecuteMerge_RecoversAlreadyAdvancedTargetWithoutDispatch(t *testing.T) {
+	merger := &stubMerger{results: []stubMergeResult{{result: &MergeResult{Success: false}}}}
+	o, db, projectID := setupMergeTest(t, merger)
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+	merger.advanceTarget(task)
+
+	if err := o.executeMerge(task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+	if merger.calls != 0 {
+		t.Fatalf("dispatch calls = %d, want 0", merger.calls)
+	}
+	var updated model.Task
+	requireNoTestDBError(t, db.First(&updated, "id = ?", task.ID).Error)
+	if updated.Status != model.StatusDone {
+		t.Fatalf("status = %q, want done", updated.Status)
+	}
+}
+
+func TestExecuteMerge_DoesNotRecoverUnrelatedTargetAdvance(t *testing.T) {
+	merger := &stubMerger{results: []stubMergeResult{{result: &MergeResult{Success: true}}}}
+	o, db, projectID := setupMergeTest(t, merger)
+	task := createMergingTask(t, db, projectID, model.CategoryStandard)
+	bareRepo := o.worktree.BareRepo()
+	baseSHA, err := testutil.RunGit([]string{"rev-parse", o.worktree.DefaultBranchName()}, bareRepo)
+	if err != nil {
+		t.Fatalf("resolve target base: %v", err)
+	}
+	treeSHA, err := testutil.RunGit([]string{"rev-parse", baseSHA + "^{tree}"}, bareRepo)
+	if err != nil {
+		t.Fatalf("resolve target tree: %v", err)
+	}
+	unrelatedSHA, err := testutil.RunGit([]string{"commit-tree", treeSHA, "-p", baseSHA, "-m", "unrelated target advance"}, bareRepo)
+	if err != nil {
+		t.Fatalf("create unrelated target commit: %v", err)
+	}
+	if _, err := testutil.RunGit([]string{"update-ref", "refs/heads/" + o.worktree.DefaultBranchName(), unrelatedSHA}, bareRepo); err != nil {
+		t.Fatalf("advance target ref: %v", err)
+	}
+
+	if err := o.executeMerge(task); err != nil {
+		t.Fatalf("executeMerge: %v", err)
+	}
+	if merger.calls != 0 {
+		t.Fatalf("dispatch calls = %d, want 0", merger.calls)
+	}
+	var updated model.Task
+	requireNoTestDBError(t, db.First(&updated, "id = ?", task.ID).Error)
+	if updated.Status != model.StatusInProgress {
+		t.Fatalf("status = %q, want in_progress", updated.Status)
+	}
+	var completions int64
+	requireNoTestDBError(t, db.Model(&model.MergeCompletion{}).Where("task_id = ?", task.ID).Count(&completions).Error)
+	if completions != 0 {
+		t.Fatalf("completion count = %d, want 0", completions)
 	}
 }
 

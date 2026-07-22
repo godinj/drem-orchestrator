@@ -5,9 +5,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/godinj/drem-orchestrator/internal/db"
+	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
 // TestTasksProjectCreatedIndexUsed is W2.1's regression test. It opens
@@ -55,6 +57,42 @@ func TestTasksProjectCreatedIndexUsed(t *testing.T) {
 	planStr := plan.String()
 	require.Contains(t, planStr, "idx_tasks_project_created",
 		"EXPLAIN QUERY PLAN did not use idx_tasks_project_created; plan was:\n%s", planStr)
+}
+
+func TestMergeCompletionMigrationAcceptsHistoricalRowsWithoutIntent(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	gdb, err := db.Init(dbPath)
+	require.NoError(t, err)
+
+	sqlDB, err := gdb.DB()
+	require.NoError(t, err)
+	rows, err := sqlDB.Query(`PRAGMA table_info(merge_completions)`)
+	require.NoError(t, err)
+	defer rows.Close()
+	intentNullable := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		require.NoError(t, rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey))
+		if name == "merge_intent_id" {
+			intentNullable = notNull == 0
+		}
+	}
+	require.NoError(t, rows.Err())
+	require.True(t, intentNullable, "merge_intent_id must remain nullable for pre-migration completion rows")
+
+	legacyID, taskID := uuid.New(), uuid.New()
+	require.NoError(t, gdb.Exec(`INSERT INTO merge_completions
+		(id, task_id, merge_intent_id, delivery_artifact_id, verification_record_id,
+		 integration_authorization_id, artifact_commit_sha, verified_base_sha,
+		 merge_commit_sha, actor, source, created_at)
+		VALUES (?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+		legacyID, taskID, uuid.New(), uuid.New(), uuid.New(), strings.Repeat("a", 40),
+		strings.Repeat("b", 40), strings.Repeat("c", 40), "orchestrator", "legacy").Error)
+	var completion model.MergeCompletion
+	require.NoError(t, gdb.First(&completion, "id = ?", legacyID).Error)
+	require.Equal(t, uuid.Nil, completion.MergeIntentID)
 }
 
 func TestAttemptEventsMigrationCreatesQueryIndexes(t *testing.T) {

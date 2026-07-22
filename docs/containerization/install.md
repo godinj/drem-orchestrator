@@ -415,6 +415,15 @@ allowed-path scope, and a clean worktree. Use `abandon-rework` to release the
 session to orchestrated implementation when any of those assumptions stops
 being true.
 
+Integration authorization also writes an immutable merge intent before the
+task enters `merging`. On every merge tick, the orchestrator reads the
+authoritative target ref directly from the local bare repository and completes
+the task only when that ref contains the intent's exact artifact commit. It
+checks both before and after merger-container dispatch, so a successful push is
+recoverable even if the container exits unexpectedly or Agentmon never delivers
+its result. `/internal/logs` merge reports remain useful diagnostics, but are
+not part of the correctness path.
+
 `approve` works only for `plan_review` and `test_review`. `testing_ready` is an
 automated preparation state. The older `pass` and `fail` commands remain
 recognized but fail closed for delivery states; use `verify --result pass`,

@@ -30,6 +30,16 @@ func TestParseFlagsRequiresFullAuthorizedSHAs(t *testing.T) {
 	if _, err := parseFlags(valid); err != nil {
 		t.Fatalf("valid exact SHA flags rejected: %v", err)
 	}
+	withoutTelemetry := []string{
+		"--feature-branch", "feature/x", "--project", "p", "--task-id", "t", "--test-cmd", "true",
+		"--expected-feature-sha", strings.Repeat("a", 40), "--expected-base-sha", strings.Repeat("b", 40),
+	}
+	if _, err := parseFlags(withoutTelemetry); err != nil {
+		t.Fatalf("telemetry-free merge flags rejected: %v", err)
+	}
+	if _, err := parseFlags(append(withoutTelemetry, "--orch-url", "http://orch")); err == nil {
+		t.Fatal("one-sided telemetry configuration unexpectedly accepted")
+	}
 
 	invalid := append(append([]string{}, base...),
 		"--expected-feature-sha", "short",

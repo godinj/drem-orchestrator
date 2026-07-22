@@ -298,11 +298,30 @@ type HostReworkSubmission struct {
 	CreatedAt            time.Time
 }
 
+// MergeIntent is the immutable authority for one exact integration attempt.
+// It is written before a task enters merging, so completion can be recovered
+// from Git even when container result telemetry is lost.
+type MergeIntent struct {
+	ID                         uuid.UUID `gorm:"type:text;primaryKey"`
+	TaskID                     uuid.UUID `gorm:"type:text;not null;index"`
+	DeliveryArtifactID         uuid.UUID `gorm:"type:text;not null;index"`
+	VerificationRecordID       uuid.UUID `gorm:"type:text;not null;index"`
+	IntegrationAuthorizationID uuid.UUID `gorm:"type:text;not null;uniqueIndex"`
+	ArtifactCommitSHA          string    `gorm:"not null;index"`
+	FeatureBranch              string    `gorm:"not null"`
+	TargetBranch               string    `gorm:"not null"`
+	TargetBaseSHA              string    `gorm:"not null"`
+	Actor                      string    `gorm:"not null"`
+	Source                     string    `gorm:"not null"`
+	CreatedAt                  time.Time
+}
+
 // MergeCompletion is the immutable terminal link between the accepted
 // delivery evidence and the commit written to the integration branch.
 type MergeCompletion struct {
 	ID                         uuid.UUID `gorm:"type:text;primaryKey"`
 	TaskID                     uuid.UUID `gorm:"type:text;not null;uniqueIndex"`
+	MergeIntentID              uuid.UUID `gorm:"type:text;uniqueIndex"` // nullable only for pre-migration historical rows
 	DeliveryArtifactID         uuid.UUID `gorm:"type:text;not null;index"`
 	VerificationRecordID       uuid.UUID `gorm:"type:text;not null;index"`
 	IntegrationAuthorizationID uuid.UUID `gorm:"type:text;not null;index"`

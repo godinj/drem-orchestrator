@@ -411,9 +411,11 @@ func itoaExit(n int) string {
 	return string(buf[i:])
 }
 
-func TestDispatchMerge_PreflightEmptyAgentmonTokenDoesNotSpawn(t *testing.T) {
+func TestDispatchMerge_EmptyTelemetryCoordinatesStillSpawns(t *testing.T) {
 	o, fake := dispatchMergeTestRig(t)
+	o.orchURL = ""
 	o.agentmonToken = ""
+	t.Setenv("DREM_ORCH_URL", "")
 	t.Setenv("DREM_AGENTMON_TOKEN", "")
 
 	task := &model.Task{
@@ -424,21 +426,16 @@ func TestDispatchMerge_PreflightEmptyAgentmonTokenDoesNotSpawn(t *testing.T) {
 		WorktreeBranch: "feature/no-token",
 	}
 	require.NoError(t, o.db.Create(task).Error)
+	seedDispatchArtifact(t, o, task)
 
 	res, err := o.dispatchMerge(context.Background(), task)
-	require.Nil(t, res)
-	require.ErrorIs(t, err, errMergerPreflightFailed)
-	require.Empty(t, fake.spawnCalls, "preflight failure must not spawn a merger container")
-
-	var reloaded model.Task
-	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
-	require.Equal(t, model.StatusFailed, reloaded.Status)
-	require.Equal(t, terminalMergerFailurePreflight, reloaded.Context[contextKeyTerminalMergerFailureReason])
-
-	var events []model.TaskEvent
-	require.NoError(t, o.db.Where("task_id = ? AND event_type = ?", task.ID, "worker_spawn_failed").Find(&events).Error)
-	require.Len(t, events, 1)
-	require.Equal(t, terminalMergerFailurePreflight, events[0].Details["reason"])
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Len(t, fake.spawnCalls, 1)
+	_, hasURL := findFlagValue(fake.spawnCalls[0].Cmd, "--orch-url")
+	_, hasToken := findFlagValue(fake.spawnCalls[0].Cmd, "--agentmon-token")
+	require.False(t, hasURL)
+	require.False(t, hasToken)
 }
 
 // TestBuildMergerArgv_EmptyTestCmdRejected covers Bug H's fail-close

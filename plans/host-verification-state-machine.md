@@ -8,8 +8,10 @@ records typed pass/failure evidence, and never launches a generic fixer.
 Computer Use results are retained per acceptance criterion and every host edit
 returns through a new commit, gate run, artifact version, and verification.
 The surrounding protocol is still partial: workspace-setup failures are not
-yet recorded as typed gate runs, merge completion depends on a report delivered
-through the telemetry endpoint, and mutation attribution is not yet uniform.
+yet recorded as typed gate runs, and mutation attribution is not yet uniform.
+Merge completion no longer depends on telemetry: an immutable intent is
+created before `merging`, and reconciliation proves the accepted artifact is
+contained in the authoritative target ref before it writes `done`.
 
 This specification also defines two local Codex responsibilities that the
 original protocol left implicit: turning Cubase observations into durable
@@ -436,8 +438,13 @@ canonical-ref exact-SHA submission, fresh artifact creation, and structured
 Computer Use interaction evidence. Host rework is non-actionable and refuses
 active worker attempts; its owner may submit, abandon, or cancel it without
 discarding prior evidence.
-Typed recording for workspace-setup failures, merge-result ownership, and
-uniform mutation guards remain partial.
+Step 11 is implemented through an immutable merge intent linked to the exact
+artifact, passing verification, authorization, feature ref, target ref, and
+verified base. The orchestrator reconciles target Git state before and after
+each merger dispatch, completes already-pushed work without redispatch, and
+refuses unrelated target advances. Agentmon reporting is optional telemetry;
+historical completion rows remain migration-compatible. Typed recording for
+workspace-setup failures and uniform mutation guards remain partial.
 Reconciliation no longer infers `done`: even when a
 recorded branch base proves the feature advanced and Git proves it is already
 on the default branch, the task returns through `testing_ready` for an exact

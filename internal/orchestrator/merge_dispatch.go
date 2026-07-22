@@ -144,10 +144,9 @@ func failureReasonForExit(code int) string {
 }
 
 // dispatchMerge spawns a merger container to execute the feature→main merge
-// and waits for it to exit. The merger's structured output is expected to
-// have been ingested into task.Context by agentmon during the container's
-// life; this function reads that context back into a MergeResult when the
-// container finishes.
+// and waits for it to exit. Agentmon may enrich failure diagnostics in
+// task.Context, but merge completion is recovered independently from the
+// typed intent and authoritative target ref.
 //
 // The existing retry_policy.go state (MergeAttemptState) is unchanged —
 // executeMerge still drives the state machine; this function only replaces
@@ -182,37 +181,18 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 		bareRepo = o.worktree.BareRepo()
 	}
 
-	// Resolve the in-cluster orch URL and agentmon token. SetInternalEndpoints
-	// is called from cmd/drem/main.go with the DREM_ORCH_URL and
-	// DREM_AGENTMON_TOKEN env vars. Tests that drive dispatchMerge without
-	// calling SetInternalEndpoints (rare) fall through to empty strings,
-	// which the merger rejects with a parseFlags error at startup — fail
-	// fast rather than silently skipping result ingestion.
+	// Resolve optional telemetry coordinates. Correctness does not depend on
+	// them: the orchestrator reconciles completion from the target ref.
 	orchURL := o.orchURL
 	if orchURL == "" {
 		orchURL = os.Getenv("DREM_ORCH_URL")
-	}
-	if strings.TrimSpace(orchURL) == "" {
-		err := fmt.Errorf("orch URL is empty")
-		markTerminalMergerFailure(task, terminalMergerFailurePreflight)
-		o.recordSpawnFailureEventWithReason(task, "merger", terminalMergerFailurePreflight, err)
-		if failErr := o.failTask(task, "merger preflight failed: orch URL is empty"); failErr != nil {
-			return nil, fmt.Errorf("dispatchMerge: %w: %v", errMergerPreflightFailed, failErr)
-		}
-		return nil, errMergerPreflightFailed
 	}
 	agentmonToken := o.agentmonToken
 	if agentmonToken == "" {
 		agentmonToken = os.Getenv("DREM_AGENTMON_TOKEN")
 	}
-	if strings.TrimSpace(agentmonToken) == "" {
-		err := fmt.Errorf("agentmon token is empty")
-		markTerminalMergerFailure(task, terminalMergerFailurePreflight)
-		o.recordSpawnFailureEventWithReason(task, "merger", terminalMergerFailurePreflight, err)
-		if failErr := o.failTask(task, "merger preflight failed: agentmon token is empty"); failErr != nil {
-			return nil, fmt.Errorf("dispatchMerge: %w: %v", errMergerPreflightFailed, failErr)
-		}
-		return nil, errMergerPreflightFailed
+	if strings.TrimSpace(orchURL) == "" || strings.TrimSpace(agentmonToken) == "" {
+		orchURL, agentmonToken = "", ""
 	}
 
 	artifact, err := currentArtifact(o.db, task.ID)
@@ -413,10 +393,11 @@ func buildMergerArgv(task *model.Task, projectID, integrationBranch, testCmd, or
 		"--project", projectID,
 		"--task-id", task.ID.String(),
 		"--test-cmd", testCmd,
-		"--orch-url", orchURL,
-		"--agentmon-token", agentmonToken,
 		"--expected-feature-sha", expectedFeatureSHA,
 		"--expected-base-sha", expectedBaseSHA,
+	}
+	if strings.TrimSpace(orchURL) != "" && strings.TrimSpace(agentmonToken) != "" {
+		argv = append(argv, "--orch-url", orchURL, "--agentmon-token", agentmonToken)
 	}
 	// Only include --integration-branch when it differs from the merger's
 	// own default ("master"). For plain main / master the flag is

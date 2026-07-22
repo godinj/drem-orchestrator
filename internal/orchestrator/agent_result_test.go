@@ -859,9 +859,13 @@ func TestExecuteMerge_Success(t *testing.T) {
 
 	// Stub the MergeDispatcher to return a successful merge without
 	// spawning a real merger container.
-	o.mergeDispatcher = &stubMerger{results: []stubMergeResult{
+	merger := &stubMerger{results: []stubMergeResult{
 		{result: &MergeResult{Success: true, MergeCommit: strings.Repeat("c", 40)}, err: nil},
 	}}
+	merger.advanceTarget = func(task *model.Task) {
+		runGitCmd(t, bareRepoPath, "update-ref", "refs/heads/main", task.WorktreeBranch)
+	}
+	o.mergeDispatcher = merger
 
 	taskID := uuid.New()
 	task := model.Task{

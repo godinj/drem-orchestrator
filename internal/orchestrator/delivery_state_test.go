@@ -287,12 +287,17 @@ func TestVerifyAndAuthorizeDeliveryExactEvidence(t *testing.T) {
 	var merging model.Task
 	require.NoError(t, orch.db.First(&merging, "id = ?", task.ID).Error)
 	require.Equal(t, model.StatusMerging, merging.Status)
+	var intent model.MergeIntent
+	require.NoError(t, orch.db.First(&intent, "integration_authorization_id = ?", auth.ID).Error)
+	require.Equal(t, artifact.CommitSHA, intent.ArtifactCommitSHA)
+	require.Equal(t, artifact.BaseSHA, intent.TargetBaseSHA)
 
-	completion, err := orch.completeAuthorizedMerge(task.ID, strings.Repeat("d", 40))
+	completion, err := orch.completeAuthorizedMerge(task.ID, intent.ID, strings.Repeat("d", 40), "test")
 	require.NoError(t, err)
 	require.Equal(t, artifact.ID, completion.DeliveryArtifactID)
 	require.Equal(t, record.ID, completion.VerificationRecordID)
 	require.Equal(t, auth.ID, completion.IntegrationAuthorizationID)
+	require.Equal(t, intent.ID, completion.MergeIntentID)
 	var done model.Task
 	require.NoError(t, orch.db.First(&done, "id = ?", task.ID).Error)
 	require.Equal(t, model.StatusDone, done.Status)

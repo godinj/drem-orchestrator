@@ -456,11 +456,22 @@ func (o *Orchestrator) AuthorizeIntegration(req IntegrateDeliveryRequest) (*mode
 		if err := tx.Create(&auth).Error; err != nil {
 			return fmt.Errorf("authorize integration: create record: %w", err)
 		}
+		intent := model.MergeIntent{
+			ID: uuid.New(), TaskID: task.ID, DeliveryArtifactID: artifact.ID,
+			VerificationRecordID: verification.ID, IntegrationAuthorizationID: auth.ID,
+			ArtifactCommitSHA: artifact.CommitSHA, FeatureBranch: artifact.Branch,
+			TargetBranch: artifact.BaseBranch, TargetBaseSHA: artifact.BaseSHA,
+			Actor: req.Actor, Source: req.Source,
+		}
+		if err := tx.Create(&intent).Error; err != nil {
+			return fmt.Errorf("authorize integration: create merge intent: %w", err)
+		}
 		return casTaskTransition(tx, &task, model.StatusIntegrationReady, model.StatusMerging, req.Actor, req.Source,
 			"verified artifact authorized for integration", map[string]any{
 				"delivery_artifact_id":         artifact.ID.String(),
 				"verification_record_id":       verification.ID.String(),
 				"integration_authorization_id": auth.ID.String(),
+				"merge_intent_id":              intent.ID.String(),
 				"artifact_version":             artifact.ArtifactVersion,
 				"commit_sha":                   artifact.CommitSHA,
 			})

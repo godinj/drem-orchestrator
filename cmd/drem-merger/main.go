@@ -70,8 +70,8 @@ func parseFlags(args []string) (flags, error) {
 	fs.StringVar(&f.project, "project", "", "project identifier (required)")
 	fs.StringVar(&f.taskID, "task-id", "", "task identifier (required)")
 	fs.StringVar(&f.testCmd, "test-cmd", "", "project test command executed via sh -c (required)")
-	fs.StringVar(&f.orchURL, "orch-url", "", "orchestrator base URL for /internal/logs (required)")
-	fs.StringVar(&f.agentmonToken, "agentmon-token", "", "bearer token for /internal/logs (required)")
+	fs.StringVar(&f.orchURL, "orch-url", "", "optional orchestrator base URL for telemetry")
+	fs.StringVar(&f.agentmonToken, "agentmon-token", "", "optional bearer token for telemetry")
 	fs.StringVar(&f.dbDSN, "gitref-db", "", "optional SQLite DSN for the gitref registry")
 	fs.StringVar(&f.expectedFeatureSHA, "expected-feature-sha", "", "authorized feature commit SHA (required)")
 	fs.StringVar(&f.expectedBaseSHA, "expected-base-sha", "", "verified integration base SHA (required)")
@@ -91,12 +91,6 @@ func parseFlags(args []string) (flags, error) {
 	if f.testCmd == "" {
 		missing = append(missing, "--test-cmd")
 	}
-	if f.orchURL == "" {
-		missing = append(missing, "--orch-url")
-	}
-	if f.agentmonToken == "" {
-		missing = append(missing, "--agentmon-token")
-	}
 	if f.expectedFeatureSHA == "" {
 		missing = append(missing, "--expected-feature-sha")
 	}
@@ -105,6 +99,9 @@ func parseFlags(args []string) (flags, error) {
 	}
 	if len(missing) > 0 {
 		return f, fmt.Errorf("missing required flags: %v", missing)
+	}
+	if (f.orchURL == "") != (f.agentmonToken == "") {
+		return f, fmt.Errorf("--orch-url and --agentmon-token must be supplied together")
 	}
 	if !isFullGitSHA(f.expectedFeatureSHA) {
 		return f, fmt.Errorf("--expected-feature-sha must be a full 40- or 64-character hexadecimal SHA")
@@ -140,7 +137,10 @@ func run(ctx context.Context, args []string) (int, error) {
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	reporter := newHTTPReporter(f.orchURL, f.agentmonToken, logger)
+	var reporter merger.MergeReporter
+	if f.orchURL != "" {
+		reporter = newHTTPReporter(f.orchURL, f.agentmonToken, logger)
+	}
 	registry, regCleanup, regErr := newRegistry(f.dbDSN, logger)
 	if regErr != nil {
 		// Non-fatal — fall back to a no-op registry and continue. A desynced

@@ -35,6 +35,12 @@ func (o *Orchestrator) dispatchMerges() {
 // dispatchMerge (the merger-container path); the legacy in-process
 // mergerClient has been retired.
 func (o *Orchestrator) executeMerge(task *model.Task) error {
+	if completion, recovered, err := o.recoverAuthorizedMerge(task); err != nil {
+		return fmt.Errorf("execute merge: recover before dispatch: %w", err)
+	} else if recovered {
+		o.recordRecoveredMerge(task, completion)
+		return nil
+	}
 	ready, err := o.preflightMergeArtifact(task)
 	if err != nil {
 		return fmt.Errorf("execute merge: delivery preflight: %w", err)
@@ -46,30 +52,26 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 		return nil
 	}
 
-	result, err := o.mergeDispatch(context.Background(), task)
-	if err != nil {
+	result, dispatchErr := o.mergeDispatch(context.Background(), task)
+	if completion, recovered, err := o.recoverAuthorizedMerge(task); err != nil {
+		return fmt.Errorf("execute merge: recover after dispatch: %w", err)
+	} else if recovered {
+		o.recordRecoveredMerge(task, completion)
+		return nil
+	}
+	if dispatchErr != nil {
 		// Fail-close: dispatchMerge refused to spawn because TestCommand
 		// is empty and has already transitioned the task to FAILED with
 		// the operator-facing reason. No further state-machine work is
 		// needed here; returning nil avoids a spurious error log.
-		if errors.Is(err, errMergerSpawnSkippedEmptyTestCmd) || errors.Is(err, errMergerPreflightFailed) {
+		if errors.Is(dispatchErr, errMergerSpawnSkippedEmptyTestCmd) || errors.Is(dispatchErr, errMergerPreflightFailed) {
 			return nil
 		}
-		return fmt.Errorf("execute merge: %w", err)
+		return fmt.Errorf("execute merge: %w", dispatchErr)
 	}
 
 	if result.Success {
-		completion, err := o.completeAuthorizedMerge(task.ID, result.MergeCommit)
-		if err != nil {
-			return fmt.Errorf("execute merge: complete authorized merge: %w", err)
-		}
-		o.emit("merge_complete", map[string]any{"task_id": task.ID})
-		o.publishTaskTransition(task.ID.String(), string(model.StatusMerging), string(model.StatusDone), "merge complete")
-		o.logger.Info("merge complete", "task_id", task.ID, "merge_completion_id", completion.ID)
-
-		// Regenerate the repo map for the main branch so the next batch of
-		// workers sees updated package/function signatures.
-		go o.worktree.GenerateRepoMapForMain()
+		return errors.New("execute merge: merger reported success but authoritative target ref does not contain the authorized artifact")
 	} else {
 		// Quick fix tasks: flag for human review on merge failure, no fixer agent.
 		if task.Category.IsQuickFix() {
@@ -225,6 +227,18 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 	}
 
 	return nil
+}
+
+func (o *Orchestrator) recordRecoveredMerge(task *model.Task, completion *model.MergeCompletion) {
+	o.emit("merge_complete", map[string]any{"task_id": task.ID, "merge_intent_id": completion.MergeIntentID})
+	o.publishTaskTransition(task.ID.String(), string(model.StatusMerging), string(model.StatusDone), "merge complete")
+	o.logger.Info("merge complete from authoritative target ref", "task_id", task.ID,
+		"merge_intent_id", completion.MergeIntentID, "merge_completion_id", completion.ID,
+		"merge_commit_sha", completion.MergeCommitSHA)
+
+	// Regenerate the repo map for the main branch so the next batch of
+	// workers sees updated package/function signatures.
+	go o.worktree.GenerateRepoMapForMain()
 }
 
 // prepareQuickFixDelivery stops at TESTING_READY. Quick fixes skip
