@@ -46,7 +46,9 @@ func GenerateDirectCoder(opts Opts) string {
 			b.WriteString("\n")
 		}
 		writeDirectContext(&b, task.Context, "prep_data", "Prepared context")
+		writeDirectContext(&b, task.Context, "verified_source_pack", "Verified source pack")
 		writeDirectContext(&b, task.Context, "planned_interface_contract", "Planned interface contract")
+		writeDirectContext(&b, task.Context, "implementation_interface_contract", "Implementation interface contract")
 		writeDirectContext(&b, task.Context, "prompt_adjustment", "Prior actionable failure")
 	}
 	hasPlannedInterfaceContract := task != nil && task.Context != nil && task.Context["planned_interface_contract"] != nil
@@ -71,12 +73,12 @@ func GenerateDirectCoder(opts Opts) string {
 	switch phase {
 	case "test":
 		if hasPlannedInterfaceContract {
-			b.WriteString("This is the TEST phase. Treat the planned interface contract above as authoritative. Planned symbols may not exist yet: do not search for them and do not invent a competing API. Inspect only existing test conventions and source-backed registration seams named in scope, then write the focused red-state test. Exercise production APIs: do not mock the production type, hardcode a failing assertion, or implement the behavior. If production declarations are outside your listed files, a compile failure naming a contracted symbol is the intended red artifact.\n")
+			b.WriteString("This is the TEST phase. Treat the planned interface contract and verified source pack above as authoritative, then write the focused red-state test. Follow its red_mode exactly: compile failure is valid only for listed missing C++ symbols; registry, keymap, and call-edge contracts require a compiling behavioral assertion. Exercise production APIs: do not mock the production type, fabricate headers, comment out the contract, hardcode a failure, or implement behavior.\n")
 		} else {
 			b.WriteString("This is the TEST phase, but no planned interface contract was supplied. Use only existing production APIs. If the task requires a new symbol, stop with a concise missing-contract result instead of searching or inventing an API.\n")
 		}
 	case "implementation":
-		b.WriteString("This is the IMPLEMENTATION phase. Read the paired test and actual production seam, implement the smallest behavior that satisfies it, and do not modify tests. Read at most 6 relevant files before the first edit.\n")
+		b.WriteString("This is the IMPLEMENTATION phase. The implementation interface contract and verified source pack are authoritative. Read the paired test and named production seam, implement the smallest behavior that satisfies them, and do not modify tests. Read at most 6 relevant files before the first edit.\n")
 	case "integration":
 		b.WriteString("This is the INTEGRATION phase. Inspect the declared production entrypoint chain, then do only manifest/wiring/assembly work; do not broaden behavior. Read at most 6 relevant files before the first edit.\n")
 	default:

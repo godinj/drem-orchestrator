@@ -169,5 +169,8 @@ The `drem-canvas` run that motivated this PRD produced these acceptance-driving 
 - Parent `test_writing` moved to `test_review` while dependency-blocked children remained backlog.
 - A mixed test/implementation dependency graph required manual phase intervention.
 - A worker model/tool loop hit max-token truncation and produced branch contamination.
+- A red-test worker replaced a shared CMake manifest with C++ test text and a later retry invented headers instead of exercising the planned seam.
+- One failed parallel child immediately cancelled an independent sibling after that sibling had already paid for and produced a useful model checkpoint.
+- A killed worker without a terminal summary left zero token telemetry even though several paid responses had completed.
 
 The first implementation slice should be small and measurable: define the evidence contract, enforce active-attempt uniqueness, and make exit-zero completion reconciliation pass branch hygiene before advancing a subtask. Subsequent slices can add parent readiness, mixed-phase scheduling, recovery APIs, and event validation.

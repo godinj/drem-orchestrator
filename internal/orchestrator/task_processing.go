@@ -467,9 +467,8 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		o.publishTaskTransition(parent.ID.String(), string(oldStatus), string(parent.Status), "all subtasks done, testing ready")
 		o.logger.Info("all subtasks done, testing ready", "task_id", parent.ID)
 	} else if anyFailed && parent.Status == model.StatusInProgress {
-		// A required subtask failed. Waiting for dependency-blocked siblings can
-		// never change the outcome, so terminalize the plan now and preserve the
-		// failed child as the recovery/adoption boundary.
+		// Stop work that cannot start, but let already-running independent
+		// siblings drain to a checkpoint before terminalizing the parent.
 		var failedNames []string
 		for _, sub := range subtasks {
 			if sub.Status == model.StatusFailed || (sub.Status == model.StatusRejected && !isSupersededRejected(sub.ID, supersededRejectedTests)) {
@@ -478,6 +477,16 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		}
 		if err := o.cancelBlockedSiblings(parent, subtasks, failedNames); err != nil {
 			return fmt.Errorf("check feature completion: cancel blocked siblings: %w", err)
+		}
+		if draining := drainingSiblingNames(subtasks); len(draining) > 0 {
+			if parent.Context == nil {
+				parent.Context = make(model.JSONField)
+			}
+			parent.Context["sibling_drain"] = map[string]any{"failed": failedNames, "running": draining}
+			if err := o.db.Save(parent).Error; err != nil {
+				return fmt.Errorf("check feature completion: save sibling drain: %w", err)
+			}
+			return nil
 		}
 		if err := o.failTask(parent, fmt.Sprintf("subtasks failed: %s", strings.Join(failedNames, ", "))); err != nil {
 			return err
@@ -497,7 +506,7 @@ func (o *Orchestrator) cancelBlockedSiblings(parent *model.Task, subtasks []mode
 	reason := fmt.Sprintf("execution plan stopped after required subtask failure: %s", strings.Join(failedNames, ", "))
 	for i := range subtasks {
 		sub := &subtasks[i]
-		if isTerminalWaveStatus(sub.Status) {
+		if isTerminalWaveStatus(sub.Status) || siblingIsRunning(*sub) {
 			continue
 		}
 		oldStatus := sub.Status
@@ -514,6 +523,23 @@ func (o *Orchestrator) cancelBlockedSiblings(parent *model.Task, subtasks []mode
 		}
 	}
 	return nil
+}
+
+func drainingSiblingNames(subtasks []model.Task) []string {
+	var names []string
+	for _, sub := range subtasks {
+		if siblingIsRunning(sub) {
+			names = append(names, sub.Title)
+		}
+	}
+	return names
+}
+
+func siblingIsRunning(sub model.Task) bool {
+	if isTerminalWaveStatus(sub.Status) {
+		return false
+	}
+	return sub.Status == model.StatusInProgress || sub.AssignedAgentID != nil
 }
 
 func supersededRejectedTestIDs(subtasks []model.Task) map[uuid.UUID]struct{} {

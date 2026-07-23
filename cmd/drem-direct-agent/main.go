@@ -95,6 +95,10 @@ func main() {
 	cfg.MaxReadsBeforeMutation = envInt("DREM_DIRECT_MAX_READS_BEFORE_MUTATION", defaultReadBudget)
 	cfg.MaxToolCalls = envInt("DREM_DIRECT_MAX_TOOL_CALLS", defaultToolBudget)
 	cfg.MaxInputTokensBeforeMutation = envInt("DREM_DIRECT_MAX_INPUT_TOKENS_BEFORE_MUTATION", defaultPreMutationInputBudget)
+	cfg.OnIteration = func(iteration, tokensIn, tokensOut, contextPct int) {
+		_, _ = fmt.Fprintf(os.Stderr, "drem-direct-agent-progress: iteration=%d tokens_in=%d tokens_out=%d context_pct=%d\n",
+			iteration+1, tokensIn, tokensOut, contextPct)
+	}
 	result, runErr := agent.RunDirectToolAgent(cfg, systemPrompt, string(promptBytes), agent.ToolsForRoleScope(*role, scopedFiles), "")
 	if result != nil {
 		_, _ = fmt.Fprintf(os.Stdout, "%s\n", strings.TrimSpace(result.Output))

@@ -294,6 +294,21 @@ func normalizeTaskSpec(spec *orchdto.TaskSpecDTO) {
 				trimStrings(shape.Functions)
 				trimStrings(shape.Types)
 			}
+			for j := range sub.InterfaceContracts {
+				contract := &sub.InterfaceContracts[j]
+				contract.Package = strings.TrimSpace(contract.Package)
+				contract.Kind = strings.ToLower(strings.TrimSpace(contract.Kind))
+				contract.State = strings.ToLower(strings.TrimSpace(contract.State))
+				contract.OwnerFile = strings.TrimSpace(contract.OwnerFile)
+				contract.Signature = strings.TrimSpace(contract.Signature)
+				contract.Symbol = strings.TrimSpace(contract.Symbol)
+				contract.ActionID = strings.TrimSpace(contract.ActionID)
+				contract.CallbackSignature = strings.TrimSpace(contract.CallbackSignature)
+				contract.Route = strings.TrimSpace(contract.Route)
+				contract.TargetAction = strings.TrimSpace(contract.TargetAction)
+				contract.Caller = strings.TrimSpace(contract.Caller)
+				contract.Callee = strings.TrimSpace(contract.Callee)
+			}
 		}
 		for i := range p.TDDExceptions {
 			p.TDDExceptions[i].Reason = strings.TrimSpace(p.TDDExceptions[i].Reason)
@@ -508,7 +523,7 @@ func validateExecutionPlan(planDTO orchdto.TaskExecutionPlanDTO, proposedScope [
 			if len(sub.TestsFor) > 0 {
 				return fmt.Errorf("implementation subtask %d cannot set tests_for", i)
 			}
-			if err := validateImplementationDepth(i, sub); err != nil {
+			if err := validateImplementationDepth(i, sub, scope); err != nil {
 				return err
 			}
 		case "integration":
@@ -556,49 +571,6 @@ func validateExecutionPlan(planDTO orchdto.TaskExecutionPlanDTO, proposedScope [
 	for i, assumption := range planDTO.Assumptions {
 		if assumption.Decision == "" || assumption.WhyChosen == "" || hasBlank(assumption.Alternatives) {
 			return fmt.Errorf("assumptions[%d] requires decision, why_chosen, and non-blank alternatives", i)
-		}
-	}
-	return nil
-}
-
-func validateImplementationDepth(index int, sub orchdto.TaskExecutionSubtaskDTO) error {
-	if len(sub.ModuleBoundaries) == 0 {
-		return fmt.Errorf("implementation subtask %d requires module_boundaries", index)
-	}
-	if len(sub.InterfaceShapes) == 0 {
-		return fmt.Errorf("implementation subtask %d requires interface_shapes", index)
-	}
-	boundaries := make(map[string]struct{}, len(sub.ModuleBoundaries))
-	for i, boundary := range sub.ModuleBoundaries {
-		if boundary.Package == "" || boundary.Description == "" || boundary.Exports < 1 {
-			return fmt.Errorf("subtasks[%d].module_boundaries[%d] requires package, description, and exports >= 1", index, i)
-		}
-		if _, exists := boundaries[boundary.Package]; exists {
-			return fmt.Errorf("subtasks[%d] module boundary %q is duplicated", index, boundary.Package)
-		}
-		boundaries[boundary.Package] = struct{}{}
-	}
-	shapes := make(map[string]struct{}, len(sub.InterfaceShapes))
-	for i, shape := range sub.InterfaceShapes {
-		if shape.Package == "" || (len(shape.Functions) == 0 && len(shape.Types) == 0) || hasBlank(shape.Functions) || hasBlank(shape.Types) {
-			return fmt.Errorf("subtasks[%d].interface_shapes[%d] requires package and at least one non-blank function or type", index, i)
-		}
-		if _, exists := boundaries[shape.Package]; !exists {
-			return fmt.Errorf("subtasks[%d] interface shape %q has no matching module boundary", index, shape.Package)
-		}
-		if _, exists := shapes[shape.Package]; exists {
-			return fmt.Errorf("subtasks[%d] interface shape %q is duplicated", index, shape.Package)
-		}
-		for j, function := range shape.Functions {
-			if !strings.Contains(function, "(") || !strings.Contains(function, ")") {
-				return fmt.Errorf("subtasks[%d].interface_shapes[%d].functions[%d] must be an explicit callable signature", index, i, j)
-			}
-		}
-		shapes[shape.Package] = struct{}{}
-	}
-	for pkg := range boundaries {
-		if _, exists := shapes[pkg]; !exists {
-			return fmt.Errorf("subtasks[%d] module boundary %q has no matching interface shape", index, pkg)
 		}
 	}
 	return nil

@@ -130,6 +130,7 @@ type WorkerUsage struct {
 	Iterations int    `json:"iterations"`
 	TokensIn   int    `json:"tokens_in"`
 	TokensOut  int    `json:"tokens_out"`
+	ContextPct int    `json:"context_pct,omitempty"`
 	StopReason string `json:"stop_reason"`
 }
 

@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/container"
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/state"
@@ -501,6 +502,23 @@ func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, 
 		failureReason = ev.Usage.StopReason
 	}
 	failureClass := normalizeFailureClass(failureReason, fmt.Sprintf("exit_code=%d oom=%t", ev.ExitCode, ev.OOMKilled))
+	if checkpoint, sha, err := o.attemptCheckpoint(ctx, attempt); err != nil {
+		o.logger.Warn("worker death: inspect checkpoint", "task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+	} else if checkpoint {
+		summary := fmt.Sprintf("worker stopped after creating checkpoint %s on %s; preserved for bounded artifact handoff", sha, attempt.Branch)
+		if task.Context == nil {
+			task.Context = make(model.JSONField)
+		}
+		task.Context["checkpoint_handoff"] = map[string]any{
+			"attempt_id": attempt.ID.String(), "branch": attempt.Branch, "sha": sha,
+			"original_failure_class": failureClass, "original_failure_reason": failureReason,
+		}
+		budget := consumeRetryBudget(task, retryEdgeForTask(*task, attempt.AgentType), failureClassArtifactHandoff, summary, now)
+		if err := o.failTaskWithFailureEvidence(task, "worker checkpoint requires bounded artifact handoff", failureClassArtifactHandoff, summary, now, budget); err != nil {
+			o.logger.Error("handle worker death: preserve checkpoint handoff", "task_id", task.ID, "error", err)
+		}
+		return
+	}
 	budget := consumeRetryBudget(task, retryEdgeForTask(*task, attempt.AgentType), failureClass,
 		fmt.Sprintf("worker %s container %s exited with %s (stop_reason=%s)", attempt.AgentType, ev.ContainerID, failureClass, failureReason), now)
 	if budget.Exhausted {
@@ -538,6 +556,25 @@ func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, 
 		o.logger.Error("handle worker death: respawn failed",
 			"task_id", task.ID, "error", err)
 	}
+}
+
+func (o *Orchestrator) attemptCheckpoint(ctx context.Context, attempt *model.WorkerAttempt) (bool, string, error) {
+	if o.worktree == nil || attempt == nil || strings.TrimSpace(attempt.BaseSHA) == "" || strings.TrimSpace(attempt.Branch) == "" {
+		return false, "", nil
+	}
+	repo := o.worktree.BareRepo()
+	count, err := gitexec.RunGit(ctx, repo, "rev-list", "--count", attempt.BaseSHA+".."+attempt.Branch)
+	if err != nil {
+		return false, "", err
+	}
+	if strings.TrimSpace(count) == "0" {
+		return false, "", nil
+	}
+	sha, err := gitexec.RunGit(ctx, repo, "rev-parse", attempt.Branch)
+	if err != nil {
+		return false, "", err
+	}
+	return true, strings.TrimSpace(sha), nil
 }
 
 func priorBranchAcceptanceRejected(task *model.Task) bool {

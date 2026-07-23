@@ -125,13 +125,32 @@ caller, registration, or manifest gap visible in that evidence.
 ## Planned interfaces for red tests
 
 Every implementation subtask in an adapter-authored `execution_plan` supplies
-`module_boundaries` and exact `interface_shapes`; every test subtask points to
-one implementation through `tests_for`. The orchestrator materializes those
-fields into the test worker's planned-interface contract, including the owning
-files, functions, types, and expected missing-symbol red state. The adapter
-does not restate that contract in a second prompt, and the test worker must not
-search for planned symbols that are intentionally absent before implementation.
+`module_boundaries` plus either legacy exact `interface_shapes` or typed
+`interface_contracts`; every test subtask points to one implementation through
+`tests_for`. New Canvas specs should use typed contracts. The orchestrator
+materializes them into both paired worker prompts together with the immutable,
+hash-verified source excerpts and paired file list.
 
-Use complete callable signatures or qualified type names in `interface_shapes`.
+Each `interface_contracts` entry requires `package`, `kind`, `state`, and
+`owner_file`. Supported kinds and their additional fields are:
+
+| Kind | Additional fields |
+|------|-------------------|
+| `cpp_function` | `signature` |
+| `cpp_type` | `symbol` |
+| `registry_action` | `action_id`, `callback_signature` |
+| `keymap_route` | `route`, `target_action` |
+| `call_edge` | `caller`, `callee` |
+
+`state` is `planned`, `existing`, or `missing`. Existing contracts require a
+matching source-evidence path and symbol/excerpt. Missing contracts require a
+matching `missing_edge`; planned contracts name new production API. Only
+planned/missing C++ functions and types may intentionally compile-red. Runtime
+registry, keymap, and call-edge tests must compile and fail on an active
+behavioral assertion. Action IDs such as `audio.divide-transients` are never
+callable signatures.
+
+Legacy `interface_shapes` remain accepted for existing clients, but their
+function entries must be real C++ signatures; dotted action IDs are rejected.
 Vague behavioral labels belong in the subtask description and acceptance
-criteria, not in the interface list.
+criteria, not in either interface contract.

@@ -107,6 +107,64 @@ func TestStandardParent_FailedChildCancelsDependencyBlockedSiblingsImmediately(t
 	}
 }
 
+func TestStandardParent_FailedChildDrainsAlreadyRunningSibling(t *testing.T) {
+	orch, db, _ := setupReconcileTest(t)
+	parentID := uuid.New()
+	parent := model.Task{
+		ID: parentID, ProjectID: orch.projectID, Title: "parallel parent",
+		Description: "one sibling fails while another has a checkpoint in progress",
+		Status:      model.StatusInProgress, Category: model.CategoryStandard,
+	}
+	if err := db.Create(&parent).Error; err != nil {
+		t.Fatal(err)
+	}
+	failed := model.Task{ID: uuid.New(), ProjectID: orch.projectID, ParentTaskID: &parentID, Title: "failed UI", Description: "failed", Status: model.StatusFailed}
+	running := model.Task{ID: uuid.New(), ProjectID: orch.projectID, ParentTaskID: &parentID, Title: "running model", Description: "running", Status: model.StatusInProgress}
+	blocked := model.Task{ID: uuid.New(), ProjectID: orch.projectID, ParentTaskID: &parentID, Title: "blocked integration", Description: "blocked", Status: model.StatusBacklog, DependencyIDs: model.JSONArray{failed.ID.String()}}
+	for _, child := range []*model.Task{&failed, &running, &blocked} {
+		if err := db.Create(child).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := orch.checkFeatureCompletion(&parent); err != nil {
+		t.Fatal(err)
+	}
+	var gotParent, gotRunning, gotBlocked model.Task
+	if err := db.First(&gotParent, "id = ?", parentID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&gotRunning, "id = ?", running.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&gotBlocked, "id = ?", blocked.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if gotParent.Status != model.StatusInProgress || gotRunning.Status != model.StatusInProgress {
+		t.Fatalf("running sibling was not drained: parent=%s sibling=%s", gotParent.Status, gotRunning.Status)
+	}
+	if gotBlocked.Status != model.StatusCancelled {
+		t.Fatalf("blocked sibling status = %s, want cancelled", gotBlocked.Status)
+	}
+	if _, ok := gotParent.Context["sibling_drain"]; !ok {
+		t.Fatal("parent lacks sibling_drain evidence")
+	}
+
+	gotRunning.Status = model.StatusDone
+	if err := db.Save(&gotRunning).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := orch.checkFeatureCompletion(&gotParent); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.First(&gotParent, "id = ?", parentID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if gotParent.Status != model.StatusFailed {
+		t.Fatalf("parent status after drain = %s, want failed", gotParent.Status)
+	}
+}
+
 func TestStandardParent_TestingReadyFailureRecordsSummaryAndDoesNotMerge(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	featureName := "testing-ready-fails"

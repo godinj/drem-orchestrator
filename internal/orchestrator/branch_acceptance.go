@@ -145,10 +145,12 @@ func (o *Orchestrator) acceptWorkerBranchCompletion(ctx context.Context, ag *mod
 		baseRef = attempt.BaseSHA
 	}
 	res, err := branchpolicy.Accept(ctx, branchpolicy.AcceptanceRequest{
-		RepoDir:       featureDir,
-		BaseRef:       baseRef,
-		HeadRef:       ag.WorktreeBranch,
-		AllowedScopes: branchAcceptanceScopes(task),
+		RepoDir:                  featureDir,
+		BaseRef:                  baseRef,
+		HeadRef:                  ag.WorktreeBranch,
+		AllowedScopes:            branchAcceptanceScopes(task),
+		RejectDestructiveRewrite: true,
+		TestContract:             testContractForAcceptance(task),
 	})
 	if err != nil {
 		res.Accepted = false
@@ -198,6 +200,14 @@ func (o *Orchestrator) acceptWorkerBranchCompletion(ctx context.Context, ag *mod
 		o.markAttemptFailedForBranchAcceptance(task.ID, ag.ID)
 	}
 	return res.Accepted, nil
+}
+
+func testContractForAcceptance(task *model.Task) string {
+	if task == nil || task.Phase != "test" || task.Context == nil {
+		return ""
+	}
+	contract, _ := task.Context["planned_interface_contract"].(string)
+	return contract
 }
 
 func (o *Orchestrator) rejectWorkerBranchCompletion(ag *model.Agent, task *model.Task) error {

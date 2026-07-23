@@ -40,6 +40,10 @@ func (o *Orchestrator) materializeSubtasksWithDB(db *gorm.DB, task *model.Task, 
 		return nil, nil, fmt.Errorf("materialize subtasks: %w", err)
 	}
 	subtaskPlans := planResult.Subtasks
+	sourcePacks, err := verifiedSourcePacks(db, task, subtaskPlans)
+	if err != nil {
+		return nil, nil, fmt.Errorf("materialize subtasks: %w", err)
+	}
 
 	var existingSubtasks []model.Task
 	if err := db.Where("parent_task_id = ?", task.ID).
@@ -91,19 +95,9 @@ func (o *Orchestrator) materializeSubtasksWithDB(db *gorm.DB, task *model.Task, 
 		subtaskID := uuid.New()
 		createdIDs[i] = subtaskID
 
-		ctx := model.JSONField{
-			"agent_type":      sp.AgentType,
-			"estimated_files": sp.EstimatedFiles,
-		}
-		if sp.Phase != "" {
-			ctx["phase"] = sp.Phase
-		}
-		if sp.Phase == "test" && len(sp.TestsFor) == 1 {
-			contract, err := plannedInterfaceContract(subtaskPlans, i)
-			if err != nil {
-				return nil, nil, fmt.Errorf("materialize subtasks: test contract %d: %w", i, err)
-			}
-			ctx["planned_interface_contract"] = contract
+		ctx, err := materializedSubtaskContext(sp, subtaskPlans, i, sourcePacks)
+		if err != nil {
+			return nil, nil, fmt.Errorf("materialize subtasks: %w", err)
 		}
 
 		sub := model.Task{
@@ -589,19 +583,20 @@ func testReviewReplacementSourceNewer(candidate model.Task, selected model.Task)
 // planEntry is an intermediate struct for parsing plans from JSON that may
 // include dependency indices and TDD phase information.
 type planEntry struct {
-	Title            string                 `json:"title"`
-	Description      string                 `json:"description"`
-	AgentType        string                 `json:"agent_type"`
-	EstimatedFiles   []string               `json:"estimated_files"`
-	Files            []string               `json:"files"`
-	Dependencies     []int                  `json:"dependencies"`
-	Priority         int                    `json:"priority"`
-	IsTest           bool                   `json:"is_test,omitempty"`
-	Phase            string                 `json:"phase,omitempty"`
-	TestsFor         []int                  `json:"tests_for,omitempty"`
-	ModuleBoundaries []score.ModuleBoundary `json:"module_boundaries,omitempty"`
-	InterfaceShapes  []score.InterfaceShape `json:"interface_shapes,omitempty"`
-	DepthMeta        *score.DepthMeta       `json:"depth_meta,omitempty"`
+	Title              string                    `json:"title"`
+	Description        string                    `json:"description"`
+	AgentType          string                    `json:"agent_type"`
+	EstimatedFiles     []string                  `json:"estimated_files"`
+	Files              []string                  `json:"files"`
+	Dependencies       []int                     `json:"dependencies"`
+	Priority           int                       `json:"priority"`
+	IsTest             bool                      `json:"is_test,omitempty"`
+	Phase              string                    `json:"phase,omitempty"`
+	TestsFor           []int                     `json:"tests_for,omitempty"`
+	ModuleBoundaries   []score.ModuleBoundary    `json:"module_boundaries,omitempty"`
+	InterfaceShapes    []score.InterfaceShape    `json:"interface_shapes,omitempty"`
+	InterfaceContracts []score.InterfaceContract `json:"interface_contracts,omitempty"`
+	DepthMeta          *score.DepthMeta          `json:"depth_meta,omitempty"`
 }
 
 // tddException represents a planner-declared exception to TDD enforcement
@@ -649,10 +644,11 @@ func parsePlan(planField model.JSONField) (*parsePlanResult, error) {
 		if entries[i].AgentType == "" {
 			entries[i].AgentType = string(model.AgentCoder)
 		}
-		if entries[i].DepthMeta == nil && (len(entries[i].ModuleBoundaries) > 0 || len(entries[i].InterfaceShapes) > 0) {
+		if entries[i].DepthMeta == nil && (len(entries[i].ModuleBoundaries) > 0 || len(entries[i].InterfaceShapes) > 0 || len(entries[i].InterfaceContracts) > 0) {
 			entries[i].DepthMeta = &score.DepthMeta{
-				ModuleBoundaries: entries[i].ModuleBoundaries,
-				InterfaceShapes:  entries[i].InterfaceShapes,
+				ModuleBoundaries:   entries[i].ModuleBoundaries,
+				InterfaceShapes:    entries[i].InterfaceShapes,
+				InterfaceContracts: entries[i].InterfaceContracts,
 			}
 		}
 	}

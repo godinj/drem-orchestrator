@@ -846,7 +846,7 @@ func TestRunDirectToolAgent_ScopedReadBudgetStopsUnproductiveReconnaissance(t *t
 	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRole("coder"), "")
 	require.Error(t, err)
 	require.Equal(t, DirectToolStopReasonNoProgress, result.StopReason)
-	require.Contains(t, err.Error(), "refused to mutate after 4 reconnaissance calls")
+	require.Contains(t, err.Error(), "refused to mutate after 2 reconnaissance calls")
 }
 
 func TestRunDirectToolAgent_StopsHistoricalBashDiscoveryTraceBeforeInferenceLoop(t *testing.T) {

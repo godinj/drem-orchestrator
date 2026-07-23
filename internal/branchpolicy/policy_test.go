@@ -144,6 +144,80 @@ func TestAcceptRejectsUnrelatedDeletion(t *testing.T) {
 	assertRejected(t, res, "unrelated_deletion")
 }
 
+func TestAcceptRejectsDestructiveRewriteInsideDeclaredScope(t *testing.T) {
+	repo := newRepo(t)
+	manifest := strings.Repeat("set(SOURCE file.cpp)\n", 80)
+	writeCommit(t, repo, "tests/cmake/IntegrationSources.cmake", manifest)
+	base := branch(t, repo, "base")
+	runGit(t, repo, "checkout", "-b", "feature")
+	writeCommit(t, repo, "tests/cmake/IntegrationSources.cmake", "#include <gtest/gtest.h>\n")
+
+	res, err := Accept(context.Background(), AcceptanceRequest{
+		RepoDir: repo, BaseRef: base,
+		AllowedScopes:            []string{"tests/cmake/IntegrationSources.cmake"},
+		RejectDestructiveRewrite: true,
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	assertRejectedPath(t, res, "tests/cmake/IntegrationSources.cmake", "M", "destructive_rewrite")
+}
+
+func TestAcceptAllowsFocusedRewriteWhenSafeguardEnabled(t *testing.T) {
+	repo := newRepo(t)
+	baseText := strings.Repeat("set(SOURCE file.cpp)\n", 80)
+	writeCommit(t, repo, "manifest.cmake", baseText)
+	base := branch(t, repo, "base")
+	runGit(t, repo, "checkout", "-b", "feature")
+	writeCommit(t, repo, "manifest.cmake", baseText+"set(SOURCE new.cpp)\n")
+
+	res, err := Accept(context.Background(), AcceptanceRequest{
+		RepoDir: repo, BaseRef: base, AllowedScopes: []string{"manifest.cmake"}, RejectDestructiveRewrite: true,
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("expected focused edit to be accepted, got %+v", res.Rejected)
+	}
+}
+
+func TestAcceptRejectsCommentedOutTestContract(t *testing.T) {
+	repo := newRepo(t)
+	writeCommit(t, repo, "tests/test_feature.cpp", "// existing tests\n")
+	base := branch(t, repo, "base")
+	runGit(t, repo, "checkout", "-b", "feature")
+	writeCommit(t, repo, "tests/test_feature.cpp", "// existing tests\n// AudioClip::divideAtTransients(settings);\n")
+	contract := `{"red_mode":"compile_missing_symbol","expected_missing_symbols":["AudioClip::divideAtTransients(const Settings &)"]}`
+
+	res, err := Accept(context.Background(), AcceptanceRequest{
+		RepoDir: repo, BaseRef: base, AllowedScopes: []string{"tests/test_feature.cpp"}, TestContract: contract,
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	assertRejected(t, res, "missing_active_contract_assertion")
+}
+
+func TestAcceptAllowsActiveCompileRedContractCall(t *testing.T) {
+	repo := newRepo(t)
+	writeCommit(t, repo, "tests/test_feature.cpp", "// existing tests\n")
+	base := branch(t, repo, "base")
+	runGit(t, repo, "checkout", "-b", "feature")
+	writeCommit(t, repo, "tests/test_feature.cpp", "// existing tests\nclip.divideAtTransients(settings);\n")
+	contract := `{"red_mode":"compile_missing_symbol","expected_missing_symbols":["AudioClip::divideAtTransients(const Settings &)"]}`
+
+	res, err := Accept(context.Background(), AcceptanceRequest{
+		RepoDir: repo, BaseRef: base, AllowedScopes: []string{"tests/test_feature.cpp"}, TestContract: contract,
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("expected active contract call to pass static admission, got %+v", res.Rejected)
+	}
+}
+
 func TestPreflightRejectsNonWritableBranchMetadata(t *testing.T) {
 	repo := newBareRepo(t)
 	work := clone(t, repo)

@@ -281,11 +281,26 @@ pre-mutation input budget (18k test, 30k implementation, 24k integration).
 Reads, structured searches, and discovery-like shell commands share the same
 reconnaissance budget; all shell commands are rejected before the first mutation.
 Older large tool results are compacted in replay history. Test subtasks receive
-an automatically materialized interface contract from the paired implementation
-plan, so a planned missing API is called directly instead of searched for.
+an automatically materialized semantic interface contract from the paired
+implementation plan. C++ functions/types, registry actions, keymap routes, and
+call edges are distinct contract kinds, so only genuinely missing C++ symbols
+may use compile-red; runtime seams require active behavioral assertions. Every
+child also receives the immutable, hash-checked source excerpts, acceptance
+criteria, and paired TDD file list supplied by the adapter.
+
+Worker checkpoints pass deterministic admission before review. The gate rejects
+out-of-scope files, destructive rewrites of existing files, placeholder tests,
+comment-only contract references, and language-mismatched manifest content. A
+failed attempt that already pushed a commit is parked as an `artifact_handoff`
+instead of being retried with the same prompt. When one parallel child fails,
+not-yet-started dependents are cancelled while already-running independent
+siblings drain and preserve their checkpoints.
 
 Terminal direct-worker summaries are copied from the bounded Docker log tail
-into both the durable worker attempt and public agent rows. New pilots can
+into both the durable worker attempt and public agent rows. The harness also
+emits an incremental usage checkpoint after every model response; if a process
+dies before its terminal summary, the last checkpoint preserves token and
+context utilization instead of reporting an unmeasured zero. New pilots can
 therefore compare `tokens_in` / `tokens_out` without scraping container logs.
 Before container creation, the spawner inspects the selected image and performs
 one serialized pull when it is absent. An unavailable registry fails the task
@@ -341,7 +356,7 @@ Older tmux settings may still be accepted by the config loader for compatibility
 
 ## Module Depth Planning
 
-Drem planner prompts ask agents to design for module depth before work begins. A plan should describe `module_boundaries`, `interface_shapes`, and export pressure so reviewers can tell whether the design creates meaningful internal logic or only moves code around.
+Drem planner prompts ask agents to design for module depth before work begins. A plan should describe `module_boundaries`, typed `interface_contracts` (or legacy `interface_shapes`), and export pressure so reviewers can tell whether the design creates meaningful internal logic or only moves code around.
 
 Planner self-checks should reject shallow designs. A shallow plan often creates a thin wrapper, pass-through package, or exported function with no real decision-making behind it. A deep plan puts policy, state transitions, validation, or orchestration behind a small interface and keeps exports proportional to the module's responsibility.
 

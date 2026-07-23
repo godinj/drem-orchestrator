@@ -633,6 +633,30 @@ func TestDispatchEvent_TokenBudgetFailureDoesNotRespawnIdenticalWorker(t *testin
 	require.Equal(t, true, reloaded.Context["latest_failure_retry_exhausted"])
 }
 
+func TestDispatchEvent_PreservesMutatedCheckpointInsteadOfRespawning(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	task := seedInFlightTask(t, o)
+	worktree := filepath.Join(t.TempDir(), "worker")
+	testutil.AddWorktree(t, o.worktree.BareRepo(), task.WorktreeBranch, worktree)
+	testutil.CommitFile(t, worktree, "checkpoint.txt", "useful partial work\n", "checkpoint")
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-checkpoint", "c-checkpoint")
+	attempt.BaseSHA = strings.TrimSpace(runGitCmd(t, o.worktree.BareRepo(), "rev-parse", "main"))
+	attempt.Branch = task.WorktreeBranch
+	require.NoError(t, o.db.Save(attempt).Error)
+
+	o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *attempt, 1, false), newReplacementTracker())
+
+	require.Empty(t, fake.spawnCalls, "a mutated checkpoint must become a handoff, not an identical retry")
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusFailed, reloaded.Status)
+	require.Equal(t, failureClassArtifactHandoff, reloaded.Context["failure_class"])
+	handoff, ok := reloaded.Context["checkpoint_handoff"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, task.WorktreeBranch, handoff["branch"])
+	require.NotEmpty(t, handoff["sha"])
+}
+
 func TestDispatchEvent_StaleDeathDoesNotKillCurrentAssignedWorker(t *testing.T) {
 	o, _, fake := dockerEventsTestRig(t)
 	task := seedInFlightTask(t, o)

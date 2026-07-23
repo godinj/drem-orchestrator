@@ -384,6 +384,12 @@ func TestCreateTaskSpecExecutionPlanValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "action id disguised as callable signature",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[1].InterfaceShapes[0].Functions = []string{"audio.divide_transients.execute(int count) -> void"}
+			},
+		},
+		{
 			name: "unresolved question",
 			mutate: func(spec *orchdto.TaskSpecDTO) {
 				spec.OpenQuestions = []string{"Which interaction wins?"}
@@ -417,6 +423,41 @@ func TestCreateTaskSpecExecutionPlanValidation(t *testing.T) {
 			defer resp.Body.Close()
 			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 		})
+	}
+}
+
+func TestCreateTaskSpecAcceptsSemanticInterfaceContracts(t *testing.T) {
+	_, server, _ := setupHTTPTest(t, nil)
+	spec := validTaskSpecWithExecutionPlan()
+	impl := &spec.ExecutionPlan.Subtasks[1]
+	impl.InterfaceShapes = nil
+	impl.InterfaceContracts = []orchdto.TaskInterfaceContractDTO{
+		{Package: "src/model/TakeCompModel", Kind: "cpp_function", State: "planned", OwnerFile: "src/model/TakeCompModel.h", Signature: "TakeCompModel::selectRange(double, double)"},
+		{Package: "src/model/TakeCompModel", Kind: "call_edge", State: "missing", OwnerFile: "cmake/DremCanvasSources.cmake", Caller: "AppController::registerAllActions()", Callee: "TakeCompModel::selectRange(double, double)"},
+	}
+
+	resp := postTaskSpec(t, server.URL, spec)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+}
+
+func TestCreateTaskSpecRejectsUnprovenExistingSemanticContract(t *testing.T) {
+	_, server, _ := setupHTTPTest(t, nil)
+	spec := validTaskSpecWithExecutionPlan()
+	impl := &spec.ExecutionPlan.Subtasks[1]
+	impl.InterfaceShapes = nil
+	impl.InterfaceContracts = []orchdto.TaskInterfaceContractDTO{{
+		Package: "src/model/TakeCompModel", Kind: "registry_action", State: "existing",
+		OwnerFile: "src/model/TakeCompModel.h", ActionID: "audio.divide-transients",
+		CallbackSignature: "TakeCompModel::selectRange(double, double)",
+	}}
+
+	resp := postTaskSpec(t, server.URL, spec)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want bad request", resp.StatusCode)
 	}
 }
 

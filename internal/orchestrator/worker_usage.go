@@ -33,12 +33,13 @@ func (o *Orchestrator) captureWorkerUsage(ctx context.Context, attempt *model.Wo
 	}
 	if err := o.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&model.WorkerAttempt{}).Where("id = ?", attempt.ID).Updates(map[string]any{
-			"tokens_in": usage.TokensIn, "tokens_out": usage.TokensOut,
+			"tokens_in": usage.TokensIn, "tokens_out": usage.TokensOut, "final_context_pct": usage.ContextPct,
 		}).Error; err != nil {
 			return err
 		}
 		attempt.TokensIn = usage.TokensIn
 		attempt.TokensOut = usage.TokensOut
+		attempt.FinalContextPct = usage.ContextPct
 		if attempt.AgentID == nil {
 			return nil
 		}
@@ -54,6 +55,7 @@ func (o *Orchestrator) captureWorkerUsage(ctx context.Context, attempt *model.Wo
 		ag.Config["tokens_out"] = usage.TokensOut
 		ag.Config["direct_iterations"] = usage.Iterations
 		ag.Config["direct_stop_reason"] = usage.StopReason
+		ag.Config["direct_context_pct"] = usage.ContextPct
 		return tx.Model(&model.Agent{}).Where("id = ?", ag.ID).Updates(map[string]any{
 			"tokens_in": usage.TokensIn, "tokens_out": usage.TokensOut, "config": ag.Config,
 		}).Error

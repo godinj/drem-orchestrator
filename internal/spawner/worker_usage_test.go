@@ -76,3 +76,18 @@ func TestParseWorkerUsageHandlesDockerMultiplexFrames(t *testing.T) {
 	got := parseWorkerUsage(demuxDockerLogPayload(framed))
 	require.Equal(t, &WorkerUsage{Iterations: 2, TokensIn: 99, TokensOut: 11}, got)
 }
+
+func TestParseWorkerUsageFallsBackToLatestProgressCheckpoint(t *testing.T) {
+	got := parseWorkerUsage([]byte(
+		"drem-direct-agent-progress: iteration=1 tokens_in=12000 tokens_out=90 context_pct=22\n" +
+			"drem-direct-agent-progress: iteration=2 tokens_in=26467 tokens_out=189 context_pct=41\n" +
+			"process killed before terminal summary\n"))
+	require.Equal(t, &WorkerUsage{Iterations: 2, TokensIn: 26467, TokensOut: 189, ContextPct: 41}, got)
+}
+
+func TestParseWorkerUsageCombinesTerminalUsageWithProgressContext(t *testing.T) {
+	got := parseWorkerUsage([]byte(
+		"drem-direct-agent-progress: iteration=3 tokens_in=40 tokens_out=7 context_pct=63\n" +
+			"drem-direct-agent: iterations=3 tokens_in=42 tokens_out=8 duration=2s stop_reason=success\n"))
+	require.Equal(t, &WorkerUsage{Iterations: 3, TokensIn: 42, TokensOut: 8, ContextPct: 63, StopReason: "success"}, got)
+}

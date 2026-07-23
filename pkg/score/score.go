@@ -31,10 +31,28 @@ type InterfaceShape struct {
 	Types     []string `json:"types"`
 }
 
+// InterfaceContract is the semantic form of an interface seam. It keeps
+// registry routes and call edges distinct from callable C++ signatures.
+type InterfaceContract struct {
+	Package           string `json:"package"`
+	Kind              string `json:"kind"`
+	State             string `json:"state"`
+	OwnerFile         string `json:"owner_file"`
+	Signature         string `json:"signature,omitempty"`
+	Symbol            string `json:"symbol,omitempty"`
+	ActionID          string `json:"action_id,omitempty"`
+	CallbackSignature string `json:"callback_signature,omitempty"`
+	Route             string `json:"route,omitempty"`
+	TargetAction      string `json:"target_action,omitempty"`
+	Caller            string `json:"caller,omitempty"`
+	Callee            string `json:"callee,omitempty"`
+}
+
 // DepthMeta carries module boundary and interface shape info for depth scoring.
 type DepthMeta struct {
-	ModuleBoundaries []ModuleBoundary `json:"module_boundaries"`
-	InterfaceShapes  []InterfaceShape `json:"interface_shapes"`
+	ModuleBoundaries   []ModuleBoundary    `json:"module_boundaries"`
+	InterfaceShapes    []InterfaceShape    `json:"interface_shapes"`
+	InterfaceContracts []InterfaceContract `json:"interface_contracts,omitempty"`
 }
 
 // PlanEntry represents a single subtask in a plan.
@@ -175,7 +193,8 @@ func scorePlanDocumentation(entries []PlanEntry) float64 {
 // scorePlanDepth scores plan depth on three equally-weighted sub-criteria
 // when DepthMeta is available:
 //  1. Module boundaries defined — at least one subtask has valid ModuleBoundaries.
-//  2. Interface shapes specified — at least one subtask has valid InterfaceShapes.
+//  2. Interfaces specified — at least one subtask has valid semantic contracts
+//     or legacy InterfaceShapes.
 //  3. Deep decomposition — all boundary-defining subtasks keep Exports ≤ 20.
 //
 // When no subtask has DepthMeta, falls back to the file-coverage ratio
@@ -229,6 +248,12 @@ func scorePlanDepth(entries []PlanEntry) float64 {
 		// Check interface shapes.
 		for _, s := range entry.DepthMeta.InterfaceShapes {
 			if s.Package != "" && (len(s.Functions) > 0 || len(s.Types) > 0) {
+				hasInterfaces = true
+				break
+			}
+		}
+		for _, contract := range entry.DepthMeta.InterfaceContracts {
+			if contract.Package != "" && contract.Kind != "" && contract.OwnerFile != "" {
 				hasInterfaces = true
 				break
 			}

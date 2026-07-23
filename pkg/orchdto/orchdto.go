@@ -113,16 +113,17 @@ type TaskExecutionPlanDTO struct {
 }
 
 type TaskExecutionSubtaskDTO struct {
-	Title            string                  `json:"title"`
-	Description      string                  `json:"description"`
-	AgentType        string                  `json:"agent_type,omitempty"`
-	Files            []string                `json:"files"`
-	Dependencies     []int                   `json:"dependencies,omitempty"`
-	Priority         int                     `json:"priority,omitempty"`
-	Phase            string                  `json:"phase"`
-	TestsFor         []int                   `json:"tests_for,omitempty"`
-	ModuleBoundaries []TaskModuleBoundaryDTO `json:"module_boundaries,omitempty"`
-	InterfaceShapes  []TaskInterfaceShapeDTO `json:"interface_shapes,omitempty"`
+	Title              string                     `json:"title"`
+	Description        string                     `json:"description"`
+	AgentType          string                     `json:"agent_type,omitempty"`
+	Files              []string                   `json:"files"`
+	Dependencies       []int                      `json:"dependencies,omitempty"`
+	Priority           int                        `json:"priority,omitempty"`
+	Phase              string                     `json:"phase"`
+	TestsFor           []int                      `json:"tests_for,omitempty"`
+	ModuleBoundaries   []TaskModuleBoundaryDTO    `json:"module_boundaries,omitempty"`
+	InterfaceShapes    []TaskInterfaceShapeDTO    `json:"interface_shapes,omitempty"`
+	InterfaceContracts []TaskInterfaceContractDTO `json:"interface_contracts,omitempty"`
 }
 
 // TaskModuleBoundaryDTO and TaskInterfaceShapeDTO make the adapter commit to
@@ -139,6 +140,25 @@ type TaskInterfaceShapeDTO struct {
 	Package   string   `json:"package"`
 	Functions []string `json:"functions"`
 	Types     []string `json:"types"`
+}
+
+// TaskInterfaceContractDTO describes one semantic seam instead of overloading
+// a C++-looking string. State is one of existing, planned, or missing. Kind is
+// one of cpp_function, cpp_type, registry_action, keymap_route, or call_edge.
+// Fields that do not apply to a kind are omitted.
+type TaskInterfaceContractDTO struct {
+	Package           string `json:"package"`
+	Kind              string `json:"kind"`
+	State             string `json:"state"`
+	OwnerFile         string `json:"owner_file"`
+	Signature         string `json:"signature,omitempty"`
+	Symbol            string `json:"symbol,omitempty"`
+	ActionID          string `json:"action_id,omitempty"`
+	CallbackSignature string `json:"callback_signature,omitempty"`
+	Route             string `json:"route,omitempty"`
+	TargetAction      string `json:"target_action,omitempty"`
+	Caller            string `json:"caller,omitempty"`
+	Callee            string `json:"callee,omitempty"`
 }
 
 type TaskTDDExceptionDTO struct {

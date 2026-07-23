@@ -136,10 +136,10 @@ func depthScoringGuidance() []string {
 		"Your plan is scored on three equally-weighted depth criteria:",
 		"",
 		"1. **Module boundaries**: At least one subtask defines valid module boundaries with a `package` path and `description`.",
-		"2. **Interface shapes**: At least one subtask specifies interface shapes with `functions` or `types`.",
+		"2. **Interfaces**: At least one subtask specifies typed `interface_contracts` or legacy interface shapes.",
 		"3. **Deep decomposition**: All boundary-defining subtasks keep `exports` in the range (0, 20].",
 		"",
-		"Plans without `depth_meta` (module_boundaries and interface_shapes) fall back to a file-coverage " +
+		"Plans without `depth_meta` (module boundaries plus contracts/shapes) fall back to a file-coverage " +
 			"ratio, which scores lower. Plans that score 0% on all three criteria are automatically flagged " +
 			"for rejection.",
 		"",
@@ -152,7 +152,7 @@ func depthScoringGuidance() []string {
 		"```",
 		`Subtask: "Add retry helper"`,
 		"  - No module_boundaries defined",
-		"  - No interface_shapes defined",
+		"  - No interface_contracts or interface_shapes defined",
 		"  - Implementation is a pass-through that calls time.Sleep in a loop",
 		"  - No internal decision-making, no policy, no state",
 		"```",
@@ -187,8 +187,8 @@ func depthScoringGuidance() []string {
 		"",
 		"1. Does every implementation subtask have `module_boundaries` with `package`, " +
 			"`description`, and `exports` ≤ 20?",
-		"2. Does every implementation subtask have `interface_shapes` with at least one " +
-			"`function` or `type`?",
+		"2. Does every implementation subtask have typed `interface_contracts`, or legacy " +
+			"`interface_shapes` with at least one `function` or `type`?",
 		"3. Is each module doing real internal work (policy logic, state machines, validation) " +
 			"rather than just delegating to another package?",
 		"4. Are there opportunities to unify duplicated concerns into shared infrastructure?",

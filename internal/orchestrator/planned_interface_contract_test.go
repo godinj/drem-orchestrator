@@ -33,6 +33,25 @@ func TestPlannedInterfaceContractUsesImplementationAPIWithoutRepositoryInference
 	require.Contains(t, contract, "Do not search for the symbols")
 }
 
+func TestPlannedInterfaceContractSeparatesRuntimeAndCompileRed(t *testing.T) {
+	subtasks := []planEntry{
+		{Title: "Write registration regression", Phase: "test", TestsFor: []int{1}},
+		{Title: "Implement action", Phase: "implementation", Files: []string{"src/ui/ActionAudio.cpp"}, DepthMeta: &score.DepthMeta{
+			ModuleBoundaries: []score.ModuleBoundary{{Package: "src/ui", Description: "audio action", Exports: 1}},
+			InterfaceContracts: []score.InterfaceContract{
+				{Package: "src/ui", Kind: "cpp_function", State: "planned", OwnerFile: "src/ui/ActionAudio.cpp", Signature: "AudioClip::divideAtTransients(const Settings&)"},
+				{Package: "src/ui", Kind: "registry_action", State: "planned", OwnerFile: "src/ui/ActionAudio.cpp", ActionID: "audio.divide-transients", CallbackSignature: "ActionCoordinator::registerAudioProcessActions()"},
+			},
+		}},
+	}
+
+	contract, err := plannedInterfaceContract(subtasks, 0)
+	require.NoError(t, err)
+	require.Contains(t, contract, `"red_mode": "mixed"`)
+	require.Contains(t, contract, `"action_id": "audio.divide-transients"`)
+	require.NotContains(t, contract, `"expected_missing_symbols": [\n    "audio.divide-transients"`)
+}
+
 func TestParsePlanPreservesAdapterInterfaceShapes(t *testing.T) {
 	parsed, err := parsePlan(map[string]any{"subtasks": []any{
 		map[string]any{

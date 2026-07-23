@@ -422,7 +422,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 						mutationObserved = true
 					}
 				}
-				if reconnaissance {
+				if reconnaissance && !blockedRecon {
 					reconnaissanceBeforeMutation++
 				}
 				traceCall := TraceCall{

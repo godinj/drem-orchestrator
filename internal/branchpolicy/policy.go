@@ -23,10 +23,12 @@ type PreflightRequest struct {
 }
 
 type AcceptanceRequest struct {
-	RepoDir       string
-	BaseRef       string
-	HeadRef       string
-	AllowedScopes []string
+	RepoDir                  string
+	BaseRef                  string
+	HeadRef                  string
+	AllowedScopes            []string
+	RejectDestructiveRewrite bool
+	TestContract             string
 }
 
 type AcceptanceResult struct {
@@ -104,6 +106,7 @@ func Accept(ctx context.Context, req AcceptanceRequest) (AcceptanceResult, error
 	}
 
 	scopes := normalizeScopes(req.AllowedScopes)
+	statuses := make(map[string]string)
 	for _, line := range strings.Split(out, "\n") {
 		status, path := parseNameStatus(line)
 		if path == "" {
@@ -113,10 +116,63 @@ func Accept(ctx context.Context, req AcceptanceRequest) (AcceptanceResult, error
 			res.Rejected = append(res.Rejected, Rejection{Path: path, Status: status, Reason: reason})
 			continue
 		}
+		statuses[path] = status
 		res.AcceptedFiles = append(res.AcceptedFiles, path)
+	}
+	if req.RejectDestructiveRewrite {
+		rejections, err := destructiveRewriteRejections(ctx, req, headRef, statuses)
+		if err != nil {
+			return res, err
+		}
+		res.Rejected = append(res.Rejected, rejections...)
+	}
+	if strings.TrimSpace(req.TestContract) != "" {
+		rejections, err := testCheckpointRejections(ctx, req, headRef)
+		if err != nil {
+			return res, err
+		}
+		res.Rejected = append(res.Rejected, rejections...)
 	}
 	res.Accepted = len(res.Rejected) == 0
 	return res, nil
+}
+
+func destructiveRewriteRejections(ctx context.Context, req AcceptanceRequest, headRef string, statuses map[string]string) ([]Rejection, error) {
+	out, err := gitexec.RunGit(ctx, req.RepoDir, "diff", "--numstat", req.BaseRef+".."+headRef)
+	if err != nil {
+		return nil, fmt.Errorf("measure diff against base: %w", err)
+	}
+	var rejected []Rejection
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 || fields[0] == "-" || fields[1] == "-" {
+			continue
+		}
+		path := filepath.ToSlash(fields[len(fields)-1])
+		if statuses[path] == "A" || statuses[path] == "D" {
+			continue
+		}
+		var added, deleted int
+		if _, err := fmt.Sscan(fields[0], &added); err != nil {
+			continue
+		}
+		if _, err := fmt.Sscan(fields[1], &deleted); err != nil {
+			continue
+		}
+		if deleted < 20 || added*2 >= deleted {
+			continue
+		}
+		base, err := gitexec.RunGit(ctx, req.RepoDir, "show", req.BaseRef+":"+path)
+		if err != nil {
+			continue
+		}
+		baseLines := strings.Count(base, "\n")
+		if baseLines == 0 || float64(deleted)/float64(baseLines) < 0.60 {
+			continue
+		}
+		rejected = append(rejected, Rejection{Path: path, Status: statuses[path], Reason: "destructive_rewrite"})
+	}
+	return rejected, nil
 }
 
 func requireWritable(path string) error {

@@ -19,6 +19,10 @@ var directWorkerUsagePattern = regexp.MustCompile(
 	`drem-direct-agent:\s+iterations=(\d+)\s+tokens_in=(\d+)\s+tokens_out=(\d+)\s+duration=\S+\s+stop_reason=([^\s\x00]*)`,
 )
 
+var directWorkerProgressPattern = regexp.MustCompile(
+	`drem-direct-agent-progress:\s+iteration=(\d+)\s+tokens_in=(\d+)\s+tokens_out=(\d+)\s+context_pct=(\d+)`,
+)
+
 func terminalWorkerStatus(status container.Status) bool {
 	return status == container.StatusExited || status == container.StatusDead || status == container.StatusRemoved
 }
@@ -58,7 +62,7 @@ func demuxDockerLogPayload(body []byte) []byte {
 func parseWorkerUsage(body []byte) *WorkerUsage {
 	matches := directWorkerUsagePattern.FindAllSubmatch(body, -1)
 	if len(matches) == 0 {
-		return nil
+		return parseWorkerProgress(body)
 	}
 	last := matches[len(matches)-1]
 	iterations, err1 := strconv.Atoi(string(last[1]))
@@ -67,10 +71,30 @@ func parseWorkerUsage(body []byte) *WorkerUsage {
 	if err1 != nil || err2 != nil || err3 != nil {
 		return nil
 	}
-	return &WorkerUsage{
+	usage := &WorkerUsage{
 		Iterations: iterations,
 		TokensIn:   tokensIn,
 		TokensOut:  tokensOut,
 		StopReason: string(last[4]),
 	}
+	if progress := parseWorkerProgress(body); progress != nil {
+		usage.ContextPct = progress.ContextPct
+	}
+	return usage
+}
+
+func parseWorkerProgress(body []byte) *WorkerUsage {
+	matches := directWorkerProgressPattern.FindAllSubmatch(body, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	last := matches[len(matches)-1]
+	iterations, err1 := strconv.Atoi(string(last[1]))
+	tokensIn, err2 := strconv.Atoi(string(last[2]))
+	tokensOut, err3 := strconv.Atoi(string(last[3]))
+	contextPct, err4 := strconv.Atoi(string(last[4]))
+	if err1 != nil || err2 != nil || err3 != nil || err4 != nil {
+		return nil
+	}
+	return &WorkerUsage{Iterations: iterations, TokensIn: tokensIn, TokensOut: tokensOut, ContextPct: contextPct}
 }
