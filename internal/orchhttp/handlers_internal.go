@@ -3,7 +3,6 @@ package orchhttp
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -97,11 +96,6 @@ func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := tx.Create(&rows).Error; err != nil {
 			return err
-		}
-		for i := range rows {
-			if err := applyIngestSideEffects(tx, rows[i]); err != nil {
-				return err
-			}
 		}
 		return nil
 	}); err != nil {
@@ -309,100 +303,6 @@ func ingestDetail(recordType string, payload map[string]any) (string, error) {
 		return reason, nil
 	}
 	return "", fmt.Errorf("no detail extractor for %q", recordType)
-}
-
-func applyIngestSideEffects(tx *gorm.DB, row model.TaskEvent) error {
-	if row.EventType != recordTypeMergeResult || row.TaskID == uuid.Nil {
-		return nil
-	}
-	var task model.Task
-	if err := tx.First(&task, "id = ?", row.TaskID).Error; err != nil {
-		return err
-	}
-	if task.Status != model.StatusMerging {
-		return nil
-	}
-	matched, attemptID, err := currentMergerAttemptMatches(tx, task, row)
-	if err != nil {
-		return err
-	}
-	if !matched {
-		return nil
-	}
-	if task.Context == nil {
-		task.Context = make(model.JSONField)
-	}
-	containerID := stringField(row.Details, "container_id")
-	if containerID == "" {
-		containerID, _ = task.Context["current_merge_container_id"].(string)
-	}
-	task.Context["merge_result_attempt_id"] = attemptID
-	task.Context["merge_result_container_id"] = containerID
-	if v := stringField(row.Details, "merged_sha"); v != "" {
-		task.Context["merge_commit"] = v
-	}
-	if conflicts, ok := stringSliceField(row.Details, "conflicts"); ok {
-		task.Context["merge_conflicts"] = conflicts
-	}
-	if v := stringField(row.Details, "failure_reason"); v != "" {
-		task.Context["merge_failure_reason"] = v
-	}
-	if v := stringField(row.Details, "test_output"); v != "" {
-		task.Context["merge_test_output"] = v
-	}
-	return tx.Model(&task).Update("context", task.Context).Error
-}
-
-func currentMergerAttemptMatches(tx *gorm.DB, task model.Task, row model.TaskEvent) (bool, string, error) {
-	containerID := stringField(row.Details, "container_id")
-	workerID := stringField(row.Details, "worker_id")
-	currentAttemptID, _ := task.Context["current_merge_attempt_id"].(string)
-	currentContainerID, _ := task.Context["current_merge_container_id"].(string)
-	currentWorkerID, _ := task.Context["current_merge_worker_id"].(string)
-	if currentAttemptID == "" {
-		return false, "", nil
-	}
-	if currentContainerID != "" && containerID != "" && currentContainerID != containerID {
-		return false, "", nil
-	}
-	if currentWorkerID != "" && workerID != "" && currentWorkerID != workerID {
-		return false, "", nil
-	}
-
-	var attempt model.WorkerAttempt
-	err := tx.First(&attempt, "id = ? AND task_id = ? AND agent_type = ?", currentAttemptID, task.ID, string(model.AgentMerger)).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return false, "", nil
-	}
-	if err != nil {
-		return false, "", err
-	}
-	if attempt.ContainerID != "" && containerID != "" && attempt.ContainerID != containerID {
-		return false, "", nil
-	}
-	if attempt.WorkerID != "" && workerID != "" && attempt.WorkerID != workerID {
-		return false, "", nil
-	}
-	return true, attempt.ID.String(), nil
-}
-
-func stringSliceField(m map[string]any, key string) ([]string, bool) {
-	v, ok := m[key]
-	if !ok {
-		return nil, false
-	}
-	raw, ok := v.([]any)
-	if !ok {
-		return nil, false
-	}
-	out := make([]string, 0, len(raw))
-	for _, item := range raw {
-		s, ok := item.(string)
-		if ok {
-			out = append(out, s)
-		}
-	}
-	return out, true
 }
 
 // stringField safely extracts a string value from the raw decoded JSON

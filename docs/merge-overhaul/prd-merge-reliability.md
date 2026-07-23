@@ -1,5 +1,9 @@
 # PRD: Merge Pipeline & Agent Lifecycle Reliability
 
+> Historical draft, superseded for task-transition authority by Phase 4 in
+> `plans/orchestration-meta-analysis.md`. Do not reintroduce inferred success,
+> failed-task revival, or automatic conflict-fixer dispatch from this draft.
+
 **Date**: 2026-03-07
 **Status**: Draft
 **Source**: [Merge Reliability Findings Report](merge-reliability-findings.md)

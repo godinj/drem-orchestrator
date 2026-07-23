@@ -29,9 +29,10 @@ type GitrefRegistry interface {
 	MarkDeleted(ctx context.Context, bareRepo, branch string) error
 }
 
-// MergeReporter is the outbound reporting surface. Production code posts
-// merge_result records to the orchestrator's /internal/logs endpoint; tests
-// use a fake to assert the Reporter is always invoked, even on failure.
+// MergeReporter is the outbound telemetry surface. Production code posts
+// merge_result records to the orchestrator's /internal/logs endpoint; they do
+// not drive task state. Tests use a fake to assert the Reporter is always
+// invoked, even on failure.
 type MergeReporter interface {
 	// Report emits a single merge_result record. The method must be called
 	// exactly once per Merger.Merge invocation, regardless of success.

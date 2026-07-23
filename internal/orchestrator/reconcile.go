@@ -10,20 +10,15 @@ import (
 
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
-	"gorm.io/gorm"
 )
 
 // ReconcileResult describes the fixes applied by a single Reconcile run.
 type ReconcileResult struct {
 	StaleSubtasksReset         int
-	OrphanedSubtasksFixed      int
-	EmptyFeaturesFailed        int
 	OrphanWorktreesCleaned     int
 	StuckAgentsRecovered       int
 	OrphanedAssignmentsCleared int
-	AlreadyMergedFeaturesFixed int
 	CompletedParentsAdvanced   int
-	FailedParentsRecovered     int
 }
 
 // ReapOrphanedSessions kills tmux agent sessions that have no active agent
@@ -45,18 +40,6 @@ func (o *Orchestrator) Reconcile() (int, error) {
 		r.StaleSubtasksReset = n
 	}
 
-	if n, err := o.reconcileOrphanedSubtasks(); err != nil {
-		return 0, fmt.Errorf("reconcile orphaned subtasks: %w", err)
-	} else {
-		r.OrphanedSubtasksFixed = n
-	}
-
-	if n, err := o.reconcileEmptyFeatures(); err != nil {
-		return 0, fmt.Errorf("reconcile empty features: %w", err)
-	} else {
-		r.EmptyFeaturesFailed = n
-	}
-
 	if n, err := o.reconcileOrphanWorktrees(); err != nil {
 		return 0, fmt.Errorf("reconcile orphan worktrees: %w", err)
 	} else {
@@ -75,25 +58,13 @@ func (o *Orchestrator) Reconcile() (int, error) {
 		r.OrphanedAssignmentsCleared = n
 	}
 
-	if n, err := o.reconcileAlreadyMergedFeatures(); err != nil {
-		return 0, fmt.Errorf("reconcile already-merged features: %w", err)
-	} else {
-		r.AlreadyMergedFeaturesFixed = n
-	}
-
 	if n, err := o.reconcileCompletedParents(); err != nil {
 		return 0, fmt.Errorf("reconcile completed parents: %w", err)
 	} else {
 		r.CompletedParentsAdvanced = n
 	}
 
-	if n, err := o.reconcileFailedParents(); err != nil {
-		return 0, fmt.Errorf("reconcile failed parents: %w", err)
-	} else {
-		r.FailedParentsRecovered = n
-	}
-
-	total := r.StaleSubtasksReset + r.OrphanedSubtasksFixed + r.EmptyFeaturesFailed + r.OrphanWorktreesCleaned + r.StuckAgentsRecovered + r.OrphanedAssignmentsCleared + r.AlreadyMergedFeaturesFixed + r.CompletedParentsAdvanced + r.FailedParentsRecovered
+	total := r.StaleSubtasksReset + r.OrphanWorktreesCleaned + r.StuckAgentsRecovered + r.OrphanedAssignmentsCleared + r.CompletedParentsAdvanced
 	if total > 0 {
 		o.emit("reconcile", r)
 	}
@@ -161,221 +132,6 @@ func (o *Orchestrator) reconcileStaleSubtasks() (int, error) {
 			}
 			fixed++
 		}
-	}
-	return fixed, nil
-}
-
-// reconcileOrphanedSubtasks finds IN_PROGRESS subtasks whose assigned agent
-// is idle or dead — meaning the agent finished but the completion signal was
-// lost before the subtask could be transitioned. For each orphaned subtask,
-// it attempts to merge any remaining agent work into the feature branch and
-// transitions the subtask to TESTING_READY so the normal quality gate can
-// verify build and test correctness. If the agent branch has no mergeable
-// work and the feature branch is empty, the subtask is reset to BACKLOG.
-func (o *Orchestrator) reconcileOrphanedSubtasks() (int, error) {
-	var subtasks []model.Task
-	if err := o.db.Where(
-		"project_id = ? AND status = ? AND parent_task_id IS NOT NULL AND assigned_agent_id IS NOT NULL",
-		o.projectID, model.StatusInProgress,
-	).Find(&subtasks).Error; err != nil {
-		return 0, err
-	}
-
-	fixed := 0
-	for i := range subtasks {
-		sub := &subtasks[i]
-
-		var ag model.Agent
-		if err := o.db.First(&ag, "id = ?", sub.AssignedAgentID).Error; err != nil {
-			// Agent record missing — reset subtask for rescheduling.
-			o.logger.Warn("reconcile: assigned agent not found, resetting subtask",
-				"subtask_id", sub.ID, "agent_id", sub.AssignedAgentID)
-			sub.AssignedAgentID = nil
-			if err := o.transitionTaskAtomic(sub, model.StatusBacklog, "orchestrator", "orphan_reconciliation",
-				"assigned agent record is missing; subtask rescheduled", nil); err != nil {
-				o.logger.Error("reconcile: save subtask", "subtask_id", sub.ID, "error", err)
-			}
-			fixed++
-			continue
-		}
-
-		// Only act if the agent is no longer actively working.
-		if ag.Status == model.AgentWorking || ag.Status == model.AgentBlocked {
-			continue
-		}
-
-		o.logger.Info("reconcile: processing orphaned in_progress subtask",
-			"subtask_id", sub.ID, "agent_id", ag.ID, "agent_status", ag.Status)
-
-		// Resolve the feature branch from the parent task.
-		featureBranch := ""
-		if sub.ParentTaskID != nil {
-			var parent model.Task
-			if err := o.db.Select("worktree_branch").First(&parent, "id = ?", sub.ParentTaskID).Error; err == nil {
-				featureBranch = parent.WorktreeBranch
-			}
-		}
-
-		// Before resetting, check if work is already merged.
-		if featureBranch != "" {
-			fn := strings.TrimPrefix(featureBranch, "feature/")
-			featureDir := o.worktree.FeatureWorktreePath(fn)
-			if o.isWorkAlreadyMerged(sub, featureDir) {
-				o.logger.Info("reconcile: work already merged, transitioning to quality gate",
-					"subtask_id", sub.ID, "agent_id", ag.ID)
-				if err := o.db.Transaction(func(tx *gorm.DB) error {
-					return casSubtaskCompletion(tx, sub, "orchestrator", map[string]any{
-						"agent_id": ag.ID.String(), "reason": "reconcile_already_merged",
-					})
-				}); err != nil {
-					o.logger.Error("reconcile: save subtask", "subtask_id", sub.ID, "error", err)
-				}
-				// Clean up agent worktree since work is merged.
-				if ag.WorktreeBranch != "" {
-					if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
-						o.logger.Warn("reconcile: cleanup agent worktree", "agent_id", ag.ID, "error", err)
-					}
-				}
-				fixed++
-				continue
-			}
-		}
-
-		// Attempt to merge agent work if the branch still exists.
-		merged := false
-		if ag.WorktreeBranch != "" && featureBranch != "" {
-			fn := strings.TrimPrefix(featureBranch, "feature/")
-			featureDir := o.worktree.FeatureWorktreePath(fn)
-
-			stale, err := gitexec.WorktreeHeadDiffersFromBranchTip(context.Background(), featureDir, featureBranch)
-			if err != nil {
-				o.logger.Warn("reconcile: cannot verify feature worktree freshness", "feature", featureBranch, "error", err)
-				continue
-			}
-			if stale {
-				o.logger.Warn("reconcile: skipping orphan recovery on stale feature worktree", "feature", featureBranch, "feature_dir", featureDir)
-				continue
-			}
-
-			clean, err := gitexec.IsClean(context.Background(), featureDir)
-			if err != nil {
-				o.logger.Warn("reconcile: cannot inspect feature worktree cleanliness", "feature", featureBranch, "error", err)
-				continue
-			}
-			if !clean {
-				o.logger.Warn("reconcile: dirty feature worktree; refusing auto-commit during reconcile", "feature", featureBranch, "feature_dir", featureDir)
-				continue
-			}
-
-			hasCommits, err := gitexec.BranchHasNewCommits(context.Background(), featureDir, ag.WorktreeBranch)
-			if err != nil {
-				o.logger.Warn("reconcile: cannot inspect agent branch, leaving subtask unfinished",
-					"subtask_id", sub.ID, "agent_id", ag.ID, "branch", ag.WorktreeBranch, "error", err)
-			} else if !branchHasMeaningfulDiff(featureDir, "HEAD", ag.WorktreeBranch) {
-				o.logger.Warn("reconcile: agent branch has no meaningful file changes, leaving subtask unfinished",
-					"subtask_id", sub.ID, "agent_id", ag.ID, "branch", ag.WorktreeBranch)
-			} else if hasCommits {
-				result, mergeErr := o.mergeAgentBranchIntoFeature(context.Background(), ag.WorktreeBranch, featureDir)
-				if mergeErr != nil {
-					o.logger.Error("reconcile: merge agent into feature failed",
-						"subtask_id", sub.ID, "agent_id", ag.ID, "error", mergeErr)
-				} else if result.Success {
-					merged = true
-					if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
-						o.logger.Warn("reconcile: cleanup agent worktree", "agent_id", ag.ID, "error", err)
-					}
-				} else {
-					o.logger.Error("reconcile: merge had conflicts",
-						"subtask_id", sub.ID, "conflicts", result.Conflicts)
-				}
-			} else {
-				o.logger.Warn("reconcile: agent branch has no new commits, leaving subtask unfinished",
-					"subtask_id", sub.ID, "agent_id", ag.ID, "branch", ag.WorktreeBranch)
-			}
-		}
-
-		if !merged {
-			// Merge failed — keep the agent worktree/branch intact so work
-			// is not lost (consistent with onAgentCompleted behavior).
-			if err := o.failTask(sub, "reconcile: agent work could not be merged into feature branch (agent branch preserved)"); err != nil {
-				o.logger.Error("reconcile: fail subtask", "subtask_id", sub.ID, "error", err)
-			}
-			// Leave agent worktree intact for manual resolution or retry.
-			fixed++
-			continue
-		}
-
-		// Clean up the agent record if it still references this subtask.
-		if ag.CurrentTaskID != nil && *ag.CurrentTaskID == sub.ID {
-			ag.CurrentTaskID = nil
-			if ag.Status == model.AgentDead {
-				ag.Status = model.AgentIdle
-			}
-			if err := o.db.Save(&ag).Error; err != nil {
-				o.logger.Error("reconcile: save agent", "agent_id", ag.ID, "error", err)
-			}
-		}
-
-		if err := o.db.Transaction(func(tx *gorm.DB) error {
-			return casSubtaskCompletion(tx, sub, "orchestrator", map[string]any{
-				"agent_id": ag.ID.String(), "reason": "reconcile_merged",
-			})
-		}); err != nil {
-			o.logger.Error("reconcile: save subtask", "subtask_id", sub.ID, "error", err)
-			continue
-		}
-		fixed++
-	}
-	return fixed, nil
-}
-
-// reconcileEmptyFeatures finds parent tasks in TESTING_READY whose feature
-// branch has no file changes relative to the default branch and fails them.
-func (o *Orchestrator) reconcileEmptyFeatures() (int, error) {
-	var tasks []model.Task
-	if err := o.db.Where(
-		"project_id = ? AND status = ? AND parent_task_id IS NULL",
-		o.projectID, model.StatusTestingReady,
-	).Find(&tasks).Error; err != nil {
-		return 0, err
-	}
-
-	fixed := 0
-	for i := range tasks {
-		task := &tasks[i]
-		if task.WorktreeBranch == "" {
-			continue
-		}
-
-		fn := strings.TrimPrefix(task.WorktreeBranch, "feature/")
-		featureDir := o.worktree.FeatureWorktreePath(fn)
-
-		changed, err := gitexec.GetChangedFiles(context.Background(), featureDir, o.worktree.DefaultBranchName())
-		if err != nil {
-			continue
-		}
-		if hasMeaningfulWorkPaths(changed) {
-			continue
-		}
-		if o.featureBranchAlreadyMergedToDefault(task) {
-			o.logger.Info("reconcile: branch already integrated; preserving testing_ready for evidence freeze",
-				"task_id", task.ID, "branch", task.WorktreeBranch)
-			continue
-		}
-
-		o.logger.Warn("reconcile: returning empty testing_ready task to implementation",
-			"task_id", task.ID)
-		if task.Context == nil {
-			task.Context = make(model.JSONField)
-		}
-		task.Context["empty_feature"] = true
-		task.Context["reconciled"] = true
-		if err := o.transitionTaskAtomic(task, model.StatusInProgress, "orchestrator", "empty_feature_recovery",
-			"feature branch has no changes; implementation must produce an artifact", nil); err != nil {
-			o.logger.Error("reconcile: rework empty feature task", "task_id", task.ID, "error", err)
-			continue
-		}
-		fixed++
 	}
 	return fixed, nil
 }
@@ -487,6 +243,9 @@ func (o *Orchestrator) reconcileOrphanedTaskAssignments() (int, error) {
 
 		var ag model.Agent
 		if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err != nil {
+			if o.hasActiveWorkerAttemptForAgent(task.ID, *task.AssignedAgentID) {
+				continue
+			}
 			// Agent record missing entirely — clear the assignment.
 			o.logger.Warn("reconcile: assigned agent not found, clearing task assignment",
 				"task_id", task.ID, "agent_id", task.AssignedAgentID)
@@ -504,6 +263,9 @@ func (o *Orchestrator) reconcileOrphanedTaskAssignments() (int, error) {
 		// Working agents are handled by reconcileStuckAgents.
 		// Blocked agents are legitimately waiting — leave them alone.
 		if ag.Status == model.AgentWorking || ag.Status == model.AgentBlocked {
+			continue
+		}
+		if o.hasActiveWorkerAttemptForAgent(task.ID, ag.ID) {
 			continue
 		}
 
@@ -572,6 +334,9 @@ func (o *Orchestrator) cleanupOrphanedAssignments() {
 		// Check agent status in DB.
 		var ag model.Agent
 		if err := o.db.First(&ag, "id = ?", task.AssignedAgentID).Error; err != nil {
+			if o.hasActiveWorkerAttemptForAgent(task.ID, *task.AssignedAgentID) {
+				continue
+			}
 			// Agent record missing — clear assignment.
 			o.logger.Warn("startup cleanup: agent not found, clearing assignment",
 				"task_id", task.ID, "agent_id", task.AssignedAgentID)
@@ -593,6 +358,9 @@ func (o *Orchestrator) cleanupOrphanedAssignments() {
 		// On startup, no agents should be working unless they survived
 		// the restart, which the runner's running map would reflect.
 		if ag.Status != model.AgentWorking && ag.Status != model.AgentBlocked {
+			if o.hasActiveWorkerAttemptForAgent(task.ID, ag.ID) {
+				continue
+			}
 			o.logger.Info("startup cleanup: clearing stale agent assignment",
 				"task_id", task.ID, "agent_id", ag.ID, "agent_status", ag.Status)
 			task.AssignedAgentID = nil
@@ -612,4 +380,17 @@ func (o *Orchestrator) cleanupOrphanedAssignments() {
 	if cleared > 0 {
 		o.logger.Info("startup cleanup: cleared orphaned task assignments", "count", cleared)
 	}
+}
+
+func (o *Orchestrator) hasActiveWorkerAttemptForAgent(taskID, agentID uuid.UUID) bool {
+	var count int64
+	if err := o.db.Model(&model.WorkerAttempt{}).
+		Where("task_id = ? AND agent_id = ? AND completed_at IS NULL AND state IN ?",
+			taskID, agentID, []string{model.WorkerAttemptReserved, model.WorkerAttemptRunning}).
+		Count(&count).Error; err != nil {
+		o.logger.Warn("reconcile: active attempt lookup failed",
+			"task_id", taskID, "agent_id", agentID, "error", err)
+		return true
+	}
+	return count > 0
 }

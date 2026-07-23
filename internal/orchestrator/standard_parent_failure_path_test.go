@@ -165,7 +165,7 @@ func jsonNumberAsInt(v any) int {
 	}
 }
 
-func TestStandardParent_TerminalMergerTestsFailedPreventsFailedParentRecovery(t *testing.T) {
+func TestStandardParent_ReconcileNeverRevivesFailedParent(t *testing.T) {
 	orch, db, _ := setupReconcileTest(t)
 
 	parentID := uuid.New()
@@ -191,9 +191,9 @@ func TestStandardParent_TerminalMergerTestsFailedPreventsFailedParentRecovery(t 
 		}
 	}
 
-	n, err := orch.reconcileFailedParents()
+	n, err := orch.Reconcile()
 	if err != nil {
-		t.Fatalf("reconcileFailedParents: %v", err)
+		t.Fatalf("Reconcile: %v", err)
 	}
 	if n != 0 {
 		t.Fatalf("recovered parents = %d, want 0", n)

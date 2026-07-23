@@ -154,7 +154,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 			return o.db.Save(task).Error
 		}
 
-		// Agent is still working — do nothing (recoverStuckAgents handles fallback).
+		// Agent is still working — its runner or typed WorkerAttempt result owns completion.
 		return nil
 	}
 

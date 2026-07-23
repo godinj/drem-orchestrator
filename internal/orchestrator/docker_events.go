@@ -12,6 +12,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/state"
+	"gorm.io/gorm/clause"
 )
 
 // replacementCap is the per-task maximum number of container replacements
@@ -213,9 +214,6 @@ func (o *Orchestrator) dispatchEvent(ctx context.Context, ev container.Event, tr
 			o.logger.Warn("docker event: task not found", "task_id", taskID, "error", err)
 			return
 		}
-		if isTerminal(task.Status) {
-			return
-		}
 		attempt, ok := o.workerAttemptForDeathEvent(task.ID, ev)
 		if !ok {
 			o.logger.Warn("docker death event has no matching worker attempt",
@@ -223,7 +221,34 @@ func (o *Orchestrator) dispatchEvent(ctx context.Context, ev container.Event, tr
 				"worker_id", ev.Labels["drem.worker_id"])
 			return
 		}
+		if err := o.recordAttemptTerminalObservation(attempt, ev); err != nil {
+			o.logger.Error("docker death event: persist terminal observation",
+				"task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+			return
+		}
+		if attempt.AgentType == string(model.AgentMerger) && attempt.AgentID == nil {
+			if err := o.finalizeObservedAttempt(attempt, ev); err != nil {
+				o.logger.Error("docker death event: finalize merger attempt",
+					"task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+			}
+			return
+		}
+		if isTerminal(task.Status) {
+			if activeWorkerAttempt(attempt) {
+				if err := o.finalizeObservedAttempt(attempt, ev); err != nil {
+					o.logger.Error("docker death event: finalize late attempt for terminal task",
+						"task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+				}
+			}
+			return
+		}
 		if !currentAssignedAttempt(&task, attempt) {
+			if activeWorkerAttempt(attempt) {
+				if err := o.finalizeObservedAttempt(attempt, ev); err != nil {
+					o.logger.Error("docker death event: finalize stale attempt",
+						"task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+				}
+			}
 			o.logger.Info("ignoring stale docker death event for non-current attempt",
 				"task_id", task.ID, "container_id", ev.ContainerID,
 				"worker_id", ev.Labels["drem.worker_id"], "attempt_id", attempt.ID)
@@ -247,11 +272,6 @@ func (o *Orchestrator) handleWorkerExitZero(ctx context.Context, taskID uuid.UUI
 		o.logger.Warn("docker completion event: task not found", "task_id", taskID, "error", err)
 		return
 	}
-	if isTerminal(task.Status) {
-		o.recordWorkerCompletionEvidence(taskID, nil, ev, "ignored", "terminal_task")
-		return
-	}
-
 	attempt, ok := o.workerAttemptForDeathEvent(task.ID, ev)
 	if !ok {
 		o.recordWorkerCompletionEvidence(taskID, nil, ev, "ignored", "unmatched_attempt")
@@ -260,7 +280,57 @@ func (o *Orchestrator) handleWorkerExitZero(ctx context.Context, taskID uuid.UUI
 			"worker_id", ev.Labels["drem.worker_id"])
 		return
 	}
+	if err := o.recordAttemptTerminalObservation(attempt, ev); err != nil {
+		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "terminal_observation_persist_failed")
+		o.logger.Error("docker completion event: persist terminal observation",
+			"task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+		return
+	}
+	if attempt.AgentType == string(model.AgentMerger) && attempt.AgentID == nil {
+		if err := o.finalizeObservedAttempt(attempt, ev); err != nil {
+			o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "merger_attempt_finalize_failed")
+			o.logger.Error("docker completion event: finalize merger attempt",
+				"task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+			return
+		}
+		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "accepted", "merger_exit_zero")
+		return
+	}
+	if isTerminal(task.Status) || task.Status == model.StatusTestingReady {
+		// The task effect may have committed before the attempt finalization.
+		// A repeated authoritative terminal observation closes that narrow
+		// crash window without replaying the task transition.
+		if activeWorkerAttempt(attempt) && attempt.AgentID != nil &&
+			(task.Status == model.StatusDone || task.Status == model.StatusTestingReady) {
+			if err := o.finalizeObservedAttempt(attempt, ev); err != nil {
+				o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "attempt_replay_finalize_failed")
+				o.logger.Error("docker completion event: finalize replayed attempt",
+					"task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+				return
+			}
+			o.recordWorkerCompletionEvidence(taskID, attempt, ev, "accepted", "task_effect_already_applied")
+			return
+		}
+		if activeWorkerAttempt(attempt) {
+			if err := o.finalizeObservedAttempt(attempt, ev); err != nil {
+				o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "terminal_task_attempt_finalize_failed")
+				o.logger.Error("docker completion event: finalize late attempt for terminal task",
+					"task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+				return
+			}
+		}
+		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "ignored", "terminal_task")
+		return
+	}
 	if !currentAssignedAttempt(&task, attempt) {
+		if activeWorkerAttempt(attempt) {
+			if err := o.finalizeObservedAttempt(attempt, ev); err != nil {
+				o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "stale_attempt_finalize_failed")
+				o.logger.Error("docker completion event: finalize stale attempt",
+					"task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+				return
+			}
+		}
 		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "ignored", "stale_attempt")
 		o.logger.Info("ignoring stale docker completion event for non-current attempt",
 			"task_id", task.ID, "container_id", ev.ContainerID,
@@ -292,13 +362,9 @@ func (o *Orchestrator) handleWorkerExitZero(ctx context.Context, taskID uuid.UUI
 		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "branch_acceptance_pending")
 		return
 	}
-	now := time.Now()
-	res := o.db.Model(&model.WorkerAttempt{}).
-		Where("id = ? AND task_id = ? AND completed_at IS NULL", attempt.ID, taskID).
-		Updates(map[string]any{"state": model.WorkerAttemptCompleted, "completed_at": &now})
-	if res.Error != nil {
+	if err := o.finalizeObservedAttempt(attempt, ev); err != nil {
 		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "attempt_completion_update_failed")
-		o.logger.Error("docker completion event: mark attempt completed", "task_id", task.ID, "attempt_id", attempt.ID, "error", res.Error)
+		o.logger.Error("docker completion event: mark attempt completed", "task_id", task.ID, "attempt_id", attempt.ID, "error", err)
 		return
 	}
 	o.recordWorkerCompletionEvidence(taskID, attempt, ev, "accepted", "exit_zero_current_attempt")
@@ -354,6 +420,60 @@ func activeWorkerAttempt(attempt *model.WorkerAttempt) bool {
 	return attempt.State == model.WorkerAttemptReserved || attempt.State == model.WorkerAttemptRunning
 }
 
+func (o *Orchestrator) recordAttemptTerminalObservation(attempt *model.WorkerAttempt, ev container.Event) error {
+	if attempt == nil {
+		return nil
+	}
+	o.attemptTerminalMu.Lock()
+	defer o.attemptTerminalMu.Unlock()
+	at := ev.Timestamp
+	if at.IsZero() {
+		at = time.Now()
+	}
+	event := model.AttemptEvent{
+		ID: uuid.New(), TaskID: attempt.TaskID, AttemptID: attempt.ID,
+		State: attempt.State, Type: "terminal_observed", Actor: "spawner-lifecycle", CreatedAt: at,
+		Details: model.JSONField{
+			"container_id":      attempt.ContainerID,
+			"worker_id":         attempt.WorkerID,
+			"exit_code":         ev.ExitCode,
+			"oom_killed":        ev.OOMKilled,
+			"normalized_reason": normalizedDockerExitReason(ev),
+		},
+	}
+	return o.db.Clauses(clause.OnConflict{DoNothing: true}).Create(&event).Error
+}
+
+func (o *Orchestrator) finalizeObservedAttempt(attempt *model.WorkerAttempt, ev container.Event) error {
+	if attempt == nil {
+		return nil
+	}
+	at := ev.Timestamp
+	if at.IsZero() {
+		at = time.Now()
+	}
+	updates := map[string]any{"completed_at": &at}
+	if ev.ExitCode == 0 && !ev.OOMKilled {
+		updates["state"] = model.WorkerAttemptCompleted
+	} else {
+		updates["state"] = model.WorkerAttemptFailed
+		updates["failed_at"] = &at
+		updates["failure_classification"] = normalizeFailureClass(normalizedDockerExitReason(ev), fmt.Sprintf("exit_code=%d oom=%t", ev.ExitCode, ev.OOMKilled))
+		updates["first_error"] = fmt.Sprintf("container %s exited with code %d (oom=%t)", ev.ContainerID, ev.ExitCode, ev.OOMKilled)
+	}
+	res := o.db.Model(&model.WorkerAttempt{}).
+		Where("id = ? AND task_id = ? AND completed_at IS NULL", attempt.ID, attempt.TaskID).
+		Updates(updates)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected > 0 {
+		attempt.CompletedAt = &at
+		attempt.State = updates["state"].(string)
+	}
+	return nil
+}
+
 func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, attempt *model.WorkerAttempt, ev container.Event, tracker *replacementTracker) {
 	now := time.Now()
 	o.markWorkerAttemptDead(task, attempt, ev, now)
@@ -392,20 +512,13 @@ func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, 
 }
 
 func (o *Orchestrator) respawnWorkerRole(ctx context.Context, task *model.Task, role string) error {
-	switch role {
-	case string(model.AgentCoder):
-		return o.spawnCoder(ctx, task)
-	case string(model.AgentReviewer):
-		return o.spawnReviewer(ctx, task)
-	case string(model.AgentFixer):
-		return o.spawnFixer(ctx, task)
-	case "supervisor":
-		return o.spawnSupervisor(ctx, task)
-	case string(model.AgentMerger):
+	if role == string(model.AgentMerger) {
 		return nil
-	default:
-		return fmt.Errorf("unknown worker role %q for respawn", role)
 	}
+	if _, err := o.workerLaunchService().Launch(ctx, task, model.AgentType(role)); err != nil {
+		return fmt.Errorf("launch replacement %s: %w", role, err)
+	}
+	return nil
 }
 
 func (o *Orchestrator) markWorkerAttemptDead(task *model.Task, attempt *model.WorkerAttempt, ev container.Event, now time.Time) {

@@ -7,7 +7,7 @@ Agent prompts for improving drem-orchestrator test coverage before a major archi
 | # | Name | Tier | Dependencies | New Test File | Target Methods |
 |---|------|------|-------------|---------------|----------------|
 | 01 | Agent Completion Handlers | 1 | none | `internal/orchestrator/completion_test.go` | processAgentResult, onAgentCompleted, onPlannerCompleted, onCoderCompleted, onReviewerCompleted, onFixerCompleted, onAgentFailed, onAgentEmptyWork |
-| 02 | Reconciliation Logic | 1 | none | `internal/orchestrator/reconciliation_test.go` | Reconcile, reconcileStaleSubtasks, reconcileOrphanedSubtasks, reconcileEmptyFeatures, reconcileOrphanWorktrees, reconcileStuckAgents, recoverStuckAgents |
+| 02 | Reconciliation and lifecycle recovery | 1 | none | existing focused reconciliation/lifecycle tests | Reconcile recovery-only contract, typed terminal replay, fail-closed inventory gaps, orphan cleanup |
 | 03 | Supervisor Execution | 1 | none | `internal/supervisor/evaluate_test.go` | Evaluate, EvaluateJSON, WriteJournalEntry, prompt generation functions |
 | 04 | Merge Execution & Pause | 1 | none | `internal/orchestrator/merge_pause_test.go` | executeMerge, handlePaused, processBacklog, processPlanning, DeleteSubtask |
 | 05 | Tick Loop & Lifecycle | 2 | 01-04 | `internal/orchestrator/tick_integration_test.go` | doTick, Run, full BACKLOG→DONE lifecycle, failure-retry lifecycle |

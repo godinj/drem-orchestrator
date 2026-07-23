@@ -633,55 +633,6 @@ func TestOnAgentEmptyWork_MaxRetries_FailsTask(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// reconcileOrphanedSubtasks - agent record missing
-// ---------------------------------------------------------------------------
-
-func TestReconcileOrphanedSubtasks_AgentMissing(t *testing.T) {
-	orch, db, _ := setupReconcileTest(t)
-
-	parentID := uuid.New()
-	parent := model.Task{
-		ID:             parentID,
-		ProjectID:      orch.projectID,
-		Title:          "orphan-missing-agent-parent",
-		Description:    "test parent",
-		Status:         model.StatusInProgress,
-		WorktreeBranch: "feature/orphan-missing",
-	}
-	db.Create(&parent)
-
-	// Reference an agent ID that doesn't exist.
-	missingAgentID := uuid.New()
-	sub := model.Task{
-		ID:              uuid.New(),
-		ProjectID:       orch.projectID,
-		ParentTaskID:    &parentID,
-		Title:           "orphan-missing-agent-sub",
-		Description:     "subtask with missing agent",
-		Status:          model.StatusInProgress,
-		AssignedAgentID: &missingAgentID,
-	}
-	db.Create(&sub)
-
-	fixes, err := orch.reconcileOrphanedSubtasks()
-	if err != nil {
-		t.Fatalf("reconcileOrphanedSubtasks() error: %v", err)
-	}
-	if fixes != 1 {
-		t.Errorf("expected 1 fix for missing agent, got %d", fixes)
-	}
-
-	var updated model.Task
-	db.First(&updated, "id = ?", sub.ID)
-	if updated.Status != model.StatusBacklog {
-		t.Errorf("expected subtask status backlog, got %s", updated.Status)
-	}
-	if updated.AssignedAgentID != nil {
-		t.Error("expected assigned agent to be cleared")
-	}
-}
-
-// ---------------------------------------------------------------------------
 // score_bridge tests
 // ---------------------------------------------------------------------------
 
@@ -2922,90 +2873,6 @@ func TestHandleTestReviewRejected_ThirdRound_PausesTask(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// reconcileOrphanedSubtasks — merge failure path
-// ---------------------------------------------------------------------------
-
-func TestReconcileOrphanedSubtasks_MergeFails(t *testing.T) {
-	orch, db, bareRepo := setupReconcileTest(t)
-
-	featureName := "orphan-merge-fail"
-	featureDir := createFeatureWorktree(t, bareRepo, featureName)
-
-	// Create an agent branch with commits NOT yet merged, AND create a
-	// conflicting commit on the feature branch.
-	agentBranch := "worktree-agent-merge-fail"
-	featureBranchName := "feature/" + featureName
-	runGitCmd(t, bareRepo, "branch", agentBranch, featureBranchName)
-	agentDir := filepath.Join(bareRepo, "feature", featureName, "agent-merge-fail")
-	if err := os.MkdirAll(filepath.Dir(agentDir), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runGitCmd(t, bareRepo, "worktree", "add", agentDir, agentBranch)
-	runGitCmd(t, agentDir, "config", "user.email", "test@test.com")
-	runGitCmd(t, agentDir, "config", "user.name", "Test")
-	writeFile(t, agentDir, "conflict.txt", "agent version")
-	runGitCmd(t, agentDir, "add", ".")
-	runGitCmd(t, agentDir, "commit", "-m", "agent conflict commit")
-
-	// Create conflicting commit on feature branch.
-	writeFile(t, featureDir, "conflict.txt", "feature version")
-	runGitCmd(t, featureDir, "add", ".")
-	runGitCmd(t, featureDir, "commit", "-m", "feature conflict commit")
-
-	parentID := uuid.New()
-	parent := model.Task{
-		ID:             parentID,
-		ProjectID:      orch.projectID,
-		Title:          "orphan-merge-fail-parent",
-		Description:    "parent",
-		Status:         model.StatusInProgress,
-		WorktreeBranch: featureBranchName,
-	}
-	db.Create(&parent)
-
-	agentID := uuid.New()
-	subID := uuid.New()
-	ag := model.Agent{
-		ID:             agentID,
-		ProjectID:      orch.projectID,
-		AgentType:      model.AgentCoder,
-		Name:           "merge-fail-agent",
-		Status:         model.AgentIdle,
-		WorktreeBranch: agentBranch,
-		CurrentTaskID:  &subID,
-	}
-	db.Create(&ag)
-
-	sub := model.Task{
-		ID:              subID,
-		ProjectID:       orch.projectID,
-		ParentTaskID:    &parentID,
-		Title:           "orphan-merge-fail-sub",
-		Description:     "subtask with unmerged conflicting work",
-		Status:          model.StatusInProgress,
-		AssignedAgentID: &agentID,
-	}
-	db.Create(&sub)
-
-	fixes, err := orch.reconcileOrphanedSubtasks()
-	if err != nil {
-		t.Fatalf("reconcileOrphanedSubtasks() error: %v", err)
-	}
-	if fixes != 1 {
-		t.Errorf("expected 1 fix, got %d", fixes)
-	}
-
-	// Subtask should be FAILED since merge had conflicts.
-	var updated model.Task
-	db.First(&updated, "id = ?", subID)
-	if updated.Status != model.StatusFailed {
-		t.Errorf("expected subtask status failed (merge conflict), got %s", updated.Status)
-	}
-
-	_ = featureDir
-}
-
-// ---------------------------------------------------------------------------
 // HandlePlanApproved with TDD plan (test phase subtasks)
 // ---------------------------------------------------------------------------
 
@@ -3196,58 +3063,6 @@ func TestHandlePaused_MixedSubtasks(t *testing.T) {
 	db.First(&updated2, "id = ?", sub2.ID)
 	if updated2.Status != model.StatusBacklog {
 		t.Errorf("expected sub2 to remain backlog, got %s", updated2.Status)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// reconcileOrphanedSubtasks with blocked agent (skipped)
-// ---------------------------------------------------------------------------
-
-func TestReconcileOrphanedSubtasks_BlockedAgent(t *testing.T) {
-	orch, db, bareRepo := setupReconcileTest(t)
-
-	featureName := "orphan-blocked"
-	createFeatureWorktree(t, bareRepo, featureName)
-
-	parentID := uuid.New()
-	parent := model.Task{
-		ID:             parentID,
-		ProjectID:      orch.projectID,
-		Title:          "orphan-blocked-parent",
-		Description:    "parent",
-		Status:         model.StatusInProgress,
-		WorktreeBranch: "feature/" + featureName,
-	}
-	db.Create(&parent)
-
-	agentID := uuid.New()
-	ag := model.Agent{
-		ID:        agentID,
-		ProjectID: orch.projectID,
-		AgentType: model.AgentCoder,
-		Name:      "blocked-agent",
-		Status:    model.AgentBlocked, // blocked, not working
-	}
-	db.Create(&ag)
-
-	sub := model.Task{
-		ID:              uuid.New(),
-		ProjectID:       orch.projectID,
-		ParentTaskID:    &parentID,
-		Title:           "orphan-blocked-sub",
-		Description:     "subtask with blocked agent",
-		Status:          model.StatusInProgress,
-		AssignedAgentID: &agentID,
-	}
-	db.Create(&sub)
-
-	fixes, err := orch.reconcileOrphanedSubtasks()
-	if err != nil {
-		t.Fatalf("reconcileOrphanedSubtasks() error: %v", err)
-	}
-	// Blocked agents are treated same as working — skipped.
-	if fixes != 0 {
-		t.Errorf("expected 0 fixes (blocked agent), got %d", fixes)
 	}
 }
 
@@ -3463,53 +3278,6 @@ func TestSpawnFixerSession_WorktreeOccupied(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Reconcile — already merged features with no subtasks completed guard
-// ---------------------------------------------------------------------------
-
-func TestReconcileAlreadyMergedFeatures_NoSubtasksDone(t *testing.T) {
-	orch, db, bareRepo := setupReconcileTest(t)
-
-	mainDir := filepath.Join(bareRepo, "main")
-	runGitCmd(t, bareRepo, "worktree", "add", mainDir, "main")
-
-	featureName := "no-subs-done"
-	createFeatureWorktree(t, bareRepo, featureName)
-	// Feature branch has no additional commits beyond main, so it's trivially
-	// an ancestor. But if it has subtasks and none are done, we shouldn't
-	// mark it as merged.
-
-	parentID := uuid.New()
-	parent := model.Task{
-		ID:             parentID,
-		ProjectID:      orch.projectID,
-		Title:          "no-subs-done-task",
-		Description:    "task with subtasks but none done",
-		Status:         model.StatusFailed,
-		WorktreeBranch: "feature/" + featureName,
-	}
-	db.Create(&parent)
-
-	// Create subtasks that are all failed (none done).
-	sub := model.Task{
-		ID:           uuid.New(),
-		ProjectID:    orch.projectID,
-		ParentTaskID: &parentID,
-		Title:        "failed-sub",
-		Description:  "failed subtask",
-		Status:       model.StatusFailed,
-	}
-	db.Create(&sub)
-
-	fixes, err := orch.reconcileAlreadyMergedFeatures()
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if fixes != 0 {
-		t.Errorf("expected 0 fixes (has subtasks but none done), got %d", fixes)
-	}
-}
-
-// ---------------------------------------------------------------------------
 // checkFeatureCompletion with worktree but empty feature branch
 // ---------------------------------------------------------------------------
 
@@ -3712,32 +3480,6 @@ func TestHandleTestReviewRejected_NotFound(t *testing.T) {
 	err := o.HandleTestReviewRejected(uuid.New(), "feedback")
 	if err == nil {
 		t.Fatal("expected error for nonexistent task")
-	}
-}
-
-// ---------------------------------------------------------------------------
-// reconcileEmptyFeatures — task with no worktree branch
-// ---------------------------------------------------------------------------
-
-func TestReconcileEmptyFeatures_NoBranch(t *testing.T) {
-	orch, db, _ := setupReconcileTest(t)
-
-	task := model.Task{
-		ID:             uuid.New(),
-		ProjectID:      orch.projectID,
-		Title:          "empty-no-branch",
-		Description:    "no worktree branch",
-		Status:         model.StatusTestingReady,
-		WorktreeBranch: "",
-	}
-	db.Create(&task)
-
-	fixes, err := orch.reconcileEmptyFeatures()
-	if err != nil {
-		t.Fatalf("error: %v", err)
-	}
-	if fixes != 0 {
-		t.Errorf("expected 0 fixes for no-branch task, got %d", fixes)
 	}
 }
 

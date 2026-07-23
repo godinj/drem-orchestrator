@@ -1,6 +1,6 @@
 # Agent: Orchestrator Tick Loop & Lifecycle Integration Tests
 
-You are working on the `master` branch of drem-orchestrator, a Go-based agent orchestration system using GORM+SQLite, tmux, and git worktrees.
+You are working on the `master` branch of drem-orchestrator, a Go-based agent orchestration system using GORM+SQLite, typed worker attempts, container workers, and legacy host runners.
 Your task is writing integration tests for `doTick()` and an end-to-end task lifecycle test that exercises the full BACKLOG-to-DONE state machine.
 
 ## Context
@@ -18,7 +18,7 @@ Read these before starting:
   - `processTestingReady` (line 4052) — automated test gate
   - `executeMerge` (line 2393) — MERGING state
   - `handlePaused` (line 2508) — PAUSED cleanup
-  - `recoverStuckAgents` (line 870) — in-tick recovery
+  - `reconcileWorkerAttemptLifecycles` — consumes typed terminal spawner observations
   - `Reconcile` (line 339) — periodic consistency audit
   - `reconcileInterval = 10` (line 50) — ticks between audits
 - `internal/orchestrator/orchestrator_test.go` (existing patterns: `testOrchestrator`, `initBareRepo`)
@@ -30,6 +30,11 @@ Read these before starting:
 - `internal/model/enums.go` (all status enums)
 - `internal/state/machine.go` (ValidTransitions map)
 - `internal/testutil/testutil.go` (NewTestDB, SetupBareRepo, AddWorktree, CommitFile)
+
+Task success or failure must not be inferred from worker absence, idle files,
+heartbeats, Git topology, or agentmon logs. Lifecycle tests should drive typed
+`WorkerAttempt` terminal observations; periodic reconciliation is recovery and
+resource cleanup only.
 
 ## Dependencies
 

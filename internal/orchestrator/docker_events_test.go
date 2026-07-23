@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -211,6 +212,90 @@ func TestReconcileWorkerAttemptLifecycles_ConsumesSpawnerExitWithoutLeaseDelay(t
 	require.Equal(t, model.WorkerAttemptCompleted, completed.State)
 	require.NotNil(t, completed.CompletedAt)
 	require.Equal(t, []spawner.InspectWorkerParams{{ContainerID: attempt.ContainerID}}, fake.inspectCalls)
+}
+
+func TestDispatchEvent_ExitZeroReplayFinalizesAttemptAfterTaskEffect(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	task := seedInFlightTask(t, o)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-replay", "c-replay")
+	require.NoError(t, o.db.Model(&model.Task{}).Where("id = ?", task.ID).Updates(map[string]any{
+		"status": model.StatusTestingReady, "assigned_agent_id": nil,
+	}).Error)
+
+	o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *attempt, 0, false), newReplacementTracker())
+
+	require.Empty(t, fake.spawnCalls)
+	var completed model.WorkerAttempt
+	require.NoError(t, o.db.First(&completed, "id = ?", attempt.ID).Error)
+	require.Equal(t, model.WorkerAttemptCompleted, completed.State)
+	require.NotNil(t, completed.CompletedAt)
+	var observationCount int64
+	require.NoError(t, o.db.Model(&model.AttemptEvent{}).
+		Where("attempt_id = ? AND type = ?", attempt.ID, "terminal_observed").Count(&observationCount).Error)
+	require.Equal(t, int64(1), observationCount)
+}
+
+func TestRecordAttemptTerminalObservation_ConcurrentSourcesRemainIdempotent(t *testing.T) {
+	o, _, _ := dockerEventsTestRig(t)
+	task := seedInFlightTask(t, o)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-concurrent", "c-concurrent")
+	ev := workerDeathEvent(task.ID, *attempt, 0, false)
+
+	const observers = 12
+	errs := make(chan error, observers)
+	var wg sync.WaitGroup
+	for range observers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- o.recordAttemptTerminalObservation(attempt, ev)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+
+	var observationCount int64
+	require.NoError(t, o.db.Model(&model.AttemptEvent{}).
+		Where("attempt_id = ? AND type = ?", attempt.ID, "terminal_observed").Count(&observationCount).Error)
+	require.Equal(t, int64(1), observationCount)
+}
+
+func TestDispatchEvent_MergerAttemptsFinalizeWithoutAgentmonState(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		exitCode  int
+		wantState string
+	}{
+		{name: "success", exitCode: 0, wantState: model.WorkerAttemptCompleted},
+		{name: "failure", exitCode: 2, wantState: model.WorkerAttemptFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, _, fake := dockerEventsTestRig(t)
+			task := seedInFlightTask(t, o)
+			task.Status = model.StatusMerging
+			require.NoError(t, o.db.Save(task).Error)
+			attempt := &model.WorkerAttempt{
+				ID: uuid.New(), TaskID: task.ID, WorkerID: "merger-worker",
+				ContainerID: "merger-container", AgentType: string(model.AgentMerger),
+				State: model.WorkerAttemptRunning,
+			}
+			require.NoError(t, o.db.Create(attempt).Error)
+
+			o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *attempt, tc.exitCode, false), newReplacementTracker())
+
+			require.Empty(t, fake.spawnCalls)
+			var saved model.WorkerAttempt
+			require.NoError(t, o.db.First(&saved, "id = ?", attempt.ID).Error)
+			require.Equal(t, tc.wantState, saved.State)
+			require.NotNil(t, saved.CompletedAt)
+			var savedTask model.Task
+			require.NoError(t, o.db.First(&savedTask, "id = ?", task.ID).Error)
+			require.Equal(t, model.StatusMerging, savedTask.Status)
+		})
+	}
 }
 
 func TestReconcileWorkerAttemptLifecycles_IgnoresRunningAndDuplicateTerminalObservations(t *testing.T) {
@@ -509,6 +594,40 @@ func TestWatchDockerEvents_ClosesCleanlyOnCtxCancel(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("watchDockerEvents did not exit within 1s")
+	}
+}
+
+func TestDispatchEvent_TerminalTaskStillFinalizesLateAttempt(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		exitCode  int
+		wantState string
+	}{
+		{name: "successful worker exit", exitCode: 0, wantState: model.WorkerAttemptCompleted},
+		{name: "failed worker exit", exitCode: 1, wantState: model.WorkerAttemptFailed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			o, _, fake := dockerEventsTestRig(t)
+			task := seedInFlightTask(t, o)
+			attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-late", "c-late")
+			task.Status = model.StatusFailed
+			require.NoError(t, o.db.Save(task).Error)
+
+			o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *attempt, tc.exitCode, false), newReplacementTracker())
+
+			require.Empty(t, fake.spawnCalls)
+			var reloaded model.Task
+			require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+			require.Equal(t, model.StatusFailed, reloaded.Status)
+			var finalized model.WorkerAttempt
+			require.NoError(t, o.db.First(&finalized, "id = ?", attempt.ID).Error)
+			require.Equal(t, tc.wantState, finalized.State)
+			require.NotNil(t, finalized.CompletedAt)
+			var observations int64
+			require.NoError(t, o.db.Model(&model.AttemptEvent{}).
+				Where("attempt_id = ? AND type = ?", attempt.ID, "terminal_observed").Count(&observations).Error)
+			require.Equal(t, int64(1), observations)
+		})
 	}
 }
 

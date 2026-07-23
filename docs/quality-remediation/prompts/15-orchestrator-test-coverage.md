@@ -1,5 +1,9 @@
 # Agent: Improve Orchestrator Package Test Coverage
 
+> Historical prompt; do not execute against the current state machine. Use
+> `docs/test-coverage/prompts/02-reconciliation.md` for the Phase 4
+> recovery-only reconciliation contract.
+
 You are working on the `master` branch of drem-orchestrator, a Go-based task orchestrator.
 Your task is to increase test coverage of `internal/orchestrator/` from 60.1% to at least 68%.
 

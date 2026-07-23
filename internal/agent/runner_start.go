@@ -57,8 +57,8 @@ func (r *Runner) startClaudeAgent(agentID, taskID uuid.UUID, worktreePath, branc
 	}
 
 	// Remove any stale idle signal file left by a previous agent that used
-	// the same worktree. Without this cleanup, recoverStuckAgents can
-	// immediately treat the freshly-spawned agent as stuck.
+	// the same worktree so the legacy runner never observes a false idle
+	// notification for the new process.
 	idleSignal := filepath.Join(claudeDir, "agent-idle")
 	os.Remove(idleSignal)
 

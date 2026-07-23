@@ -574,21 +574,6 @@ func (o *Orchestrator) onFixerCompleted(ag *model.Agent, task *model.Task) error
 		return fmt.Errorf("on fixer completed: save agent: %w", err)
 	}
 
-	if task.Context != nil {
-		if resolverID, _ := task.Context[contextKeyMergeConflictResolverAgentID].(string); resolverID == ag.ID.String() {
-			if task.AssignedAgentID != nil && *task.AssignedAgentID == ag.ID {
-				task.AssignedAgentID = nil
-			}
-			task.Context[contextKeyMergeConflictResolverState] = "completed"
-			if err := o.db.Save(task).Error; err != nil {
-				return fmt.Errorf("on fixer completed: save resolver task: %w", err)
-			}
-			o.emit("merge_conflict_resolver_completed", map[string]any{"task_id": task.ID, "agent_id": ag.ID})
-			o.logger.Info("merge conflict resolver completed", "task_id", task.ID, "agent_id", ag.ID)
-			return nil
-		}
-	}
-
 	o.emit("task_updated", task)
 	o.logger.Info("fixer completed", "task_id", task.ID, "agent_id", ag.ID)
 	return nil

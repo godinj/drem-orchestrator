@@ -1,5 +1,10 @@
 # Reconciler container-awareness
 
+> Historical plan, superseded by Phase 4 in
+> `plans/orchestration-meta-analysis.md`. Container inventory absence is not
+> liveness or terminal evidence, and reconciliation must not respawn or mutate
+> container tasks from `ListWorkers` presence/absence.
+
 Teach `reconcileStuckAgents` that container-mode workers are not registered
 with the legacy runner, so presence in the spawner's `ListWorkers` result —
 not `runner.GetRunningAgents()` — is the authoritative liveness signal for

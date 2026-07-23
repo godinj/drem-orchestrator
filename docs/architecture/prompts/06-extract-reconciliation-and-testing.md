@@ -1,5 +1,9 @@
 # Agent: Extract Reconciliation and Test Execution from orchestrator.go
 
+> Historical extraction prompt. Several named reconciliation methods were
+> deleted by Phase 4; do not recreate them. See
+> `plans/orchestration-meta-analysis.md`.
+
 You are working on the `master` branch of Drem Orchestrator, a Go-based agent orchestration system.
 Your task is to extract two groups of methods from `internal/orchestrator/orchestrator.go` into their own files within the same package.
 

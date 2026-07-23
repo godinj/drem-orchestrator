@@ -347,7 +347,7 @@ func TestIsWorkAlreadyMerged_NonZeroContainerDeathBlocks(t *testing.T) {
 	}
 }
 
-func TestIsWorkAlreadyMerged_PushFailureBlocks(t *testing.T) {
+func TestIsWorkAlreadyMerged_AgentmonPushFailureIsTelemetryOnly(t *testing.T) {
 	bareRepoPath := setupTestRepoWithMainBranch(t)
 
 	featureName := "test-feature-push-failure"
@@ -379,8 +379,8 @@ func TestIsWorkAlreadyMerged_PushFailureBlocks(t *testing.T) {
 		CreatedAt: time.Now(),
 	})
 
-	if o.isWorkAlreadyMerged(subtask, featureDir) {
-		t.Error("expected false when the worker recorded a push failure")
+	if !o.isWorkAlreadyMerged(subtask, featureDir) {
+		t.Error("agentmon build_error telemetry must not override authoritative branch and attempt evidence")
 	}
 }
 

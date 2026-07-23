@@ -433,7 +433,7 @@ const (
 type AttemptEvent struct {
 	ID        uuid.UUID `gorm:"type:text;primaryKey"`
 	TaskID    uuid.UUID `gorm:"type:text;not null;index;index:idx_attempt_events_task_created,priority:1"`
-	AttemptID uuid.UUID `gorm:"type:text;not null;index;index:idx_attempt_events_attempt_created,priority:1"`
+	AttemptID uuid.UUID `gorm:"type:text;not null;index;index:idx_attempt_events_attempt_created,priority:1;uniqueIndex:idx_attempt_terminal_observed_once,where:type = 'terminal_observed'"`
 	State     string    `gorm:"not null;default:'';index;index:idx_attempt_events_state_created,priority:1"`
 	Type      string    `gorm:"not null;index;index:idx_attempt_events_type_created,priority:1"`
 	Details   JSONField `gorm:"type:text"`

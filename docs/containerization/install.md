@@ -583,10 +583,12 @@ Design and rationale: `plans/merger-spawn-on-demand-impl.md`.
 container with `/bare` mounted read-write and all six required
 flags (`--feature-branch`, `--project`, `--task-id`, `--test-cmd`,
 `--orch-url`, `--agentmon-token`) passed as argv. The container
-runs one merge, POSTs a `merge_result` record to `/internal/logs`,
-exits with a typed code (0=success, 2=conflict, 3=tests-failed,
+runs one merge, POSTs a telemetry-only `merge_result` record to
+`/internal/logs`, exits with a typed code (0=success, 2=conflict, 3=tests-failed,
 4=push-failed, 1=misc), and the spawner removes it on the
-Docker-event path.
+Docker-event path. Task state is derived from the persisted merger
+`WorkerAttempt` plus the authoritative target ref; loss, delay, or duplication
+of the telemetry record cannot approve or fail the merge.
 
 Watch with:
 
@@ -1131,6 +1133,12 @@ curl -s http://127.0.0.1:8095/projects | jq .
 docker run --rm --network drem-net curlimages/curl:latest \
   -s --unix-socket /var/run/drem/spawner.sock http://localhost/ListWorkers
 ```
+
+`ListWorkers` is a lifecycle observation, not an absence detector. A listed
+terminal worker is safe for the orchestrator to consume; a missing worker does
+not cause automatic failure or respawn. If an attempt appears stuck after a
+spawner restart or inventory gap, inspect its persisted `WorkerAttempt` and
+recover it explicitly rather than deleting task or attempt records.
 
 ## Teardown
 

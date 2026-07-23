@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"log/slog"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -384,122 +383,6 @@ func TestCleanupOrphanedAssignments_IncrementsRetryForPlanning(t *testing.T) {
 		t.Error("expected AssignedAgentID to be cleared after startup cleanup")
 	}
 }
-
-func TestReconcileStuckAgents_UsesPlannerRetryLimit(t *testing.T) {
-	// A stuck planner agent should use MaxPlannerRetries (3), not
-	// MaxEmptyWorkRetries (2), as the retry cap. A PLANNING task at
-	// retry_count = MaxEmptyWorkRetries should still be retried (since
-	// MaxPlannerRetries > MaxEmptyWorkRetries).
-	orch, db, bareRepo := setupReconcileTest(t)
-
-	featureName := "stuck-planner-limit"
-	createFeatureWorktree(t, bareRepo, featureName)
-
-	agentID := uuid.New()
-	taskID := uuid.New()
-	ag := model.Agent{
-		ID:             agentID,
-		ProjectID:      orch.projectID,
-		AgentType:      model.AgentPlanner,
-		Name:           "stuck-planner-agent",
-		Status:         model.AgentWorking,
-		WorktreeBranch: "",
-		CurrentTaskID:  &taskID,
-	}
-	db.Create(&ag)
-	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
-
-	task := model.Task{
-		ID:              taskID,
-		ProjectID:       orch.projectID,
-		Title:           "stuck-planner-task",
-		Description:     "planning task with stuck planner",
-		Status:          model.StatusPlanning,
-		AssignedAgentID: &agentID,
-		WorktreeBranch:  "feature/" + featureName,
-		// retry_count at MaxEmptyWorkRetries — would fail with old logic,
-		// should retry with new logic since MaxPlannerRetries = 3.
-		Context: model.JSONField{"retry_count": float64(MaxEmptyWorkRetries)},
-	}
-	db.Create(&task)
-
-	fixes, err := orch.reconcileStuckAgents()
-	if err != nil {
-		t.Fatalf("reconcileStuckAgents: %v", err)
-	}
-	if fixes != 1 {
-		t.Errorf("expected 1 fix, got %d", fixes)
-	}
-
-	var updated model.Task
-	db.First(&updated, "id = ?", taskID)
-
-	// With the planner-aware limit (MaxPlannerRetries=3), the task at
-	// retry_count=2 should be retried (not failed).
-	if updated.Status == model.StatusFailed {
-		t.Error("stuck planner task was failed at MaxEmptyWorkRetries — should use MaxPlannerRetries instead")
-	}
-	// retry_count should be incremented to 3.
-	rc, ok := updated.Context["retry_count"].(float64)
-	if !ok {
-		t.Fatal("retry_count missing after reconcile")
-	}
-	if int(rc) != MaxEmptyWorkRetries+1 {
-		t.Errorf("expected retry_count = %d (incremented), got %v", MaxEmptyWorkRetries+1, rc)
-	}
-}
-
-func TestReconcileStuckAgents_PlannerFailsAtPlannerLimit(t *testing.T) {
-	// A stuck planner at MaxPlannerRetries should be failed.
-	orch, db, bareRepo := setupReconcileTest(t)
-
-	featureName := "stuck-planner-max"
-	createFeatureWorktree(t, bareRepo, featureName)
-
-	agentID := uuid.New()
-	taskID := uuid.New()
-	ag := model.Agent{
-		ID:             agentID,
-		ProjectID:      orch.projectID,
-		AgentType:      model.AgentPlanner,
-		Name:           "stuck-planner-max-agent",
-		Status:         model.AgentWorking,
-		WorktreeBranch: "",
-		CurrentTaskID:  &taskID,
-	}
-	db.Create(&ag)
-	db.Model(&ag).Update("created_at", time.Now().Add(-2*agentSpawnGracePeriod))
-
-	task := model.Task{
-		ID:              taskID,
-		ProjectID:       orch.projectID,
-		Title:           "stuck-planner-max-task",
-		Description:     "planning task at planner retry limit",
-		Status:          model.StatusPlanning,
-		AssignedAgentID: &agentID,
-		WorktreeBranch:  "feature/" + featureName,
-		Context:         model.JSONField{"retry_count": float64(MaxPlannerRetries)},
-	}
-	db.Create(&task)
-
-	fixes, err := orch.reconcileStuckAgents()
-	if err != nil {
-		t.Fatalf("reconcileStuckAgents: %v", err)
-	}
-	if fixes != 1 {
-		t.Errorf("expected 1 fix, got %d", fixes)
-	}
-
-	var updated model.Task
-	db.First(&updated, "id = ?", taskID)
-	if updated.Status != model.StatusFailed {
-		t.Errorf("expected stuck planner at MaxPlannerRetries to be failed, got %s", updated.Status)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Phase 3 tests: Replan aggression
-// ---------------------------------------------------------------------------
 
 func TestTestWritingReplan_CappedAt1(t *testing.T) {
 	// Second empty-subtask replan should flag for human review instead of

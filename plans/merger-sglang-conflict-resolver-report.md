@@ -1,5 +1,10 @@
 # Merger SGLang Conflict Resolver Report
 
+> Historical operational report. Phase 4 removed automatic merge-conflict
+> resolver dispatch; conflicts now fail terminally and require explicit rework.
+> Event names and automatic resolver behavior below are retained only as
+> incident history.
+
 ## Mike Passive Resolver-Watch ACK Retained - 2026-04-25T14:57:41Z
 
 Signal:

@@ -1,5 +1,9 @@
 # Agent: Orchestrator Reconciliation Test Coverage
 
+> Historical pre-refactor prompt; do not execute. Use
+> `docs/test-coverage/prompts/02-reconciliation.md` for the current
+> recovery-only contract.
+
 You are working on the `master` branch of Drem Orchestrator, a Go multi-agent development orchestrator.
 Your task is pre-refactor test hardening: add tests for the orchestrator's consistency audit (Reconcile) functions.
 

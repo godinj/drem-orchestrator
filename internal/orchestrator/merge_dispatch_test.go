@@ -181,7 +181,7 @@ func TestDispatchMerge_RecordsDurableAttemptWithoutCoderAttribution(t *testing.T
 	require.Empty(t, spawn.Details["agent_id"])
 }
 
-func TestDispatchMerge_RecordsCurrentAttemptAndClearsStaleMergeContext(t *testing.T) {
+func TestDispatchMerge_UsesTypedAttemptAndClearsLegacyMergeContext(t *testing.T) {
 	o, fake := dispatchMergeTestRig(t)
 	fake.spawnResults = []spawnOutcome{{res: spawner.SpawnWorkerResult{ContainerID: "current-container"}}}
 	task := &model.Task{
@@ -209,9 +209,11 @@ func TestDispatchMerge_RecordsCurrentAttemptAndClearsStaleMergeContext(t *testin
 	require.NoError(t, o.db.First(&attempt, "task_id = ? AND agent_type = ?", task.ID, string(model.AgentMerger)).Error)
 	var saved model.Task
 	require.NoError(t, o.db.First(&saved, "id = ?", task.ID).Error)
-	require.Equal(t, attempt.ID.String(), saved.Context["current_merge_attempt_id"])
-	require.Equal(t, "current-container", saved.Context["current_merge_container_id"])
-	require.NotEmpty(t, saved.Context["current_merge_worker_id"])
+	require.Equal(t, model.WorkerAttemptCompleted, attempt.State)
+	require.NotNil(t, attempt.CompletedAt)
+	require.NotContains(t, saved.Context, "current_merge_attempt_id")
+	require.NotContains(t, saved.Context, "current_merge_container_id")
+	require.NotContains(t, saved.Context, "current_merge_worker_id")
 	require.NotContains(t, saved.Context, "merge_commit")
 	require.NotContains(t, saved.Context, "merge_conflicts")
 	require.NotContains(t, saved.Context, "merge_failure_reason")
@@ -389,6 +391,16 @@ func TestDispatchMerge_ExitCodeMapping(t *testing.T) {
 			require.Equal(t, tc.wantOK, res.Success, "Success for exit %d", tc.exit)
 			require.Equal(t, tc.wantReason, res.FailureReason,
 				"FailureReason for exit %d", tc.exit)
+			var attempt model.WorkerAttempt
+			require.NoError(t, o.db.First(&attempt, "task_id = ? AND agent_type = ?", task.ID, string(model.AgentMerger)).Error)
+			require.NotNil(t, attempt.CompletedAt)
+			if tc.wantOK {
+				require.Equal(t, model.WorkerAttemptCompleted, attempt.State)
+			} else {
+				require.Equal(t, model.WorkerAttemptFailed, attempt.State)
+				require.NotNil(t, attempt.FailedAt)
+				require.NotEmpty(t, attempt.FailureClassification)
+			}
 		})
 	}
 }

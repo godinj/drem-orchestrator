@@ -1,5 +1,9 @@
 # Reconciler × Stale Integration Worktree — Fix Plan
 
+> Superseded by Phase 4 in `plans/orchestration-meta-analysis.md`. The
+> reconciler no longer derives task completion from branch topology; do not
+> implement the proposed control paths below.
+
 Status: **proposed, 2026-04-20.** Plan only. No implementation
 in this commit; this document is the scoping artefact so the
 implementation can be dispatched as a separate worktree once the

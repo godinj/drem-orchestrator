@@ -3,7 +3,6 @@ package workeridentity
 import (
 	"context"
 	"errors"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -135,7 +134,7 @@ func TestReserveSpawn_ConcurrentReservationsKeepOneActiveAttempt(t *testing.T) {
 			successes++
 			continue
 		}
-		require.True(t, errors.Is(err, ErrTaskAlreadyClaimed) || strings.Contains(err.Error(), "database table is locked"), "unexpected reservation error: %v", err)
+		require.ErrorIs(t, err, ErrTaskAlreadyClaimed)
 		claimed++
 	}
 	require.Equal(t, 1, successes)
@@ -145,6 +144,11 @@ func TestReserveSpawn_ConcurrentReservationsKeepOneActiveAttempt(t *testing.T) {
 	require.NoError(t, db.Model(&model.WorkerAttempt{}).
 		Where("task_id = ? AND agent_type = ? AND branch = ? AND completed_at IS NULL", task.ID, "coder", "feature/task").
 		Count(&activeAttempts).Error)
+	if activeAttempts != 1 {
+		var attempts []model.WorkerAttempt
+		require.NoError(t, db.Where("task_id = ?", task.ID).Order("created_at").Find(&attempts).Error)
+		t.Logf("reservation attempts after concurrent claim: %+v", attempts)
+	}
 	require.Equal(t, int64(1), activeAttempts)
 
 	var reloaded model.Task

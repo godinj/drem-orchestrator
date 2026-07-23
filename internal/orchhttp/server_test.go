@@ -908,7 +908,7 @@ func TestIngestLeavesUnmatchedMissingTaskIDUnattributed(t *testing.T) {
 	require.Equal(t, "heartbeat", event.Details["original_event_type"])
 }
 
-func TestIngestAcceptsMergeResultAndUpdatesTaskContext(t *testing.T) {
+func TestIngestAcceptsMergeResultAsTelemetryWithoutUpdatingTaskContext(t *testing.T) {
 	srv, ts, project := setupHTTPTest(t, nil)
 	task := testutil.CreateTask(t, srv.DB, project.ID, "merge me", model.StatusMerging)
 	attemptID := uuid.New()
@@ -951,11 +951,12 @@ func TestIngestAcceptsMergeResultAndUpdatesTaskContext(t *testing.T) {
 
 	var saved model.Task
 	require.NoError(t, srv.DB.First(&saved, "id = ?", task.ID).Error)
-	require.Equal(t, "conflict", saved.Context["merge_failure_reason"])
-	require.Equal(t, "merge failed", saved.Context["merge_test_output"])
-	require.Equal(t, []any{"README.md"}, saved.Context["merge_conflicts"])
-	require.Equal(t, attemptID.String(), saved.Context["merge_result_attempt_id"])
-	require.Equal(t, "container-1", saved.Context["merge_result_container_id"])
+	require.Equal(t, attemptID.String(), saved.Context["current_merge_attempt_id"])
+	require.NotContains(t, saved.Context, "merge_failure_reason")
+	require.NotContains(t, saved.Context, "merge_test_output")
+	require.NotContains(t, saved.Context, "merge_conflicts")
+	require.NotContains(t, saved.Context, "merge_result_attempt_id")
+	require.NotContains(t, saved.Context, "merge_result_container_id")
 
 	var evt model.TaskEvent
 	require.NoError(t, srv.DB.First(&evt, "event_type = ?", "merge_result").Error)

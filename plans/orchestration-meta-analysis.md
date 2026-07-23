@@ -1,11 +1,11 @@
 # Orchestration meta-analysis: simplify the control loop
 
-Status: evidence-backed direction after ordered delivery and live three-artifact
-Canvas/Computer Use canaries. Phases 1–3 are implemented and covered by
-focused, full-suite, and race tests, including typed failures that occur before
-a gate command starts. Phase 4 remains deliberate follow-up work; it should
-delete old paths rather than layer new roles beside them. The delivery protocol
-and bounded host-direct repair loop are worth keeping.
+Status: implemented after ordered delivery and live three-artifact
+Canvas/Computer Use canaries. Phases 1–4 are implemented. The control loop now
+uses typed worker, gate, verification, authorization, and merge evidence for
+normal task transitions; reconciliation is limited to fail-closed recovery and
+resource cleanup. The delivery protocol and bounded host-direct repair loop
+remain in place.
 
 ## What the canary proved
 
@@ -122,7 +122,7 @@ it is not itself a task phase.
 
 ## Incremental replacement plan
 
-### Phase 1 — authoritative worker completion
+### Phase 1 — authoritative worker completion (implemented)
 
 On each orchestrator tick, list project workers through the spawner. Inspect
 only terminal entries and feed their exact exit state into the existing,
@@ -152,14 +152,47 @@ each class. Remove the generic path from command failure to fixer dispatch.
 Success criterion: an unavailable tool, mount, endpoint, or runner spends no
 model tokens and cannot be mislabeled as a code defect.
 
-### Phase 4 — delete duplicate control paths
+### Phase 4 — delete duplicate control paths (implemented)
 
-Once production evidence shows the first three phases are stable, remove
-agentmon-to-state assumptions, happy-path stale-agent completion synthesis,
-and role-specific recovery branches that duplicate typed attempt handling.
+The duplicate paths have been removed:
+
+- `POST /internal/logs` stores `TaskEvent` telemetry but cannot mutate task
+  context, approve a merge, classify completion, or drive retry policy;
+- worker terminal observations are recorded as `AttemptEvent` records before
+  their task effect, then finalize the typed `WorkerAttempt`, closing the
+  crash-replay gap without synthesizing success from Git or an idle file;
+- concurrent worker reservations compare-and-swap the task claim before
+  superseding attempt history and retry transient SQLite lock contention, so
+  exactly one typed attempt owns the task;
+- merger attempts use the same typed lifecycle and derive completion from the
+  spawner exit plus the authoritative target ref, not a `merge_result` log;
+- absence from `ListWorkers` is not terminal evidence and never causes an
+  automatic respawn;
+- automatic conflict-fixer dispatch and role-specific respawn branches were
+  removed in favor of explicit rework and the generic launch service; and
+- reconciliation no longer reopens failed parents, completes stale agents from
+  branch topology, or implements alternate happy-path task edges.
 
 Success criterion: one documented normal transition source exists for each
 task edge, with the reconciler exercising only recovery edges.
+
+| Transition or fact | Normal authoritative source |
+| --- | --- |
+| Worker process terminal state | Spawner `ListWorkers`/`InspectWorker`, recorded on the typed `WorkerAttempt` |
+| Worker completion applied to a task | Idempotent worker-attempt terminal handler |
+| Candidate identity | Exact-SHA branch acceptance record |
+| Preliminary gate result | Disposable exact-SHA runner result |
+| Native Canvas proof | `VerificationRecord` bound to the artifact |
+| Permission to integrate | `IntegrationAuthorization` bound to the artifact |
+| Merge execution and completion | Typed merger `WorkerAttempt`, `MergeIntent`, and authoritative target ref |
+| Logs, build messages, and `merge_result` | `TaskEvent` telemetry only; never a transition source |
+
+The reconciler now has four bounded jobs: clean orphan resources, clear a stale
+assignment only when no active typed attempt exists, route a disappeared
+legacy host agent through the ordinary typed failure path, and repair a missed
+parent advancement when all durable child records are already complete. It
+does not infer worker success or death from absence, Git state, heartbeat age,
+idle files, or telemetry, and it never revives a terminal task.
 
 ## Measures that determine whether this is better
 

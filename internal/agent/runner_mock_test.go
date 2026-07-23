@@ -148,8 +148,8 @@ func TestSpawnAgentInWorktree_Subprocess(t *testing.T) {
 
 // TestSpawnAgentInWorktree_CleansStaleIdleSignal verifies that spawning an
 // agent in a worktree with a leftover agent-idle file from a previous agent
-// cleans up the stale file before starting. This prevents the race condition
-// where recoverStuckAgents treats the freshly-spawned agent as stuck.
+// cleans up the stale file before starting. Idle files remain part of the
+// legacy runner protocol even though they no longer drive task recovery.
 func TestSpawnAgentInWorktree_CleansStaleIdleSignal(t *testing.T) {
 	db := testutil.NewTestDB(t)
 

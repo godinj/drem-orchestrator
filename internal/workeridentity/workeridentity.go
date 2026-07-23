@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -180,90 +181,117 @@ func (s *Store) ReserveSpawn(ctx context.Context, r SpawnRecord) (Reservation, e
 	if now.IsZero() {
 		now = time.Now()
 	}
+	taskID := r.Task.ID
+
+	reserve := func() (Reservation, error) {
+		var out Reservation
+		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			agentID := uuid.New()
+
+			// Make the compare-and-swap the transaction's first database
+			// statement. A read followed by a write lets two SQLite deferred
+			// transactions acquire shared locks and then both fail their lock
+			// upgrade. Starting with the write guarantees that one reservation
+			// owns the task while the other either waits or retries.
+			res := tx.Model(&model.Task{}).
+				Where("id = ? AND assigned_agent_id IS NULL", taskID).
+				Update("assigned_agent_id", agentID)
+			if res.Error != nil {
+				return fmt.Errorf("claim task: %w", res.Error)
+			}
+			if res.RowsAffected != 1 {
+				return ErrTaskAlreadyClaimed
+			}
+
+			ag := model.Agent{
+				ID:             agentID,
+				ProjectID:      r.ProjectID,
+				AgentType:      model.AgentType(r.AgentType),
+				Name:           fmt.Sprintf("%s-%s", r.AgentType, taskID.String()[:8]),
+				Status:         model.AgentWorking,
+				CurrentTaskID:  &taskID,
+				WorktreeBranch: r.Branch,
+				Provider:       r.Provider,
+				ModelID:        r.ModelID,
+				Effort:         r.Effort,
+				HeartbeatAt:    &now,
+			}
+			if err := tx.Create(&ag).Error; err != nil {
+				return fmt.Errorf("create agent: %w", err)
+			}
+
+			if err := tx.Model(&model.WorkerAttempt{}).
+				Where("task_id = ? AND agent_type = ? AND branch = ? AND completed_at IS NULL", taskID, r.AgentType, r.Branch).
+				Updates(map[string]any{
+					"state":        model.WorkerAttemptSuperseded,
+					"completed_at": &now,
+				}).Error; err != nil {
+				return fmt.Errorf("close stale attempts: %w", err)
+			}
+
+			attempt := model.WorkerAttempt{
+				ID:                      uuid.New(),
+				TaskID:                  taskID,
+				AgentID:                 &ag.ID,
+				WorkerID:                r.WorkerID,
+				AgentType:               r.AgentType,
+				Branch:                  r.Branch,
+				Image:                   r.Image,
+				State:                   model.WorkerAttemptReserved,
+				LeaseOwner:              r.WorkerID,
+				LeaseExpiresAt:          ptrTime(now.Add(DefaultLeaseTTL)),
+				PromptAssetVersionsJSON: r.PromptAssetVersionsJSON,
+				RenderedPromptHash:      r.RenderedPromptHash,
+				RenderedPromptPath:      r.RenderedPromptPath,
+			}
+			if err := tx.Create(&attempt).Error; err != nil {
+				return fmt.Errorf("create attempt: %w", err)
+			}
+
+			out = Reservation{
+				TaskID:    taskID,
+				AgentID:   ag.ID,
+				AttemptID: attempt.ID,
+				WorkerID:  r.WorkerID,
+				AgentType: r.AgentType,
+				Branch:    r.Branch,
+				Image:     r.Image,
+				Provider:  r.Provider,
+				ModelID:   r.ModelID,
+				Effort:    r.Effort,
+			}
+			return nil
+		})
+		return out, err
+	}
 
 	var out Reservation
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var task model.Task
-		if err := tx.First(&task, "id = ?", r.Task.ID).Error; err != nil {
-			return fmt.Errorf("load task: %w", err)
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		out, err = reserve()
+		if !sqliteBusy(err) {
+			break
 		}
-		if task.AssignedAgentID != nil {
-			return ErrTaskAlreadyClaimed
+		select {
+		case <-ctx.Done():
+			return Reservation{}, ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 5 * time.Millisecond):
 		}
-		if err := tx.Model(&model.WorkerAttempt{}).
-			Where("task_id = ? AND agent_type = ? AND branch = ? AND completed_at IS NULL", task.ID, r.AgentType, r.Branch).
-			Updates(map[string]any{
-				"state":        model.WorkerAttemptSuperseded,
-				"completed_at": &now,
-			}).Error; err != nil {
-			return fmt.Errorf("close stale attempts: %w", err)
-		}
-
-		ag := model.Agent{
-			ID:             uuid.New(),
-			ProjectID:      r.ProjectID,
-			AgentType:      model.AgentType(r.AgentType),
-			Name:           fmt.Sprintf("%s-%s", r.AgentType, task.ID.String()[:8]),
-			Status:         model.AgentWorking,
-			CurrentTaskID:  &task.ID,
-			WorktreeBranch: r.Branch,
-			Provider:       r.Provider,
-			ModelID:        r.ModelID,
-			Effort:         r.Effort,
-			HeartbeatAt:    &now,
-		}
-		if err := tx.Create(&ag).Error; err != nil {
-			return fmt.Errorf("create agent: %w", err)
-		}
-
-		attempt := model.WorkerAttempt{
-			ID:                      uuid.New(),
-			TaskID:                  task.ID,
-			AgentID:                 &ag.ID,
-			WorkerID:                r.WorkerID,
-			AgentType:               r.AgentType,
-			Branch:                  r.Branch,
-			Image:                   r.Image,
-			State:                   model.WorkerAttemptReserved,
-			LeaseOwner:              r.WorkerID,
-			LeaseExpiresAt:          ptrTime(now.Add(DefaultLeaseTTL)),
-			PromptAssetVersionsJSON: r.PromptAssetVersionsJSON,
-			RenderedPromptHash:      r.RenderedPromptHash,
-			RenderedPromptPath:      r.RenderedPromptPath,
-		}
-		if err := tx.Create(&attempt).Error; err != nil {
-			return fmt.Errorf("create attempt: %w", err)
-		}
-
-		res := tx.Model(&model.Task{}).
-			Where("id = ? AND assigned_agent_id IS NULL", task.ID).
-			Update("assigned_agent_id", ag.ID)
-		if res.Error != nil {
-			return fmt.Errorf("claim task: %w", res.Error)
-		}
-		if res.RowsAffected != 1 {
-			return ErrTaskAlreadyClaimed
-		}
-
-		out = Reservation{
-			TaskID:    task.ID,
-			AgentID:   ag.ID,
-			AttemptID: attempt.ID,
-			WorkerID:  r.WorkerID,
-			AgentType: r.AgentType,
-			Branch:    r.Branch,
-			Image:     r.Image,
-			Provider:  r.Provider,
-			ModelID:   r.ModelID,
-			Effort:    r.Effort,
-		}
-		return nil
-	})
+	}
 	if err != nil {
 		return Reservation{}, fmt.Errorf("workeridentity.ReserveSpawn: %w", err)
 	}
 	r.Task.AssignedAgentID = &out.AgentID
 	return out, nil
+}
+
+func sqliteBusy(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := err.Error()
+	return strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "database is locked")
 }
 
 func (s *Store) FinalizeSpawn(ctx context.Context, res Reservation, containerID string) (Handle, error) {

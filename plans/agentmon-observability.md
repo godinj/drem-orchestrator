@@ -1,5 +1,10 @@
 # Plan: Agentmon observability (post v12–v14 canary)
 
+> Historical plan, superseded by Phase 4 in
+> `plans/orchestration-meta-analysis.md`. Agentmon is telemetry-only and
+> `ContainerSightingProbe` has been removed; do not use this plan as an
+> implementation specification.
+
 ## 1. Incident summary
 
 Between the v13 and v14 canary cuts, agentmon's Docker event

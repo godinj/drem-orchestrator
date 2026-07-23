@@ -1,5 +1,9 @@
 # Agent: Orchestrator Reliability
 
+> Historical prompt; do not execute against the current state machine. Its
+> inferred-success and failed-task revival paths were retired by Phase 4. See
+> `plans/orchestration-meta-analysis.md`.
+
 You are working on the `master` branch of Drem Orchestrator, a Go-based multi-agent orchestrator that manages Claude Code agents via tmux in git bare repos with worktrees.
 Your task is to fix critical reliability issues in the orchestrator: prevent destructive retries of already-merged work, fix premature parent task failure, detect stuck agents with dead tmux sessions, verify agent records after spawn, and add a `failed -> in_progress` state transition.
 

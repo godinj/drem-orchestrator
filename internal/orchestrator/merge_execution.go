@@ -11,7 +11,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -48,10 +47,6 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 	if !ready {
 		return nil
 	}
-	if o.hasActiveMergeConflictResolver(task) {
-		return nil
-	}
-
 	result, dispatchErr := o.mergeDispatch(context.Background(), task)
 	if completion, recovered, err := o.recoverAuthorizedMerge(task); err != nil {
 		return fmt.Errorf("execute merge: recover after dispatch: %w", err)
@@ -112,6 +107,17 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 			}
 			o.emit("merge_tests_failed", map[string]any{"task_id": task.ID, "failure_reason": result.FailureReason, "exit_code": result.ExitCode})
 			return nil
+		case "conflict":
+			reason := "merge aborted: merger reported a conflict"
+			markTerminalMergerFailure(task, terminalMergerFailureConflict)
+			if err := o.failTask(task, reason); err != nil {
+				return err
+			}
+			o.emit("merge_conflict", map[string]any{
+				"task_id": task.ID, "failure_reason": result.FailureReason,
+				"exit_code": result.ExitCode, "telemetry_only_details": true,
+			})
+			return nil
 		case "misc", "unknown":
 			reason := fmt.Sprintf("merge aborted: %s exit from merger (code=%d)", result.FailureReason, result.ExitCode)
 			if err := o.failTask(task, reason); err != nil {
@@ -147,16 +153,6 @@ func (o *Orchestrator) executeMerge(task *model.Task) error {
 				"attempt", attemptState.AttemptCount(),
 				"next_delay", policy.Delay(attemptState.AttemptCount()))
 			return nil
-		}
-
-		if result.FailureReason == "conflict" && len(result.Conflicts) > 0 {
-			spawned, spawnErr := o.maybeSpawnMergeConflictResolver(task, result)
-			if spawnErr != nil {
-				return spawnErr
-			}
-			if spawned {
-				return nil
-			}
 		}
 
 		// Supervisor-powered analysis of the failure.
@@ -333,13 +329,7 @@ const contextKeyMergeAttemptCount = "merge_attempt_count"
 // re-enter the same deterministic merger loop.
 const contextKeyTerminalMergerFailureReason = "terminal_merger_failure_reason"
 
-const (
-	contextKeyMergeConflictResolverAttemptCount = "merge_conflict_resolver_attempt_count"
-	contextKeyMergeConflictResolverAgentID      = "merge_conflict_resolver_agent_id"
-	contextKeyMergeConflictFiles                = "merge_conflict_files"
-	contextKeyMergeConflictResolverState        = "merge_conflict_resolver_state"
-	maxMergeConflictResolverAttempts            = 1
-)
+const contextKeyMergeConflictFiles = "merge_conflict_files"
 
 const (
 	terminalMergerFailureConflict          = "conflict"
@@ -353,103 +343,6 @@ func markTerminalMergerFailure(task *model.Task, reason string) {
 		task.Context = make(model.JSONField)
 	}
 	task.Context[contextKeyTerminalMergerFailureReason] = reason
-}
-
-func hasTerminalMergerFailure(task *model.Task) bool {
-	if task.Context == nil {
-		return false
-	}
-	if reason, _ := task.Context[contextKeyTerminalMergerFailureReason].(string); reason != "" {
-		return true
-	}
-	failureReason, _ := task.Context["failure_reason"].(string)
-	failureReason = strings.ToLower(failureReason)
-	return strings.Contains(failureReason, "merge conflicts") ||
-		strings.Contains(failureReason, "merge failed after") ||
-		strings.Contains(failureReason, "pre-push tests failed") ||
-		strings.Contains(failureReason, "merger spawn skipped")
-}
-
-func (o *Orchestrator) hasActiveMergeConflictResolver(task *model.Task) bool {
-	if task.Context == nil {
-		return false
-	}
-	rawID, _ := task.Context[contextKeyMergeConflictResolverAgentID].(string)
-	if rawID == "" {
-		return false
-	}
-	agentID, err := uuid.Parse(rawID)
-	if err != nil {
-		return false
-	}
-	var ag model.Agent
-	if err := o.db.First(&ag, "id = ?", agentID).Error; err != nil {
-		return false
-	}
-	return ag.Status == model.AgentWorking && ag.CurrentTaskID != nil && *ag.CurrentTaskID == task.ID
-}
-
-func (o *Orchestrator) maybeSpawnMergeConflictResolver(task *model.Task, result *MergeResult) (bool, error) {
-	if task.Context == nil {
-		task.Context = make(model.JSONField)
-	}
-	attempts := mergeConflictResolverAttemptCount(task)
-	if attempts >= maxMergeConflictResolverAttempts {
-		return false, nil
-	}
-
-	task.Context[contextKeyMergeConflictFiles] = result.Conflicts
-	task.Context["affected_files"] = result.Conflicts
-	task.Context["failure_reason"] = "merge conflict"
-	integrationBranch := "the integration branch"
-	if o.worktree != nil && o.worktree.DefaultBranchName() != "" {
-		integrationBranch = o.worktree.DefaultBranchName()
-	}
-	task.Context["failure_diagnosis"] = fmt.Sprintf("Merge conflict while merging %s into %s.", task.WorktreeBranch, integrationBranch)
-	task.Context["suggested_fix"] = "Resolve the listed merge conflicts, commit the resolution, and leave the task in MERGING for the merger to retry."
-	task.Context[contextKeyMergeConflictResolverState] = "spawning"
-	if err := o.db.Save(task).Error; err != nil {
-		return false, fmt.Errorf("spawn merge conflict resolver: save context: %w", err)
-	}
-
-	if _, err := o.SpawnFixerSession(task.ID); err != nil {
-		task.Context[contextKeyMergeConflictResolverState] = "spawn_failed"
-		_ = o.db.Save(task).Error
-		return false, fmt.Errorf("spawn merge conflict resolver: %w", err)
-	}
-
-	var reloaded model.Task
-	if err := o.db.First(&reloaded, "id = ?", task.ID).Error; err != nil {
-		return false, fmt.Errorf("spawn merge conflict resolver: reload task: %w", err)
-	}
-	if reloaded.Context == nil {
-		reloaded.Context = make(model.JSONField)
-	}
-	if reloaded.AssignedAgentID != nil {
-		reloaded.Context[contextKeyMergeConflictResolverAgentID] = reloaded.AssignedAgentID.String()
-	}
-	reloaded.Context[contextKeyMergeConflictResolverAttemptCount] = attempts + 1
-	reloaded.Context[contextKeyMergeConflictResolverState] = "running"
-	if err := o.db.Save(&reloaded).Error; err != nil {
-		return false, fmt.Errorf("spawn merge conflict resolver: save agent id: %w", err)
-	}
-	*task = reloaded
-	o.emit("merge_conflict_resolver_spawned", map[string]any{"task_id": task.ID, "conflicts": result.Conflicts})
-	return true, nil
-}
-
-func mergeConflictResolverAttemptCount(task *model.Task) int {
-	if task.Context == nil {
-		return 0
-	}
-	switch v := task.Context[contextKeyMergeConflictResolverAttemptCount].(type) {
-	case int:
-		return v
-	case float64:
-		return int(v)
-	default:
-		return 0
-	}
 }
 
 // MergeAttemptState provides typed access to merge retry tracking fields

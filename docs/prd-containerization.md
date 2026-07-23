@@ -36,17 +36,17 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 13. As Kyle, I want a single HTTP API per project orchestrator that returns live state for all workers, running tasks, and recent events, so that I can answer "what is happening now" in one call per project.
 14. As Kyle, I want the same HTTP API to return historical state (recently completed tasks, exit codes, crash reasons), so that I can answer "what went wrong" without log archaeology.
 15. As Kyle, I want a read-only `docker_query` tool (via an MCP proxy) as an escape hatch for deep-dive questions, so that I can inspect container status, exit codes, and live log tails when the orchestrator API is insufficient.
-16. As Kyle, I want agentmon to filter every container's stdout for structured state signals (commits, pushes, test results, build errors, crashes) and write them into each project's SQLite, so that my reports are built on authoritative event data rather than string-matching raw logs.
+16. As Kyle, I want agentmon to filter every container's stdout for structured telemetry (commits, pushes, test results, build errors, crashes) and write it into each project's SQLite, so that my reports do not require string-matching raw logs while task transitions remain exclusively driven by typed control-plane records.
 17. As an Opus coder agent, I want my container to include a watchdog process that commits my in-progress work and pushes to the bare repository every minute and after every passing test, so that if my container dies I can resume from a recent checkpoint.
 18. As a G4 worker agent, I want the same watchdog behavior, so that my ephemeral container's crash does not lose work.
-19. As the orchestrator, I want to detect worker container death via Docker events and spawn a replacement worker that clones the same branch, so that the coder can resume from its most recent committed state.
+19. As the orchestrator, I want to consume typed terminal worker observations from the spawner and apply retry policy through the persisted WorkerAttempt lifecycle, so that replacement is idempotent and never inferred from inventory absence or log telemetry.
 20. As the orchestrator, I want to delegate container creation to a separate spawner service that holds the Docker socket, so that I never need direct Docker socket access and the privilege surface is minimized.
 21. As the spawner service, I want a narrow RPC surface (SpawnWorker, DestroyWorker, ListWorkers, InspectWorker) exposed over a Unix socket, so that the orchestrator and any other caller have a well-defined, easily-audited contract.
 22. As the merger service, I want to pull a worker's branch plus the integration branch into a fresh container filesystem, run the project's test command, merge, and push the result to the bare repository, so that no host-side working copy is required.
 23. As the merger service, I want to delete a feature branch from the bare repository after a successful merge, so that dead branches do not accumulate.
-24. As the merger service, I want to report merge conflicts and test failures as structured records to the orchestrator, so that Kyle can surface them without scraping logs.
-25. As the orchestrator, I want to subscribe to Docker lifecycle events for every container labeled with my project, so that I can react to crashes, OOM kills, and exits in near real time.
-26. As agentmon, I want to tail each container's stdout and filter for structured state signals (git operations, test results, build errors, heartbeat, tool call counts, crash indicators), so that the orchestrator database receives a clean event stream rather than raw logs.
+24. As the merger service, I want to report merge conflicts and test failures as structured telemetry to the orchestrator, so that Kyle can surface them without scraping logs; the merger's typed exit and authoritative target ref remain the state-machine evidence.
+25. As the orchestrator, I want to subscribe to Docker lifecycle events and poll the spawner's typed worker inventory, so that I can react to crashes, OOM kills, and exits in near real time without making event delivery a correctness dependency.
+26. As agentmon, I want to tail each container's stdout and filter for structured telemetry (git operations, test results, build errors, heartbeat, tool call counts, crash indicators), so that the orchestrator database receives a clean observational event stream rather than raw logs.
 27. As agentmon, I want to leave raw log content in place (Docker's log driver retains it) and not duplicate it into SQLite, so that the database stays small and the source of truth for full logs remains a `docker logs` call.
 28. As the orchestrator, I want to expose a `GET /logs?container=...` endpoint that proxies `docker logs` on demand, so that deeper investigation is available without duplicating data.
 29. As a new developer cloning the drem-orchestrator repository, I want the global `docker-compose.yml` and all service Dockerfiles to live in the repository, so that `docker compose up` (or an equivalent command) is sufficient to start the stack.
@@ -145,7 +145,7 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 
 - **Spawner RPC (Unix socket, JSON-RPC 2.0 framed):** `SpawnWorker(project, agent_type, worker_id, branch, labels) → {container_id, endpoint}`; `DestroyWorker(container_id) → {}`; `ListWorkers(project?) → [WorkerInfo]`; `InspectWorker(container_id) → {status, exit_code, started_at, finished_at, oom_killed}`.
 - **Orchestrator public HTTP (read-only, consumed by Kyle and TUI):** `GET /projects`; `GET /projects/:name/tasks`; `GET /projects/:name/workers`; `GET /workers/:id`; `GET /workers/:id/history`; `GET /events?since=`; `GET /logs?container=&since=` (proxies `docker logs`).
-- **Orchestrator internal HTTP (consumed by agentmon):** `POST /internal/logs` accepting batched structured state records.
+- **Orchestrator internal HTTP (consumed by agentmon):** `POST /internal/logs` accepting batched structured telemetry records. Ingestion creates `TaskEvent` rows only and cannot mutate task context or advance, fail, retry, or approve a task.
 
 ### Networking and security
 
@@ -157,10 +157,10 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 ### Lifecycle and recovery
 
 - A worker's watchdog commits and pushes every minute if the working tree has diffs, and immediately after any test command returns a zero exit code.
-- On worker container death, the orchestrator receives a Docker event, records the exit code and OOM flag, and spawns a replacement worker which clones the same branch from the bare repository.
+- On worker container death, the orchestrator records a terminal observation before applying its task effect, finalizes the typed WorkerAttempt, and applies the ordinary retry policy. Docker events are a latency optimization; spawner polling supplies the same typed terminal observation.
 - The merger pool resets each container's workspace between merges (remove workspace, re-clone integration branch).
 - On successful merge, the merger deletes the feature branch from the bare repository.
-- On orchestrator restart, it reconstructs in-flight worker state from its SQLite database and a fresh `ListWorkers` call to the spawner.
+- On orchestrator restart, it resumes typed WorkerAttempt lifecycle processing from SQLite and a fresh `ListWorkers` call. A terminal spawner record may be consumed; absence from the inventory is not evidence of death and cannot mutate or respawn a task.
 
 ## Testing Decisions
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/container"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/workeridentity"
@@ -144,9 +145,9 @@ func failureReasonForExit(code int) string {
 }
 
 // dispatchMerge spawns a merger container to execute the feature→main merge
-// and waits for it to exit. Agentmon may enrich failure diagnostics in
-// task.Context, but merge completion is recovered independently from the
-// typed intent and authoritative target ref.
+// and waits for it to exit. The spawner's terminal result supplies the typed
+// outcome; successful completion is proven separately from the immutable
+// merge intent and authoritative target ref. Agentmon output is telemetry only.
 //
 // The existing retry_policy.go state (MergeAttemptState) is unchanged —
 // executeMerge still drives the state machine; this function only replaces
@@ -182,7 +183,8 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 	}
 
 	// Resolve optional telemetry coordinates. Correctness does not depend on
-	// them: the orchestrator reconciles completion from the target ref.
+	// them: the orchestrator consumes the spawner result and proves successful
+	// completion from the authoritative target ref.
 	orchURL := o.orchURL
 	if orchURL == "" {
 		orchURL = os.Getenv("DREM_ORCH_URL")
@@ -293,26 +295,42 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 	if recordErr != nil {
 		return nil, fmt.Errorf("dispatchMerge: record merger identity: %w", recordErr)
 	}
-	if task.Context == nil {
-		task.Context = make(model.JSONField)
-	}
-	task.Context["current_merge_attempt_id"] = handle.AttemptID.String()
-	task.Context["current_merge_container_id"] = res.ContainerID
-	task.Context["current_merge_worker_id"] = workerID
-	delete(task.Context, "merge_commit")
-	delete(task.Context, "merge_conflicts")
-	delete(task.Context, "merge_failure_reason")
-	delete(task.Context, "merge_test_output")
-	delete(task.Context, "merge_result_attempt_id")
-	delete(task.Context, "merge_result_container_id")
-	if err := o.db.Model(task).Update("context", task.Context).Error; err != nil {
-		return nil, fmt.Errorf("dispatchMerge: record current merge attempt context: %w", err)
+	if task.Context != nil {
+		for _, key := range []string{
+			"current_merge_attempt_id", "current_merge_container_id", "current_merge_worker_id",
+			"merge_commit", "merge_conflicts", "merge_failure_reason", "merge_test_output",
+			"merge_result_attempt_id", "merge_result_container_id",
+		} {
+			delete(task.Context, key)
+		}
+		if err := o.db.Model(task).Update("context", task.Context).Error; err != nil {
+			return nil, fmt.Errorf("dispatchMerge: remove legacy merge context: %w", err)
+		}
 	}
 	o.recordSpawnEventWithWorkerID(task, "merger", res.ContainerID, params.Image, workerID, handle.AttemptID)
 
 	finalState, err := o.awaitMergerExit(dispatchCtx, res.ContainerID)
 	if err != nil {
 		return nil, fmt.Errorf("dispatchMerge: await merger exit: %w", err)
+	}
+	terminalEvent := container.Event{
+		Type: container.EventDie, ContainerID: res.ContainerID,
+		ExitCode: finalState.ExitCode, OOMKilled: finalState.OOMKilled,
+		Timestamp: finalState.FinishedAt,
+		Labels: map[string]string{
+			"drem.task_id": task.ID.String(), "drem.worker_id": workerID,
+			"drem.agent_type": string(model.AgentMerger),
+		},
+	}
+	var mergerAttempt model.WorkerAttempt
+	if err := o.db.First(&mergerAttempt, "id = ?", handle.AttemptID).Error; err != nil {
+		return nil, fmt.Errorf("dispatchMerge: reload merger attempt: %w", err)
+	}
+	if err := o.recordAttemptTerminalObservation(&mergerAttempt, terminalEvent); err != nil {
+		return nil, fmt.Errorf("dispatchMerge: persist merger terminal observation: %w", err)
+	}
+	if err := o.finalizeObservedAttempt(&mergerAttempt, terminalEvent); err != nil {
+		return nil, fmt.Errorf("dispatchMerge: finalize merger attempt: %w", err)
 	}
 
 	result := &MergeResult{
@@ -321,37 +339,6 @@ func (o *Orchestrator) dispatchMerge(ctx context.Context, task *model.Task) (*Me
 		Success:       finalState.ExitCode == 0 && finalState.Status == string(spawnerStatusExited),
 		FailureReason: failureReasonForExit(finalState.ExitCode),
 	}
-	if err := o.db.First(task, "id = ?", task.ID).Error; err != nil {
-		return nil, fmt.Errorf("dispatchMerge: reload task after merger exit: %w", err)
-	}
-	ctxAttempt, _ := task.Context["merge_result_attempt_id"].(string)
-	ctxContainer, _ := task.Context["merge_result_container_id"].(string)
-	if ctxAttempt != handle.AttemptID.String() || ctxContainer != res.ContainerID {
-		o.logger.Warn("dispatchMerge: ignoring merge context from non-current attempt",
-			"task_id", task.ID,
-			"attempt_id", handle.AttemptID,
-			"container_id", res.ContainerID,
-			"context_attempt_id", ctxAttempt,
-			"context_container_id", ctxContainer)
-		return result, nil
-	}
-	// Pull any agentmon-populated merge context off the task (merger's
-	// structured output is ingested into task.Context by agentmon during
-	// the container's life). Fields are optional — empty means the merger
-	// did not publish structured data.
-	if task.Context != nil {
-		if raw, ok := task.Context["merge_commit"].(string); ok {
-			result.MergeCommit = raw
-		}
-		if raw, ok := task.Context["merge_conflicts"].([]any); ok {
-			for _, c := range raw {
-				if s, ok := c.(string); ok {
-					result.Conflicts = append(result.Conflicts, s)
-				}
-			}
-		}
-	}
-
 	return result, nil
 }
 

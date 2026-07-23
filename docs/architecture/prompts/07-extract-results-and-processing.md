@@ -1,5 +1,9 @@
 # Agent: Extract Agent Results and Task Processing from orchestrator.go
 
+> Historical extraction prompt. Any reference below to idle-file completion or
+> duplicate reconciliation paths is superseded by Phase 4. See
+> `plans/orchestration-meta-analysis.md`.
+
 You are working on the `master` branch of Drem Orchestrator, a Go-based agent orchestration system.
 Your task is to extract two groups of methods from `internal/orchestrator/orchestrator.go` into their own files within the same package.
 

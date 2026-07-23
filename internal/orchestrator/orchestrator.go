@@ -8,9 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -28,7 +26,6 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/memory"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
-	"github.com/godinj/drem-orchestrator/internal/workeridentity"
 )
 
 const (
@@ -131,6 +128,7 @@ type Orchestrator struct {
 	deliveryPolicy              DeliveryPolicyConfig
 	deliveryMu                  sync.Mutex // serializes the sole-writer delivery protocol
 	workerLifecycleMu           sync.Mutex // serializes duplicate poll/event observations for one worker lifecycle
+	attemptTerminalMu           sync.Mutex // serializes event/poll and synchronous terminal evidence writes
 	workerReplacements          *replacementTracker
 	projectID                   uuid.UUID
 	projectName                 string // human-readable label; pairs with projectID on worker labels (see plans/dual-label-worker-spawn.md)
@@ -177,11 +175,11 @@ type Orchestrator struct {
 	GitrefRegistry *gitref.Registry
 
 	// orchURL is the in-cluster base URL that spawned worker containers
-	// (most notably the per-task merger) use to POST results back to this
+	// (most notably the per-task merger) use to POST telemetry back to this
 	// orchestrator's /internal/logs endpoint. Populated from the
 	// DREM_ORCH_URL env var at startup via SetInternalEndpoints. Empty
-	// means "no in-cluster URL" — workers can still run, but merge result
-	// ingestion via HTTP will not happen.
+	// means "no in-cluster URL" — workers can still run, but merger
+	// telemetry ingestion via HTTP will not happen.
 	orchURL string
 
 	// agentmonToken is the shared bearer token that agentmon (and any
@@ -189,45 +187,6 @@ type Orchestrator struct {
 	// /internal/logs. Mirrors DREM_AGENTMON_TOKEN from the per-project
 	// compose file. Populated via SetInternalEndpoints.
 	agentmonToken string
-
-	// sightingProbe lets the stuck-agent reconciler ask "has agentmon's
-	// subscription ever observed this container?" before declaring a
-	// container-mode agent dead. See plans/agentmon-observability.md.
-	// Nil is safe (host-mode legacy) and preserves the original
-	// kill-on-stale-DB behaviour. When set, a false return from
-	// HasSeen short-circuits the kill so v12–v14-style false positives
-	// do not fire when agentmon itself is silently misconfigured.
-	sightingProbe ContainerSightingProbe
-}
-
-// ContainerSightingProbe is the hook the orchestrator's stuck-agent
-// reconciler consults before killing a container-mode agent. The
-// production implementation is an *agentmon.DockerSource via its
-// HasSeen method; tests pass a fake. The interface lives in this
-// package (not agentmon) so adding the hook does not introduce a
-// new internal/* import to internal/orchestrator — constitution
-// constraints pin that package's internal imports at 17, shrink-only.
-type ContainerSightingProbe interface {
-	// HasSeen returns true if the subscription backing this probe has
-	// observed any lifecycle event for containerID since Run began,
-	// OR if the subscription has demonstrable recent traffic (the
-	// agentmon-is-alive fallback). A false return means the probe
-	// is unable to confirm the container exists through its live
-	// event stream — the exact situation that caused the v12–v14
-	// false-positive kills.
-	HasSeen(containerID string) bool
-}
-
-// SetContainerSightingProbe installs the agentmon HasSeen probe that
-// reconcileStuckAgents consults before killing a container-mode agent.
-// Pass nil (the default) to keep the legacy behaviour where the
-// reconciler trusts the spawner's ListWorkers + DB heartbeats alone.
-//
-// The expected production wiring builds the probe from the agentmon
-// DockerSource that the orch container spawns via SetRuntime, so
-// orch and agentmon share a single event subscription.
-func (o *Orchestrator) SetContainerSightingProbe(p ContainerSightingProbe) {
-	o.sightingProbe = p
 }
 
 // New creates an Orchestrator. sup/bugSvc are optional (nil disables).
@@ -451,7 +410,7 @@ func (o *Orchestrator) SetEventBus(bus *eventbus.Bus) {
 
 // SetInternalEndpoints configures the in-cluster URL and shared bearer
 // token that spawned worker containers (the per-task merger in
-// particular) need in order to POST merge_result records back to
+// particular) need in order to POST merge_result telemetry back to
 // /internal/logs. Both values are typically plumbed in from the
 // DREM_ORCH_URL and DREM_AGENTMON_TOKEN env vars on the orchestrator
 // container. Safe to call multiple times; empty strings reset the
@@ -598,10 +557,6 @@ func (o *Orchestrator) doTickLegacy(ctx context.Context) {
 
 	// 2b. Check context window usage and apply role-aware escalation.
 	o.checkContextUsage()
-
-	// 2c. Fallback: detect agents stuck as WORKING whose idle signal file
-	// exists but was never picked up (e.g. notification hook failed to fire).
-	o.recoverStuckAgents()
 
 	// 3. Process PLANNING tasks -> spawn planners or handle plans.
 	var planningTasks []model.Task
@@ -841,11 +796,6 @@ func (o *Orchestrator) hasBlockingCompletionSignal(task *model.Task, ag *model.A
 	}
 
 	var event model.TaskEvent
-	if err := o.db.Where("task_id = ? AND event_type = ? AND new_value LIKE ?", task.ID, "build_error", "%failed to push some refs%").
-		Order("created_at DESC").First(&event).Error; err == nil {
-		return true
-	}
-
 	if err := o.db.Where("task_id = ? AND event_type = ?", task.ID, "container_died").
 		Order("created_at DESC").First(&event).Error; err != nil {
 		return false
@@ -924,59 +874,6 @@ func hasMeaningfulWorkPaths(paths []string) bool {
 		}
 	}
 	return false
-}
-
-func (o *Orchestrator) recoverStuckAgents() {
-	var agents []model.Agent
-	if err := o.db.Where("project_id = ? AND status = ?", o.projectID, model.AgentWorking).
-		Find(&agents).Error; err != nil {
-		o.logger.Error("recover stuck agents: query", "error", err)
-		return
-	}
-
-	now := time.Now()
-	for _, ag := range agents {
-		// OpenCode agents don't use .claude/agent-idle — they're monitored
-		// by process exit. Skip to avoid false idle detection from stale files.
-		if ag.Provider == string(model.ProviderOpenCode) {
-			continue
-		}
-
-		// Container-mode agents don't share a host-visible worktree, so the
-		// idle-signal-file heuristic is moot for them.
-		if workeridentity.FromAgent(ag).HasContainer() {
-			continue
-		}
-
-		// Grace period: skip agents that were recently spawned. This prevents
-		// a race where a stale idle signal file (from a previous agent in the
-		// same worktree) causes a freshly-spawned agent to be immediately
-		// treated as stuck before it has time to begin work.
-		if ag.CreatedAt.After(now.Add(-agentSpawnGracePeriod)) {
-			continue
-		}
-
-		idleSignal := filepath.Join(ag.WorktreePath, ".claude", "agent-idle")
-		if _, err := os.Stat(idleSignal); err != nil {
-			continue // signal file doesn't exist — agent is genuinely working
-		}
-
-		o.logger.Info("recovering stuck agent (idle signal found)", "agent_id", ag.ID, "type", ag.AgentType)
-
-		if ag.CurrentTaskID == nil {
-			continue
-		}
-
-		var task model.Task
-		if err := o.db.First(&task, "id = ?", ag.CurrentTaskID).Error; err != nil {
-			o.logger.Error("recover stuck agent: load task", "agent_id", ag.ID, "error", err)
-			continue
-		}
-
-		if err := o.onAgentCompleted(&ag, &task); err != nil {
-			o.logger.Error("recover stuck agent: on completed", "agent_id", ag.ID, "error", err)
-		}
-	}
 }
 
 // isTerminal returns true if a task status is a terminal state (no further

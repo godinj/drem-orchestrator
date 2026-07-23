@@ -95,26 +95,17 @@ func TestReconcileOnStartup_LiveContainersUntouched(t *testing.T) {
 	require.NotNil(t, reloaded.AssignedAgentID)
 }
 
-func TestReconcileOnStartup_GoneContainersRespawn(t *testing.T) {
+func TestReconcileOnStartup_MissingContainerIsNotTerminalEvidence(t *testing.T) {
 	o, fake := reconcileTestRig(t)
 	task := createTaskWithContainer(t, o, "container-gone")
-
-	// Spawner reports an empty list — the container is not live.
 	fake.listResult = spawner.ListWorkersResult{Workers: []spawner.WorkerInfo{}}
-	fake.spawnResults = []spawnOutcome{
-		{res: spawner.SpawnWorkerResult{ContainerID: "container-fresh"}},
-	}
 
 	require.NoError(t, o.reconcileOnStartup(context.Background()))
-
-	require.Len(t, fake.spawnCalls, 1, "gone container should trigger respawn")
-	require.Equal(t, task.ID.String(), fake.spawnCalls[0].Labels["drem.task_id"])
+	require.Empty(t, fake.spawnCalls, "absence from inventory must not respawn a worker")
 
 	var reloaded model.Task
 	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
-	require.NotNil(t, reloaded.AssignedAgentID, "fresh agent must be assigned")
-	// The old stale agent binding was cleared and a new one written via
-	// spawnCoder's worker identity recording path.
+	require.NotNil(t, reloaded.AssignedAgentID, "unproven terminal state must preserve ownership")
 }
 
 func TestReconcileOnStartup_TasksWithoutContainerIDIgnored(t *testing.T) {
@@ -218,85 +209,77 @@ func TestReconcileStuckAgents_ContainerAlive_Skips(t *testing.T) {
 // dead-agent path still fires when the spawner reports the container as
 // no longer running. This is the case the legacy host-spawn path
 // handled via runner.GetRunningAgents and that we must preserve.
-func TestReconcileStuckAgents_ContainerExited_Kills(t *testing.T) {
+func TestReconcileStuckAgents_ContainerExitedIsOwnedByAttemptLifecycle(t *testing.T) {
 	o, fake := reconcileTestRig(t)
 	task := createTaskWithContainer(t, o, "container-exited-xyz")
 	backdateAgentPastGrace(t, o, *task.AssignedAgentID)
-
-	// Container present in list but status != running.
-	fake.listResult = spawner.ListWorkersResult{
-		Workers: []spawner.WorkerInfo{
-			{ContainerID: "container-exited-xyz", Project: o.projectID.String(), Status: "exited"},
-		},
-	}
+	fake.listResult = spawner.ListWorkersResult{Workers: []spawner.WorkerInfo{{
+		ContainerID: "container-exited-xyz", Project: o.projectID.String(), Status: "exited",
+	}}}
 
 	fixes, err := o.reconcileStuckAgents()
 	require.NoError(t, err)
-	require.Equal(t, 1, fixes, "exited container must be flagged stuck")
+	require.Zero(t, fixes, "stale-agent reconciliation must not consume container state")
 
-	// Agent marked dead.
 	var ag model.Agent
 	require.NoError(t, o.db.First(&ag, "id = ?", *task.AssignedAgentID).Error)
-	require.Equal(t, model.AgentDead, ag.Status)
-
-	// Task auto-retried (retry_count bumped, backlog since InProgress).
-	var reloaded model.Task
-	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
-	require.Equal(t, model.StatusBacklog, reloaded.Status)
-	require.NotNil(t, reloaded.Context)
-	rc, ok := reloaded.Context["retry_count"].(float64)
-	require.True(t, ok, "retry_count must be written as float64")
-	require.Equal(t, float64(1), rc)
+	require.Equal(t, model.AgentWorking, ag.Status)
 }
 
-// TestReconcileStuckAgents_ContainerMissing_Kills covers the case where
-// the container is absent from ListWorkers entirely (e.g. removed
-// out-of-band). The agent should be treated the same as an exited one.
-func TestReconcileStuckAgents_ContainerMissing_Kills(t *testing.T) {
+func TestReconcileStuckAgents_ContainerMissingIsNotFailureEvidence(t *testing.T) {
 	o, fake := reconcileTestRig(t)
 	task := createTaskWithContainer(t, o, "container-missing-def")
 	backdateAgentPastGrace(t, o, *task.AssignedAgentID)
-
-	fake.listResult = spawner.ListWorkersResult{Workers: []spawner.WorkerInfo{}}
+	fake.listResult = spawner.ListWorkersResult{}
 
 	fixes, err := o.reconcileStuckAgents()
 	require.NoError(t, err)
-	require.Equal(t, 1, fixes)
+	require.Zero(t, fixes)
 
 	var ag model.Agent
 	require.NoError(t, o.db.First(&ag, "id = ?", *task.AssignedAgentID).Error)
-	require.Equal(t, model.AgentDead, ag.Status)
+	require.Equal(t, model.AgentWorking, ag.Status)
 }
 
-// TestReconcileStuckAgents_SpawnerListError_FallsBackToLegacy verifies
-// that a transient ListWorkers RPC failure does not crash or hang the
-// reconciler. The set stays empty, legacy host-mode tracking works as
-// before, and container-mode agents may be flagged dead (pre-fix
-// behaviour — deliberately no worse than today on spawner outage).
-func TestReconcileStuckAgents_SpawnerListError_FallsBackToLegacy(t *testing.T) {
+func TestReconcileStuckAgents_SpawnerOutageCannotMutateContainerTask(t *testing.T) {
 	o, fake := reconcileTestRig(t)
 	task := createTaskWithContainer(t, o, "container-errd")
 	backdateAgentPastGrace(t, o, *task.AssignedAgentID)
-
 	fake.listErr = errors.New("spawner RPC unreachable")
 
 	fixes, err := o.reconcileStuckAgents()
-	require.NoError(t, err, "reconciler must not propagate spawner RPC error")
-	require.Equal(t, 1, fixes, "fallback behaviour kills the agent as pre-fix code did")
+	require.NoError(t, err)
+	require.Zero(t, fixes)
 
-	// Agent marked dead (the pre-fix false-positive path).
 	var ag model.Agent
 	require.NoError(t, o.db.First(&ag, "id = ?", *task.AssignedAgentID).Error)
-	require.Equal(t, model.AgentDead, ag.Status)
-
-	_ = task
+	require.Equal(t, model.AgentWorking, ag.Status)
 }
 
-// TestReconcileStuckAgents_LegacyRunnerPathIntact is a regression guard
-// for host-mode agents. An agent with an empty container ID (no
-// TmuxSession) and no entry in runner.running must still be flagged
-// dead exactly as before. No container changes may mask legacy dead
-// agents.
+func TestReconcileOrphanedAssignment_PreservesActiveTypedAttempt(t *testing.T) {
+	o, _ := reconcileTestRig(t)
+	task := createTaskWithContainer(t, o, "container-active-attempt")
+	agentID := *task.AssignedAgentID
+	require.NoError(t, o.db.Model(&model.Agent{}).Where("id = ?", agentID).
+		Update("status", model.AgentIdle).Error)
+	attempt := model.WorkerAttempt{
+		ID: uuid.New(), TaskID: task.ID, AgentID: &agentID,
+		WorkerID: "active-worker", ContainerID: "container-active-attempt",
+		AgentType: string(model.AgentCoder), State: model.WorkerAttemptRunning,
+	}
+	require.NoError(t, o.db.Create(&attempt).Error)
+
+	fixes, err := o.reconcileOrphanedTaskAssignments()
+	require.NoError(t, err)
+	require.Zero(t, fixes)
+	o.cleanupOrphanedAssignments()
+
+	var saved model.Task
+	require.NoError(t, o.db.First(&saved, "id = ?", task.ID).Error)
+	require.NotNil(t, saved.AssignedAgentID)
+	require.Equal(t, agentID, *saved.AssignedAgentID)
+}
+
 func TestReconcileStuckAgents_LegacyRunnerPathIntact(t *testing.T) {
 	o, fake := reconcileTestRig(t)
 

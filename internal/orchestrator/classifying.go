@@ -358,8 +358,8 @@ func truncateClassifierBody(b []byte, maxLen int) string {
 // It reads the classification.json from the agent's worktree and transitions
 // the task based on the output.
 func (o *Orchestrator) onClassifierCompleted(ag *model.Agent, task *model.Task) error {
-	// Mark the agent idle and detach from the task so recoverStuckAgents
-	// does not re-detect it on subsequent ticks.
+	// Mark the agent idle and detach from the task so duplicate completion
+	// delivery cannot reapply the transition.
 	ag.Status = model.AgentIdle
 	ag.CurrentTaskID = nil
 	if err := o.db.Save(ag).Error; err != nil {
@@ -392,8 +392,8 @@ func (o *Orchestrator) onClassifierCompleted(ag *model.Agent, task *model.Task) 
 // onClassifierFailed handles a classifier agent that encountered an error.
 // The task stays in CLASSIFYING and is parked for human triage.
 func (o *Orchestrator) onClassifierFailed(ag *model.Agent, task *model.Task) error {
-	// Mark the agent dead and detach from the task so recoverStuckAgents
-	// does not re-detect it on subsequent ticks.
+	// Mark the agent dead and detach from the task so duplicate failure
+	// delivery cannot reapply policy.
 	ag.Status = model.AgentDead
 	ag.CurrentTaskID = nil
 	if err := o.db.Save(ag).Error; err != nil {

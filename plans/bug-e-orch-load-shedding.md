@@ -1,5 +1,8 @@
 # Bug E — Orchestrator load-shedding + observability hardening
 
+> Phase 4 note: the historical `ContainerSightingProbe` material below is
+> retired. Agentmon remains observational and cannot gate task transitions.
+
 **Status**: W1 (load-shedding middleware + /tasks DB-query timeout) and
 W2.1 (tasks composite index) merged 2026-04-21 per §Sequencing item 1.
 W3.1 (pprof), W3.2 (SIGUSR1 dump), W4.1 (log sampling), and W5.1
