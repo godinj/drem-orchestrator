@@ -57,10 +57,9 @@ type GateOrchestrator interface {
 	HandleTestFailed(taskID uuid.UUID) error
 	HandleClarificationAnswer(taskID uuid.UUID, answer string) error
 	HandleClarificationAnswerBy(taskID uuid.UUID, answer, actor string) error
-	// RetryTask transitions a task in StatusFailed back to StatusBacklog so
-	// the scheduler can redispatch it. Used by POST /tasks/{id}/retry and
-	// the TUI's retry action. Returns an error if the task is not in
-	// StatusFailed or is missing.
+	// RetryTask transitions a failed task back to backlog, or a paused
+	// preliminary runner failure back to testing_ready without redispatching.
+	// Used by POST /tasks/{id}/retry and the TUI's retry action.
 	RetryTask(taskID uuid.UUID) error
 }
 

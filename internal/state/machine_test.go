@@ -40,6 +40,7 @@ func TestValidateTransition(t *testing.T) {
 		{"paused to backlog is valid", model.StatusPaused, model.StatusBacklog, false},
 		{"paused to planning is valid", model.StatusPaused, model.StatusPlanning, false},
 		{"paused to in_progress is valid", model.StatusPaused, model.StatusInProgress, false},
+		{"paused to testing_ready is valid", model.StatusPaused, model.StatusTestingReady, false},
 
 		// REJECTED work can only be archived as cancelled.
 		{"rejected to backlog is INVALID", model.StatusRejected, model.StatusBacklog, true},

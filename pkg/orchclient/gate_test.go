@@ -26,16 +26,17 @@ import (
 // code and body. The handler is intentionally dumb: it does not know
 // which verb was called, so tests configure it per-case.
 type gateHandler struct {
-	method     string
-	path       string
-	ctype      string
-	rawBody    []byte
-	calls      int32
-	status     int
-	respBody   string
-	respCtype  string
-	sleepFor   time.Duration
-	stopBefore chan struct{} // if non-nil, closed to indicate server saw the request
+	method         string
+	path           string
+	ctype          string
+	rawBody        []byte
+	calls          int32
+	status         int
+	respBody       string
+	respCtype      string
+	sleepFor       time.Duration
+	stopBefore     chan struct{} // if non-nil, closed to indicate server saw the request
+	idempotencyKey string
 }
 
 func (g *gateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +44,7 @@ func (g *gateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	g.method = r.Method
 	g.path = r.URL.Path
 	g.ctype = r.Header.Get("Content-Type")
+	g.idempotencyKey = r.Header.Get("Idempotency-Key")
 	if r.Body != nil {
 		b, _ := io.ReadAll(r.Body)
 		g.rawBody = b
@@ -77,11 +79,12 @@ func (g *gateHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // assert on a couple of fields to confirm decoding actually ran.
 func sampleDTO(id uuid.UUID, status string) orchdto.TaskDTO {
 	return orchdto.TaskDTO{
-		ID:        id.String(),
-		Title:     "example task",
-		Status:    status,
-		CreatedAt: time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC),
-		UpdatedAt: time.Date(2026, 4, 20, 11, 0, 0, 0, time.UTC),
+		ID:           id.String(),
+		Title:        "example task",
+		Status:       status,
+		StateVersion: 1,
+		CreatedAt:    time.Date(2026, 4, 20, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 4, 20, 11, 0, 0, 0, time.UTC),
 	}
 }
 
@@ -417,6 +420,18 @@ func TestClient_Retry_Success(t *testing.T) {
 	require.Equal(t, "backlog", got.Status)
 	require.Equal(t, "/projects/canvas/tasks/"+id.String()+"/retry", h.path)
 	require.Equal(t, http.MethodPost, h.method)
+}
+
+func TestClient_RetryWithIdempotencyKey_OverridesDurableReplayKey(t *testing.T) {
+	id := uuid.New()
+	h := &gateHandler{status: http.StatusOK, respBody: sampleDTOJSON(t, id, "testing_ready")}
+	c, _ := newGateClient(t, h)
+	c.WithActor("codex:host-verifier")
+
+	got, err := c.RetryWithIdempotencyKey(context.Background(), "canvas", id, "retry-after-upgrade")
+	require.NoError(t, err)
+	require.Equal(t, "testing_ready", got.Status)
+	require.Equal(t, "retry-after-upgrade", h.idempotencyKey)
 }
 
 func TestClient_Retry_NotFound(t *testing.T) {

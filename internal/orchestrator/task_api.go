@@ -11,7 +11,10 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/state"
 )
 
-var ErrRetryParentHasChildren = errors.New("retry task: refusing parent retry with existing child history")
+var (
+	ErrRetryParentHasChildren = errors.New("retry task: refusing parent retry with existing child history")
+	ErrRetryPausedGateMissing = errors.New("retry task: paused task has no retryable preliminary gate")
+)
 
 // AddComment creates a new comment on a task. Allowed for tasks in any status.
 func (o *Orchestrator) AddComment(taskID uuid.UUID, author, body string) error {
@@ -103,15 +106,19 @@ func (o *Orchestrator) ResumeTask(taskID uuid.UUID) error {
 	return nil
 }
 
-// RetryTask transitions a FAILED task back to BACKLOG.
+// RetryTask transitions a FAILED task back to BACKLOG, or retries a PAUSED
+// preliminary runner failure at TESTING_READY without discarding its branch.
 func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 	var task model.Task
 	if err := o.db.First(&task, "id = ?", taskID).Error; err != nil {
 		return fmt.Errorf("retry task: load task: %w", err)
 	}
 
+	if task.Status == model.StatusPaused {
+		return o.retryPausedPreliminaryGate(&task)
+	}
 	if task.Status != model.StatusFailed {
-		return fmt.Errorf("retry task: task %s is in %s, expected failed", taskID, task.Status)
+		return fmt.Errorf("retry task: task %s is in %s, expected failed or paused preliminary gate", taskID, task.Status)
 	}
 	if task.ParentTaskID == nil {
 		var childCount int64
@@ -190,6 +197,31 @@ func (o *Orchestrator) RetryTask(taskID uuid.UUID) error {
 	o.emit("task_updated", &task)
 	o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "user retried task")
 	o.logger.Info("task retried", "task_id", task.ID)
+	return nil
+}
+
+func (o *Orchestrator) retryPausedPreliminaryGate(task *model.Task) error {
+	var gate model.PreliminaryGateRun
+	result := o.db.Where("task_id = ?", task.ID).Order("created_at DESC, id DESC").Limit(1).Find(&gate)
+	if result.Error != nil {
+		return fmt.Errorf("retry task: load paused preliminary gate: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return ErrRetryPausedGateMissing
+	}
+	switch gate.Outcome {
+	case model.PreliminaryGateInfraFailure, model.PreliminaryGateConfiguration, model.PreliminaryGateTimeout:
+	default:
+		return fmt.Errorf("%w: latest outcome is %q", ErrRetryPausedGateMissing, gate.Outcome)
+	}
+	oldStatus := task.Status
+	if err := o.transitionTaskAtomic(task, model.StatusTestingReady, "operator", "task_retry",
+		"paused preliminary gate retried", map[string]any{"preliminary_gate_run_id": gate.ID.String(), "outcome": string(gate.Outcome)}); err != nil {
+		return fmt.Errorf("retry task: transition paused preliminary gate: %w", err)
+	}
+	o.emit("task_updated", task)
+	o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "paused preliminary gate retried")
+	o.logger.Info("paused preliminary gate retried", "task_id", task.ID, "gate_run_id", gate.ID, "outcome", gate.Outcome)
 	return nil
 }
 

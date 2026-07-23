@@ -246,9 +246,9 @@ func (s *Server) handleAnswerTask(w http.ResponseWriter, r *http.Request) {
 	s.writeUpdatedTask(w, task.ID)
 }
 
-// handleRetryTask dispatches POST /projects/{name}/tasks/{id}/retry. Only
-// failed is accepted; any other status returns 409. Delegates to
-// Orchestrator.RetryTask, which does the failed→backlog transition,
+// handleRetryTask dispatches POST /projects/{name}/tasks/{id}/retry. Failed
+// tasks and paused preliminary runner failures are accepted. Delegates to
+// Orchestrator.RetryTask, which does the failed→backlog or paused→testing_ready transition,
 // clears retry_count/last_error/failure diagnostics, removes the stale feature
 // branch for standalone top-level tasks, unlinks stale agents, and records a
 // "user retried task" event. See
@@ -271,9 +271,9 @@ func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if task.Status != model.StatusFailed {
+	if task.Status != model.StatusFailed && task.Status != model.StatusPaused {
 		writeJSONError(w, http.StatusConflict,
-			fmt.Sprintf("task in status %q, expected one of [failed]", task.Status))
+			fmt.Sprintf("task in status %q, expected one of [failed paused]", task.Status))
 		return
 	}
 
@@ -311,7 +311,7 @@ func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.Orch.RetryTask(task.ID); err != nil {
 		slog.Error("orchhttp: retry failed", "task_id", task.ID, "err", err)
-		if errors.Is(err, orchestrator.ErrRetryParentHasChildren) {
+		if errors.Is(err, orchestrator.ErrRetryParentHasChildren) || errors.Is(err, orchestrator.ErrRetryPausedGateMissing) {
 			writeJSONError(w, http.StatusConflict, err.Error())
 			return
 		}

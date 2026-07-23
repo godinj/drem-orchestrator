@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -1305,6 +1306,41 @@ func TestRetryTask(t *testing.T) {
 			t.Error("expected last_error to be cleared")
 		}
 	}
+}
+
+func TestRetryTask_RetriesPausedPreliminaryGateWithoutDiscardingBranch(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "retry-paused-gate", model.StatusPaused, nil)
+	task.WorktreeBranch = "feature/retry-paused-gate"
+	task.WorktreeBaseSHA = strings.Repeat("a", 40)
+	require.NoError(t, db.Save(&task).Error)
+	gate := model.PreliminaryGateRun{
+		ID: uuid.New(), TaskID: task.ID, Branch: task.WorktreeBranch,
+		CommitSHA: strings.Repeat("b", 40), BaseBranch: "main", BaseSHA: task.WorktreeBaseSHA,
+		WorkspaceID: "gate-workspace", EnvironmentFingerprint: "linux/arm64",
+		CommandEvidence: model.JSONField{"commands": []any{}}, Outcome: model.PreliminaryGateConfiguration,
+		Actor: "orchestrator", Source: "testing_ready", StartedAt: time.Now(), FinishedAt: time.Now(),
+	}
+	require.NoError(t, db.Create(&gate).Error)
+
+	require.NoError(t, o.RetryTask(task.ID))
+	var updated model.Task
+	require.NoError(t, db.First(&updated, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusTestingReady, updated.Status)
+	require.Equal(t, task.WorktreeBranch, updated.WorktreeBranch)
+	require.Equal(t, task.WorktreeBaseSHA, updated.WorktreeBaseSHA)
+	require.Empty(t, o.worktree.(*FakeWorktreeManager).RemovedFeatures)
+}
+
+func TestRetryTask_RefusesPausedTaskWithoutRetryableGate(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	task := createLifecycleTask(t, db, o.projectID, "operator-paused", model.StatusPaused, nil)
+
+	err := o.RetryTask(task.ID)
+	require.ErrorIs(t, err, ErrRetryPausedGateMissing)
+	var updated model.Task
+	require.NoError(t, db.First(&updated, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusPaused, updated.Status)
 }
 
 func TestRetryTask_RefusesTopLevelParentWithChildren(t *testing.T) {

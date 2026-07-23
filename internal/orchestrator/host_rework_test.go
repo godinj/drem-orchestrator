@@ -59,6 +59,7 @@ func failedInteraction(binarySHA string) VerificationInteractionEvidence {
 
 func TestComputerUseFailureHostReworkSubmissionRequiresFreshArtifact(t *testing.T) {
 	orch, task, snapshot := deliveryFixture(t)
+	persistAcceptedSnapshot(t, orch, task, snapshot)
 	seedAcceptanceCriterion(t, orch, task, "range-selection")
 	artifact1, err := orch.FreezeDeliveryArtifact(task.ID, snapshot)
 	require.NoError(t, err)
@@ -112,6 +113,10 @@ func TestComputerUseFailureHostReworkSubmissionRequiresFreshArtifact(t *testing.
 	require.Equal(t, session.OwnerActor, session.TerminalActor)
 	require.NotNil(t, session.TerminalIdempotencyKey)
 	require.Equal(t, submitReq.IdempotencyKey, *session.TerminalIdempotencyKey)
+	candidate, err := orch.acceptedDeliveryCandidate(&current)
+	require.NoError(t, err)
+	require.Equal(t, replacementSHA, candidate.CommitSHA)
+	require.Equal(t, snapshot.BaseSHA, candidate.BaseSHA)
 
 	snapshot.CommitSHA = replacementSHA
 	snapshot.GateWorkspaceID = "fresh-gate-workspace"

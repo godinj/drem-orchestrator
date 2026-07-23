@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -283,6 +284,21 @@ func (o *Orchestrator) acceptedDeliveryCandidate(task *model.Task) (acceptedDeli
 	candidate.CommitSHA = strings.TrimSpace(acceptance.HeadSHA)
 	candidate.BaseBranch = strings.TrimSpace(acceptance.BaseBranch)
 	candidate.BaseSHA = strings.TrimSpace(acceptance.BaseSHA)
+	var submission model.HostReworkSubmission
+	if err := o.db.Where("task_id = ?", task.ID).Order("created_at DESC, id DESC").First(&submission).Error; err == nil {
+		if !submission.CreatedAt.Before(acceptance.CreatedAt) {
+			var session model.HostReworkSession
+			if err := o.db.First(&session, "id = ? AND task_id = ?", submission.SessionID, task.ID).Error; err != nil {
+				return candidate, fmt.Errorf("delivery gate: host rework session is missing: %w", err)
+			}
+			if strings.TrimSpace(session.Branch) != candidate.Branch {
+				return candidate, fmt.Errorf("delivery gate: host rework branch %s does not match task branch %s", session.Branch, candidate.Branch)
+			}
+			candidate.CommitSHA = strings.TrimSpace(submission.ReplacementCommitSHA)
+		}
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return candidate, fmt.Errorf("delivery gate: inspect host rework submissions: %w", err)
+	}
 	if !validObjectID(candidate.CommitSHA) || !validObjectID(candidate.BaseSHA) {
 		return candidate, errors.New("delivery gate: branch acceptance requires full head and base commit SHAs")
 	}

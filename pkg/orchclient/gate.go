@@ -166,14 +166,26 @@ func (c *Client) Answer(ctx context.Context, project string, taskID uuid.UUID, b
 	return out, nil
 }
 
-// Retry transitions a failed task back to backlog so the orchestrator
-// can redispatch it. Returns *ErrWrongStatus if the task is not in
-// status=failed, *ErrNotFound if the task does not exist. See
-// plans/v15-v16-failed-task-recovery.md for the recovery workflow.
+// Retry transitions a failed task back to backlog or retries a paused
+// preliminary gate. Returns *ErrWrongStatus when neither route is current.
 func (c *Client) Retry(ctx context.Context, project string, taskID uuid.UUID) (orchdto.TaskDTO, error) {
+	return c.retry(ctx, project, taskID, "")
+}
+
+// RetryWithIdempotencyKey starts a new retry intention even when a prior
+// identical request has a durable failed replay record.
+func (c *Client) RetryWithIdempotencyKey(ctx context.Context, project string, taskID uuid.UUID, idempotencyKey string) (orchdto.TaskDTO, error) {
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if idempotencyKey == "" || len(idempotencyKey) > 200 {
+		return orchdto.TaskDTO{}, &ErrBadRequest{Message: "retry idempotency key is required and must be at most 200 characters"}
+	}
+	return c.retry(ctx, project, taskID, idempotencyKey)
+}
+
+func (c *Client) retry(ctx context.Context, project string, taskID uuid.UUID, idempotencyKey string) (orchdto.TaskDTO, error) {
 	var out orchdto.TaskDTO
 	path := gatePath(project, taskID, "retry")
-	if err := c.postGate(ctx, path, nil, &out); err != nil {
+	if err := c.postGateWithIdempotencyKey(ctx, path, nil, &out, idempotencyKey); err != nil {
 		return orchdto.TaskDTO{}, err
 	}
 	return out, nil
@@ -328,6 +340,10 @@ func gatePath(project string, taskID uuid.UUID, verb string) string {
 // into typed errors, and the response body is always drained and
 // closed so the HTTP connection can be reused.
 func (c *Client) postGate(ctx context.Context, path string, body any, out any) error {
+	return c.postGateWithIdempotencyKey(ctx, path, body, out, "")
+}
+
+func (c *Client) postGateWithIdempotencyKey(ctx context.Context, path string, body any, out any, explicitKey string) error {
 	var (
 		rawBody     []byte
 		contentType string
@@ -344,6 +360,12 @@ func (c *Client) postGate(ctx context.Context, path string, body any, out any) e
 	observed, idempotencyKey, guarded, err := c.legacyMutationMetadata(ctx, path, rawBody)
 	if err != nil {
 		return err
+	}
+	if explicitKey != "" {
+		if !guarded {
+			return &ErrBadRequest{Message: "explicit idempotency key requires a guarded task mutation"}
+		}
+		idempotencyKey = explicitKey
 	}
 	var resp *http.Response
 	for attempt := 0; attempt < 2; attempt++ {

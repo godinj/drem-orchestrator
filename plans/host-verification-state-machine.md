@@ -467,17 +467,25 @@ implementation without freezing an artifact.
 Reconciliation no longer infers `done`: even when a
 recorded branch base proves the feature advanced and Git proves it is already
 on the default branch, the task returns through `testing_ready` for an exact
-artifact freeze and verification. The earlier delivery half of step 13 passed
-on 2026-07-22; the local canary API still shows four disposable delivery tasks
-cancelled after verification, with no integration. The repository-free
-inference probe and its tests now exist, but its live run returned a transport
-block because the loopback tunnel is absent. The repeated-tweak state-machine
-canary passes deterministically: two Computer Use failures create two distinct
-actor-owned host-rework sessions, commits, submissions, and replacement
-artifacts before a third artifact passes into `integration_ready`, with no
-active worker attempt. The live native Canvas/Computer Use version remains
-blocked behind the inference stage. No remote service was restarted and no
-live Canvas writer was authorized.
+artifact freeze and verification. The full ordered step-13 protocol passed
+live on 2026-07-22. Repository-free inference traversed the local loopback
+tunnel and remote GQ/SGLang worker with `repo_data_sent=false`. A
+non-integrating delivery canary froze and verified a single metadata-file
+artifact. The native multi-tweak canary then produced three exact Canvas
+artifacts and binary hashes: two Computer Use failures created two distinct
+actor-owned host-rework sessions, submissions, fresh preliminary gates, and
+replacement artifacts; artifact version 3 passed into `integration_ready`.
+The task was archived without integration and Canvas `master` remained at its
+recorded base SHA.
+
+That live run found and closed two state-machine defects. Candidate resolution
+now treats the newest typed host-rework submission as the authoritative head
+when it is newer than worker branch acceptance, retaining the accepted base.
+Paused infrastructure/configuration/timeout gates now have a supported
+`dremctl retry` edge back to `testing_ready` that preserves the feature branch.
+An explicit retry idempotency key permits a new operator intention after a
+durably replayed failure without falsifying actor identity. Regression tests
+cover all three contracts.
 
 ## Operational hardening discovered by the canary
 
@@ -502,10 +510,11 @@ It exposed and closed these boundary defects before any real Canvas task:
 - obsolete, unassigned `testing_ready` tasks can be archived through the
   authenticated API, while any live assignment still blocks cancellation.
 
-## Pre-live canary protocol
+## Pre-live canary protocol and results
 
-Do not improvise the remaining canaries or combine them with the first real
-Canvas change.
+The protocol below was run in order and retained as the repeatable admission
+check for future control-plane changes. Do not combine it with a real Canvas
+integration.
 
 1. **Read-only inference canary.** After the operator separately starts the
    loopback SSH tunnel and local control plane, record the Canvas default-branch
@@ -516,10 +525,13 @@ Canvas change.
    Prove the Canvas SHA/status and local worktree list are byte-for-byte
    unchanged afterward.
 
-   **2026-07-22 result:** transport reached the remote loopback GQ endpoint,
-   but GQ returned 502 because `http://sglang:8081` had no running upstream or
-   service listener. Canvas refs and worktrees were not sent or mounted. This
-   is an external availability block, not a passing inference canary.
+   **2026-07-22 final result:** after restoring the existing remote SGLang
+   worker and GQ route, request `0e3cc9a42a104bfaa6ab1c3cd8866da8`
+   completed through the local loopback tunnel. The response hash was
+   `33b613bbe848774c8f35f52b41ad15a4c1340ec27423a138fd316795598f3fba`;
+   the probe recorded `repo_data_sent=false` and no orchestration state. The
+   earlier 502 remains useful typed availability evidence, not the final
+   outcome.
 2. **Non-integrating Canvas delivery canary.** Record the Canvas default SHA
    and dirty-worktree inventory again. Use one explicitly named disposable
    feature branch whose only change is a canary metadata file; never reuse an
@@ -543,12 +555,33 @@ Canvas change.
    SHA. Concurrent local writers changed two already-dirty worktree
    fingerprints during the long run; canary cleanup preserved their
    contemporaneous fingerprints exactly and never reset or staged them.
+
+   **2026-07-22 ordered rerun:** task
+   `26b2ad4b-c8ed-49fc-86b0-cca6cdefd35d` produced artifact
+   `3803667e-0113-4952-8e45-35383c02d2e5` at commit
+   `2bb7f13643e1ad219fdc5a585e608053d786d174`, verified it, stopped at
+   `integration_ready`, and was archived. No integrate call occurred.
 3. **Non-integrating multi-tweak Computer Use canary.** Verify an exact Canvas
    artifact, submit a failing interaction result into `host_rework`, make one
    bounded local Codex correction, submit the replacement SHA, and prove that a
    new preliminary gate, artifact version, binary hash, and Computer Use record
    are required. Stop again at `integration_ready`, archive the task, and prove
    the default ref and unrelated worktrees never changed.
+
+   **2026-07-22 result:** quick-fix task
+   `98e14e0d-be5e-4721-bed1-2a5577fc88bb` produced artifacts v1/v2/v3 at
+   commits `7d81ff11ceffe329063e9086c5b13865e0afb59f`,
+   `b645d2c4e982a0a40344857a55afd91f5d244cfd`, and
+   `773fef60b8560a8775b05184f0f31bece0cd9957`. The corresponding native
+   binary hashes were `1f57dfa17c21c8c9d40aed5f513e51f5604f19d8c90fc31b3abd7e07c7454eb2`,
+   `69099d722fb41faf5da3f7b69c3ba9a34af8dca810dbaddc0e753ab682646775`,
+   and `2a2f24ef9162e58ead46971337acb3148df7739eaa9a8ca9d4e44ffacf9c92e5`.
+   Computer Use failed v1 and v2, then passed v3 with the readable title
+   `[HV:A3|SGLang:remote|orch:local] Drem Canvas
+   [feature/98e14e0d-add-opt-...]`. The ledger contains three artifacts,
+   three verification records, three interaction records, two host-rework
+   sessions, and two submissions. The task reached `integration_ready`, was
+   archived, and never invoked integration.
 4. A live Canvas writer is authorized only after all evidence bundles are
    retained and the canaries demonstrate that no default ref, active worktree,
    or unrelated task changed.

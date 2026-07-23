@@ -142,6 +142,13 @@ func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error {
 	if f.ErrRetryTask != nil {
 		return f.ErrRetryTask
 	}
+	var task model.Task
+	if err := f.db.First(&task, "id = ?", taskID).Error; err != nil {
+		return err
+	}
+	if task.Status == model.StatusPaused {
+		return f.transition(taskID, model.StatusTestingReady)
+	}
 	return f.transition(taskID, model.StatusBacklog)
 }
 
@@ -844,6 +851,29 @@ func TestServer_RetryTaskEndpoint_Happy(t *testing.T) {
 	require.Len(t, fake.Calls, 1)
 	require.Equal(t, "RetryTask", fake.Calls[0].Method)
 	require.Equal(t, task.ID, fake.Calls[0].TaskID)
+}
+
+func TestServer_RetryTaskEndpoint_PausedGate(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "runner unavailable", model.StatusPaused)
+
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, string(model.StatusTestingReady), dto.Status)
+	require.Len(t, fake.Calls, 1)
+	require.Equal(t, "RetryTask", fake.Calls[0].Method)
+}
+
+func TestServer_RetryTaskEndpoint_PausedWithoutGateReturnsConflict(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "operator paused", model.StatusPaused)
+	fake.ErrRetryTask = orchestrator.ErrRetryPausedGateMissing
+
+	resp, body := doJSON(t, http.MethodPost, retryURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "no retryable preliminary gate")
 }
 
 func TestServer_RetryTaskEndpoint_UnknownTask(t *testing.T) {

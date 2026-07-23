@@ -48,7 +48,7 @@ Commands:
   pass <task-id-prefix>                         deprecated; delivery states fail closed
   fail <task-id-prefix>                         deprecated; delivery states fail closed
   answer <task-id-prefix> --body TEXT
-  retry <task-id-prefix>
+  retry <task-id-prefix> [--idempotency-key KEY]
   archive <task-id-prefix> --reason TEXT [--actor TEXT]
   comment <task-id-prefix> --body TEXT
   recover stale-assignment <task-id-prefix> (--dry-run|--apply)
@@ -478,6 +478,7 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 	reason := ""
 	actor := cfg.actor
 	body := ""
+	idempotencyKey := ""
 	var err error
 
 	if command == "reject" || command == "archive" {
@@ -498,6 +499,12 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 		}
 		if strings.TrimSpace(body) == "" {
 			return errors.New("--body is required")
+		}
+	}
+	if command == "retry" {
+		idempotencyKey, args, err = parseStringOption(args, "idempotency-key")
+		if err != nil {
+			return err
 		}
 	}
 	if len(args) != 1 {
@@ -525,7 +532,11 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 	case "answer":
 		dto, err = client.Answer(ctx, cfg.project, taskID, body)
 	case "retry":
-		dto, err = client.Retry(ctx, cfg.project, taskID)
+		if idempotencyKey == "" {
+			dto, err = client.Retry(ctx, cfg.project, taskID)
+		} else {
+			dto, err = client.RetryWithIdempotencyKey(ctx, cfg.project, taskID, idempotencyKey)
+		}
 	case "archive":
 		dto, err = client.Archive(ctx, cfg.project, taskID, reason, actor)
 	case "comment":
@@ -906,6 +917,8 @@ func mutationUsage(command string) string {
 		return "archive <task-id-prefix> --reason TEXT [--actor TEXT]"
 	case "answer", "comment":
 		return command + " <task-id-prefix> --body TEXT"
+	case "retry":
+		return "retry <task-id-prefix> [--idempotency-key KEY]"
 	case "create", "create-task", "file-task":
 		return command + " (--title TEXT --description TEXT | --spec FILE|JSON)"
 	default:

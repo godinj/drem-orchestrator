@@ -22,12 +22,13 @@ import (
 const testTaskID = "12345678-1234-1234-1234-123456789abc"
 
 type recordedRequest struct {
-	Method        string
-	Path          string
-	Query         string
-	Body          string
-	Authorization string
-	Actor         string
+	Method         string
+	Path           string
+	Query          string
+	Body           string
+	Authorization  string
+	Actor          string
+	IdempotencyKey string
 }
 
 func TestRequestReworkUsesObservedArtifactAndAuthenticatedActor(t *testing.T) {
@@ -608,6 +609,7 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 		{name: "fail", args: []string{"fail", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/fail", wantOut: "in_progress"},
 		{name: "answer", args: []string{"answer", "12345678", "--body", "use port 9090"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/answer", wantBody: `{"body":"use port 9090"}`, wantOut: "in_progress"},
 		{name: "retry", args: []string{"retry", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/retry", wantOut: "in_progress"},
+		{name: "retry explicit key", args: []string{"retry", "12345678", "--idempotency-key", "retry-after-upgrade"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/retry", wantOut: "in_progress"},
 		{name: "archive", args: []string{"archive", "12345678", "--reason", "superseded", "--actor", "codex:kyle:test"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/archive", wantBody: `{"actor":"codex:kyle:test","reason":"superseded","mode":"obsolete"}`, wantOut: "in_progress"},
 		{name: "comment", args: []string{"comment", "12345678", "--body", "supersede from current base"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/comments", wantBody: `{"body":"supersede from current base"}`, wantOut: "comment"},
 	}
@@ -662,6 +664,9 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 			}
 			if strings.TrimSpace(posts[0].Body) != tt.wantBody {
 				t.Fatalf("POST body = %q, want %q", strings.TrimSpace(posts[0].Body), tt.wantBody)
+			}
+			if tt.name == "retry explicit key" && posts[0].IdempotencyKey != "retry-after-upgrade" {
+				t.Fatalf("Idempotency-Key = %q, want retry-after-upgrade", posts[0].IdempotencyKey)
 			}
 			if !strings.Contains(out.String(), tt.wantOut) {
 				t.Fatalf("mutation output %q missing %q", out.String(), tt.wantOut)
@@ -1225,6 +1230,7 @@ func recordRequest(t *testing.T, r *http.Request) recordedRequest {
 	return recordedRequest{
 		Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Body: string(body),
 		Authorization: r.Header.Get("Authorization"), Actor: r.Header.Get("X-Drem-Actor"),
+		IdempotencyKey: r.Header.Get("Idempotency-Key"),
 	}
 }
 

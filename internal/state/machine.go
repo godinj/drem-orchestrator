@@ -59,7 +59,7 @@ var ValidTransitions = map[model.TaskStatus][]model.TaskStatus{
 	model.StatusHostRework:         {model.StatusTestingReady, model.StatusInProgress, model.StatusCancelled},
 	model.StatusIntegrationReady:   {model.StatusMerging, model.StatusHostRework, model.StatusInProgress, model.StatusCancelled},
 	model.StatusMerging:            {model.StatusDone, model.StatusFailed, model.StatusTestingReady, model.StatusIntegrationReady, model.StatusInProgress, model.StatusCancelled},
-	model.StatusPaused:             {model.StatusClassifying, model.StatusBacklog, model.StatusPlanning, model.StatusInProgress, model.StatusTestWriting, model.StatusNeedsClarification, model.StatusCancelled},
+	model.StatusPaused:             {model.StatusClassifying, model.StatusBacklog, model.StatusPlanning, model.StatusInProgress, model.StatusTestWriting, model.StatusTestingReady, model.StatusNeedsClarification, model.StatusCancelled},
 	model.StatusDone:               {},
 	model.StatusFailed:             {model.StatusClassifying, model.StatusBacklog, model.StatusInProgress, model.StatusTestWriting, model.StatusCancelled},
 	model.StatusRejected:           {model.StatusCancelled},
