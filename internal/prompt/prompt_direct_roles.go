@@ -35,14 +35,21 @@ func GenerateDirectCoder(opts Opts) string {
 	}
 
 	fmt.Fprintf(&b, "## Working Directory\n\n%s\n\n", opts.WorktreePath)
+	if opts.WorktreeBranch != "" {
+		fmt.Fprintf(&b, "Branch: `%s`\n\n", opts.WorktreeBranch)
+	}
 
 	if task != nil && len(task.Context) > 0 {
-		if files, ok := task.Context["estimated_files"]; ok {
+		if files, ok := firstContextValue(task.Context, "estimated_files", "actual_test_files"); ok {
 			b.WriteString("## Files to create/modify\n\n")
 			writeFileList(&b, files)
 			b.WriteString("\n")
 		}
+		writeDirectContext(&b, task.Context, "prep_data", "Prepared context")
+		writeDirectContext(&b, task.Context, "planned_interface_contract", "Planned interface contract")
+		writeDirectContext(&b, task.Context, "prompt_adjustment", "Prior actionable failure")
 	}
+	hasPlannedInterfaceContract := task != nil && task.Context != nil && task.Context["planned_interface_contract"] != nil
 
 	if len(opts.ParentCtx) > 0 {
 		b.WriteString("## Parent Task Context\n\n")
@@ -52,34 +59,64 @@ func GenerateDirectCoder(opts Opts) string {
 		b.WriteString("\n")
 	}
 
-	b.WriteString("## MANDATORY EXECUTION SEQUENCE\n\n")
-	b.WriteString("You MUST follow these steps IN ORDER. Do NOT deviate.\n\n")
-	b.WriteString("STEP 1: Read ONE source file (the main file you need to understand).\n")
-	b.WriteString("STEP 2: Write your code using write. Write the COMPLETE file content.\n")
-	if rules := asset(opts, "direct", "coder"); rules != "" {
+	phase := ""
+	if task != nil {
+		phase = task.Phase
+		if phase == "" && task.Context != nil {
+			phase, _ = task.Context["phase"].(string)
+		}
+	}
+	b.WriteString("## Execution contract\n\n")
+	b.WriteString("Work only in the listed scope. Read the minimum needed and make the change early. The worker harness owns commit and push; do not run git commit or git push.\n")
+	switch phase {
+	case "test":
+		if hasPlannedInterfaceContract {
+			b.WriteString("This is the TEST phase. Treat the planned interface contract above as authoritative. Planned symbols may not exist yet: do not search for them and do not invent a competing API. Inspect only existing test conventions and source-backed registration seams named in scope, then write the focused red-state test. Exercise production APIs: do not mock the production type, hardcode a failing assertion, or implement the behavior. If production declarations are outside your listed files, a compile failure naming a contracted symbol is the intended red artifact.\n")
+		} else {
+			b.WriteString("This is the TEST phase, but no planned interface contract was supplied. Use only existing production APIs. If the task requires a new symbol, stop with a concise missing-contract result instead of searching or inventing an API.\n")
+		}
+	case "implementation":
+		b.WriteString("This is the IMPLEMENTATION phase. Read the paired test and actual production seam, implement the smallest behavior that satisfies it, and do not modify tests. Read at most 6 relevant files before the first edit.\n")
+	case "integration":
+		b.WriteString("This is the INTEGRATION phase. Inspect the declared production entrypoint chain, then do only manifest/wiring/assembly work; do not broaden behavior. Read at most 6 relevant files before the first edit.\n")
+	default:
+		b.WriteString("Implement the smallest complete scoped change. Read at most 4 relevant files before the first edit.\n")
+	}
+	if opts.ExternalVerification {
+		b.WriteString("Native builds and tests run later on the external host. Do not run CMake, install dependencies, or modify build settings to satisfy this container. Run only `git diff --check` (and another lightweight check only if already available), then leave the scoped result for the harness. A test-phase red result is the intended artifact.\n")
+	} else if rules := asset(opts, "direct", "coder"); rules != "" {
 		b.WriteString(rules)
 		b.WriteString("\n")
 	} else {
-		b.WriteString("STEP 3: Run `go vet ./... && go test ./...`\n")
+		b.WriteString("Run `go vet ./... && go test ./...` after editing.\n")
 	}
-	b.WriteString("STEP 4: If tests fail, fix and re-run ONCE.\n")
-	b.WriteString("STEP 5: Run `git add -A && git commit -m '<message>'`\n\n")
-	b.WriteString("RULES:\n")
-	b.WriteString("- You have MAX 20 tool calls. Most tasks need only 5.\n")
-	b.WriteString("- Do NOT run ls, find, or grep to explore. You already know the codebase.\n")
-	b.WriteString("- Do NOT read more than 2 files before writing code.\n")
-	b.WriteString("- WRITE CODE on your 2nd or 3rd tool call. Not later.\n")
-	b.WriteString("- If you have not called write by your 4th tool call, you are FAILING.\n\n")
+	b.WriteString("The harness enforces a 12-call total budget and blocks all shell commands before the first mutation. Do not inventory the repository. If a check fails, make one focused repair attempt; preserve useful scoped work rather than looping.\n\n")
 	if projectLanguage(opts) != "cpp" {
 		b.WriteString("Test Infrastructure:\n")
 		b.WriteString("- DB: use `testutil.NewTestDB(t)`, never `gorm.Open` directly.\n")
 		b.WriteString("- Git helpers: `testutil.SetupBareRepo(t)`, `testutil.CommitFile(t, ...)`\n")
-		b.WriteString("- Shared helpers: `internal/testutil/testutil.go`\n\n")
+		fmt.Fprintf(&b, "- Shared helpers: `%s`\n\n", "internal"+"/testutil/testutil.go")
 	}
-	b.WriteString("If tests fail after 2 fix attempts, commit anyway with a note about failures.\n")
-	b.WriteString("Do NOT push to remote.\n")
+	b.WriteString("Finish after the lightweight check and leave scoped changes in the working tree. The harness will commit and push them.\n")
 
 	return b.String()
+}
+
+func firstContextValue(ctx map[string]any, keys ...string) (any, bool) {
+	for _, key := range keys {
+		if value, ok := ctx[key]; ok {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func writeDirectContext(b *strings.Builder, ctx map[string]any, key, label string) {
+	value, ok := ctx[key]
+	if !ok || value == nil || strings.TrimSpace(fmt.Sprint(value)) == "" {
+		return
+	}
+	fmt.Fprintf(b, "## %s\n\n%v\n\n", label, value)
 }
 
 // GenerateDirectReviewer builds a compact system prompt for a local-model

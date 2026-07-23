@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -104,7 +105,7 @@ func validPlanResponse(taskID string) map[string]any {
 					"files":       []any{"foo_test.go"},
 				},
 				map[string]any{
-					"title":       "impl add",
+					"title":       "implement add",
 					"description": "implement",
 					"agent_type":  "coder",
 					"phase":       "implementation",
@@ -347,6 +348,54 @@ func TestSpawnPlannerHTTP_ValidationFailureDoesNotStorePlan(t *testing.T) {
 		"attempt still counts against retry budget")
 }
 
+func TestSpawnPlannerHTTP_RejectsInventedDirectoryTree(t *testing.T) {
+	plan := func(w http.ResponseWriter, r *http.Request) {
+		response := validPlanResponse("x")
+		response["plan"] = map[string]any{"subtasks": []any{
+			map[string]any{
+				"title": "write test", "description": "test", "agent_type": "coder", "phase": "test",
+				"tests_for": []any{float64(1)}, "files": []any{"invented/pkg/widget_test.go"},
+			},
+			map[string]any{
+				"title": "implement widget", "description": "implementation", "agent_type": "coder", "phase": "implementation",
+				"files": []any{"invented/pkg/widget.go"},
+			},
+		}}
+		_ = json.NewEncoder(w).Encode(response)
+	}
+	o, _, task, project := planClientRig(t, nil, plan)
+
+	require.NoError(t, o.spawnPlannerHTTP(&task, &project, "prompt"))
+
+	var updated model.Task
+	require.NoError(t, o.db.First(&updated, "id = ?", task.ID).Error)
+	require.Nil(t, updated.Plan)
+	validation, ok := updated.Context["plan_validation"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, false, validation["valid"])
+}
+
+func TestSpawnPlannerHTTP_DiscardsResultAfterConcurrentCancellation(t *testing.T) {
+	var orch *Orchestrator
+	var taskID uuid.UUID
+	plan := func(w http.ResponseWriter, r *http.Request) {
+		require.NoError(t, orch.db.Exec(
+			"UPDATE tasks SET status = ?, state_version = state_version + 1 WHERE id = ?",
+			model.StatusCancelled, taskID,
+		).Error)
+		_ = json.NewEncoder(w).Encode(validPlanResponse("x"))
+	}
+	o, _, task, project := planClientRig(t, nil, plan)
+	orch, taskID = o, task.ID
+
+	require.NoError(t, o.spawnPlannerHTTP(&task, &project, "prompt"))
+
+	var updated model.Task
+	require.NoError(t, o.db.First(&updated, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusCancelled, updated.Status)
+	require.Nil(t, updated.Plan, "stale planner response must not resurrect a cancelled task")
+}
+
 // TestSpawnPlannerHTTP_HealthzFailDoesNotStorePlan: /healthz fails so
 // dispatch short-circuits. Counter still increments so retry budget is
 // respected; task stays in PLANNING.
@@ -363,6 +412,67 @@ func TestSpawnPlannerHTTP_HealthzFailDoesNotStorePlan(t *testing.T) {
 	require.Nil(t, updated.Plan)
 	require.Equal(t, model.StatusPlanning, updated.Status)
 	require.Equal(t, float64(1), updated.Context["total_planner_spawns"])
+}
+
+func TestProcessPlanningWarmHTTPDoesNotConsumeLegacyAgentCapacity(t *testing.T) {
+	plan := func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(validPlanResponse("x"))
+	}
+	o, _, task, _ := planClientRig(t, nil, plan)
+	o.runner = agent.NewRunner(o.db, nil, nil, "/bin/false", "", 0, func(at model.AgentType) model.AgentCLIConfig {
+		if at == model.AgentPlanner {
+			return model.AgentCLIConfig{Provider: model.ProviderCodex, Model: "gpt-5.4-mini", Effort: "high"}
+		}
+		return model.AgentCLIConfig{}
+	})
+
+	require.NoError(t, o.processPlanning(&task))
+
+	var updated model.Task
+	require.Eventually(t, func() bool {
+		if err := o.db.First(&updated, "id = ?", task.ID).Error; err != nil {
+			return false
+		}
+		return updated.Plan != nil
+	}, time.Second, 10*time.Millisecond)
+	require.NotNil(t, updated.Plan, "warm planner must run even when legacy agent capacity is zero")
+}
+
+func TestProcessPlanningWarmHTTPDoesNotBlockLifecycleTickOrDuplicate(t *testing.T) {
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	requestCount := make(chan struct{}, 2)
+	plan := func(w http.ResponseWriter, r *http.Request) {
+		requestCount <- struct{}{}
+		select {
+		case <-requestStarted:
+		default:
+			close(requestStarted)
+		}
+		<-releaseRequest
+		_ = json.NewEncoder(w).Encode(validPlanResponse("x"))
+	}
+	o, _, task, _ := planClientRig(t, nil, plan)
+
+	started := time.Now()
+	require.NoError(t, o.processPlanning(&task))
+	require.Less(t, time.Since(started), 100*time.Millisecond,
+		"warm planner latency must not block the lifecycle tick")
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		t.Fatal("planner request did not start")
+	}
+
+	// A second tick while the first request is live must reuse the in-memory
+	// claim instead of sending a duplicate plan request.
+	require.NoError(t, o.processPlanning(&task))
+	close(releaseRequest)
+	require.Eventually(t, func() bool {
+		var updated model.Task
+		return o.db.First(&updated, "id = ?", task.ID).Error == nil && updated.Plan != nil
+	}, time.Second, 10*time.Millisecond)
+	require.Len(t, requestCount, 1)
 }
 
 // ---------------------------------------------------------------------------

@@ -93,6 +93,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 	// branch that must be merged.
 	featureBranch := o.featureBranchForTask(task)
 	merged := false
+	branchAccepted := false
 	var mergeResult *WorktreeMergeResult
 	if ag.WorktreeBranch != "" && featureBranch != "" {
 		fn := strings.TrimPrefix(featureBranch, "feature/")
@@ -127,6 +128,14 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			if !hasCommits {
 				return o.onAgentEmptyWork(ag, task, output)
 			}
+			accepted, acceptErr := o.acceptWorkerBranchCompletion(context.Background(), ag, task, featureDir)
+			if acceptErr != nil {
+				return fmt.Errorf("on agent completed: pre-merge branch acceptance: %w", acceptErr)
+			}
+			if !accepted {
+				return o.rejectWorkerBranchCompletion(ag, task)
+			}
+			branchAccepted = true
 
 			// Resolve diagnostic refs before merge for structured failure events.
 			mergeBase, _ := gitexec.RunGit(context.Background(), featureDir, "merge-base", "HEAD", ag.WorktreeBranch)
@@ -260,7 +269,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 		task.Context["scores"] = scoreImplGate(implScorePassed, implScoreFailed, implChangedFiles, "")
 	}
 
-	if featureBranch != "" && o.worktree != nil {
+	if featureBranch != "" && o.worktree != nil && !branchAccepted {
 		fn := strings.TrimPrefix(featureBranch, "feature/")
 		featureDir := o.worktree.FeatureWorktreePath(fn)
 		accepted, acceptErr := o.acceptWorkerBranchCompletion(context.Background(), ag, task, featureDir)
@@ -268,24 +277,13 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			return fmt.Errorf("on agent completed: branch acceptance: %w", acceptErr)
 		}
 		if !accepted {
-			ag.Status = model.AgentIdle
-			ag.CurrentTaskID = nil
-			if err := o.db.Save(ag).Error; err != nil {
-				return fmt.Errorf("on agent completed: save agent after branch rejection: %w", err)
-			}
-			task.AssignedAgentID = nil
-			if err := o.db.Save(task).Error; err != nil {
-				return fmt.Errorf("on agent completed: save task after branch rejection: %w", err)
-			}
-			o.emit("task_updated", task)
-			o.logger.Warn("branch acceptance rejected worker completion", "task_id", task.ID, "agent_id", ag.ID)
-			return nil
+			return o.rejectWorkerBranchCompletion(ag, task)
 		}
 	}
 
 	// Merge succeeded — clean up agent worktree.
 	if ag.WorktreeBranch != "" {
-		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+		if err := o.cleanupTaskWorkerBranch(context.Background(), task, ag.WorktreeBranch); err != nil {
 			o.logger.Warn("cleanup agent worktree failed", "agent_id", ag.ID, "error", err)
 		}
 	}
@@ -503,7 +501,7 @@ func (o *Orchestrator) onPlannerCompleted(ag *model.Agent, task *model.Task) err
 
 	// Clean up planner agent worktree.
 	if ag.WorktreeBranch != "" {
-		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+		if err := o.cleanupTaskWorkerBranch(context.Background(), task, ag.WorktreeBranch); err != nil {
 			o.logger.Warn("cleanup planner worktree failed", "agent_id", ag.ID, "error", err)
 		}
 	}

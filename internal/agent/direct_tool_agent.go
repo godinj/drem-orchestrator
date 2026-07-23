@@ -39,102 +39,6 @@ type TraceCall struct {
 }
 
 // ---------------------------------------------------------------------------
-// Configuration
-// ---------------------------------------------------------------------------
-
-// DirectToolAgentConfig holds connection, generation, and execution parameters
-// for the direct tool-calling agent.
-type DirectToolAgentConfig struct {
-	Endpoint      string        // Full URL for chat completions endpoint
-	Model         string        // Model identifier sent in the API request
-	MaxTokens     int           // Maximum tokens per response
-	Temperature   float64       // Sampling temperature
-	Timeout       time.Duration // HTTP request timeout per API call
-	MaxIterations int           // Maximum tool-call loop iterations
-	WorkDir       string        // Working directory; tools restricted to paths under this
-	BashTimeout   time.Duration // Timeout for bash commands (default 30s)
-	TraceWriter   io.Writer     // Optional: JSON-lines trace, one TraceEvent per iteration
-	// GQCaller and GQPriority identify this request to a GQ admission proxy.
-	// They are harmless when the endpoint is SGLang directly because unknown
-	// HTTP headers are ignored.
-	GQCaller   string
-	GQPriority string
-	// ChatTemplateKwargs is forwarded to SGLang as `chat_template_kwargs` in the
-	// request body. Use for model-specific template flags (e.g. Gemma-4's
-	// `enable_thinking: true`). Nil/empty ⇒ field omitted.
-	ChatTemplateKwargs map[string]any
-
-	// Context-window monitoring. ContextLimit is the model's input context
-	// window size in tokens (e.g. 131072 for gemma4-26b). When > 0, the loop
-	// inspects each response's prompt_tokens against ContextLimit and:
-	//   - injects a one-shot system "wrap up" nudge once usage crosses
-	//     ContextWarnPct (default 85);
-	//   - hard-stops the loop with StopReason="context_limit" once usage
-	//     crosses ContextStopPct (default 95) on any non-stop turn.
-	// When ContextLimit is 0 the monitor is disabled and the result's
-	// FinalContextPct stays 0.
-	ContextLimit   int
-	ContextWarnPct int
-	ContextStopPct int
-
-	// OnIteration is called after each successful API round-trip. Use it to
-	// update heartbeat timestamps so the stale-agent reaper doesn't kill
-	// long-running direct-tool agents. contextPct is the current context
-	// window usage percentage (0 when ContextLimit is not configured).
-	// Nil ⇒ no callback.
-	OnIteration func(iteration, tokensIn, tokensOut, contextPct int)
-
-	// OnToolCall is called after each tool execution with the tool name,
-	// parsed arguments, and result length in bytes. Use it to persist
-	// activity metrics (last tool, target file, phase) so the TUI can
-	// display live agent activity. Nil ⇒ no callback.
-	OnToolCall func(toolName string, args map[string]any, resultLen int)
-}
-
-// DefaultDirectToolAgentConfig returns a config targeting the local SGLang
-// server with sensible defaults.
-func DefaultDirectToolAgentConfig() DirectToolAgentConfig {
-	return DirectToolAgentConfig{
-		Endpoint:      "http://localhost:8081/v1/chat/completions",
-		Model:         "qwen3-coder-30b",
-		MaxTokens:     8192,
-		Temperature:   0.1,
-		Timeout:       120 * time.Second,
-		MaxIterations: 20,
-		BashTimeout:   30 * time.Second,
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Result
-// ---------------------------------------------------------------------------
-
-// DirectToolAgentResult holds the outcome of a tool-agent run.
-type DirectToolAgentResult struct {
-	Output     string        // Final text output from the model
-	OutputPath string        // Path to the written output file (if any)
-	TokensIn   int           // Total prompt tokens across all iterations
-	TokensOut  int           // Total completion tokens across all iterations
-	Iterations int           // Number of loop iterations used
-	Duration   time.Duration // Wall-clock time for the entire run
-	// FinalContextPct is the most recent prompt_tokens / ContextLimit
-	// expressed in 0..100. Stays 0 when ContextLimit is unset.
-	FinalContextPct int
-	// StopReason is set for structured non-natural stops such as
-	// "context_limit", "max_iterations", or "no_progress".
-	StopReason string
-}
-
-// Structured stop reasons emitted by DirectToolAgentResult.StopReason.
-const (
-	DirectToolStopReasonContextLimit  = "context_limit"
-	DirectToolStopReasonMaxIterations = "max_iterations"
-	DirectToolStopReasonNoProgress    = "no_progress"
-	DirectToolStopReasonMaxTokens     = "max_tokens"
-	DirectToolStopReasonTimeout       = "timeout"
-)
-
-// ---------------------------------------------------------------------------
 // Tool schemas
 // ---------------------------------------------------------------------------
 
@@ -217,6 +121,29 @@ func ToolsForRole(role string) []toolDefinition {
 	return tools
 }
 
+// ToolsForRoleScope removes repository-discovery tools from bounded coder and
+// fixer runs whose exact file scope is already supplied by the planner. The
+// pilot showed that exposing grep/glob to a one-file integration worker caused
+// repeated repository exploration without producing an edit. Read/edit/write
+// remain available for the named files and bash remains available for the
+// lightweight deterministic gate.
+func ToolsForRoleScope(role string, scopedFiles []string) []toolDefinition {
+	if (role == "coder" || role == "fixer") && len(scopedFiles) > 0 {
+		return toolsByName([]string{"read", "edit", "write", "bash"})
+	}
+	return ToolsForRole(role)
+}
+
+func toolsByName(names []string) []toolDefinition {
+	tools := make([]toolDefinition, 0, len(names))
+	for _, name := range names {
+		if td, exists := builtinTools[name]; exists {
+			tools = append(tools, td)
+		}
+	}
+	return tools
+}
+
 // ---------------------------------------------------------------------------
 // Core tool-call loop
 // ---------------------------------------------------------------------------
@@ -272,6 +199,10 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 	// has been read via the read tool. After maxFileReads, the tool result
 	// includes a warning nudging the model to stop re-reading and act.
 	fileReadCounts := map[string]int{}
+	reconnaissanceBeforeMutation := 0
+	blockedReconBeforeMutation := 0
+	totalToolCalls := 0
+	mutationObserved := false
 
 	maxIter := cfg.MaxIterations
 	if maxIter <= 0 {
@@ -279,6 +210,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 	}
 
 	for iteration := 0; iteration < maxIter; iteration++ {
+		messages = compactToolResultHistory(messages)
 		slog.Info("direct tool agent: calling API",
 			"iteration", iteration,
 			"messages", len(messages),
@@ -350,14 +282,22 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		// context_limit even if usage already crossed the stop threshold.
 		if choice.FinishReason == "stop" || choice.FinishReason == "end_of_turn" {
 			writeTrace(cfg.TraceWriter, traceEvent)
+			if !mutationObserved && cfg.MaxInputTokensBeforeMutation > 0 && totalTokensIn >= cfg.MaxInputTokensBeforeMutation {
+				return &DirectToolAgentResult{
+					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+					StopReason: DirectToolStopReasonNoProgress,
+				}, fmt.Errorf("pre-mutation input budget reached without a mutation checkpoint: %d/%d", totalTokensIn, cfg.MaxInputTokensBeforeMutation)
+			}
 			finalOutput := choice.Message.Content
 			result := &DirectToolAgentResult{
-				Output:          finalOutput,
-				TokensIn:        totalTokensIn,
-				TokensOut:       totalTokensOut,
-				Iterations:      iteration + 1,
-				Duration:        time.Since(start),
-				FinalContextPct: finalPct,
+				Output:           finalOutput,
+				TokensIn:         totalTokensIn,
+				TokensOut:        totalTokensOut,
+				Iterations:       iteration + 1,
+				Duration:         time.Since(start),
+				FinalContextPct:  finalPct,
+				MutationObserved: mutationObserved,
 			}
 
 			// Write output file if requested.
@@ -380,29 +320,11 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			return result, nil
 		}
 
-		// Context monitor: hard stop. The natural-stop branch above already
-		// returned, so reaching this point means the model wants to keep
-		// going (tool calls, length truncation, etc.). If usage has crossed
-		// the stop threshold, halt now to prevent runaway token spend.
-		// Returns nil error (this is a planned safety stop, not a failure).
-		if cfg.ContextLimit > 0 && currentPct >= stopPct {
-			writeTrace(cfg.TraceWriter, traceEvent)
-			slog.Warn("direct tool agent: context stop threshold reached",
-				"iteration", iteration,
-				"pct", currentPct,
-				"limit", cfg.ContextLimit,
-				"prompt_tokens", resp.Usage.PromptTokens,
-			)
-			return &DirectToolAgentResult{
-				Output:          choice.Message.Content,
-				TokensIn:        totalTokensIn,
-				TokensOut:       totalTokensOut,
-				Iterations:      iteration + 1,
-				Duration:        time.Since(start),
-				FinalContextPct: finalPct,
-				StopReason:      DirectToolStopReasonContextLimit,
-			}, nil
-		}
+		// Decide whether this is the final paid response before executing its
+		// tool calls, but stop only after that complete response batch. Stopping
+		// here used to discard edits the model had already generated and billed.
+		budgetReached := cfg.MaxCumulativeInputTokens > 0 && totalTokensIn >= cfg.MaxCumulativeInputTokens
+		contextReached := cfg.ContextLimit > 0 && currentPct >= stopPct
 
 		// If the model wants to call tools, execute them.
 		if choice.FinishReason == "tool_calls" || len(choice.Message.ToolCalls) > 0 {
@@ -412,15 +334,24 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			// with 28 valid reads, then generation breaks down into 159
 			// malformed calls, consuming 58k context tokens on garbage).
 			callsToProcess := choice.Message.ToolCalls
-			var cappedCalls []toolCall
-			if len(callsToProcess) > maxToolCallsPerTurn {
+			remainingCalls := cfg.MaxToolCalls - totalToolCalls
+			if cfg.MaxToolCalls <= 0 {
+				remainingCalls = len(callsToProcess)
+			}
+			callCap := maxToolCallsPerTurn
+			if remainingCalls < callCap {
+				callCap = remainingCalls
+			}
+			if callCap < 0 {
+				callCap = 0
+			}
+			if len(callsToProcess) > callCap {
 				slog.Warn("direct tool agent: capping tool calls per turn",
 					"iteration", iteration,
 					"total", len(callsToProcess),
-					"cap", maxToolCallsPerTurn,
+					"cap", callCap,
 				)
-				cappedCalls = callsToProcess[maxToolCallsPerTurn:]
-				callsToProcess = callsToProcess[:maxToolCallsPerTurn]
+				callsToProcess = callsToProcess[:callCap]
 				// Rewrite the assistant message to only contain the kept calls,
 				// so capped calls don't pollute conversation history.
 				cappedMsg := choice.Message
@@ -430,20 +361,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				// Append the assistant message with tool calls.
 				messages = append(messages, choice.Message)
 			}
-
-			// Stub the capped calls with a redirect message. Each tool_call_id
-			// still gets a response so the OpenAI protocol is satisfied.
-			for _, tc := range cappedCalls {
-				stub := fmt.Sprintf("[HARNESS: Too many tool calls in one turn (%d). Only the first %d were executed. "+
-					"Break your work across multiple turns — call a few tools, review the results, then continue.]",
-					len(choice.Message.ToolCalls), maxToolCallsPerTurn)
-				messages = append(messages, toolChatMsg{
-					Role:       "tool",
-					Content:    stub,
-					ToolCallID: tc.ID,
-					Name:       tc.Function.Name,
-				})
-			}
+			totalToolCalls += len(callsToProcess)
 
 			// Intra-iteration dedup: if the model emits multiple tool calls
 			// with identical name+args in a single turn, execute only the first
@@ -484,7 +402,29 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					continue
 				}
 
-				result, toolErr := exec.execute(tc.Function.Name, tc.Function.Arguments)
+				var result string
+				var toolErr error
+				scopedBashBeforeMutation := !mutationObserved && tc.Function.Name == "bash" && cfg.MaxReadsBeforeMutation > 0
+				reconnaissance := !mutationObserved && (scopedBashBeforeMutation || isReconnaissanceToolCall(tc.Function.Name, tc.Function.Arguments))
+				reconBudgetReached := reconnaissance && cfg.MaxReadsBeforeMutation > 0 &&
+					reconnaissanceBeforeMutation >= cfg.MaxReadsBeforeMutation
+				inputBudgetReached := reconnaissance && cfg.MaxInputTokensBeforeMutation > 0 &&
+					totalTokensIn >= cfg.MaxInputTokensBeforeMutation
+				blockedRecon := scopedBashBeforeMutation || reconBudgetReached || inputBudgetReached
+				if blockedRecon {
+					blockedReconBeforeMutation++
+					result = fmt.Sprintf("[HARNESS: Scoped reconnaissance stopped (used=%d limit=%d, input=%d/%d). "+
+						"Shell commands are not allowed before the first mutation. Use the declared files and planned interface contract; your next call must be edit or write.]",
+						reconnaissanceBeforeMutation, cfg.MaxReadsBeforeMutation, totalTokensIn, cfg.MaxInputTokensBeforeMutation)
+				} else {
+					result, toolErr = exec.execute(tc.Function.Name, tc.Function.Arguments)
+					if (tc.Function.Name == "edit" || tc.Function.Name == "write") && toolErr == nil {
+						mutationObserved = true
+					}
+				}
+				if reconnaissance {
+					reconnaissanceBeforeMutation++
+				}
 				traceCall := TraceCall{
 					Name: tc.Function.Name,
 					Args: tc.Function.Arguments,
@@ -572,6 +512,55 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				})
 			}
 			writeTrace(cfg.TraceWriter, traceEvent)
+			if !mutationObserved && blockedReconBeforeMutation >= 2 {
+				return &DirectToolAgentResult{
+						Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+						Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+						StopReason: DirectToolStopReasonNoProgress,
+					}, fmt.Errorf("scoped agent refused to mutate after %d reconnaissance calls and %d blocked attempts",
+						reconnaissanceBeforeMutation, blockedReconBeforeMutation)
+			}
+
+			if cfg.MaxToolCalls > 0 && totalToolCalls >= cfg.MaxToolCalls {
+				result := &DirectToolAgentResult{
+					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+					StopReason: DirectToolStopReasonToolBudget, MutationObserved: mutationObserved,
+				}
+				if mutationObserved {
+					return result, nil
+				}
+				return result, fmt.Errorf("tool-call budget reached without a mutation checkpoint: %d/%d", totalToolCalls, cfg.MaxToolCalls)
+			}
+			if !mutationObserved && cfg.MaxInputTokensBeforeMutation > 0 && totalTokensIn >= cfg.MaxInputTokensBeforeMutation {
+				return &DirectToolAgentResult{
+					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+					StopReason: DirectToolStopReasonNoProgress,
+				}, fmt.Errorf("pre-mutation input budget reached without a mutation checkpoint: %d/%d", totalTokensIn, cfg.MaxInputTokensBeforeMutation)
+			}
+
+			if budgetReached {
+				result := &DirectToolAgentResult{
+					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+					StopReason: DirectToolStopReasonTokenBudget, MutationObserved: mutationObserved,
+				}
+				if mutationObserved {
+					return result, nil
+				}
+				return result, fmt.Errorf("cumulative input token budget reached without a mutation checkpoint: %d/%d", totalTokensIn, cfg.MaxCumulativeInputTokens)
+			}
+			if contextReached {
+				slog.Warn("direct tool agent: context stop threshold reached after checkpointing response",
+					"iteration", iteration, "pct", currentPct, "limit", cfg.ContextLimit,
+					"prompt_tokens", resp.Usage.PromptTokens)
+				return &DirectToolAgentResult{
+					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+					StopReason: DirectToolStopReasonContextLimit, MutationObserved: mutationObserved,
+				}, nil
+			}
 
 			// Context monitor: warn nudge. Inject a one-shot system message
 			// asking the model to wrap up. Only fires once per run so the
@@ -595,6 +584,27 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				warnInjected = true
 			}
 			continue
+		}
+
+		if budgetReached {
+			writeTrace(cfg.TraceWriter, traceEvent)
+			result := &DirectToolAgentResult{
+				Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+				Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+				StopReason: DirectToolStopReasonTokenBudget, MutationObserved: mutationObserved,
+			}
+			if mutationObserved {
+				return result, nil
+			}
+			return result, fmt.Errorf("cumulative input token budget reached without a mutation checkpoint: %d/%d", totalTokensIn, cfg.MaxCumulativeInputTokens)
+		}
+		if contextReached {
+			writeTrace(cfg.TraceWriter, traceEvent)
+			return &DirectToolAgentResult{
+				Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+				Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+				StopReason: DirectToolStopReasonContextLimit, MutationObserved: mutationObserved,
+			}, nil
 		}
 
 		// Length-truncated response: the model hit max_tokens before completing

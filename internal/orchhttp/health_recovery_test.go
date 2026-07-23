@@ -116,6 +116,27 @@ func TestHealthIssuesDoesNotRecommendDeadAssignedAgentRecoveryForTerminalTask(t 
 	requireNoIssueType(t, issues, "dead_assigned_agent")
 }
 
+func TestHealthIssuesReportsLegacyDependencyFailureStall(t *testing.T) {
+	fake, project, _, baseURL := setupGateHTTPTest(t)
+	parent := testutil.CreateTask(t, fake.db, project.ID, "stalled parent", model.StatusInProgress)
+	failed := testutil.CreateTask(t, fake.db, project.ID, "failed implementation", model.StatusFailed)
+	failed.ParentTaskID = &parent.ID
+	require.NoError(t, fake.db.Save(&failed).Error)
+	blocked := testutil.CreateTask(t, fake.db, project.ID, "blocked integration", model.StatusBacklog)
+	blocked.ParentTaskID = &parent.ID
+	blocked.DependencyIDs = model.JSONArray{failed.ID.String()}
+	require.NoError(t, fake.db.Save(&blocked).Error)
+
+	resp, body := doJSON(t, http.MethodGet, baseURL+"/projects/"+projectName+"/health/issues", "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	var issues []orchdto.HealthIssueDTO
+	require.NoError(t, json.Unmarshal(body, &issues))
+	issue := findIssueType(t, issues, "dependency_failure_stall")
+	require.Equal(t, "critical", issue.Severity)
+	require.Equal(t, failed.ID.String(), issue.BlockedDependencies[0].DependencyID)
+	require.Equal(t, blocked.ID.String(), issue.BlockedDependencies[0].TaskID)
+}
+
 func TestHealthIssuesReportsDuplicateAttemptsBlockedDependenciesAndBranchGate(t *testing.T) {
 	fake, project, _, baseURL := setupGateHTTPTest(t)
 	db := fake.db
@@ -149,6 +170,28 @@ func TestHealthIssuesReportsDuplicateAttemptsBlockedDependenciesAndBranchGate(t 
 		CreatedAt: time.Now(),
 		Actor:     "orchestrator",
 	}).Error)
+	historicalGate := testutil.CreateTask(t, db, project.ID, "gate recovered", model.StatusIntegrationReady)
+	historicalGate.Context = model.JSONField{"latest_failure_current": false}
+	require.NoError(t, db.Save(&historicalGate).Error)
+	require.NoError(t, db.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    historicalGate.ID,
+		EventType: "branch_acceptance_rejected",
+		Details:   model.JSONField{"reason": "branch_contamination"},
+		CreatedAt: time.Now(),
+		Actor:     "orchestrator",
+	}).Error)
+	acceptedGate := testutil.CreateTask(t, db, project.ID, "gate accepted", model.StatusIntegrationReady)
+	acceptedGate.Context = model.JSONField{"branch_acceptance_reason": "accepted_parent_delivery_candidate"}
+	require.NoError(t, db.Save(&acceptedGate).Error)
+	require.NoError(t, db.Create(&model.TaskEvent{
+		ID:        uuid.New(),
+		TaskID:    acceptedGate.ID,
+		EventType: "branch_acceptance_rejected",
+		Details:   model.JSONField{"reason": "accepted_parent_delivery_candidate"},
+		CreatedAt: time.Now(),
+		Actor:     "orchestrator",
+	}).Error)
 
 	resp, body := doJSON(t, http.MethodGet, baseURL+"/projects/"+projectName+"/health/issues", "")
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
@@ -164,6 +207,10 @@ func TestHealthIssuesReportsDuplicateAttemptsBlockedDependenciesAndBranchGate(t 
 	gateIssue := findIssueType(t, issues, "branch_hygiene_gate_failure")
 	require.NotNil(t, gateIssue.GateFailure)
 	require.Equal(t, "branch_hygiene", gateIssue.GateFailure.Gate)
+	for _, issue := range issues {
+		require.NotEqual(t, historicalGate.ID.String(), issue.TaskID, "historical recovered gate must not remain a health issue")
+		require.NotEqual(t, acceptedGate.ID.String(), issue.TaskID, "successful branch acceptance must not be reported as a gate failure")
+	}
 }
 
 func TestRecoverStaleAssignmentRefusesFreshWorkingWorker(t *testing.T) {

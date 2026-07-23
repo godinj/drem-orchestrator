@@ -33,6 +33,7 @@ const (
 	failedTaskActiveAttempt = "failed_task_active_attempt"
 	staleActiveAttempt      = "stale_active_attempt"
 	deadAssignedAgent       = "dead_assigned_agent"
+	dependencyFailureStall  = "dependency_failure_stall"
 )
 
 func (s *Server) handleHealthIssues(w http.ResponseWriter, r *http.Request) {
@@ -79,8 +80,12 @@ func (m publicReadModel) HealthIssues(ctx context.Context, now time.Time) ([]orc
 		agentsByID[agent.ID] = agent
 	}
 	tasksByID := make(map[uuid.UUID]model.Task, len(tasks))
+	childrenByParent := make(map[uuid.UUID][]model.Task)
 	for _, task := range tasks {
 		tasksByID[task.ID] = task
+		if task.ParentTaskID != nil {
+			childrenByParent[*task.ParentTaskID] = append(childrenByParent[*task.ParentTaskID], task)
+		}
 	}
 
 	issues := make([]orchdto.HealthIssueDTO, 0)
@@ -95,6 +100,9 @@ func (m publicReadModel) HealthIssues(ctx context.Context, now time.Time) ([]orc
 
 		if blocked := parentReadinessIssue(task, now); blocked.Type != "" {
 			issues = append(issues, blocked)
+		}
+		if stalled := dependencyFailureIssue(task, childrenByParent[task.ID], now); stalled.Type != "" {
+			issues = append(issues, stalled)
 		}
 
 		if gate := branchGateIssue(task, failures[task.ID], now); gate.Type != "" {
@@ -260,24 +268,6 @@ func staleAttemptIssue(task model.Task, attempt model.WorkerAttempt, now time.Ti
 	}
 }
 
-func attemptIDs(attempts []model.WorkerAttempt) []string {
-	ids := make([]string, 0, len(attempts))
-	for _, attempt := range attempts {
-		ids = append(ids, attempt.ID.String())
-	}
-	return ids
-}
-
-func attemptWorkerID(attempt model.WorkerAttempt) string {
-	if attempt.WorkerID != "" {
-		return attempt.WorkerID
-	}
-	if attempt.AgentID != nil {
-		return attempt.AgentID.String()
-	}
-	return ""
-}
-
 func recommendedRecoveryAction(action string, taskID uuid.UUID) string {
 	return fmt.Sprintf("dremctl recover %s %s --dry-run", action, taskID.String())
 }
@@ -355,9 +345,13 @@ func parentReadinessIssue(task model.Task, now time.Time) orchdto.HealthIssueDTO
 }
 
 func branchGateIssue(task model.Task, failure model.TaskEvent, now time.Time) orchdto.HealthIssueDTO {
+	current, currentSet := boolField(task.Context, "latest_failure_current")
+	if branchGateResolved(string(task.Status)) || (currentSet && !current) {
+		return orchdto.HealthIssueDTO{}
+	}
 	failureType, summary := taskFailureFromEvent(failure)
 	if failureType != branchGateFailure {
-		summary = firstNonEmpty(stringField(task.Context, "branch_hygiene_failure"), stringField(task.Context, "branch_acceptance_reason"))
+		summary = stringField(task.Context, "branch_hygiene_failure")
 	}
 	if strings.TrimSpace(summary) == "" {
 		return orchdto.HealthIssueDTO{}
@@ -787,7 +781,6 @@ func assignedID(task model.Task) string {
 	}
 	return task.AssignedAgentID.String()
 }
-
 func assignmentAgeSeconds(agent model.Agent, now time.Time) int64 {
 	if agent.ID == uuid.Nil || agent.HeartbeatAt == nil {
 		return 0

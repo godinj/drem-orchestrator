@@ -491,6 +491,15 @@ func TestService_InspectWorker_ReturnsInjectedState(t *testing.T) {
 	require.True(t, res.OOMKilled)
 }
 
+func TestService_InspectWorker_ReturnsRemovedForMissingContainer(t *testing.T) {
+	_, client, cleanup := startHarness(t)
+	defer cleanup()
+
+	res, err := client.InspectWorker(context.Background(), InspectWorkerParams{ContainerID: "removed-worker"})
+	require.NoError(t, err)
+	require.Equal(t, string(container.StatusRemoved), res.Status)
+}
+
 func TestService_ListWorkers_FiltersByProject(t *testing.T) {
 	_, client, cleanup := startHarness(t)
 	defer cleanup()

@@ -199,6 +199,12 @@ func TestListTasksIncludesDiagnosticsFromContextAndEvents(t *testing.T) {
 		},
 	}).Error)
 	eventTask := testutil.CreateTask(t, srv.DB, project.ID, "event failure", model.StatusInProgress)
+	doneTask := testutil.CreateTask(t, srv.DB, project.ID, "adopted historical failure", model.StatusDone)
+	require.NoError(t, srv.DB.Model(&doneTask).Update("context", model.JSONField{
+		"latest_failure_summary": "old rejected worker branch",
+		"latest_failure_type":    "branch_contamination",
+		"latest_failure_current": true,
+	}).Error)
 	failureAt := time.Date(2026, 4, 30, 10, 0, 0, 0, time.UTC)
 	require.NoError(t, srv.DB.Create(&model.TaskEvent{
 		ID:        uuid.New(),
@@ -241,6 +247,10 @@ func TestListTasksIncludesDiagnosticsFromContextAndEvents(t *testing.T) {
 	require.True(t, failureAt.Equal(*fromEvent.LatestFailureAt))
 	require.NotNil(t, fromEvent.LatestFailureCurrent)
 	require.False(t, *fromEvent.LatestFailureCurrent)
+
+	fromAdopted := byTitle["adopted historical failure"]
+	require.NotNil(t, fromAdopted.LatestFailureCurrent)
+	require.False(t, *fromAdopted.LatestFailureCurrent)
 }
 
 func TestListTasksUnknownProjectReturns404(t *testing.T) {

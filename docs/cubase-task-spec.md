@@ -88,14 +88,50 @@ in this JSON.
 }
 ```
 
-All required lists must contain non-empty entries. Evidence accepts `image/*`
-or `video/*` media types and a 64-character hexadecimal SHA-256. Every
-acceptance criterion has a unique ID, concrete verification steps, and an
-expected result. Non-empty `open_questions` create the task in
-`needs_clarification`; otherwise it starts in `classifying`.
+All required lists must contain non-empty entries. Evidence accepts `image/*`,
+`video/*`, `text/*`, or `application/json` media types and a 64-character
+hexadecimal SHA-256. Image and video remain the normal evidence for Cubase
+observations; text and JSON admit content-addressed repository, build, and
+workflow evidence without pretending it is visual media. Executable and
+arbitrary binary media remain rejected. Every acceptance criterion has a
+unique ID, concrete verification steps, and an expected result. Non-empty
+`open_questions` create the task in `needs_clarification`; otherwise it starts
+in `classifying`.
 
 The orchestrator stores the normalized immutable specification and each
 criterion in typed records. It also emits an admitted text-only rendering into
 the task description so downstream planning receives the workflow, criterion
 IDs, evidence references, proposed scope, and exclusions without receiving the
 media itself.
+
+## Source-backed production seams
+
+An adapter-authored `execution_plan` must also provide `integration_seams`.
+Each seam maps acceptance-criterion IDs to a real production entrypoint,
+includes an exact source excerpt plus the SHA-256 of those excerpt bytes,
+declares the missing call, registration, or manifest edges, and names every
+file needed to close them. Required edge files must appear in both
+`proposed_scope` and the plan’s integration subtask. `verification_level` is
+one of `automated_integration`, `native_runtime`, or `computer_use`, and its
+steps must exercise the production entrypoint rather than merely searching
+source text or calling an isolated helper.
+
+This contract deliberately permits source evidence files outside the mutation
+scope: an existing registrar or caller is often the evidence that reveals a
+missing edge. It does not permit the edge’s writable file to remain excluded.
+The plan reviewer receives the verified excerpts and must reject any additional
+caller, registration, or manifest gap visible in that evidence.
+
+## Planned interfaces for red tests
+
+Every implementation subtask in an adapter-authored `execution_plan` supplies
+`module_boundaries` and exact `interface_shapes`; every test subtask points to
+one implementation through `tests_for`. The orchestrator materializes those
+fields into the test worker's planned-interface contract, including the owning
+files, functions, types, and expected missing-symbol red state. The adapter
+does not restate that contract in a second prompt, and the test worker must not
+search for planned symbols that are intentionally absent before implementation.
+
+Use complete callable signatures or qualified type names in `interface_shapes`.
+Vague behavioral labels belong in the subtask description and acceptance
+criteria, not in the interface list.

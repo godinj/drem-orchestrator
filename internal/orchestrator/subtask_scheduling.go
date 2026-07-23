@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,6 +28,9 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 	// tries (and fails) to stop, creating an infinite dispatch loop.
 	if parent.Status == model.StatusPaused {
 		return nil
+	}
+	if err := repairSupersededTestDependencies(o.db, parent.ID); err != nil {
+		return fmt.Errorf("schedule subtasks: repair superseded test dependencies: %w", err)
 	}
 
 	var subtasks []model.Task
@@ -53,6 +57,24 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 	}
 	if len(candidates) == 0 {
 		return nil
+	}
+
+	// A completed test-phase task may intentionally add a production-file
+	// scaffold so its tests compile before the implementation exists. File
+	// presence and a fuzzy commit-subject match are therefore insufficient
+	// evidence that a later implementation task is already complete. Keep the
+	// dedup fast path for unrelated prior work, but never let it consume a
+	// production task whose declared scope overlaps a completed test scaffold.
+	var completedTestTasks []model.Task
+	if err := o.db.Where("parent_task_id = ? AND phase = ? AND status = ?",
+		parent.ID, "test", model.StatusDone).Find(&completedTestTasks).Error; err != nil {
+		return fmt.Errorf("schedule subtasks: query completed test scaffolds: %w", err)
+	}
+	completedTestScaffoldFiles := make(map[string]struct{})
+	for i := range completedTestTasks {
+		for _, path := range getEstimatedFiles(completedTestTasks[i].Context) {
+			completedTestScaffoldFiles[path] = struct{}{}
+		}
 	}
 
 	// Experiment-aware ordering: when experiments are active, reorder candidates
@@ -102,7 +124,9 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 		// Content-aware dedup: if the subtask's estimated files already
 		// appear in the integration branch and commit messages match,
 		// fast-track to done without spawning an agent.
-		if estimatedFiles := getEstimatedFiles(sub.Context); len(estimatedFiles) > 0 && !skipExistingWorkDedup(sub.Context) {
+		if estimatedFiles := getEstimatedFiles(sub.Context); len(estimatedFiles) > 0 &&
+			!skipExistingWorkDedup(sub.Context) &&
+			!overlapsFileSet(estimatedFiles, completedTestScaffoldFiles) {
 			featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
 			featureDir := o.worktree.FeatureWorktreePath(featureName)
 			changedFiles, diffErr := getChangedFiles(featureDir, o.worktree.DefaultBranchName())
@@ -308,6 +332,65 @@ func (o *Orchestrator) scheduleSubtasks(parent *model.Task, phaseFilter ...strin
 	return nil
 }
 
+// repairSupersededTestDependencies reconnects implementation work to the
+// accepted revision of a rejected test task. Test-review rejection clones the
+// test and preserves TestsFor, but historical plans point implementation
+// DependencyIDs at the original row. Without this reconciliation the parent
+// can return to in_progress while every implementation remains permanently
+// blocked on a rejected dependency.
+func repairSupersededTestDependencies(db *gorm.DB, parentID uuid.UUID) error {
+	var siblings []model.Task
+	if err := db.Where("parent_task_id = ?", parentID).Order("created_at DESC, id DESC").Find(&siblings).Error; err != nil {
+		return err
+	}
+	byID := make(map[string]model.Task, len(siblings))
+	completedTestFor := make(map[string]string)
+	for _, sibling := range siblings {
+		byID[sibling.ID.String()] = sibling
+		if sibling.Phase != "test" || sibling.Status != model.StatusDone {
+			continue
+		}
+		for _, implementationID := range sibling.TestsFor {
+			if _, exists := completedTestFor[implementationID]; !exists {
+				completedTestFor[implementationID] = sibling.ID.String()
+			}
+		}
+	}
+	for i := range siblings {
+		sibling := &siblings[i]
+		if sibling.Phase == "test" || len(sibling.DependencyIDs) == 0 {
+			continue
+		}
+		replacementID := completedTestFor[sibling.ID.String()]
+		if replacementID == "" {
+			continue
+		}
+		changed := false
+		for j, dependencyID := range sibling.DependencyIDs {
+			dependency, exists := byID[dependencyID]
+			if exists && dependency.Phase == "test" && dependency.Status == model.StatusRejected {
+				sibling.DependencyIDs[j] = replacementID
+				changed = true
+			}
+		}
+		if changed {
+			if err := db.Model(&model.Task{}).Where("id = ?", sibling.ID).Update("dependency_ids", sibling.DependencyIDs).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func overlapsFileSet(paths []string, files map[string]struct{}) bool {
+	for _, path := range paths {
+		if _, ok := files[path]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 func skipExistingWorkDedup(ctx model.JSONField) bool {
 	if ctx == nil {
 		return false
@@ -423,8 +506,14 @@ func (o *Orchestrator) dispatchSubtaskViaSpawner(sub *model.Task, agentType mode
 	}
 
 	ctx := context.Background()
+	previousStatus := sub.Status
 	launch, err := o.workerLaunchService().Launch(ctx, sub, agentType)
 	if err != nil {
+		if errors.Is(err, errWorkerImageUnavailable) {
+			if failErr := o.failTask(sub, err.Error()); failErr != nil {
+				return fmt.Errorf("fail subtask after worker image preflight: %w", failErr)
+			}
+		}
 		return fmt.Errorf("spawn %s via spawner: %w", agentType, err)
 	}
 
@@ -449,9 +538,11 @@ func (o *Orchestrator) dispatchSubtaskViaSpawner(sub *model.Task, agentType mode
 		return fmt.Errorf("agent assignment missing after container spawn for subtask %s", sub.ID)
 	}
 
-	if err := o.transitionTaskAtomic(sub, model.StatusInProgress, "orchestrator", "worker_dispatch",
-		"container worker claimed subtask", map[string]any{"agent_id": launch.AgentID.String(), "agent_type": string(agentType)}); err != nil {
-		return fmt.Errorf("claim subtask after container spawn: %w", err)
+	if previousStatus != model.StatusInProgress {
+		if err := o.transitionTaskAtomic(sub, model.StatusInProgress, "orchestrator", "worker_dispatch",
+			"container worker claimed subtask", map[string]any{"agent_id": launch.AgentID.String(), "agent_type": string(agentType)}); err != nil {
+			return fmt.Errorf("claim subtask after container spawn: %w", err)
+		}
 	}
 
 	o.emit("subtask_scheduled", map[string]any{
@@ -459,7 +550,7 @@ func (o *Orchestrator) dispatchSubtaskViaSpawner(sub *model.Task, agentType mode
 		"agent_id":   launch.AgentID,
 		"agent_type": agentType,
 	})
-	o.publishTaskTransition(sub.ID.String(), string(model.StatusBacklog),
+	o.publishTaskTransition(sub.ID.String(), string(previousStatus),
 		string(sub.Status), "subtask scheduled")
 	o.publishAgentStatus(sub.ID.String(), launch.AgentID.String(),
 		string(agentType), string(model.AgentWorking))

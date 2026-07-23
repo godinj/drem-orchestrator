@@ -1,0 +1,140 @@
+{
+  "title": "Operational pilot: show Untitled in the default Canvas window title",
+  "description": "Make a newly launched Canvas window read `Drem Canvas — Untitled` while preserving the existing non-main branch suffix. Add a small pure formatter in `src/platform/WindowTitle.h`; `src/Main.cpp` must use that formatter for both macOS and Linux. The formatter must return `Drem Canvas — Untitled` for an empty, `master`, or `main` branch and append ` [<branch>]` for any other non-empty branch. This is a bounded operational pilot: do not add session-name tracking, persistence, or other title states.",
+  "actor": "codex:canvas-pilot-3",
+  "idempotency_key": "canvas-default-untitled-title-20260723-2",
+  "observation": {
+    "session_id": "canvas-pilot-00516fe3-v2-baseline",
+    "product": "Drem Canvas",
+    "product_version": "96db6b7 plus pilot artifact 3a1bc49",
+    "os": "macOS 26.5 arm64",
+    "display_environment": "native macOS window via Computer Use",
+    "observed_at": "2026-07-22T23:36:07Z",
+    "observer_actor": "codex:computer-use:pilot-1",
+    "preconditions": [
+      "Canvas launches without loading a saved session.",
+      "The exact pilot binary is visible as a native macOS window."
+    ],
+    "steps": [
+      {
+        "action": "Launch Canvas without a session path",
+        "target": "native Canvas application window",
+        "expected_visible_result": "A single Canvas window opens and its title identifies the application."
+      }
+    ],
+    "expected_behavior": [
+      "The default window title clearly identifies that the project is untitled.",
+      "A feature-branch build retains its branch suffix for artifact identification."
+    ],
+    "negative_behavior": [
+      "The title does not claim a saved project name.",
+      "The main and master branches do not add a branch suffix."
+    ],
+    "evidence": [
+      {
+        "artifact_id": "canvas-pilot-v2-unmarked-window",
+        "sha256": "bd878952d28f525586184f38de87bbf410f084f5b5ea90506bb3930aaca66023",
+        "media_type": "image/png",
+        "purpose": "Content-addressed baseline showing the current native Canvas title before the Untitled label."
+      }
+    ]
+  },
+  "acceptance_criteria": [
+    {
+      "id": "default-title-identifies-untitled-project",
+      "description": "A new Canvas window has the exact title `Drem Canvas — Untitled` on a mainline build.",
+      "verification_steps": [
+        "Build the exact frozen artifact natively on macOS.",
+        "Launch it without a session path.",
+        "Read the native window title with Computer Use."
+      ],
+      "expected_behavior": [
+        "The visible native title is exactly `Drem Canvas — Untitled`."
+      ],
+      "negative_behavior": [
+        "No feature branch suffix appears for an empty, main, or master branch."
+      ]
+    },
+    {
+      "id": "feature-title-preserves-branch-identity",
+      "description": "A non-main branch remains identifiable after adding the Untitled label.",
+      "verification_steps": [
+        "Run the focused formatter test for a representative feature branch.",
+        "Launch the exact feature artifact and read its native window title."
+      ],
+      "expected_behavior": [
+        "The title is `Drem Canvas — Untitled [feature/example]` for the representative branch."
+      ],
+      "negative_behavior": [
+        "The branch suffix is not duplicated or dropped."
+      ]
+    }
+  ],
+  "proposed_scope": [
+    "src/Main.cpp",
+    "src/platform/WindowTitle.h",
+    "tests/unit/test_WindowTitle.cpp",
+    "tests/cmake/UnitSources.cmake"
+  ],
+  "exclusions": [
+    "session-name tracking",
+    "project persistence",
+    "dirty-state tracking",
+    "native window APIs",
+    "build-system changes outside the unit-test manifest"
+  ],
+  "dependencies": [],
+  "uncertainty": [],
+  "execution_plan": {
+    "subtasks": [
+      {
+        "title": "Specify the default Untitled window-title contract",
+        "description": "Create focused unit coverage for empty, main, master, and feature branches. Add only the declaration/scaffold needed for the expected red-state test; do not implement the formatter behavior.",
+        "files": [
+          "src/platform/WindowTitle.h",
+          "tests/unit/test_WindowTitle.cpp",
+          "tests/cmake/UnitSources.cmake"
+        ],
+        "phase": "test",
+        "tests_for": [1],
+        "priority": 3
+      },
+      {
+        "title": "Implement the Untitled window-title formatter",
+        "description": "Implement the pure header formatter exactly as specified by the paired tests. Do not modify tests or broaden into session state.",
+        "files": [
+          "src/platform/WindowTitle.h"
+        ],
+        "dependencies": [0],
+        "phase": "implementation",
+        "priority": 2,
+        "module_boundaries": [
+          {
+            "package": "src/platform/WindowTitle",
+            "description": "Owns deterministic, platform-independent formatting of the initial Canvas window title from the build branch.",
+            "exports": 1
+          }
+        ],
+        "interface_shapes": [
+          {
+            "package": "src/platform/WindowTitle",
+            "functions": [
+              "drem::platform::formatWindowTitle(std::string_view branch) -> std::string"
+            ],
+            "types": []
+          }
+        ]
+      },
+      {
+        "title": "Wire the formatter into Canvas startup",
+        "description": "Replace the local title construction in `src/Main.cpp` with the shared formatter for both supported platforms. Preserve source-file ceilings and make no unrelated startup changes.",
+        "files": [
+          "src/Main.cpp"
+        ],
+        "dependencies": [1],
+        "phase": "integration",
+        "priority": 1
+      }
+    ]
+  }
+}

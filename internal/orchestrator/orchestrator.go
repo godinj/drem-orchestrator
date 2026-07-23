@@ -126,8 +126,10 @@ type Orchestrator struct {
 	bugreportDir                string                 // path to .drem/bug-reports/ drop directory
 	testGate                    TestGateConfig
 	deliveryPolicy              DeliveryPolicyConfig
+	reviewPolicy                ReviewPolicyConfig
 	deliveryMu                  sync.Mutex // serializes the sole-writer delivery protocol
 	workerLifecycleMu           sync.Mutex // serializes duplicate poll/event observations for one worker lifecycle
+	plannerHTTPInflight         sync.Map   // task UUID -> struct{}; warm planning must never block the lifecycle tick
 	attemptTerminalMu           sync.Mutex // serializes event/poll and synchronous terminal evidence writes
 	workerReplacements          *replacementTracker
 	projectID                   uuid.UUID
@@ -231,6 +233,9 @@ func New(
 		deliveryPolicy: DeliveryPolicyConfig{
 			IntegrationPolicy:  model.IntegrationAutoMerge,
 			VerificationPolicy: model.VerificationLocalAutomated,
+		},
+		reviewPolicy: ReviewPolicyConfig{
+			Plan: model.ReviewGateManual, Tests: model.ReviewGateManual,
 		},
 		projectID:          projectID,
 		projectName:        projectName,
@@ -569,6 +574,12 @@ func (o *Orchestrator) doTickLegacy(ctx context.Context) {
 			o.logger.Error("process planning", "task_id", planningTasks[i].ID, "error", err)
 		}
 	}
+
+	// 3b. Approval gates are automated only when the project explicitly opts
+	// into the fail-closed SGLang policy. Ambiguous or unavailable reviews stay
+	// parked and emit review_attention_required instead of spending Codex
+	// inference on routine approvals.
+	o.processReviewGates()
 
 	// 4b. Process TEST_WRITING parent tasks.
 	var testWritingTasks []model.Task

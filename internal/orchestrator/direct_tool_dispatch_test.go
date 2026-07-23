@@ -352,6 +352,7 @@ func TestPersistDirectAgentContext_StructuredStopReasons(t *testing.T) {
 	}{
 		{name: "max iterations", stopReason: "max_iterations", want: model.ExitReasonMaxIterations},
 		{name: "no progress", stopReason: "no_progress", want: model.ExitReasonNoProgress},
+		{name: "token budget checkpoint", stopReason: "token_budget", want: model.ExitReasonTokenBudget},
 	}
 
 	for _, tt := range tests {

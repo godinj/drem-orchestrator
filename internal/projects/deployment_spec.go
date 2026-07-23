@@ -66,6 +66,12 @@ func compileTemplateDefaults(data TemplateData, fallbackHome, fallbackProject st
 	if data.VerificationPolicy == "" {
 		data.VerificationPolicy = "local_automated"
 	}
+	if data.PlanReviewPolicy == "" {
+		data.PlanReviewPolicy = "manual"
+	}
+	if data.TestReviewPolicy == "" {
+		data.TestReviewPolicy = "manual"
+	}
 	if data.InferenceEndpoint == "" {
 		data.InferenceEndpoint = DefaultInferenceEndpoint
 	}
@@ -95,6 +101,9 @@ func compileTemplateDefaults(data TemplateData, fallbackHome, fallbackProject st
 	}
 	if data.WorkerCodexAuthPath == "" && data.HostHome != "" {
 		data.WorkerCodexAuthPath = filepath.Join(data.HostHome, ".codex", "auth.json")
+	}
+	if data.WarmAgentTokenPath == "" && data.HostHome != "" {
+		data.WarmAgentTokenPath = filepath.Join(data.HostHome, ".drem", warmAgentTokenFilename)
 	}
 	if data.WorkerPromptRoot == "" && data.HostHome != "" && projectName != "" {
 		data.WorkerPromptRoot = filepath.Join(data.HostHome, ".drem", "projects", projectName, "prompts")

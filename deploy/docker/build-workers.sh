@@ -31,6 +31,13 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 cd "${REPO_ROOT}"
 
+SOURCE_REVISION="${DREM_SOURCE_REVISION:-$(git rev-parse HEAD)}"
+SOURCE_STATE="${DREM_SOURCE_STATE:-${SOURCE_REVISION}}"
+LABEL_ARGS=(
+    --label "org.opencontainers.image.revision=${SOURCE_REVISION}"
+    --label "io.drem.source-state=${SOURCE_STATE}"
+)
+
 # Build the watchdog with CGO disabled so it runs on a debian:bookworm-slim
 # base without a libc mismatch. Static-ish build keeps the image layer simple.
 echo ">> building drem-watchdog -> deploy/docker/context/drem-watchdog"
@@ -58,7 +65,9 @@ fi
 cd deploy/docker
 
 echo ">> building localhost:5000/drem-worker-base:latest"
-docker build -t localhost:5000/drem-worker-base:latest \
+docker build "${LABEL_ARGS[@]}" \
+    -t "localhost:5000/drem-worker-base:${SOURCE_STATE}" \
+    -t localhost:5000/drem-worker-base:latest \
     -f worker-base.Dockerfile context/
 
 # Push the base BEFORE building derived images so `--pull` on the
@@ -72,21 +81,28 @@ docker build -t localhost:5000/drem-worker-base:latest \
 # did not propagate to worker-go until a manual `--no-cache` rebuild.
 echo ">> pushing base so derived --pull builds see fresh digest"
 docker push localhost:5000/drem-worker-base:latest
+docker push "localhost:5000/drem-worker-base:${SOURCE_STATE}"
 
 # --pull forces docker to re-fetch the base image from the registry at
 # build time, invalidating any stale FROM layer cache. Combined with
 # the push above, this guarantees derived images build against the
 # newly-pushed base digest.
 echo ">> building localhost:5000/drem-worker-go:latest"
-docker build --pull -t localhost:5000/drem-worker-go:latest \
+docker build --pull "${LABEL_ARGS[@]}" \
+    -t "localhost:5000/drem-worker-go:${SOURCE_STATE}" \
+    -t localhost:5000/drem-worker-go:latest \
     -f worker-go.Dockerfile context/
 
 echo ">> building localhost:5000/drem-worker-cpp:latest"
-docker build --pull -t localhost:5000/drem-worker-cpp:latest \
+docker build --pull "${LABEL_ARGS[@]}" \
+    -t "localhost:5000/drem-worker-cpp:${SOURCE_STATE}" \
+    -t localhost:5000/drem-worker-cpp:latest \
     -f worker-cpp.Dockerfile context/
 
 echo ">> pushing derived images to localhost:5000"
 docker push localhost:5000/drem-worker-go:latest
 docker push localhost:5000/drem-worker-cpp:latest
+docker push "localhost:5000/drem-worker-go:${SOURCE_STATE}"
+docker push "localhost:5000/drem-worker-cpp:${SOURCE_STATE}"
 
 echo ">> done"

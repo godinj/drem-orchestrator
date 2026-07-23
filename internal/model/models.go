@@ -397,6 +397,7 @@ type WorkerAttempt struct {
 	ContainerID             string     `gorm:"index"`
 	AgentType               string
 	Branch                  string `gorm:"not null;default:'';index"`
+	BaseSHA                 string `gorm:"not null;default:''"`
 	Image                   string
 	State                   string     `gorm:"not null;default:'reserved';index"`
 	LeaseOwner              string     `gorm:"not null;default:'';index"`

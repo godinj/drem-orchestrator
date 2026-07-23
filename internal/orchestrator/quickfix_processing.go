@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -32,7 +33,7 @@ func (o *Orchestrator) processQuickFix(task *model.Task) error {
 
 		if ag.Status == model.AgentDead || ag.Status == model.AgentIdle {
 			if ag.WorktreeBranch != "" {
-				if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+				if err := o.cleanupTaskWorkerBranch(context.Background(), task, ag.WorktreeBranch); err != nil {
 					o.logger.Warn("cleanup dead quickfix agent worktree", "agent_id", ag.ID, "error", err)
 				}
 			}
@@ -142,6 +143,11 @@ func (o *Orchestrator) processQuickFix(task *model.Task) error {
 func (o *Orchestrator) dispatchQuickFixViaSpawner(task *model.Task, event *model.TaskEvent) error {
 	launch, err := o.workerLaunchService().Launch(context.Background(), task, model.AgentCoder)
 	if err != nil {
+		if errors.Is(err, errWorkerImageUnavailable) {
+			if failErr := o.failTask(task, err.Error()); failErr != nil {
+				return fmt.Errorf("process quick fix: fail after worker image preflight: %w", failErr)
+			}
+		}
 		return fmt.Errorf("process quick fix: spawn coder: %w", err)
 	}
 
@@ -252,6 +258,11 @@ func (o *Orchestrator) respawnQuickFixAgent(task *model.Task) error {
 func (o *Orchestrator) respawnQuickFixAgentViaSpawner(task *model.Task) error {
 	launch, err := o.workerLaunchService().Launch(context.Background(), task, model.AgentCoder)
 	if err != nil {
+		if errors.Is(err, errWorkerImageUnavailable) {
+			if failErr := o.failTask(task, err.Error()); failErr != nil {
+				return fmt.Errorf("respawn quickfix agent: fail after worker image preflight: %w", failErr)
+			}
+		}
 		return fmt.Errorf("respawn quickfix agent: spawn via spawner: %w", err)
 	}
 

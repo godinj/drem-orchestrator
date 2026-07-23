@@ -52,9 +52,23 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 			} `toml:"coder"`
 		} `toml:"agents"`
 		DirectToolAgent struct {
-			Endpoint      string `toml:"endpoint"`
-			Model         string `toml:"model"`
-			MaxIterations int    `toml:"max_iterations"`
+			Endpoint                                   string `toml:"endpoint"`
+			Model                                      string `toml:"model"`
+			MaxIterations                              int    `toml:"max_iterations"`
+			MaxCumulativeInputTokens                   int    `toml:"max_cumulative_input_tokens"`
+			TestMaxCumulativeInputTokens               int    `toml:"test_max_cumulative_input_tokens"`
+			ImplementationMaxCumulativeInputTokens     int    `toml:"implementation_max_cumulative_input_tokens"`
+			IntegrationMaxCumulativeInputTokens        int    `toml:"integration_max_cumulative_input_tokens"`
+			ReviewMaxCumulativeInputTokens             int    `toml:"review_max_cumulative_input_tokens"`
+			MaxReadsBeforeMutation                     int    `toml:"max_reads_before_mutation"`
+			MaxToolCalls                               int    `toml:"max_tool_calls"`
+			MaxInputTokensBeforeMutation               int    `toml:"max_input_tokens_before_mutation"`
+			TestMaxInputTokensBeforeMutation           int    `toml:"test_max_input_tokens_before_mutation"`
+			ImplementationMaxInputTokensBeforeMutation int    `toml:"implementation_max_input_tokens_before_mutation"`
+			IntegrationMaxInputTokensBeforeMutation    int    `toml:"integration_max_input_tokens_before_mutation"`
+			TestMaxReadsBeforeMutation                 int    `toml:"test_max_reads_before_mutation"`
+			ImplementationMaxReadsBeforeMutation       int    `toml:"implementation_max_reads_before_mutation"`
+			IntegrationMaxReadsBeforeMutation          int    `toml:"integration_max_reads_before_mutation"`
 		} `toml:"direct_tool_agent"`
 	}
 	require.NoError(t, toml.Unmarshal(out, &parsed))
@@ -64,7 +78,21 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 	require.Equal(t, "sglang-direct", parsed.Agents.Coder.Provider)
 	require.Equal(t, "gemma4-26b", parsed.Agents.Coder.Model)
 	require.Equal(t, "http://gq:8090/v1/chat/completions", parsed.DirectToolAgent.Endpoint)
-	require.Equal(t, 50, parsed.DirectToolAgent.MaxIterations)
+	require.Equal(t, 16, parsed.DirectToolAgent.MaxIterations)
+	require.Equal(t, 60_000, parsed.DirectToolAgent.MaxCumulativeInputTokens)
+	require.Equal(t, 65_000, parsed.DirectToolAgent.TestMaxCumulativeInputTokens)
+	require.Equal(t, 90_000, parsed.DirectToolAgent.ImplementationMaxCumulativeInputTokens)
+	require.Equal(t, 75_000, parsed.DirectToolAgent.IntegrationMaxCumulativeInputTokens)
+	require.Equal(t, 30_000, parsed.DirectToolAgent.ReviewMaxCumulativeInputTokens)
+	require.Equal(t, 4, parsed.DirectToolAgent.MaxReadsBeforeMutation)
+	require.Equal(t, 12, parsed.DirectToolAgent.MaxToolCalls)
+	require.Equal(t, 20_000, parsed.DirectToolAgent.MaxInputTokensBeforeMutation)
+	require.Equal(t, 18_000, parsed.DirectToolAgent.TestMaxInputTokensBeforeMutation)
+	require.Equal(t, 30_000, parsed.DirectToolAgent.ImplementationMaxInputTokensBeforeMutation)
+	require.Equal(t, 24_000, parsed.DirectToolAgent.IntegrationMaxInputTokensBeforeMutation)
+	require.Equal(t, 8, parsed.DirectToolAgent.TestMaxReadsBeforeMutation)
+	require.Equal(t, 6, parsed.DirectToolAgent.ImplementationMaxReadsBeforeMutation)
+	require.Equal(t, 6, parsed.DirectToolAgent.IntegrationMaxReadsBeforeMutation)
 	// The warm-classifier endpoint must round-trip so orch picks it up on
 	// startup without needing DREM_CLASSIFIER_URL also set. See
 	// plans/warm-direct-classifier.md §3 (Modified files).

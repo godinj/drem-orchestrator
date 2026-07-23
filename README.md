@@ -182,13 +182,117 @@ To exit the dashboard, close or kill the tmux pane/session that owns it. The `q`
 | `./drem cli approve TASK_ID` | Approve a gate such as a reviewed plan. |
 | `./drem cli reject TASK_ID --reason=...` | Reject a gate and give a reason. |
 | `./drem cli retry TASK_ID` | Retry failed work. |
+| `dremctl accept-assumptions TASK_ID` | Preserve the current deterministic plan and advance it to SGLang review without a manual approval gate. |
+| `dremctl revise-plan TASK_ID --spec task.json --reason TEXT` | Replace a reviewer-rejected adapter plan in place, revalidate immutable scope, and request one fresh SGLang review without invoking the planner. |
+| `dremctl adopt CHILD_ID --commit SHA` | Admit a bounded Codex repair for a failed child after re-running branch/scope checks, without another inference attempt. |
 | `dremctl artifact TASK_ID` | Show the immutable branch/commit/base delivery envelope. |
+| `dremctl report TASK_ID` | Correlate phase timing, SGLang tokens, attempts, artifact versions, host rework, native verification, and Computer Use evidence. |
+| `dremctl codex-usage TASK_ID ...` | Attach final explicit Codex goal tokens and elapsed time without mixing them into SGLang inference totals. |
 | `dremctl verify TASK_ID ...` | Record evidence for the exact current artifact. |
 | `dremctl request-rework TASK_ID --mode orchestrated --reason ...` | Invalidate the current artifact and return it to an orchestrated worker. |
 | `dremctl request-rework TASK_ID --mode host-direct --scope PATH ...` | Reserve a bounded repair for the current Codex verifier. |
 | `dremctl submit-rework TASK_ID --session UUID --commit SHA` | Submit the host-owned replacement commit for fresh deterministic gates. |
 | `dremctl abandon-rework TASK_ID --session UUID --reason ...` | Release host ownership and return the task to orchestration. |
 | `dremctl integrate TASK_ID` | Authorize an externally verified prepared branch for integration. |
+
+### Local Canvas Codex adapter
+
+For a project registered with `verification_policy = "external_ack"`, Linux
+workers stop at an immutable delivery artifact. The control plane validates the
+Git candidate but deliberately does not run Canvas build commands inside its
+container; the Mac host owns native compilation and Computer Use evidence.
+
+The helper below checks out the exact frozen SHA in an isolated detached
+worktree and runs Canvas's native verification contract:
+
+```bash
+scripts/drem-canvas-pilot.sh doctor --base <canvas-base-sha> --min-free-gib 8
+scripts/drem-canvas-pilot.sh start --spec plans/canvas-canary-task-spec.json
+scripts/drem-canvas-pilot.sh revise <task-id-prefix> --spec plans/canvas-canary-task-spec.json --reason "address reviewer findings"
+scripts/drem-canvas-pilot.sh await <task-id-prefix> --timeout 30m
+scripts/drem-canvas-pilot.sh prepare <task-id-prefix>
+scripts/drem-canvas-pilot.sh build <task-id-prefix>
+scripts/drem-canvas-pilot.sh verify <task-id-prefix> \
+  --worktree <exact-artifact-worktree> \
+  --binary <exact-native-binary> \
+  --interactions <computer-use-evidence.json>
+scripts/drem-canvas-pilot.sh goal-usage <task-id-prefix> \
+  --goal-objective "supervise Canvas task" --goal-status complete \
+  --tokens-used <final-goal-tokens> --elapsed-ms <final-goal-elapsed-ms>
+scripts/drem-canvas-pilot.sh report <task-id-prefix> --output canary-report.md
+scripts/drem-canvas-pilot.sh report <task-id-prefix> --json --output canary-report.json
+```
+
+Run `doctor` before activating the supervising Codex goal. It checks the exact
+base, local control plane, writable evidence roots, shared Skia cache,
+toolchain, and free disk before subscription inference starts. The goal
+objective is to supervise the run to a measured terminal report; if the Canvas
+implementation fails, producing that report still completes the supervisory
+goal. This avoids spending extra turns converting an already measured worker
+failure into a Codex `blocked` audit.
+
+For an apples-to-apples comparison, `experiment-init` freezes identical spec
+bytes and base commit, `direct-prepare` creates the Drem-owned direct-arm
+worktree, and `experiment-record` appends each arm exactly once. The resulting
+`experiment-report` includes direct-arm commits, binary/evidence hashes, Codex
+tokens, and elapsed time instead of incorrectly reporting those artifacts as
+zero because they did not pass through an orchestrated task.
+
+`verify` fails closed unless that worktree is clean, belongs to the registered
+Canvas bare repository, and has the exact current artifact commit checked out.
+It also requires the supplied binary to live inside that exact worktree. This
+prevents a stale build or a convenient binary from another Canvas task from
+being attached to otherwise valid Computer Use evidence.
+
+`start` preserves the attributed task-spec contract, and `await` stops at the
+next state where the Codex task must inspect evidence rather than hiding that
+decision in a shell loop. `report` is a single orchestrator-owned snapshot: it
+joins the parent and child attempts with artifact/rework/verification records,
+and marks historical zero-token inference as unmeasured. For a measured pilot,
+the delegating prompt explicitly instructs the supervising Codex thread to
+create a supervisory goal after `doctor` passes and before filing the task.
+After the run has a terminal measured outcome, Codex completes that goal,
+submits the final returned tokens/time with `goal-usage`,
+and regenerates the report. Codex goal usage stays separate from SGLang totals.
+
+If a worker result is scope-rejected but the repair is deterministic, repair
+the isolated child worktree, commit it, and use `dremctl adopt`. If native or
+visual verification finds a bounded implementation issue, use the existing
+`request-rework --mode host-direct` / `submit-rework` cycle. Any edit creates a
+new artifact version; an inconclusive UI read with no edit can be repeated
+against the same binary.
+
+For direct SGLang coder/fixer workers, a task with planner-declared files is a
+bounded run: the exact list is passed to the harness and repository discovery
+tools are omitted. Unscoped work and reviewers retain discovery tools. This is
+an inference control, not the correctness boundary; whole-branch scope
+admission still rejects any out-of-scope diff.
+
+Direct-worker token limits bound cumulative replay input across model requests;
+they are not the SGLang model's live context-window size. Generated project
+configuration uses phase-aware ceilings: 65k for tests, 90k for implementation,
+75k for integration, and 30k for review, with a 60k generic fallback. A response
+that has already produced repository mutations is preserved as a checkpoint
+when a cumulative-input ceiling is crossed, then deterministic gates decide
+whether it is usable. Empty budget-exhausted runs still fail closed.
+
+Scoped coder/fixer runs also enforce a 12-call run-wide ceiling and a smaller
+pre-mutation input budget (18k test, 30k implementation, 24k integration).
+Reads, structured searches, and discovery-like shell commands share the same
+reconnaissance budget; all shell commands are rejected before the first mutation.
+Older large tool results are compacted in replay history. Test subtasks receive
+an automatically materialized interface contract from the paired implementation
+plan, so a planned missing API is called directly instead of searched for.
+
+Terminal direct-worker summaries are copied from the bounded Docker log tail
+into both the durable worker attempt and public agent rows. New pilots can
+therefore compare `tokens_in` / `tokens_out` without scraping container logs.
+Before container creation, the spawner inspects the selected image and performs
+one serialized pull when it is absent. An unavailable registry fails the task
+with `worker_image_unavailable` instead of retrying the same spawn every tick.
+After an accepted child merge, the orchestrator deletes only the exact
+Git-reference-registry-owned child branch; checked-out branches, parent feature
+branches, and unowned refs fail closed.
 
 ## Project Registration
 
@@ -230,7 +334,7 @@ Common settings include:
 | `agentmon_token` | Shared secret for agentmon to submit structured events. |
 | `[project].language` | Project language used to choose worker images. |
 | `[agents.*]` | Per-agent provider, model, effort, endpoint, or container image overrides. |
-| `[direct_tool_agent]` | Optional direct local-model tool-agent path. |
+| `[direct_tool_agent]` | Optional direct local-model tool-agent path, including generic and phase-specific cumulative replay/read-before-mutation limits. |
 | `inference_endpoint` in the project registry | Optional OpenAI-compatible endpoint injected into generated direct-tool configuration. |
 
 Older tmux settings may still be accepted by the config loader for compatibility, but they are ignored by the current production path.

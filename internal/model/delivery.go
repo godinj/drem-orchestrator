@@ -77,3 +77,23 @@ func ParseVerificationPolicy(raw string) (VerificationPolicy, error) {
 		return "", fmt.Errorf("unknown verification policy: %q", raw)
 	}
 }
+
+// ReviewGatePolicy controls whether an approval gate waits for an operator or
+// may be advanced by the fail-closed SGLang reviewer. Automatic policy only
+// advances explicit "approve" recommendations; every other result stays
+// parked for a Codex/operator decision.
+type ReviewGatePolicy string
+
+const (
+	ReviewGateManual         ReviewGatePolicy = "manual"
+	ReviewGateSGLangSafeAuto ReviewGatePolicy = "sglang_safe_auto"
+)
+
+func ParseReviewGatePolicy(raw string) (ReviewGatePolicy, error) {
+	switch ReviewGatePolicy(raw) {
+	case ReviewGateManual, ReviewGateSGLangSafeAuto:
+		return ReviewGatePolicy(raw), nil
+	default:
+		return "", fmt.Errorf("unknown review gate policy: %q", raw)
+	}
+}

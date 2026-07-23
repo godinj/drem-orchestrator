@@ -268,9 +268,39 @@ func toTaskDTO(t model.Task, events ...model.TaskEvent) orchdto.TaskDTO {
 		AssignedWorker: assigned,
 		Category:       string(t.Category),
 	}
+	if t.Context != nil {
+		d.ReviewStatus, _ = t.Context["automated_review_status"].(string)
+		d.ReviewDetail, _ = t.Context["automated_review_detail"].(string)
+		if review, ok := t.Context["review"].(map[string]any); ok {
+			d.ReviewRecommendation, _ = review["recommendation"].(string)
+			d.ReviewCoverage, _ = review["coverage"].(string)
+			d.ReviewFileOverlapRisk, _ = review["file_overlap_risk"].(string)
+			if gap, ok := review["integration_gap"].(bool); ok {
+				d.ReviewIntegrationGap = &gap
+			}
+			d.ReviewIssues = interfaceStrings(review["issues"])
+		}
+	}
 	d.CurrentHealth = taskCurrentHealth(t)
 	applyTaskFailureDiagnostics(&d, t, events...)
 	return d
+}
+
+func interfaceStrings(value any) []string {
+	switch values := value.(type) {
+	case []string:
+		return append([]string(nil), values...)
+	case []any:
+		out := make([]string, 0, len(values))
+		for _, value := range values {
+			if s, ok := value.(string); ok && strings.TrimSpace(s) != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func taskCurrentHealth(t model.Task) string {
@@ -334,7 +364,10 @@ func applyTaskFailureDiagnostics(d *orchdto.TaskDTO, t model.Task, events ...mod
 	d.LatestFailureType = firstNonEmpty(failureType, "task_failure")
 	d.LatestFailureAt = failureAt
 	current := taskFailureIsCurrent(t, d.CurrentHealth)
-	if v, ok := boolField(t.Context, "latest_failure_current"); ok {
+	// Terminal success always makes earlier failure evidence historical. A
+	// stale compatibility flag from a pre-adoption failure must not make a
+	// DONE/CANCELLED task look actively unhealthy.
+	if v, ok := boolField(t.Context, "latest_failure_current"); ok && t.Status != model.StatusDone && t.Status != model.StatusCancelled {
 		current = v
 	}
 	d.LatestFailureCurrent = &current

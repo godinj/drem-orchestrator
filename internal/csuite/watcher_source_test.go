@@ -1,37 +1,33 @@
-package csuite
+package csuite_test
 
 import (
 	"testing"
 	"time"
 
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
+	"github.com/godinj/drem-orchestrator/internal/csuite"
+	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
 func TestWatcherSourceSnapshotUsesTokenAliasesWithoutDoubleCounting(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("open db: %v", err)
-	}
-	if err := db.AutoMigrate(&turnMetricRow{}); err != nil {
-		t.Fatalf("migrate: %v", err)
+	db := testutil.NewTestDB(t)
+	if err := db.Exec(`CREATE TABLE turn_metrics (
+        agent TEXT, started_at DATETIME, ended_at DATETIME, duration_ms INTEGER,
+        tokens_in INTEGER, tokens_out INTEGER, input_tokens INTEGER,
+        output_tokens INTEGER, events_processed INTEGER, exit_status INTEGER,
+        error_details TEXT
+    )`).Error; err != nil {
+		t.Fatalf("create turn_metrics: %v", err)
 	}
 
 	started := time.Now().Add(-time.Minute)
 	ended := time.Now()
-	if err := db.Create(&turnMetricRow{
-		Agent:        "mike",
-		StartedAt:    started,
-		EndedAt:      ended,
-		TokensIn:     100,
-		InputTokens:  100,
-		TokensOut:    40,
-		OutputTokens: 40,
-	}).Error; err != nil {
+	if err := db.Exec(`INSERT INTO turn_metrics
+        (agent, started_at, ended_at, tokens_in, input_tokens, tokens_out, output_tokens)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`, "mike", started, ended, 100, 100, 40, 40).Error; err != nil {
 		t.Fatalf("create metric: %v", err)
 	}
 
-	snap, err := NewWatcherSourceFromDB(db, nil).Snapshot()
+	snap, err := csuite.NewWatcherSourceFromDB(db, nil).Snapshot()
 	if err != nil {
 		t.Fatalf("snapshot: %v", err)
 	}

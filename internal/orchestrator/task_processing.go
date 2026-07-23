@@ -141,7 +141,7 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 		// worktree, clear assignment, and maybe retry.
 		if ag.Status == model.AgentDead || ag.Status == model.AgentIdle {
 			if ag.WorktreeBranch != "" {
-				if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+				if err := o.cleanupTaskWorkerBranch(context.Background(), task, ag.WorktreeBranch); err != nil {
 					o.logger.Warn("cleanup dead planner worktree failed", "agent_id", ag.ID, "error", err)
 				}
 			}
@@ -169,10 +169,6 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 	}
 	if totalSpawns >= MaxTotalPlannerSpawns {
 		return o.blockPlannerCapacityExhausted(task, totalSpawns)
-	}
-
-	if !o.runner.CanSpawn() {
-		return nil // wait for capacity
 	}
 
 	// Load project for prompt context.
@@ -206,11 +202,15 @@ func (o *Orchestrator) processPlanning(task *model.Task) error {
 	// operator overrides and sandboxes without a warm planner still work.
 	if o.shouldDispatchPlanHTTP() {
 		plannerPrompt := o.plannerPromptFor(task, &project)
-		if err := o.spawnPlannerHTTP(task, &project, plannerPrompt); err != nil {
-			return fmt.Errorf("process planning: dispatch plan http: %w", err)
-		}
-		o.logger.Info("planner http: dispatched", "task_id", task.ID)
+		o.spawnPlannerHTTPAsync(task, &project, plannerPrompt)
 		return nil
+	}
+
+	// Only the legacy planner path consumes an agent slot. Warm HTTP planning
+	// is handled by a long-lived service and must remain available when worker
+	// capacity is occupied by completed or concurrent task agents.
+	if !o.runner.CanSpawn() {
+		return nil // wait for legacy planner capacity
 	}
 
 	// Generate planner prompt.
@@ -363,9 +363,10 @@ func (o *Orchestrator) findCurrentGroup(parent *model.Task, schedule Schedule) *
 }
 
 // checkFeatureCompletion checks whether all subtasks of a parent are DONE and
-// transitions the parent accordingly. The parent only fails when ALL subtasks
-// are terminal (done or failed) and at least one is failed. While any subtask
-// is still in_progress, planning, or backlog, the parent stays in_progress.
+// transitions the parent accordingly. A required failed/rejected subtask is a
+// terminal failure for the execution plan: descendants that can no longer run
+// are cancelled and the parent fails immediately instead of waiting forever
+// behind unmet dependencies.
 func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 	var subtasks []model.Task
 	if err := o.db.Where("parent_task_id = ?", parent.ID).Find(&subtasks).Error; err != nil {
@@ -376,9 +377,9 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		return nil
 	}
 
-	allTerminal := true
 	anyFailed := false
 	allDone := true
+	supersededRejectedTests := supersededRejectedTestIDs(subtasks)
 
 	for _, sub := range subtasks {
 		switch sub.Status {
@@ -386,11 +387,19 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 			// good
 		case model.StatusCancelled:
 			// Superseded subtasks are terminal and should not block the active generation.
+		case model.StatusRejected:
+			if _, superseded := supersededRejectedTests[sub.ID]; superseded {
+				// Preserve the rejected row as immutable review history. A done
+				// revision covering the same implementation is the active test
+				// generation, so the historical rejection no longer blocks delivery.
+				continue
+			}
+			anyFailed = true
+			allDone = false
 		case model.StatusFailed:
 			anyFailed = true
 			allDone = false
 		default:
-			allTerminal = false
 			allDone = false
 		}
 	}
@@ -457,13 +466,18 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		o.emit("testing_ready", map[string]any{"task_id": parent.ID})
 		o.publishTaskTransition(parent.ID.String(), string(oldStatus), string(parent.Status), "all subtasks done, testing ready")
 		o.logger.Info("all subtasks done, testing ready", "task_id", parent.ID)
-	} else if allTerminal && anyFailed && parent.Status == model.StatusInProgress {
-		// All subtasks finished but some failed -> parent fails.
+	} else if anyFailed && parent.Status == model.StatusInProgress {
+		// A required subtask failed. Waiting for dependency-blocked siblings can
+		// never change the outcome, so terminalize the plan now and preserve the
+		// failed child as the recovery/adoption boundary.
 		var failedNames []string
 		for _, sub := range subtasks {
-			if sub.Status == model.StatusFailed {
+			if sub.Status == model.StatusFailed || (sub.Status == model.StatusRejected && !isSupersededRejected(sub.ID, supersededRejectedTests)) {
 				failedNames = append(failedNames, sub.Title)
 			}
+		}
+		if err := o.cancelBlockedSiblings(parent, subtasks, failedNames); err != nil {
+			return fmt.Errorf("check feature completion: cancel blocked siblings: %w", err)
 		}
 		if err := o.failTask(parent, fmt.Sprintf("subtasks failed: %s", strings.Join(failedNames, ", "))); err != nil {
 			return err
@@ -472,6 +486,64 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 	// Otherwise: subtasks still running, keep parent in_progress — do nothing.
 
 	return nil
+}
+
+func isSupersededRejected(id uuid.UUID, superseded map[uuid.UUID]struct{}) bool {
+	_, ok := superseded[id]
+	return ok
+}
+
+func (o *Orchestrator) cancelBlockedSiblings(parent *model.Task, subtasks []model.Task, failedNames []string) error {
+	reason := fmt.Sprintf("execution plan stopped after required subtask failure: %s", strings.Join(failedNames, ", "))
+	for i := range subtasks {
+		sub := &subtasks[i]
+		if isTerminalWaveStatus(sub.Status) {
+			continue
+		}
+		oldStatus := sub.Status
+		if err := o.transitionTaskAtomic(sub, model.StatusCancelled, "orchestrator", "dependency_failure_cascade", reason,
+			map[string]any{"parent_task_id": parent.ID.String(), "failed_subtasks": failedNames}); err != nil {
+			return err
+		}
+		o.emit("task_updated", sub)
+		o.publishTaskTransition(sub.ID.String(), string(oldStatus), string(sub.Status), reason)
+		if sub.AssignedAgentID != nil && o.runner != nil {
+			if err := o.runner.StopAgent(*sub.AssignedAgentID); err != nil {
+				o.logger.Warn("failed to stop cancelled sibling agent", "task_id", sub.ID, "agent_id", sub.AssignedAgentID, "error", err)
+			}
+		}
+	}
+	return nil
+}
+
+func supersededRejectedTestIDs(subtasks []model.Task) map[uuid.UUID]struct{} {
+	coveredByDoneRevision := make(map[string]struct{})
+	for _, sub := range subtasks {
+		if sub.Phase != "test" || sub.Status != model.StatusDone {
+			continue
+		}
+		for _, implementationID := range sub.TestsFor {
+			coveredByDoneRevision[implementationID] = struct{}{}
+		}
+	}
+
+	superseded := make(map[uuid.UUID]struct{})
+	for _, sub := range subtasks {
+		if sub.Phase != "test" || sub.Status != model.StatusRejected || len(sub.TestsFor) == 0 {
+			continue
+		}
+		allCovered := true
+		for _, implementationID := range sub.TestsFor {
+			if _, ok := coveredByDoneRevision[implementationID]; !ok {
+				allCovered = false
+				break
+			}
+		}
+		if allCovered {
+			superseded[sub.ID] = struct{}{}
+		}
+	}
+	return superseded
 }
 
 // handlePaused stops agents on paused tasks and their subtasks.

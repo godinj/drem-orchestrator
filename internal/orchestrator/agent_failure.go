@@ -80,7 +80,7 @@ func (o *Orchestrator) onAgentFailed(ag *model.Agent, task *model.Task) error {
 			o.logger.Info("preserving failed agent worktree with commits",
 				"agent_id", ag.ID, "branch", ag.WorktreeBranch)
 		} else {
-			if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+			if err := o.cleanupTaskWorkerBranch(context.Background(), task, ag.WorktreeBranch); err != nil {
 				o.logger.Warn("cleanup failed agent worktree failed", "agent_id", ag.ID, "error", err)
 			}
 		}
@@ -214,7 +214,7 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 
 	// Clean up agent worktree — nothing to preserve.
 	if ag.WorktreeBranch != "" {
-		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+		if err := o.cleanupTaskWorkerBranch(context.Background(), task, ag.WorktreeBranch); err != nil {
 			o.logger.Warn("cleanup empty agent worktree failed", "agent_id", ag.ID, "error", err)
 		}
 	}

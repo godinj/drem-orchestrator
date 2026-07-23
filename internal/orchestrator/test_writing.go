@@ -26,7 +26,26 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 	if parent.Context == nil {
 		parent.Context = make(model.JSONField)
 	}
-	if _, checked := parent.Context["baseline_tests_checked"]; !checked {
+	if o.deliveryPolicy.VerificationPolicy == model.VerificationExternalAck {
+		_, checked := parent.Context["baseline_tests_checked"]
+		_, deferred := parent.Context["baseline_tests_deferred"]
+		_, failed := parent.Context["baseline_tests_failed"]
+		_, output := parent.Context["baseline_test_output"]
+		if !checked || !deferred || failed || output {
+			// The control-plane image intentionally does not carry project-native
+			// toolchains. Under external verification, running a repository test
+			// command here produces a misleading failure (and used to repeat on
+			// every lifecycle tick). Record the deferral once; the exact delivery
+			// artifact is exercised by the host verifier later in the lifecycle.
+			parent.Context["baseline_tests_checked"] = true
+			parent.Context["baseline_tests_deferred"] = "external_verification"
+			delete(parent.Context, "baseline_tests_failed")
+			delete(parent.Context, "baseline_test_output")
+			if err := o.db.Save(parent).Error; err != nil {
+				return fmt.Errorf("process test writing: save deferred baseline check: %w", err)
+			}
+		}
+	} else if _, checked := parent.Context["baseline_tests_checked"]; !checked {
 		if testCmd := o.getTestCommand(parent); testCmd != "" {
 			featureName := strings.TrimPrefix(parent.WorktreeBranch, "feature/")
 			featureDir := o.worktree.FeatureWorktreePath(featureName)

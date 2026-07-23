@@ -169,6 +169,33 @@ func GuardedCompleteSubtask(task *model.Task, req TransitionRequest) (*model.Tas
 	return transitionTaskUncheckedAt(task, model.StatusDone, actor, evidenceDetails(req.Evidence), evidenceTimestamp(req.Evidence)), nil
 }
 
+// GuardedAdoptFailedSubtask is the narrow recovery path for a host Codex
+// repair that has already passed deterministic branch admission. It keeps a
+// rejected worker attempt immutable while allowing its failed child task to
+// become done without pretending another worker ran.
+func GuardedAdoptFailedSubtask(task *model.Task, req TransitionRequest) (*model.TaskEvent, error) {
+	if task == nil || task.ParentTaskID == nil {
+		return nil, errors.New("only failed subtasks may be adopted")
+	}
+	if task.Status != model.StatusFailed || req.Target != model.StatusDone {
+		return nil, errors.New("Codex adoption requires failed subtask to done")
+	}
+	if req.ExpectedStatus != "" && req.ExpectedStatus != model.StatusFailed {
+		return nil, fmt.Errorf("%w: expected status must be failed", ErrStaleTransition)
+	}
+	if req.Evidence.Source != "codex_adapter_adoption" {
+		return nil, fmt.Errorf("%w: codex_adapter_adoption source is required", ErrMissingEvidence)
+	}
+	if err := validateEvidence(task.ID, req); err != nil {
+		return nil, err
+	}
+	actor := req.Actor
+	if actor == "" {
+		actor = req.Evidence.Actor
+	}
+	return transitionTaskUncheckedAt(task, model.StatusDone, actor, evidenceDetails(req.Evidence), evidenceTimestamp(req.Evidence)), nil
+}
+
 // GuardedAcceptExistingSubtask records that a parent-scoped unit of work is
 // already present on the feature branch. It is intentionally separate from
 // worker completion so deduplication never synthesizes parent delivery states.
@@ -203,11 +230,20 @@ func GuardedAcceptExistingSubtask(task *model.Task, req TransitionRequest) (*mod
 // test review is rejected. The rejected record remains immutable history and
 // the orchestrator creates a new backlog revision rather than reopening it.
 func GuardedSupersedeCompletedTestSubtask(task *model.Task, req TransitionRequest) (*model.TaskEvent, error) {
-	if task == nil || task.ParentTaskID == nil || task.Phase != "test" {
-		return nil, errors.New("only completed test subtasks may be superseded")
-	}
-	if task.Status != model.StatusDone || req.Target != model.StatusRejected {
+	if req.Target != model.StatusRejected {
 		return nil, errors.New("test subtask supersession requires done to rejected")
+	}
+	return GuardedInvalidateCompletedTestSubtask(task, req)
+}
+
+// GuardedInvalidateCompletedTestSubtask lets automated review fail a completed
+// test child so a Codex-authored correction can use the audited adoption path.
+func GuardedInvalidateCompletedTestSubtask(task *model.Task, req TransitionRequest) (*model.TaskEvent, error) {
+	if task == nil || task.ParentTaskID == nil || task.Phase != "test" {
+		return nil, errors.New("only completed test subtasks may be invalidated")
+	}
+	if task.Status != model.StatusDone || (req.Target != model.StatusRejected && req.Target != model.StatusFailed) {
+		return nil, errors.New("test subtask invalidation requires done to rejected or failed")
 	}
 	if req.ExpectedStatus != "" && req.ExpectedStatus != model.StatusDone {
 		return nil, fmt.Errorf("%w: expected status must be done", ErrStaleTransition)
@@ -222,7 +258,7 @@ func GuardedSupersedeCompletedTestSubtask(task *model.Task, req TransitionReques
 	if actor == "" {
 		actor = req.Evidence.Actor
 	}
-	return transitionTaskUncheckedAt(task, model.StatusRejected, actor, evidenceDetails(req.Evidence), evidenceTimestamp(req.Evidence)), nil
+	return transitionTaskUncheckedAt(task, req.Target, actor, evidenceDetails(req.Evidence), evidenceTimestamp(req.Evidence)), nil
 }
 
 func validateEvidence(taskID uuid.UUID, req TransitionRequest) error {

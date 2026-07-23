@@ -19,6 +19,7 @@ const (
 	failureClassInfraFailure       = "infra_failure"
 	failureClassPlannerValidation  = "planner_validation"
 	failureClassPlannerUnavailable = "planner_unavailable"
+	failureClassInferenceBudget    = "inference_budget"
 
 	retryBudgetsContextKey = "retry_budgets"
 )
@@ -101,7 +102,7 @@ func maxRetriesForFailureClass(class string) int {
 	switch class {
 	case failureClassModelTruncation, failureClassToolLoop:
 		return 1
-	case failureClassBranchPermission, failureClassBranchContam, failureClassTestFailure:
+	case failureClassBranchPermission, failureClassBranchContam, failureClassTestFailure, failureClassInferenceBudget:
 		return 0
 	case failureClassInfraTimeout, failureClassInfraFailure:
 		return 3
@@ -137,6 +138,8 @@ func (o *Orchestrator) failTaskWithFailureEvidence(task *model.Task, reason, cla
 func normalizeFailureClass(reason, evidence string) string {
 	text := strings.ToLower(strings.TrimSpace(reason + " " + evidence))
 	switch {
+	case strings.Contains(text, "token_budget"), strings.Contains(text, "token budget"), strings.Contains(text, "no_progress"), strings.Contains(text, "no progress"):
+		return failureClassInferenceBudget
 	case strings.Contains(text, "model_truncation"), strings.Contains(text, "context_limit"), strings.Contains(text, "context limit"), strings.Contains(text, "truncat"):
 		return failureClassModelTruncation
 	case strings.Contains(text, "tool_loop"), strings.Contains(text, "tool loop"), strings.Contains(text, "too many tool"), strings.Contains(text, "tool use loop"):

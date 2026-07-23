@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
@@ -645,6 +646,64 @@ func TestHandleTestReviewRejected_ReplacementPreservesPhaseAndTestsFor(t *testin
 	}
 }
 
+func TestRepairSupersededTestDependenciesUsesCompletedRevision(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	parentID := uuid.New()
+	implementationID := uuid.New()
+	originalTestID := uuid.New()
+	revisionTestID := uuid.New()
+	for _, task := range []model.Task{
+		{
+			ID: originalTestID, ProjectID: uuid.New(), ParentTaskID: &parentID,
+			Title: "original test", Status: model.StatusRejected, Phase: "test",
+			TestsFor: model.JSONArray{implementationID.String()},
+		},
+		{
+			ID: revisionTestID, ProjectID: uuid.New(), ParentTaskID: &parentID,
+			Title: "test revision", Status: model.StatusDone, Phase: "test",
+			TestsFor: model.JSONArray{implementationID.String()},
+		},
+		{
+			ID: implementationID, ProjectID: uuid.New(), ParentTaskID: &parentID,
+			Title: "implementation", Status: model.StatusBacklog, Phase: "implementation",
+			DependencyIDs: model.JSONArray{originalTestID.String()},
+		},
+	} {
+		require.NoError(t, db.Create(&task).Error)
+	}
+
+	require.NoError(t, repairSupersededTestDependencies(db, parentID))
+	var implementation model.Task
+	require.NoError(t, db.First(&implementation, "id = ?", implementationID).Error)
+	require.Equal(t, model.JSONArray{revisionTestID.String()}, implementation.DependencyIDs)
+}
+
+func TestSupersededRejectedTestIDsRequiresDoneRevisionCoverage(t *testing.T) {
+	implementationID := uuid.New().String()
+	rejected := model.Task{
+		ID: uuid.New(), Phase: "test", Status: model.StatusRejected,
+		TestsFor: model.JSONArray{implementationID},
+	}
+	doneRevision := model.Task{
+		ID: uuid.New(), Phase: "test", Status: model.StatusDone,
+		TestsFor: model.JSONArray{implementationID},
+	}
+	unsuperseded := model.Task{
+		ID: uuid.New(), Phase: "test", Status: model.StatusRejected,
+		TestsFor: model.JSONArray{uuid.New().String()},
+	}
+
+	got := supersededRejectedTestIDs([]model.Task{rejected, doneRevision, unsuperseded})
+	require.Contains(t, got, rejected.ID)
+	require.NotContains(t, got, unsuperseded.ID)
+	required := requiredSubtasksForParentTarget(
+		[]model.Task{rejected, doneRevision, unsuperseded}, model.StatusTestingReady,
+	)
+	require.NotContains(t, required, rejected.ID.String())
+	require.Contains(t, required, doneRevision.ID.String())
+	require.Contains(t, required, unsuperseded.ID.String())
+}
+
 // ---------------------------------------------------------------------------
 // isTerminal tests
 // ---------------------------------------------------------------------------
@@ -737,11 +796,17 @@ func TestCheckFeatureCompletion_RejectedSubtasksAreTerminal(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Parent should stay in_progress since sub3 (BACKLOG) is non-terminal.
+	// A rejected required child terminalizes the parent immediately rather than
+	// leaving it blocked behind a replacement that can no longer be useful.
 	var updated model.Task
 	db.First(&updated, "id = ?", parentID)
-	if updated.Status != model.StatusInProgress {
-		t.Errorf("expected parent to stay in_progress, got %s", updated.Status)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected parent to fail, got %s", updated.Status)
+	}
+	var replacement model.Task
+	db.First(&replacement, "id = ?", sub3.ID)
+	if replacement.Status != model.StatusCancelled {
+		t.Errorf("expected blocked replacement to be cancelled, got %s", replacement.Status)
 	}
 }
 

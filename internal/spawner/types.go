@@ -9,7 +9,11 @@
 // makes it easy to audit the contract without reading service plumbing.
 package spawner
 
-import "time"
+import (
+	"time"
+
+	"github.com/godinj/drem-orchestrator/internal/container"
+)
 
 // SpawnWorkerParams is the payload of the SpawnWorker RPC. Project is
 // the human-readable project name (e.g. "drem-orchestrator") and maps
@@ -132,9 +136,14 @@ type InspectWorkerParams struct {
 // InspectWorkerResult mirrors container.State with JSON-friendly field
 // names. OOMKilled is authoritative when true per the runtime contract.
 type InspectWorkerResult struct {
-	Status     string    `json:"status"`
-	ExitCode   int       `json:"exit_code"`
-	StartedAt  time.Time `json:"started_at"`
-	FinishedAt time.Time `json:"finished_at"`
-	OOMKilled  bool      `json:"oom_killed"`
+	Status     string       `json:"status"`
+	ExitCode   int          `json:"exit_code"`
+	StartedAt  time.Time    `json:"started_at"`
+	FinishedAt time.Time    `json:"finished_at"`
+	OOMKilled  bool         `json:"oom_killed"`
+	Usage      *WorkerUsage `json:"usage,omitempty"`
 }
+
+// WorkerUsage is the machine-readable completion summary emitted by the
+// direct SGLang harness. It is attached only after a worker is terminal.
+type WorkerUsage = container.WorkerUsage

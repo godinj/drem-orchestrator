@@ -715,6 +715,16 @@ func casAcceptedExistingSubtask(tx *gorm.DB, task *model.Task, references map[st
 }
 
 func casSupersedeCompletedTestSubtask(tx *gorm.DB, task *model.Task, actor string, references map[string]any) error {
+	return casInvalidateCompletedTestSubtask(tx, task, model.StatusRejected, actor,
+		"completed test subtask superseded after review rejection", references)
+}
+
+func casFailCompletedTestSubtask(tx *gorm.DB, task *model.Task, actor string, references map[string]any) error {
+	return casInvalidateCompletedTestSubtask(tx, task, model.StatusFailed, actor,
+		"automated review rejected test subtask; Codex correction required", references)
+}
+
+func casInvalidateCompletedTestSubtask(tx *gorm.DB, task *model.Task, target model.TaskStatus, actor, reason string, references map[string]any) error {
 	originalStatus := task.Status
 	originalVersion := task.StateVersion
 	originalUpdatedAt := task.UpdatedAt
@@ -729,11 +739,11 @@ func casSupersedeCompletedTestSubtask(tx *gorm.DB, task *model.Task, actor strin
 		}
 	}()
 
-	event, err := state.GuardedSupersedeCompletedTestSubtask(task, state.TransitionRequest{
-		Target: model.StatusRejected, Actor: actor, ExpectedStatus: model.StatusDone,
+	event, err := state.GuardedInvalidateCompletedTestSubtask(task, state.TransitionRequest{
+		Target: target, Actor: actor, ExpectedStatus: model.StatusDone,
 		Evidence: state.Evidence{
 			TaskID: task.ID, Actor: actor, Source: "review_gate",
-			Reason:    "completed test subtask superseded after review rejection",
+			Reason:    reason,
 			Timestamp: time.Now(), References: references,
 		},
 	})
@@ -745,7 +755,7 @@ func casSupersedeCompletedTestSubtask(tx *gorm.DB, task *model.Task, actor strin
 	res := tx.Model(&model.Task{}).
 		Where("id = ? AND status = ? AND state_version = ?", task.ID, model.StatusDone, originalVersion).
 		Updates(map[string]any{"status": task.Status, "state_version": task.StateVersion,
-			"assigned_agent_id": nil, "updated_at": task.UpdatedAt})
+			"assigned_agent_id": nil, "context": task.Context, "updated_at": task.UpdatedAt})
 	if res.Error != nil {
 		return res.Error
 	}

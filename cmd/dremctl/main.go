@@ -18,6 +18,7 @@ import (
 
 	"github.com/godinj/drem-orchestrator/pkg/orchclient"
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
+	"github.com/godinj/drem-orchestrator/pkg/projectconfig"
 )
 
 const usage = `usage: dremctl [--orch-url URL] [--orch-token TOKEN] [--actor ID] [--project NAME] [--json] <command> [args]
@@ -33,13 +34,17 @@ Commands:
   events [--since RFC3339] [--limit N]
   logs --container NAME [--follow] [--since RFC3339]
   status
+  follow <task-id-prefix> [--until STATUS,...] [--timeout DURATION] [--interval DURATION]
   health issues
   create (--title TEXT --description TEXT | --spec FILE|JSON)
   create-task (--title TEXT --description TEXT | --spec FILE|JSON)
   file-task (--title TEXT --description TEXT | --spec FILE|JSON)
   approve <task-id-prefix>
   reject <task-id-prefix> [--reason TEXT]
+  revise-plan <task-id-prefix> --spec FILE|JSON --reason TEXT [--idempotency-key KEY]
   artifact <task-id-prefix>
+  report <task-id-prefix>                       correlated phase/token/evidence report
+  codex-usage <task-id-prefix> --goal-objective TEXT --goal-status complete|blocked --tokens-used N --elapsed-ms N
   verify <task-id-prefix> --result pass|fail --actor ID --environment FINGERPRINT --command CMD [...] [--interactions FILE]
   integrate <task-id-prefix> --actor ID
   request-rework <task-id-prefix> --actor ID --mode orchestrated|host-direct --reason TEXT [--scope PATH ...]
@@ -48,7 +53,10 @@ Commands:
   pass <task-id-prefix>                         deprecated; delivery states fail closed
   fail <task-id-prefix>                         deprecated; delivery states fail closed
   answer <task-id-prefix> --body TEXT
+  accept-assumptions <task-id-prefix>             preserve the current plan and advance to SGLang review
   retry <task-id-prefix> [--idempotency-key KEY]
+  resume <task-id-prefix>                        restore a diagnostic pause to its recorded phase
+  adopt <failed-child-id-prefix> --commit SHA [--idempotency-key KEY]
   archive <task-id-prefix> --reason TEXT [--actor TEXT]
   comment <task-id-prefix> --body TEXT
   recover stale-assignment <task-id-prefix> (--dry-run|--apply)
@@ -76,6 +84,10 @@ func main() {
 
 func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io.Writer) error {
 	cfg, rest, err := parseGlobalFlags(args, getenv)
+	if err != nil {
+		return err
+	}
+	cfg, err = resolveLocalProjectConfig(cfg, getenv)
 	if err != nil {
 		return err
 	}
@@ -127,6 +139,11 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 			return err
 		}
 		return handleStatus(ctx, client, cfg, stdout)
+	case "follow":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleFollow(ctx, client, cfg, commandArgs, stdout)
 	case "health":
 		if err := requireProject(cfg); err != nil {
 			return err
@@ -137,16 +154,31 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 			return err
 		}
 		return handleCreateTask(ctx, client, cfg, command, commandArgs, stdout)
-	case "approve", "reject", "pass", "fail", "answer", "retry", "archive", "comment":
+	case "approve", "reject", "pass", "fail", "answer", "accept-assumptions", "retry", "resume", "adopt", "archive", "comment":
 		if err := requireProject(cfg); err != nil {
 			return err
 		}
 		return handleMutation(ctx, client, cfg, command, commandArgs, stdout)
+	case "revise-plan":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleRevisePlan(ctx, client, cfg, commandArgs, stdout)
 	case "artifact":
 		if err := requireProject(cfg); err != nil {
 			return err
 		}
 		return handleArtifact(ctx, client, cfg, commandArgs, stdout)
+	case "report":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleTaskReport(ctx, client, cfg, commandArgs, stdout)
+	case "codex-usage":
+		if err := requireProject(cfg); err != nil {
+			return err
+		}
+		return handleCodexGoalUsage(ctx, client, cfg, commandArgs, stdout)
 	case "verify":
 		if err := requireProject(cfg); err != nil {
 			return err
@@ -185,6 +217,40 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 	default:
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+// resolveLocalProjectConfig makes dremctl directly usable from a Codex task.
+// Explicit flags and DREM_* environment values always win. Missing URL and
+// bearer-token values are loaded from the host project registry and generated
+// compose state without ever printing the token. CODEX_THREAD_ID supplies a
+// stable, attributable mutation actor when the caller did not set one.
+func resolveLocalProjectConfig(cfg cliConfig, getenv envLookup) (cliConfig, error) {
+	if strings.TrimSpace(cfg.actor) == "" {
+		if threadID := strings.TrimSpace(getenv("CODEX_THREAD_ID")); threadID != "" {
+			cfg.actor = "codex:" + threadID
+		}
+	}
+	if strings.TrimSpace(cfg.project) == "" || (strings.TrimSpace(cfg.orchURL) != "" && strings.TrimSpace(cfg.orchToken) != "") {
+		return cfg, nil
+	}
+	home := strings.TrimSpace(getenv("HOME"))
+	if home == "" {
+		return cfg, nil
+	}
+	project, token, err := projectconfig.Load(home, cfg.project)
+	if err != nil {
+		if strings.TrimSpace(cfg.orchURL) == "" {
+			return cfg, fmt.Errorf("load local project configuration: %w", err)
+		}
+		return cfg, nil
+	}
+	if strings.TrimSpace(cfg.orchURL) == "" {
+		cfg.orchURL = project.OrchURL
+	}
+	if strings.TrimSpace(cfg.orchToken) == "" {
+		cfg.orchToken = token
+	}
+	return cfg, nil
 }
 
 func parseGlobalFlags(args []string, getenv envLookup) (cliConfig, []string, error) {
@@ -384,6 +450,83 @@ func handleStatus(ctx context.Context, client *orchclient.Client, cfg cliConfig,
 	return renderStatus(stdout, status)
 }
 
+func handleFollow(ctx context.Context, client *orchclient.Client, cfg cliConfig, args []string, stdout io.Writer) error {
+	if len(args) == 0 {
+		return errors.New("usage: dremctl follow <task-id-prefix> [--until STATUS,...] [--timeout DURATION] [--interval DURATION]")
+	}
+	taskArg := args[0]
+	fs := newFlagSet("follow")
+	untilRaw := fs.String("until", "verification_ready,integration_ready,done,failed,paused,needs_clarification,cancelled", "comma-separated statuses that stop following")
+	timeout := fs.Duration("timeout", 30*time.Minute, "maximum time to wait; zero waits indefinitely")
+	interval := fs.Duration("interval", 2*time.Second, "poll interval")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *interval <= 0 || *timeout < 0 {
+		return errors.New("usage: dremctl follow <task-id-prefix> [--until STATUS,...] [--timeout DURATION] [--interval DURATION]")
+	}
+	until := make(map[string]bool)
+	for _, raw := range strings.Split(*untilRaw, ",") {
+		status := strings.TrimSpace(raw)
+		if status != "" {
+			until[status] = true
+		}
+	}
+	if len(until) == 0 {
+		return errors.New("--until must contain at least one status")
+	}
+	taskID, err := resolveTaskUUID(ctx, client, cfg.project, taskArg)
+	if err != nil {
+		return err
+	}
+	followCtx := ctx
+	cancel := func() {}
+	if *timeout > 0 {
+		followCtx, cancel = context.WithTimeout(ctx, *timeout)
+	}
+	defer cancel()
+
+	var lastVersion uint64
+	for {
+		task, taskErr := client.Task(followCtx, cfg.project, taskID)
+		if taskErr != nil {
+			return taskErr
+		}
+		if task.StateVersion != lastVersion {
+			if cfg.json {
+				if err := writeJSON(stdout, task); err != nil {
+					return err
+				}
+			} else {
+				fmt.Fprintf(stdout, "%s v%d %s\n", shortID(task.ID), task.StateVersion, task.Status)
+			}
+			lastVersion = task.StateVersion
+		}
+		if until[task.Status] {
+			return nil
+		}
+		if task.ReviewStatus != "" && task.ReviewStatus != "running" && task.ReviewStatus != "approved" {
+			if !cfg.json {
+				fmt.Fprintf(stdout, "%s review_attention_required: %s\n", shortID(task.ID), task.ReviewDetail)
+				if task.ReviewRecommendation != "" || task.ReviewCoverage != "" {
+					fmt.Fprintf(stdout, "%s review recommendation=%s coverage=%s\n", shortID(task.ID), task.ReviewRecommendation, task.ReviewCoverage)
+				}
+				for _, issue := range task.ReviewIssues {
+					fmt.Fprintf(stdout, "%s review_issue: %s\n", shortID(task.ID), issue)
+				}
+			}
+			return nil
+		}
+		timer := time.NewTimer(*interval)
+		select {
+		case <-followCtx.Done():
+			timer.Stop()
+			return fmt.Errorf("follow task %s: %w", shortID(task.ID), followCtx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
 func listAllTasks(ctx context.Context, client *orchclient.Client, project string) ([]orchdto.TaskDTO, error) {
 	var all []orchdto.TaskDTO
 	for offset := 0; ; offset += taskPageLimit {
@@ -479,6 +622,7 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 	actor := cfg.actor
 	body := ""
 	idempotencyKey := ""
+	commitSHA := ""
 	var err error
 
 	if command == "reject" || command == "archive" {
@@ -502,6 +646,19 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 		}
 	}
 	if command == "retry" {
+		idempotencyKey, args, err = parseStringOption(args, "idempotency-key")
+		if err != nil {
+			return err
+		}
+	}
+	if command == "adopt" {
+		commitSHA, args, err = parseStringOption(args, "commit")
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(commitSHA) == "" {
+			return errors.New("--commit is required")
+		}
 		idempotencyKey, args, err = parseStringOption(args, "idempotency-key")
 		if err != nil {
 			return err
@@ -531,11 +688,21 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 		dto, err = client.Fail(ctx, cfg.project, taskID)
 	case "answer":
 		dto, err = client.Answer(ctx, cfg.project, taskID, body)
+	case "accept-assumptions":
+		dto, err = client.Answer(ctx, cfg.project, taskID, "/accept-plan")
 	case "retry":
 		if idempotencyKey == "" {
 			dto, err = client.Retry(ctx, cfg.project, taskID)
 		} else {
 			dto, err = client.RetryWithIdempotencyKey(ctx, cfg.project, taskID, idempotencyKey)
+		}
+	case "resume":
+		dto, err = client.Resume(ctx, cfg.project, taskID)
+	case "adopt":
+		if idempotencyKey == "" {
+			dto, err = client.AdoptFailedChild(ctx, cfg.project, taskID, commitSHA)
+		} else {
+			dto, err = client.AdoptFailedChildWithIdempotencyKey(ctx, cfg.project, taskID, commitSHA, idempotencyKey)
 		}
 	case "archive":
 		dto, err = client.Archive(ctx, cfg.project, taskID, reason, actor)
@@ -547,6 +714,49 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 		return renderComment(stdout, cfg.json, comment)
 	default:
 		return fmt.Errorf("unknown mutation %q", command)
+	}
+	if err != nil {
+		return err
+	}
+	return renderMutatedTask(stdout, cfg.json, dto)
+}
+
+func handleRevisePlan(ctx context.Context, client *orchclient.Client, cfg cliConfig, args []string, stdout io.Writer) error {
+	specSource, rest, err := parseStringOption(args, "spec")
+	if err != nil {
+		return err
+	}
+	reason, rest, err := parseStringOption(rest, "reason")
+	if err != nil {
+		return err
+	}
+	idempotencyKey, rest, err := parseStringOption(rest, "idempotency-key")
+	if err != nil {
+		return err
+	}
+	if len(rest) != 1 || strings.TrimSpace(specSource) == "" || strings.TrimSpace(reason) == "" {
+		return errors.New("usage: dremctl revise-plan <task-id-prefix> --spec FILE|JSON --reason TEXT [--idempotency-key KEY]")
+	}
+	if strings.TrimSpace(cfg.actor) == "" {
+		return errors.New("--actor or DREM_ACTOR is required for task mutations")
+	}
+	spec, err := readTaskSpec(specSource)
+	if err != nil {
+		return err
+	}
+	if spec.ExecutionPlan == nil {
+		return errors.New("--spec must contain execution_plan")
+	}
+	taskID, err := resolveTaskUUID(ctx, client, cfg.project, rest[0])
+	if err != nil {
+		return err
+	}
+	req := orchdto.ReviseTaskPlanRequest{ExecutionPlan: *spec.ExecutionPlan, Reason: strings.TrimSpace(reason)}
+	var dto orchdto.TaskDTO
+	if idempotencyKey == "" {
+		dto, err = client.RevisePlan(ctx, cfg.project, taskID, req)
+	} else {
+		dto, err = client.RevisePlanWithIdempotencyKey(ctx, cfg.project, taskID, req, idempotencyKey)
 	}
 	if err != nil {
 		return err
@@ -913,12 +1123,18 @@ func mutationUsage(command string) string {
 	switch command {
 	case "reject":
 		return "reject <task-id-prefix> [--reason TEXT]"
+	case "revise-plan":
+		return "revise-plan <task-id-prefix> --spec FILE|JSON --reason TEXT [--idempotency-key KEY]"
 	case "archive":
 		return "archive <task-id-prefix> --reason TEXT [--actor TEXT]"
 	case "answer", "comment":
 		return command + " <task-id-prefix> --body TEXT"
 	case "retry":
 		return "retry <task-id-prefix> [--idempotency-key KEY]"
+	case "resume":
+		return "resume <task-id-prefix>"
+	case "adopt":
+		return "adopt <failed-child-id-prefix> --commit SHA [--idempotency-key KEY]"
 	case "create", "create-task", "file-task":
 		return command + " (--title TEXT --description TEXT | --spec FILE|JSON)"
 	default:

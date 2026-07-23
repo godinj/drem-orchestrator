@@ -25,6 +25,25 @@ func TestAcceptCleanScope(t *testing.T) {
 	}
 }
 
+func TestAcceptExplicitHeadRefDoesNotRequireCheckout(t *testing.T) {
+	repo := newRepo(t)
+	writeCommit(t, repo, "README.md", "base\n")
+	base := branch(t, repo, "base-explicit")
+	runGit(t, repo, "checkout", "-b", "worker-explicit")
+	writeCommit(t, repo, "allowed.txt", "worker\n")
+	runGit(t, repo, "checkout", "base-explicit")
+
+	res, err := Accept(context.Background(), AcceptanceRequest{
+		RepoDir: repo, BaseRef: base, HeadRef: "worker-explicit", AllowedScopes: []string{"allowed.txt"},
+	})
+	if err != nil {
+		t.Fatalf("accept explicit head: %v", err)
+	}
+	if !res.Accepted || len(res.AcceptedFiles) != 1 || res.AcceptedFiles[0] != "allowed.txt" {
+		t.Fatalf("expected worker ref acceptance without checkout, got %+v", res)
+	}
+}
+
 func TestAcceptRejectsArtifactOnly(t *testing.T) {
 	repo := newRepo(t)
 	writeCommit(t, repo, "README.md", "base\n")

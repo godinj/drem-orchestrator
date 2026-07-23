@@ -41,7 +41,10 @@ type fakeGateOrch struct {
 	ErrTestPassed         error
 	ErrTestFailed         error
 	ErrClarification      error
+	ErrRevisePlan         error
 	ErrRetryTask          error
+	ErrResumeTask         error
+	ErrAdoptFailedChild   error
 	ErrVerifyDelivery     error
 	ErrIntegrateDelivery  error
 	LastVerify            *orchestrator.VerifyDeliveryRequest
@@ -81,8 +84,16 @@ func (f *fakeGateOrch) HandlePlanRejected(taskID uuid.UUID) error {
 	return f.transition(taskID, model.StatusRejected)
 }
 
-func (f *fakeGateOrch) HandlePlanRejectedBy(taskID uuid.UUID, actor string) error {
-	return f.HandlePlanRejected(taskID)
+func (f *fakeGateOrch) HandlePlanRejectedBy(taskID uuid.UUID, actor string, feedback ...string) error {
+	body := ""
+	if len(feedback) > 0 {
+		body = feedback[0]
+	}
+	f.logCall("HandlePlanRejected", taskID, body)
+	if f.ErrPlanRejected != nil {
+		return f.ErrPlanRejected
+	}
+	return f.transition(taskID, model.StatusRejected)
 }
 
 func (f *fakeGateOrch) HandleTestReviewApproved(taskID uuid.UUID) error {
@@ -137,6 +148,18 @@ func (f *fakeGateOrch) HandleClarificationAnswerBy(taskID uuid.UUID, answer, act
 	return f.HandleClarificationAnswer(taskID, answer)
 }
 
+func (f *fakeGateOrch) RevisePlan(taskID uuid.UUID, observedVersion uint64, plan model.JSONField, actor, reason string) error {
+	f.logCall("RevisePlan", taskID, reason)
+	if f.ErrRevisePlan != nil {
+		return f.ErrRevisePlan
+	}
+	return f.db.Model(&model.Task{}).
+		Where("id = ? AND status = ? AND state_version = ?", taskID, model.StatusPlanReview, observedVersion).
+		Updates(map[string]any{
+			"plan": plan, "state_version": observedVersion + 1, "assigned_agent_id": nil,
+		}).Error
+}
+
 func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error {
 	f.logCall("RetryTask", taskID, "")
 	if f.ErrRetryTask != nil {
@@ -150,6 +173,22 @@ func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error {
 		return f.transition(taskID, model.StatusTestingReady)
 	}
 	return f.transition(taskID, model.StatusBacklog)
+}
+
+func (f *fakeGateOrch) ResumeTask(taskID uuid.UUID) error {
+	f.logCall("ResumeTask", taskID, "")
+	if f.ErrResumeTask != nil {
+		return f.ErrResumeTask
+	}
+	return f.transition(taskID, model.StatusTestWriting)
+}
+
+func (f *fakeGateOrch) AdoptFailedChild(taskID uuid.UUID, commitSHA, actor string) error {
+	f.logCall("AdoptFailedChild", taskID, commitSHA+"|"+actor)
+	if f.ErrAdoptFailedChild != nil {
+		return f.ErrAdoptFailedChild
+	}
+	return f.transition(taskID, model.StatusDone)
 }
 
 func (f *fakeGateOrch) VerifyDelivery(req orchestrator.VerifyDeliveryRequest) (*model.VerificationRecord, error) {
@@ -366,6 +405,12 @@ func answerURL(base, task string) string {
 func retryURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/retry", base, projectName, task)
 }
+func resumeURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/resume", base, projectName, task)
+}
+func adoptURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/adopt", base, projectName, task)
+}
 func archiveURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/archive", base, projectName, task)
 }
@@ -485,13 +530,13 @@ func TestApproveMalformedUUIDReturns400(t *testing.T) {
 }
 
 // ------------------------------------------------------------------
-// 6. Reject plan_review (no reason) → 200.
+// 6. Reject plan_review with planner feedback → 200.
 // ------------------------------------------------------------------
 func TestRejectPlanReviewHappy(t *testing.T) {
 	fake, project, srv, base := setupGateHTTPTest(t)
 	task := testutil.CreateTask(t, srv.DB, project.ID, "bad plan", model.StatusPlanReview)
 
-	resp, body := doJSON(t, http.MethodPost, rejectURL(base, task.ID.String()), "")
+	resp, body := doJSON(t, http.MethodPost, rejectURL(base, task.ID.String()), `{"reason":"use existing test seams"}`)
 	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
 
 	var dto orchdto.TaskDTO
@@ -500,6 +545,7 @@ func TestRejectPlanReviewHappy(t *testing.T) {
 
 	require.Len(t, fake.Calls, 1)
 	require.Equal(t, "HandlePlanRejected", fake.Calls[0].Method)
+	require.Equal(t, "use existing test seams", fake.Calls[0].Body)
 }
 
 // ------------------------------------------------------------------
@@ -851,6 +897,69 @@ func TestServer_RetryTaskEndpoint_Happy(t *testing.T) {
 	require.Len(t, fake.Calls, 1)
 	require.Equal(t, "RetryTask", fake.Calls[0].Method)
 	require.Equal(t, task.ID, fake.Calls[0].TaskID)
+}
+
+func TestServer_ResumeTaskEndpoint_Happy(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "diagnostic pause", model.StatusPaused)
+
+	resp, body := doJSON(t, http.MethodPost, resumeURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, string(model.StatusTestWriting), dto.Status)
+	require.Len(t, fake.Calls, 1)
+	require.Equal(t, "ResumeTask", fake.Calls[0].Method)
+}
+
+func TestServer_ResumeTaskEndpoint_WrongStatus(t *testing.T) {
+	_, project, srv, base := setupGateHTTPTest(t)
+	task := testutil.CreateTask(t, srv.DB, project.ID, "running", model.StatusInProgress)
+
+	resp, body := doJSON(t, http.MethodPost, resumeURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusConflict, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), "paused")
+}
+
+func TestServer_ResumeTaskEndpoint_OrchError(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	fake.ErrResumeTask = errors.New("resume blew up")
+	task := testutil.CreateTask(t, srv.DB, project.ID, "diagnostic pause", model.StatusPaused)
+
+	resp, body := doJSON(t, http.MethodPost, resumeURL(base, task.ID.String()), "")
+	require.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+	require.Contains(t, decodeErr(t, body), "resume blew up")
+}
+
+func TestServer_AdoptFailedChildEndpoint(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	parent := testutil.CreateTask(t, srv.DB, project.ID, "parent", model.StatusFailed)
+	child := testutil.CreateTask(t, srv.DB, project.ID, "child", model.StatusFailed)
+	child.ParentTaskID = &parent.ID
+	require.NoError(t, srv.DB.Save(child).Error)
+	commit := strings.Repeat("a", 40)
+
+	resp, body := doJSON(t, http.MethodPost, adoptURL(base, child.ID.String()), `{"commit_sha":"`+commit+`"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, string(model.StatusDone), dto.Status)
+	require.Len(t, fake.Calls, 1)
+	require.Equal(t, "AdoptFailedChild", fake.Calls[0].Method)
+	require.Contains(t, fake.Calls[0].Body, commit)
+}
+
+func TestServer_AdoptFailedChildMapsAdmissionConflict(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	parent := testutil.CreateTask(t, srv.DB, project.ID, "parent", model.StatusFailed)
+	child := testutil.CreateTask(t, srv.DB, project.ID, "child", model.StatusFailed)
+	child.ParentTaskID = &parent.ID
+	require.NoError(t, srv.DB.Save(child).Error)
+	fake.ErrAdoptFailedChild = fmt.Errorf("%w: stale head", orchestrator.ErrCodexAdoptionConflict)
+
+	resp, body := doJSON(t, http.MethodPost, adoptURL(base, child.ID.String()), `{"commit_sha":"deadbeef"}`)
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "stale head")
 }
 
 func TestServer_RetryTaskEndpoint_PausedGate(t *testing.T) {

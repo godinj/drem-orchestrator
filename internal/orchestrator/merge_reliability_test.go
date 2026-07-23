@@ -372,9 +372,9 @@ func TestOnAgentFailed_NotMerged_FailsNormally(t *testing.T) {
 // §4.7 Parent Failure Cascading — additional edge cases
 // ---------------------------------------------------------------------------
 
-// TestCheckFeatureCompletion_BacklogSubtask_StaysInProgress verifies that
-// the parent stays in_progress when some subtasks are still in backlog.
-func TestCheckFeatureCompletion_BacklogSubtask_StaysInProgress(t *testing.T) {
+// TestCheckFeatureCompletion_FailedChildCancelsBacklogSubtask verifies that a
+// required failure does not wait behind dependency-blocked backlog work.
+func TestCheckFeatureCompletion_FailedChildCancelsBacklogSubtask(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
@@ -415,8 +415,13 @@ func TestCheckFeatureCompletion_BacklogSubtask_StaysInProgress(t *testing.T) {
 
 	var updated model.Task
 	db.First(&updated, "id = ?", parentID)
-	if updated.Status != model.StatusInProgress {
-		t.Errorf("expected parent to stay in_progress (backlog sub exists), got %s", updated.Status)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected parent to fail, got %s", updated.Status)
+	}
+	var backlog model.Task
+	db.First(&backlog, "id = ?", sub3.ID)
+	if backlog.Status != model.StatusCancelled {
+		t.Errorf("expected backlog sibling to be cancelled, got %s", backlog.Status)
 	}
 }
 

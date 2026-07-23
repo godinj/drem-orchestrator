@@ -289,10 +289,12 @@ services:
       DREM_CLASSIFIER_UPSTREAM: "http://gq:8090/v1/chat/completions"
       DREM_CLASSIFIER_MODEL: "${DREM_CLASSIFIER_MODEL:-gemma4-26b}"
       DREM_CLASSIFIER_TIMEOUT: "${DREM_CLASSIFIER_TIMEOUT:-60s}"
-      # Bearer token shared with orch — same convention as merger and
-      # csuite-watcher. Empty on dev hosts without agentmon; the binary
-      # falls open on missing-token when the env is unset.
-      DREM_AGENTMON_TOKEN: "${DREM_AGENTMON_TOKEN:-}"
+      DREM_WARM_AGENT_TOKEN_FILE: "/run/secrets/drem-warm-agent-token"
+    volumes:
+      - type: bind
+        source: ${HOME}/.drem/warm-agent.token
+        target: /run/secrets/drem-warm-agent-token
+        read_only: true
     depends_on:
       sglang:
         condition: service_healthy
@@ -326,11 +328,12 @@ services:
       - drem-net
     environment:
       DREM_PLANNER_LISTEN: ":8090"
-      # Bearer token shared with orch — same convention as classifier and
-      # merger. Empty on dev hosts without agentmon; the binary falls
-      # open on missing-token when the env is unset.
-      DREM_AGENTMON_TOKEN: "${DREM_AGENTMON_TOKEN:-}"
+      DREM_WARM_AGENT_TOKEN_FILE: "/run/secrets/drem-warm-agent-token"
     volumes:
+      - type: bind
+        source: ${HOME}/.drem/warm-agent.token
+        target: /run/secrets/drem-warm-agent-token
+        read_only: true
       # Read-only bind-mount of the operator's Codex auth file.
       - type: bind
         source: ${HOME}/.codex/auth.json

@@ -125,7 +125,7 @@ func (o *Orchestrator) dispatchPlanHTTP(ctx context.Context, task *model.Task, p
 	case http.StatusServiceUnavailable:
 		return &PlanResult{Success: false, FailureReason: "planner_unhealthy"}, nil
 	case http.StatusUnauthorized:
-		return nil, fmt.Errorf("dispatchPlanHTTP: planner rejected bearer token (401); check DREM_AGENTMON_TOKEN alignment")
+		return nil, fmt.Errorf("dispatchPlanHTTP: planner rejected bearer token (401); check DREM_WARM_AGENT_TOKEN_FILE alignment")
 	default:
 		return &PlanResult{
 			Success:       false,
@@ -258,6 +258,39 @@ func (o *Orchestrator) shouldDispatchPlanHTTP() bool {
 	}
 }
 
+// spawnPlannerHTTPAsync starts one warm planner request for task and returns
+// immediately. Planner latency can be several minutes; doing this work inline
+// used to stall the single lifecycle tick, preventing unrelated tasks from
+// classifying, dispatching, or completing while Codex planned one task.
+//
+// The in-memory claim suppresses duplicate requests on subsequent ticks. It is
+// intentionally process-local: after a restart the old HTTP request no longer
+// exists, so the new process may safely claim and retry the still-planning task.
+// spawnPlannerHTTP retains the durable state-version claim and conditional
+// result write, so cancellation/review actions cannot be overwritten by a late
+// response.
+func (o *Orchestrator) spawnPlannerHTTPAsync(task *model.Task, project *model.Project, plannerPrompt string) {
+	key := task.ID.String()
+	if _, loaded := o.plannerHTTPInflight.LoadOrStore(key, struct{}{}); loaded {
+		return
+	}
+
+	// Work on copies because the caller's task/project usually point into a
+	// per-tick query slice whose elements are reused after this method returns.
+	taskCopy := *task
+	projectCopy := *project
+	go func() {
+		defer o.plannerHTTPInflight.Delete(key)
+		if err := o.spawnPlannerHTTP(&taskCopy, &projectCopy, plannerPrompt); err != nil {
+			o.logger.Error("planner http: async dispatch", "task_id", taskCopy.ID, "error", err)
+			return
+		}
+		o.logger.Info("planner http: dispatch completed", "task_id", taskCopy.ID)
+	}()
+
+	o.logger.Info("planner http: dispatch started", "task_id", task.ID)
+}
+
 // spawnPlannerHTTP drives the HTTP path. Called by processPlanning when
 // shouldDispatchPlanHTTP is true. On success writes the returned plan onto
 // task.Plan and clears any stale agent assignment so the "plan already
@@ -269,6 +302,7 @@ func (o *Orchestrator) shouldDispatchPlanHTTP() bool {
 // Returns a non-nil error only for genuinely fatal conditions: a mis-
 // configured URL, an HTTP transport failure, or an auth mismatch (401).
 func (o *Orchestrator) spawnPlannerHTTP(task *model.Task, project *model.Project, plannerPrompt string) error {
+	dispatchVersion := task.StateVersion
 	// Increment the total-planner-spawns counter BEFORE dispatch so
 	// validation / upstream failures still count against the budget.
 	totalSpawns := 0
@@ -281,14 +315,48 @@ func (o *Orchestrator) spawnPlannerHTTP(task *model.Task, project *model.Project
 		task.Context = make(model.JSONField)
 	}
 	task.Context["total_planner_spawns"] = float64(totalSpawns + 1)
+	claimed := o.db.Model(&model.Task{}).
+		Where("id = ? AND status = ? AND state_version = ?", task.ID, model.StatusPlanning, dispatchVersion).
+		Update("context", task.Context)
+	if claimed.Error != nil {
+		return fmt.Errorf("spawnPlannerHTTP: persist dispatch claim: %w", claimed.Error)
+	}
+	if claimed.RowsAffected == 0 {
+		o.logger.Info("planner http: dispatch skipped after task changed", "task_id", task.ID, "state_version", dispatchVersion)
+		return nil
+	}
 
 	ctx := context.Background()
 	res, err := o.dispatchPlanHTTP(ctx, task, project, plannerPrompt)
 	if err != nil {
-		// Infrastructure failure (network, URL misconfigured, auth). Still
-		// persist the incremented counter so retries don't loop forever.
-		_ = o.db.Save(task).Error
 		return fmt.Errorf("spawnPlannerHTTP: %w", err)
+	}
+	var current model.Task
+	if err := o.db.Select("id", "status", "state_version").First(&current, "id = ?", task.ID).Error; err != nil {
+		return fmt.Errorf("spawnPlannerHTTP: reload dispatch state: %w", err)
+	}
+	if current.Status != model.StatusPlanning || current.StateVersion != dispatchVersion {
+		o.logger.Info("planner http: result discarded after task changed",
+			"task_id", task.ID, "dispatch_version", dispatchVersion,
+			"current_version", current.StateVersion, "current_status", current.Status)
+		return nil
+	}
+
+	if res.Success {
+		validation, err := o.validateWarmPlan(res.Plan, task)
+		if err != nil {
+			return fmt.Errorf("spawnPlannerHTTP: validate returned plan: %w", err)
+		}
+		if !validation.Valid {
+			if task.Context == nil {
+				task.Context = make(model.JSONField)
+			}
+			task.Context["plan_validation"] = map[string]any{
+				"valid": false, "warnings": validation.Warnings, "errors": validation.Errors,
+			}
+			res.Success = false
+			res.FailureReason = "plan_validation_failed: " + strings.Join(validation.Errors, "; ")
+		}
 	}
 
 	if res.Success {
@@ -324,17 +392,42 @@ func (o *Orchestrator) spawnPlannerHTTP(task *model.Task, project *model.Project
 		}
 	}
 
-	if err := o.db.Save(task).Error; err != nil {
-		return fmt.Errorf("spawnPlannerHTTP: save task: %w", err)
+	updates := map[string]any{"context": task.Context}
+	if res.Success {
+		updates["plan"] = task.Plan
+		updates["assigned_agent_id"] = nil
+	}
+	saved := o.db.Model(&model.Task{}).
+		Where("id = ? AND status = ? AND state_version = ?", task.ID, model.StatusPlanning, dispatchVersion).
+		Updates(updates)
+	if saved.Error != nil {
+		return fmt.Errorf("spawnPlannerHTTP: save task: %w", saved.Error)
+	}
+	if saved.RowsAffected == 0 {
+		o.logger.Info("planner http: result discarded during conditional save", "task_id", task.ID, "state_version", dispatchVersion)
 	}
 	return nil
 }
 
-// plannerPromptFor produces the planner prompt text the HTTP client sends
-// in the request body. The planner server composes its own canonical
-// prompt from the structured context; this function stays in place for
-// compatibility with operators who want to inspect the rendered prompt in
-// planner_http_success events.
+// validateWarmPlan applies the same structural and repository-path checks to
+// inline HTTP planner results that agent-worktree planner results receive.
+// This prevents the low-latency warm path from bypassing deterministic gates.
+func (o *Orchestrator) validateWarmPlan(plan model.JSONField, task *model.Task) (PlanValidationResult, error) {
+	parsed, err := parsePlan(plan)
+	if err != nil {
+		return PlanValidationResult{}, err
+	}
+	result := ValidatePlan(parsed.Subtasks, parsed.TDDExceptions)
+	fileResult := ValidatePlanFileExistence(parsed.Subtasks, o.worktreePathFor(task))
+	result.Warnings = append(result.Warnings, fileResult.Warnings...)
+	result.Errors = append(result.Errors, fileResult.Errors...)
+	result.Valid = len(result.Errors) == 0
+	return result, nil
+}
+
+// plannerPromptFor produces repository-aware context for the warm planner.
+// It includes the repo map, local instructions, constraints, and build/test
+// commands that are unavailable inside the global planner container.
 func (o *Orchestrator) plannerPromptFor(task *model.Task, project *model.Project) string {
 	featureName := strings.TrimPrefix(task.WorktreeBranch, "feature/")
 	featureDir := o.worktree.FeatureWorktreePath(featureName)

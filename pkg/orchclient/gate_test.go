@@ -150,6 +150,30 @@ func TestApproveWrongStatus(t *testing.T) {
 	require.Contains(t, ws.Message, "cannot approve")
 }
 
+func TestRevisePlanUsesGuardedMutationContract(t *testing.T) {
+	id := uuid.New()
+	h := &gateHandler{status: http.StatusOK, respBody: sampleDTOJSON(t, id, "plan_review")}
+	c, _ := newGateClient(t, h)
+	c.WithActor("codex:thread-42")
+	req := orchdto.ReviseTaskPlanRequest{
+		ExecutionPlan: orchdto.TaskExecutionPlanDTO{Subtasks: []orchdto.TaskExecutionSubtaskDTO{{
+			Title: "corrected", Description: "cover verification", Files: []string{"CMakeLists.txt"}, Phase: "integration",
+		}}},
+		Reason: "address reviewer feedback",
+	}
+
+	got, err := c.RevisePlanWithIdempotencyKey(context.Background(), "canvas", id, req, "revision-1")
+	require.NoError(t, err)
+	require.Equal(t, id.String(), got.ID)
+	require.Equal(t, "/projects/canvas/tasks/"+id.String()+"/revise-plan", h.path)
+	require.Equal(t, http.MethodPost, h.method)
+	require.Equal(t, "revision-1", h.idempotencyKey)
+	var decoded orchdto.ReviseTaskPlanRequest
+	require.NoError(t, json.Unmarshal(h.rawBody, &decoded))
+	require.Equal(t, req.Reason, decoded.Reason)
+	require.Equal(t, "corrected", decoded.ExecutionPlan.Subtasks[0].Title)
+}
+
 func TestApproveServerError(t *testing.T) {
 	h := &gateHandler{status: http.StatusInternalServerError, respBody: `{"error":"db exploded"}`}
 	c, _ := newGateClient(t, h)
@@ -375,6 +399,20 @@ func TestAnswerHappyPath(t *testing.T) {
 	require.Equal(t, "use port 9090", payload.Body)
 }
 
+func TestAdoptFailedChildHappyPath(t *testing.T) {
+	id := uuid.New()
+	h := &gateHandler{status: http.StatusOK, respBody: sampleDTOJSON(t, id, "done")}
+	c, _ := newGateClient(t, h)
+	c.WithActor("codex:repair")
+
+	got, err := c.AdoptFailedChildWithIdempotencyKey(context.Background(), "canvas", id, "abc123", "adopt-after-detach")
+	require.NoError(t, err)
+	require.Equal(t, "done", got.Status)
+	require.Equal(t, "/projects/canvas/tasks/"+id.String()+"/adopt", h.path)
+	require.JSONEq(t, `{"commit_sha":"abc123"}`, string(h.rawBody))
+	require.Equal(t, "adopt-after-detach", h.idempotencyKey)
+}
+
 // TestAnswerEmptyBodyGuardsNetwork asserts that Answer with an empty
 // body fails client-side (before any network call) so callers don't
 // waste a roundtrip on input the server is guaranteed to reject.
@@ -464,6 +502,30 @@ func TestClient_Retry_BadRequest(t *testing.T) {
 	require.Error(t, err)
 	var bad *orchclient.ErrBadRequest
 	require.True(t, errors.As(err, &bad), "want *ErrBadRequest, got %T: %v", err, err)
+}
+
+// -- Resume --------------------------------------------------------------
+
+func TestClient_Resume_Success(t *testing.T) {
+	id := uuid.New()
+	h := &gateHandler{status: http.StatusOK, respBody: sampleDTOJSON(t, id, "test_writing")}
+	c, _ := newGateClient(t, h)
+
+	got, err := c.Resume(context.Background(), "canvas", id)
+	require.NoError(t, err)
+	require.Equal(t, "test_writing", got.Status)
+	require.Equal(t, "/projects/canvas/tasks/"+id.String()+"/resume", h.path)
+	require.Equal(t, http.MethodPost, h.method)
+}
+
+func TestClient_Resume_Conflict(t *testing.T) {
+	h := &gateHandler{status: http.StatusConflict, respBody: `{"error":"task in status backlog, expected paused"}`}
+	c, _ := newGateClient(t, h)
+
+	_, err := c.Resume(context.Background(), "canvas", uuid.New())
+	require.Error(t, err)
+	var wrongStatus *orchclient.ErrWrongStatus
+	require.True(t, errors.As(err, &wrongStatus))
 }
 
 // -- CreateTask ----------------------------------------------------------

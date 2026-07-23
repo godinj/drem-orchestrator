@@ -47,6 +47,7 @@ type planRequest struct {
 	Comments     []any          `json:"comments,omitempty"`
 	TargetCoder  targetCoder    `json:"target_coder,omitempty"`
 	Effort       string         `json:"effort,omitempty"`
+	Prompt       string         `json:"prompt,omitempty"`
 }
 
 type targetCoder struct {

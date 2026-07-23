@@ -205,6 +205,15 @@ func TestAllocateOrchHostPort_SkipsUsed(t *testing.T) {
 	require.NotEqual(t, first.OrchHostPort, second.OrchHostPort)
 }
 
+func TestAllocateOrchHostPort_SkipsLegacyURLPort(t *testing.T) {
+	r := &projects.Registry{Projects: []projects.Project{{
+		OrchURL: "http://127.0.0.1:8080",
+	}}}
+	require.Equal(t, 8081, r.AllocateOrchHostPort())
+	require.Equal(t, 18081, projects.OrchHostPortFromURL("http://localhost:18081/api"))
+	require.Zero(t, projects.OrchHostPortFromURL("http://localhost"))
+}
+
 // TestDefaultPath smoke-tests the helper.
 func TestDefaultPath(t *testing.T) {
 	got := projects.DefaultPath()

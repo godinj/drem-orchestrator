@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -54,6 +55,67 @@ func validTaskSpec() orchdto.TaskSpecDTO {
 		ProposedScope: []string{"arrangement comp interaction", "take comp model"},
 		Exclusions:    []string{"audio rendering", "session persistence"},
 	}
+}
+
+func validTaskSpecWithExecutionPlan() orchdto.TaskSpecDTO {
+	spec := validTaskSpec()
+	spec.IdempotencyKey = "cubase-range-comp-execution-plan-1"
+	spec.ProposedScope = []string{
+		"src/model/TakeCompModel.cpp",
+		"src/model/TakeCompModel.h",
+		"tests/integration/test_take_comp_model.cpp",
+		"cmake/DremCanvasSources.cmake",
+	}
+	spec.IntegrationSeams = []orchdto.TaskIntegrationSeamDTO{{
+		ID:                    "range-comp-production-entrypoint",
+		AcceptanceCriteriaIDs: []string{"range-promotes-segment"},
+		EntryPoint:            "AppController::registerAllActions",
+		SourceEvidence: []orchdto.TaskSourceEvidenceDTO{{
+			Path:          "src/ui/AppController.cpp",
+			Symbol:        "AppController::registerAllActions",
+			Excerpt:       "registerAllActions();",
+			ExcerptSHA256: "4f141ffacb74e016a80445b72a641afc5ef816922b2e2e4ee3bc6740688ae70f",
+		}},
+		MissingEdges: []orchdto.TaskIntegrationEdgeDTO{{
+			Description:   "Compile the new model implementation into the production target.",
+			RequiredFiles: []string{"cmake/DremCanvasSources.cmake"},
+		}},
+		VerificationLevel: "native_runtime",
+		VerificationSteps: []string{"Launch Canvas and invoke the range comp gesture through the arrangement UI."},
+	}}
+	spec.ExecutionPlan = &orchdto.TaskExecutionPlanDTO{Subtasks: []orchdto.TaskExecutionSubtaskDTO{
+		{
+			Title:       "Specify range comp selection",
+			Description: "Add focused red-state coverage for selecting a bounded take range.",
+			Files:       []string{"tests/integration/test_take_comp_model.cpp"},
+			Phase:       "test",
+			TestsFor:    []int{1},
+		},
+		{
+			Title:        "Implement range comp selection",
+			Description:  "Implement the minimal model behavior required by the paired test.",
+			Files:        []string{"src/model/TakeCompModel.cpp", "src/model/TakeCompModel.h"},
+			Dependencies: []int{0},
+			Phase:        "implementation",
+			ModuleBoundaries: []orchdto.TaskModuleBoundaryDTO{{
+				Package:     "src/model/TakeCompModel",
+				Description: "Owns bounded take-range selection behavior.",
+				Exports:     1,
+			}},
+			InterfaceShapes: []orchdto.TaskInterfaceShapeDTO{{
+				Package:   "src/model/TakeCompModel",
+				Functions: []string{"TakeCompModel::selectRange(...)"},
+			}},
+		},
+		{
+			Title:        "Wire and verify range comp selection",
+			Description:  "Add the source manifest wiring and preserve the assembled feature for host verification.",
+			Files:        []string{"cmake/DremCanvasSources.cmake"},
+			Dependencies: []int{1},
+			Phase:        "integration",
+		},
+	}}
+	return spec
 }
 
 func postTaskSpec(t *testing.T, baseURL string, spec orchdto.TaskSpecDTO) *http.Response {
@@ -234,4 +296,139 @@ func TestCreateTaskSpecRejectsBadEvidenceAndActorMismatch(t *testing.T) {
 	resp = postTaskSpec(t, ts.URL, spec)
 	resp.Body.Close()
 	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestCreateTaskSpecAcceptsRepositoryEvidenceMediaTypes(t *testing.T) {
+	for _, mediaType := range []string{"text/markdown", "text/x-diff", "application/json"} {
+		t.Run(mediaType, func(t *testing.T) {
+			_, ts, _ := setupHTTPTest(t, nil)
+			spec := validTaskSpec()
+			spec.IdempotencyKey += "-" + strings.NewReplacer("/", "-", "+", "-").Replace(mediaType)
+			spec.Observation.Evidence[0].MediaType = mediaType
+			resp := postTaskSpec(t, ts.URL, spec)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusCreated, resp.StatusCode)
+		})
+	}
+}
+
+func TestCreateTaskSpecRejectsExecutableEvidenceMediaType(t *testing.T) {
+	_, ts, _ := setupHTTPTest(t, nil)
+	spec := validTaskSpec()
+	spec.Observation.Evidence[0].MediaType = "application/x-executable"
+	resp := postTaskSpec(t, ts.URL, spec)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestCreateTaskSpecWithExecutionPlanSkipsToPlanReview(t *testing.T) {
+	srv, ts, _ := setupHTTPTest(t, nil)
+	spec := validTaskSpecWithExecutionPlan()
+	resp := postTaskSpec(t, ts.URL, spec)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+	var got orchdto.TaskDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&got))
+	require.Equal(t, string(model.StatusPlanReview), got.Status)
+
+	var task model.Task
+	require.NoError(t, srv.DB.First(&task, "id = ?", got.ID).Error)
+	require.NotNil(t, task.Plan)
+	require.Len(t, task.Plan["subtasks"], 3)
+
+	var event model.TaskEvent
+	require.NoError(t, srv.DB.Where("task_id = ?", got.ID).First(&event).Error)
+	require.Equal(t, true, event.Details["adapter_execution_plan"])
+}
+
+func TestCreateTaskSpecExecutionPlanValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*orchdto.TaskSpecDTO)
+	}{
+		{
+			name: "file outside proposed scope",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[1].Files = append(spec.ExecutionPlan.Subtasks[1].Files, "src/ui/Unclaimed.cpp")
+			},
+		},
+		{
+			name: "dependency cycle",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[0].Dependencies = []int{2}
+			},
+		},
+		{
+			name: "invalid TDD pairing",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[0].TestsFor = nil
+			},
+		},
+		{
+			name: "missing implementation depth metadata",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[1].ModuleBoundaries = nil
+			},
+		},
+		{
+			name: "mismatched implementation interface package",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[1].InterfaceShapes[0].Package = "src/model/Other"
+			},
+		},
+		{
+			name: "vague implementation interface function",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[1].InterfaceShapes[0].Functions = []string{"select range somehow"}
+			},
+		},
+		{
+			name: "unresolved question",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.OpenQuestions = []string{"Which interaction wins?"}
+			},
+		},
+		{
+			name: "missing source-backed integration seam",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.IntegrationSeams = nil
+			},
+		},
+		{
+			name: "source excerpt digest mismatch",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.IntegrationSeams[0].SourceEvidence[0].Excerpt = "different source"
+			},
+		},
+		{
+			name: "missing edge file absent from integration subtask",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ProposedScope = append(spec.ProposedScope, "src/ui/AppController.cpp")
+				spec.IntegrationSeams[0].MissingEdges[0].RequiredFiles = []string{"src/ui/AppController.cpp"}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ts, _ := setupHTTPTest(t, nil)
+			spec := validTaskSpecWithExecutionPlan()
+			tc.mutate(&spec)
+			resp := postTaskSpec(t, ts.URL, spec)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
+	}
+}
+
+func TestCreateTaskSpecExecutionPlanParticipatesInIdempotencyHash(t *testing.T) {
+	_, ts, _ := setupHTTPTest(t, nil)
+	spec := validTaskSpecWithExecutionPlan()
+	first := postTaskSpec(t, ts.URL, spec)
+	first.Body.Close()
+	require.Equal(t, http.StatusCreated, first.StatusCode)
+
+	spec.ExecutionPlan.Subtasks[1].Description = "A materially different implementation plan."
+	conflict := postTaskSpec(t, ts.URL, spec)
+	defer conflict.Body.Close()
+	require.Equal(t, http.StatusConflict, conflict.StatusCode)
 }

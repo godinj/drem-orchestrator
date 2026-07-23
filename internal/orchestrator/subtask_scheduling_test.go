@@ -421,6 +421,41 @@ func TestScheduleSubtasks_DispatchesCoderViaSpawner(t *testing.T) {
 	}
 }
 
+func TestScheduleSubtasks_ReassignsUnclaimedInProgressSubtaskViaSpawner(t *testing.T) {
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	o, fake, project, _, bareRepo := newContainerSubtaskRig(t)
+	pushTestFeatureBranch(t, bareRepo, "feature/reassign-in-progress")
+
+	parent := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      project.ID,
+		Title:          "parent with interrupted worker",
+		Description:    "parent",
+		Status:         model.StatusInProgress,
+		WorktreeBranch: "feature/reassign-in-progress",
+	}
+	require.NoError(t, o.db.Create(&parent).Error)
+	sub := model.Task{
+		ID:           uuid.New(),
+		ProjectID:    project.ID,
+		ParentTaskID: &parent.ID,
+		Title:        "resume interrupted work",
+		Description:  "resume",
+		Status:       model.StatusInProgress,
+		Context:      model.JSONField{"agent_type": "coder"},
+	}
+	require.NoError(t, o.db.Create(&sub).Error)
+	fake.spawnResults = []spawnOutcome{{res: spawner.SpawnWorkerResult{ContainerID: "container-reassigned"}}}
+
+	require.NoError(t, o.scheduleSubtasks(&parent))
+
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", sub.ID).Error)
+	require.Equal(t, model.StatusInProgress, reloaded.Status)
+	require.NotNil(t, reloaded.AssignedAgentID)
+	require.Len(t, fake.spawnCalls, 1)
+}
+
 // TestScheduleSubtasks_SpawnerFailureFailsFast verifies that when the
 // container spawner returns an error, the subtask stays in BACKLOG,
 // no Agent assignment is written, and scheduleSubtasks returns nil

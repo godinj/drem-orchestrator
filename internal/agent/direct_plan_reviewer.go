@@ -75,8 +75,9 @@ Evaluate the plan for:
 2. **File overlap risk**: Do subtasks share files? High overlap causes merge conflicts and serialized execution. Flag pairs of subtasks that touch the same files.
 3. **Integration gap**: Is there a final integration subtask that wires the pieces together? A plan that produces isolated components with no wiring subtask has an integration gap.
 4. **TDD structure**: Does every implementation subtask have a corresponding test subtask with ` + "`" + `tests_for` + "`" + `? Are test descriptions specific about the behavior they verify? Are any TDD exceptions justified (integration wiring / research are valid; "too hard to test" is not)?
-5. **Depth**: Does each implementation subtask include ` + "`" + `module_boundaries` + "`" + ` and ` + "`" + `interface_shapes` + "`" + `? Are modules deep (rich internal logic, few exports) rather than shallow pass-through wrappers? Flag subtasks that lack depth metadata or define trivial wrappers.
+5. **Depth**: Does each subtask whose ` + "`" + `phase` + "`" + ` is exactly ` + "`" + `implementation` + "`" + ` include ` + "`" + `module_boundaries` + "`" + ` and ` + "`" + `interface_shapes` + "`" + `? Are modules deep (rich internal logic, few exports) rather than shallow pass-through wrappers? Do not require depth metadata on ` + "`" + `test` + "`" + ` or wiring-only ` + "`" + `integration` + "`" + ` subtasks.
 6. **Decomposition quality**: Are subtasks sized appropriately (3-6 is typical)? Are dependencies between subtasks correct?
+7. **Source-backed entrypoint chain**: Treat the task's production-entrypoint seams and content-addressed source excerpts as authoritative evidence. Verify every declared missing-edge file is present in the integration subtask and that the runtime verification exercises the production entrypoint, not merely a helper or source-text assertion. If the evidence shows an unlisted caller/registration/manifest edge, mark an integration gap and require the file in scope.
 
 ## Output Format
 
@@ -102,7 +103,11 @@ Respond with ONLY a JSON object matching this exact schema. No markdown fences, 
 1. Respond with ONLY valid JSON. No markdown, no code fences, no commentary.
 2. ` + "`" + `recommendation` + "`" + ` must be one of: approve, revise, reject.
 3. Use ` + "`" + `revise` + "`" + ` when the plan is structurally salvageable with edits; use ` + "`" + `reject` + "`" + ` when it needs fundamental redesign.
-4. Do not modify any code. Your only output is the review.json content described above.`
+4. Set ` + "`" + `tdd_assessment.exceptions_justified` + "`" + ` to true when the plan has no TDD exceptions; there is nothing to disqualify.
+5. Do not rename ` + "`" + `tdd_assessment` + "`" + ` to ` + "`" + `tdd_structure` + "`" + ` or any other alias.
+6. ` + "`" + `dependencies` + "`" + ` and ` + "`" + `tests_for` + "`" + ` contain zero-based subtask indices. A test at index 0 with ` + "`" + `tests_for: [1]` + "`" + ` covers the implementation at index 1; the implementation's dependency on 0 is the correct acyclic TDD order, not self-reference.
+7. If ` + "`" + `recommendation` + "`" + ` is ` + "`" + `approve` + "`" + `, set coverage to full, integration_gap to false, and both top-level and TDD issue arrays to empty. Any actionable issue requires ` + "`" + `recommendation: revise` + "`" + `.
+8. Do not modify any code. Your only output is the review.json content described above.`
 
 // ---------------------------------------------------------------------------
 // User message construction
@@ -136,14 +141,20 @@ func buildPlanReviewerUserMessage(title, description, planJSON string) string {
 // The function reuses chatRequest/chatMessage/chatResponse/chatRespFormat
 // types defined in direct_classifier.go — do not redefine them here.
 func RunDirectPlanReviewer(cfg DirectPlanReviewerConfig, taskID uuid.UUID, title, description, planJSON, outputDir string) (*DirectPlanReviewerResult, error) {
-	start := time.Now()
+	return runDirectStructuredReviewer(cfg, taskID, "plan", planReviewerSystemPrompt,
+		buildPlanReviewerUserMessage(title, description, planJSON), outputDir)
+}
 
-	userMsg := buildPlanReviewerUserMessage(title, description, planJSON)
+// runDirectStructuredReviewer is the shared, no-tools JSON review transport.
+// Gate-specific reviewers supply their own prompts while retaining identical
+// validation, token accounting, and review.json handoff semantics.
+func runDirectStructuredReviewer(cfg DirectPlanReviewerConfig, taskID uuid.UUID, reviewKind, systemPrompt, userMsg, outputDir string) (*DirectPlanReviewerResult, error) {
+	start := time.Now()
 
 	reqBody := chatRequest{
 		Model: cfg.Model,
 		Messages: []chatMessage{
-			{Role: "system", Content: planReviewerSystemPrompt},
+			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userMsg},
 		},
 		MaxTokens:      cfg.MaxTokens,
@@ -153,10 +164,11 @@ func RunDirectPlanReviewer(cfg DirectPlanReviewerConfig, taskID uuid.UUID, title
 
 	reqJSON, err := json.Marshal(reqBody)
 	if err != nil {
-		return nil, fmt.Errorf("direct plan reviewer: marshal request: %w", err)
+		return nil, fmt.Errorf("direct %s reviewer: marshal request: %w", reviewKind, err)
 	}
 
-	slog.Info("direct plan reviewer: calling SGLang API",
+	slog.Info("direct structured reviewer: calling SGLang API",
+		"review_kind", reviewKind,
 		"task_id", taskID,
 		"endpoint", cfg.Endpoint,
 		"model", cfg.Model,
@@ -165,46 +177,46 @@ func RunDirectPlanReviewer(cfg DirectPlanReviewerConfig, taskID uuid.UUID, title
 
 	httpReq, err := http.NewRequest(http.MethodPost, cfg.Endpoint, bytes.NewReader(reqJSON))
 	if err != nil {
-		return nil, fmt.Errorf("direct plan reviewer: create request: %w", err)
+		return nil, fmt.Errorf("direct %s reviewer: create request: %w", reviewKind, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{Timeout: cfg.Timeout}
 	resp, err := client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("direct plan reviewer: API call failed: %w", err)
+		return nil, fmt.Errorf("direct %s reviewer: API call failed: %w", reviewKind, err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("direct plan reviewer: read response: %w", err)
+		return nil, fmt.Errorf("direct %s reviewer: read response: %w", reviewKind, err)
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("direct plan reviewer: API returned status %d: %s", resp.StatusCode, truncateBody(body, 500))
+		return nil, fmt.Errorf("direct %s reviewer: API returned status %d: %s", reviewKind, resp.StatusCode, truncateBody(body, 500))
 	}
 
 	var chatResp chatResponse
 	if err := json.Unmarshal(body, &chatResp); err != nil {
-		return nil, fmt.Errorf("direct plan reviewer: parse response: %w", err)
+		return nil, fmt.Errorf("direct %s reviewer: parse response: %w", reviewKind, err)
 	}
 
 	if len(chatResp.Choices) == 0 {
-		return nil, fmt.Errorf("direct plan reviewer: no choices in response")
+		return nil, fmt.Errorf("direct %s reviewer: no choices in response", reviewKind)
 	}
 
 	content := chatResp.Choices[0].Message.Content
 	if content == "" {
-		return nil, fmt.Errorf("direct plan reviewer: empty response content (finish_reason: %s)",
-			chatResp.Choices[0].FinishReason)
+		return nil, fmt.Errorf("direct %s reviewer: empty response content (finish_reason: %s)",
+			reviewKind, chatResp.Choices[0].FinishReason)
 	}
 
 	// Validate that the response is valid JSON before writing.
 	var jsonCheck json.RawMessage
 	if err := json.Unmarshal([]byte(content), &jsonCheck); err != nil {
-		return nil, fmt.Errorf("direct plan reviewer: response is not valid JSON: %w\nraw: %s",
-			err, truncateBody([]byte(content), 500))
+		return nil, fmt.Errorf("direct %s reviewer: response is not valid JSON: %w\nraw: %s",
+			reviewKind, err, truncateBody([]byte(content), 500))
 	}
 
 	// Pretty-print the JSON for consistency with agent-produced files.
@@ -217,12 +229,13 @@ func RunDirectPlanReviewer(cfg DirectPlanReviewerConfig, taskID uuid.UUID, title
 	// Write review.json at the exact path onReviewerCompleted expects.
 	outputPath := filepath.Join(outputDir, "review.json")
 	if err := os.WriteFile(outputPath, prettyJSON.Bytes(), 0o644); err != nil {
-		return nil, fmt.Errorf("direct plan reviewer: write output: %w", err)
+		return nil, fmt.Errorf("direct %s reviewer: write output: %w", reviewKind, err)
 	}
 
 	duration := time.Since(start)
 
-	slog.Info("direct plan reviewer: completed",
+	slog.Info("direct structured reviewer: completed",
+		"review_kind", reviewKind,
 		"task_id", taskID,
 		"output_path", outputPath,
 		"duration", duration.Round(time.Millisecond),

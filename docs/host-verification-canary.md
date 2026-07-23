@@ -48,6 +48,18 @@ The stage passes only when the artifact names the expected feature ref and
 exact SHA, the default branch is unchanged, and archive/cancel invalidates the
 artifact without merging it. Never use `pass` to synthesize native evidence.
 
+For a normal Codex-operated task, `accept-assumptions` replaces the former
+manual plan-approval pause. If a child worker is rejected for deterministic
+scope contamination, the Codex task may repair that child branch and run
+`dremctl adopt <child> --commit <sha>`. Adoption replays branch admission and
+records typed evidence; it does not trust the commit merely because Codex
+created it.
+
+With `verification_policy = "external_ack"`, the preliminary Linux gate is
+Git-only. It verifies the exact clean candidate and records that project-native
+commands are deferred. `scripts/drem-canvas-pilot.sh build <task>` then creates
+the exact detached Mac worktree and runs `scripts/dev verify` natively.
+
 ## 3. Repeated native Computer Use tweaks
 
 Build the exact artifact commit on the Mac, record the binary SHA-256, launch

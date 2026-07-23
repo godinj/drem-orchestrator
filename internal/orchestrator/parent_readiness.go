@@ -99,7 +99,11 @@ func requiredSubtasksForParentTarget(subtasks []model.Task, target model.TaskSta
 			}
 		}
 	case model.StatusTestingReady, model.StatusMerging, model.StatusDone:
+		supersededRejectedTests := supersededRejectedTestIDs(subtasks)
 		for _, sub := range subtasks {
+			if _, superseded := supersededRejectedTests[sub.ID]; superseded {
+				continue
+			}
 			required[sub.ID.String()] = true
 		}
 	}

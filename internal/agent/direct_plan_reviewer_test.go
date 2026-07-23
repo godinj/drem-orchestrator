@@ -63,6 +63,13 @@ func TestPlanReviewerSystemPrompt(t *testing.T) {
 		"approve",
 		"revise",
 		"reject",
+		"phase` is exactly `implementation",
+		"wiring-only `integration`",
+		"zero-based subtask indices",
+		"tests_for: [1]",
+		"Any actionable issue requires",
+		"Source-backed entrypoint chain",
+		"production entrypoint",
 	} {
 		assert.Contains(t, planReviewerSystemPrompt, needle,
 			"system prompt missing keyword %q", needle)

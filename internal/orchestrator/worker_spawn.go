@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/godinj/drem-orchestrator/internal/branchpolicy"
+	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
@@ -132,6 +134,11 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		o.recordSpawnFailureEventWithReason(task, agentType, spawnPolicyReasonAPIKey, policyErr)
 		return fmt.Errorf("spawn %s worker: %w", agentType, policyErr)
 	}
+	baseSHA, baseErr := gitexec.RunGit(ctx, swc.bareRepo, "rev-parse", swc.branch)
+	if baseErr != nil {
+		o.recordSpawnFailureEventWithReason(task, agentType, spawnPolicyReasonBranchMissing, baseErr)
+		return fmt.Errorf("spawn %s worker: resolve spawn base for %s: %w", agentType, swc.branch, baseErr)
+	}
 	params := spawner.SpawnWorkerParams{
 		Project:       swc.project,
 		ProjectID:     swc.projectID,
@@ -165,6 +172,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		WorkerID:                swc.workerID,
 		Image:                   params.Image,
 		Branch:                  params.Branch,
+		BaseSHA:                 baseSHA,
 		Provider:                swc.provider,
 		ModelID:                 swc.modelID,
 		Effort:                  swc.effort,
@@ -186,10 +194,15 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 
 	res, spawnErr := o.Spawner.SpawnWorker(ctx, params)
 	if spawnErr != nil {
+		failureReason := ""
+		if strings.Contains(spawnErr.Error(), "worker image unavailable") {
+			failureReason = spawnPolicyReasonImageUnavailable
+			spawnErr = fmt.Errorf("%w: %v", errWorkerImageUnavailable, spawnErr)
+		}
 		if abortErr := store.AbortReservation(ctx, reservation, "spawn_failed"); abortErr != nil {
 			o.logger.Error("spawn worker: abort reservation after spawn failure", "task_id", task.ID, "error", abortErr)
 		}
-		o.recordSpawnFailureEvent(task, agentType, spawnErr)
+		o.recordSpawnFailureEventWithReason(task, agentType, failureReason, spawnErr)
 		return fmt.Errorf("spawn %s worker: %w", agentType, spawnErr)
 	}
 
@@ -294,25 +307,46 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		env["DREM_AGENT_HARNESS"] = "sglang-direct"
 		env["DREM_GQ_CALLER"] = agentType
 		env["DREM_GQ_PRIORITY"] = "normal"
+		scopedFiles := extractEstimatedFiles(*task)
+		if len(scopedFiles) > 0 {
+			encoded, err := json.Marshal(scopedFiles)
+			if err != nil {
+				return spawnWorkerContext{}, fmt.Errorf("encode scoped worker files: %w", err)
+			}
+			env["DREM_SCOPED_FILES_JSON"] = string(encoded)
+		}
 		if o.directToolAgentCfg != nil {
-			env["DREM_DIRECT_ENDPOINT"] = o.directToolAgentCfg.Endpoint
-			if o.directToolAgentCfg.MaxTokens > 0 {
-				env["DREM_DIRECT_MAX_TOKENS"] = fmt.Sprintf("%d", o.directToolAgentCfg.MaxTokens)
+			workerCfg := o.directToolAgentCfg.ForWorkload(agentType, task.Phase)
+			env["DREM_DIRECT_ENDPOINT"] = workerCfg.Endpoint
+			if workerCfg.MaxTokens > 0 {
+				env["DREM_DIRECT_MAX_TOKENS"] = fmt.Sprintf("%d", workerCfg.MaxTokens)
 			}
-			if o.directToolAgentCfg.MaxIterations > 0 {
-				env["DREM_DIRECT_MAX_ITERATIONS"] = fmt.Sprintf("%d", o.directToolAgentCfg.MaxIterations)
+			if workerCfg.MaxIterations > 0 {
+				env["DREM_DIRECT_MAX_ITERATIONS"] = fmt.Sprintf("%d", workerCfg.MaxIterations)
 			}
-			if o.directToolAgentCfg.Temperature >= 0 {
-				env["DREM_DIRECT_TEMPERATURE"] = fmt.Sprintf("%g", o.directToolAgentCfg.Temperature)
+			if workerCfg.MaxCumulativeInputTokens > 0 {
+				env["DREM_DIRECT_MAX_CUMULATIVE_INPUT_TOKENS"] = fmt.Sprintf("%d", workerCfg.MaxCumulativeInputTokens)
 			}
-			if o.directToolAgentCfg.Timeout > 0 {
-				env["DREM_DIRECT_TIMEOUT"] = o.directToolAgentCfg.Timeout.String()
+			if workerCfg.MaxToolCalls > 0 {
+				env["DREM_DIRECT_MAX_TOOL_CALLS"] = fmt.Sprintf("%d", workerCfg.MaxToolCalls)
 			}
-			if o.directToolAgentCfg.BashTimeout > 0 {
-				env["DREM_DIRECT_BASH_TIMEOUT"] = o.directToolAgentCfg.BashTimeout.String()
+			if workerCfg.MaxInputTokensBeforeMutation > 0 {
+				env["DREM_DIRECT_MAX_INPUT_TOKENS_BEFORE_MUTATION"] = fmt.Sprintf("%d", workerCfg.MaxInputTokensBeforeMutation)
 			}
-			if o.directToolAgentCfg.ContextLimit > 0 {
-				env["DREM_DIRECT_CONTEXT_LIMIT"] = fmt.Sprintf("%d", o.directToolAgentCfg.ContextLimit)
+			if (agentType == "coder" || agentType == "fixer") && len(scopedFiles) > 0 && workerCfg.MaxReadsBeforeMutation > 0 {
+				env["DREM_DIRECT_MAX_READS_BEFORE_MUTATION"] = fmt.Sprintf("%d", workerCfg.MaxReadsBeforeMutation)
+			}
+			if workerCfg.Temperature >= 0 {
+				env["DREM_DIRECT_TEMPERATURE"] = fmt.Sprintf("%g", workerCfg.Temperature)
+			}
+			if workerCfg.Timeout > 0 {
+				env["DREM_DIRECT_TIMEOUT"] = workerCfg.Timeout.String()
+			}
+			if workerCfg.BashTimeout > 0 {
+				env["DREM_DIRECT_BASH_TIMEOUT"] = workerCfg.BashTimeout.String()
+			}
+			if workerCfg.ContextLimit > 0 {
+				env["DREM_DIRECT_CONTEXT_LIMIT"] = fmt.Sprintf("%d", workerCfg.ContextLimit)
 			}
 			if o.contextWarnPct > 0 {
 				env["DREM_DIRECT_CONTEXT_WARN_PCT"] = fmt.Sprintf("%d", o.contextWarnPct)
@@ -397,7 +431,7 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		if err := o.db.First(&row, "id = ?", o.projectID).Error; err == nil {
 			proj = &row
 		}
-		promptInfo, err := o.renderAndWritePrompt(task, proj, agentType, promptRoot)
+		promptInfo, err := o.renderAndWritePrompt(task, proj, agentType, provider, branch, promptRoot)
 		if err != nil {
 			return spawnWorkerContext{}, fmt.Errorf(
 				"render prompt for agent_type=%q task_id=%s: %w",
@@ -551,6 +585,10 @@ func (o *Orchestrator) recordSpawnFailureEventWithReason(task *model.Task, agent
 // because ANTHROPIC_API_KEY appeared in the Env map. Subscription-only
 // policy forbids shipping API-key auth through the default spawn path.
 const spawnPolicyReasonAPIKey = "policy_violation_api_key"
+
+const spawnPolicyReasonImageUnavailable = "worker_image_unavailable"
+
+var errWorkerImageUnavailable = errors.New("worker image unavailable")
 
 // spawnPolicyReasonBranchMissing is the classifier attached to
 // worker_spawn_failed events emitted when a subtask is dispatched but

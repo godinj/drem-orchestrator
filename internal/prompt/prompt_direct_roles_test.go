@@ -80,6 +80,50 @@ func TestGenerateDirectCoder_CppUsesProjectAssets(t *testing.T) {
 	assert.NotContains(t, result, "testutil.NewTestDB")
 }
 
+func TestGenerateDirectCoder_ExternalVerificationIsPhaseAwareAndCompact(t *testing.T) {
+	task := &model.Task{
+		Title:       "Specify marked title behavior",
+		Description: "Add a focused test for the exact marked title.",
+		Phase:       "test",
+		Context: model.JSONField{
+			"estimated_files":            []any{"tests/unit/test_MainWindowTitle.cpp"},
+			"prep_data":                  "MainWindow title formatting is the seam.",
+			"planned_interface_contract": `{"kind":"planned_api","interfaces":[{"functions":["formatMarkedTitle()"]}]}`,
+			"internal_retry_failures":    strings.Repeat("irrelevant retry state ", 1000),
+		},
+	}
+	assets := map[string]string{}
+	for _, a := range promptassets.DefaultsForLanguage("cpp") {
+		assets[promptassets.Key(a.Kind, a.Name)] = a.Content
+	}
+
+	result := GenerateDirectCoder(Opts{
+		Task:                 task,
+		Project:              &model.Project{Language: "cpp"},
+		AgentType:            model.AgentCoder,
+		WorktreePath:         "/home/drem/work",
+		WorktreeBranch:       "feature/marked-title",
+		PromptAssets:         assets,
+		ExternalVerification: true,
+	})
+
+	assert.Contains(t, result, "TEST phase")
+	assert.Contains(t, result, "focused red-state test")
+	assert.Contains(t, result, "planned interface contract")
+	assert.Contains(t, result, "do not mock the production type")
+	assert.Contains(t, result, "blocks all shell commands")
+	assert.NotContains(t, result, "Do not read more than 2 files")
+	assert.Contains(t, result, "external host")
+	assert.Contains(t, result, "git diff --check")
+	assert.Contains(t, result, "harness owns commit and push")
+	assert.NotContains(t, result, "git add -A")
+	assert.Contains(t, result, "/home/drem/work")
+	assert.Contains(t, result, "feature/marked-title")
+	assert.NotContains(t, result, "cmake --preset")
+	assert.NotContains(t, result, "internal_retry_failures")
+	assert.Less(t, len(result), 8000)
+}
+
 func TestGenerateDirectReviewer_PlanReview(t *testing.T) {
 	task := &model.Task{
 		Title:       "Review the plan",

@@ -33,6 +33,7 @@ services:
       # containers. Mergers POST merge_result records back to this URL.
       DREM_ORCH_URL: "http://orch-{{.ProjectName}}:8080"
       DREM_AGENTMON_TOKEN: "{{.SharedToken}}"
+      DREM_WARM_AGENT_TOKEN_FILE: "/run/secrets/drem-warm-agent-token"
       # Warm drem-classifier endpoint — orch POSTs classify jobs here
       # instead of running the direct-SGLang call inline. Matches the
       # endpoint also declared in drem.toml [agents.classifier]; this env
@@ -63,17 +64,12 @@ services:
       # plans/worker-prompt-delivery.md §§2, 4.
       DREM_PROMPT_ROOT_HOST: "{{.WorkerPromptRoot}}"
     volumes:
-      # Host bind-mount for orch state (drem.db + its WAL/shm sidecars
-      # and any other per-project state rooted at /var/lib/drem in the
-      # container). A bind-mount (rather than the pre-pivot
-      # `drem-<project>-db` named volume) lets operators inspect the
-      # database directly with sqlite3/du/cp without
-      # `docker run --rm -v <vol>:/src alpine cat ...`. The named
-      # `drem-<project>-db` volume remains declared in the top-level
-      # volumes block so an existing pre-pivot project's state stays
-      # reachable for a one-time migration copy-out; see
-      # plans/orch-db-host-access-impl.md §Migration runbook.
-      - {{.HostDataDir}}:/var/lib/drem:rw
+      # SQLite state. macOS registrations use Docker's native Linux named
+      # volume because Docker Desktop bind mounts can lose or hide WAL-backed
+      # writes across container recreation. Linux registrations retain the
+      # host bind mount for direct operator inspection.{{if .UseNamedDBVolume}}
+      - drem-{{.ProjectName}}-db:/var/lib/drem{{else}}
+      - {{.HostDataDir}}:/var/lib/drem:rw{{end}}
       - drem-{{.ProjectName}}-prompts:/var/lib/drem/prompts
       # Bind-mount the bare repo at its HOST-identical path so DREM_BARE_REPO
       # (which is a host path) resolves inside the container. Mounting at a
@@ -86,6 +82,7 @@ services:
       # Read-write: orch writes, spawner only reads. See
       # plans/worker-prompt-delivery.md §4.
       - {{.WorkerPromptRoot}}:{{.WorkerPromptRoot}}:rw
+      - {{.WarmAgentTokenPath}}:/run/secrets/drem-warm-agent-token:ro
       # drem.toml is generated alongside this compose file and mounted into
       # the orch CWD so LoadConfig finds it. Enables direct-classifier and
       # points the direct-tool endpoint at gq on drem-net. Path is absolute

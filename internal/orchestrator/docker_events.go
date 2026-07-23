@@ -2,7 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -141,36 +143,42 @@ func (o *Orchestrator) reconcileWorkerAttemptLifecycles(ctx context.Context) {
 		return
 	}
 
-	terminal := make(map[string]spawner.WorkerInfo)
+	observed := make(map[string]spawner.WorkerInfo)
 	for _, worker := range live.Workers {
-		if worker.Status == string(container.StatusExited) || worker.Status == string(container.StatusDead) {
-			terminal[worker.ContainerID] = worker
-		}
-	}
-	if len(terminal) == 0 {
-		return
+		observed[worker.ContainerID] = worker
 	}
 
 	for i := range attempts {
 		attempt := &attempts[i]
-		if _, ok := terminal[attempt.ContainerID]; !ok {
+		worker, listed := observed[attempt.ContainerID]
+		if listed && worker.Status != string(container.StatusExited) && worker.Status != string(container.StatusDead) && worker.Status != string(container.StatusRemoved) {
 			continue
 		}
+		// A spawner restart loses its in-memory inventory, so an absent list
+		// entry is not terminal evidence. Inspect the exact persisted
+		// container ID: Docker can distinguish a still-running container from
+		// one that was authoritatively removed.
 		state, inspectErr := o.Spawner.InspectWorker(pollCtx, spawner.InspectWorkerParams{ContainerID: attempt.ContainerID})
 		if inspectErr != nil {
-			o.logger.Warn("worker lifecycle poll: inspect terminal worker",
+			o.logger.Warn("worker lifecycle poll: inspect worker",
 				"attempt_id", attempt.ID, "container_id", attempt.ContainerID, "error", inspectErr)
 			continue
 		}
-		if state.Status != string(container.StatusExited) && state.Status != string(container.StatusDead) {
+		if state.Status != string(container.StatusExited) && state.Status != string(container.StatusDead) && state.Status != string(container.StatusRemoved) {
 			continue
 		}
+		exitCode := state.ExitCode
+		if state.Status == string(container.StatusRemoved) {
+			exitCode = 1
+		}
 		ev := container.Event{
-			Type:        container.EventDie,
-			ContainerID: attempt.ContainerID,
-			ExitCode:    state.ExitCode,
-			OOMKilled:   state.OOMKilled,
-			Timestamp:   state.FinishedAt,
+			Type:           container.EventDie,
+			ContainerID:    attempt.ContainerID,
+			ExitCode:       exitCode,
+			OOMKilled:      state.OOMKilled,
+			Usage:          state.Usage,
+			UsageInspected: true,
+			Timestamp:      state.FinishedAt,
 			Labels: map[string]string{
 				"drem.task_id":    attempt.TaskID.String(),
 				"drem.worker_id":  attempt.WorkerID,
@@ -221,6 +229,7 @@ func (o *Orchestrator) dispatchEvent(ctx context.Context, ev container.Event, tr
 				"worker_id", ev.Labels["drem.worker_id"])
 			return
 		}
+		ev.Usage = o.captureWorkerUsage(ctx, attempt, ev)
 		if err := o.recordAttemptTerminalObservation(attempt, ev); err != nil {
 			o.logger.Error("docker death event: persist terminal observation",
 				"task_id", task.ID, "attempt_id", attempt.ID, "error", err)
@@ -280,6 +289,7 @@ func (o *Orchestrator) handleWorkerExitZero(ctx context.Context, taskID uuid.UUI
 			"worker_id", ev.Labels["drem.worker_id"])
 		return
 	}
+	ev.Usage = o.captureWorkerUsage(ctx, attempt, ev)
 	if err := o.recordAttemptTerminalObservation(attempt, ev); err != nil {
 		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "terminal_observation_persist_failed")
 		o.logger.Error("docker completion event: persist terminal observation",
@@ -477,9 +487,22 @@ func (o *Orchestrator) finalizeObservedAttempt(attempt *model.WorkerAttempt, ev 
 func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, attempt *model.WorkerAttempt, ev container.Event, tracker *replacementTracker) {
 	now := time.Now()
 	o.markWorkerAttemptDead(task, attempt, ev, now)
-	failureClass := normalizeFailureClass(normalizedDockerExitReason(ev), fmt.Sprintf("exit_code=%d oom=%t", ev.ExitCode, ev.OOMKilled))
+	if priorBranchAcceptanceRejected(task) {
+		summary := "worker retry interrupted after a prior deterministic branch-scope rejection"
+		budget := consumeRetryBudget(task, retryEdgeForTask(*task, attempt.AgentType), failureClassBranchContam, summary, now)
+		if err := o.failTaskWithFailureEvidence(task,
+			"worker branch rejected by deterministic scope acceptance", failureClassBranchContam, summary, now, budget); err != nil {
+			o.logger.Error("handle worker death: fail task after prior branch rejection", "task_id", task.ID, "error", err)
+		}
+		return
+	}
+	failureReason := normalizedDockerExitReason(ev)
+	if ev.Usage != nil && strings.TrimSpace(ev.Usage.StopReason) != "" {
+		failureReason = ev.Usage.StopReason
+	}
+	failureClass := normalizeFailureClass(failureReason, fmt.Sprintf("exit_code=%d oom=%t", ev.ExitCode, ev.OOMKilled))
 	budget := consumeRetryBudget(task, retryEdgeForTask(*task, attempt.AgentType), failureClass,
-		fmt.Sprintf("worker %s container %s exited with %s", attempt.AgentType, ev.ContainerID, failureClass), now)
+		fmt.Sprintf("worker %s container %s exited with %s (stop_reason=%s)", attempt.AgentType, ev.ContainerID, failureClass, failureReason), now)
 	if budget.Exhausted {
 		reason := fmt.Sprintf("retry budget exhausted for %s on %s after %d failure(s)", failureClass, budget.Edge, budget.Attempts)
 		if err := o.failTaskWithFailureEvidence(task, reason, failureClass, budget.LastSummary, now, budget); err != nil {
@@ -506,9 +529,27 @@ func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, 
 		"exit_code", ev.ExitCode, "oom", ev.OOMKilled, "attempt", attempts)
 
 	if err := o.respawnWorkerRole(ctx, task, attempt.AgentType); err != nil {
+		if errors.Is(err, errWorkerImageUnavailable) {
+			if failErr := o.failTask(task, err.Error()); failErr != nil {
+				o.logger.Error("handle worker death: fail after worker image preflight", "task_id", task.ID, "error", failErr)
+			}
+			return
+		}
 		o.logger.Error("handle worker death: respawn failed",
 			"task_id", task.ID, "error", err)
 	}
+}
+
+func priorBranchAcceptanceRejected(task *model.Task) bool {
+	if task == nil || task.Context == nil {
+		return false
+	}
+	detail, ok := task.Context["branch_acceptance"].(map[string]any)
+	if !ok {
+		return false
+	}
+	accepted, present := detail["accepted"].(bool)
+	return present && !accepted
 }
 
 func (o *Orchestrator) respawnWorkerRole(ctx context.Context, task *model.Task, role string) error {

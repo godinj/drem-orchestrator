@@ -98,6 +98,13 @@ func (o *Orchestrator) materializeSubtasksWithDB(db *gorm.DB, task *model.Task, 
 		if sp.Phase != "" {
 			ctx["phase"] = sp.Phase
 		}
+		if sp.Phase == "test" && len(sp.TestsFor) == 1 {
+			contract, err := plannedInterfaceContract(subtaskPlans, i)
+			if err != nil {
+				return nil, nil, fmt.Errorf("materialize subtasks: test contract %d: %w", i, err)
+			}
+			ctx["planned_interface_contract"] = contract
+		}
 
 		sub := model.Task{
 			ID:           subtaskID,
@@ -306,7 +313,11 @@ func (o *Orchestrator) HandlePlanRejected(taskID uuid.UUID) error {
 	return o.HandlePlanRejectedBy(taskID, "orchestrator-internal")
 }
 
-func (o *Orchestrator) HandlePlanRejectedBy(taskID uuid.UUID, actor string) error {
+func (o *Orchestrator) HandlePlanRejectedBy(taskID uuid.UUID, actor string, feedback ...string) error {
+	planFeedback := ""
+	if len(feedback) > 0 {
+		planFeedback = strings.TrimSpace(feedback[0])
+	}
 	var task model.Task
 	err := o.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.First(&task, "id = ?", taskID).Error; err != nil {
@@ -316,8 +327,11 @@ func (o *Orchestrator) HandlePlanRejectedBy(taskID uuid.UUID, actor string) erro
 			actor, "review_gate", "plan rejected", nil); err != nil {
 			return fmt.Errorf("handle plan rejected: transition: %w", err)
 		}
+		clearAutomatedReviewContext(task.Context)
 		return tx.Model(&model.Task{}).Where("id = ?", task.ID).
-			Updates(map[string]any{"plan": nil, "assigned_agent_id": nil}).Error
+			Updates(map[string]any{
+				"plan": nil, "plan_feedback": planFeedback, "assigned_agent_id": nil, "context": task.Context,
+			}).Error
 	})
 	if err != nil {
 		return err
@@ -326,12 +340,21 @@ func (o *Orchestrator) HandlePlanRejectedBy(taskID uuid.UUID, actor string) erro
 		_ = o.metrics.Record(*task.AssignedAgentID, "plan_rejected", 1.0, nil)
 	}
 	task.Plan = nil
+	task.PlanFeedback = planFeedback
 	task.AssignedAgentID = nil
 
 	o.emit("task_updated", &task)
 	o.publishTaskTransition(task.ID.String(), string(model.StatusPlanReview), string(model.StatusPlanning), "plan rejected")
 	o.logger.Info("plan rejected", "task_id", task.ID)
 	return nil
+}
+
+func clearAutomatedReviewContext(context model.JSONField) {
+	for _, key := range []string{
+		"automated_review_state_version", "automated_review_status", "automated_review_detail", "review",
+	} {
+		delete(context, key)
+	}
 }
 
 // HandleTestPassed transitions from TESTING_READY to MERGING.
@@ -379,6 +402,7 @@ func (o *Orchestrator) HandleTestReviewRejectedBy(taskID uuid.UUID, feedback, ac
 	var task model.Task
 	var rejectionCount, clonedCount int
 	diagnostic := false
+	codexRepairRequired := actor == automatedReviewActor
 	err := o.db.Transaction(func(tx *gorm.DB) error {
 		if err := tx.First(&task, "id = ?", taskID).Error; err != nil {
 			return fmt.Errorf("handle test review rejected: load task: %w", err)
@@ -395,6 +419,39 @@ func (o *Orchestrator) HandleTestReviewRejectedBy(taskID uuid.UUID, feedback, ac
 		rejectionCount++
 		task.Context["test_rejection_count"] = float64(rejectionCount)
 		task.Context[fmt.Sprintf("test_rejection_feedback_%d", rejectionCount)] = feedback
+		if codexRepairRequired {
+			var doneTestSubtasks []model.Task
+			if err := tx.Where("parent_task_id = ? AND phase = ? AND status = ?", task.ID, "test", model.StatusDone).
+				Find(&doneTestSubtasks).Error; err != nil {
+				return fmt.Errorf("handle automated test rejection: query test subtasks: %w", err)
+			}
+			sourceIDs := testReviewReplacementSourceIDs(doneTestSubtasks)
+			for i := range doneTestSubtasks {
+				sub := &doneTestSubtasks[i]
+				if !sourceIDs[sub.ID] {
+					continue
+				}
+				if sub.Context == nil {
+					sub.Context = make(model.JSONField)
+				}
+				sub.Context["latest_failure_type"] = "test_review_rejected"
+				sub.Context["latest_failure_summary"] = feedback
+				sub.Context["latest_failure_current"] = true
+				if err := casFailCompletedTestSubtask(tx, sub, actor, map[string]any{
+					"action": "automated_test_review_rejected", "feedback": feedback,
+				}); err != nil {
+					return fmt.Errorf("handle automated test rejection: fail subtask %s: %w", sub.ID, err)
+				}
+				clonedCount++
+			}
+			task.Context["latest_failure_type"] = "test_review_rejected"
+			task.Context["latest_failure_summary"] = feedback
+			task.Context["latest_failure_current"] = true
+			return casTaskTransition(tx, &task, model.StatusTestReview, model.StatusFailed, actor,
+				"review_gate", "automated test review requires Codex correction", map[string]any{
+					"rejection_count": rejectionCount, "feedback": feedback, "failed_subtasks": clonedCount,
+				})
+		}
 
 		if rejectionCount >= maxPlanRejections {
 			if err := casTaskTransition(tx, &task, model.StatusTestReview, model.StatusTestWriting, actor,
@@ -455,6 +512,12 @@ func (o *Orchestrator) HandleTestReviewRejectedBy(taskID uuid.UUID, feedback, ac
 	}
 
 	o.emit("task_updated", &task)
+	if codexRepairRequired {
+		o.publishTaskTransition(task.ID.String(), string(model.StatusTestReview), string(model.StatusFailed), "automated test review requires Codex correction")
+		o.logger.Warn("automated test review rejected; task failed closed for Codex repair", "task_id", task.ID,
+			"rejection_count", rejectionCount, "failed_subtasks", clonedCount)
+		return nil
+	}
 	if diagnostic {
 		o.publishTaskTransition(task.ID.String(), string(model.StatusTestReview), string(model.StatusPaused), "test review rejected 3 times, paused for diagnostic")
 		o.logger.Warn("test review rejected 3 times, task paused for diagnostic", "task_id", task.ID, "rejection_count", rejectionCount)
@@ -526,17 +589,19 @@ func testReviewReplacementSourceNewer(candidate model.Task, selected model.Task)
 // planEntry is an intermediate struct for parsing plans from JSON that may
 // include dependency indices and TDD phase information.
 type planEntry struct {
-	Title          string           `json:"title"`
-	Description    string           `json:"description"`
-	AgentType      string           `json:"agent_type"`
-	EstimatedFiles []string         `json:"estimated_files"`
-	Files          []string         `json:"files"`
-	Dependencies   []int            `json:"dependencies"`
-	Priority       int              `json:"priority"`
-	IsTest         bool             `json:"is_test,omitempty"`
-	Phase          string           `json:"phase,omitempty"`
-	TestsFor       []int            `json:"tests_for,omitempty"`
-	DepthMeta      *score.DepthMeta `json:"depth_meta,omitempty"`
+	Title            string                 `json:"title"`
+	Description      string                 `json:"description"`
+	AgentType        string                 `json:"agent_type"`
+	EstimatedFiles   []string               `json:"estimated_files"`
+	Files            []string               `json:"files"`
+	Dependencies     []int                  `json:"dependencies"`
+	Priority         int                    `json:"priority"`
+	IsTest           bool                   `json:"is_test,omitempty"`
+	Phase            string                 `json:"phase,omitempty"`
+	TestsFor         []int                  `json:"tests_for,omitempty"`
+	ModuleBoundaries []score.ModuleBoundary `json:"module_boundaries,omitempty"`
+	InterfaceShapes  []score.InterfaceShape `json:"interface_shapes,omitempty"`
+	DepthMeta        *score.DepthMeta       `json:"depth_meta,omitempty"`
 }
 
 // tddException represents a planner-declared exception to TDD enforcement
@@ -583,6 +648,12 @@ func parsePlan(planField model.JSONField) (*parsePlanResult, error) {
 		}
 		if entries[i].AgentType == "" {
 			entries[i].AgentType = string(model.AgentCoder)
+		}
+		if entries[i].DepthMeta == nil && (len(entries[i].ModuleBoundaries) > 0 || len(entries[i].InterfaceShapes) > 0) {
+			entries[i].DepthMeta = &score.DepthMeta{
+				ModuleBoundaries: entries[i].ModuleBoundaries,
+				InterfaceShapes:  entries[i].InterfaceShapes,
+			}
 		}
 	}
 
@@ -647,6 +718,27 @@ func (o *Orchestrator) HandleClarificationAnswerBy(taskID uuid.UUID, answer, act
 	sessionData, ok := task.Context["clarification_session"]
 	if !ok {
 		return fmt.Errorf("handle clarification answer: no clarification_session in context")
+	}
+
+	// /accept-plan is an explicit machine-consumable resolution for Codex and
+	// other trusted adapters. It means the operator accepts every assumption
+	// already represented by the current plan, so asking the planner to rewrite
+	// an unchanged plan would spend inference without adding information.
+	if strings.EqualFold(strings.TrimSpace(answer), "/accept-plan") {
+		if task.Plan == nil {
+			return fmt.Errorf("handle clarification answer: cannot accept missing plan")
+		}
+		task.Context["clarification_resolution"] = "accepted_plan_assumptions"
+		delete(task.Context, "clarification_current_question")
+		oldStatus := task.Status
+		if err := o.transitionTaskAtomic(&task, model.StatusPlanReview, actor, "clarification_answer",
+			"current plan assumptions accepted without replanning", nil); err != nil {
+			return fmt.Errorf("handle clarification answer: accept current plan: %w", err)
+		}
+		o.emit("task_updated", &task)
+		o.publishTaskTransition(task.ID.String(), string(oldStatus), string(task.Status), "plan assumptions accepted")
+		o.logger.Info("clarification assumptions accepted; preserving plan", "task_id", task.ID)
+		return nil
 	}
 
 	updatedSession, done, nextQuestion, err := clarification.ProcessAnswer(sessionData, answer)

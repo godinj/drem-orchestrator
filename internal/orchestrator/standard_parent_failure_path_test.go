@@ -57,6 +57,56 @@ func TestStandardParent_FailedChildDoesNotAdvance(t *testing.T) {
 	}
 }
 
+func TestStandardParent_FailedChildCancelsDependencyBlockedSiblingsImmediately(t *testing.T) {
+	orch, db, _ := setupReconcileTest(t)
+
+	parentID := uuid.New()
+	failedID := uuid.New()
+	parent := model.Task{
+		ID: parentID, ProjectID: orch.projectID, Title: "standard parent",
+		Description: "one child failed before dependent work started",
+		Status:      model.StatusInProgress, Category: model.CategoryStandard,
+	}
+	if err := db.Create(&parent).Error; err != nil {
+		t.Fatalf("create parent: %v", err)
+	}
+	children := []model.Task{
+		{ID: failedID, ProjectID: orch.projectID, ParentTaskID: &parentID, Title: "failed implementation", Description: "failed", Status: model.StatusFailed},
+		{ID: uuid.New(), ProjectID: orch.projectID, ParentTaskID: &parentID, Title: "blocked integration", Description: "blocked", Status: model.StatusBacklog, DependencyIDs: model.JSONArray{failedID.String()}},
+	}
+	for i := range children {
+		if err := db.Create(&children[i]).Error; err != nil {
+			t.Fatalf("create child: %v", err)
+		}
+	}
+
+	if err := orch.checkFeatureCompletion(&parent); err != nil {
+		t.Fatalf("checkFeatureCompletion: %v", err)
+	}
+
+	var gotParent, gotBlocked model.Task
+	if err := db.First(&gotParent, "id = ?", parentID).Error; err != nil {
+		t.Fatalf("load parent: %v", err)
+	}
+	if err := db.First(&gotBlocked, "id = ?", children[1].ID).Error; err != nil {
+		t.Fatalf("load blocked child: %v", err)
+	}
+	if gotParent.Status != model.StatusFailed {
+		t.Fatalf("parent status = %s, want failed", gotParent.Status)
+	}
+	if gotBlocked.Status != model.StatusCancelled {
+		t.Fatalf("blocked child status = %s, want cancelled", gotBlocked.Status)
+	}
+	var event model.TaskEvent
+	if err := db.Where("task_id = ? AND new_value = ?", gotBlocked.ID, string(model.StatusCancelled)).First(&event).Error; err != nil {
+		t.Fatalf("load cascade event: %v", err)
+	}
+	evidence, _ := event.Details["evidence"].(map[string]any)
+	if evidence["source"] != "dependency_failure_cascade" {
+		t.Fatalf("cascade event source = %v, want dependency_failure_cascade", evidence["source"])
+	}
+}
+
 func TestStandardParent_TestingReadyFailureRecordsSummaryAndDoesNotMerge(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	featureName := "testing-ready-fails"

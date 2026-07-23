@@ -1,0 +1,182 @@
+{
+  "title": "Operational canary: add deterministic Canvas task context",
+  "description": "Add `scripts/dev context <path>...` as a compact, deterministic entry point for coding agents. For each repository-relative path, report the applicable AGENTS.md chain, the owning concern, the recommended starting files, and the focused verification command. Reject paths that escape the repository. Register a focused shell regression with CTest and document the command. Do not change application sources, build products, or existing build/test semantics.",
+  "actor": "codex:019f8688-cd79-7c21-9fe7-612862fd2e78",
+  "idempotency_key": "canvas-deterministic-task-context-20260723-1",
+  "observation": {
+    "session_id": "canvas-pilot-5-post-guardrail",
+    "product": "Drem Canvas",
+    "product_version": "96db6b7",
+    "os": "macOS 26.5 arm64",
+    "display_environment": "native terminal and exact-artifact Canvas worktree",
+    "observed_at": "2026-07-23T10:30:00Z",
+    "observer_actor": "codex:019f8688-cd79-7c21-9fe7-612862fd2e78",
+    "preconditions": [
+      "Canvas agents begin with AGENTS.md and docs/CODEMAP.md.",
+      "scripts/dev is the authoritative developer command surface."
+    ],
+    "steps": [
+      {
+        "action": "Determine the correct guidance and focused gate for a requested source path",
+        "target": "Canvas repository navigation and verification metadata",
+        "expected_visible_result": "One command emits the scoped guidance chain and focused verification without repository-wide discovery."
+      }
+    ],
+    "expected_behavior": [
+      "Engine, model, Vim, widget, platform, and repository-workflow paths resolve to stable concern and gate records.",
+      "Nested AGENTS.md files are reported from repository root to the nearest owning directory."
+    ],
+    "negative_behavior": [
+      "The context command does not read or write outside the repository.",
+      "Existing scripts/dev commands and test labels retain their behavior."
+    ],
+    "evidence": [
+      {
+        "artifact_id": "canvas-agent-guide-96db6b7",
+        "sha256": "808b57009ccca676b0bb852e0f7e5f73d251f9f07184d62571da551b458b0b7d",
+        "media_type": "text/markdown",
+        "purpose": "Content-addressed baseline of the current authoritative agent entry point whose navigation steps the new command makes deterministic."
+      }
+    ]
+  },
+  "acceptance_criteria": [
+    {
+      "id": "scoped-context-is-deterministic",
+      "description": "scripts/dev context emits stable repository identity, guidance, concern, starting files, and focused verification for every requested path.",
+      "verification_steps": [
+        "Run scripts/dev context for representative engine, model serialization, Vim, widget, platform, and repository-workflow paths.",
+        "Assert the root-to-nearest AGENTS.md chain and exact focused gate for each representative path.",
+        "Run the command twice at the same revision and compare normalized output."
+      ],
+      "expected_behavior": [
+        "The same revision and path list produce the same normalized context records."
+      ],
+      "negative_behavior": [
+        "Output does not depend on generated build directories or tool availability."
+      ]
+    },
+    {
+      "id": "repository-boundary-is-enforced",
+      "description": "Context paths are repository-relative and cannot escape the Canvas worktree.",
+      "verification_steps": [
+        "Request context for ../outside and for an absolute path outside the repository.",
+        "Confirm both requests fail nonzero with a concise repository-boundary diagnostic."
+      ],
+      "expected_behavior": [
+        "Existing or not-yet-created paths inside the repository are accepted; escaping paths are rejected."
+      ]
+    },
+    {
+      "id": "native-canvas-workflow-passes",
+      "description": "The exact frozen artifact passes the focused context regression and standard Canvas verification.",
+      "verification_steps": [
+        "Run the registered context regression through CTest.",
+        "Run scripts/dev check all and scripts/dev verify from the exact artifact worktree."
+      ],
+      "expected_behavior": [
+        "All required repository gates pass without changing application runtime behavior."
+      ]
+    }
+  ],
+  "proposed_scope": [
+    "scripts/dev",
+    "tests/CMakeLists.txt",
+    "tests/e2e/test_dev_context.sh",
+    "docs/DEVELOPMENT.md"
+  ],
+  "exclusions": [
+    "application source files",
+    "generated files and build directories",
+    "changes to existing build, test, check, or verify behavior",
+    "session state and persistence",
+    "default-branch integration"
+  ],
+  "dependencies": [],
+  "uncertainty": [],
+  "execution_plan": {
+    "subtasks": [
+      {
+        "title": "Define the deterministic task-context regression",
+        "description": "Add a focused shell regression at tests/e2e/test_dev_context.sh and register it with CTest under a non-environment-dependent test label. The regression must exercise representative engine, model serialization, Vim, widget, platform, and repository-workflow paths; assert the root-to-nearest AGENTS.md chain, concern, starting files, and exact focused gate; compare normalized repeated output; accept a missing path inside the repository; and reject ../outside plus an absolute outside path. Confirm the baseline is red because scripts/dev has no context command. Do not edit scripts/dev or documentation.",
+        "agent_type": "coder",
+        "files": [
+          "tests/e2e/test_dev_context.sh",
+          "tests/CMakeLists.txt"
+        ],
+        "phase": "test",
+        "tests_for": [
+          1
+        ],
+        "priority": 2
+      },
+      {
+        "title": "Implement and document deterministic task context",
+        "description": "Implement `scripts/dev context <path>...` and document it in docs/DEVELOPMENT.md. Emit revision once, then one stable record per input path with repository-relative path, ordered applicable AGENTS.md files, concern, starting files, and focused verification. Use an explicit prefix mapping aligned with docs/CODEMAP.md for engine, model serialization, model, Vim/default keymap, widget, platform, and repository workflow paths. Accept missing in-repository paths, reject empty invocation and any absolute or relative path escaping the repository, and preserve all existing scripts/dev commands byte-for-behavior. Run the focused regression and repository checks. Do not edit tests or application sources.",
+        "agent_type": "coder",
+        "files": [
+          "scripts/dev",
+          "docs/DEVELOPMENT.md"
+        ],
+        "dependencies": [
+          0
+        ],
+        "phase": "implementation",
+        "priority": 1,
+        "module_boundaries": [
+          {
+            "package": "scripts/dev-context",
+            "description": "Projects versioned repository guidance and verification seams into a deterministic path-scoped command.",
+            "exports": 1
+          }
+        ],
+        "interface_shapes": [
+          {
+            "package": "scripts/dev-context",
+            "functions": [
+              "repository-relative paths -> stable task-context records or boundary error"
+            ],
+            "types": []
+          }
+        ]
+      },
+      {
+        "title": "Validate and record the assembled task-context workflow",
+        "description": "Validate the dependency-assembled feature without changing scripts, tests, CMake behavior, or application sources. Run the CTest-registered context regression, scripts/dev check all, and the standard verification gate. Update only the existing task-context section in docs/DEVELOPMENT.md with the exact focused regression command and a concise statement of the stable output/boundary contract so future agents can reproduce the gate. This is the single final integration subtask.",
+        "agent_type": "coder",
+        "files": [
+          "docs/DEVELOPMENT.md"
+        ],
+        "dependencies": [
+          1
+        ],
+        "phase": "integration",
+        "priority": 0
+      }
+    ],
+    "assumptions": [
+      {
+        "decision": "Treat this command as repository workflow metadata rather than an application feature.",
+        "alternatives": [
+          "Add a C++ runtime surface",
+          "Require a generated index or external service"
+        ],
+        "why_chosen": "The authoritative inputs are already versioned and the goal is to reduce discovery work before a Canvas edit begins."
+      },
+      {
+        "decision": "Use a CTest-registered shell regression so the contract runs through the existing scripts/dev test surface.",
+        "alternatives": [
+          "Leave the helper untested",
+          "Add a new standalone test runner outside existing verification"
+        ],
+        "why_chosen": "CTest is the repository's existing test registry and can exercise the shell interface without adding production dependencies."
+      },
+      {
+        "decision": "Interpret tests_for and dependencies as zero-based subtask indices.",
+        "alternatives": [
+          "Use mixed one-based and zero-based references"
+        ],
+        "why_chosen": "Subtask 0 defines the red contract for implementation subtask 1, which depends on subtask 0; subtask 2 is the single final integration gate and depends on implementation."
+      }
+    ]
+  }
+}

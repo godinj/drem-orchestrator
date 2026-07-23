@@ -46,6 +46,7 @@ type SpawnRecord struct {
 	ContainerID             string
 	Image                   string
 	Branch                  string
+	BaseSHA                 string
 	Provider                string
 	ModelID                 string
 	Effort                  string
@@ -154,6 +155,7 @@ func (s *Store) RecordSpawn(ctx context.Context, r SpawnRecord) (Handle, error) 
 		ContainerID:             r.ContainerID,
 		AgentType:               r.AgentType,
 		Branch:                  r.Branch,
+		BaseSHA:                 r.BaseSHA,
 		Image:                   r.Image,
 		State:                   model.WorkerAttemptRunning,
 		LeaseOwner:              r.WorkerID,
@@ -236,6 +238,7 @@ func (s *Store) ReserveSpawn(ctx context.Context, r SpawnRecord) (Reservation, e
 				WorkerID:                r.WorkerID,
 				AgentType:               r.AgentType,
 				Branch:                  r.Branch,
+				BaseSHA:                 r.BaseSHA,
 				Image:                   r.Image,
 				State:                   model.WorkerAttemptReserved,
 				LeaseOwner:              r.WorkerID,

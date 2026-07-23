@@ -1,53 +1,67 @@
 package main
 
 import (
+	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/godinj/drem-orchestrator/internal/agent"
 )
 
-func TestOpenTraceUsesRuntimeDirectoryOutsideCheckout(t *testing.T) {
-	workDir := t.TempDir()
-	traceDir := t.TempDir()
-	t.Setenv("DREM_WORKDIR", workDir)
-	t.Setenv("DREM_TRACE_DIR", traceDir)
-	t.Setenv("DREM_AGENT_ID", "12345678-aaaa")
+func TestBoundedStopWithWork(t *testing.T) {
+	dir := t.TempDir()
+	runGitForTest(t, dir, "init")
+	runGitForTest(t, dir, "config", "user.email", "test@example.com")
+	runGitForTest(t, dir, "config", "user.name", "Test")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("base\n"), 0o644))
+	runGitForTest(t, dir, "add", "tracked.txt")
+	runGitForTest(t, dir, "commit", "-m", "base")
 
-	trace, err := openTrace()
-	require.NoError(t, err)
-	require.NoError(t, trace.Close())
+	startSHA := gitForTest(t, dir, "rev-parse", "HEAD")
+	require.False(t, boundedStopWithWork(dir, startSHA, agent.DirectToolStopReasonNoProgress))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("changed\n"), 0o644))
+	for _, reason := range []string{agent.DirectToolStopReasonMaxIterations, agent.DirectToolStopReasonContextLimit, agent.DirectToolStopReasonTokenBudget} {
+		require.True(t, boundedStopWithWork(dir, startSHA, reason), reason)
+	}
+	for _, reason := range []string{agent.DirectToolStopReasonNoProgress, agent.DirectToolStopReasonMaxTokens, agent.DirectToolStopReasonTimeout, ""} {
+		require.False(t, boundedStopWithWork(dir, startSHA, reason), reason)
+	}
 
-	_, err = os.Stat(filepath.Join(traceDir, "agent-trace-12345678.jsonl"))
-	require.NoError(t, err)
-	entries, err := os.ReadDir(workDir)
-	require.NoError(t, err)
-	require.Empty(t, entries)
+	runGitForTest(t, dir, "add", "tracked.txt")
+	runGitForTest(t, dir, "commit", "-m", "completed work")
+	require.Empty(t, gitForTest(t, dir, "status", "--porcelain"))
+	require.False(t, boundedStopWithWork(dir, startSHA, agent.DirectToolStopReasonMaxTokens))
 }
 
-func TestClassifyPushFailureDuplicateWhenRefsMatch(t *testing.T) {
-	require.Equal(t, "duplicate", classifyPushFailure(
-		"abc123",
-		"abc123",
-		"error: failed to push some refs to '/bare'",
-	))
+func TestEnvJSONStrings(t *testing.T) {
+	t.Setenv("DREM_SCOPED_FILES_JSON", `[" src/Main.cpp ","","tests/unit/test_Main.cpp"]`)
+	require.Equal(t,
+		[]string{"src/Main.cpp", "tests/unit/test_Main.cpp"},
+		envJSONStrings("DREM_SCOPED_FILES_JSON"))
 }
 
-func TestClassifyPushFailureStaleRefOrRace(t *testing.T) {
-	require.Equal(t, "stale_ref_or_race", classifyPushFailure(
-		"local",
-		"remote",
-		"! [rejected] HEAD -> feature/x (fetch first)\nerror: failed to push some refs to '/bare'",
-	))
+func TestEnvJSONStringsInvalidFallsBackToUnscoped(t *testing.T) {
+	t.Setenv("DREM_SCOPED_FILES_JSON", `{not-json}`)
+	require.Nil(t, envJSONStrings("DREM_SCOPED_FILES_JSON"))
 }
 
-func TestClassifyPushFailureUnknown(t *testing.T) {
-	require.Equal(t, "unknown", classifyPushFailure("local", "", "fatal: 'origin' does not appear to be a git repository"))
+func runGitForTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
 }
 
-func TestTailStringKeepsStderrTail(t *testing.T) {
-	tail := tailString("prefix "+strings.Repeat("x", 20)+" suffix", 10)
-	require.Equal(t, "xxx suffix", tail)
+func gitForTest(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	return string(bytes.TrimSpace(out))
 }

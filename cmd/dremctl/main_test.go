@@ -155,6 +155,97 @@ func TestEnvDefaultsAndFlagOverride(t *testing.T) {
 	}
 }
 
+func TestLocalProjectConfigSuppliesURLTokenAndCodexActor(t *testing.T) {
+	var post recordedRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := recordRequest(t, r)
+		switch r.Method {
+		case http.MethodGet:
+			writeJSONResponse(t, w, map[string]any{
+				"id": testTaskID, "title": "A", "status": "plan_review", "state_version": 1,
+				"created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z"),
+			})
+		case http.MethodPost:
+			post = rec
+			writeJSONResponse(t, w, map[string]any{
+				"id": testTaskID, "title": "A", "status": "in_progress", "state_version": 2,
+				"created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:02:00Z"),
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	home := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(home, ".drem", "projects", "canvas"), 0o755))
+	registry := fmt.Sprintf("[[projects]]\nname = \"canvas\"\nbare_repo_path = %q\nlanguage = \"cpp\"\norch_url = %q\n", home, ts.URL)
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".drem", "projects.toml"), []byte(registry), 0o600))
+	compose := "services:\n  orch:\n    environment:\n      DREM_AGENTMON_TOKEN: local-secret\n"
+	require.NoError(t, os.WriteFile(filepath.Join(home, ".drem", "projects", "canvas", "compose.yml"), []byte(compose), 0o600))
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"--project", "canvas", "approve", testTaskID}, mapEnv(map[string]string{
+		"HOME": home, "CODEX_THREAD_ID": "thread-123",
+	}), &out, &errOut)
+	require.NoError(t, err)
+	require.Equal(t, "Bearer local-secret", post.Authorization)
+	require.Equal(t, "codex:thread-123", post.Actor)
+}
+
+func TestFollowPrintsOnlyStateChangesAndStopsAtRequestedStatus(t *testing.T) {
+	statuses := []struct {
+		status  string
+		version uint64
+	}{
+		{status: "in_progress", version: 2},
+		{status: "in_progress", version: 2},
+		{status: "testing_ready", version: 3},
+		{status: "verification_ready", version: 4},
+	}
+	requests := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idx := requests
+		if idx >= len(statuses) {
+			idx = len(statuses) - 1
+		}
+		requests++
+		writeJSONResponse(t, w, map[string]any{
+			"id": testTaskID, "title": "A", "status": statuses[idx].status, "state_version": statuses[idx].version,
+			"created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z"),
+		})
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"follow", testTaskID, "--interval", "1ms", "--timeout", "1s"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL, "DREM_PROJECT": "canvas",
+	}), &out, &errOut)
+	require.NoError(t, err)
+	require.Equal(t, "12345678 v2 in_progress\n12345678 v3 testing_ready\n12345678 v4 verification_ready\n", out.String())
+}
+
+func TestFollowPrintsStructuredReviewEvidence(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeJSONResponse(t, w, map[string]any{
+			"id": testTaskID, "title": "A", "status": "plan_review", "state_version": 4,
+			"created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z"),
+			"review_status": "attention_required", "review_detail": "SGLang recommendation: revise",
+			"review_recommendation": "revise", "review_coverage": "partial",
+			"review_issues": []string{"missing repository boundary"},
+		})
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err := run(t.Context(), []string{"follow", testTaskID, "--interval", "1ms", "--timeout", "1s"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL, "DREM_PROJECT": "canvas",
+	}), &out, &errOut)
+	require.NoError(t, err)
+	require.Contains(t, out.String(), "review recommendation=revise coverage=partial")
+	require.Contains(t, out.String(), "review_issue: missing repository boundary")
+}
+
 func TestMissingURLError(t *testing.T) {
 	var out, errOut bytes.Buffer
 	err := run(t.Context(), []string{"projects"}, mapEnv(nil), &out, &errOut)
@@ -608,8 +699,12 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 		{name: "pass", args: []string{"pass", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/pass", wantOut: "in_progress"},
 		{name: "fail", args: []string{"fail", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/fail", wantOut: "in_progress"},
 		{name: "answer", args: []string{"answer", "12345678", "--body", "use port 9090"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/answer", wantBody: `{"body":"use port 9090"}`, wantOut: "in_progress"},
+		{name: "accept assumptions", args: []string{"accept-assumptions", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/answer", wantBody: `{"body":"/accept-plan"}`, wantOut: "in_progress"},
 		{name: "retry", args: []string{"retry", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/retry", wantOut: "in_progress"},
 		{name: "retry explicit key", args: []string{"retry", "12345678", "--idempotency-key", "retry-after-upgrade"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/retry", wantOut: "in_progress"},
+		{name: "resume", args: []string{"resume", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/resume", wantOut: "in_progress"},
+		{name: "adopt", args: []string{"adopt", "12345678", "--commit", "abc123"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/adopt", wantBody: `{"commit_sha":"abc123"}`, wantOut: "in_progress"},
+		{name: "adopt explicit key", args: []string{"adopt", "12345678", "--commit", "abc123", "--idempotency-key", "adopt-after-detach"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/adopt", wantBody: `{"commit_sha":"abc123"}`, wantOut: "in_progress"},
 		{name: "archive", args: []string{"archive", "12345678", "--reason", "superseded", "--actor", "codex:kyle:test"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/archive", wantBody: `{"actor":"codex:kyle:test","reason":"superseded","mode":"obsolete"}`, wantOut: "in_progress"},
 		{name: "comment", args: []string{"comment", "12345678", "--body", "supersede from current base"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/comments", wantBody: `{"body":"supersede from current base"}`, wantOut: "comment"},
 	}
@@ -668,11 +763,55 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 			if tt.name == "retry explicit key" && posts[0].IdempotencyKey != "retry-after-upgrade" {
 				t.Fatalf("Idempotency-Key = %q, want retry-after-upgrade", posts[0].IdempotencyKey)
 			}
+			if tt.name == "adopt explicit key" && posts[0].IdempotencyKey != "adopt-after-detach" {
+				t.Fatalf("Idempotency-Key = %q, want adopt-after-detach", posts[0].IdempotencyKey)
+			}
 			if !strings.Contains(out.String(), tt.wantOut) {
 				t.Fatalf("mutation output %q missing %q", out.String(), tt.wantOut)
 			}
 		})
 	}
+}
+
+func TestRevisePlanReadsExecutionPlanFromSpec(t *testing.T) {
+	specPath := filepath.Join(t.TempDir(), "task-spec.json")
+	spec := orchdto.TaskSpecDTO{ExecutionPlan: &orchdto.TaskExecutionPlanDTO{
+		Subtasks: []orchdto.TaskExecutionSubtaskDTO{{
+			Title: "verify all boundaries", Description: "corrected plan", Files: []string{"CMakeLists.txt"}, Phase: "integration",
+		}},
+	}}
+	raw, err := json.Marshal(spec)
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(specPath, raw, 0o600))
+	var post recordedRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks":
+			writeJSONResponse(t, w, []map[string]any{{"id": testTaskID, "title": "A", "status": "plan_review", "state_version": 4, "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")}})
+		case r.Method == http.MethodGet && r.URL.Path == "/projects/canvas/tasks/"+testTaskID:
+			writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": "A", "status": "plan_review", "state_version": 4, "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:01:00Z")})
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/revise-plan"):
+			post = recordRequest(t, r)
+			writeJSONResponse(t, w, map[string]any{"id": testTaskID, "title": "A", "status": "plan_review", "state_version": 5, "created_at": rfc3339("2026-04-24T10:00:00Z"), "updated_at": rfc3339("2026-04-24T10:02:00Z")})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	var out, errOut bytes.Buffer
+	err = run(t.Context(), []string{"revise-plan", "12345678", "--spec", specPath, "--reason", "cover reviewer findings", "--idempotency-key", "revision-4"}, mapEnv(map[string]string{
+		"DREM_ORCH_URL": ts.URL, "DREM_PROJECT": "canvas", "DREM_ACTOR": "codex:test-thread",
+	}), &out, &errOut)
+	require.NoError(t, err)
+	require.Equal(t, "/projects/canvas/tasks/"+testTaskID+"/revise-plan", post.Path)
+	require.Equal(t, "codex:test-thread", post.Actor)
+	require.Equal(t, "revision-4", post.IdempotencyKey)
+	var request orchdto.ReviseTaskPlanRequest
+	require.NoError(t, json.Unmarshal([]byte(post.Body), &request))
+	require.Equal(t, "cover reviewer findings", request.Reason)
+	require.Equal(t, "verify all boundaries", request.ExecutionPlan.Subtasks[0].Title)
+	require.Contains(t, out.String(), "plan_review")
 }
 
 func TestFullUUIDMutationSkipsPrefixResolution(t *testing.T) {

@@ -3,6 +3,9 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -211,7 +214,28 @@ func TestReconcileWorkerAttemptLifecycles_ConsumesSpawnerExitWithoutLeaseDelay(t
 	require.NoError(t, o.db.First(&completed, "id = ?", attempt.ID).Error)
 	require.Equal(t, model.WorkerAttemptCompleted, completed.State)
 	require.NotNil(t, completed.CompletedAt)
-	require.Equal(t, []spawner.InspectWorkerParams{{ContainerID: attempt.ContainerID}}, fake.inspectCalls)
+	require.Equal(t, []spawner.InspectWorkerParams{{ContainerID: attempt.ContainerID}, {ContainerID: attempt.ContainerID}}, fake.inspectCalls,
+		"terminal reconciliation retries inspection once when the first response has no flushed usage summary")
+}
+
+func TestReconcileWorkerAttemptLifecycles_RecoversAuthoritativelyRemovedContainer(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	setWorkerCredsPathEnv(t, "/host/.claude/.credentials.json")
+	setWorkerPromptRootEnv(t, t.TempDir())
+	task := seedInFlightTask(t, o)
+	pushTestFeatureBranch(t, o.worktree.(*FakeWorktreeManager).BarePath, task.WorktreeBranch)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-removed", "c-removed")
+	fake.listResult = spawner.ListWorkersResult{}
+	fake.inspectResult = spawner.InspectWorkerResult{Status: string(container.StatusRemoved)}
+
+	o.reconcileWorkerAttemptLifecycles(context.Background())
+
+	var failed model.WorkerAttempt
+	require.NoError(t, o.db.First(&failed, "id = ?", attempt.ID).Error)
+	require.Equal(t, model.WorkerAttemptFailed, failed.State)
+	require.NotNil(t, failed.CompletedAt)
+	require.Equal(t, []spawner.InspectWorkerParams{{ContainerID: attempt.ContainerID}, {ContainerID: attempt.ContainerID}}, fake.inspectCalls)
+	require.Len(t, fake.spawnCalls, 1, "removed current worker should use the normal retry path")
 }
 
 func TestDispatchEvent_ExitZeroReplayFinalizesAttemptAfterTaskEffect(t *testing.T) {
@@ -318,7 +342,7 @@ func TestReconcileWorkerAttemptLifecycles_IgnoresRunningAndDuplicateTerminalObse
 	o.reconcileWorkerAttemptLifecycles(context.Background())
 	o.reconcileWorkerAttemptLifecycles(context.Background())
 
-	require.Len(t, fake.inspectCalls, 1, "finalized attempts must not be consumed twice")
+	require.Len(t, fake.inspectCalls, 2, "one lifecycle inspect plus one usage retry; finalized attempts must not be consumed again")
 	var evidenceCount int64
 	require.NoError(t, o.db.Model(&model.TaskEvent{}).
 		Where("task_id = ? AND event_type = ?", task.ID, "worker_completion_evidence").Count(&evidenceCount).Error)
@@ -370,6 +394,116 @@ func TestDispatchEvent_ExitZeroCompletesThroughBranchAcceptance(t *testing.T) {
 	evidenceMap := evidence.Details["evidence"].(map[string]any)
 	require.Equal(t, "accepted", evidenceMap["reason"])
 	require.Equal(t, "exit_zero_current_attempt", evidenceMap["normalized_reason"])
+}
+
+func TestDispatchEvent_BranchAcceptanceUsesWorkerSpawnBase(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	o.skipConstraintGate = true
+	fwt := o.worktree.(*FakeWorktreeManager)
+	fwt.Default = testutil.GetDefaultBranch(t, fwt.BarePath)
+	featureDir := t.TempDir()
+	testutil.AddWorktree(t, fwt.BarePath, "feature/cumulative-parent", featureDir)
+	testutil.CommitFile(t, featureDir, "inherited.txt", "parent work\n", "parent sibling work")
+	spawnBase := strings.TrimSpace(runGitCmd(t, featureDir, "rev-parse", "HEAD"))
+	testutil.CommitFile(t, featureDir, "allowed.go", "package allowed\n", "worker work")
+	fwt.Features = map[string]string{"cumulative-parent": featureDir}
+
+	task := seedInFlightTask(t, o)
+	task.WorktreeBranch = "feature/cumulative-parent"
+	task.Context = model.JSONField{"estimated_files": []any{"allowed.go"}}
+	require.NoError(t, o.db.Save(task).Error)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-cumulative", "c-cumulative")
+	attempt.Branch = task.WorktreeBranch
+	attempt.BaseSHA = spawnBase
+	require.NoError(t, o.db.Save(attempt).Error)
+
+	o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *attempt, 0, false), newReplacementTracker())
+
+	require.Empty(t, fake.spawnCalls)
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusTestingReady, reloaded.Status)
+	detail := reloaded.Context["branch_acceptance"].(map[string]any)
+	require.Equal(t, spawnBase, detail["base_ref"])
+	require.Equal(t, []any{"allowed.go"}, detail["accepted_files"])
+}
+
+func TestDispatchEvent_ExitZeroFailsClosedOnBranchScopeRejection(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	o.skipConstraintGate = true
+	fwt := o.worktree.(*FakeWorktreeManager)
+	fwt.Default = testutil.GetDefaultBranch(t, fwt.BarePath)
+	featureDir := t.TempDir()
+	testutil.AddWorktree(t, fwt.BarePath, "feature/rejected-exit-zero", featureDir)
+	testutil.CommitFile(t, featureDir, "outside.go", "package outside\n", "add out-of-scope file")
+	fwt.Features = map[string]string{"rejected-exit-zero": featureDir}
+
+	task := seedInFlightTask(t, o)
+	task.WorktreeBranch = "feature/rejected-exit-zero"
+	task.Context = model.JSONField{"estimated_files": []any{"allowed.go"}}
+	require.NoError(t, o.db.Save(task).Error)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-bad-branch", "c-bad-branch")
+	attempt.Branch = task.WorktreeBranch
+	require.NoError(t, o.db.Save(attempt).Error)
+
+	o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *attempt, 0, false), newReplacementTracker())
+
+	require.Empty(t, fake.spawnCalls, "scope rejection must stop rather than spend another inference attempt")
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusFailed, reloaded.Status)
+	require.Equal(t, failureClassBranchContam, reloaded.Context["failure_class"])
+}
+
+func TestDispatchEvent_RejectsOutOfScopeWorkerBeforeParentMerge(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	o.skipConstraintGate = true
+	fwt := o.worktree.(*FakeWorktreeManager)
+	fwt.Default = testutil.GetDefaultBranch(t, fwt.BarePath)
+	parentDir := t.TempDir()
+	testutil.AddWorktree(t, fwt.BarePath, "feature/premerge-parent", parentDir)
+	testutil.CommitFile(t, parentDir, "inherited.txt", "parent work\n", "parent work")
+	spawnBase := strings.TrimSpace(runGitCmd(t, parentDir, "rev-parse", "HEAD"))
+	workerDir := t.TempDir()
+	testutil.AddWorktree(t, fwt.BarePath, "feature/premerge-worker", workerDir)
+	runGitCmd(t, workerDir, "reset", "--hard", spawnBase)
+	testutil.CommitFile(t, workerDir, "outside.txt", "bad worker change\n", "out-of-scope work")
+	fwt.Features = map[string]string{"premerge-parent": parentDir}
+
+	task := seedInFlightTask(t, o)
+	task.WorktreeBranch = "feature/premerge-parent"
+	task.Context = model.JSONField{"estimated_files": []any{"allowed.go"}}
+	require.NoError(t, o.db.Save(task).Error)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-premerge", "c-premerge")
+	attempt.Branch = "feature/premerge-worker"
+	attempt.BaseSHA = spawnBase
+	require.NoError(t, o.db.Save(attempt).Error)
+	require.NoError(t, o.db.Model(&model.Agent{}).Where("id = ?", attempt.AgentID).
+		Update("worktree_branch", attempt.Branch).Error)
+
+	o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *attempt, 0, false), newReplacementTracker())
+
+	require.Empty(t, fake.spawnCalls)
+	require.Equal(t, spawnBase, strings.TrimSpace(runGitCmd(t, parentDir, "rev-parse", "HEAD")),
+		"rejected worker must not advance the parent branch")
+	_, err := os.Stat(filepath.Join(parentDir, "outside.txt"))
+	require.True(t, os.IsNotExist(err), "rejected file must never enter the parent worktree")
+}
+
+func TestDispatchEvent_DeathAfterPriorBranchRejectionFailsWithoutRespawn(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	task := seedInFlightTask(t, o)
+	task.Context = model.JSONField{"branch_acceptance": map[string]any{"accepted": false}}
+	require.NoError(t, o.db.Save(task).Error)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-legacy-retry", "c-legacy-retry")
+
+	o.dispatchEvent(context.Background(), workerDeathEvent(task.ID, *attempt, 143, false), newReplacementTracker())
+
+	require.Empty(t, fake.spawnCalls)
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusFailed, reloaded.Status)
+	require.Equal(t, failureClassBranchContam, reloaded.Context["failure_class"])
 }
 
 func TestDispatchEvent_ExitZeroStaleAttemptDoesNotMutateCurrentAssignment(t *testing.T) {
@@ -479,6 +613,24 @@ func TestDispatchEvent_RepeatedToolLoopExhaustsDurableRetryBudget(t *testing.T) 
 		require.Equal(t, true, entry["exhausted"])
 	}
 	require.True(t, found, "expected persisted tool-loop budget")
+}
+
+func TestDispatchEvent_TokenBudgetFailureDoesNotRespawnIdenticalWorker(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	task := seedInFlightTask(t, o)
+	attempt := seedAssignedWorkerAttempt(t, o, task, model.AgentCoder, "worker-budget", "c-budget")
+
+	ev := workerDeathEvent(task.ID, *attempt, 1, false)
+	ev.Usage = &container.WorkerUsage{Iterations: 9, TokensIn: 31061, TokensOut: 400, StopReason: "token_budget"}
+	ev.UsageInspected = true
+	o.dispatchEvent(context.Background(), ev, newReplacementTracker())
+
+	require.Empty(t, fake.spawnCalls, "deterministic inference-budget exhaustion must park after the first attempt")
+	var reloaded model.Task
+	require.NoError(t, o.db.First(&reloaded, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusFailed, reloaded.Status)
+	require.Equal(t, failureClassInferenceBudget, reloaded.Context["latest_failure_type"])
+	require.Equal(t, true, reloaded.Context["latest_failure_retry_exhausted"])
 }
 
 func TestDispatchEvent_StaleDeathDoesNotKillCurrentAssignedWorker(t *testing.T) {

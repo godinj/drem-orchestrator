@@ -320,13 +320,20 @@ func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
 	setWorkerPromptRootEnv(t, t.TempDir())
 	o, fake, _ := workerSpawnTestRig(t)
 	o.SetDirectToolAgentConfig(&agent.DirectToolAgentConfig{
-		Endpoint:      "http://gq:8090/v1/chat/completions",
-		Model:         "gemma4-26b",
-		MaxTokens:     2048,
-		MaxIterations: 7,
-		Temperature:   0.2,
-		Timeout:       30 * time.Second,
+		Endpoint:                         "http://gq:8090/v1/chat/completions",
+		Model:                            "gemma4-26b",
+		MaxTokens:                        2048,
+		MaxIterations:                    7,
+		MaxCumulativeInputTokens:         12345,
+		MaxReadsBeforeMutation:           4,
+		TestMaxCumulativeInputTokens:     23456,
+		TestMaxReadsBeforeMutation:       8,
+		MaxToolCalls:                     12,
+		TestMaxInputTokensBeforeMutation: 18000,
+		Temperature:                      0.2,
+		Timeout:                          30 * time.Second,
 	})
+	o.deliveryPolicy.VerificationPolicy = model.VerificationExternalAck
 	o.runner = agent.NewRunner(o.db, nil, nil, "/bin/false", "", 1, func(at model.AgentType) model.AgentCLIConfig {
 		require.Equal(t, model.AgentCoder, at)
 		return model.AgentCLIConfig{Provider: model.ProviderSGLangDirect, Model: "gemma4-26b"}
@@ -338,7 +345,13 @@ func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
 		Title:          "Run sglang-direct in a container harness",
 		Description:    "d",
 		Status:         model.StatusInProgress,
+		Phase:          "test",
 		WorktreeBranch: "feature/no-container-sglang",
+		Context: model.JSONField{
+			"estimated_files":            []any{"tests/unit/test_marker.cpp"},
+			"planned_interface_contract": `{"kind":"planned_api","expected_missing_symbols":["Marker::set()"]}`,
+			"internal_retry_failure":     "must not leak",
+		},
 	}
 	require.NoError(t, o.db.Create(task).Error)
 
@@ -350,12 +363,27 @@ func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
 	require.Equal(t, "gemma4-26b", p.Env["DREM_MODEL"])
 	require.Equal(t, "2048", p.Env["DREM_DIRECT_MAX_TOKENS"])
 	require.Equal(t, "7", p.Env["DREM_DIRECT_MAX_ITERATIONS"])
+	require.Equal(t, "23456", p.Env["DREM_DIRECT_MAX_CUMULATIVE_INPUT_TOKENS"])
+	require.Equal(t, "8", p.Env["DREM_DIRECT_MAX_READS_BEFORE_MUTATION"])
+	require.Equal(t, "12", p.Env["DREM_DIRECT_MAX_TOOL_CALLS"])
+	require.Equal(t, "18000", p.Env["DREM_DIRECT_MAX_INPUT_TOKENS_BEFORE_MUTATION"])
 	require.Equal(t, "0.2", p.Env["DREM_DIRECT_TEMPERATURE"])
 	require.Equal(t, "30s", p.Env["DREM_DIRECT_TIMEOUT"])
 	require.Equal(t, "coder", p.Env["DREM_GQ_CALLER"])
 	require.Equal(t, "normal", p.Env["DREM_GQ_PRIORITY"])
+	require.JSONEq(t, `["tests/unit/test_marker.cpp"]`, p.Env["DREM_SCOPED_FILES_JSON"])
 	require.Empty(t, p.CredsMount)
 	require.NotEmpty(t, p.PromptMount)
+	rawPrompt, err := os.ReadFile(p.PromptMount)
+	require.NoError(t, err)
+	rendered := string(rawPrompt)
+	require.Contains(t, rendered, "TEST phase")
+	require.Contains(t, rendered, "Marker::set()")
+	require.Contains(t, rendered, "/home/drem/work")
+	require.Contains(t, rendered, task.WorktreeBranch)
+	require.NotContains(t, rendered, "Repository Map")
+	require.NotContains(t, rendered, "must not leak")
+	require.Less(t, len(rendered), 8000)
 }
 
 func TestSpawnCoder_RecordsContainerIDAndModelMetadataOnAgent(t *testing.T) {

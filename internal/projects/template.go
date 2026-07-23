@@ -92,6 +92,9 @@ type TemplateData struct {
 	// it into codex-backed worker spawns as SpawnWorkerParams.CodexAuthMount.
 	// Defaults to HostHome/.codex/auth.json when empty.
 	WorkerCodexAuthPath string
+	// WarmAgentTokenPath is mounted read-only into project orchestrators so
+	// shared classifier/planner auth is independent of per-project API tokens.
+	WarmAgentTokenPath string
 	// WorkerPromptRoot is the host directory under which orch writes
 	// per-task prompt files. Passed to orch via DREM_PROMPT_ROOT_HOST
 	// AND bind-mounted read-write into the orch container at the same
@@ -125,6 +128,11 @@ type TemplateData struct {
 	// state remains reachable for the one-time migration copy-out.
 	// See plans/orch-db-host-access-impl.md (Option A).
 	HostDataDir string
+	// UseNamedDBVolume keeps SQLite and its WAL on Docker's native Linux
+	// filesystem. It is enabled by the registration CLI on macOS, where
+	// Docker Desktop bind mounts do not provide reliable WAL durability across
+	// container recreation. Linux registrations retain host DB inspection.
+	UseNamedDBVolume bool
 
 	// PlanPacketRoot is the host directory bind-mounted read-only into
 	// C-Suite persona containers at /home/drem/orch-plans. It holds
@@ -161,6 +169,10 @@ type TemplateData struct {
 	// CompileCommand is the test-phase compile gate command written to
 	// generated drem.toml. Defaults from Language when empty.
 	CompileCommand string
+	// Review policies are explicit so a generated project never silently
+	// turns an operator gate into an automated model decision.
+	PlanReviewPolicy string
+	TestReviewPolicy string
 }
 
 // Default image tags for the orchestrator.

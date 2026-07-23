@@ -35,6 +35,7 @@ type Service struct {
 
 	mu       sync.Mutex
 	registry map[string]*registryEntry
+	imageMu  sync.Mutex
 }
 
 // registryEntry holds the label context captured at spawn time so

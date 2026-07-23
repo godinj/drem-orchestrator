@@ -932,6 +932,25 @@ func TestRender_HostDataDirBindMountIsWired(t *testing.T) {
 		parsed.Services["orch"].Volumes)
 }
 
+func TestRender_NamedDBVolumeForDockerDesktop(t *testing.T) {
+	data := fullTemplateData("drem-canvas", projects.LanguageCpp)
+	data.HostHome = "/Users/operator"
+	data.UseNamedDBVolume = true
+	out, err := projects.Render(data)
+	require.NoError(t, err)
+
+	var parsed struct {
+		Services map[string]struct {
+			Volumes []string `yaml:"volumes"`
+		} `yaml:"services"`
+	}
+	require.NoError(t, yaml.Unmarshal(out, &parsed))
+	require.Contains(t, parsed.Services["orch"].Volumes, "drem-drem-canvas-db:/var/lib/drem")
+	for _, volume := range parsed.Services["orch"].Volumes {
+		require.NotContains(t, volume, "/Users/operator/.drem/projects/drem-canvas/data:/var/lib/drem")
+	}
+}
+
 // TestRender_HostDataDirDefaultsFromHostHome asserts deployment defaults
 // fills in HostDataDir as <HostHome>/.drem/projects/<ProjectName>/data
 // when the caller leaves it zero-value. Mirrors the WorkerPromptRoot

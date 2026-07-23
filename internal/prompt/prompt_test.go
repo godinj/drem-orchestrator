@@ -542,6 +542,7 @@ func TestGenerate_WorktreeInfo(t *testing.T) {
 
 func TestGenerate_ScopeSection(t *testing.T) {
 	opts := minimalOpts()
+	opts.Task.Context = model.JSONField{"estimated_files": []any{"src/only.go", "tests/only_test.go"}}
 	output := Generate(opts)
 
 	if !strings.Contains(output, "## Scope") {
@@ -549,6 +550,22 @@ func TestGenerate_ScopeSection(t *testing.T) {
 	}
 	if !strings.Contains(output, "Only modify files directly relevant") {
 		t.Error("expected scope limitation text")
+	}
+	if !strings.Contains(output, "Exact allowed files: `src/only.go`, `tests/only_test.go`") {
+		t.Error("expected exact deterministic file scope")
+	}
+}
+
+func TestGenerate_ExternalVerificationDefersNativeBuild(t *testing.T) {
+	opts := minimalOpts()
+	opts.ExternalVerification = true
+	output := Generate(opts)
+
+	if !strings.Contains(output, "external host adapter") {
+		t.Error("expected host verification ownership")
+	}
+	if !strings.Contains(output, "Do not change build configuration") {
+		t.Error("expected worker-container build guardrail")
 	}
 }
 

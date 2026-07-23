@@ -61,6 +61,22 @@ func (c *Client) Reject(ctx context.Context, project string, taskID uuid.UUID, r
 	return out, nil
 }
 
+// RevisePlan replaces an adapter-authored execution plan after review feedback
+// without routing the task through the planner again. The server validates the
+// replacement against the immutable task specification.
+func (c *Client) RevisePlan(ctx context.Context, project string, taskID uuid.UUID, req orchdto.ReviseTaskPlanRequest) (orchdto.TaskDTO, error) {
+	return c.RevisePlanWithIdempotencyKey(ctx, project, taskID, req, "")
+}
+
+func (c *Client) RevisePlanWithIdempotencyKey(ctx context.Context, project string, taskID uuid.UUID, req orchdto.ReviseTaskPlanRequest, idempotencyKey string) (orchdto.TaskDTO, error) {
+	var out orchdto.TaskDTO
+	path := gatePath(project, taskID, "revise-plan")
+	if err := c.postGateWithIdempotencyKey(ctx, path, req, &out, idempotencyKey); err != nil {
+		return orchdto.TaskDTO{}, err
+	}
+	return out, nil
+}
+
 // Pass is a deprecated compatibility call. Evidence-bearing delivery flows
 // should use Verify; servers fail this call closed for testing_ready tasks.
 //
@@ -186,6 +202,36 @@ func (c *Client) retry(ctx context.Context, project string, taskID uuid.UUID, id
 	var out orchdto.TaskDTO
 	path := gatePath(project, taskID, "retry")
 	if err := c.postGateWithIdempotencyKey(ctx, path, nil, &out, idempotencyKey); err != nil {
+		return orchdto.TaskDTO{}, err
+	}
+	return out, nil
+}
+
+// Resume restores a paused task to its recorded pre-pause pipeline status.
+// It is deliberately distinct from Retry, which applies failure recovery
+// semantics and may route a task through backlog or a preliminary gate.
+func (c *Client) Resume(ctx context.Context, project string, taskID uuid.UUID) (orchdto.TaskDTO, error) {
+	var out orchdto.TaskDTO
+	path := gatePath(project, taskID, "resume")
+	if err := c.postGate(ctx, path, nil, &out); err != nil {
+		return orchdto.TaskDTO{}, err
+	}
+	return out, nil
+}
+
+// AdoptFailedChild asks the orchestrator to admit an exact host-repaired head
+// for a failed child task and resume its parent without another inference run.
+func (c *Client) AdoptFailedChild(ctx context.Context, project string, taskID uuid.UUID, commitSHA string) (orchdto.TaskDTO, error) {
+	return c.AdoptFailedChildWithIdempotencyKey(ctx, project, taskID, commitSHA, "")
+}
+
+func (c *Client) AdoptFailedChildWithIdempotencyKey(ctx context.Context, project string, taskID uuid.UUID, commitSHA, idempotencyKey string) (orchdto.TaskDTO, error) {
+	commitSHA = strings.TrimSpace(commitSHA)
+	if commitSHA == "" {
+		return orchdto.TaskDTO{}, &ErrBadRequest{Message: "adopt commit SHA is required"}
+	}
+	var out orchdto.TaskDTO
+	if err := c.postGateWithIdempotencyKey(ctx, gatePath(project, taskID, "adopt"), orchdto.AdoptFailedChildRequest{CommitSHA: commitSHA}, &out, idempotencyKey); err != nil {
 		return orchdto.TaskDTO{}, err
 	}
 	return out, nil
@@ -457,7 +503,7 @@ func (c *Client) legacyMutationMetadata(ctx context.Context, path string, body [
 	}
 	verb := strings.Join(parts[4:], "/")
 	guarded := map[string]bool{
-		"approve": true, "reject": true, "answer": true, "retry": true,
+		"approve": true, "reject": true, "revise-plan": true, "answer": true, "retry": true, "resume": true, "adopt": true,
 		"archive": true, "comments": true, "audit-events": true,
 	}
 	if strings.HasPrefix(verb, "recover/") {

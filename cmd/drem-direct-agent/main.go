@@ -62,6 +62,7 @@ func main() {
 	cfg.WorkDir = *workDir
 	cfg.MaxTokens = envInt("DREM_DIRECT_MAX_TOKENS", cfg.MaxTokens)
 	cfg.MaxIterations = envInt("DREM_DIRECT_MAX_ITERATIONS", cfg.MaxIterations)
+	cfg.MaxCumulativeInputTokens = envInt("DREM_DIRECT_MAX_CUMULATIVE_INPUT_TOKENS", cfg.MaxCumulativeInputTokens)
 	cfg.Temperature = envFloat("DREM_DIRECT_TEMPERATURE", cfg.Temperature)
 	cfg.Timeout = envDuration("DREM_DIRECT_TIMEOUT", cfg.Timeout)
 	cfg.BashTimeout = envDuration("DREM_DIRECT_BASH_TIMEOUT", cfg.BashTimeout)
@@ -81,18 +82,66 @@ func main() {
 	}
 
 	systemPrompt := systemPromptForRole(*role)
-	result, runErr := agent.RunDirectToolAgent(cfg, systemPrompt, string(promptBytes), agent.ToolsForRole(*role), "")
+	startSHA := gitValue(*workDir, "rev-parse", "HEAD")
+	scopedFiles := envJSONStrings("DREM_SCOPED_FILES_JSON")
+	defaultReadBudget := 0
+	defaultToolBudget := 0
+	defaultPreMutationInputBudget := 0
+	if (*role == "coder" || *role == "fixer") && len(scopedFiles) > 0 {
+		defaultReadBudget = 2
+		defaultToolBudget = 12
+		defaultPreMutationInputBudget = 20_000
+	}
+	cfg.MaxReadsBeforeMutation = envInt("DREM_DIRECT_MAX_READS_BEFORE_MUTATION", defaultReadBudget)
+	cfg.MaxToolCalls = envInt("DREM_DIRECT_MAX_TOOL_CALLS", defaultToolBudget)
+	cfg.MaxInputTokensBeforeMutation = envInt("DREM_DIRECT_MAX_INPUT_TOKENS_BEFORE_MUTATION", defaultPreMutationInputBudget)
+	result, runErr := agent.RunDirectToolAgent(cfg, systemPrompt, string(promptBytes), agent.ToolsForRoleScope(*role, scopedFiles), "")
 	if result != nil {
 		_, _ = fmt.Fprintf(os.Stdout, "%s\n", strings.TrimSpace(result.Output))
 		_, _ = fmt.Fprintf(os.Stderr, "drem-direct-agent: iterations=%d tokens_in=%d tokens_out=%d duration=%s stop_reason=%s\n",
 			result.Iterations, result.TokensIn, result.TokensOut, result.Duration, result.StopReason)
 	}
 	if runErr != nil {
+		if result != nil && boundedStopWithWork(*workDir, startSHA, result.StopReason) {
+			log.Printf("direct tool agent stopped at %s with repository changes; preserving work for deterministic gates: %v", result.StopReason, runErr)
+			if err := finalizeGit(*workDir); err != nil {
+				log.Fatalf("finalize bounded direct-agent work: %v", err)
+			}
+			return
+		}
 		log.Fatalf("direct tool agent failed: %v", runErr)
 	}
 	if err := finalizeGit(*workDir); err != nil {
 		log.Fatalf("finalize git work: %v", err)
 	}
+}
+
+// boundedStopWithWork preserves complete response checkpoints. The direct
+// loop applies the entire threshold-crossing tool batch before returning a
+// token/context stop, so those changes can safely proceed to deterministic
+// gates. Truncated and no-progress turns remain failed attempts.
+func boundedStopWithWork(workDir, startSHA, stopReason string) bool {
+	switch stopReason {
+	case agent.DirectToolStopReasonMaxIterations, agent.DirectToolStopReasonContextLimit,
+		agent.DirectToolStopReasonTokenBudget, agent.DirectToolStopReasonToolBudget:
+	default:
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(workDir, ".git")); err != nil {
+		return false
+	}
+	out, err := git(workDir, "status", "--porcelain")
+	if err != nil {
+		return false
+	}
+	if strings.TrimSpace(out) != "" {
+		return true
+	}
+	// Agents are instructed to commit before finishing. A bounded stop after
+	// that commit leaves a clean tree, so compare with the SHA captured before
+	// inference instead of discarding the completed artifact and retrying the
+	// same work. finalizeGit will push the commit if the model did not.
+	return startSHA != "" && gitValue(workDir, "rev-parse", "HEAD") != startSHA
 }
 
 func systemPromptForRole(role string) string {
@@ -258,6 +307,25 @@ func envInt(key string, fallback int) int {
 		return fallback
 	}
 	return parsed
+}
+
+func envJSONStrings(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	var values []string
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		log.Printf("invalid %s JSON; preserving unscoped tool set: %v", key, err)
+		return nil
+	}
+	result := values[:0]
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func envFloat(key string, fallback float64) float64 {

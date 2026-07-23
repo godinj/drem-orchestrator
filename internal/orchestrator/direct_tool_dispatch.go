@@ -88,10 +88,13 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 			"subtask_id", sub.ID)
 		return nil
 	}
-	toolCfg := *o.directToolAgentCfg
+	toolCfg := o.directToolAgentCfg.ForWorkload("coder", sub.Phase)
 	toolCfg.GQCaller = "coder"
 	toolCfg.GQPriority = "normal"
 	toolCfg.WorkDir = featureDir
+	if sub.Context == nil || len(extractFileList(sub.Context["estimated_files"])) == 0 {
+		toolCfg.MaxReadsBeforeMutation = 0
+	}
 	o.applyContextThresholds(&toolCfg)
 
 	agentID := uuid.New()
@@ -283,10 +286,11 @@ func (o *Orchestrator) dispatchQuickFixDirect(task *model.Task, event *model.Tas
 		return fmt.Errorf("direct quickfix: no feature workdir resolved")
 	}
 
-	toolCfg := *o.directToolAgentCfg
+	toolCfg := o.directToolAgentCfg.ForWorkload("coder", "implementation")
 	toolCfg.GQCaller = "coder"
 	toolCfg.GQPriority = "normal"
 	toolCfg.WorkDir = featureDir
+	toolCfg.MaxReadsBeforeMutation = 0
 	o.applyContextThresholds(&toolCfg)
 
 	agentID := uuid.New()
@@ -401,10 +405,11 @@ func (o *Orchestrator) processReviewerDirect(task *model.Task) error {
 	}
 
 	worktreePath := o.resolveReviewerWorkDir(task)
-	toolCfg := *o.directToolAgentCfg
+	toolCfg := o.directToolAgentCfg.ForWorkload("reviewer", task.Phase)
 	toolCfg.GQCaller = "reviewer"
 	toolCfg.GQPriority = "normal"
 	toolCfg.WorkDir = worktreePath
+	toolCfg.MaxReadsBeforeMutation = 0
 	o.applyContextThresholds(&toolCfg)
 
 	agentID := uuid.New()
@@ -454,6 +459,9 @@ func (o *Orchestrator) processReviewerDirect(task *model.Task) error {
 		if saveErr := o.db.Save(ag).Error; saveErr != nil {
 			o.logger.Warn("direct reviewer: save tokens", "agent_id", ag.ID, "error", saveErr)
 		}
+		if usageErr := o.recordInferenceUsage(task.ID, directReviewPhase(reviewMode), "reviewer", string(model.ProviderSGLangDirect), toolCfg.Model, result.TokensIn, result.TokensOut, result.Duration); usageErr != nil {
+			o.logger.Warn("direct reviewer: persist inference usage", "task_id", task.ID, "error", usageErr)
+		}
 	}
 	if runErr != nil {
 		o.logger.Error("direct reviewer: tool agent failed", "task_id", task.ID, "agent_id", ag.ID, "error", runErr)
@@ -480,7 +488,7 @@ func (o *Orchestrator) processFixerDirect(task *model.Task) error {
 	}
 
 	worktreePath := o.resolveReviewerWorkDir(task)
-	toolCfg := *o.directToolAgentCfg
+	toolCfg := o.directToolAgentCfg.ForWorkload("fixer", task.Phase)
 	toolCfg.GQCaller = "fixer"
 	toolCfg.GQPriority = "normal"
 	toolCfg.WorkDir = worktreePath

@@ -26,6 +26,10 @@ project_language = "{{.Language}}"
   integration_policy  = "{{.IntegrationPolicy}}"
   verification_policy = "{{.VerificationPolicy}}"
 
+[review_policy]
+  plan  = "{{.PlanReviewPolicy}}"
+  tests = "{{.TestReviewPolicy}}"
+
 # Classifier routes through the warm drem-classifier container on drem-net.
 # - `direct=true` bypasses the legacy OpenCode subprocess path (unavailable
 #   inside the headless orch container; kept here so the inline-fallback
@@ -47,7 +51,30 @@ project_language = "{{.Language}}"
 [direct_tool_agent]
   endpoint = "{{.InferenceEndpoint}}"
   model    = "gemma4-26b"
-  max_iterations = 50
+  # A bounded stop with a non-empty diff is preserved for deterministic gates,
+  # so long post-edit command loops no longer need a 50-turn budget.
+  max_iterations = 16
+  # Cumulative replay budget, distinct from the model's live context window.
+  # Phase overrides give complex local coding work more room while reviews
+  # remain cheap. Useful mutation checkpoints proceed to deterministic gates.
+  max_cumulative_input_tokens = 60000
+  test_max_cumulative_input_tokens = 65000
+  implementation_max_cumulative_input_tokens = 90000
+  integration_max_cumulative_input_tokens = 75000
+  review_max_cumulative_input_tokens = 30000
+  # Hard run-wide and pre-mutation limits stop search loops before they consume
+  # the larger checkpoint-preserving phase budget.
+  max_tool_calls = 12
+  max_input_tokens_before_mutation = 20000
+  test_max_input_tokens_before_mutation = 18000
+  implementation_max_input_tokens_before_mutation = 30000
+  integration_max_input_tokens_before_mutation = 24000
+  # This compatibility-named budget counts all reconnaissance, including
+  # structured search and discovery-like bash; scoped bash is denied pre-edit.
+  max_reads_before_mutation = 4
+  test_max_reads_before_mutation = 8
+  implementation_max_reads_before_mutation = 6
+  integration_max_reads_before_mutation = 6
 
 # Coder/reviewer/fixer work uses the GQ-fronted SGLang direct-tool path.
 [agents.coder]

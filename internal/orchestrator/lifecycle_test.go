@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
+	"github.com/godinj/drem-orchestrator/internal/clarification"
 	"github.com/godinj/drem-orchestrator/internal/model"
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
@@ -62,6 +63,30 @@ func createLifecycleTask(t *testing.T, db *gorm.DB, projectID uuid.UUID, title s
 		t.Fatalf("create task %q: %v", title, err)
 	}
 	return task
+}
+
+func TestHandleClarificationAnswerByAcceptPlanPreservesPlan(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+	plan := model.JSONField{"subtasks": []any{map[string]any{"title": "bounded implementation"}}}
+	session, err := clarification.Evaluate("{}", []clarification.Assumption{{
+		Decision: "Use the requested helper", Alternatives: []string{"Add a class"}, WhyChosen: "bounded scope",
+	}}, "")
+	require.NoError(t, err)
+	task := createLifecycleTask(t, db, o.projectID, "accept-plan", model.StatusNeedsClarification, plan)
+	task.Context = model.JSONField{
+		"clarification_session":          session.SessionData,
+		"clarification_current_question": session.Questions[0],
+	}
+	require.NoError(t, db.Save(&task).Error)
+
+	require.NoError(t, o.HandleClarificationAnswerBy(task.ID, "/accept-plan", "codex:test"))
+
+	var updated model.Task
+	require.NoError(t, db.First(&updated, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusPlanReview, updated.Status)
+	require.Equal(t, plan, updated.Plan)
+	require.Equal(t, "accepted_plan_assumptions", updated.Context["clarification_resolution"])
+	require.NotContains(t, updated.Context, "clarification_current_question")
 }
 
 func authorizeTestDelivery(t *testing.T, o *Orchestrator, taskID uuid.UUID) (*model.DeliveryArtifact, *model.VerificationRecord, *model.IntegrationAuthorization) {
@@ -147,8 +172,17 @@ func TestHandlePlanRejected(t *testing.T) {
 
 	plan := makePlan(2)
 	task := createLifecycleTask(t, db, o.projectID, "reject-plan-test", model.StatusPlanReview, plan)
+	task.Context = model.JSONField{
+		"automated_review_state_version": float64(task.StateVersion),
+		"automated_review_status":        "attention_required",
+		"automated_review_detail":        "revise",
+		"review":                         map[string]any{"recommendation": "revise"},
+	}
+	if err := db.Save(&task).Error; err != nil {
+		t.Fatalf("seed review context: %v", err)
+	}
 
-	if err := o.HandlePlanRejected(task.ID); err != nil {
+	if err := o.HandlePlanRejectedBy(task.ID, "test", "Use the existing unit-test harness"); err != nil {
 		t.Fatalf("HandlePlanRejected: unexpected error: %v", err)
 	}
 
@@ -167,10 +201,18 @@ func TestHandlePlanRejected(t *testing.T) {
 	if updated.Plan != nil {
 		t.Errorf("expected plan to be nil after rejection, got %v", updated.Plan)
 	}
+	if updated.PlanFeedback != "Use the existing unit-test harness" {
+		t.Errorf("expected plan feedback to be persisted, got %q", updated.PlanFeedback)
+	}
 
 	// Verify assigned agent was cleared.
 	if updated.AssignedAgentID != nil {
 		t.Errorf("expected assigned agent to be nil, got %v", updated.AssignedAgentID)
+	}
+	for _, key := range []string{"automated_review_state_version", "automated_review_status", "automated_review_detail", "review"} {
+		if _, ok := updated.Context[key]; ok {
+			t.Errorf("expected stale review key %q to be cleared", key)
+		}
 	}
 
 	// Verify a status_change event was recorded.

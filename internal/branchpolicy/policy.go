@@ -25,6 +25,7 @@ type PreflightRequest struct {
 type AcceptanceRequest struct {
 	RepoDir       string
 	BaseRef       string
+	HeadRef       string
 	AllowedScopes []string
 }
 
@@ -82,14 +83,18 @@ func Accept(ctx context.Context, req AcceptanceRequest) (AcceptanceResult, error
 	if err != nil {
 		return res, fmt.Errorf("resolve base ref: %w", err)
 	}
-	headSHA, err := gitexec.RunGit(ctx, req.RepoDir, "rev-parse", "HEAD")
+	headRef := strings.TrimSpace(req.HeadRef)
+	if headRef == "" {
+		headRef = "HEAD"
+	}
+	headSHA, err := gitexec.RunGit(ctx, req.RepoDir, "rev-parse", headRef)
 	if err != nil {
 		return res, fmt.Errorf("resolve HEAD: %w", err)
 	}
 	res.BaseSHA = baseSHA
 	res.HeadSHA = headSHA
 
-	out, err := gitexec.RunGit(ctx, req.RepoDir, "diff", "--name-status", req.BaseRef+"..HEAD")
+	out, err := gitexec.RunGit(ctx, req.RepoDir, "diff", "--name-status", req.BaseRef+".."+headRef)
 	if err != nil {
 		return res, fmt.Errorf("diff against base: %w", err)
 	}

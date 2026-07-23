@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
@@ -171,6 +172,55 @@ func TestDedupScheduling_SkipExistingWorkDedupPreventsFastTrack(t *testing.T) {
 	}
 	if updated.Status != model.StatusBacklog {
 		t.Errorf("expected subtask to remain %q, got %q", model.StatusBacklog, updated.Status)
+	}
+}
+
+func TestDedupScheduling_ImplementationOverlappingCompletedTestScaffoldIsNotFastTracked(t *testing.T) {
+	o, db, projectID, integrationDir := setupDedupSchedulingTest(t)
+
+	implTitle := "Implement host verification window title"
+	os.MkdirAll(filepath.Join(integrationDir, "src", "platform"), 0o755)
+	testutil.CommitFile(t, integrationDir,
+		"src/platform/WindowTitle.h",
+		"#pragma once\n// test-compilation scaffold only\n",
+		implTitle)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID: parentID, ProjectID: projectID, Title: "Host verification marker",
+		Description: "parent feature task", Status: model.StatusInProgress,
+		WorktreeBranch: "feature/dedup-test",
+	}
+	require.NoError(t, db.Create(&parent).Error)
+
+	testTask := model.Task{
+		ID: uuid.New(), ProjectID: projectID, ParentTaskID: &parentID,
+		Title: "Define host verification window title contract", Status: model.StatusDone,
+		Phase: "test", Context: model.JSONField{
+			"estimated_files": []any{"src/platform/WindowTitle.h", "tests/unit/test_WindowTitle.cpp"},
+		},
+	}
+	require.NoError(t, db.Create(&testTask).Error)
+
+	implementation := model.Task{
+		ID: uuid.New(), ProjectID: projectID, ParentTaskID: &parentID,
+		Title: implTitle, Description: "Implement the behavior under test",
+		Status: model.StatusBacklog, Phase: "implementation",
+		Context: model.JSONField{
+			"estimated_files": []any{"src/platform/WindowTitle.h", "src/Main.cpp"},
+			"agent_type":      "coder",
+		},
+	}
+	require.NoError(t, db.Create(&implementation).Error)
+
+	if err := o.scheduleSubtasks(&parent); err != nil {
+		t.Fatalf("scheduleSubtasks: %v", err)
+	}
+
+	var updated model.Task
+	require.NoError(t, db.First(&updated, "id = ?", implementation.ID).Error)
+	if updated.Status != model.StatusBacklog {
+		t.Fatalf("implementation scaffold overlap must require a worker, got status %q", updated.Status)
 	}
 }
 

@@ -10,9 +10,15 @@ package container
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 )
+
+// ErrNotFound is returned when the runtime can authoritatively determine
+// that a requested container no longer exists. Callers must not translate
+// transport errors or incomplete inventories into this sentinel.
+var ErrNotFound = errors.New("container not found")
 
 // Status is the lifecycle state of a container as reported by Inspect.
 type Status string
@@ -91,8 +97,9 @@ type State struct {
 // LogOptions controls the bounded/tailing behavior of StreamLogs.
 // A zero value returns the container's currently available logs and closes.
 type LogOptions struct {
-	Since  time.Time
-	Follow bool
+	Since     time.Time
+	Follow    bool
+	TailLines int
 }
 
 // EventFilter restricts SubscribeEvents to containers whose labels are a
@@ -112,6 +119,18 @@ type Event struct {
 	Timestamp   time.Time
 	ExitCode    int
 	OOMKilled   bool
+	Usage       *WorkerUsage
+	// UsageInspected distinguishes a terminal inspection with no direct
+	// harness summary from an event that has not queried logs yet.
+	UsageInspected bool
+}
+
+// WorkerUsage is the terminal token summary emitted by a direct worker.
+type WorkerUsage struct {
+	Iterations int    `json:"iterations"`
+	TokensIn   int    `json:"tokens_in"`
+	TokensOut  int    `json:"tokens_out"`
+	StopReason string `json:"stop_reason"`
 }
 
 // Runtime is the single I/O surface of this package. Every operation is
@@ -151,4 +170,12 @@ type Runtime interface {
 	// will fail with a not-found error — callers that need idempotency wrap
 	// the error check themselves.
 	Destroy(ctx context.Context, id string) error
+}
+
+// ImageEnsurer is an optional runtime capability used by the spawner before
+// it creates a worker container. Keeping it separate from Runtime preserves
+// compatibility with read-only/test runtimes while production Docker can
+// inspect and pull a missing image exactly once at the spawn boundary.
+type ImageEnsurer interface {
+	EnsureImage(ctx context.Context, image string) error
 }

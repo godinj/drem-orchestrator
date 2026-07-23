@@ -4,8 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
@@ -914,6 +916,34 @@ func TestCleanupOrphanedAssignments_ClearsIdleAgent(t *testing.T) {
 	if updated.AssignedAgentID != nil {
 		t.Error("expected startup cleanup to clear assigned_agent_id for idle agent")
 	}
+}
+
+func TestCleanupOrphanedAssignments_ClearsInProcessDirectAgent(t *testing.T) {
+	orch, db, _ := setupReconcileTest(t)
+
+	agentID := uuid.New()
+	taskID := uuid.New()
+	now := time.Now()
+	ag := model.Agent{
+		ID: agentID, ProjectID: orch.projectID, AgentType: model.AgentClassifier,
+		Name: "startup-direct", Status: model.AgentWorking, Provider: string(model.ProviderSGLangDirect),
+		CurrentTaskID: &taskID, HeartbeatAt: &now,
+	}
+	require.NoError(t, db.Create(&ag).Error)
+	task := model.Task{
+		ID: taskID, ProjectID: orch.projectID, Title: "direct request interrupted by restart",
+		Description: "recover immediately", Status: model.StatusClassifying, AssignedAgentID: &agentID,
+	}
+	require.NoError(t, db.Create(&task).Error)
+
+	orch.cleanupOrphanedAssignments()
+
+	var updated model.Task
+	require.NoError(t, db.First(&updated, "id = ?", taskID).Error)
+	require.Nil(t, updated.AssignedAgentID)
+	require.NoError(t, db.First(&ag, "id = ?", agentID).Error)
+	require.Equal(t, model.AgentDead, ag.Status)
+	require.Equal(t, "orchestrator_restart", ag.ExitReason)
 }
 
 func TestCleanupOrphanedAssignments_ClearsMissingAgent(t *testing.T) {

@@ -17,6 +17,8 @@ ssh_args=(
     -L "127.0.0.1:${local_port}:${remote_host}:${remote_port}"
     -p "${ssh_port}"
     -o ExitOnForwardFailure=yes
+	-o BatchMode=yes
+	-o ConnectTimeout=10
     -o ServerAliveInterval=30
     -o ServerAliveCountMax=3
 )

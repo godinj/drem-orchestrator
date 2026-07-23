@@ -9,8 +9,10 @@ import (
 	dockercontainer "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/filters"
+	dockerimage "github.com/docker/docker/api/types/image"
 	dockermount "github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 )
 
 // DockerRuntime is the production Runtime backed by the Docker Engine API
@@ -18,6 +20,33 @@ import (
 // client is itself goroutine-safe and DockerRuntime holds no mutable state.
 type DockerRuntime struct {
 	cli *client.Client
+}
+
+// EnsureImage verifies that image is available to the Docker daemon and
+// pulls it when absent. The pull stream is drained so Docker completes and
+// verifies the transfer before the caller proceeds to ContainerCreate.
+func (r *DockerRuntime) EnsureImage(ctx context.Context, image string) error {
+	if image == "" {
+		return fmt.Errorf("ensure image: image is empty")
+	}
+	if _, _, err := r.cli.ImageInspectWithRaw(ctx, image); err == nil {
+		return nil
+	} else if !errdefs.IsNotFound(err) {
+		return fmt.Errorf("inspect image %s: %w", image, err)
+	}
+
+	rc, err := r.cli.ImagePull(ctx, image, dockerimage.PullOptions{})
+	if err != nil {
+		return fmt.Errorf("pull image %s: %w", image, err)
+	}
+	defer rc.Close()
+	if _, err := io.Copy(io.Discard, rc); err != nil {
+		return fmt.Errorf("pull image %s: consume response: %w", image, err)
+	}
+	if _, _, err := r.cli.ImageInspectWithRaw(ctx, image); err != nil {
+		return fmt.Errorf("inspect pulled image %s: %w", image, err)
+	}
+	return nil
 }
 
 // NewDockerRuntime constructs a Runtime using the Docker client's standard
@@ -76,6 +105,9 @@ func (r *DockerRuntime) Spawn(ctx context.Context, spec Spec) (Handle, error) {
 func (r *DockerRuntime) Inspect(ctx context.Context, id string) (State, error) {
 	resp, err := r.cli.ContainerInspect(ctx, id)
 	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return State{}, fmt.Errorf("container inspect %s: %w", id, ErrNotFound)
+		}
 		return State{}, fmt.Errorf("container inspect: %w", err)
 	}
 	if resp.State == nil {
@@ -98,6 +130,9 @@ func (r *DockerRuntime) StreamLogs(ctx context.Context, id string, opts LogOptio
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     opts.Follow,
+	}
+	if opts.TailLines > 0 {
+		dockerOpts.Tail = fmt.Sprintf("%d", opts.TailLines)
 	}
 	if !opts.Since.IsZero() {
 		dockerOpts.Since = opts.Since.UTC().Format(time.RFC3339Nano)

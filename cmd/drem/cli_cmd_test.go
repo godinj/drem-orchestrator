@@ -34,8 +34,10 @@ func (f *fakeGateOrch) HandlePlanApproved(taskID uuid.UUID) error {
 func (f *fakeGateOrch) HandlePlanApprovedBy(taskID uuid.UUID, actor string) error {
 	return f.HandlePlanApproved(taskID)
 }
-func (f *fakeGateOrch) HandlePlanRejected(taskID uuid.UUID) error                       { return nil }
-func (f *fakeGateOrch) HandlePlanRejectedBy(taskID uuid.UUID, actor string) error       { return nil }
+func (f *fakeGateOrch) HandlePlanRejected(taskID uuid.UUID) error { return nil }
+func (f *fakeGateOrch) HandlePlanRejectedBy(taskID uuid.UUID, actor string, feedback ...string) error {
+	return nil
+}
 func (f *fakeGateOrch) HandleTestReviewApproved(taskID uuid.UUID) error                 { return nil }
 func (f *fakeGateOrch) HandleTestReviewApprovedBy(taskID uuid.UUID, actor string) error { return nil }
 func (f *fakeGateOrch) HandleTestReviewRejected(uuid.UUID, string) error                { return nil }
@@ -44,7 +46,12 @@ func (f *fakeGateOrch) HandleTestPassed(taskID uuid.UUID) error                 
 func (f *fakeGateOrch) HandleTestFailed(taskID uuid.UUID) error                         { return nil }
 func (f *fakeGateOrch) HandleClarificationAnswer(uuid.UUID, string) error               { return nil }
 func (f *fakeGateOrch) HandleClarificationAnswerBy(uuid.UUID, string, string) error     { return nil }
-func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error                                { return nil }
+func (f *fakeGateOrch) RevisePlan(uuid.UUID, uint64, model.JSONField, string, string) error {
+	return nil
+}
+func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error                 { return nil }
+func (f *fakeGateOrch) ResumeTask(taskID uuid.UUID) error                { return nil }
+func (f *fakeGateOrch) AdoptFailedChild(uuid.UUID, string, string) error { return nil }
 
 // TestCLIApproveAgainstRealOrchHTTP is the end-to-end regression test
 // for Phase 2 of the orch API gate-mutation pivot. It wires a real

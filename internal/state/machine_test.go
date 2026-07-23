@@ -198,6 +198,25 @@ func TestGuardedCompleteSubtaskCannotBypassTopLevelDelivery(t *testing.T) {
 	}
 }
 
+func TestGuardedAdoptFailedSubtaskRequiresDedicatedEvidence(t *testing.T) {
+	parentID := uuid.New()
+	task := &model.Task{ID: uuid.New(), ParentTaskID: &parentID, Status: model.StatusFailed}
+	req := TransitionRequest{
+		Target: model.StatusDone, Actor: "codex:pilot", ExpectedStatus: model.StatusFailed,
+		Evidence: Evidence{TaskID: task.ID, Actor: "codex:pilot", Source: "worker_completion", Reason: "repair", Timestamp: time.Now()},
+	}
+	if _, err := GuardedAdoptFailedSubtask(task, req); err == nil {
+		t.Fatal("expected non-adoption evidence to be rejected")
+	}
+	req.Evidence.Source = "codex_adapter_adoption"
+	if _, err := GuardedAdoptFailedSubtask(task, req); err != nil {
+		t.Fatalf("expected dedicated adoption evidence to pass: %v", err)
+	}
+	if task.Status != model.StatusDone {
+		t.Fatalf("got %s, want done", task.Status)
+	}
+}
+
 func TestGuardedAcceptExistingSubtaskRequiresExplicitDedupEvidence(t *testing.T) {
 	parentID := uuid.New()
 	task := &model.Task{ID: uuid.New(), ParentTaskID: &parentID, Status: model.StatusBacklog}
@@ -252,6 +271,21 @@ func TestGuardedSupersedeCompletedTestSubtaskIsNarrow(t *testing.T) {
 	request.Evidence.TaskID = topLevel.ID
 	if _, err := GuardedSupersedeCompletedTestSubtask(topLevel, request); err == nil {
 		t.Fatal("top-level done task must remain terminal")
+	}
+}
+
+func TestGuardedInvalidateCompletedTestSubtaskCanFailForCodexRepair(t *testing.T) {
+	parentID := uuid.New()
+	task := &model.Task{ID: uuid.New(), ParentTaskID: &parentID, Phase: "test", Status: model.StatusDone}
+	event, err := GuardedInvalidateCompletedTestSubtask(task, TransitionRequest{
+		Target: model.StatusFailed, Actor: "policy:sglang-safe-auto", ExpectedStatus: model.StatusDone,
+		Evidence: Evidence{TaskID: task.ID, Actor: "policy:sglang-safe-auto", Source: "review_gate", Reason: "review rejected"},
+	})
+	if err != nil {
+		t.Fatalf("invalidate completed test subtask: %v", err)
+	}
+	if task.Status != model.StatusFailed || event.OldValue != string(model.StatusDone) || event.NewValue != string(model.StatusFailed) {
+		t.Fatalf("unexpected invalidation: status=%q event=%#v", task.Status, event)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -351,6 +352,34 @@ func (o *Orchestrator) cleanupOrphanedAssignments() {
 				o.logger.Error("startup cleanup: save task", "task_id", task.ID, "error", err)
 			}
 			cleared++
+			continue
+		}
+
+		// sglang-direct sessions execute synchronously inside the orchestrator
+		// process. They cannot survive a process restart and have no container
+		// attempt to reconnect, so a persisted WORKING row is definitively
+		// orphaned once startup reaches this sweep.
+		if ag.Provider == string(model.ProviderSGLangDirect) && !o.hasActiveWorkerAttemptForAgent(task.ID, ag.ID) {
+			now := time.Now()
+			o.logger.Info("startup cleanup: clearing orphaned direct session",
+				"task_id", task.ID, "agent_id", ag.ID, "agent_type", ag.AgentType)
+			task.AssignedAgentID = nil
+			task.UpdatedAt = now
+			ag.Status = model.AgentDead
+			ag.CompletedAt = &now
+			ag.ExitReason = "orchestrator_restart"
+			ag.CurrentTaskID = nil
+			if err := o.db.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Save(&ag).Error; err != nil {
+					return err
+				}
+				return tx.Model(&model.Task{}).Where("id = ?", task.ID).
+					Updates(map[string]any{"assigned_agent_id": nil, "updated_at": now}).Error
+			}); err != nil {
+				o.logger.Error("startup cleanup: save orphaned direct session", "task_id", task.ID, "error", err)
+			} else {
+				cleared++
+			}
 			continue
 		}
 

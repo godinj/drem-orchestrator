@@ -16,14 +16,15 @@ const maxDiffLen = 50000
 
 // Opts contains all inputs needed to generate an agent prompt.
 type Opts struct {
-	Task         *model.Task
-	Project      *model.Project
-	AgentType    model.AgentType
-	WorktreePath string
-	Memories     []model.Memory
-	Comments     []model.TaskComment
-	ParentCtx    map[string]any
-	PromptAssets map[string]string
+	Task           *model.Task
+	Project        *model.Project
+	AgentType      model.AgentType
+	WorktreePath   string
+	WorktreeBranch string
+	Memories       []model.Memory
+	Comments       []model.TaskComment
+	ParentCtx      map[string]any
+	PromptAssets   map[string]string
 
 	// Reviewer fields
 	ReviewMode string // "plan" or "feature"
@@ -39,6 +40,10 @@ type Opts struct {
 	// Empty fields mean "unknown / use defaults".
 	TargetCoderProvider string // "claude", "opencode", etc.
 	TargetCoderModel    string // e.g. "Qwen3-Coder-30B-A3B", "claude-sonnet-4-6"
+
+	// ExternalVerification means project-native gates run outside the worker
+	// (for example, a macOS Canvas build driven by the Codex adapter).
+	ExternalVerification bool
 }
 
 // Generate builds a full markdown prompt for a Claude Code agent.
@@ -93,21 +98,32 @@ func Generate(opts Opts) string {
 
 	// 2d. Verification Efficiency — not needed for read-only classifiers.
 	if opts.AgentType != model.AgentClassifier {
-		verification := asset(opts, "verification", "strategy")
-		if verification == "" {
-			verification = "Run `go vet ./... && go test ./...` in a SINGLE command — never separately"
+		if opts.ExternalVerification {
+			sections = append(sections,
+				"## Verification Strategy",
+				"",
+				"Project-native verification is owned by the external host adapter after this branch is assembled.",
+				"Do not change build configuration, dependencies, or manifests to make this worker container pass a native host build.",
+				"Use only lightweight checks available without changing repository files, then commit the scoped result.",
+				"",
+			)
+		} else {
+			verification := asset(opts, "verification", "strategy")
+			if verification == "" {
+				verification = "Run `go vet ./... && go test ./...` in a SINGLE command — never separately"
+			}
+			sections = append(sections,
+				"## Verification Strategy",
+				"",
+				"Each turn costs context. Minimize verification rounds:",
+				"1. Write ALL code changes before running any verification",
+				"2. "+verification,
+				"3. If verification fails, read ALL errors, fix ALL issues in one pass, then verify ONCE more",
+				"4. Maximum 2 verification cycles. If tests still fail after 2 fix attempts, commit what you have with a note",
+				"5. Do NOT re-read files you already read — use your memory of their contents",
+				"",
+			)
 		}
-		sections = append(sections,
-			"## Verification Strategy",
-			"",
-			"Each turn costs context. Minimize verification rounds:",
-			"1. Write ALL code changes before running any verification",
-			"2. "+verification,
-			"3. If verification fails, read ALL errors, fix ALL issues in one pass, then verify ONCE more",
-			"4. Maximum 2 verification cycles. If tests still fail after 2 fix attempts, commit what you have with a note",
-			"5. Do NOT re-read files you already read — use your memory of their contents",
-			"",
-		)
 	}
 
 	// 2e. Critical Rules Library — standing guardrails from observed failure patterns.
@@ -219,7 +235,7 @@ func Generate(opts Opts) string {
 	// 7. Build & Verify — read CLAUDE.md if present
 	// Skip for classifiers: they don't write code.
 	buildCmds := readBuildCommands(opts.WorktreePath)
-	if buildCmds != "" && opts.AgentType != model.AgentClassifier {
+	if buildCmds != "" && opts.AgentType != model.AgentClassifier && !opts.ExternalVerification {
 		sections = append(sections, "## Build & Verify", "")
 		sections = append(sections, "```bash")
 		sections = append(sections, buildCmds)
@@ -237,6 +253,17 @@ func Generate(opts Opts) string {
 	// Skip for classifiers: they don't write code.
 	if opts.AgentType != model.AgentClassifier {
 		sections = append(sections, "## Scope", "")
+		if files := taskContextStrings(opts.Task, "estimated_files"); len(files) > 0 {
+			quoted := make([]string, 0, len(files))
+			for _, file := range files {
+				quoted = append(quoted, "`"+file+"`")
+			}
+			sections = append(sections,
+				"Exact allowed files: "+strings.Join(quoted, ", ")+".",
+				"Do not modify, delete, or generate any other repository file; deterministic branch acceptance will reject the entire attempt.",
+				"",
+			)
+		}
 		sections = append(sections,
 			"Only modify files directly relevant to this task. "+
 				"Do not refactor unrelated code or change project configuration "+
@@ -267,6 +294,28 @@ func Generate(opts Opts) string {
 	}
 
 	return strings.Join(sections, "\n")
+}
+
+func taskContextStrings(task *model.Task, key string) []string {
+	if task == nil || task.Context == nil {
+		return nil
+	}
+	raw, ok := task.Context[key]
+	if !ok {
+		return nil
+	}
+	var out []string
+	switch values := raw.(type) {
+	case []string:
+		out = append(out, values...)
+	case []any:
+		for _, value := range values {
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, text)
+			}
+		}
+	}
+	return out
 }
 
 func asset(opts Opts, kind, name string) string {

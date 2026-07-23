@@ -104,8 +104,9 @@ func warnSamePackageTestOverlap(subtasks []planEntry, result *PlanValidationResu
 // must match real paths — a hallucinated file like "experiment_scheduling.go"
 // when the real file is "scheduler_experiments.go" wastes agent iterations.
 //
-// Returns errors for source files that don't exist (blocks plan), warnings
-// for test files whose parent directory doesn't exist.
+// Returns errors for source files that don't exist and for any proposed new
+// file whose parent directory does not exist. Requiring a real parent keeps
+// planners free to add files while rejecting invented directory trees.
 func ValidatePlanFileExistence(subtasks []planEntry, worktreeRoot string) PlanValidationResult {
 	var result PlanValidationResult
 
@@ -122,17 +123,23 @@ func ValidatePlanFileExistence(subtasks []planEntry, worktreeRoot string) PlanVa
 
 		var missing []string
 		for _, f := range files {
-			absPath := filepath.Join(worktreeRoot, f)
+			clean := filepath.Clean(f)
+			if filepath.IsAbs(f) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("Subtask %d (%q): file path escapes the worktree: %s", i, sub.Title, f))
+				continue
+			}
+			absPath := filepath.Join(worktreeRoot, clean)
 
 			if isNewFileCandidate(f, sub) {
 				dir := filepath.Dir(absPath)
-				if _, err := os.Stat(dir); os.IsNotExist(err) {
-					result.Warnings = append(result.Warnings,
+				if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+					result.Errors = append(result.Errors,
 						fmt.Sprintf("Subtask %d (%q): parent directory for new file %s does not exist",
 							i, sub.Title, f))
 				}
 			} else {
-				if _, err := os.Stat(absPath); os.IsNotExist(err) {
+				if _, err := os.Stat(absPath); err != nil {
 					missing = append(missing, f)
 				}
 			}

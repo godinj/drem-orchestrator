@@ -32,6 +32,9 @@ func (o *Orchestrator) processTestingReady(parent *model.Task) error {
 		// Agent already running — skip.
 		return nil
 	}
+	if err := o.ensureParentDeliveryAcceptance(context.Background(), parent); err != nil {
+		return fmt.Errorf("processTestingReady: parent branch acceptance: %w", err)
+	}
 
 	gate, err := o.runAcceptedDeliveryGate(context.Background(), parent)
 	if err != nil {

@@ -163,6 +163,8 @@ func (o *Orchestrator) renderAndWritePrompt(
 	task *model.Task,
 	project *model.Project,
 	agentType string,
+	provider model.ProviderType,
+	branch string,
 	promptRoot string,
 ) (renderedPromptInfo, error) {
 	if task == nil {
@@ -172,19 +174,7 @@ func (o *Orchestrator) renderAndWritePrompt(
 		return renderedPromptInfo{}, fmt.Errorf("prompt root is empty")
 	}
 
-	// WorktreePath: for container workers the worktree lives inside
-	// the worker at /home/drem/work, but the prompt renderer reads it
-	// as a logical handle (the generator doesn't actually open the
-	// directory for most branches). Pass the host-identical bare repo
-	// path when available so prompt.Generate has something truthful to
-	// display in the rendered markdown. The legacy host path had
-	// worktreePath point at a per-feature checkout on host; the
-	// container path doesn't create one, so we use the bare repo path
-	// here as a stable handle.
-	var worktreePath string
-	if o.worktree != nil {
-		worktreePath = o.worktree.BareRepo()
-	}
+	worktreePath := "/home/drem/work"
 
 	var assets map[string]string
 	versions := map[string]string{}
@@ -203,16 +193,37 @@ func (o *Orchestrator) renderAndWritePrompt(
 	}
 
 	diagnosis, suggestedFix, affectedFiles := extractFixerContext(task)
-	rendered := prompt.Generate(prompt.Opts{
-		Task:          task,
-		Project:       project,
-		AgentType:     model.AgentType(agentType),
-		WorktreePath:  worktreePath,
-		PromptAssets:  assets,
-		Diagnosis:     diagnosis,
-		AffectedFiles: affectedFiles,
-		SuggestedFix:  suggestedFix,
-	})
+	opts := prompt.Opts{
+		Task:                 task,
+		Project:              project,
+		AgentType:            model.AgentType(agentType),
+		WorktreePath:         worktreePath,
+		WorktreeBranch:       branch,
+		PromptAssets:         assets,
+		Diagnosis:            diagnosis,
+		AffectedFiles:        affectedFiles,
+		SuggestedFix:         suggestedFix,
+		ExternalVerification: o.deliveryPolicy.VerificationPolicy == model.VerificationExternalAck,
+	}
+	rendered := prompt.Generate(opts)
+	if provider == model.ProviderSGLangDirect {
+		switch model.AgentType(agentType) {
+		case model.AgentCoder:
+			rendered = prompt.GenerateDirectCoder(opts)
+		case model.AgentReviewer:
+			if task.Status == model.StatusPlanReview {
+				opts.ReviewMode = "plan"
+				if raw, err := json.Marshal(task.Plan); err == nil {
+					opts.PlanJSON = string(raw)
+				}
+			} else {
+				opts.ReviewMode = "feature"
+			}
+			rendered = prompt.GenerateDirectReviewer(opts)
+		case model.AgentFixer:
+			rendered = prompt.GenerateDirectFixer(opts)
+		}
+	}
 	if strings.TrimSpace(rendered) == "" {
 		return renderedPromptInfo{}, fmt.Errorf("prompt.Generate produced empty output for agent_type=%q task_id=%s",
 			agentType, task.ID)

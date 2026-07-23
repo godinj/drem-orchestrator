@@ -62,6 +62,7 @@ func NewTestDB(t *testing.T) *gorm.DB {
 		&model.DeliveryReworkRecord{},
 		&model.HostReworkSession{},
 		&model.HostReworkSubmission{},
+		&model.CodexGoalUsage{},
 		&model.MergeIntent{},
 		&model.MergeCompletion{},
 		&model.TaskMutationRecord{},
@@ -109,6 +110,7 @@ func NewTestDBWithModels(t *testing.T, extraModels ...any) *gorm.DB {
 		&model.DeliveryReworkRecord{},
 		&model.HostReworkSession{},
 		&model.HostReworkSubmission{},
+		&model.CodexGoalUsage{},
 		&model.MergeIntent{},
 		&model.MergeCompletion{},
 		&model.TaskMutationRecord{},
@@ -155,7 +157,12 @@ func NewTestDBFileWAL(t *testing.T) *gorm.DB {
 // Use this for tests that need a single shared in-memory DB.
 func NewSharedTestDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	db, err := gorm.Open(sqlite.Open("file::memory:?cache=shared"), &gorm.Config{
+	// cache=shared must share connections within this test database, not one
+	// process-global anonymous database across every test. The latter leaks
+	// rows and unique constraints between otherwise independent tests.
+	name := uuid.New().String()
+	dsn := "file:" + name + "?mode=memory&cache=shared"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
@@ -181,6 +188,7 @@ func NewSharedTestDB(t *testing.T) *gorm.DB {
 		&model.DeliveryReworkRecord{},
 		&model.HostReworkSession{},
 		&model.HostReworkSubmission{},
+		&model.CodexGoalUsage{},
 		&model.MergeIntent{},
 		&model.MergeCompletion{},
 		&model.TaskMutationRecord{},

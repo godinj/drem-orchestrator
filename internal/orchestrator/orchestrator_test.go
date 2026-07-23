@@ -509,7 +509,7 @@ func TestCheckFeatureCompletion_AllDone(t *testing.T) {
 	}
 }
 
-func TestCheckFeatureCompletion_MixedFailedAndInProgress(t *testing.T) {
+func TestCheckFeatureCompletion_FailedChildCancelsInProgressSibling(t *testing.T) {
 	db := testutil.NewTestDB(t)
 	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
 	o := testOrchestrator(t, db, wt)
@@ -552,11 +552,17 @@ func TestCheckFeatureCompletion_MixedFailedAndInProgress(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Parent should stay in_progress since sub2 is still running.
+	// A required failure terminalizes the parent and cancels still-running
+	// siblings so the feature cannot remain wedged indefinitely.
 	var updated model.Task
 	db.First(&updated, "id = ?", parentID)
-	if updated.Status != model.StatusInProgress {
-		t.Errorf("expected parent to stay in_progress, got %s", updated.Status)
+	if updated.Status != model.StatusFailed {
+		t.Errorf("expected parent to fail, got %s", updated.Status)
+	}
+	var running model.Task
+	db.First(&running, "id = ?", sub2.ID)
+	if running.Status != model.StatusCancelled {
+		t.Errorf("expected running sibling to be cancelled, got %s", running.Status)
 	}
 }
 

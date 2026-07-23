@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 
@@ -67,6 +68,10 @@ func splitPositional(args []string) (string, []string) {
 		"--inference-endpoint": true, "-inference-endpoint": true,
 		"--integration-policy": true, "-integration-policy": true,
 		"--verification-policy": true, "-verification-policy": true,
+		"--plan-review-policy": true, "-plan-review-policy": true,
+		"--test-review-policy": true, "-test-review-policy": true,
+		"--test-command": true, "-test-command": true,
+		"--compile-command": true, "-compile-command": true,
 	}
 	var positional string
 	var remaining []string
@@ -191,6 +196,10 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 	inferenceEndpoint := fs.String("inference-endpoint", "", "OpenAI-compatible chat-completions URL for direct workers")
 	integrationPolicy := fs.String("integration-policy", string(model.IntegrationAutoMerge), "delivery integration policy: auto_merge or prepare_branch")
 	verificationPolicy := fs.String("verification-policy", string(model.VerificationLocalAutomated), "delivery verification policy: local_automated or external_ack")
+	planReviewPolicy := fs.String("plan-review-policy", "", "plan approval policy: manual or sglang_safe_auto")
+	testReviewPolicy := fs.String("test-review-policy", "", "test approval policy: manual or sglang_safe_auto")
+	testCommand := fs.String("test-command", "", "project preliminary/test gate command")
+	compileCommand := fs.String("compile-command", "", "project test-phase compilation gate command")
 	homeDir := fs.String("home-dir", "", "override $HOME (testing)")
 	update := fs.Bool("update", false, "regenerate per-project compose.yml + drem.toml from current templates (preserves SharedToken)")
 	dryRun := fs.Bool("dry-run", false, "print what would change without writing (implies --update)")
@@ -208,12 +217,16 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 			resolvedName = positional
 		}
 		return cmdProjectRegisterUpdate(registerUpdateOpts{
-			Name:            resolvedName,
-			HomeDir:         *homeDir,
-			DryRun:          *dryRun,
-			Force:           *force,
-			FailOnDrift:     *failOnDrift,
-			RegenerateToken: *regenerateToken,
+			Name:             resolvedName,
+			HomeDir:          *homeDir,
+			DryRun:           *dryRun,
+			Force:            *force,
+			FailOnDrift:      *failOnDrift,
+			RegenerateToken:  *regenerateToken,
+			PlanReviewPolicy: strings.TrimSpace(*planReviewPolicy),
+			TestReviewPolicy: strings.TrimSpace(*testReviewPolicy),
+			TestCommand:      strings.TrimSpace(*testCommand),
+			CompileCommand:   strings.TrimSpace(*compileCommand),
 		}, stdout)
 	}
 
@@ -226,12 +239,23 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
+	warmTokenPath, err := projects.EnsureWarmAgentToken(*homeDir)
+	if err != nil {
+		return err
+	}
 
 	if _, err := model.ParseIntegrationPolicy(*integrationPolicy); err != nil {
 		return err
 	}
 	if _, err := model.ParseVerificationPolicy(*verificationPolicy); err != nil {
 		return err
+	}
+	for label, raw := range map[string]string{"plan review": *planReviewPolicy, "test review": *testReviewPolicy} {
+		if strings.TrimSpace(raw) != "" {
+			if _, err := model.ParseReviewGatePolicy(strings.TrimSpace(raw)); err != nil {
+				return fmt.Errorf("%s policy: %w", label, err)
+			}
+		}
 	}
 	p := projects.Project{
 		Name:               *name,
@@ -241,6 +265,14 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 		InferenceEndpoint:  strings.TrimSpace(*inferenceEndpoint),
 		IntegrationPolicy:  strings.TrimSpace(*integrationPolicy),
 		VerificationPolicy: strings.TrimSpace(*verificationPolicy),
+		PlanReviewPolicy:   strings.TrimSpace(*planReviewPolicy),
+		TestReviewPolicy:   strings.TrimSpace(*testReviewPolicy),
+		TestCommand:        strings.TrimSpace(*testCommand),
+		CompileCommand:     strings.TrimSpace(*compileCommand),
+	}
+	p.OrchHostPort = projects.OrchHostPortFromURL(p.OrchURL)
+	if p.OrchHostPort == 0 {
+		p.OrchHostPort = reg.AllocateOrchHostPort()
 	}
 	if err := reg.Add(p); err != nil {
 		return err
@@ -250,6 +282,7 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 	}
 
 	data := templateDataFor(p)
+	data.WarmAgentTokenPath = warmTokenPath
 	configPath, err := projects.WriteProjectConfigAt(*homeDir, p.Name, data)
 	if err != nil {
 		return fmt.Errorf("write drem.toml: %w", err)
@@ -280,12 +313,16 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 // flag parsing and cmdProjectRegisterUpdate's consumption agree on
 // field names without shipping a stringly-typed map.
 type registerUpdateOpts struct {
-	Name            string
-	HomeDir         string
-	DryRun          bool
-	Force           bool
-	FailOnDrift     bool
-	RegenerateToken bool
+	Name             string
+	HomeDir          string
+	DryRun           bool
+	Force            bool
+	FailOnDrift      bool
+	RegenerateToken  bool
+	PlanReviewPolicy string
+	TestReviewPolicy string
+	TestCommand      string
+	CompileCommand   string
 }
 
 // cmdProjectRegisterUpdate regenerates the per-project compose.yml +
@@ -309,6 +346,29 @@ func cmdProjectRegisterUpdate(opts registerUpdateOpts, stdout io.Writer) error {
 	p, ok := reg.Get(opts.Name)
 	if !ok {
 		return fmt.Errorf("project %q not found in registry (run `drem project register` to create it first)", opts.Name)
+	}
+	warmTokenPath, err := projects.EnsureWarmAgentToken(opts.HomeDir)
+	if err != nil {
+		return err
+	}
+	updatedProject := *p
+	if opts.PlanReviewPolicy != "" {
+		if _, err := model.ParseReviewGatePolicy(opts.PlanReviewPolicy); err != nil {
+			return fmt.Errorf("plan review policy: %w", err)
+		}
+		updatedProject.PlanReviewPolicy = opts.PlanReviewPolicy
+	}
+	if opts.TestReviewPolicy != "" {
+		if _, err := model.ParseReviewGatePolicy(opts.TestReviewPolicy); err != nil {
+			return fmt.Errorf("test review policy: %w", err)
+		}
+		updatedProject.TestReviewPolicy = opts.TestReviewPolicy
+	}
+	if opts.TestCommand != "" {
+		updatedProject.TestCommand = opts.TestCommand
+	}
+	if opts.CompileCommand != "" {
+		updatedProject.CompileCommand = opts.CompileCommand
 	}
 
 	// 2. Extract on-disk state (SharedToken + observed host port).
@@ -334,7 +394,8 @@ func cmdProjectRegisterUpdate(opts registerUpdateOpts, stdout io.Writer) error {
 	}
 
 	// 4. Build TemplateData from (registry entry + state snapshot).
-	data := templateDataFor(*p)
+	data := templateDataFor(updatedProject)
+	data.WarmAgentTokenPath = warmTokenPath
 	data.SharedToken = token
 	// Prefer the registry's OrchHostPort when set; fall back to what
 	// the on-disk compose observed; fall back to zero (applyDefaults
@@ -407,6 +468,10 @@ func cmdProjectRegisterUpdate(opts registerUpdateOpts, stdout io.Writer) error {
 	}
 	if _, err := projects.WriteProjectComposeAt(opts.HomeDir, opts.Name, data); err != nil {
 		return fmt.Errorf("write compose: %w", err)
+	}
+	*p = updatedProject
+	if err := reg.Save(); err != nil {
+		return fmt.Errorf("save project registry: %w", err)
 	}
 
 	// Reapply the bare-repo config on every --update so operators
@@ -489,8 +554,21 @@ func templateDataFor(p projects.Project) projects.TemplateData {
 		InferenceEndpoint:  p.InferenceEndpoint,
 		IntegrationPolicy:  effectiveIntegrationPolicy(p.IntegrationPolicy),
 		VerificationPolicy: effectiveVerificationPolicy(p.VerificationPolicy),
+		PlanReviewPolicy:   effectiveReviewPolicy(p.PlanReviewPolicy),
+		TestReviewPolicy:   effectiveReviewPolicy(p.TestReviewPolicy),
+		TestCommand:        p.TestCommand,
+		CompileCommand:     p.CompileCommand,
+		OrchHostPort:       p.OrchHostPort,
 		SharedToken:        uuid.NewString(),
+		UseNamedDBVolume:   runtime.GOOS == "darwin",
 	}
+}
+
+func effectiveReviewPolicy(raw string) string {
+	if strings.TrimSpace(raw) == "" {
+		return string(model.ReviewGateManual)
+	}
+	return raw
 }
 
 func effectiveIntegrationPolicy(raw string) string {
@@ -605,6 +683,14 @@ func cmdProjectShow(args []string, stdout io.Writer) error {
 		inferenceEndpoint = projects.DefaultInferenceEndpoint
 	}
 	fmt.Fprintf(&b, "Inference:     %s\n", inferenceEndpoint)
+	fmt.Fprintf(&b, "PlanReview:   %s\n", effectiveReviewPolicy(p.PlanReviewPolicy))
+	fmt.Fprintf(&b, "TestReview:   %s\n", effectiveReviewPolicy(p.TestReviewPolicy))
+	if p.TestCommand != "" {
+		fmt.Fprintf(&b, "TestCommand:  %s\n", p.TestCommand)
+	}
+	if p.CompileCommand != "" {
+		fmt.Fprintf(&b, "CompileCommand: %s\n", p.CompileCommand)
+	}
 	if len(p.ContainerImageOverrides) > 0 {
 		fmt.Fprintln(&b, "ContainerImageOverrides:")
 		for k, v := range p.ContainerImageOverrides {

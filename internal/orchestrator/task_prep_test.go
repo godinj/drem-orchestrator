@@ -88,6 +88,21 @@ func prepCfgForTest(endpoint, workDir string) *agent.DirectPrepConfig {
 	return &cfg
 }
 
+func TestNeedsPrepRequiresExplicitOptIn(t *testing.T) {
+	orch, _ := setupPrepTest(t)
+	orch.runner = agent.NewRunner(orch.db, nil, nil, "/bin/false", "", 1, func(at model.AgentType) model.AgentCLIConfig {
+		if at == model.AgentCoder {
+			return model.AgentCLIConfig{Provider: model.ProviderSGLangDirect}
+		}
+		return model.AgentCLIConfig{}
+	})
+	sub := &model.Task{Context: model.JSONField{"estimated_files": []any{"src/Main.cpp"}}}
+
+	require.False(t, orch.needsPrep(sub), "local coder alone must not implicitly enable reconnaissance")
+	orch.directPrepCfg = prepCfgForTest("http://unused", t.TempDir())
+	require.True(t, orch.needsPrep(sub), "explicit direct prep config must enable reconnaissance")
+}
+
 func TestSpawnPrepAgentDirect_DispatchesToRunDirectPrep(t *testing.T) {
 	orch, projectID := setupPrepTest(t)
 

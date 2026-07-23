@@ -36,6 +36,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/orchhttp"
 	"github.com/godinj/drem-orchestrator/internal/promptassets"
 	"github.com/godinj/drem-orchestrator/internal/ratelimit"
+	"github.com/godinj/drem-orchestrator/internal/serviceauth"
 	"github.com/godinj/drem-orchestrator/internal/spawner"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/taskimport"
@@ -266,7 +267,11 @@ func main() {
 		classifierURL = cfg.Agents.Classifier.Endpoint
 	}
 	if classifierURL != "" {
-		orch.SetClassifierContainerEndpoint(classifierURL, os.Getenv("DREM_AGENTMON_TOKEN"))
+		warmToken, err := serviceauth.Resolve()
+		if err != nil {
+			log.Fatalf("resolve warm-agent token: %v", err)
+		}
+		orch.SetClassifierContainerEndpoint(classifierURL, warmToken)
 	}
 
 	// Route plan jobs to the warm drem-planner container when
@@ -278,7 +283,11 @@ func main() {
 		plannerURL = cfg.Agents.Planner.Endpoint
 	}
 	if plannerURL != "" {
-		orch.SetPlannerContainerEndpoint(plannerURL, os.Getenv("DREM_AGENTMON_TOKEN"))
+		warmToken, err := serviceauth.Resolve()
+		if err != nil {
+			log.Fatalf("resolve warm-agent token: %v", err)
+		}
+		orch.SetPlannerContainerEndpoint(plannerURL, warmToken)
 	}
 
 	// Wire the container-mode worker spawner. When DREM_SPAWNER_SOCKET is set
@@ -326,15 +335,14 @@ func main() {
 			"socket", spawnerSock, "error", err)
 	}
 
-	// Enable direct SGLang prep agent. Prep is the read-only recon role that
-	// reuses the classifier's SGLang server but with a larger token budget for
-	// tool loops. Auto-enable when the prep role is explicitly set to direct,
-	// when the prep provider is "opencode" with an sglang model, or when the
-	// classifier already runs direct (the prep role piggybacks on the same
-	// SGLang endpoint by default).
+	// Enable direct SGLang prep only when the prep role explicitly opts in.
+	// Classification and repository reconnaissance have very different token
+	// profiles; implicitly enabling an agentic prep loop merely because the
+	// classifier is direct caused bounded Canvas tasks to spend tens of
+	// thousands of repeated search tokens before the coder even started.
 	prepDirect := cfg.Agents.Prep.Direct ||
-		(cfg.Agents.Prep.Provider == "opencode" && strings.Contains(cfg.Agents.Prep.Model, "sglang")) ||
-		classifierDirect
+		cfg.Agents.Prep.Provider == string(model.ProviderSGLangDirect) ||
+		(cfg.Agents.Prep.Provider == "opencode" && strings.Contains(cfg.Agents.Prep.Model, "sglang"))
 	if prepDirect {
 		pcfg := agent.DirectPrepConfig{DirectToolAgentConfig: agent.DefaultDirectToolAgentConfig()}
 		pcfg.GQCaller = "prep"
@@ -365,6 +373,13 @@ func main() {
 	// to "sglang-direct".
 	if dta := buildDirectToolAgentConfig(cfg); dta != nil {
 		orch.SetDirectToolAgentConfig(dta)
+		reviewerCfg := agent.DefaultDirectPlanReviewerConfig()
+		reviewerCfg.Endpoint = dta.Endpoint
+		reviewerCfg.Model = dta.Model
+		if dta.Timeout > 0 {
+			reviewerCfg.Timeout = dta.Timeout
+		}
+		orch.SetDirectPlanReviewerConfig(&reviewerCfg)
 	}
 
 	// Wire test gate config from drem.toml so test_command is respected.
@@ -383,6 +398,11 @@ func main() {
 		VerificationPolicy: cfg.Delivery.VerificationPolicy,
 	}); err != nil {
 		log.Fatalf("configure delivery policy: %v", err)
+	}
+	if err := orch.SetReviewPolicyConfig(orchestrator.ReviewPolicyConfig{
+		Plan: cfg.ReviewPolicy.Plan, Tests: cfg.ReviewPolicy.Tests,
+	}); err != nil {
+		log.Fatalf("configure review policy: %v", err)
 	}
 	// When drem.toml leaves test_command empty, infer it from the main
 	// worktree (go.mod → "go test ./...", package.json → "npm test",
@@ -683,6 +703,28 @@ func buildDirectToolAgentConfig(cfg Config) *agent.DirectToolAgentConfig {
 	if cfg.DirectToolAgent.MaxIterations > 0 {
 		resolved.MaxIterations = cfg.DirectToolAgent.MaxIterations
 	}
+	if cfg.DirectToolAgent.MaxCumulativeInputTokens > 0 {
+		resolved.MaxCumulativeInputTokens = cfg.DirectToolAgent.MaxCumulativeInputTokens
+	}
+	if cfg.DirectToolAgent.MaxReadsBeforeMutation > 0 {
+		resolved.MaxReadsBeforeMutation = cfg.DirectToolAgent.MaxReadsBeforeMutation
+	}
+	if cfg.DirectToolAgent.MaxToolCalls > 0 {
+		resolved.MaxToolCalls = cfg.DirectToolAgent.MaxToolCalls
+	}
+	if cfg.DirectToolAgent.MaxInputTokensBeforeMutation > 0 {
+		resolved.MaxInputTokensBeforeMutation = cfg.DirectToolAgent.MaxInputTokensBeforeMutation
+	}
+	resolved.TestMaxCumulativeInputTokens = cfg.DirectToolAgent.TestMaxCumulativeInputTokens
+	resolved.ImplementationMaxCumulativeInputTokens = cfg.DirectToolAgent.ImplementationMaxCumulativeInputTokens
+	resolved.IntegrationMaxCumulativeInputTokens = cfg.DirectToolAgent.IntegrationMaxCumulativeInputTokens
+	resolved.ReviewMaxCumulativeInputTokens = cfg.DirectToolAgent.ReviewMaxCumulativeInputTokens
+	resolved.TestMaxReadsBeforeMutation = cfg.DirectToolAgent.TestMaxReadsBeforeMutation
+	resolved.ImplementationMaxReadsBeforeMutation = cfg.DirectToolAgent.ImplementationMaxReadsBeforeMutation
+	resolved.IntegrationMaxReadsBeforeMutation = cfg.DirectToolAgent.IntegrationMaxReadsBeforeMutation
+	resolved.TestMaxInputTokensBeforeMutation = cfg.DirectToolAgent.TestMaxInputTokensBeforeMutation
+	resolved.ImplementationMaxInputTokensBeforeMutation = cfg.DirectToolAgent.ImplementationMaxInputTokensBeforeMutation
+	resolved.IntegrationMaxInputTokensBeforeMutation = cfg.DirectToolAgent.IntegrationMaxInputTokensBeforeMutation
 	if cfg.DirectToolAgent.BashTimeout > 0 {
 		resolved.BashTimeout = cfg.DirectToolAgent.BashTimeout
 	}

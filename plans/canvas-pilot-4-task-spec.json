@@ -1,0 +1,183 @@
+{
+  "title": "Operational canary: scope Canvas branch metadata recompilation",
+  "description": "Reduce iterative Canvas build cost by removing `DC_GIT_BRANCH` from the target-wide `DremCanvas` compile definitions and applying it only to the two translation units that consume it: `src/Main.cpp` and `src/ui/transport/TransportBarWidget.cpp`. Preserve the exact current branch-title and transport-badge behavior. Document the source-scoped build-metadata rule. Do not change application C++ sources, runtime behavior, generated files, or other compile definitions.",
+  "actor": "codex:019f8688-cd79-7c21-9fe7-612862fd2e78",
+  "idempotency_key": "canvas-branch-metadata-source-scope-20260723-1",
+  "observation": {
+    "session_id": "canvas-pilot-9a44738c-build-cost-followup",
+    "product": "Drem Canvas",
+    "product_version": "96db6b7",
+    "os": "macOS 26.5 arm64",
+    "display_environment": "native macOS window plus CMake compile database inspection",
+    "observed_at": "2026-07-23T09:30:00Z",
+    "observer_actor": "codex:019f8688-cd79-7c21-9fe7-612862fd2e78",
+    "preconditions": [
+      "Canvas is configured with CMake and exports a compile database.",
+      "The current branch name is embedded in both the native title and transport badge."
+    ],
+    "steps": [
+      {
+        "action": "Change the checked-out Git branch and reconfigure Canvas",
+        "target": "DremCanvas target compile commands",
+        "expected_visible_result": "Only branch-aware translation units require the branch-valued definition while the application keeps the same visible branch identity."
+      }
+    ],
+    "expected_behavior": [
+      "DC_GIT_BRANCH is present on exactly the source files that consume it.",
+      "A named feature build remains visually identifiable in the Canvas title and transport badge."
+    ],
+    "negative_behavior": [
+      "Changing branch metadata does not invalidate every DremCanvas translation unit.",
+      "No runtime branch label is removed or renamed."
+    ],
+    "evidence": [
+      {
+        "artifact_id": "canvas-pilot-v2-unmarked-window",
+        "sha256": "bd878952d28f525586184f38de87bbf410f084f5b5ea90506bb3930aaca66023",
+        "media_type": "image/png",
+        "purpose": "Content-addressed native Canvas baseline establishing the existing branch-aware title surface whose behavior must be preserved."
+      }
+    ]
+  },
+  "acceptance_criteria": [
+    {
+      "id": "branch-definition-is-source-scoped",
+      "description": "DC_GIT_BRANCH is absent from target-wide DremCanvas definitions and present only for `src/Main.cpp` and `src/ui/transport/TransportBarWidget.cpp`.",
+      "verification_steps": [
+        "Configure the exact artifact with compile command export enabled.",
+        "Inspect every DremCanvas compile command containing DC_GIT_BRANCH.",
+        "Confirm the matching source set is exactly Main.cpp and TransportBarWidget.cpp."
+      ],
+      "expected_behavior": [
+        "Exactly two application translation units receive DC_GIT_BRANCH."
+      ],
+      "negative_behavior": [
+        "No library or unrelated DremCanvas source receives the branch-valued definition."
+      ]
+    },
+    {
+      "id": "branch-identity-remains-visible",
+      "description": "A representative named-branch build retains the existing visible branch identity.",
+      "verification_steps": [
+        "Build the exact frozen artifact in a temporary named branch context without changing its source tree.",
+        "Launch that exact binary and inspect the native title and transport badge with Computer Use."
+      ],
+      "expected_behavior": [
+        "The native title and transport badge show the representative branch name exactly as before."
+      ],
+      "negative_behavior": [
+        "The branch label is not empty, stale, duplicated, or replaced by HEAD in the named-branch verification build."
+      ]
+    },
+    {
+      "id": "native-canvas-gates-pass",
+      "description": "The exact artifact satisfies Canvas native verification after the build-graph change.",
+      "verification_steps": [
+        "Run scripts/dev preflight from the exact artifact worktree.",
+        "Run scripts/dev verify and retain the command result."
+      ],
+      "expected_behavior": [
+        "All required native verification gates pass."
+      ]
+    }
+  ],
+  "proposed_scope": [
+    "CMakeLists.txt",
+    "docs/DEVELOPMENT.md"
+  ],
+  "exclusions": [
+    "application C++ source changes",
+    "runtime branch-discovery changes",
+    "window-title or transport-badge behavior changes",
+    "other target compile definitions",
+    "session persistence",
+    "generated build files"
+  ],
+  "dependencies": [],
+  "uncertainty": [],
+  "execution_plan": {
+    "subtasks": [
+      {
+        "title": "Define and exercise the branch-identity verification contract",
+        "description": "Before implementation, own the dedicated verification boundary for visible branch identity and build-graph scope. In `docs/DEVELOPMENT.md`, specify the exact named-branch native Computer Use checks for both the macOS title and transport badge, plus the compile-database query that identifies every source receiving DC_GIT_BRANCH. Exercise the current baseline query and record that the criterion is red because the definition is target-wide. Do not edit CMake or application sources.",
+        "agent_type": "coder",
+        "files": [
+          "docs/DEVELOPMENT.md"
+        ],
+        "phase": "test",
+        "tests_for": [
+          1
+        ],
+        "priority": 3
+      },
+      {
+        "title": "Scope Canvas branch metadata to its consumers",
+        "description": "Move only DC_GIT_BRANCH out of the target-wide DremCanvas definition block and apply the same escaped value to `src/Main.cpp` and `src/ui/transport/TransportBarWidget.cpp` with source-file compile definitions. Preserve SK_GANESH, DC_APP_NAME, DC_APP_VERSION, and platform definitions exactly. Do not edit C++ sources.",
+        "agent_type": "coder",
+        "files": [
+          "CMakeLists.txt"
+        ],
+        "dependencies": [
+          0
+        ],
+        "phase": "implementation",
+        "priority": 2,
+        "module_boundaries": [
+          {
+            "package": "cmake/DremCanvasGitMetadata",
+            "description": "Owns configuration-time projection of the Git branch into only the Canvas sources that display it.",
+            "exports": 1
+          }
+        ],
+        "interface_shapes": [
+          {
+            "package": "cmake/DremCanvasGitMetadata",
+            "functions": [
+              "DC_GIT_BRANCH value -> source-scoped compile definition for Main.cpp and TransportBarWidget.cpp"
+            ],
+            "types": []
+          }
+        ]
+      },
+      {
+        "title": "Execute the standalone post-implementation validation gate",
+        "description": "This subtask is the dedicated validation step for the completed CMake change, not a second implementation or general documentation task. Configure with compile-command export and prove that the DC_GIT_BRANCH source set is exactly Main.cpp and TransportBarWidget.cpp; run scripts/dev preflight and scripts/dev verify in the worker environment and retain their results; then update the pre-existing verification contract in docs/DEVELOPMENT.md from red baseline to passing build-graph evidence. Preserve an explicit exact-artifact host handoff requiring the frozen macOS binary to show the named branch in both the native title and transport badge through Computer Use. Do not edit CMake or application sources.",
+        "agent_type": "coder",
+        "files": [
+          "docs/DEVELOPMENT.md"
+        ],
+        "dependencies": [
+          1
+        ],
+        "phase": "integration",
+        "priority": 1
+      }
+    ],
+    "assumptions": [
+      {
+        "decision": "Keep native macOS and Computer Use verification at the immutable host artifact boundary while making the integration subtask explicitly responsible for the compile-database and repository gate evidence.",
+        "alternatives": [
+          "Pretend a Linux worker can validate macOS window chrome and transport rendering",
+          "Broaden the immutable task scope with a new test harness unrelated to the two-file build-graph change"
+        ],
+        "why_chosen": "The orchestrator already freezes and exposes the exact worker artifact for native Canvas verification; this preserves platform-correct evidence without weakening or broadening the task."
+      },
+      {
+        "decision": "Use docs/DEVELOPMENT.md sequentially for the red verification contract and final passing evidence rather than adding a test harness outside the immutable scope.",
+        "alternatives": [
+          "Broaden the approved file scope after task creation",
+          "Create a synthetic runtime test that cannot inspect macOS native window chrome"
+        ],
+        "why_chosen": "The test and integration subtasks are dependency-ordered, so the final worker extends the same verification record after the CMake change without concurrent file ownership or false platform claims."
+      },
+      {
+        "decision": "Interpret all dependencies and tests_for values as zero-based subtask indices, matching the validated public execution-plan contract.",
+        "alternatives": [
+          "Treat tests_for as one-based while dependencies remain zero-based",
+          "Reorder the required test-before-implementation graph into an invalid cycle"
+        ],
+        "why_chosen": "Subtask 0 tests implementation subtask 1; implementation 1 depends on test 0; integration 2 depends on implementation 1. This is the intended acyclic TDD graph."
+      }
+    ]
+  }
+}

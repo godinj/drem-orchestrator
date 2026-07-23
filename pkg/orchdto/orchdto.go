@@ -32,21 +32,28 @@ type ProjectDTO struct {
 // directly; the HTTP API intentionally returns a narrow shape so Kyle and
 // the TUI do not become coupled to every field on the GORM model.
 type TaskDTO struct {
-	ID                   string                `json:"id"`
-	Title                string                `json:"title"`
-	Status               string                `json:"status"`
-	StateVersion         uint64                `json:"state_version"`
-	CreatedAt            time.Time             `json:"created_at"`
-	UpdatedAt            time.Time             `json:"updated_at"`
-	AssignedWorker       string                `json:"assigned_worker"`
-	ActiveAttemptCount   int                   `json:"active_attempt_count,omitempty"`
-	ActiveAttempts       []TaskAttemptLeaseDTO `json:"active_attempts,omitempty"`
-	Category             string                `json:"category,omitempty"`
-	CurrentHealth        string                `json:"current_health,omitempty"`
-	LatestFailureSummary string                `json:"latest_failure_summary,omitempty"`
-	LatestFailureType    string                `json:"latest_failure_type,omitempty"`
-	LatestFailureAt      *time.Time            `json:"latest_failure_at,omitempty"`
-	LatestFailureCurrent *bool                 `json:"latest_failure_current,omitempty"`
+	ID                    string                `json:"id"`
+	Title                 string                `json:"title"`
+	Status                string                `json:"status"`
+	StateVersion          uint64                `json:"state_version"`
+	CreatedAt             time.Time             `json:"created_at"`
+	UpdatedAt             time.Time             `json:"updated_at"`
+	AssignedWorker        string                `json:"assigned_worker"`
+	ActiveAttemptCount    int                   `json:"active_attempt_count,omitempty"`
+	ActiveAttempts        []TaskAttemptLeaseDTO `json:"active_attempts,omitempty"`
+	Category              string                `json:"category,omitempty"`
+	CurrentHealth         string                `json:"current_health,omitempty"`
+	LatestFailureSummary  string                `json:"latest_failure_summary,omitempty"`
+	LatestFailureType     string                `json:"latest_failure_type,omitempty"`
+	LatestFailureAt       *time.Time            `json:"latest_failure_at,omitempty"`
+	LatestFailureCurrent  *bool                 `json:"latest_failure_current,omitempty"`
+	ReviewStatus          string                `json:"review_status,omitempty"`
+	ReviewDetail          string                `json:"review_detail,omitempty"`
+	ReviewRecommendation  string                `json:"review_recommendation,omitempty"`
+	ReviewCoverage        string                `json:"review_coverage,omitempty"`
+	ReviewIssues          []string              `json:"review_issues,omitempty"`
+	ReviewFileOverlapRisk string                `json:"review_file_overlap_risk,omitempty"`
+	ReviewIntegrationGap  *bool                 `json:"review_integration_gap,omitempty"`
 }
 
 // TaskSpecDTO is the authenticated task-creation contract used by Codex after
@@ -59,11 +66,99 @@ type TaskSpecDTO struct {
 	IdempotencyKey     string                       `json:"idempotency_key"`
 	Observation        *ReferenceObservationDTO     `json:"observation"`
 	AcceptanceCriteria []TaskAcceptanceCriterionDTO `json:"acceptance_criteria"`
+	IntegrationSeams   []TaskIntegrationSeamDTO     `json:"integration_seams,omitempty"`
 	ProposedScope      []string                     `json:"proposed_scope"`
 	Exclusions         []string                     `json:"exclusions"`
 	Dependencies       []string                     `json:"dependencies,omitempty"`
 	Uncertainty        []string                     `json:"uncertainty,omitempty"`
 	OpenQuestions      []string                     `json:"open_questions,omitempty"`
+	ExecutionPlan      *TaskExecutionPlanDTO        `json:"execution_plan,omitempty"`
+}
+
+// TaskIntegrationSeamDTO proves how a user-visible criterion reaches the
+// production entrypoint. Source evidence is submitted as a content-addressed
+// excerpt; missing edges name every file that must be in both task scope and
+// the integration subtask. This turns call-chain completeness into an
+// admission contract instead of a reviewer guess.
+type TaskIntegrationSeamDTO struct {
+	ID                    string                   `json:"id"`
+	AcceptanceCriteriaIDs []string                 `json:"acceptance_criteria_ids"`
+	EntryPoint            string                   `json:"entry_point"`
+	SourceEvidence        []TaskSourceEvidenceDTO  `json:"source_evidence"`
+	MissingEdges          []TaskIntegrationEdgeDTO `json:"missing_edges"`
+	VerificationLevel     string                   `json:"verification_level"`
+	VerificationSteps     []string                 `json:"verification_steps"`
+}
+
+type TaskSourceEvidenceDTO struct {
+	Path          string `json:"path"`
+	Symbol        string `json:"symbol"`
+	Excerpt       string `json:"excerpt"`
+	ExcerptSHA256 string `json:"excerpt_sha256"`
+}
+
+type TaskIntegrationEdgeDTO struct {
+	Description   string   `json:"description"`
+	RequiredFiles []string `json:"required_files"`
+}
+
+// TaskExecutionPlanDTO is an optional adapter-authored plan. Supplying it
+// lets a trusted Codex adapter spend its repository/reference context once,
+// while the orchestrator still validates and reviews the plan before any
+// worker runs. Specs without this field retain the classifier/planner path.
+type TaskExecutionPlanDTO struct {
+	Subtasks      []TaskExecutionSubtaskDTO `json:"subtasks"`
+	TDDExceptions []TaskTDDExceptionDTO     `json:"tdd_exceptions,omitempty"`
+	Assumptions   []TaskPlanAssumptionDTO   `json:"assumptions,omitempty"`
+}
+
+type TaskExecutionSubtaskDTO struct {
+	Title            string                  `json:"title"`
+	Description      string                  `json:"description"`
+	AgentType        string                  `json:"agent_type,omitempty"`
+	Files            []string                `json:"files"`
+	Dependencies     []int                   `json:"dependencies,omitempty"`
+	Priority         int                     `json:"priority,omitempty"`
+	Phase            string                  `json:"phase"`
+	TestsFor         []int                   `json:"tests_for,omitempty"`
+	ModuleBoundaries []TaskModuleBoundaryDTO `json:"module_boundaries,omitempty"`
+	InterfaceShapes  []TaskInterfaceShapeDTO `json:"interface_shapes,omitempty"`
+}
+
+// TaskModuleBoundaryDTO and TaskInterfaceShapeDTO make the adapter commit to
+// the same implementation depth metadata that the SGLang plan reviewer
+// evaluates. They are wire-only duplicates of the internal plan model so the
+// public DTO package remains dependency-free.
+type TaskModuleBoundaryDTO struct {
+	Package     string `json:"package"`
+	Description string `json:"description"`
+	Exports     int    `json:"exports"`
+}
+
+type TaskInterfaceShapeDTO struct {
+	Package   string   `json:"package"`
+	Functions []string `json:"functions"`
+	Types     []string `json:"types"`
+}
+
+type TaskTDDExceptionDTO struct {
+	SubtaskIndex int    `json:"subtask_index"`
+	Reason       string `json:"reason"`
+}
+
+type TaskPlanAssumptionDTO struct {
+	Decision     string   `json:"decision"`
+	Alternatives []string `json:"alternatives,omitempty"`
+	WhyChosen    string   `json:"why_chosen"`
+}
+
+// ReviseTaskPlanRequest replaces only the mutable execution plan of a task
+// parked at plan_review. The immutable TaskSpecification remains the source
+// of truth for scope and acceptance criteria; the server validates the new
+// plan against it before dispatching the guarded mutation.
+type ReviseTaskPlanRequest struct {
+	ExecutionPlan TaskExecutionPlanDTO `json:"execution_plan"`
+	Reason        string               `json:"reason"`
 }
 
 // ReferenceObservationDTO captures the reproducible Cubase workflow that
@@ -367,6 +462,12 @@ type WorkerAttemptDTO struct {
 	FinalContextPct       int        `json:"final_context_pct"`
 	ConstraintViolations  int        `json:"constraint_violations"`
 	ArtifactURI           string     `json:"artifact_uri,omitempty"`
+}
+
+// AdoptFailedChildRequest identifies the exact repaired head a host Codex
+// task wants the orchestrator to admit in place of a rejected worker result.
+type AdoptFailedChildRequest struct {
+	CommitSHA string `json:"commit_sha"`
 }
 
 // WorkerHistoryDTO wraps a worker's recent state transitions and exit

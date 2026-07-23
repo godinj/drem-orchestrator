@@ -88,7 +88,7 @@ func (f *FakeRuntime) Inspect(_ context.Context, id string) (State, error) {
 	f.calls = append(f.calls, Call{Op: "Inspect", ID: id})
 	c, ok := f.containers[id]
 	if !ok {
-		return State{}, fmt.Errorf("fake runtime: inspect unknown id %q", id)
+		return State{}, fmt.Errorf("fake runtime: inspect unknown id %q: %w", id, ErrNotFound)
 	}
 	return c.state, nil
 }

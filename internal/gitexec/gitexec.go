@@ -159,11 +159,12 @@ func CommitUnstagedChanges(ctx context.Context, dir, message string) (bool, erro
 	return true, nil
 }
 
-// UntrackEphemeralFiles removes orchestrator-generated ephemeral files
-// (plan.json, .claude/settings.json) from git tracking if they are currently
-// tracked. The files remain on disk. Returns true if a commit was created.
+// UntrackEphemeralFiles removes orchestrator-generated plan.json from git
+// tracking if it is currently tracked. Repository-owned files such as
+// .claude/settings.json must remain part of the delivery branch. The file
+// remains on disk. Returns true if a commit was created.
 func UntrackEphemeralFiles(ctx context.Context, dir string) (bool, error) {
-	ephemeralFiles := []string{"plan.json", ".claude/settings.json"}
+	ephemeralFiles := []string{"plan.json"}
 	var untracked bool
 	for _, f := range ephemeralFiles {
 		out, err := RunGit(ctx, dir, "ls-files", f)

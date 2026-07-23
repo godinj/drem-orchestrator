@@ -164,6 +164,27 @@ Builds and pushes: `drem-worker-base`, `drem-worker-go`, `drem-worker-cpp`.
 `worker-cpp` is the slowest (C/C++ toolchain layer) — budget 10–15 min on
 first build.
 
+The direct-agent binary is embedded in each language worker image. After
+changing direct-agent checkpoint, prompt, or budget behavior, rebuild and push
+the worker image as well as `drem-orch`; rebuilding only the orchestrator leaves
+ephemeral workers on stale behavior. Confirm the source-state labels on
+`drem-orch`, `drem-spawner`, and the selected worker image match before a
+measured pilot. Restart/deploy control-plane services with `--no-deps` so this
+verification never restarts the warm SGLang service.
+
+`[direct_tool_agent].*_max_cumulative_input_tokens` are cumulative replay-cost
+ceilings, not SGLang context-window settings. The Canvas profile uses 65k for
+tests, 90k for implementation, 75k for integration, and 30k for review. A paid
+response that already mutated the repository is checkpointed at the ceiling;
+an empty run fails closed.
+
+`max_tool_calls` is a hard run-wide limit. The
+`*_max_input_tokens_before_mutation` settings are earlier no-progress limits,
+and the compatibility-named `*_max_reads_before_mutation` settings count all
+reconnaissance rather than only the structured read tool. Scoped workers reject
+all shell commands before mutation; use the declared
+files and the generated planned-interface contract instead.
+
 ### 4e — SGLang + GQ (GPU required)
 
 ```bash
@@ -394,7 +415,8 @@ export DREM_PROJECT=drem-canvas
 export DREM_ORCH_TOKEN='<project shared token>'
 export DREM_ACTOR='codex:<task-or-thread-id>'
 dremctl tasks --status plan_review
-dremctl approve <task-id-prefix>
+dremctl accept-assumptions <task-id-prefix>
+dremctl revise-plan <task-id-prefix> --spec task.json --reason "address reviewer findings"
 dremctl reject <task-id-prefix> --reason "specific evidence-backed rework"
 
 dremctl artifact <task-id-prefix>
@@ -405,6 +427,82 @@ dremctl verify <task-id-prefix> \
   --binary-sha256 '<sha256-if-produced>'
 dremctl integrate <task-id-prefix>
 ```
+
+For Canvas, use the host adapter rather than duplicating artifact parsing or
+running project-native commands in the Linux control plane:
+
+```bash
+scripts/drem-canvas-pilot.sh doctor --base <canvas-base-sha> --min-free-gib 8
+scripts/drem-canvas-pilot.sh start --spec plans/canvas-canary-task-spec.json
+scripts/drem-canvas-pilot.sh revise <task-id-prefix> --spec plans/canvas-canary-task-spec.json --reason "address reviewer findings"
+scripts/drem-canvas-pilot.sh await <task-id-prefix> --timeout 30m
+scripts/drem-canvas-pilot.sh build <task-id-prefix>
+# Launch the reported exact binary and capture each acceptance criterion with
+# Computer Use, then submit the content-addressed interaction JSON:
+scripts/drem-canvas-pilot.sh verify <task-id-prefix> \
+  --worktree <reported-worktree> \
+  --binary <reported-worktree>/build-debug/DremCanvas \
+  --interactions interactions.json
+scripts/drem-canvas-pilot.sh goal-usage <task-id-prefix> \
+  --goal-objective "supervise Canvas task" --goal-status complete \
+  --tokens-used <final-goal-tokens> --elapsed-ms <final-goal-elapsed-ms>
+scripts/drem-canvas-pilot.sh report <task-id-prefix> --output canary-report.md
+scripts/drem-canvas-pilot.sh report <task-id-prefix> --json --output canary-report.json
+```
+
+`doctor` is a pre-goal gate: do not activate subscription inference until it
+confirms the registered base, control-plane connectivity, shared Skia cache,
+writable evidence roots, local tools, and disk headroom. Phrase the explicit
+Codex goal as “supervise this run to a measured terminal report.” A terminal
+worker or verification failure is an experiment outcome, not a failure to
+complete the supervisory goal.
+
+Paired comparisons use one immutable contract:
+
+```bash
+scripts/drem-canvas-pilot.sh experiment-init --id <experiment> --spec task.json --base <sha>
+scripts/drem-canvas-pilot.sh direct-prepare --base <sha> --run-id <experiment>-direct
+scripts/drem-canvas-pilot.sh experiment-record --id <experiment> --arm orchestrated --outcome <status> --tokens <n> --elapsed-ms <n> --commit <sha> --task <task>
+scripts/drem-canvas-pilot.sh experiment-record --id <experiment> --arm direct --outcome <status> --tokens <n> --elapsed-ms <n> --commit <sha> --binary <path> --evidence <json>
+scripts/drem-canvas-pilot.sh experiment-report --id <experiment>
+```
+
+Each arm record is append-only and must descend from the frozen base. This
+keeps the direct arm inside Drem’s worktree/evidence workflow without routing
+its implementation through SGLang.
+
+The adapter resolves the current delivery envelope again at submission time.
+It refuses a worktree with the wrong HEAD, local source changes, a different
+Git common directory, or a binary outside that worktree. A new artifact version
+therefore invalidates an older prepared worktree even when its native build is
+still present. `cleanup` similarly refuses dirty pilot worktrees.
+
+The report endpoint correlates the parent and its immediate child tasks, every
+durable worker attempt, cumulative time spent in repeated lifecycle phases,
+artifact versions, host-rework sessions/submissions, native verification, and
+Computer Use interactions. Warm direct reviewer usage is persisted as a
+task-correlated `inference_usage` event; container workers use the durable
+WorkerAttempt token fields. Measurement coverage distinguishes an actual zero
+from a historical run that predates terminal usage capture. A measured Codex
+pilot begins only after `doctor` passes and an explicit supervisory goal is
+created. Once the run has a terminal measured outcome, complete the goal, take
+the final token and
+elapsed values returned by Codex, submit them with `goal-usage`, and regenerate
+the report. The append-only record is actor/thread attributed and idempotent;
+it is reported separately from SGLang input/output tokens.
+
+Canvas embeds the current Git branch in its title. A detached exact-artifact
+worktree reports `HEAD`; when a criterion explicitly requires a representative
+branch label, build the same frozen SHA in a temporary local branch context,
+record that context in the interaction step, then detach back to the frozen SHA
+and remove the temporary ref before submission. The commit and source tree must
+remain unchanged.
+
+When a failed child has a deterministic host repair on its canonical branch,
+`dremctl adopt <child-id> --commit <sha>` re-runs immutable-base scope admission
+and merges only the accepted head. It is not a general force-complete command:
+active attempts, a non-failed child/parent, ref drift, or out-of-scope paths are
+refused.
 
 Computer Use evidence is supplied as a JSON array with one object per
 acceptance criterion. Each object records its criterion ID, scenario, ordered
@@ -577,6 +675,19 @@ long-lived warm service in `deploy/compose/global.yml` (see
 One agent role still runs as a short-lived per-task container:
 `merger` (one-shot Go binary that merges feature → main and pushes).
 Design and rationale: `plans/merger-spawn-on-demand-impl.md`.
+
+All worker spawns now include image readiness at the spawner boundary. Docker
+first inspects the configured image and, only when missing, performs one
+serialized pull before `ContainerCreate`. If that bounded operation fails, the
+task records `worker_image_unavailable` and stops rather than generating a
+tick-driven spawn storm. Restore the registry/image, then use the ordinary
+`dremctl retry` operation.
+
+For `sglang-direct` workers, `InspectWorker` reads only the last 200 log lines
+after termination and returns the harness's iterations, input/output tokens,
+and stop reason. The orchestrator persists those values on the immutable
+attempt and public agent record before it applies completion. Historical rows
+created before this behavior remain zero; no estimate is backfilled.
 
 **Merger.** When a task reaches `StatusMerging`, the orchestrator's
 `dispatchMerge` asks the spawner for a short-lived `drem-merger`

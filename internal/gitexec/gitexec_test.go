@@ -170,6 +170,20 @@ func TestUntrackEphemeralFiles_TrackedPlan(t *testing.T) {
 	require.Empty(t, out)
 }
 
+func TestUntrackEphemeralFiles_PreservesTrackedClaudeSettings(t *testing.T) {
+	_, wt := setupWorktree(t)
+	require.NoError(t, os.MkdirAll(filepath.Join(wt, ".claude"), 0o755))
+	testutil.CommitFile(t, wt, ".claude/settings.json", `{"permissions":{}}`, "add repository settings")
+
+	committed, err := UntrackEphemeralFiles(context.Background(), wt)
+	require.NoError(t, err)
+	require.False(t, committed)
+
+	out, err := RunGit(context.Background(), wt, "ls-files", ".claude/settings.json")
+	require.NoError(t, err)
+	require.Equal(t, ".claude/settings.json", out)
+}
+
 func TestBranchHasNewCommits(t *testing.T) {
 	bare, wt := setupWorktree(t)
 

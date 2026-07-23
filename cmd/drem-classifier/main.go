@@ -32,6 +32,7 @@ import (
 	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
+	"github.com/godinj/drem-orchestrator/internal/serviceauth"
 )
 
 // defaultListenAddr is the port the container template advertises. Kept in a
@@ -62,8 +63,11 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 	fs.StringVar(&cfg.endpoint, "endpoint", envOr("DREM_CLASSIFIER_UPSTREAM", "http://gq:8090/v1/chat/completions"), "Upstream OpenAI-compatible chat completions URL (gq proxy)")
 	fs.StringVar(&cfg.model, "model", envOr("DREM_CLASSIFIER_MODEL", "gemma4-26b"), "Model name forwarded to the upstream")
 	fs.DurationVar(&cfg.timeout, "timeout", parseDurationOr("DREM_CLASSIFIER_TIMEOUT", 60*time.Second), "Upstream HTTP request timeout")
-	// Token comes from env only — avoids leaking into `ps` output.
-	cfg.token = os.Getenv("DREM_AGENTMON_TOKEN")
+	var err error
+	cfg.token, err = serviceauth.Resolve()
+	if err != nil {
+		return config{}, err
+	}
 
 	if err := fs.Parse(args); err != nil {
 		return config{}, err

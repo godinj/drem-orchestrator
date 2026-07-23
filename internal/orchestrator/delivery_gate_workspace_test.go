@@ -51,6 +51,45 @@ func TestAcceptedDeliveryGateUsesAcceptedBaseAfterDefaultBranchDrifts(t *testing
 	require.Equal(t, acceptedBaseSHA, result.artifactSnapshot().BaseSHA)
 }
 
+func TestExternalVerificationGateDefersProjectNativeCommandToHost(t *testing.T) {
+	o, task, _, _, _ := deliveryGateFixture(t)
+	o.deliveryPolicy.VerificationPolicy = model.VerificationExternalAck
+	o.testGate.TestCommand = "false"
+
+	result, err := o.runAcceptedDeliveryGate(context.Background(), &task)
+	require.NoError(t, err)
+	require.True(t, result.Passed)
+	require.Equal(t, "external-host-verification:deferred", result.Evidence.Command)
+	require.Contains(t, result.Evidence.Output, "external host adapter")
+}
+
+func TestEnsureParentDeliveryAcceptanceUsesDeclaredWholeFeatureScope(t *testing.T) {
+	o, task, _, _, baseSHA := deliveryGateFixture(t)
+	require.NoError(t, o.db.Where("task_id = ?", task.ID).Delete(&model.BranchAcceptanceRecord{}).Error)
+	task.WorktreeBaseSHA = baseSHA
+	task.Context = model.JSONField{"estimated_files": []any{"candidate.txt"}}
+
+	require.NoError(t, o.ensureParentDeliveryAcceptance(context.Background(), &task))
+	var acceptance model.BranchAcceptanceRecord
+	require.NoError(t, o.db.Where("task_id = ? AND source = ?", task.ID, "parent_delivery_acceptance").First(&acceptance).Error)
+	require.True(t, acceptance.Accepted)
+	require.Equal(t, baseSHA, acceptance.BaseSHA)
+	require.Equal(t, "orchestrator", acceptance.Actor)
+}
+
+func TestEnsureParentDeliveryAcceptanceRejectsOutOfScopeFeatureDelta(t *testing.T) {
+	o, task, _, _, baseSHA := deliveryGateFixture(t)
+	require.NoError(t, o.db.Where("task_id = ?", task.ID).Delete(&model.BranchAcceptanceRecord{}).Error)
+	task.WorktreeBaseSHA = baseSHA
+	task.Context = model.JSONField{"estimated_files": []any{"different.txt"}}
+
+	err := o.ensureParentDeliveryAcceptance(context.Background(), &task)
+	require.ErrorContains(t, err, "candidate.txt")
+	var acceptance model.BranchAcceptanceRecord
+	require.NoError(t, o.db.Where("task_id = ? AND source = ?", task.ID, "parent_delivery_acceptance").First(&acceptance).Error)
+	require.False(t, acceptance.Accepted)
+}
+
 func TestAcceptedDeliveryGateRejectsBranchRefDriftBeforeExecution(t *testing.T) {
 	o, task, featureDir, acceptedSHA, _ := deliveryGateFixture(t)
 	require.NoError(t, os.WriteFile(filepath.Join(featureDir, "drift.txt"), []byte("drift\n"), 0o644))

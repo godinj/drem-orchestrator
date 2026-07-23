@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
@@ -17,6 +19,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/prompt"
 	"github.com/godinj/drem-orchestrator/internal/supervisor"
 	"github.com/godinj/drem-orchestrator/internal/workeridentity"
+	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
 
 // SpawnReviewerSession spawns a reviewer agent for the given task.
@@ -27,8 +30,8 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 	}
 
 	// Validate status.
-	if task.Status != model.StatusPlanReview && task.Status != model.StatusTestingReady {
-		return "", fmt.Errorf("spawn reviewer: task must be in plan_review or testing_ready, got %s", task.Status)
+	if task.Status != model.StatusPlanReview && task.Status != model.StatusTestReview && task.Status != model.StatusTestingReady {
+		return "", fmt.Errorf("spawn reviewer: task must be in plan_review, test_review, or testing_ready, got %s", task.Status)
 	}
 
 	// Check for existing working reviewer on the same task.
@@ -57,11 +60,21 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 	var reviewMode, planJSON, gitDiff string
 	if task.Status == model.StatusPlanReview {
 		reviewMode = "plan"
+		if err := o.verifyTaskSpecSourceEvidence(&task, worktreePath); err != nil {
+			return "", fmt.Errorf("spawn reviewer: source-backed integration seam: %w", err)
+		}
 		if task.Plan != nil {
 			if data, err := json.MarshalIndent(task.Plan, "", "  "); err == nil {
 				planJSON = string(data)
 			}
 		}
+	} else if task.Status == model.StatusTestReview {
+		reviewMode = "tests"
+		evidence, evidenceErr := o.buildTestReviewEvidence(&task, worktreePath)
+		if evidenceErr != nil {
+			return "", evidenceErr
+		}
+		planJSON = evidence
 	} else {
 		reviewMode = "feature"
 		// Get diff of integration branch vs default branch.
@@ -87,8 +100,13 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 	// synchronously, write review.json into the worktree, and run the
 	// completion handler inline. Feature reviews fall through to the
 	// subprocess path below.
-	if reviewMode == "plan" && o.directPlanReviewerCfg != nil {
-		return o.spawnDirectPlanReviewer(&task, worktreePath, planJSON)
+	if o.directPlanReviewerCfg != nil {
+		switch reviewMode {
+		case "plan":
+			return o.spawnDirectPlanReviewer(&task, worktreePath, planJSON)
+		case "tests":
+			return o.spawnDirectTestReviewer(&task, worktreePath, planJSON)
+		}
 	}
 
 	// Container-mode dispatch: when o.Spawner is wired, route the
@@ -150,12 +168,47 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 	return workerHandleString(*ag), nil
 }
 
+func (o *Orchestrator) verifyTaskSpecSourceEvidence(task *model.Task, worktreePath string) error {
+	var stored model.TaskSpecification
+	if err := o.db.Where("task_id = ?", task.ID).First(&stored).Error; err != nil {
+		// Legacy planner-created tasks have no immutable adapter specification.
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	var spec orchdto.TaskSpecDTO
+	if err := json.Unmarshal([]byte(stored.SpecJSON), &spec); err != nil {
+		return fmt.Errorf("decode immutable task specification: %w", err)
+	}
+	for _, seam := range spec.IntegrationSeams {
+		for _, evidence := range seam.SourceEvidence {
+			content, err := os.ReadFile(filepath.Join(worktreePath, filepath.Clean(evidence.Path)))
+			if err != nil {
+				return fmt.Errorf("%s evidence file %s: %w", seam.ID, evidence.Path, err)
+			}
+			if !strings.Contains(string(content), evidence.Excerpt) {
+				return fmt.Errorf("%s evidence excerpt for %s is stale or absent at the task base", seam.ID, evidence.Symbol)
+			}
+		}
+	}
+	return nil
+}
+
 // spawnDirectPlanReviewer runs the direct SGLang plan review synchronously.
 // It mirrors the lightweight-agent pattern from processClassifyingTasksDirect:
 // create an Agent DB record, run the API call, invoke onReviewerCompleted
 // which parses review.json and stores it on task.Context. Returns
 // ("", nil) on success — no tmux session exists for direct agents.
 func (o *Orchestrator) spawnDirectPlanReviewer(task *model.Task, worktreePath, planJSON string) (string, error) {
+	return o.spawnDirectGateReviewer(task, worktreePath, "plan", planJSON)
+}
+
+func (o *Orchestrator) spawnDirectTestReviewer(task *model.Task, worktreePath, evidenceJSON string) (string, error) {
+	return o.spawnDirectGateReviewer(task, worktreePath, "tests", evidenceJSON)
+}
+
+func (o *Orchestrator) spawnDirectGateReviewer(task *model.Task, worktreePath, reviewKind, payload string) (string, error) {
 	cfg := o.directPlanReviewerCfg
 	now := time.Now()
 	ag := &model.Agent{
@@ -179,10 +232,16 @@ func (o *Orchestrator) spawnDirectPlanReviewer(task *model.Task, worktreePath, p
 		return "", fmt.Errorf("spawn direct reviewer: assign agent to task: %w", err)
 	}
 
-	o.logger.Info("direct plan reviewer: reviewing plan",
-		"task_id", task.ID, "agent_id", ag.ID)
+	o.logger.Info("direct gate reviewer: reviewing",
+		"task_id", task.ID, "agent_id", ag.ID, "review_kind", reviewKind)
 
-	result, err := agent.RunDirectPlanReviewer(*cfg, task.ID, task.Title, task.Description, planJSON, worktreePath)
+	var result *agent.DirectPlanReviewerResult
+	var err error
+	if reviewKind == "tests" {
+		result, err = agent.RunDirectTestReviewer(*cfg, task.ID, task.Title, task.Description, payload, worktreePath)
+	} else {
+		result, err = agent.RunDirectPlanReviewer(*cfg, task.ID, task.Title, task.Description, payload, worktreePath)
+	}
 	if err != nil {
 		ag.Status = model.AgentDead
 		ag.CurrentTaskID = nil
@@ -194,6 +253,9 @@ func (o *Orchestrator) spawnDirectPlanReviewer(task *model.Task, worktreePath, p
 	ag.TokensIn = result.TokensIn
 	ag.TokensOut = result.TokensOut
 	_ = o.db.Save(ag).Error
+	if usageErr := o.recordInferenceUsage(task.ID, directReviewPhase(reviewKind), "reviewer", "sglang-direct", cfg.Model, result.TokensIn, result.TokensOut, result.Duration); usageErr != nil {
+		o.logger.Warn("direct gate reviewer: persist inference usage", "task_id", task.ID, "error", usageErr)
+	}
 
 	if err := o.onReviewerCompleted(ag, task); err != nil {
 		return "", fmt.Errorf("spawn direct reviewer: on completed: %w", err)
@@ -202,9 +264,44 @@ func (o *Orchestrator) spawnDirectPlanReviewer(task *model.Task, worktreePath, p
 	o.emit("reviewer_spawned", map[string]any{
 		"task_id":  task.ID,
 		"agent_id": ag.ID,
-		"mode":     "plan-direct",
+		"mode":     reviewKind + "-direct",
 	})
 	return "", nil
+}
+
+func (o *Orchestrator) buildTestReviewEvidence(task *model.Task, worktreePath string) (string, error) {
+	var testTasks []model.Task
+	if err := o.db.Where("parent_task_id = ? AND phase = ?", task.ID, "test").Order("created_at asc").Find(&testTasks).Error; err != nil {
+		return "", fmt.Errorf("build test review evidence: query test tasks: %w", err)
+	}
+	type testTaskEvidence struct {
+		Title       string           `json:"title"`
+		Description string           `json:"description"`
+		Status      model.TaskStatus `json:"status"`
+		TestsFor    model.JSONArray  `json:"tests_for"`
+	}
+	completed := make([]testTaskEvidence, 0, len(testTasks))
+	for i := range testTasks {
+		completed = append(completed, testTaskEvidence{
+			Title: testTasks[i].Title, Description: testTasks[i].Description,
+			Status: testTasks[i].Status, TestsFor: testTasks[i].TestsFor,
+		})
+	}
+	diff, _ := gitexec.RunGit(context.Background(), worktreePath,
+		"diff", o.worktree.DefaultBranchName()+"...HEAD", "--", "tests")
+	if len(diff) > 60000 {
+		diff = diff[:60000] + "\n[diff truncated]"
+	}
+	payload := map[string]any{
+		"approved_plan":          task.Plan,
+		"completed_test_tasks":   completed,
+		"test_only_feature_diff": diff,
+	}
+	raw, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("build test review evidence: marshal: %w", err)
+	}
+	return string(raw), nil
 }
 
 // SpawnFixerSession spawns a fixer agent for the given task.

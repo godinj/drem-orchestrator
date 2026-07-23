@@ -106,6 +106,9 @@ func TestLoadConfigDeliveryPoliciesDefaultForLegacyConfig(t *testing.T) {
 	if cfg.Delivery.VerificationPolicy != model.VerificationLocalAutomated {
 		t.Errorf("VerificationPolicy: got %q, want %q", cfg.Delivery.VerificationPolicy, model.VerificationLocalAutomated)
 	}
+	if cfg.ReviewPolicy.Plan != model.ReviewGateManual || cfg.ReviewPolicy.Tests != model.ReviewGateManual {
+		t.Errorf("ReviewPolicy: got plan=%q tests=%q, want manual/manual", cfg.ReviewPolicy.Plan, cfg.ReviewPolicy.Tests)
+	}
 }
 
 func TestLoadConfigRejectsUnknownExplicitDeliveryPolicy(t *testing.T) {
@@ -121,6 +124,22 @@ verification_policy = "local_automated"
 	_, err := LoadConfig(cfgPath)
 	if err == nil || !strings.Contains(err.Error(), "delivery.integration_policy") {
 		t.Fatalf("LoadConfig error = %v, want integration-policy validation error", err)
+	}
+}
+
+func TestLoadConfigRejectsUnknownReviewPolicy(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(`[review_policy]
+plan = "trust_everything"
+tests = "manual"
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	_, err := LoadConfig(cfgPath)
+	if err == nil || !strings.Contains(err.Error(), "review_policy.plan") {
+		t.Fatalf("LoadConfig error = %v, want review-policy validation error", err)
 	}
 }
 
@@ -235,6 +254,15 @@ func TestBuildDirectToolAgentConfigEnabledByCoder(t *testing.T) {
 	cfg.Agents.Coder = AgentConfig{Provider: string(model.ProviderSGLangDirect), Model: "gemma4-26b"}
 	cfg.DirectToolAgent.Endpoint = "http://gq:8090/v1/chat/completions"
 	cfg.DirectToolAgent.Model = "gemma4-26b"
+	cfg.DirectToolAgent.MaxReadsBeforeMutation = 4
+	cfg.DirectToolAgent.MaxToolCalls = 12
+	cfg.DirectToolAgent.MaxInputTokensBeforeMutation = 20_000
+	cfg.DirectToolAgent.TestMaxInputTokensBeforeMutation = 18_000
+	cfg.DirectToolAgent.TestMaxCumulativeInputTokens = 65_000
+	cfg.DirectToolAgent.ImplementationMaxCumulativeInputTokens = 90_000
+	cfg.DirectToolAgent.IntegrationMaxCumulativeInputTokens = 75_000
+	cfg.DirectToolAgent.ReviewMaxCumulativeInputTokens = 30_000
+	cfg.DirectToolAgent.TestMaxReadsBeforeMutation = 8
 
 	got := buildDirectToolAgentConfig(cfg)
 	if got == nil {
@@ -245,6 +273,19 @@ func TestBuildDirectToolAgentConfigEnabledByCoder(t *testing.T) {
 	}
 	if got.Model != "gemma4-26b" {
 		t.Errorf("Model = %q", got.Model)
+	}
+	if got.MaxReadsBeforeMutation != 4 {
+		t.Errorf("MaxReadsBeforeMutation = %d", got.MaxReadsBeforeMutation)
+	}
+	if got.MaxToolCalls != 12 || got.MaxInputTokensBeforeMutation != 20_000 || got.TestMaxInputTokensBeforeMutation != 18_000 {
+		t.Errorf("pre-mutation budgets not mapped: %+v", got)
+	}
+	if got.TestMaxCumulativeInputTokens != 65_000 || got.ImplementationMaxCumulativeInputTokens != 90_000 ||
+		got.IntegrationMaxCumulativeInputTokens != 75_000 || got.ReviewMaxCumulativeInputTokens != 30_000 {
+		t.Errorf("phase token budgets not mapped: %+v", got)
+	}
+	if got.TestMaxReadsBeforeMutation != 8 {
+		t.Errorf("TestMaxReadsBeforeMutation = %d", got.TestMaxReadsBeforeMutation)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"regexp"
 	"strings"
 	"time"
@@ -99,6 +100,8 @@ func (s *Server) handleCreateTaskSpec(w http.ResponseWriter, r *http.Request, sp
 		taskStatus := model.StatusClassifying
 		if len(spec.OpenQuestions) > 0 {
 			taskStatus = model.StatusNeedsClarification
+		} else if spec.ExecutionPlan != nil {
+			taskStatus = model.StatusPlanReview
 		}
 		task = model.Task{
 			ID:          uuid.New(),
@@ -107,6 +110,13 @@ func (s *Server) handleCreateTaskSpec(w http.ResponseWriter, r *http.Request, sp
 			Description: renderTaskSpecDescription(spec),
 			Status:      taskStatus,
 			Category:    model.CategoryStandard,
+		}
+		if spec.ExecutionPlan != nil {
+			plan, err := executionPlanField(spec.ExecutionPlan)
+			if err != nil {
+				return err
+			}
+			task.Plan = plan
 		}
 		if err := tx.Create(&task).Error; err != nil {
 			return err
@@ -166,6 +176,7 @@ func (s *Server) handleCreateTaskSpec(w http.ResponseWriter, r *http.Request, sp
 				"evidence_count":         len(spec.Observation.Evidence),
 				"acceptance_count":       len(spec.AcceptanceCriteria),
 				"open_questions":         spec.OpenQuestions,
+				"adapter_execution_plan": spec.ExecutionPlan != nil,
 			},
 			Actor:     actor,
 			CreatedAt: now,
@@ -241,6 +252,58 @@ func normalizeTaskSpec(spec *orchdto.TaskSpecDTO) {
 		trimStrings(c.ExpectedBehavior)
 		trimStrings(c.NegativeBehavior)
 	}
+	for i := range spec.IntegrationSeams {
+		seam := &spec.IntegrationSeams[i]
+		seam.ID = strings.TrimSpace(seam.ID)
+		seam.EntryPoint = strings.TrimSpace(seam.EntryPoint)
+		seam.VerificationLevel = strings.ToLower(strings.TrimSpace(seam.VerificationLevel))
+		trimStrings(seam.AcceptanceCriteriaIDs)
+		trimStrings(seam.VerificationSteps)
+		for j := range seam.SourceEvidence {
+			evidence := &seam.SourceEvidence[j]
+			evidence.Path = strings.TrimSpace(evidence.Path)
+			evidence.Symbol = strings.TrimSpace(evidence.Symbol)
+			evidence.ExcerptSHA256 = strings.ToLower(strings.TrimSpace(evidence.ExcerptSHA256))
+		}
+		for j := range seam.MissingEdges {
+			edge := &seam.MissingEdges[j]
+			edge.Description = strings.TrimSpace(edge.Description)
+			trimStrings(edge.RequiredFiles)
+		}
+	}
+	if spec.ExecutionPlan != nil {
+		p := spec.ExecutionPlan
+		for i := range p.Subtasks {
+			sub := &p.Subtasks[i]
+			sub.Title = strings.TrimSpace(sub.Title)
+			sub.Description = strings.TrimSpace(sub.Description)
+			sub.AgentType = strings.TrimSpace(sub.AgentType)
+			if sub.AgentType == "" {
+				sub.AgentType = string(model.AgentCoder)
+			}
+			sub.Phase = strings.ToLower(strings.TrimSpace(sub.Phase))
+			trimStrings(sub.Files)
+			for j := range sub.ModuleBoundaries {
+				boundary := &sub.ModuleBoundaries[j]
+				boundary.Package = strings.TrimSpace(boundary.Package)
+				boundary.Description = strings.TrimSpace(boundary.Description)
+			}
+			for j := range sub.InterfaceShapes {
+				shape := &sub.InterfaceShapes[j]
+				shape.Package = strings.TrimSpace(shape.Package)
+				trimStrings(shape.Functions)
+				trimStrings(shape.Types)
+			}
+		}
+		for i := range p.TDDExceptions {
+			p.TDDExceptions[i].Reason = strings.TrimSpace(p.TDDExceptions[i].Reason)
+		}
+		for i := range p.Assumptions {
+			p.Assumptions[i].Decision = strings.TrimSpace(p.Assumptions[i].Decision)
+			p.Assumptions[i].WhyChosen = strings.TrimSpace(p.Assumptions[i].WhyChosen)
+			trimStrings(p.Assumptions[i].Alternatives)
+		}
+	}
 }
 
 func trimStrings(values []string) {
@@ -315,8 +378,8 @@ func validateTaskSpec(spec orchdto.TaskSpecDTO, headerActor string) error {
 		if err != nil || len(decoded) != sha256.Size {
 			return fmt.Errorf("observation.evidence[%d].sha256 must be a 64-character hex digest", i)
 		}
-		if !strings.HasPrefix(evidence.MediaType, "image/") && !strings.HasPrefix(evidence.MediaType, "video/") {
-			return fmt.Errorf("observation.evidence[%d].media_type must be image/* or video/*", i)
+		if !taskEvidenceMediaTypeAllowed(evidence.MediaType) {
+			return fmt.Errorf("observation.evidence[%d].media_type must be image/*, video/*, text/*, or application/json", i)
 		}
 	}
 	if len(spec.AcceptanceCriteria) == 0 {
@@ -356,7 +419,235 @@ func validateTaskSpec(spec orchdto.TaskSpecDTO, headerActor string) error {
 			return fmt.Errorf("%s cannot contain blank entries", optional.name)
 		}
 	}
+	if spec.ExecutionPlan != nil {
+		if len(spec.OpenQuestions) > 0 {
+			return errors.New("execution_plan requires open_questions to be resolved")
+		}
+		if err := validateExecutionPlan(*spec.ExecutionPlan, spec.ProposedScope); err != nil {
+			return fmt.Errorf("execution_plan: %w", err)
+		}
+		if err := validateIntegrationSeams(spec); err != nil {
+			return fmt.Errorf("integration_seams: %w", err)
+		}
+	}
 	return nil
+}
+
+func taskEvidenceMediaTypeAllowed(mediaType string) bool {
+	return strings.HasPrefix(mediaType, "image/") || strings.HasPrefix(mediaType, "video/") ||
+		strings.HasPrefix(mediaType, "text/") || mediaType == "application/json"
+}
+
+func validateExecutionPlan(planDTO orchdto.TaskExecutionPlanDTO, proposedScope []string) error {
+	if len(planDTO.Subtasks) == 0 || len(planDTO.Subtasks) > 8 {
+		return errors.New("subtasks must contain between 1 and 8 entries")
+	}
+	scope := make(map[string]struct{}, len(proposedScope))
+	for i, file := range proposedScope {
+		if err := validatePlanPath(file); err != nil {
+			return fmt.Errorf("proposed_scope[%d]: %w", i, err)
+		}
+		if _, exists := scope[file]; exists {
+			return fmt.Errorf("proposed_scope path %q is duplicated", file)
+		}
+		scope[file] = struct{}{}
+	}
+
+	implCoverage := make(map[int]int)
+	var implIndices []int
+	integrationIndex := -1
+	for i, sub := range planDTO.Subtasks {
+		if sub.Title == "" || sub.Description == "" {
+			return fmt.Errorf("subtasks[%d] requires title and description", i)
+		}
+		if sub.AgentType != string(model.AgentCoder) {
+			return fmt.Errorf("subtasks[%d].agent_type must be %q", i, model.AgentCoder)
+		}
+		if sub.Phase != "test" && sub.Phase != "implementation" && sub.Phase != "integration" {
+			return fmt.Errorf("subtasks[%d].phase must be test, implementation, or integration", i)
+		}
+		if len(sub.Files) == 0 || hasBlank(sub.Files) {
+			return fmt.Errorf("subtasks[%d].files requires non-empty entries", i)
+		}
+		seenFiles := map[string]struct{}{}
+		for j, file := range sub.Files {
+			if err := validatePlanPath(file); err != nil {
+				return fmt.Errorf("subtasks[%d].files[%d]: %w", i, j, err)
+			}
+			if _, ok := scope[file]; !ok {
+				return fmt.Errorf("subtasks[%d] file %q is outside proposed_scope", i, file)
+			}
+			if _, exists := seenFiles[file]; exists {
+				return fmt.Errorf("subtasks[%d] file %q is duplicated", i, file)
+			}
+			seenFiles[file] = struct{}{}
+		}
+		for _, dep := range sub.Dependencies {
+			if dep < 0 || dep >= len(planDTO.Subtasks) || dep == i {
+				return fmt.Errorf("subtasks[%d] has invalid dependency index %d", i, dep)
+			}
+			if sub.Phase == "test" && planDTO.Subtasks[dep].Phase == "implementation" {
+				return fmt.Errorf("test subtask %d cannot depend on implementation subtask %d", i, dep)
+			}
+		}
+		switch sub.Phase {
+		case "test":
+			if len(sub.TestsFor) != 1 {
+				return fmt.Errorf("test subtask %d must reference exactly one implementation in tests_for", i)
+			}
+			impl := sub.TestsFor[0]
+			if impl < 0 || impl >= len(planDTO.Subtasks) || planDTO.Subtasks[impl].Phase != "implementation" || impl <= i {
+				return fmt.Errorf("test subtask %d has invalid tests_for index %d", i, impl)
+			}
+			if prior, exists := implCoverage[impl]; exists {
+				return fmt.Errorf("test subtasks %d and %d both cover implementation subtask %d", prior, i, impl)
+			}
+			implCoverage[impl] = i
+		case "implementation":
+			implIndices = append(implIndices, i)
+			if len(sub.TestsFor) > 0 {
+				return fmt.Errorf("implementation subtask %d cannot set tests_for", i)
+			}
+			if err := validateImplementationDepth(i, sub); err != nil {
+				return err
+			}
+		case "integration":
+			if integrationIndex != -1 {
+				return errors.New("plan must contain exactly one integration subtask")
+			}
+			integrationIndex = i
+			if len(sub.TestsFor) > 0 {
+				return fmt.Errorf("integration subtask %d cannot set tests_for", i)
+			}
+		}
+	}
+	if hasPlanCycle(planDTO.Subtasks) {
+		return errors.New("dependency cycle detected")
+	}
+	exceptions := map[int]struct{}{}
+	for i, exception := range planDTO.TDDExceptions {
+		if exception.SubtaskIndex < 0 || exception.SubtaskIndex >= len(planDTO.Subtasks) || planDTO.Subtasks[exception.SubtaskIndex].Phase != "implementation" {
+			return fmt.Errorf("tdd_exceptions[%d] must reference an implementation subtask", i)
+		}
+		if exception.Reason == "" {
+			return fmt.Errorf("tdd_exceptions[%d].reason is required", i)
+		}
+		exceptions[exception.SubtaskIndex] = struct{}{}
+	}
+	for _, impl := range implIndices {
+		_, covered := implCoverage[impl]
+		_, exempt := exceptions[impl]
+		if covered == exempt {
+			return fmt.Errorf("implementation subtask %d must have exactly one test or one TDD exception", impl)
+		}
+	}
+	if integrationIndex != len(planDTO.Subtasks)-1 {
+		return errors.New("the final subtask must be the single integration subtask")
+	}
+	deps := map[int]struct{}{}
+	for _, dep := range planDTO.Subtasks[integrationIndex].Dependencies {
+		deps[dep] = struct{}{}
+	}
+	for _, impl := range implIndices {
+		if _, ok := deps[impl]; !ok {
+			return fmt.Errorf("integration subtask must depend on implementation subtask %d", impl)
+		}
+	}
+	for i, assumption := range planDTO.Assumptions {
+		if assumption.Decision == "" || assumption.WhyChosen == "" || hasBlank(assumption.Alternatives) {
+			return fmt.Errorf("assumptions[%d] requires decision, why_chosen, and non-blank alternatives", i)
+		}
+	}
+	return nil
+}
+
+func validateImplementationDepth(index int, sub orchdto.TaskExecutionSubtaskDTO) error {
+	if len(sub.ModuleBoundaries) == 0 {
+		return fmt.Errorf("implementation subtask %d requires module_boundaries", index)
+	}
+	if len(sub.InterfaceShapes) == 0 {
+		return fmt.Errorf("implementation subtask %d requires interface_shapes", index)
+	}
+	boundaries := make(map[string]struct{}, len(sub.ModuleBoundaries))
+	for i, boundary := range sub.ModuleBoundaries {
+		if boundary.Package == "" || boundary.Description == "" || boundary.Exports < 1 {
+			return fmt.Errorf("subtasks[%d].module_boundaries[%d] requires package, description, and exports >= 1", index, i)
+		}
+		if _, exists := boundaries[boundary.Package]; exists {
+			return fmt.Errorf("subtasks[%d] module boundary %q is duplicated", index, boundary.Package)
+		}
+		boundaries[boundary.Package] = struct{}{}
+	}
+	shapes := make(map[string]struct{}, len(sub.InterfaceShapes))
+	for i, shape := range sub.InterfaceShapes {
+		if shape.Package == "" || (len(shape.Functions) == 0 && len(shape.Types) == 0) || hasBlank(shape.Functions) || hasBlank(shape.Types) {
+			return fmt.Errorf("subtasks[%d].interface_shapes[%d] requires package and at least one non-blank function or type", index, i)
+		}
+		if _, exists := boundaries[shape.Package]; !exists {
+			return fmt.Errorf("subtasks[%d] interface shape %q has no matching module boundary", index, shape.Package)
+		}
+		if _, exists := shapes[shape.Package]; exists {
+			return fmt.Errorf("subtasks[%d] interface shape %q is duplicated", index, shape.Package)
+		}
+		for j, function := range shape.Functions {
+			if !strings.Contains(function, "(") || !strings.Contains(function, ")") {
+				return fmt.Errorf("subtasks[%d].interface_shapes[%d].functions[%d] must be an explicit callable signature", index, i, j)
+			}
+		}
+		shapes[shape.Package] = struct{}{}
+	}
+	for pkg := range boundaries {
+		if _, exists := shapes[pkg]; !exists {
+			return fmt.Errorf("subtasks[%d] module boundary %q has no matching interface shape", index, pkg)
+		}
+	}
+	return nil
+}
+
+func validatePlanPath(file string) error {
+	if file == "" || strings.Contains(file, "\\") || path.IsAbs(file) || path.Clean(file) != file || file == "." || strings.HasPrefix(file, "../") {
+		return fmt.Errorf("%q must be a normalized repository-relative path", file)
+	}
+	return nil
+}
+
+func hasPlanCycle(subtasks []orchdto.TaskExecutionSubtaskDTO) bool {
+	state := make([]uint8, len(subtasks))
+	var visit func(int) bool
+	visit = func(i int) bool {
+		if state[i] == 1 {
+			return true
+		}
+		if state[i] == 2 {
+			return false
+		}
+		state[i] = 1
+		for _, dep := range subtasks[i].Dependencies {
+			if visit(dep) {
+				return true
+			}
+		}
+		state[i] = 2
+		return false
+	}
+	for i := range subtasks {
+		if visit(i) {
+			return true
+		}
+	}
+	return false
+}
+
+func executionPlanField(plan *orchdto.TaskExecutionPlanDTO) (model.JSONField, error) {
+	raw, err := json.Marshal(plan)
+	if err != nil {
+		return nil, fmt.Errorf("encode execution plan: %w", err)
+	}
+	var field model.JSONField
+	if err := json.Unmarshal(raw, &field); err != nil {
+		return nil, fmt.Errorf("store execution plan: %w", err)
+	}
+	return field, nil
 }
 
 func hasBlank(values []string) bool {
@@ -383,6 +674,7 @@ func taskSpecHashes(spec orchdto.TaskSpecDTO) ([]byte, string, string, error) {
 		ExpectedBehavior   []string                             `json:"expected_behavior"`
 		NegativeBehavior   []string                             `json:"negative_behavior"`
 		AcceptanceCriteria []orchdto.TaskAcceptanceCriterionDTO `json:"acceptance_criteria"`
+		IntegrationSeams   []orchdto.TaskIntegrationSeamDTO     `json:"integration_seams"`
 		ProposedScope      []string                             `json:"proposed_scope"`
 		Exclusions         []string                             `json:"exclusions"`
 	}{
@@ -394,6 +686,7 @@ func taskSpecHashes(spec orchdto.TaskSpecDTO) ([]byte, string, string, error) {
 		ExpectedBehavior:   spec.Observation.ExpectedBehavior,
 		NegativeBehavior:   spec.Observation.NegativeBehavior,
 		AcceptanceCriteria: spec.AcceptanceCriteria,
+		IntegrationSeams:   spec.IntegrationSeams,
 		ProposedScope:      spec.ProposedScope,
 		Exclusions:         spec.Exclusions,
 	}
@@ -437,6 +730,22 @@ func renderTaskSpecDescription(spec orchdto.TaskSpecDTO) string {
 	b.WriteString("Evidence references:\n")
 	for _, evidence := range spec.Observation.Evidence {
 		fmt.Fprintf(&b, "- %s sha256:%s (%s): %s\n", evidence.ArtifactID, evidence.SHA256, evidence.MediaType, evidence.Purpose)
+	}
+	if len(spec.IntegrationSeams) > 0 {
+		b.WriteString("Source-backed production entrypoint seams:\n")
+		for _, seam := range spec.IntegrationSeams {
+			fmt.Fprintf(&b, "- %s [%s] entrypoint: %s; criteria: %s\n", seam.ID, seam.VerificationLevel, seam.EntryPoint, strings.Join(seam.AcceptanceCriteriaIDs, ", "))
+			for _, evidence := range seam.SourceEvidence {
+				fmt.Fprintf(&b, "  source: %s :: %s sha256:%s\n", evidence.Path, evidence.Symbol, evidence.ExcerptSHA256)
+				fmt.Fprintf(&b, "  excerpt:\n%s\n", evidence.Excerpt)
+			}
+			for _, edge := range seam.MissingEdges {
+				fmt.Fprintf(&b, "  missing edge: %s; required files: %s\n", edge.Description, strings.Join(edge.RequiredFiles, ", "))
+			}
+			for _, step := range seam.VerificationSteps {
+				fmt.Fprintf(&b, "  runtime verify: %s\n", step)
+			}
+		}
 	}
 	b.WriteString("Proposed Canvas scope: ")
 	b.WriteString(strings.Join(spec.ProposedScope, ", "))

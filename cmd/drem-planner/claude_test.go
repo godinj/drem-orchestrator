@@ -149,10 +149,13 @@ Let me know if you need changes.`
 // the full task/project/worktree context so the model has what it needs.
 func TestRenderPlannerPrompt_IncludesTaskBody(t *testing.T) {
 	req := minimalValidRequest()
+	req.Prompt = "REPOSITORY_SENTINEL src/Main.cpp scripts/dev verify"
 	prompt, err := renderPlannerPrompt(req)
 	require.NoError(t, err)
 	assert.Contains(t, prompt, "subtasks")
 	assert.Contains(t, prompt, req.WorktreePath)
+	assert.Contains(t, prompt, req.Prompt)
+	assert.Contains(t, prompt, "authoritative for repository layout")
 }
 
 // TestServer_UsesClaudeGenerator end-to-end: wire a stub invoker through

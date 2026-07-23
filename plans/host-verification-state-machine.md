@@ -248,6 +248,13 @@ the same commands as operators; they never edit SQLite directly:
 - `dremctl reject <id> --reason ...` returns the current approval gate for
   rework.
 - `dremctl answer <id> --body ...` resolves `needs_clarification`.
+- `dremctl accept-assumptions <id>` preserves the current plan and advances it
+  to deterministic/SGLang review when Codex has already inspected the plan; it
+  replaces a manual plan-review approval without bypassing review evidence.
+- `dremctl adopt <failed-child> --commit <sha>` is a specialized recovery edge
+  for a failed child and failed parent. It requires an idle child, exact
+  canonical branch-head equality, and fresh immutable-base scope admission;
+  accepted work resumes the parent without another inference attempt.
 - `pass` and `fail` remain recognized compatibility commands but fail closed
   for delivery states with a pointer to `verify`; they cannot manufacture the
   missing exact-SHA evidence.

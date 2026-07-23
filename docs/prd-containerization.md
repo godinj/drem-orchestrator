@@ -143,8 +143,8 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 
 ### RPC and HTTP contracts
 
-- **Spawner RPC (Unix socket, JSON-RPC 2.0 framed):** `SpawnWorker(project, agent_type, worker_id, branch, labels) → {container_id, endpoint}`; `DestroyWorker(container_id) → {}`; `ListWorkers(project?) → [WorkerInfo]`; `InspectWorker(container_id) → {status, exit_code, started_at, finished_at, oom_killed}`.
-- **Orchestrator public HTTP (read-only, consumed by Kyle and TUI):** `GET /projects`; `GET /projects/:name/tasks`; `GET /projects/:name/workers`; `GET /workers/:id`; `GET /workers/:id/history`; `GET /events?since=`; `GET /logs?container=&since=` (proxies `docker logs`).
+- **Spawner RPC (Unix socket, JSON-RPC 2.0 framed):** `SpawnWorker(project, agent_type, worker_id, branch, labels) → {container_id, endpoint}`; `DestroyWorker(container_id) → {}`; `ListWorkers(project?) → [WorkerInfo]`; `InspectWorker(container_id) → {status, exit_code, started_at, finished_at, oom_killed, usage?}`. `usage` is present for a terminal direct worker whose bounded log tail contains the structured harness summary.
+- **Orchestrator public HTTP (consumed by Kyle, TUI, and the Codex adapter):** read endpoints include `GET /projects`, task/report/worker/history/event/log projections; authenticated task mutations are actor-attributed, observed-version guarded where they change lifecycle state, and idempotent. `POST /projects/:name/tasks/:id/revise-plan` replaces only an execution plan at `plan_review`, validates it against the immutable task specification, and triggers one fresh review without planner dispatch. `POST /projects/:name/tasks/:id/codex-usage` appends terminal explicit-goal token/time telemetry for the authenticated `codex:<thread-id>` actor without changing task state.
 - **Orchestrator internal HTTP (consumed by agentmon):** `POST /internal/logs` accepting batched structured telemetry records. Ingestion creates `TaskEvent` rows only and cannot mutate task context or advance, fail, retry, or approve a task.
 
 ### Networking and security
@@ -157,7 +157,16 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 ### Lifecycle and recovery
 
 - A worker's watchdog commits and pushes every minute if the working tree has diffs, and immediately after any test command returns a zero exit code.
+- The spawner serializes image readiness checks and pulls an absent worker image before container creation. A failed pull is a typed task failure, not an unbounded spawn retry.
 - On worker container death, the orchestrator records a terminal observation before applying its task effect, finalizes the typed WorkerAttempt, and applies the ordinary retry policy. Docker events are a latency optimization; spawner polling supplies the same typed terminal observation.
+- Terminal direct-worker token usage is captured from the spawner and persisted on both WorkerAttempt and Agent before completion effects run.
+- In-process SGLang reviewer usage is persisted as a task-correlated inference event. The task report combines those events with descendant WorkerAttempts and reports measurement coverage so pre-instrumentation zeroes are never presented as zero-cost inference.
+- Final supervising-Codex usage is accepted only as a terminal explicit-goal record (`complete` or `blocked`), with thread/actor equality and idempotent replay. Reports keep Codex goal tokens and elapsed time separate from SGLang input/output totals so subscription inference can be compared rather than estimated.
+- Direct-worker limits distinguish the model context window from cumulative replay cost. Test, implementation, integration, and review phases may receive different cumulative-input and read-before-mutation ceilings. Any already-applied mutation is preserved as a checkpoint at a ceiling and admitted only through deterministic repository gates; a budget-exhausted worker with no mutation fails closed.
+- Scoped mutation workers enforce total-tool-call and pre-mutation inference ceilings. Structured reads/searches and discovery-like bash share one reconnaissance budget, all shell commands are denied before mutation, and older large tool results are compacted without breaking assistant/tool protocol pairs.
+- Every paired red-test subtask receives a planned-interface contract materialized from its implementation plan: owning files, exact functions/types, and the expected missing-symbol red state. Adapter-authored implementation plans are rejected without interface shapes, so the supervising Codex thread does not have to spend a second pass restating the API.
+- A measured deployment is image-coherent: orchestrator, spawner, and selected worker image carry the same source-state attestation. Direct-agent runtime changes are not considered deployed when only the orchestrator image was rebuilt.
+- Accepted container child refs are deleted only when the Git reference registry proves exact task ownership and Git proves the ref is not checked out. Parent deliverable refs are retained through host verification and integration.
 - The merger pool resets each container's workspace between merges (remove workspace, re-clone integration branch).
 - On successful merge, the merger deletes the feature branch from the bare repository.
 - On orchestrator restart, it resumes typed WorkerAttempt lifecycle processing from SQLite and a fresh `ListWorkers` call. A terminal spawner record may be consumed; absence from the inventory is not evidence of death and cannot mutate or respawn a task.
@@ -178,7 +187,11 @@ Tests will be written for every new module:
   integration are authenticated, versioned, idempotent mutations; the merger
   re-checks the authorized SHAs inside its container before changing the
   integration branch, and `done` atomically links the resulting merge commit
-  to the accepted evidence chain.
+  to the accepted evidence chain. For native Canvas projects the Linux gate is
+  Git-authoritative but command-deferred: the local Codex adapter builds the
+  frozen SHA on macOS, records the exact binary and Computer Use evidence, and
+  may adopt only scope-admitted failed-child repairs or use an actor-owned
+  bounded host-rework cycle.
 - **Spawner RPC.** Tests use the fake container runtime and assert that each RPC produces the expected runtime calls and returns the expected response.
 - **Watchdog.** Tests exercise the commit-and-push loop against a bare repository, asserting that commits appear on the feature branch when the working tree has diffs and that the loop is a no-op when there are no diffs or the test command has not yet passed.
 

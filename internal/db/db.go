@@ -118,6 +118,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.DeliveryReworkRecord{},
 		&model.HostReworkSession{},
 		&model.HostReworkSubmission{},
+		&model.CodexGoalUsage{},
 		&model.MergeIntent{},
 		&model.MergeCompletion{},
 		&model.TaskMutationRecord{},

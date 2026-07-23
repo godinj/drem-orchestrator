@@ -253,6 +253,12 @@ func renderPlannerPrompt(req planRequest) (string, error) {
 	b.WriteString("- every tests_for / dependencies index must be within the subtasks slice.\n")
 	b.WriteString("- every implementation subtask should be paired with exactly one test subtask via tests_for.\n\n")
 	b.WriteString("Emit EXACTLY one JSON object on stdout. No markdown fences, no prose before or after.\n\n")
+	if strings.TrimSpace(req.Prompt) != "" {
+		b.WriteString("### Repository-aware planning context\n")
+		b.WriteString("Treat this orchestrator-rendered context as authoritative for repository layout, local instructions, constraints, and verification commands. Do not invent paths that are absent from it.\n\n")
+		b.WriteString(req.Prompt)
+		b.WriteString("\n\n")
+	}
 	b.WriteString("### Task context\n")
 	b.Write(rawReq)
 	b.WriteString("\n")

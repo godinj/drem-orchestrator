@@ -199,6 +199,25 @@ func (o *Orchestrator) runAcceptedDeliveryGate(ctx context.Context, task *model.
 	if err := verifyDeliveryGateCheckout(ctx, checkout, candidate.CommitSHA); err != nil {
 		return result, err
 	}
+	if o.deliveryPolicy.VerificationPolicy == model.VerificationExternalAck {
+		// The control plane proves only Git identity and checkout cleanliness.
+		// Project-native commands belong to the host adapter, which later must
+		// submit real command and Computer Use evidence for this frozen SHA.
+		now := time.Now()
+		result.Evidence = CommandEvidence{
+			Command: "external-host-verification:deferred", Passed: true, ExitCode: 0,
+			Output:    "project-native verification deferred to the external host adapter",
+			StartedAt: now, FinishedAt: now,
+		}
+		result.Passed = true
+		result.Outcome = model.PreliminaryGatePassed
+		result.FailureStage = deliveryGateFailureCheckoutAfter
+		if err := verifyDeliveryGateCheckout(ctx, checkout, candidate.CommitSHA); err != nil {
+			return result, err
+		}
+		result.FailureStage = ""
+		return result, nil
+	}
 
 	command := strings.TrimSpace(o.testGate.TestCommand)
 	if command == "" {

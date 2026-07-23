@@ -28,6 +28,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/godinj/drem-orchestrator/internal/serviceauth"
 )
 
 const defaultListenAddr = ":8090"
@@ -54,8 +56,11 @@ func parseFlags(args []string, stderr io.Writer) (config, error) {
 	fs.StringVar(&cfg.listenAddr, "listen", envOr("DREM_PLANNER_LISTEN", defaultListenAddr), "HTTP listen address")
 	fs.StringVar(&cfg.credentialsPath, "credentials", envOr("DREM_PLANNER_CREDENTIALS", defaultCredentialsPath()), "Path to Codex auth file")
 	fs.DurationVar(&cfg.claudeTimeout, "claude-timeout", parseDurationOr("DREM_PLANNER_CLAUDE_TIMEOUT", 5*time.Minute), "Max wall-clock time for a single Codex invocation")
-	// Token comes from env only — avoids leaking into `ps` output.
-	cfg.token = os.Getenv("DREM_AGENTMON_TOKEN")
+	var err error
+	cfg.token, err = serviceauth.Resolve()
+	if err != nil {
+		return config{}, err
+	}
 
 	if err := fs.Parse(args); err != nil {
 		return config{}, err

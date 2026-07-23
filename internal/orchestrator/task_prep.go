@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -81,6 +82,16 @@ func (o *Orchestrator) needsPrep(sub *model.Task) bool {
 
 	// Only prep when the coder is a local model.
 	if o.runner == nil {
+		return false
+	}
+	// Prep is opt-in. An unspecified prep role historically defaulted to
+	// Claude, while classifier-direct startup also auto-enabled SGLang prep.
+	// That made a read-only reconnaissance loop an invisible mandatory cost for
+	// every local-model subtask. Direct config or an explicit legacy provider
+	// now expresses the operator's intent; otherwise the planner's repository
+	// context flows straight to the coder.
+	prepCfg := o.runner.AgentConfig(model.AgentPrep)
+	if o.directPrepCfg == nil && prepCfg.Provider == "" {
 		return false
 	}
 	coderCfg := o.runner.AgentConfig(model.AgentCoder)
@@ -230,7 +241,7 @@ func (o *Orchestrator) onPrepCompleted(ag *model.Agent, task *model.Task) error 
 func (o *Orchestrator) onPrepFailed(ag *model.Agent, task *model.Task) error {
 	// Clean up agent worktree if it exists.
 	if ag.WorktreeBranch != "" {
-		if err := o.worktree.RemoveAgentWorktree(ag.WorktreeBranch); err != nil {
+		if err := o.cleanupTaskWorkerBranch(context.Background(), task, ag.WorktreeBranch); err != nil {
 			o.logger.Warn("cleanup failed prep agent worktree failed", "agent_id", ag.ID, "error", err)
 		}
 	}

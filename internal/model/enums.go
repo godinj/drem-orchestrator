@@ -205,6 +205,7 @@ const (
 	ExitReasonTimeout       = "timeout"        // Agent exceeded timeout
 	ExitReasonMaxIterations = "max_iterations" // Agent exhausted iteration budget
 	ExitReasonNoProgress    = "no_progress"    // Agent repeated tool calls without progress
+	ExitReasonTokenBudget   = "token_budget"   // Agent checkpointed a complete response at cumulative budget
 	ExitReasonEmptyOutput   = "empty_output"   // Agent produced no output
 	ExitReasonDefault       = "unknown"        // Default when exit info is nil
 )

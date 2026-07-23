@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/BurntSushi/toml"
 
@@ -52,6 +53,14 @@ type Project struct {
 	// VerificationPolicy controls whether delivery verification is performed
 	// locally by the orchestrator or acknowledged by an external host verifier.
 	VerificationPolicy string `toml:"verification_policy,omitempty"`
+	// Review policies choose whether plan/test gates remain manual or allow a
+	// fail-closed SGLang reviewer to approve structurally safe results.
+	PlanReviewPolicy string `toml:"plan_review_policy,omitempty"`
+	TestReviewPolicy string `toml:"test_review_policy,omitempty"`
+	// Gate commands are project-specific executable contracts. Canvas uses its
+	// repository wrapper rather than the generic CMake fallback.
+	TestCommand    string `toml:"test_command,omitempty"`
+	CompileCommand string `toml:"compile_command,omitempty"`
 	// ContainerImageOverrides maps agent type ("coder", "merger",
 	// "csuite-mike", ...) to a specific image tag. Agent types without an
 	// override use the language-derived default.
@@ -177,6 +186,10 @@ func (r *Registry) AllocateOrchHostPort() int {
 	for _, p := range r.Projects {
 		if p.OrchHostPort > 0 {
 			used[p.OrchHostPort] = true
+		} else if port := OrchHostPortFromURL(p.OrchURL); port > 0 {
+			// Older registry entries predate OrchHostPort. Their URL is still
+			// authoritative enough to keep a fresh registration from colliding.
+			used[port] = true
 		}
 	}
 	for port := DefaultOrchHostPort; ; port++ {
@@ -184,6 +197,20 @@ func (r *Registry) AllocateOrchHostPort() int {
 			return port
 		}
 	}
+}
+
+// OrchHostPortFromURL returns the explicit TCP port in an orchestrator URL,
+// or zero when the URL is malformed or omits a port.
+func OrchHostPortFromURL(raw string) int {
+	u, err := url.Parse(raw)
+	if err != nil || u.Port() == "" {
+		return 0
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return 0
+	}
+	return port
 }
 
 // Remove deletes the project with the given name. Returns an error if no
@@ -234,6 +261,13 @@ func validateProject(p Project) error {
 	if p.VerificationPolicy != "" {
 		if _, err := model.ParseVerificationPolicy(p.VerificationPolicy); err != nil {
 			return err
+		}
+	}
+	for label, raw := range map[string]string{"plan_review_policy": p.PlanReviewPolicy, "test_review_policy": p.TestReviewPolicy} {
+		if raw != "" {
+			if _, err := model.ParseReviewGatePolicy(raw); err != nil {
+				return fmt.Errorf("%s: %w", label, err)
+			}
 		}
 	}
 	if !validLanguage(p.Language) {

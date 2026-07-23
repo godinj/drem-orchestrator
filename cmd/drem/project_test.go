@@ -67,6 +67,20 @@ func TestProjectRegisterAndList(t *testing.T) {
 	require.Contains(t, out, "http://localhost:8080")
 }
 
+func TestProjectRegisterPersistsRequestedOrchPort(t *testing.T) {
+	homeDir := t.TempDir()
+	bareRepo := testutil.SetupBareRepo(t)
+	require.NoError(t, dispatchProject([]string{
+		"register", "--name", "canvas", "--bare", bareRepo, "--language", "cpp",
+		"--orch-url", "http://127.0.0.1:18081", "--home-dir", homeDir,
+	}, io.Discard, io.Discard))
+
+	registry := string(readFile(t, filepath.Join(homeDir, ".drem", "projects.toml")))
+	require.Contains(t, registry, "orch_host_port = 18081")
+	compose := string(readFile(t, filepath.Join(homeDir, ".drem", "projects", "canvas", "compose.yml")))
+	require.Contains(t, compose, `127.0.0.1:18081:8080`)
+}
+
 // TestProjectShow verifies the `show` subcommand after registration.
 func TestProjectShow(t *testing.T) {
 	homeDir := t.TempDir()
@@ -93,6 +107,48 @@ func TestProjectShow(t *testing.T) {
 	require.Contains(t, s, "http://localhost:8081")
 	require.Contains(t, s, "http://host.docker.internal:18090/v1/chat/completions")
 	require.Contains(t, s, "compose.yml")
+}
+
+func TestProjectRegisterPersistsCanvasGateAndReviewPolicies(t *testing.T) {
+	homeDir := t.TempDir()
+	bareRepo := testutil.SetupBareRepo(t)
+	require.NoError(t, dispatchProject([]string{
+		"register", "--name", "canvas", "--bare", bareRepo, "--language", "cpp",
+		"--orch-url", "http://localhost:8080",
+		"--plan-review-policy", "sglang_safe_auto",
+		"--test-review-policy", "sglang_safe_auto",
+		"--test-command", "scripts/dev check all && scripts/dev check changed",
+		"--compile-command", "scripts/dev check changed",
+		"--home-dir", homeDir,
+	}, io.Discard, io.Discard))
+
+	config := string(readFile(t, filepath.Join(homeDir, ".drem", "projects", "canvas", "drem.toml")))
+	require.Contains(t, config, `plan  = "sglang_safe_auto"`)
+	require.Contains(t, config, `tests = "sglang_safe_auto"`)
+	require.Contains(t, config, `test_command    = "scripts/dev check all && scripts/dev check changed"`)
+	require.Contains(t, config, `compile_command = "scripts/dev check changed"`)
+}
+
+func TestProjectRegisterUpdateChangesCanvasOperationalPolicy(t *testing.T) {
+	homeDir := t.TempDir()
+	registerForUpdate(t, homeDir)
+	require.NoError(t, dispatchProject([]string{
+		"register", "--update", "drem-orchestrator", "--force",
+		"--plan-review-policy", "sglang_safe_auto",
+		"--test-review-policy", "sglang_safe_auto",
+		"--test-command", "scripts/dev check changed",
+		"--compile-command", "scripts/dev check changed",
+		"--home-dir", homeDir,
+	}, io.Discard, io.Discard))
+
+	config := string(readFile(t, filepath.Join(homeDir, ".drem", "projects", "drem-orchestrator", "drem.toml")))
+	require.Contains(t, config, `plan  = "sglang_safe_auto"`)
+	require.Contains(t, config, `tests = "sglang_safe_auto"`)
+	require.Contains(t, config, `test_command    = "scripts/dev check changed"`)
+
+	registry := string(readFile(t, filepath.Join(homeDir, ".drem", "projects.toml")))
+	require.Contains(t, registry, `plan_review_policy = "sglang_safe_auto"`)
+	require.Contains(t, registry, `test_command = "scripts/dev check changed"`)
 }
 
 // TestProjectRemove verifies the `remove` subcommand clears the registry

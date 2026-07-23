@@ -2,6 +2,7 @@ package spawner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -63,6 +64,17 @@ func (s *Service) SpawnWorker(ctx context.Context, p SpawnWorkerParams) (SpawnWo
 			return SpawnWorkerResult{}, fmt.Errorf("no image mapping for agent_type=%q", p.AgentType)
 		}
 		image = resolved
+	}
+	if ensurer, ok := s.Runtime.(container.ImageEnsurer); ok {
+		// Serialize image inspection/pulls at the Docker ownership boundary.
+		// A missing shared worker image should cause one bounded pull rather
+		// than several concurrent ContainerCreate failures and task retries.
+		s.imageMu.Lock()
+		err := ensurer.EnsureImage(ctx, image)
+		s.imageMu.Unlock()
+		if err != nil {
+			return SpawnWorkerResult{}, fmt.Errorf("worker image unavailable: %w", err)
+		}
 	}
 
 	labels := mergeLabels(p.Labels, map[string]string{
@@ -240,15 +252,22 @@ func (s *Service) InspectWorker(ctx context.Context, p InspectWorkerParams) (Ins
 	}
 	st, err := s.Runtime.Inspect(ctx, p.ContainerID)
 	if err != nil {
+		if errors.Is(err, container.ErrNotFound) {
+			return InspectWorkerResult{Status: string(container.StatusRemoved)}, nil
+		}
 		return InspectWorkerResult{}, fmt.Errorf("inspect: %w", err)
 	}
-	return InspectWorkerResult{
+	result := InspectWorkerResult{
 		Status:     string(st.Status),
 		ExitCode:   st.ExitCode,
 		StartedAt:  st.StartedAt,
 		FinishedAt: st.FinishedAt,
 		OOMKilled:  st.OOMKilled,
-	}, nil
+	}
+	if terminalWorkerStatus(st.Status) {
+		result.Usage = s.readWorkerUsage(ctx, p.ContainerID)
+	}
+	return result, nil
 }
 
 // mergeLabels combines caller-supplied labels with the service's own

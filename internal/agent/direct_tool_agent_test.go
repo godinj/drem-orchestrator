@@ -48,6 +48,22 @@ func TestToolsForRole_Unknown(t *testing.T) {
 	assert.ElementsMatch(t, []string{"read", "grep", "glob"}, names)
 }
 
+func TestToolsForRoleScope_BoundedCoderOmitsDiscoveryTools(t *testing.T) {
+	names := toolNames(ToolsForRoleScope("coder", []string{"src/Main.cpp"}))
+	assert.ElementsMatch(t, []string{"read", "edit", "write", "bash"}, names)
+	assert.NotContains(t, names, "grep")
+	assert.NotContains(t, names, "glob")
+}
+
+func TestToolsForRoleScope_UnscopedAndReadOnlyRolesKeepDiscoveryTools(t *testing.T) {
+	assert.ElementsMatch(t,
+		toolNames(ToolsForRole("coder")),
+		toolNames(ToolsForRoleScope("coder", nil)))
+	assert.ElementsMatch(t,
+		toolNames(ToolsForRole("reviewer")),
+		toolNames(ToolsForRoleScope("reviewer", []string{"src/Main.cpp"})))
+}
+
 func TestToolsForRole_ToolDefinitionsAreValid(t *testing.T) {
 	for _, role := range []string{"coder", "reviewer", "fixer"} {
 		tools := ToolsForRole(role)
@@ -758,7 +774,253 @@ func TestDefaultDirectToolAgentConfig(t *testing.T) {
 	assert.Equal(t, "qwen3-coder-30b", cfg.Model)
 	assert.Equal(t, 8192, cfg.MaxTokens)
 	assert.Equal(t, 20, cfg.MaxIterations)
+	assert.Equal(t, 60000, cfg.MaxCumulativeInputTokens)
 	assert.Equal(t, 30*1e9, float64(cfg.BashTimeout)) // 30s in nanoseconds
+}
+
+func TestRunDirectToolAgent_CumulativeInputBudgetCheckpointsToolBatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := toolChatResponse{
+			Choices: []toolChatChoice{{
+				Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+					ID: "write-1", Type: "function",
+					Function: toolCallFunction{Name: "write", Arguments: `{"path":"checkpoint.txt","content":"preserved"}`},
+				}}},
+				FinishReason: "tool_calls",
+			}},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			}{PromptTokens: 120, CompletionTokens: 5, TotalTokens: 125},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.MaxCumulativeInputTokens = 100
+
+	result, err := RunDirectToolAgent(cfg, "sys", "user", ToolsForRole("coder"), "")
+	require.NoError(t, err)
+	require.Equal(t, DirectToolStopReasonTokenBudget, result.StopReason)
+	require.Equal(t, 120, result.TokensIn)
+	require.True(t, result.MutationObserved)
+	content, readErr := os.ReadFile(filepath.Join(dir, "checkpoint.txt"))
+	require.NoError(t, readErr)
+	require.Equal(t, "preserved", string(content))
+}
+
+func TestRunDirectToolAgent_ScopedReadBudgetStopsUnproductiveReconnaissance(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls := make([]toolCall, 0, 4)
+		for i := 1; i <= 4; i++ {
+			calls = append(calls, toolCall{
+				ID: fmt.Sprintf("read-%d", i), Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: fmt.Sprintf(`{"path":"file-%d.txt"}`, i)},
+			})
+		}
+		resp := toolChatResponse{
+			Choices: []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: calls}, FinishReason: "tool_calls"}},
+		}
+		resp.Usage.PromptTokens = 20
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	for i := 1; i <= 4; i++ {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, fmt.Sprintf("file-%d.txt", i)), []byte(fmt.Sprintf("content-%d", i)), 0o644))
+	}
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.MaxReadsBeforeMutation = 2
+
+	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRole("coder"), "")
+	require.Error(t, err)
+	require.Equal(t, DirectToolStopReasonNoProgress, result.StopReason)
+	require.Contains(t, err.Error(), "refused to mutate after 4 reconnaissance calls")
+}
+
+func TestRunDirectToolAgent_StopsHistoricalBashDiscoveryTraceBeforeInferenceLoop(t *testing.T) {
+	commands := []string{
+		"ls tests/integration", "scripts/dev test --filter Transient", "find src -name '*Audio*'",
+		"rg -n Slicing src", "ls src/model", "grep -R divideAtTransients .",
+	}
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		command := commands[callCount%len(commands)]
+		callCount++
+		resp := toolChatResponse{
+			Choices: []toolChatChoice{{
+				Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+					ID: fmt.Sprintf("search-%d", callCount), Type: "function",
+					Function: toolCallFunction{Name: "bash", Arguments: fmt.Sprintf(`{"cmd":%q}`, command)},
+				}}},
+				FinishReason: "tool_calls",
+			}},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			}{PromptTokens: 5500, CompletionTokens: 25, TotalTokens: 5525},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.MaxIterations = 16
+	cfg.MaxReadsBeforeMutation = 8
+	cfg.MaxToolCalls = 12
+	cfg.MaxInputTokensBeforeMutation = 18_000
+
+	result, err := RunDirectToolAgent(cfg, "sys", "write the contracted red test", ToolsForRoleScope("coder", []string{"tests/test.cpp"}), "")
+	require.Error(t, err)
+	require.Equal(t, DirectToolStopReasonNoProgress, result.StopReason)
+	require.Equal(t, 2, callCount)
+	require.Equal(t, 11_000, result.TokensIn)
+	require.False(t, result.MutationObserved)
+}
+
+func TestRunDirectToolAgent_AppliesMutationLaterInBlockedReconnaissanceBatch(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		resp := toolChatResponse{}
+		if callCount == 1 {
+			resp.Choices = []toolChatChoice{{
+				Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{
+					{ID: "search-1", Type: "function", Function: toolCallFunction{Name: "bash", Arguments: `{"cmd":"ls"}`}},
+					{ID: "search-2", Type: "function", Function: toolCallFunction{Name: "bash", Arguments: `{"cmd":"rg Missing"}`}},
+					{ID: "write-1", Type: "function", Function: toolCallFunction{Name: "write", Arguments: `{"path":"test.cpp","content":"contracted test"}`}},
+				}}, FinishReason: "tool_calls",
+			}}
+		} else {
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", Content: "done"}, FinishReason: "stop"}}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.MaxReadsBeforeMutation = 8
+	cfg.MaxToolCalls = 12
+	result, err := RunDirectToolAgent(cfg, "sys", "task", ToolsForRoleScope("coder", []string{"test.cpp"}), "")
+	require.NoError(t, err)
+	require.True(t, result.MutationObserved)
+	require.Equal(t, 2, callCount)
+	data, readErr := os.ReadFile(filepath.Join(dir, "test.cpp"))
+	require.NoError(t, readErr)
+	require.Equal(t, "contracted test", string(data))
+}
+
+func TestRunDirectToolAgent_EnforcesTotalToolCallBudget(t *testing.T) {
+	callCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		resp := toolChatResponse{Choices: []toolChatChoice{{
+			Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: fmt.Sprintf("call-%d", callCount), Type: "function",
+				Function: toolCallFunction{Name: "bash", Arguments: fmt.Sprintf(`{"cmd":"echo step-%d"}`, callCount)},
+			}}}, FinishReason: "tool_calls",
+		}}}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.MaxToolCalls = 3
+	result, err := RunDirectToolAgent(cfg, "sys", "task", ToolsForRole("coder"), "")
+	require.Error(t, err)
+	require.Equal(t, DirectToolStopReasonToolBudget, result.StopReason)
+	require.Equal(t, 3, callCount)
+}
+
+func TestRunDirectToolAgent_NaturalStopWinsOverCumulativeInputBudget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := toolChatResponse{
+			Choices: []toolChatChoice{{Message: toolChatMsg{Role: "assistant", Content: "done"}, FinishReason: "stop"}},
+			Usage: struct {
+				PromptTokens     int `json:"prompt_tokens"`
+				CompletionTokens int `json:"completion_tokens"`
+				TotalTokens      int `json:"total_tokens"`
+			}{PromptTokens: 120, CompletionTokens: 2, TotalTokens: 122},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.MaxCumulativeInputTokens = 100
+	result, err := RunDirectToolAgent(cfg, "sys", "user", nil, "")
+	require.NoError(t, err)
+	require.Equal(t, "done", result.Output)
+	require.Empty(t, result.StopReason)
+}
+
+func TestRunDirectToolAgent_CumulativeInputBudgetPreservesPriorMutationOnUnexpectedFinish(t *testing.T) {
+	request := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request++
+		resp := toolChatResponse{}
+		if request == 1 {
+			resp.Choices = []toolChatChoice{{
+				Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+					ID: "write-1", Type: "function",
+					Function: toolCallFunction{Name: "write", Arguments: `{"path":"checkpoint.txt","content":"preserved"}`},
+				}}},
+				FinishReason: "tool_calls",
+			}}
+			resp.Usage.PromptTokens = 60
+			resp.Usage.CompletionTokens = 5
+		} else {
+			// Some OpenAI-compatible servers have returned an empty/unknown
+			// finish reason after a complete tool turn. A prior mutation remains
+			// a valid deterministic checkpoint when the cumulative cap is crossed.
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", Content: "checkpointed"}}}
+			resp.Usage.PromptTokens = 50
+			resp.Usage.CompletionTokens = 2
+		}
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.MaxCumulativeInputTokens = 100
+
+	result, err := RunDirectToolAgent(cfg, "sys", "user", ToolsForRole("coder"), "")
+	require.NoError(t, err)
+	require.Equal(t, DirectToolStopReasonTokenBudget, result.StopReason)
+	require.True(t, result.MutationObserved)
+	require.Equal(t, 110, result.TokensIn)
+	content, readErr := os.ReadFile(filepath.Join(dir, "checkpoint.txt"))
+	require.NoError(t, readErr)
+	require.Equal(t, "preserved", string(content))
 }
 
 // TestToolSchemaTokenBudget verifies that tool schemas stay compact.

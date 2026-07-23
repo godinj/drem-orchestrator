@@ -105,15 +105,29 @@ func (a AgentsConfig) InteractiveSupervisorCLIConfig() model.AgentCLIConfig {
 // to configure the direct SGLang tool-calling agent path for coder,
 // reviewer, and fixer roles.
 type DirectToolAgentTOMLConfig struct {
-	Enabled       bool          `toml:"enabled"`
-	Endpoint      string        `toml:"endpoint"`
-	Model         string        `toml:"model"`
-	MaxTokens     int           `toml:"max_tokens"`
-	Temperature   float64       `toml:"temperature"`
-	Timeout       time.Duration `toml:"timeout"`
-	MaxIterations int           `toml:"max_iterations"`
-	BashTimeout   time.Duration `toml:"bash_timeout"`
-	ContextLimit  int           `toml:"context_limit"`
+	Enabled                                    bool          `toml:"enabled"`
+	Endpoint                                   string        `toml:"endpoint"`
+	Model                                      string        `toml:"model"`
+	MaxTokens                                  int           `toml:"max_tokens"`
+	Temperature                                float64       `toml:"temperature"`
+	Timeout                                    time.Duration `toml:"timeout"`
+	MaxIterations                              int           `toml:"max_iterations"`
+	MaxCumulativeInputTokens                   int           `toml:"max_cumulative_input_tokens"`
+	MaxReadsBeforeMutation                     int           `toml:"max_reads_before_mutation"`
+	MaxToolCalls                               int           `toml:"max_tool_calls"`
+	MaxInputTokensBeforeMutation               int           `toml:"max_input_tokens_before_mutation"`
+	TestMaxCumulativeInputTokens               int           `toml:"test_max_cumulative_input_tokens"`
+	ImplementationMaxCumulativeInputTokens     int           `toml:"implementation_max_cumulative_input_tokens"`
+	IntegrationMaxCumulativeInputTokens        int           `toml:"integration_max_cumulative_input_tokens"`
+	ReviewMaxCumulativeInputTokens             int           `toml:"review_max_cumulative_input_tokens"`
+	TestMaxReadsBeforeMutation                 int           `toml:"test_max_reads_before_mutation"`
+	ImplementationMaxReadsBeforeMutation       int           `toml:"implementation_max_reads_before_mutation"`
+	IntegrationMaxReadsBeforeMutation          int           `toml:"integration_max_reads_before_mutation"`
+	TestMaxInputTokensBeforeMutation           int           `toml:"test_max_input_tokens_before_mutation"`
+	ImplementationMaxInputTokensBeforeMutation int           `toml:"implementation_max_input_tokens_before_mutation"`
+	IntegrationMaxInputTokensBeforeMutation    int           `toml:"integration_max_input_tokens_before_mutation"`
+	BashTimeout                                time.Duration `toml:"bash_timeout"`
+	ContextLimit                               int           `toml:"context_limit"`
 }
 
 // DeliveryTOMLConfig selects the explicit delivery and verification policy.
@@ -121,6 +135,15 @@ type DirectToolAgentTOMLConfig struct {
 type DeliveryTOMLConfig struct {
 	IntegrationPolicy  model.IntegrationPolicy  `toml:"integration_policy"`
 	VerificationPolicy model.VerificationPolicy `toml:"verification_policy"`
+}
+
+// ReviewPolicyTOMLConfig controls approval-gate automation. The safe-auto
+// policy delegates review to SGLang but advances only an explicit, validated
+// approve recommendation; malformed, unavailable, revise, and reject results
+// remain parked for Codex/operator attention.
+type ReviewPolicyTOMLConfig struct {
+	Plan  model.ReviewGatePolicy `toml:"plan"`
+	Tests model.ReviewGatePolicy `toml:"tests"`
 }
 
 // Config holds all runtime configuration for the Drem Orchestrator.
@@ -171,6 +194,7 @@ type Config struct {
 	Agents          AgentsConfig              `toml:"agents"`
 	DirectToolAgent DirectToolAgentTOMLConfig `toml:"direct_tool_agent"`
 	Delivery        DeliveryTOMLConfig        `toml:"delivery"`
+	ReviewPolicy    ReviewPolicyTOMLConfig    `toml:"review_policy"`
 	Profiles        map[string]ProfileConfig  `toml:"profiles"`
 	// Tmux is accepted but ignored for one release so existing drem.toml
 	// files that still carry a [tmux] table keep loading. Prompt 17
@@ -244,6 +268,10 @@ func DefaultConfig() Config {
 			IntegrationPolicy:  model.IntegrationAutoMerge,
 			VerificationPolicy: model.VerificationLocalAutomated,
 		},
+		ReviewPolicy: ReviewPolicyTOMLConfig{
+			Plan:  model.ReviewGateManual,
+			Tests: model.ReviewGateManual,
+		},
 		Agents: AgentsConfig{
 			Classifier:            AgentConfig{Effort: "medium"},
 			Planner:               AgentConfig{Effort: "medium"},
@@ -281,6 +309,12 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if _, err := model.ParseVerificationPolicy(string(cfg.Delivery.VerificationPolicy)); err != nil {
 		return cfg, fmt.Errorf("delivery.verification_policy: %w", err)
+	}
+	if _, err := model.ParseReviewGatePolicy(string(cfg.ReviewPolicy.Plan)); err != nil {
+		return cfg, fmt.Errorf("review_policy.plan: %w", err)
+	}
+	if _, err := model.ParseReviewGatePolicy(string(cfg.ReviewPolicy.Tests)); err != nil {
+		return cfg, fmt.Errorf("review_policy.tests: %w", err)
 	}
 
 	for name := range cfg.Profiles {

@@ -46,8 +46,8 @@ type errResponse struct {
 	Error string `json:"error"`
 }
 
-// rejectRequest is the optional body of POST /reject. The CLI today accepts
-// --reason=... for plan_review (ignored by HandlePlanRejected) and
+// rejectRequest is the optional body of POST /reject. The reason becomes
+// planner feedback for plan_review and test feedback for test_review.
 // test_review (forwarded as feedback).
 type rejectRequest struct {
 	Reason string `json:"reason"`
@@ -153,7 +153,7 @@ func (s *Server) handleRejectTask(w http.ResponseWriter, r *http.Request) {
 	var err error
 	switch task.Status {
 	case model.StatusPlanReview:
-		err = s.Orch.HandlePlanRejectedBy(task.ID, actor)
+		err = s.Orch.HandlePlanRejectedBy(task.ID, actor, req.Reason)
 	case model.StatusTestReview:
 		err = s.Orch.HandleTestReviewRejectedBy(task.ID, req.Reason, actor)
 	default:
@@ -312,6 +312,79 @@ func (s *Server) handleRetryTask(w http.ResponseWriter, r *http.Request) {
 	if err := s.Orch.RetryTask(task.ID); err != nil {
 		slog.Error("orchhttp: retry failed", "task_id", task.ID, "err", err)
 		if errors.Is(err, orchestrator.ErrRetryParentHasChildren) || errors.Is(err, orchestrator.ErrRetryPausedGateMissing) {
+			writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
+		return
+	}
+	s.writeUpdatedTask(w, task.ID)
+}
+
+// handleResumeTask restores a diagnostic pause to the exact pipeline phase
+// recorded in paused_from. Unlike retry, resume does not clear failure state,
+// detach agents, or reroute the task through backlog.
+func (s *Server) handleResumeTask(w http.ResponseWriter, r *http.Request) {
+	if s.Orch == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "gate mutations not configured")
+		return
+	}
+	if !s.requireProject(w, r) {
+		return
+	}
+	task, ok := s.loadTaskForMutation(w, r)
+	if !ok {
+		return
+	}
+	if task.Status != model.StatusPaused {
+		writeJSONError(w, http.StatusConflict,
+			fmt.Sprintf("task in status %q, expected one of [paused]", task.Status))
+		return
+	}
+	if err := s.Orch.ResumeTask(task.ID); err != nil {
+		slog.Error("orchhttp: resume failed", "task_id", task.ID, "err", err)
+		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
+		return
+	}
+	s.writeUpdatedTask(w, task.ID)
+}
+
+// handleAdoptFailedChild is the Codex adapter's deterministic repair seam.
+// It never retries inference: the orchestrator validates and merges the exact
+// repaired branch head before reopening the failed parent pipeline.
+func (s *Server) handleAdoptFailedChild(w http.ResponseWriter, r *http.Request) {
+	if s.Orch == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "gate mutations not configured")
+		return
+	}
+	if !s.requireProject(w, r) {
+		return
+	}
+	task, ok := s.loadTaskForMutation(w, r)
+	if !ok {
+		return
+	}
+	if task.Status != model.StatusFailed || task.ParentTaskID == nil {
+		writeJSONError(w, http.StatusConflict, "Codex adoption requires a failed child task")
+		return
+	}
+	actor, ok := requireMutationActor(w, r)
+	if !ok {
+		return
+	}
+	var req orchdto.AdoptFailedChildRequest
+	if err := decodeOptionalJSON(r.Body, &req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	req.CommitSHA = strings.TrimSpace(req.CommitSHA)
+	if req.CommitSHA == "" {
+		writeJSONError(w, http.StatusBadRequest, "commit_sha is required")
+		return
+	}
+	if err := s.Orch.AdoptFailedChild(task.ID, req.CommitSHA, actor); err != nil {
+		slog.Error("orchhttp: Codex adoption failed", "task_id", task.ID, "err", err)
+		if errors.Is(err, orchestrator.ErrCodexAdoptionConflict) {
 			writeJSONError(w, http.StatusConflict, err.Error())
 			return
 		}
