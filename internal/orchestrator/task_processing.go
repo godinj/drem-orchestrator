@@ -459,6 +459,8 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		delete(parent.Context, "parent_readiness_blockers")
 		delete(parent.Context, "parent_readiness_blocker_count")
 		delete(parent.Context, "delivery_rework_pending")
+		delete(parent.Context, "delivery_rework_repair_ids")
+		delete(parent.Context, "delivery_rework_repair_count")
 		oldStatus := parent.Status
 		if err := o.transitionTaskAtomic(parent, model.StatusTestingReady, "orchestrator", "subtask_completion",
 			"all subtasks completed", nil); err != nil {

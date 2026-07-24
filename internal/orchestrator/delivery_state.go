@@ -135,42 +135,7 @@ func stageOrchestratedDeliveryRework(tx *gorm.DB, task *model.Task, reason strin
 		return nil
 	}
 
-	// A standard task cannot be returned to in_progress with every planned
-	// child still terminal: checkFeatureCompletion would immediately freeze a
-	// new artifact at the same commit. Reopen the latest integration worker (or
-	// implementation worker when no integration child exists) and force it to
-	// consume the host failure before another artifact can be produced.
-	var repair model.Task
-	err := tx.Where("parent_task_id = ? AND status = ? AND phase IN ?", task.ID, model.StatusDone,
-		[]string{"integration", "implementation"}).
-		Order("CASE phase WHEN 'integration' THEN 0 ELSE 1 END, updated_at DESC").
-		First(&repair).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return errors.New("stage orchestrated delivery rework: no completed integration or implementation subtask is available for repair")
-	}
-	if err != nil {
-		return fmt.Errorf("stage orchestrated delivery rework: find repair subtask: %w", err)
-	}
-	if repair.Context == nil {
-		repair.Context = model.JSONField{}
-	}
-	repair.Context["prompt_adjustment"] = strings.TrimSpace(reason)
-	repair.Context["delivery_rework_pending"] = true
-	repair.Context["skip_existing_work_dedup"] = true
-	repair.Context["skip_existing_work_dedup_reason"] = "delivery_verification_failed"
-	repair.Status = model.StatusBacklog
-	repair.AssignedAgentID = nil
-	repair.WorktreeBranch = fmt.Sprintf("feature/%s-rework-%s", taskFeatureName(&repair), uuid.NewString()[:8])
-	if err := tx.Model(&repair).Select("context", "status", "assigned_agent_id", "worktree_branch").Updates(&repair).Error; err != nil {
-		return fmt.Errorf("stage orchestrated delivery rework: reopen repair subtask: %w", err)
-	}
-
-	task.Context["delivery_rework_pending"] = repair.ID.String()
-	task.AssignedAgentID = nil
-	if err := tx.Model(task).Select("context", "assigned_agent_id").Updates(task).Error; err != nil {
-		return fmt.Errorf("stage orchestrated delivery rework: %w", err)
-	}
-	return nil
+	return stageScopedDeliveryRepairChildren(tx, task, reason)
 }
 
 // FreezeDeliveryArtifact atomically creates a versioned immutable handoff and

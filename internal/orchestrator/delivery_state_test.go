@@ -416,14 +416,176 @@ func TestFailedVerificationRetainedAndArtifactInvalidated(t *testing.T) {
 	require.NoError(t, orch.db.First(&updated, "id = ?", task.ID).Error)
 	require.Equal(t, model.StatusInProgress, updated.Status)
 	require.NoError(t, orch.db.First(&repair, "id = ?", repair.ID).Error)
-	require.Equal(t, model.StatusBacklog, repair.Status)
-	require.Equal(t, "native compile failed", repair.Context["prompt_adjustment"])
-	require.Equal(t, true, repair.Context["delivery_rework_pending"])
-	require.Equal(t, true, repair.Context["skip_existing_work_dedup"])
-	require.Contains(t, repair.WorktreeBranch, "-rework-")
+	require.Equal(t, model.StatusDone, repair.Status, "completed owner remains immutable audit history")
+	var repairChild model.Task
+	require.NoError(t, orch.db.Where("parent_task_id = ? AND status = ?", task.ID, model.StatusBacklog).First(&repairChild).Error)
+	require.Equal(t, repair.ID.String(), repairChild.Context[deliveryReworkSourceTaskKey])
+	require.Contains(t, repairChild.Context["prompt_adjustment"], "native compile failed")
+	require.Equal(t, true, repairChild.Context["delivery_rework_pending"])
+	require.Equal(t, true, repairChild.Context["skip_existing_work_dedup"])
+	require.Contains(t, repairChild.WorktreeBranch, "-rework-")
 	var invalidated model.DeliveryArtifact
 	require.NoError(t, orch.db.First(&invalidated, "id = ?", artifact.ID).Error)
 	require.NotNil(t, invalidated.InvalidatedAt)
+}
+
+func TestOrchestratedDeliveryReworkCreatesDependencyOrderedScopedRepairs(t *testing.T) {
+	orch, task, snapshot := deliveryFixture(t)
+
+	modelTest := testutil.CreateTask(t, orch.db, task.ProjectID, "write lane cycling contract", model.StatusDone)
+	modelTest.ParentTaskID = &task.ID
+	modelTest.Phase = "test"
+	modelTest.Priority = 3
+	modelTest.Context = model.JSONField{
+		"estimated_files": []any{"tests/integration/LaneVersionCommandTest.cpp"},
+		"writable_files":  []any{"tests/integration/LaneVersionCommandTest.cpp"},
+	}
+	require.NoError(t, orch.db.Save(&modelTest).Error)
+
+	action := testutil.CreateTask(t, orch.db, task.ProjectID, "implement take cycling actions", model.StatusDone)
+	action.ParentTaskID = &task.ID
+	action.Phase = "implementation"
+	action.Priority = 2
+	action.DependencyIDs = model.JSONArray{modelTest.ID.String()}
+	action.Context = model.JSONField{
+		"estimated_files": []any{"src/ui/ActionCoordinatorHandlers.cpp", "src/ui/ActionCoordinatorRegistration.cpp"},
+		"writable_files":  []any{"src/ui/ActionCoordinatorHandlers.cpp", "src/ui/ActionCoordinatorRegistration.cpp"},
+	}
+	require.NoError(t, orch.db.Save(&action).Error)
+	modelTest.TestsFor = model.JSONArray{action.ID.String()}
+	require.NoError(t, orch.db.Save(&modelTest).Error)
+
+	integration := testutil.CreateTask(t, orch.db, task.ProjectID, "wire take cycling keymap", model.StatusDone)
+	integration.ParentTaskID = &task.ID
+	integration.Phase = "integration"
+	integration.Priority = 1
+	integration.DependencyIDs = model.JSONArray{action.ID.String()}
+	integration.Context = model.JSONField{
+		"estimated_files": []any{
+			"tests/integration/LaneVersionCommandTest.cpp",
+			"src/ui/ActionCoordinatorHandlers.cpp",
+			"src/ui/ActionCoordinatorRegistration.cpp",
+			"config/default_keymap.yaml",
+		},
+		"writable_files": []any{"config/default_keymap.yaml"},
+	}
+	require.NoError(t, orch.db.Save(&integration).Error)
+
+	artifact, err := orch.FreezeDeliveryArtifact(task.ID, snapshot)
+	require.NoError(t, err)
+	var current model.Task
+	require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+	_, err = orch.RequestDeliveryRework(RequestDeliveryReworkRequest{
+		TaskID: current.ID, ObservedStateVersion: current.StateVersion,
+		ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
+		Actor: "codex:verifier", Source: "test",
+		Reason: "test APIs do not compile; action APIs are undeclared; config/default_keymap.yaml is missing Alt+j/Alt+k",
+		Mode:   model.DeliveryReworkOrchestrated, IdempotencyKey: "multi-owner-delivery-rework",
+	})
+	require.NoError(t, err)
+
+	var children []model.Task
+	require.NoError(t, orch.db.Where("parent_task_id = ?", task.ID).Find(&children).Error)
+	repairs := map[string]model.Task{}
+	for _, child := range children {
+		if source, ok := child.Context[deliveryReworkSourceTaskKey].(string); ok {
+			repairs[source] = child
+		}
+	}
+	require.Len(t, repairs, 3)
+	testRepair := repairs[modelTest.ID.String()]
+	actionRepair := repairs[action.ID.String()]
+	integrationRepair := repairs[integration.ID.String()]
+	require.Equal(t, []string{"tests/integration/LaneVersionCommandTest.cpp"}, extractWritableFiles(testRepair))
+	require.Equal(t, []string{"src/ui/ActionCoordinatorHandlers.cpp", "src/ui/ActionCoordinatorRegistration.cpp"}, extractWritableFiles(actionRepair))
+	require.Equal(t, []string{"config/default_keymap.yaml"}, extractWritableFiles(integrationRepair),
+		"integration must not inherit read/merge paths as mutation authority")
+	require.Equal(t, model.JSONArray{testRepair.ID.String()}, actionRepair.DependencyIDs)
+	require.Equal(t, model.JSONArray{actionRepair.ID.String()}, testRepair.TestsFor)
+	require.Equal(t, model.JSONArray{actionRepair.ID.String()}, integrationRepair.DependencyIDs)
+	var scopedEvents int64
+	require.NoError(t, orch.db.Model(&model.TaskEvent{}).
+		Where("event_type = ? AND task_id IN ?", "delivery_rework_scoped", []uuid.UUID{testRepair.ID, actionRepair.ID, integrationRepair.ID}).
+		Count(&scopedEvents).Error)
+	require.EqualValues(t, 3, scopedEvents)
+
+	met, err := DependenciesMet(orch.db, actionRepair.DependencyIDs)
+	require.NoError(t, err)
+	require.False(t, met)
+	met, err = DependenciesMet(orch.db, integrationRepair.DependencyIDs)
+	require.NoError(t, err)
+	require.False(t, met)
+
+	require.NoError(t, orch.db.Model(&model.Task{}).Where("id = ?", testRepair.ID).Update("status", model.StatusDone).Error)
+	met, err = DependenciesMet(orch.db, actionRepair.DependencyIDs)
+	require.NoError(t, err)
+	require.True(t, met)
+	require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+	require.NoError(t, orch.checkFeatureCompletion(&current))
+	require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusInProgress, current.Status)
+
+	require.NoError(t, orch.db.Model(&model.Task{}).Where("id = ?", actionRepair.ID).Update("status", model.StatusDone).Error)
+	met, err = DependenciesMet(orch.db, integrationRepair.DependencyIDs)
+	require.NoError(t, err)
+	require.True(t, met)
+	require.NoError(t, orch.checkFeatureCompletion(&current))
+	require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusInProgress, current.Status)
+
+	require.NoError(t, orch.db.Model(&model.Task{}).Where("id = ?", integrationRepair.ID).Update("status", model.StatusDone).Error)
+	require.NoError(t, orch.checkFeatureCompletion(&current))
+	require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusTestingReady, current.Status)
+	refrozen, err := orch.FreezeDeliveryArtifact(task.ID, snapshot)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), refrozen.ArtifactVersion)
+}
+
+func TestOrchestratedDeliveryReworkSingleOwnerCompatibilityAndNoOwnerFailure(t *testing.T) {
+	t.Run("single owner", func(t *testing.T) {
+		orch, task, snapshot := deliveryFixture(t)
+		owner := testutil.CreateTask(t, orch.db, task.ProjectID, "repair action", model.StatusDone)
+		owner.ParentTaskID = &task.ID
+		owner.Phase = "implementation"
+		owner.Context = model.JSONField{"writable_files": []any{"src/action.cpp"}}
+		require.NoError(t, orch.db.Save(&owner).Error)
+		artifact, err := orch.FreezeDeliveryArtifact(task.ID, snapshot)
+		require.NoError(t, err)
+		var current model.Task
+		require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+		_, err = orch.RequestDeliveryRework(RequestDeliveryReworkRequest{
+			TaskID: task.ID, ObservedStateVersion: current.StateVersion,
+			ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
+			Actor: "codex:verifier", Source: "test", Reason: "compile failure",
+			Mode: model.DeliveryReworkOrchestrated, IdempotencyKey: "single-owner-rework",
+		})
+		require.NoError(t, err)
+		var repair model.Task
+		require.NoError(t, orch.db.Where("parent_task_id = ? AND status = ?", task.ID, model.StatusBacklog).First(&repair).Error)
+		require.Equal(t, owner.ID.String(), repair.Context[deliveryReworkSourceTaskKey])
+		require.Equal(t, []string{"src/action.cpp"}, extractWritableFiles(repair))
+	})
+
+	t.Run("no completed owner fails atomically", func(t *testing.T) {
+		orch, task, snapshot := deliveryFixture(t)
+		artifact, err := orch.FreezeDeliveryArtifact(task.ID, snapshot)
+		require.NoError(t, err)
+		var current model.Task
+		require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+		_, err = orch.RequestDeliveryRework(RequestDeliveryReworkRequest{
+			TaskID: task.ID, ObservedStateVersion: current.StateVersion,
+			ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
+			Actor: "codex:verifier", Source: "test", Reason: "compile failure",
+			Mode: model.DeliveryReworkOrchestrated, IdempotencyKey: "missing-owner-rework",
+		})
+		require.ErrorContains(t, err, "no completed test, implementation, or integration subtask")
+		require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+		require.Equal(t, model.StatusVerificationReady, current.Status)
+		var invalidated model.DeliveryArtifact
+		require.NoError(t, orch.db.First(&invalidated, "id = ?", artifact.ID).Error)
+		require.Nil(t, invalidated.InvalidatedAt)
+	})
 }
 
 func TestVerifyDeliveryRejectsContradictoryOrMalformedEvidence(t *testing.T) {

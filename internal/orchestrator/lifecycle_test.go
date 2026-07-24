@@ -1193,8 +1193,11 @@ func TestTaskLifecycle_TestFailedBackToPlanning(t *testing.T) {
 		t.Errorf("expected in_progress, got %s", updated.Status)
 	}
 	require.NoError(t, db.First(&repair, "id = ?", repair.ID).Error)
-	require.Equal(t, model.StatusBacklog, repair.Status)
-	require.Equal(t, true, repair.Context["delivery_rework_pending"])
+	require.Equal(t, model.StatusDone, repair.Status)
+	var repairChild model.Task
+	require.NoError(t, db.Where("parent_task_id = ? AND status = ?", task.ID, model.StatusBacklog).First(&repairChild).Error)
+	require.Equal(t, repair.ID.String(), repairChild.Context[deliveryReworkSourceTaskKey])
+	require.Equal(t, true, repairChild.Context["delivery_rework_pending"])
 }
 
 func TestTaskLifecycle_PlanRejectReplanApprove(t *testing.T) {

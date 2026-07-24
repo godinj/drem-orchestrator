@@ -124,6 +124,17 @@ Use this routing rule after each observation:
 | A bounded implementation correction; acceptance criteria and dependency/persistence/security/process/build-policy shape are unchanged | Submit failed verification with `host-direct`, enter the actor-owned `host_rework` session, commit only the allowed scope, then `submit-rework`. Fresh deterministic gates must create the next artifact version before another native build. |
 | The correction changes acceptance criteria, dependencies, persistence/schema, security/auth, cross-process ownership, or build/release policy | Route to `orchestrated` rework. The task returns to normal worker planning/implementation; the Codex verifier must not patch it as a local tweak. |
 
+An orchestrated delivery correction is routed back through the owners of the
+accepted execution plan, not assigned wholesale to the final integration
+worker. The orchestrator creates immutable repair children for the active
+completed test, implementation, and integration owners, preserves each
+owner's original `writable_files`, and remaps the original dependency graph to
+the repair generation. Integration may still read the complete declared
+assembly scope, but it may mutate only its original `writable_files`. A new
+preliminary gate and artifact version are impossible until every scoped repair
+has completed. The failed artifact and original children remain immutable
+audit evidence.
+
 For every code tweak, the required sequence is:
 
 ```text

@@ -351,7 +351,13 @@ Computer Use. It then chooses exactly one outcome through the API:
    architecture or data ownership is implicated, tests/design need expansion,
    the repair crosses the bounded task scope, or the verifier cannot state a
    deterministic edit. The task returns to `in_progress` with the discrepancy
-   evidence admitted to the next worker prompt.
+   evidence partitioned across immutable repair children cloned from the
+   active completed test, implementation, and integration owners. Every repair
+   inherits only its owner's `writable_files`; original dependency and
+   `tests_for` edges are remapped to the repair generation. The original
+   children stay terminal as audit history, integration cannot widen its write
+   authority to its read/merge scope, and `testing_ready`/artifact re-freeze is
+   blocked until every scoped repair succeeds.
 3. **Fail to host-direct rework** — use for a deterministic, bounded correction
    that preserves the existing task intent and acceptance criteria. The same
    Codex task acquires `host_rework`, edits only its isolated worktree, commits,
