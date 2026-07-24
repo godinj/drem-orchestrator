@@ -52,23 +52,25 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 			} `toml:"coder"`
 		} `toml:"agents"`
 		DirectToolAgent struct {
-			Endpoint                                   string `toml:"endpoint"`
-			Model                                      string `toml:"model"`
-			MaxIterations                              int    `toml:"max_iterations"`
-			MaxCumulativeInputTokens                   int    `toml:"max_cumulative_input_tokens"`
-			TestMaxCumulativeInputTokens               int    `toml:"test_max_cumulative_input_tokens"`
-			ImplementationMaxCumulativeInputTokens     int    `toml:"implementation_max_cumulative_input_tokens"`
-			IntegrationMaxCumulativeInputTokens        int    `toml:"integration_max_cumulative_input_tokens"`
-			ReviewMaxCumulativeInputTokens             int    `toml:"review_max_cumulative_input_tokens"`
-			MaxReadsBeforeMutation                     int    `toml:"max_reads_before_mutation"`
-			MaxToolCalls                               int    `toml:"max_tool_calls"`
-			MaxInputTokensBeforeMutation               int    `toml:"max_input_tokens_before_mutation"`
-			TestMaxInputTokensBeforeMutation           int    `toml:"test_max_input_tokens_before_mutation"`
-			ImplementationMaxInputTokensBeforeMutation int    `toml:"implementation_max_input_tokens_before_mutation"`
-			IntegrationMaxInputTokensBeforeMutation    int    `toml:"integration_max_input_tokens_before_mutation"`
-			TestMaxReadsBeforeMutation                 int    `toml:"test_max_reads_before_mutation"`
-			ImplementationMaxReadsBeforeMutation       int    `toml:"implementation_max_reads_before_mutation"`
-			IntegrationMaxReadsBeforeMutation          int    `toml:"integration_max_reads_before_mutation"`
+			Endpoint                                   string         `toml:"endpoint"`
+			Model                                      string         `toml:"model"`
+			MaxIterations                              int            `toml:"max_iterations"`
+			MaxCumulativeInputTokens                   int            `toml:"max_cumulative_input_tokens"`
+			TestMaxCumulativeInputTokens               int            `toml:"test_max_cumulative_input_tokens"`
+			ImplementationMaxCumulativeInputTokens     int            `toml:"implementation_max_cumulative_input_tokens"`
+			IntegrationMaxCumulativeInputTokens        int            `toml:"integration_max_cumulative_input_tokens"`
+			ReviewMaxCumulativeInputTokens             int            `toml:"review_max_cumulative_input_tokens"`
+			MaxReadsBeforeMutation                     int            `toml:"max_reads_before_mutation"`
+			MaxToolCalls                               int            `toml:"max_tool_calls"`
+			MaxInputTokensBeforeMutation               int            `toml:"max_input_tokens_before_mutation"`
+			TestMaxInputTokensBeforeMutation           int            `toml:"test_max_input_tokens_before_mutation"`
+			ImplementationMaxInputTokensBeforeMutation int            `toml:"implementation_max_input_tokens_before_mutation"`
+			IntegrationMaxInputTokensBeforeMutation    int            `toml:"integration_max_input_tokens_before_mutation"`
+			TestMaxReadsBeforeMutation                 int            `toml:"test_max_reads_before_mutation"`
+			ImplementationMaxReadsBeforeMutation       int            `toml:"implementation_max_reads_before_mutation"`
+			IntegrationMaxReadsBeforeMutation          int            `toml:"integration_max_reads_before_mutation"`
+			ChatTemplateKwargs                         map[string]any `toml:"chat_template_kwargs"`
+			ToolArgumentsFormat                        string         `toml:"tool_arguments_format"`
 		} `toml:"direct_tool_agent"`
 	}
 	require.NoError(t, toml.Unmarshal(out, &parsed))
@@ -93,6 +95,8 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 	require.Equal(t, 8, parsed.DirectToolAgent.TestMaxReadsBeforeMutation)
 	require.Equal(t, 6, parsed.DirectToolAgent.ImplementationMaxReadsBeforeMutation)
 	require.Equal(t, 6, parsed.DirectToolAgent.IntegrationMaxReadsBeforeMutation)
+	require.Equal(t, map[string]any{"enable_thinking": false}, parsed.DirectToolAgent.ChatTemplateKwargs)
+	require.Equal(t, "object", parsed.DirectToolAgent.ToolArgumentsFormat)
 	// The warm-classifier endpoint must round-trip so orch picks it up on
 	// startup without needing DREM_CLASSIFIER_URL also set. See
 	// plans/warm-direct-classifier.md §3 (Modified files).
@@ -121,6 +125,51 @@ func TestRenderConfig_UsesExternalInferenceEndpoint(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(out),
 		`endpoint = "http://host.docker.internal:18090/v1/chat/completions"`)
+}
+
+func TestRenderConfig_UsesSelectedInferenceModelForEveryDirectRole(t *testing.T) {
+	out, err := projects.RenderConfig(projects.TemplateData{
+		BareRepoPath:   "/tmp/canvas.git",
+		Language:       projects.LanguageCpp,
+		InferenceModel: "qwen3.6-27b-code",
+	})
+	require.NoError(t, err)
+
+	var parsed struct {
+		Agents struct {
+			Classifier struct {
+				Model string `toml:"model"`
+			} `toml:"classifier"`
+			Coder struct {
+				Model string `toml:"model"`
+			} `toml:"coder"`
+			Reviewer struct {
+				Model string `toml:"model"`
+			} `toml:"reviewer"`
+			Fixer struct {
+				Model string `toml:"model"`
+			} `toml:"fixer"`
+			Merger struct {
+				Model string `toml:"model"`
+			} `toml:"merger"`
+		} `toml:"agents"`
+		DirectToolAgent struct {
+			Model               string `toml:"model"`
+			ToolArgumentsFormat string `toml:"tool_arguments_format"`
+		} `toml:"direct_tool_agent"`
+	}
+	require.NoError(t, toml.Unmarshal(out, &parsed))
+	for name, modelName := range map[string]string{
+		"classifier":        parsed.Agents.Classifier.Model,
+		"coder":             parsed.Agents.Coder.Model,
+		"reviewer":          parsed.Agents.Reviewer.Model,
+		"fixer":             parsed.Agents.Fixer.Model,
+		"merger":            parsed.Agents.Merger.Model,
+		"direct_tool_agent": parsed.DirectToolAgent.Model,
+	} {
+		require.Equal(t, "qwen3.6-27b-code", modelName, name)
+	}
+	require.Equal(t, "string", parsed.DirectToolAgent.ToolArgumentsFormat)
 }
 
 func TestRenderConfig_WritesExplicitDeliveryPolicies(t *testing.T) {

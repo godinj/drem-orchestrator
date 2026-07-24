@@ -62,12 +62,13 @@ type toolCall struct {
 // `{{"key":"val"}}` double-brace output. Feeding a Gemma model its own
 // prior tool calls in the string form causes it to fail to recognize
 // them as tool calls in conversation history, which manifests as
-// edit-loops and no-progress patterns. Templates that expect a string
-// (e.g. OpenAI's own schema) still receive valid JSON — either a string
-// or an object containing the same data.
+// edit-loops and no-progress patterns. OpenAI-compatible servers such as
+// vLLM require a string, so callToolAPI selects the representation through
+// DirectToolAgentConfig.ToolArgumentsFormat.
 type toolCallFunction struct {
-	Name      string `json:"name"`
-	Arguments string `json:"arguments"`
+	Name              string `json:"name"`
+	Arguments         string `json:"arguments"`
+	argumentsAsObject bool
 }
 
 // UnmarshalJSON accepts `arguments` as either a JSON string (OpenAI
@@ -99,7 +100,7 @@ func (tcf *toolCallFunction) UnmarshalJSON(data []byte) error {
 // MarshalJSON emits Arguments as a JSON object when it parses as one,
 // and as a string otherwise. See type-level doc for rationale.
 func (tcf toolCallFunction) MarshalJSON() ([]byte, error) {
-	if tcf.Arguments != "" {
+	if tcf.argumentsAsObject && tcf.Arguments != "" {
 		var argsObj map[string]any
 		if err := json.Unmarshal([]byte(tcf.Arguments), &argsObj); err == nil {
 			return json.Marshal(struct {
@@ -138,9 +139,19 @@ type toolChatChoice struct {
 
 // callToolAPI makes a single chat completions request with tool definitions.
 func callToolAPI(cfg DirectToolAgentConfig, messages []toolChatMsg, tools []toolDefinition) (*toolChatResponse, error) {
+	wireMessages := make([]toolChatMsg, len(messages))
+	copy(wireMessages, messages)
+	if cfg.ToolArgumentsFormat == ToolArgumentsObject {
+		for i := range wireMessages {
+			wireMessages[i].ToolCalls = append([]toolCall(nil), messages[i].ToolCalls...)
+			for j := range wireMessages[i].ToolCalls {
+				wireMessages[i].ToolCalls[j].Function.argumentsAsObject = true
+			}
+		}
+	}
 	reqBody := toolChatRequest{
 		Model:              cfg.Model,
-		Messages:           messages,
+		Messages:           wireMessages,
 		MaxTokens:          cfg.MaxTokens,
 		Temperature:        cfg.Temperature,
 		Tools:              tools,

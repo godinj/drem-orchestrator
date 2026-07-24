@@ -39,6 +39,19 @@ func TestLookupModel_Unknown(t *testing.T) {
 	}
 }
 
+func TestLookupModel_Qwen36Code(t *testing.T) {
+	caps, ok := LookupModel("qwen3.6-27b-code")
+	if !ok {
+		t.Fatal("expected match for qwen3.6-27b-code")
+	}
+	if !caps.Has(ToolCalling) || !caps.Has(ExtendedThinking) {
+		t.Fatalf("expected proved Qwen tool-calling and thinking capabilities, got %#v", caps)
+	}
+	if caps.Has(CodeExecution) {
+		t.Error("remote Qwen model does not provide native code execution")
+	}
+}
+
 func TestLookupModel_OlderModel(t *testing.T) {
 	caps, ok := LookupModel("claude-3-5-sonnet-20241022")
 	if !ok {

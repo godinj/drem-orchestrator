@@ -121,6 +121,21 @@ type RequestDeliveryReworkRequest struct {
 	IdempotencyKey        string
 }
 
+func stageOrchestratedDeliveryRework(tx *gorm.DB, task *model.Task, reason string) error {
+	if task.Context == nil {
+		task.Context = model.JSONField{}
+	}
+	task.Context["prompt_adjustment"] = strings.TrimSpace(reason)
+	if task.Category.IsQuickFix() {
+		task.Context[quickFixDeliveryReworkPendingKey] = true
+	}
+	task.AssignedAgentID = nil
+	if err := tx.Model(task).Select("context", "assigned_agent_id").Updates(task).Error; err != nil {
+		return fmt.Errorf("stage orchestrated delivery rework: %w", err)
+	}
+	return nil
+}
+
 // FreezeDeliveryArtifact atomically creates a versioned immutable handoff and
 // advances testing_ready to verification_ready. A stale task claim rolls back
 // the artifact and event together.
@@ -341,6 +356,8 @@ func (o *Orchestrator) VerifyDelivery(req VerifyDeliveryRequest) (*model.Verific
 				target = model.StatusHostRework
 				hostReworkSessionID = session.ID
 				rework.HostReworkSessionID = &session.ID
+			} else if err := stageOrchestratedDeliveryRework(tx, &task, req.FailureReason); err != nil {
+				return err
 			}
 			if err := tx.Create(&rework).Error; err != nil {
 				return fmt.Errorf("verify delivery: create rework record: %w", err)
@@ -540,6 +557,8 @@ func (o *Orchestrator) RequestDeliveryRework(req RequestDeliveryReworkRequest) (
 			target = model.StatusHostRework
 			hostReworkSessionID = session.ID
 			record.HostReworkSessionID = &session.ID
+		} else if err := stageOrchestratedDeliveryRework(tx, &task, req.Reason); err != nil {
+			return err
 		}
 		if err := tx.Create(&record).Error; err != nil {
 			return fmt.Errorf("request delivery rework: create record: %w", err)

@@ -371,6 +371,7 @@ drem project register \
   --language cpp \
   --orch-url http://127.0.0.1:8080 \
   --inference-endpoint http://host.docker.internal:18090/v1/chat/completions \
+  --inference-model gemma4-26b \
   --integration-policy prepare_branch \
   --verification-policy external_ack
 ```
@@ -379,6 +380,32 @@ This keeps inference remote while project Git, build artifacts, verification,
 and integration authority remain local. A successful worker parks an exact
 artifact at `verification_ready`; it cannot advance the default branch without
 native evidence and explicit integration authorization.
+
+`--inference-model` must match the model ID returned by the endpoint's
+`/v1/models` response. It is persisted in the project registry and rendered
+for classifier, coder, reviewer, fixer, merger, and direct-tool roles. Existing
+registrations that omit it retain the backward-compatible `gemma4-26b`
+default. To switch a registered project without hand-editing generated files:
+
+```bash
+drem project register --update drem-canvas --force \
+  --inference-model qwen3.6-27b-code
+```
+
+Generated direct-agent configuration also selects the OpenAI wire adapter for
+the model family. Gemma retains object-form replay for historical SGLang tool
+calls; Qwen and other OpenAI-compatible servers use string-form
+`function.arguments`. Direct classifier and worker requests explicitly set
+`chat_template_kwargs.enable_thinking = false` so short deterministic phases
+cannot spend their entire response budget in an unobserved reasoning channel.
+These are compatibility settings, not task-spec knobs; regenerate the project
+instead of hand-editing them.
+
+For Qwen 3.6, the validated local profile serves `qwen3.6-27b-code` through
+vLLM while keeping the same loopback GQ/SSH boundary. SGLang remains a valid
+Gemma backend, but the orchestration client depends only on the
+OpenAI-compatible endpoint. Run the repository-free and Canvas C++ canaries
+after changing either the model or the serving engine.
 
 #### GPU host with native SGLang and containerized GQ
 
@@ -932,13 +959,18 @@ project's `drem.toml` ships with the classify endpoint pre-set:
 [agents.classifier]
   direct   = true
   endpoint = "http://drem-classifier:8090/classify"
-  model    = "gemma4-26b"
+  model    = "<registered inference model>"
 ```
 
 …and the per-project `compose.yml` passes
 `DREM_CLASSIFIER_URL=http://drem-classifier:8090/classify` to the
 `orch` service so the env var wins over the toml key during a rolling
 upgrade.
+
+The warm classifier also selects its upstream model at process start. When a
+project switches models, recreate only `drem-classifier` with
+`DREM_CLASSIFIER_MODEL` set to the same served ID; do not restart unrelated
+inference or planner services.
 
 When orch sees a classify endpoint (via env or toml), it POSTs each
 `CLASSIFYING` task to `drem-classifier` instead of running the SGLang

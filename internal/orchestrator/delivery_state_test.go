@@ -516,6 +516,30 @@ func TestRequestDeliveryReworkIsExactAtomicAndIdempotent(t *testing.T) {
 	}
 }
 
+func TestRequestDeliveryReworkStagesQuickFixCorrectionWorker(t *testing.T) {
+	orch, task, snapshot := deliveryFixture(t)
+	task.Category = model.CategoryQuickFix
+	require.NoError(t, orch.db.Save(&task).Error)
+
+	artifact, err := orch.FreezeDeliveryArtifact(task.ID, snapshot)
+	require.NoError(t, err)
+	var current model.Task
+	require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+
+	_, err = orch.RequestDeliveryRework(RequestDeliveryReworkRequest{
+		TaskID: task.ID, ObservedStateVersion: current.StateVersion,
+		ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
+		Actor: "codex:reviewer", Source: "test", Reason: "move the requested tab instead",
+		Mode: model.DeliveryReworkOrchestrated, IdempotencyKey: "quickfix-correction",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusInProgress, current.Status)
+	require.Equal(t, true, current.Context[quickFixDeliveryReworkPendingKey])
+	require.Equal(t, "move the requested tab instead", current.Context["prompt_adjustment"])
+}
+
 func TestDeliveryPolicyMatrixStopsAtTheConfiguredBoundary(t *testing.T) {
 	for _, verificationPolicy := range []model.VerificationPolicy{
 		model.VerificationExternalAck,

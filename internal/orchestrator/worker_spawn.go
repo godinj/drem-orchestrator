@@ -318,6 +318,16 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		if o.directToolAgentCfg != nil {
 			workerCfg := o.directToolAgentCfg.ForWorkload(agentType, task.Phase)
 			env["DREM_DIRECT_ENDPOINT"] = workerCfg.Endpoint
+			if workerCfg.ChatTemplateKwargs != nil {
+				encoded, err := json.Marshal(workerCfg.ChatTemplateKwargs)
+				if err != nil {
+					return spawnWorkerContext{}, fmt.Errorf("encode direct chat-template kwargs: %w", err)
+				}
+				env["DREM_DIRECT_CHAT_TEMPLATE_KWARGS"] = string(encoded)
+			}
+			if workerCfg.ToolArgumentsFormat != "" {
+				env["DREM_DIRECT_TOOL_ARGUMENTS_FORMAT"] = workerCfg.ToolArgumentsFormat
+			}
 			if workerCfg.MaxTokens > 0 {
 				env["DREM_DIRECT_MAX_TOKENS"] = fmt.Sprintf("%d", workerCfg.MaxTokens)
 			}

@@ -731,5 +731,11 @@ func buildDirectToolAgentConfig(cfg Config) *agent.DirectToolAgentConfig {
 	if cfg.DirectToolAgent.ContextLimit > 0 {
 		resolved.ContextLimit = cfg.DirectToolAgent.ContextLimit
 	}
+	if cfg.DirectToolAgent.ChatTemplateKwargs != nil {
+		resolved.ChatTemplateKwargs = cfg.DirectToolAgent.ChatTemplateKwargs
+	}
+	if cfg.DirectToolAgent.ToolArgumentsFormat != "" {
+		resolved.ToolArgumentsFormat = cfg.DirectToolAgent.ToolArgumentsFormat
+	}
 	return &resolved
 }

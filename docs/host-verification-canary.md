@@ -33,6 +33,37 @@ When the GPU host runs SGLang natively but GQ in Docker, use
 guide; otherwise GQ's default `sglang:8081` Docker upstream cannot reach the
 host process.
 
+## 1b. Canvas C++ tool-use smoke
+
+Before exposing a new model/server pair to the Canvas repository, run the
+checked-in Canvas-style C++ fixture through the same direct tool agent used by
+workers:
+
+```bash
+go run ./cmd/drembench \
+  -endpoint http://127.0.0.1:18090/v1/chat/completions \
+  -model qwen3.6-27b-code \
+  -task canvas-cpp-lower-zone-smoke \
+  -runs 3 \
+  -max-iter 20 \
+  -out bench/results/run-canvas-cpp-smoke.csv
+```
+
+`bench/tasks/canvas-cpp-smoke.json` requires the model to inspect Canvas-style
+C++17, repair a bounded state invariant, invoke the native compiler, run the
+focused executable, and stop. The stage passes only when all three isolated
+trials verify and finish naturally; a single lucky pass is insufficient. This
+fixture contains no Canvas checkout data and cannot replace the real task in
+stage 2.
+
+For a production candidate, stage 2 should use a test-only quick-fix on the
+exact Canvas base. Review the semantic diff before acknowledging native gates:
+compilation can prove that a test is valid without proving that the worker
+implemented the requested assertion. If the semantic review fails, request
+orchestrated rework and require a new worker attempt, commit SHA, artifact
+version, and native verification record. Refreezing the same SHA is a failed
+canary.
+
 ## 2. Non-integrating delivery
 
 Use a disposable task and feature branch against the local Canvas bare

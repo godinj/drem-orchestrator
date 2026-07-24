@@ -66,6 +66,7 @@ func splitPositional(args []string) (string, []string) {
 		"--language": true, "-language": true,
 		"--orch-url": true, "-orch-url": true,
 		"--inference-endpoint": true, "-inference-endpoint": true,
+		"--inference-model": true, "-inference-model": true,
 		"--integration-policy": true, "-integration-policy": true,
 		"--verification-policy": true, "-verification-policy": true,
 		"--plan-review-policy": true, "-plan-review-policy": true,
@@ -194,6 +195,7 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 	language := fs.String("language", "", "project language: go or cpp (required for fresh register)")
 	orchURL := fs.String("orch-url", "", "orchestrator HTTP URL (required for fresh register)")
 	inferenceEndpoint := fs.String("inference-endpoint", "", "OpenAI-compatible chat-completions URL for direct workers")
+	inferenceModel := fs.String("inference-model", "", "served model ID for direct workers")
 	integrationPolicy := fs.String("integration-policy", string(model.IntegrationAutoMerge), "delivery integration policy: auto_merge or prepare_branch")
 	verificationPolicy := fs.String("verification-policy", string(model.VerificationLocalAutomated), "delivery verification policy: local_automated or external_ack")
 	planReviewPolicy := fs.String("plan-review-policy", "", "plan approval policy: manual or sglang_safe_auto")
@@ -227,6 +229,7 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 			TestReviewPolicy: strings.TrimSpace(*testReviewPolicy),
 			TestCommand:      strings.TrimSpace(*testCommand),
 			CompileCommand:   strings.TrimSpace(*compileCommand),
+			InferenceModel:   strings.TrimSpace(*inferenceModel),
 		}, stdout)
 	}
 
@@ -263,6 +266,7 @@ func cmdProjectRegister(args []string, stdout io.Writer) error {
 		Language:           *language,
 		OrchURL:            *orchURL,
 		InferenceEndpoint:  strings.TrimSpace(*inferenceEndpoint),
+		InferenceModel:     strings.TrimSpace(*inferenceModel),
 		IntegrationPolicy:  strings.TrimSpace(*integrationPolicy),
 		VerificationPolicy: strings.TrimSpace(*verificationPolicy),
 		PlanReviewPolicy:   strings.TrimSpace(*planReviewPolicy),
@@ -323,6 +327,7 @@ type registerUpdateOpts struct {
 	TestReviewPolicy string
 	TestCommand      string
 	CompileCommand   string
+	InferenceModel   string
 }
 
 // cmdProjectRegisterUpdate regenerates the per-project compose.yml +
@@ -369,6 +374,9 @@ func cmdProjectRegisterUpdate(opts registerUpdateOpts, stdout io.Writer) error {
 	}
 	if opts.CompileCommand != "" {
 		updatedProject.CompileCommand = opts.CompileCommand
+	}
+	if opts.InferenceModel != "" {
+		updatedProject.InferenceModel = opts.InferenceModel
 	}
 
 	// 2. Extract on-disk state (SharedToken + observed host port).
@@ -552,6 +560,7 @@ func templateDataFor(p projects.Project) projects.TemplateData {
 		CsuiteImages:       csuiteImages,
 		BareRepoPath:       p.BareRepoPath,
 		InferenceEndpoint:  p.InferenceEndpoint,
+		InferenceModel:     p.InferenceModel,
 		IntegrationPolicy:  effectiveIntegrationPolicy(p.IntegrationPolicy),
 		VerificationPolicy: effectiveVerificationPolicy(p.VerificationPolicy),
 		PlanReviewPolicy:   effectiveReviewPolicy(p.PlanReviewPolicy),
@@ -683,6 +692,11 @@ func cmdProjectShow(args []string, stdout io.Writer) error {
 		inferenceEndpoint = projects.DefaultInferenceEndpoint
 	}
 	fmt.Fprintf(&b, "Inference:     %s\n", inferenceEndpoint)
+	inferenceModel := p.InferenceModel
+	if inferenceModel == "" {
+		inferenceModel = projects.DefaultInferenceModel
+	}
+	fmt.Fprintf(&b, "Model:         %s\n", inferenceModel)
 	fmt.Fprintf(&b, "PlanReview:   %s\n", effectiveReviewPolicy(p.PlanReviewPolicy))
 	fmt.Fprintf(&b, "TestReview:   %s\n", effectiveReviewPolicy(p.TestReviewPolicy))
 	if p.TestCommand != "" {

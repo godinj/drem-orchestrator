@@ -71,6 +71,7 @@ print(json.dumps({
   "messages": [{"role":"user","content":"Return exactly: DREM_INFERENCE_CANARY_OK"}],
   "temperature": 0,
   "max_tokens": 32,
+  "chat_template_kwargs": {"enable_thinking": False},
 }))
 ' "$MODEL")"
 

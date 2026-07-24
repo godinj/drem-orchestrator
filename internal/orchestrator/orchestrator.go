@@ -610,12 +610,7 @@ func (o *Orchestrator) doTickLegacy(ctx context.Context) {
 				// without commits and onAgentEmptyWork cleared the agent
 				// for respawn). In that case, respawn a new agent instead
 				// of transitioning to merging.
-				needsRetry := false
-				if task.Context != nil {
-					if _, ok := task.Context["empty_work"]; ok {
-						needsRetry = true
-					}
-				}
+				needsRetry := quickFixNeedsRespawn(task)
 				if needsRetry {
 					if err := o.respawnQuickFixAgent(task); err != nil {
 						o.logger.Error("quickfix respawn", "task_id", task.ID, "error", err)

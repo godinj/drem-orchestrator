@@ -1,0 +1,4 @@
+task,trial,iterations,tokens_in,tokens_out,duration_ms,finish_reason,verifier_pass,error_msg
+canvas-cpp-lower-zone-smoke,1,5,5391,482,18408,stop,true,
+canvas-cpp-lower-zone-smoke,2,6,6319,465,18644,stop,true,
+canvas-cpp-lower-zone-smoke,3,5,5407,499,18739,stop,true,

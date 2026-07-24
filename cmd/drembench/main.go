@@ -128,10 +128,12 @@ func main() {
 				MaxIterations: *maxIter,
 				WorkDir:       scratchDir,
 				BashTimeout:   *bashTO,
+				ChatTemplateKwargs: map[string]any{
+					"enable_thinking": *thinking,
+				},
 			}
 			sysPrompt := spec.SystemPrompt
 			if *thinking {
-				cfg.ChatTemplateKwargs = map[string]any{"enable_thinking": true}
 				// Rider: explicitly instruct model to fill the thought block.
 				// Without this, Gemma-4 emits empty <|channel>thought<channel|>
 				// markers ~75% of turns (observed: 22/30 empty in baseline run).

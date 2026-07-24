@@ -48,6 +48,13 @@ type TemplateData struct {
 	// service; Mac control-plane deployments override it with the
 	// host.docker.internal URL of an SSH-forwarded remote GQ endpoint.
 	InferenceEndpoint string
+	// InferenceModel is the served model ID forwarded by direct local-model
+	// roles. It must match the model exposed by InferenceEndpoint.
+	InferenceModel string
+	// InferenceToolArgumentsFormat selects the server-compatible wire shape
+	// for replayed tool-call arguments: "string" for OpenAI/vLLM and "object"
+	// for the Gemma SGLang template.
+	InferenceToolArgumentsFormat string
 	// IntegrationPolicy is written to [delivery].integration_policy.
 	IntegrationPolicy string
 	// VerificationPolicy is written to [delivery].verification_policy.

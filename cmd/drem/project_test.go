@@ -93,6 +93,7 @@ func TestProjectShow(t *testing.T) {
 		"--language", "cpp",
 		"--orch-url", "http://localhost:8081",
 		"--inference-endpoint", "http://host.docker.internal:18090/v1/chat/completions",
+		"--inference-model", "qwen3.6-27b-code",
 		"--home-dir", homeDir,
 	}, io.Discard, io.Discard)
 	require.NoError(t, err)
@@ -106,6 +107,7 @@ func TestProjectShow(t *testing.T) {
 	require.Contains(t, s, bareRepo)
 	require.Contains(t, s, "http://localhost:8081")
 	require.Contains(t, s, "http://host.docker.internal:18090/v1/chat/completions")
+	require.Contains(t, s, "qwen3.6-27b-code")
 	require.Contains(t, s, "compose.yml")
 }
 
@@ -138,6 +140,7 @@ func TestProjectRegisterUpdateChangesCanvasOperationalPolicy(t *testing.T) {
 		"--test-review-policy", "sglang_safe_auto",
 		"--test-command", "scripts/dev check changed",
 		"--compile-command", "scripts/dev check changed",
+		"--inference-model", "qwen3.6-27b-code",
 		"--home-dir", homeDir,
 	}, io.Discard, io.Discard))
 
@@ -145,10 +148,12 @@ func TestProjectRegisterUpdateChangesCanvasOperationalPolicy(t *testing.T) {
 	require.Contains(t, config, `plan  = "sglang_safe_auto"`)
 	require.Contains(t, config, `tests = "sglang_safe_auto"`)
 	require.Contains(t, config, `test_command    = "scripts/dev check changed"`)
+	require.Contains(t, config, `model    = "qwen3.6-27b-code"`)
 
 	registry := string(readFile(t, filepath.Join(homeDir, ".drem", "projects.toml")))
 	require.Contains(t, registry, `plan_review_policy = "sglang_safe_auto"`)
 	require.Contains(t, registry, `test_command = "scripts/dev check changed"`)
+	require.Contains(t, registry, `inference_model = "qwen3.6-27b-code"`)
 }
 
 // TestProjectRemove verifies the `remove` subcommand clears the registry

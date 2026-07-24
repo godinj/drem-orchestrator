@@ -35,6 +35,8 @@ func TestCompileProjectDeploymentSpec_DerivesProjectLayoutAndTemplateDefaults(t 
 	require.Equal(t, DefaultOrchImage, data.OrchImage)
 	require.Equal(t, DefaultOrchHostPort, data.OrchHostPort)
 	require.Equal(t, DefaultInferenceEndpoint, data.InferenceEndpoint)
+	require.Equal(t, DefaultInferenceModel, data.InferenceModel)
+	require.Equal(t, "object", data.InferenceToolArgumentsFormat)
 	require.Equal(t, "auto_merge", data.IntegrationPolicy)
 	require.Equal(t, "local_automated", data.VerificationPolicy)
 	require.Equal(t, spec.ConfigPath, data.ConfigFilePath)
@@ -103,6 +105,7 @@ func TestCompileProjectDeploymentSpec_PreservesExplicitDeploymentOverrides(t *te
 		TestCommand:            "make test",
 		CompileCommand:         "make build",
 		InferenceEndpoint:      "http://host.docker.internal:18090/v1/chat/completions",
+		InferenceModel:         "qwen3.6-27b-code",
 	}
 
 	spec, err := compileProjectDeploymentSpec(homeDir, "directory-name", data)
@@ -134,4 +137,6 @@ func TestCompileProjectDeploymentSpec_PreservesExplicitDeploymentOverrides(t *te
 	require.Equal(t, data.TestCommand, compiled.TestCommand)
 	require.Equal(t, data.CompileCommand, compiled.CompileCommand)
 	require.Equal(t, data.InferenceEndpoint, compiled.InferenceEndpoint)
+	require.Equal(t, data.InferenceModel, compiled.InferenceModel)
+	require.Equal(t, "string", compiled.InferenceToolArgumentsFormat)
 }

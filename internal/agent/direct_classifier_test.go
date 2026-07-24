@@ -72,6 +72,9 @@ func TestClassify_HappyPath(t *testing.T) {
 		Timeout:     5 * time.Second,
 		GQCaller:    "classifier",
 		GQPriority:  "high",
+		ChatTemplateKwargs: map[string]any{
+			"enable_thinking": false,
+		},
 	}
 
 	result, err := Classify(context.Background(), cfg, ClassifyInput{
@@ -87,12 +90,20 @@ func TestClassify_HappyPath(t *testing.T) {
 	assert.NotZero(t, result.Duration)
 	assert.Equal(t, "classifier", srv.lastHeader.Get("X-GQ-Caller"))
 	assert.Equal(t, "high", srv.lastHeader.Get("X-GQ-Priority"))
+	var request map[string]any
+	require.NoError(t, json.Unmarshal(srv.lastRequestBody, &request))
+	require.Equal(t, map[string]any{"enable_thinking": false}, request["chat_template_kwargs"])
 
 	// Result JSON must be parseable and preserve the classifier decision fields.
 	var parsed map[string]any
 	require.NoError(t, json.Unmarshal(result.JSON, &parsed))
 	assert.Equal(t, "quickfix", parsed["category"])
 	assert.EqualValues(t, 2, parsed["complexity_score"])
+}
+
+func TestDefaultDirectClassifierConfigDisablesThinking(t *testing.T) {
+	cfg := DefaultDirectClassifierConfig()
+	require.Equal(t, map[string]any{"enable_thinking": false}, cfg.ChatTemplateKwargs)
 }
 
 // TestClassify_FiltersInternalContextKeys verifies that orchestrator-internal

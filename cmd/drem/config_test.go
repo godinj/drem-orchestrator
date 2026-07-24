@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
+	"github.com/stretchr/testify/require"
 )
 
 func TestDefaultConfigTmuxSocket(t *testing.T) {
@@ -109,6 +110,15 @@ func TestLoadConfigDeliveryPoliciesDefaultForLegacyConfig(t *testing.T) {
 	if cfg.ReviewPolicy.Plan != model.ReviewGateManual || cfg.ReviewPolicy.Tests != model.ReviewGateManual {
 		t.Errorf("ReviewPolicy: got plan=%q tests=%q, want manual/manual", cfg.ReviewPolicy.Plan, cfg.ReviewPolicy.Tests)
 	}
+}
+
+func TestLoadConfigRejectsUnknownToolArgumentsFormat(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.toml")
+	require.NoError(t, os.WriteFile(cfgPath, []byte("[direct_tool_agent]\ntool_arguments_format = \"array\"\n"), 0o644))
+
+	_, err := LoadConfig(cfgPath)
+	require.ErrorContains(t, err, "tool_arguments_format")
 }
 
 func TestLoadConfigRejectsUnknownExplicitDeliveryPolicy(t *testing.T) {
@@ -263,6 +273,8 @@ func TestBuildDirectToolAgentConfigEnabledByCoder(t *testing.T) {
 	cfg.DirectToolAgent.IntegrationMaxCumulativeInputTokens = 75_000
 	cfg.DirectToolAgent.ReviewMaxCumulativeInputTokens = 30_000
 	cfg.DirectToolAgent.TestMaxReadsBeforeMutation = 8
+	cfg.DirectToolAgent.ChatTemplateKwargs = map[string]any{"enable_thinking": false}
+	cfg.DirectToolAgent.ToolArgumentsFormat = "string"
 
 	got := buildDirectToolAgentConfig(cfg)
 	if got == nil {
@@ -286,6 +298,12 @@ func TestBuildDirectToolAgentConfigEnabledByCoder(t *testing.T) {
 	}
 	if got.TestMaxReadsBeforeMutation != 8 {
 		t.Errorf("TestMaxReadsBeforeMutation = %d", got.TestMaxReadsBeforeMutation)
+	}
+	if enabled, ok := got.ChatTemplateKwargs["enable_thinking"].(bool); !ok || enabled {
+		t.Errorf("ChatTemplateKwargs = %#v", got.ChatTemplateKwargs)
+	}
+	if got.ToolArgumentsFormat != "string" {
+		t.Errorf("ToolArgumentsFormat = %q", got.ToolArgumentsFormat)
 	}
 }
 

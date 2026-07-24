@@ -42,7 +42,7 @@ project_language = "{{.Language}}"
 [agents.classifier]
   direct   = true
   endpoint = "http://drem-classifier:8090/classify"
-  model    = "gemma4-26b"
+  model    = "{{.InferenceModel}}"
 
 # Endpoint override shared by direct-classifier, direct-prep, and
 # direct-tool-agent. The default of http://localhost:8081 resolves to
@@ -50,7 +50,8 @@ project_language = "{{.Language}}"
 # forwards to sglang on drem-net.
 [direct_tool_agent]
   endpoint = "{{.InferenceEndpoint}}"
-  model    = "gemma4-26b"
+  model    = "{{.InferenceModel}}"
+  tool_arguments_format = "{{.InferenceToolArgumentsFormat}}"
   # A bounded stop with a non-empty diff is preserved for deterministic gates,
   # so long post-edit command loops no longer need a 50-turn budget.
   max_iterations = 16
@@ -76,27 +77,32 @@ project_language = "{{.Language}}"
   implementation_max_reads_before_mutation = 6
   integration_max_reads_before_mutation = 6
 
-# Coder/reviewer/fixer work uses the GQ-fronted SGLang direct-tool path.
+# Coding tasks need tool calls and bounded final answers, not hidden chain-of-
+# thought. Explicitly disable optional model thinking so a short generation
+# budget cannot be exhausted before the first mutation call.
+[direct_tool_agent.chat_template_kwargs]
+  enable_thinking = false
+
+# Coder/reviewer/fixer work uses the GQ-fronted direct-tool path.
 [agents.coder]
   provider = "sglang-direct"
-  model    = "gemma4-26b"
+  model    = "{{.InferenceModel}}"
   effort   = "medium"
 
 [agents.reviewer]
   provider = "sglang-direct"
-  model    = "gemma4-26b"
+  model    = "{{.InferenceModel}}"
   effort   = "medium"
 
 [agents.fixer]
   provider = "sglang-direct"
-  model    = "gemma4-26b"
+  model    = "{{.InferenceModel}}"
   effort   = "medium"
 
-# Merger is configured as an SGLang/Gemma role so any merger-side agent work
-# uses the same gq-fronted SGLang path as the direct tool agents.
+# Merger uses the same GQ-fronted model as the direct tool agents.
 [agents.merger]
   provider = "sglang-direct"
-  model    = "gemma4-26b"
+  model    = "{{.InferenceModel}}"
 
 # Planner runs as a long-lived warm drem-planner container (see
 # deploy/compose/global.yml) that orch reaches via POST /plan. Provider=codex

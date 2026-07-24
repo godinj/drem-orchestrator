@@ -767,6 +767,28 @@ func TestToolChatMsgSerialization(t *testing.T) {
 	assert.Equal(t, "read", parsed["name"])
 }
 
+func TestToolCallFunctionSerializationFormats(t *testing.T) {
+	standard, err := json.Marshal(toolCallFunction{
+		Name: "read", Arguments: `{"path":"main.cpp"}`,
+	})
+	require.NoError(t, err)
+	var standardWire struct {
+		Arguments any `json:"arguments"`
+	}
+	require.NoError(t, json.Unmarshal(standard, &standardWire))
+	require.Equal(t, `{"path":"main.cpp"}`, standardWire.Arguments)
+
+	gemma, err := json.Marshal(toolCallFunction{
+		Name: "read", Arguments: `{"path":"main.cpp"}`, argumentsAsObject: true,
+	})
+	require.NoError(t, err)
+	var gemmaWire struct {
+		Arguments any `json:"arguments"`
+	}
+	require.NoError(t, json.Unmarshal(gemma, &gemmaWire))
+	require.Equal(t, map[string]any{"path": "main.cpp"}, gemmaWire.Arguments)
+}
+
 // TestDefaultDirectToolAgentConfig verifies default values are sensible.
 func TestDefaultDirectToolAgentConfig(t *testing.T) {
 	cfg := DefaultDirectToolAgentConfig()
@@ -775,6 +797,7 @@ func TestDefaultDirectToolAgentConfig(t *testing.T) {
 	assert.Equal(t, 8192, cfg.MaxTokens)
 	assert.Equal(t, 20, cfg.MaxIterations)
 	assert.Equal(t, 60000, cfg.MaxCumulativeInputTokens)
+	assert.Equal(t, ToolArgumentsString, cfg.ToolArgumentsFormat)
 	assert.Equal(t, 30*1e9, float64(cfg.BashTimeout)) // 30s in nanoseconds
 }
 

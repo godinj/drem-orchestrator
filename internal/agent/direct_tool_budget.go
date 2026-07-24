@@ -14,6 +14,8 @@ const (
 	defaultMaxInputTokensBeforeMutation = 20_000
 	toolHistoryKeepRecent               = 2
 	toolHistoryCompactedPrefix          = 240
+	ToolArgumentsString                 = "string"
+	ToolArgumentsObject                 = "object"
 )
 
 // DirectToolAgentConfig holds connection, generation, and execution parameters
@@ -56,12 +58,13 @@ type DirectToolAgentConfig struct {
 	GQCaller    string
 	GQPriority  string
 
-	ChatTemplateKwargs map[string]any
-	ContextLimit       int
-	ContextWarnPct     int
-	ContextStopPct     int
-	OnIteration        func(iteration, tokensIn, tokensOut, contextPct int)
-	OnToolCall         func(toolName string, args map[string]any, resultLen int)
+	ChatTemplateKwargs  map[string]any
+	ToolArgumentsFormat string
+	ContextLimit        int
+	ContextWarnPct      int
+	ContextStopPct      int
+	OnIteration         func(iteration, tokensIn, tokensOut, contextPct int)
+	OnToolCall          func(toolName string, args map[string]any, resultLen int)
 }
 
 func DefaultDirectToolAgentConfig() DirectToolAgentConfig {
@@ -74,6 +77,7 @@ func DefaultDirectToolAgentConfig() DirectToolAgentConfig {
 		MaxIterations:            20,
 		MaxCumulativeInputTokens: 60_000,
 		BashTimeout:              30 * time.Second,
+		ToolArgumentsFormat:      ToolArgumentsString,
 	}
 }
 

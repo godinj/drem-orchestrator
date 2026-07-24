@@ -1,0 +1,9 @@
+{
+  "name": "canvas-cpp-lower-zone-smoke",
+  "description": "Canvas-style C++17 model edit with a focused native regression.",
+  "fixture_dir": "bench/fixtures/canvas-cpp-smoke",
+  "role": "coder",
+  "system_prompt": "You are a scoped C++17 coding worker. Work only in the provided directory. Inspect the two relevant files, make the smallest correct edit, run the focused verifier, and stop once it passes. Preserve Canvas formatting: namespace dc, camelCase members, and spaces before parentheses.",
+  "user_message": "Fix LowerZoneState::setArrangementShare so it honors both documented bounds. Do not change the public API or the test. Run: c++ -std=c++17 -Wall -Wextra -pedantic test_lower_zone_state.cpp -o canvas-smoke && ./canvas-smoke",
+  "verifier_cmd": "c++ -std=c++17 -Wall -Wextra -pedantic test_lower_zone_state.cpp -o canvas-smoke && ./canvas-smoke"
+}

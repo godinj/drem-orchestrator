@@ -1,12 +1,14 @@
 package orchestrator
 
 import (
+	"context"
 	"log/slog"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
@@ -698,6 +700,24 @@ func TestQuickFixInProgress_EmptyWork_DoesNotTransitionToMerging(t *testing.T) {
 	if updated.Status != model.StatusInProgress {
 		t.Errorf("expected status %q, got %q", model.StatusInProgress, updated.Status)
 	}
+}
+
+func TestQuickFixInProgress_DeliveryReworkWaitsForCorrectionWorker(t *testing.T) {
+	o, db, projectID := setupQuickFixTest(t)
+	task := createQuickFixTask(t, db, projectID, "correct reviewed artifact", model.StatusInProgress)
+	task.Context = model.JSONField{
+		quickFixDeliveryReworkPendingKey: true,
+		"prompt_adjustment":              "move the requested tab instead",
+	}
+	task.WorktreeBranch = "feature/test-reviewed-quickfix"
+	require.NoError(t, db.Save(&task).Error)
+
+	o.doTick(context.Background())
+
+	var updated model.Task
+	require.NoError(t, db.First(&updated, "id = ?", task.ID).Error)
+	require.Equal(t, model.StatusInProgress, updated.Status)
+	require.Equal(t, true, updated.Context[quickFixDeliveryReworkPendingKey])
 }
 
 func TestQuickFixInProgress_EmptyWork_RespawnClearsFlag(t *testing.T) {

@@ -40,6 +40,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 				Language:          projects.LanguageGo,
 				OrchURL:           "http://localhost:8080",
 				InferenceEndpoint: "http://host.docker.internal:18090/v1/chat/completions",
+				InferenceModel:    "qwen3.6-27b-code",
 				ContainerImageOverrides: map[string]string{
 					"coder": "drem-worker-go:v1.2.3",
 				},
@@ -57,6 +58,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	require.Equal(t, projects.LanguageGo, got.Language)
 	require.Equal(t, "http://localhost:8080", got.OrchURL)
 	require.Equal(t, "http://host.docker.internal:18090/v1/chat/completions", got.InferenceEndpoint)
+	require.Equal(t, "qwen3.6-27b-code", got.InferenceModel)
 	require.Equal(t, "drem-worker-go:v1.2.3", got.ContainerImageOverrides["coder"])
 }
 
@@ -108,6 +110,21 @@ func TestAdd_RejectsInvalidInferenceEndpoint(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "absolute http(s) URL")
+}
+
+func TestAdd_RejectsInferenceModelThatBreaksGeneratedTOML(t *testing.T) {
+	bareRepo := testutil.SetupBareRepo(t)
+	r := &projects.Registry{Path: filepath.Join(t.TempDir(), "projects.toml")}
+
+	err := r.Add(projects.Project{
+		Name:           "bad-model",
+		BareRepoPath:   bareRepo,
+		Language:       projects.LanguageGo,
+		OrchURL:        "http://localhost:8080",
+		InferenceModel: "qwen\"\ninvalid",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "inference_model")
 }
 
 // TestAdd_RejectsNonBareRepo verifies that BareRepoPath must actually be

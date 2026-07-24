@@ -14,6 +14,25 @@ import (
 // quick fix agent before failing the task.
 const MaxQuickFixRetries = 3
 
+const quickFixDeliveryReworkPendingKey = "delivery_rework_pending"
+
+func quickFixNeedsRespawn(task *model.Task) bool {
+	if task == nil || task.Context == nil {
+		return false
+	}
+	_, emptyWork := task.Context["empty_work"]
+	_, deliveryRework := task.Context[quickFixDeliveryReworkPendingKey]
+	return emptyWork || deliveryRework
+}
+
+func clearQuickFixRespawnFlags(task *model.Task) {
+	if task == nil || task.Context == nil {
+		return
+	}
+	delete(task.Context, "empty_work")
+	delete(task.Context, quickFixDeliveryReworkPendingKey)
+}
+
 // processQuickFix handles quick fix tasks, transitioning them from BACKLOG
 // directly to IN_PROGRESS and spawning a coder agent. Quick fix tasks skip
 // the planning and TDD lifecycle gates.
@@ -195,7 +214,7 @@ func (o *Orchestrator) respawnQuickFixAgent(task *model.Task) error {
 		if err := o.dispatchQuickFixDirect(task, nil); err != nil {
 			return err
 		}
-		delete(task.Context, "empty_work")
+		clearQuickFixRespawnFlags(task)
 		return o.db.Save(task).Error
 	}
 
@@ -233,7 +252,7 @@ func (o *Orchestrator) respawnQuickFixAgent(task *model.Task) error {
 	// Clear the empty_work flag now that a new agent is assigned.
 	// If this agent also produces empty work, onAgentEmptyWork will set
 	// it again and the cycle repeats until MaxEmptyWorkRetries is reached.
-	delete(task.Context, "empty_work")
+	clearQuickFixRespawnFlags(task)
 	task.AssignedAgentID = &ag.ID
 	if err := o.db.Save(task).Error; err != nil {
 		return fmt.Errorf("respawn quickfix agent: save: %w", err)
@@ -276,7 +295,7 @@ func (o *Orchestrator) respawnQuickFixAgentViaSpawner(task *model.Task) error {
 	// Clear the empty_work flag now that a new agent is assigned. Persist
 	// the context update on top of the AssignedAgentID that spawnCoder
 	// already wrote, so both updates land in a single Save.
-	delete(task.Context, "empty_work")
+	clearQuickFixRespawnFlags(task)
 	if err := o.db.Save(task).Error; err != nil {
 		return fmt.Errorf("respawn quickfix agent: save after spawn: %w", err)
 	}

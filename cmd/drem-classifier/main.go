@@ -108,15 +108,10 @@ func run(args []string, stderr io.Writer) error {
 	logger := slog.New(slog.NewJSONHandler(stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(logger)
 
-	classifierCfg := agent.DirectClassifierConfig{
-		Endpoint:    cfg.endpoint,
-		Model:       cfg.model,
-		MaxTokens:   1024,
-		Temperature: 0.1,
-		Timeout:     cfg.timeout,
-		GQCaller:    "classifier",
-		GQPriority:  "high",
-	}
+	classifierCfg := agent.DefaultDirectClassifierConfig()
+	classifierCfg.Endpoint = cfg.endpoint
+	classifierCfg.Model = cfg.model
+	classifierCfg.Timeout = cfg.timeout
 
 	deps := Deps{
 		Classify:      agent.Classify,

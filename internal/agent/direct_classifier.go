@@ -27,13 +27,14 @@ import (
 // DirectClassifierConfig holds connection and generation parameters for the
 // direct SGLang classifier.
 type DirectClassifierConfig struct {
-	Endpoint    string        // Full URL for chat completions endpoint
-	Model       string        // Model identifier sent in the API request
-	MaxTokens   int           // Maximum tokens in the response
-	Temperature float64       // Sampling temperature (low = deterministic)
-	Timeout     time.Duration // HTTP request timeout
-	GQCaller    string        // GQ caller identity; ignored by direct SGLang
-	GQPriority  string        // GQ priority lane; ignored by direct SGLang
+	Endpoint           string         // Full URL for chat completions endpoint
+	Model              string         // Model identifier sent in the API request
+	MaxTokens          int            // Maximum tokens in the response
+	Temperature        float64        // Sampling temperature (low = deterministic)
+	Timeout            time.Duration  // HTTP request timeout
+	GQCaller           string         // GQ caller identity; ignored by direct SGLang
+	GQPriority         string         // GQ priority lane; ignored by direct SGLang
+	ChatTemplateKwargs map[string]any // Model-template controls forwarded to the server
 }
 
 // DefaultDirectClassifierConfig returns a config targeting the local SGLang
@@ -47,6 +48,9 @@ func DefaultDirectClassifierConfig() DirectClassifierConfig {
 		Timeout:     60 * time.Second,
 		GQCaller:    "classifier",
 		GQPriority:  "high",
+		ChatTemplateKwargs: map[string]any{
+			"enable_thinking": false,
+		},
 	}
 }
 
@@ -194,11 +198,12 @@ func buildClassifierUserMessage(title, description string, ctx map[string]any) s
 // ---------------------------------------------------------------------------
 
 type chatRequest struct {
-	Model          string          `json:"model"`
-	Messages       []chatMessage   `json:"messages"`
-	MaxTokens      int             `json:"max_tokens"`
-	Temperature    float64         `json:"temperature"`
-	ResponseFormat *chatRespFormat `json:"response_format,omitempty"`
+	Model              string          `json:"model"`
+	Messages           []chatMessage   `json:"messages"`
+	MaxTokens          int             `json:"max_tokens"`
+	Temperature        float64         `json:"temperature"`
+	ResponseFormat     *chatRespFormat `json:"response_format,omitempty"`
+	ChatTemplateKwargs map[string]any  `json:"chat_template_kwargs,omitempty"`
 }
 
 type chatMessage struct {
@@ -249,9 +254,10 @@ func Classify(ctx context.Context, cfg DirectClassifierConfig, in ClassifyInput)
 			{Role: "system", Content: classifierSystemPrompt},
 			{Role: "user", Content: userMsg},
 		},
-		MaxTokens:      cfg.MaxTokens,
-		Temperature:    cfg.Temperature,
-		ResponseFormat: &chatRespFormat{Type: "json_object"},
+		MaxTokens:          cfg.MaxTokens,
+		Temperature:        cfg.Temperature,
+		ResponseFormat:     &chatRespFormat{Type: "json_object"},
+		ChatTemplateKwargs: cfg.ChatTemplateKwargs,
 	}
 
 	reqJSON, err := json.Marshal(reqBody)

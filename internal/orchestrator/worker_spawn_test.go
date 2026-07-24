@@ -332,6 +332,8 @@ func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
 		TestMaxInputTokensBeforeMutation: 18000,
 		Temperature:                      0.2,
 		Timeout:                          30 * time.Second,
+		ChatTemplateKwargs:               map[string]any{"enable_thinking": false},
+		ToolArgumentsFormat:              agent.ToolArgumentsString,
 	})
 	o.deliveryPolicy.VerificationPolicy = model.VerificationExternalAck
 	o.runner = agent.NewRunner(o.db, nil, nil, "/bin/false", "", 1, func(at model.AgentType) model.AgentCLIConfig {
@@ -369,6 +371,8 @@ func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
 	require.Equal(t, "18000", p.Env["DREM_DIRECT_MAX_INPUT_TOKENS_BEFORE_MUTATION"])
 	require.Equal(t, "0.2", p.Env["DREM_DIRECT_TEMPERATURE"])
 	require.Equal(t, "30s", p.Env["DREM_DIRECT_TIMEOUT"])
+	require.JSONEq(t, `{"enable_thinking":false}`, p.Env["DREM_DIRECT_CHAT_TEMPLATE_KWARGS"])
+	require.Equal(t, agent.ToolArgumentsString, p.Env["DREM_DIRECT_TOOL_ARGUMENTS_FORMAT"])
 	require.Equal(t, "coder", p.Env["DREM_GQ_CALLER"])
 	require.Equal(t, "normal", p.Env["DREM_GQ_PRIORITY"])
 	require.JSONEq(t, `["tests/unit/test_marker.cpp"]`, p.Env["DREM_SCOPED_FILES_JSON"])

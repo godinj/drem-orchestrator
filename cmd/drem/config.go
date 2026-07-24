@@ -105,29 +105,31 @@ func (a AgentsConfig) InteractiveSupervisorCLIConfig() model.AgentCLIConfig {
 // to configure the direct SGLang tool-calling agent path for coder,
 // reviewer, and fixer roles.
 type DirectToolAgentTOMLConfig struct {
-	Enabled                                    bool          `toml:"enabled"`
-	Endpoint                                   string        `toml:"endpoint"`
-	Model                                      string        `toml:"model"`
-	MaxTokens                                  int           `toml:"max_tokens"`
-	Temperature                                float64       `toml:"temperature"`
-	Timeout                                    time.Duration `toml:"timeout"`
-	MaxIterations                              int           `toml:"max_iterations"`
-	MaxCumulativeInputTokens                   int           `toml:"max_cumulative_input_tokens"`
-	MaxReadsBeforeMutation                     int           `toml:"max_reads_before_mutation"`
-	MaxToolCalls                               int           `toml:"max_tool_calls"`
-	MaxInputTokensBeforeMutation               int           `toml:"max_input_tokens_before_mutation"`
-	TestMaxCumulativeInputTokens               int           `toml:"test_max_cumulative_input_tokens"`
-	ImplementationMaxCumulativeInputTokens     int           `toml:"implementation_max_cumulative_input_tokens"`
-	IntegrationMaxCumulativeInputTokens        int           `toml:"integration_max_cumulative_input_tokens"`
-	ReviewMaxCumulativeInputTokens             int           `toml:"review_max_cumulative_input_tokens"`
-	TestMaxReadsBeforeMutation                 int           `toml:"test_max_reads_before_mutation"`
-	ImplementationMaxReadsBeforeMutation       int           `toml:"implementation_max_reads_before_mutation"`
-	IntegrationMaxReadsBeforeMutation          int           `toml:"integration_max_reads_before_mutation"`
-	TestMaxInputTokensBeforeMutation           int           `toml:"test_max_input_tokens_before_mutation"`
-	ImplementationMaxInputTokensBeforeMutation int           `toml:"implementation_max_input_tokens_before_mutation"`
-	IntegrationMaxInputTokensBeforeMutation    int           `toml:"integration_max_input_tokens_before_mutation"`
-	BashTimeout                                time.Duration `toml:"bash_timeout"`
-	ContextLimit                               int           `toml:"context_limit"`
+	Enabled                                    bool           `toml:"enabled"`
+	Endpoint                                   string         `toml:"endpoint"`
+	Model                                      string         `toml:"model"`
+	MaxTokens                                  int            `toml:"max_tokens"`
+	Temperature                                float64        `toml:"temperature"`
+	Timeout                                    time.Duration  `toml:"timeout"`
+	MaxIterations                              int            `toml:"max_iterations"`
+	MaxCumulativeInputTokens                   int            `toml:"max_cumulative_input_tokens"`
+	MaxReadsBeforeMutation                     int            `toml:"max_reads_before_mutation"`
+	MaxToolCalls                               int            `toml:"max_tool_calls"`
+	MaxInputTokensBeforeMutation               int            `toml:"max_input_tokens_before_mutation"`
+	TestMaxCumulativeInputTokens               int            `toml:"test_max_cumulative_input_tokens"`
+	ImplementationMaxCumulativeInputTokens     int            `toml:"implementation_max_cumulative_input_tokens"`
+	IntegrationMaxCumulativeInputTokens        int            `toml:"integration_max_cumulative_input_tokens"`
+	ReviewMaxCumulativeInputTokens             int            `toml:"review_max_cumulative_input_tokens"`
+	TestMaxReadsBeforeMutation                 int            `toml:"test_max_reads_before_mutation"`
+	ImplementationMaxReadsBeforeMutation       int            `toml:"implementation_max_reads_before_mutation"`
+	IntegrationMaxReadsBeforeMutation          int            `toml:"integration_max_reads_before_mutation"`
+	TestMaxInputTokensBeforeMutation           int            `toml:"test_max_input_tokens_before_mutation"`
+	ImplementationMaxInputTokensBeforeMutation int            `toml:"implementation_max_input_tokens_before_mutation"`
+	IntegrationMaxInputTokensBeforeMutation    int            `toml:"integration_max_input_tokens_before_mutation"`
+	BashTimeout                                time.Duration  `toml:"bash_timeout"`
+	ContextLimit                               int            `toml:"context_limit"`
+	ChatTemplateKwargs                         map[string]any `toml:"chat_template_kwargs"`
+	ToolArgumentsFormat                        string         `toml:"tool_arguments_format"`
 }
 
 // DeliveryTOMLConfig selects the explicit delivery and verification policy.
@@ -315,6 +317,11 @@ func LoadConfig(path string) (Config, error) {
 	}
 	if _, err := model.ParseReviewGatePolicy(string(cfg.ReviewPolicy.Tests)); err != nil {
 		return cfg, fmt.Errorf("review_policy.tests: %w", err)
+	}
+	switch cfg.DirectToolAgent.ToolArgumentsFormat {
+	case "", "string", "object":
+	default:
+		return cfg, fmt.Errorf("direct_tool_agent.tool_arguments_format: must be string or object")
 	}
 
 	for name := range cfg.Profiles {

@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 
@@ -47,6 +48,9 @@ type Project struct {
 	// InferenceEndpoint is the OpenAI-compatible chat-completions endpoint
 	// injected into direct workers. Empty retains the in-stack GQ default.
 	InferenceEndpoint string `toml:"inference_endpoint,omitempty"`
+	// InferenceModel is the served model ID requested from InferenceEndpoint.
+	// Empty retains the backward-compatible Gemma default.
+	InferenceModel string `toml:"inference_model,omitempty"`
 	// IntegrationPolicy controls whether a verified delivery is merged
 	// automatically or waits for explicit integration authorization.
 	IntegrationPolicy string `toml:"integration_policy,omitempty"`
@@ -282,6 +286,9 @@ func validateProject(p Project) error {
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
 			return fmt.Errorf("inference_endpoint must be an absolute http(s) URL")
 		}
+	}
+	if p.InferenceModel != "" && strings.ContainsAny(p.InferenceModel, "\"\r\n") {
+		return fmt.Errorf("inference_model must not contain quotes or newlines")
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // projectDeploymentSpec is the package-local boundary between project
@@ -75,6 +76,12 @@ func compileTemplateDefaults(data TemplateData, fallbackHome, fallbackProject st
 	if data.InferenceEndpoint == "" {
 		data.InferenceEndpoint = DefaultInferenceEndpoint
 	}
+	if data.InferenceModel == "" {
+		data.InferenceModel = DefaultInferenceModel
+	}
+	if data.InferenceToolArgumentsFormat == "" {
+		data.InferenceToolArgumentsFormat = defaultToolArgumentsFormat(data.InferenceModel)
+	}
 	if data.OrchImage == "" {
 		if data.DevMode {
 			data.OrchImage = DefaultOrchDevImage
@@ -135,6 +142,17 @@ func compileTemplateDefaults(data TemplateData, fallbackHome, fallbackProject st
 // DefaultInferenceEndpoint is the in-stack GQ endpoint used by normal Linux
 // deployments. External-inference deployments set an explicit project value.
 const DefaultInferenceEndpoint = "http://gq:8090/v1/chat/completions"
+
+// DefaultInferenceModel preserves the existing Gemma deployment for projects
+// that have not selected a model explicitly.
+const DefaultInferenceModel = "gemma4-26b"
+
+func defaultToolArgumentsFormat(modelID string) string {
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(modelID)), "gemma") {
+		return "object"
+	}
+	return "string"
+}
 
 func defaultTestCommand(language string) string {
 	switch language {

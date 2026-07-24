@@ -70,6 +70,7 @@ func main() {
 	cfg.ContextWarnPct = envInt("DREM_DIRECT_CONTEXT_WARN_PCT", cfg.ContextWarnPct)
 	cfg.ContextStopPct = envInt("DREM_DIRECT_CONTEXT_STOP_PCT", cfg.ContextStopPct)
 	cfg.ChatTemplateKwargs = envJSONMap("DREM_DIRECT_CHAT_TEMPLATE_KWARGS")
+	cfg.ToolArgumentsFormat = envDefault("DREM_DIRECT_TOOL_ARGUMENTS_FORMAT", cfg.ToolArgumentsFormat)
 	cfg.GQCaller = envDefault("DREM_GQ_CALLER", *role)
 	cfg.GQPriority = strings.TrimSpace(os.Getenv("DREM_GQ_PRIORITY"))
 
