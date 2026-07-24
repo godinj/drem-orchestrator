@@ -58,10 +58,16 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 
 	// Determine review mode and build context.
 	var reviewMode, planJSON, gitDiff string
+	reviewDescription := task.Description
 	if task.Status == model.StatusPlanReview {
 		reviewMode = "plan"
 		if err := o.verifyTaskSpecSourceEvidence(&task, worktreePath); err != nil {
 			return "", fmt.Errorf("spawn reviewer: source-backed integration seam: %w", err)
+		}
+		var err error
+		reviewDescription, err = o.planReviewDescription(&task)
+		if err != nil {
+			return "", fmt.Errorf("spawn reviewer: compact review packet: %w", err)
 		}
 		if task.Plan != nil {
 			if data, err := json.MarshalIndent(task.Plan, "", "  "); err == nil {
@@ -103,7 +109,7 @@ func (o *Orchestrator) SpawnReviewerSession(taskID uuid.UUID) (string, error) {
 	if o.directPlanReviewerCfg != nil {
 		switch reviewMode {
 		case "plan":
-			return o.spawnDirectPlanReviewer(&task, worktreePath, planJSON)
+			return o.spawnDirectPlanReviewer(&task, worktreePath, reviewDescription, planJSON)
 		case "tests":
 			return o.spawnDirectTestReviewer(&task, worktreePath, planJSON)
 		}
@@ -200,15 +206,15 @@ func (o *Orchestrator) verifyTaskSpecSourceEvidence(task *model.Task, worktreePa
 // create an Agent DB record, run the API call, invoke onReviewerCompleted
 // which parses review.json and stores it on task.Context. Returns
 // ("", nil) on success — no tmux session exists for direct agents.
-func (o *Orchestrator) spawnDirectPlanReviewer(task *model.Task, worktreePath, planJSON string) (string, error) {
-	return o.spawnDirectGateReviewer(task, worktreePath, "plan", planJSON)
+func (o *Orchestrator) spawnDirectPlanReviewer(task *model.Task, worktreePath, description, planJSON string) (string, error) {
+	return o.spawnDirectGateReviewer(task, worktreePath, "plan", description, planJSON)
 }
 
 func (o *Orchestrator) spawnDirectTestReviewer(task *model.Task, worktreePath, evidenceJSON string) (string, error) {
-	return o.spawnDirectGateReviewer(task, worktreePath, "tests", evidenceJSON)
+	return o.spawnDirectGateReviewer(task, worktreePath, "tests", task.Description, evidenceJSON)
 }
 
-func (o *Orchestrator) spawnDirectGateReviewer(task *model.Task, worktreePath, reviewKind, payload string) (string, error) {
+func (o *Orchestrator) spawnDirectGateReviewer(task *model.Task, worktreePath, reviewKind, description, payload string) (string, error) {
 	cfg := o.directPlanReviewerCfg
 	now := time.Now()
 	ag := &model.Agent{
@@ -237,23 +243,37 @@ func (o *Orchestrator) spawnDirectGateReviewer(task *model.Task, worktreePath, r
 
 	var result *agent.DirectPlanReviewerResult
 	var err error
+	startedAt := time.Now()
 	if reviewKind == "tests" {
-		result, err = agent.RunDirectTestReviewer(*cfg, task.ID, task.Title, task.Description, payload, worktreePath)
+		result, err = agent.RunDirectTestReviewer(*cfg, task.ID, task.Title, description, payload, worktreePath)
 	} else {
-		result, err = agent.RunDirectPlanReviewer(*cfg, task.ID, task.Title, task.Description, payload, worktreePath)
+		result, err = agent.RunDirectPlanReviewer(*cfg, task.ID, task.Title, description, payload, worktreePath)
+	}
+	attempt := InferenceAttempt{
+		Phase: directReviewPhase(reviewKind), Role: "reviewer", Provider: "sglang-direct",
+		ModelID: cfg.Model, Duration: time.Since(startedAt), Outcome: "completed",
+	}
+	if result != nil {
+		ag.TokensIn, ag.TokensOut = result.TokensIn, result.TokensOut
+		attempt.TokensIn, attempt.TokensOut, attempt.Duration = result.TokensIn, result.TokensOut, result.Duration
+		attempt.FinishReason, attempt.ContentBytes = result.FinishReason, result.ContentBytes
 	}
 	if err != nil {
+		attempt.Outcome = "failed"
+		attempt.FailureCode = agent.DirectReviewFailureCode(err)
+		if usageErr := o.recordInferenceAttempt(task.ID, attempt); usageErr != nil {
+			o.logger.Warn("direct gate reviewer: persist failed inference", "task_id", task.ID, "error", usageErr)
+		}
 		ag.Status = model.AgentDead
 		ag.CurrentTaskID = nil
 		_ = o.db.Save(ag).Error
+		_ = o.recordReviewAttemptFailure(task.ID, reviewKind, attempt, err)
 		return "", fmt.Errorf("spawn direct reviewer: %w", err)
 	}
 
 	// Record token usage for observability.
-	ag.TokensIn = result.TokensIn
-	ag.TokensOut = result.TokensOut
 	_ = o.db.Save(ag).Error
-	if usageErr := o.recordInferenceUsage(task.ID, directReviewPhase(reviewKind), "reviewer", "sglang-direct", cfg.Model, result.TokensIn, result.TokensOut, result.Duration); usageErr != nil {
+	if usageErr := o.recordInferenceAttempt(task.ID, attempt); usageErr != nil {
 		o.logger.Warn("direct gate reviewer: persist inference usage", "task_id", task.ID, "error", usageErr)
 	}
 

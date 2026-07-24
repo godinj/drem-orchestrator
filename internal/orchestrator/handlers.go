@@ -39,7 +39,36 @@ func (o *Orchestrator) materializeSubtasksWithDB(db *gorm.DB, task *model.Task, 
 	if err != nil {
 		return nil, nil, fmt.Errorf("materialize subtasks: %w", err)
 	}
-	subtaskPlans := planResult.Subtasks
+	originalPlans := planResult.Subtasks
+	specFingerprint := ""
+	if db.Migrator().HasTable(&model.TaskSpecification{}) {
+		var stored model.TaskSpecification
+		if err := db.Where("task_id = ?", task.ID).First(&stored).Error; err == nil {
+			specFingerprint = stored.SpecFingerprint
+		}
+	}
+	manifest, err := compileExecutionManifest(task, originalPlans, specFingerprint)
+	if err != nil {
+		return nil, nil, fmt.Errorf("materialize subtasks: %w", err)
+	}
+	manifestValue, err := executionManifestMap(manifest)
+	if err != nil {
+		return nil, nil, fmt.Errorf("materialize subtasks: encode execution manifest: %w", err)
+	}
+	acceptedPlanJSON, err := json.Marshal(task.Plan)
+	if err != nil {
+		return nil, nil, fmt.Errorf("materialize subtasks: encode accepted execution plan: %w", err)
+	}
+	if task.Context == nil {
+		task.Context = make(model.JSONField)
+	}
+	task.Context["execution_manifest"] = manifestValue
+	task.Context["execution_manifest_hash"] = manifest.Hash
+	task.Context["execution_lane"] = string(manifest.Lane)
+	if err := db.Model(task).Update("context", task.Context).Error; err != nil {
+		return nil, nil, fmt.Errorf("materialize subtasks: persist execution manifest: %w", err)
+	}
+	subtaskPlans := collapseAtomicPlan(task, originalPlans)
 	sourcePacks, err := verifiedSourcePacks(db, task, subtaskPlans)
 	if err != nil {
 		return nil, nil, fmt.Errorf("materialize subtasks: %w", err)
@@ -98,6 +127,12 @@ func (o *Orchestrator) materializeSubtasksWithDB(db *gorm.DB, task *model.Task, 
 		ctx, err := materializedSubtaskContext(sp, subtaskPlans, i, sourcePacks)
 		if err != nil {
 			return nil, nil, fmt.Errorf("materialize subtasks: %w", err)
+		}
+		ctx["execution_lane"] = string(manifest.Lane)
+		ctx["execution_manifest_hash"] = manifest.Hash
+		if manifest.Lane == executionLaneAtomic {
+			ctx["execution_manifest"] = manifestValue
+			ctx["accepted_execution_plan"] = string(acceptedPlanJSON)
 		}
 
 		sub := model.Task{
@@ -588,6 +623,7 @@ type planEntry struct {
 	AgentType          string                    `json:"agent_type"`
 	EstimatedFiles     []string                  `json:"estimated_files"`
 	Files              []string                  `json:"files"`
+	WritableFiles      []string                  `json:"writable_files,omitempty"`
 	Dependencies       []int                     `json:"dependencies"`
 	Priority           int                       `json:"priority"`
 	IsTest             bool                      `json:"is_test,omitempty"`

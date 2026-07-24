@@ -20,6 +20,18 @@ passing result has `ok: true`, `repository_data_sent: false`, and
 `orchestration_state_mutated: false`. Do not start a Canvas writer if this
 stage is unreachable, malformed, or semantically wrong.
 
+Then exercise the exact no-tools reviewer protocol with a fixed Canvas-shaped
+contract (still containing no checkout data):
+
+```bash
+DREM_INFERENCE_CANARY_PROFILE=reviewer scripts/drem-remote-inference-canary.sh
+```
+
+This stage requires a measured response with `finish_reason: stop` and a valid
+review schema. Both profiles explicitly set `enable_thinking=false`; an empty
+visible completion or `finish_reason: length` is a failure even when the
+inference server returned HTTP 200.
+
 The tunnel is an operator-owned foreground process:
 
 ```bash
@@ -32,6 +44,13 @@ When the GPU host runs SGLang natively but GQ in Docker, use
 `deploy/compose/host-sglang.override.yml` as documented in the containerization
 guide; otherwise GQ's default `sglang:8081` Docker upstream cannot reach the
 host process.
+
+Plan-review inference uses the GQ `reviewer`/`high` lane. The orchestrator
+persists token counts, finish reason, visible-content size, and a stable
+failure code for both successful and failed reviewer calls. Do not replay an
+unchanged plan solely because review inference failed: `reject` is a review
+decision that returns the task to planning, while `archive` terminally cancels
+an obsolete or deliberately abandoned non-running experiment.
 
 ## 1b. Canvas C++ tool-use smoke
 

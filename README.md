@@ -197,6 +197,11 @@ To exit the dashboard, close or kill the tmux pane/session that owns it. The `q`
 
 ### Local Canvas Codex adapter
 
+The Canvas execution/recovery contract is documented in
+[`docs/canvas-orchestration-reliability.md`](docs/canvas-orchestration-reliability.md).
+Before spending a measured Codex goal, run
+`scripts/drem-canvas-orchestration-regressions.sh` and the real worker canary.
+
 For a project registered with `verification_policy = "external_ack"`, Linux
 workers stop at an immutable delivery artifact. The control plane validates the
 Git candidate but deliberately does not run Canvas build commands inside its
@@ -230,6 +235,15 @@ objective is to supervise the run to a measured terminal report; if the Canvas
 implementation fails, producing that report still completes the supervisory
 goal. This avoids spending extra turns converting an already measured worker
 failure into a Codex `blocked` audit.
+
+When local Docker/Colima capacity is relevant, add `--container-disk-audit` to
+that doctor call, or run `scripts/drem-container-disk.sh audit` directly. The
+default audit is read-only: it reports host free space versus Colima's sparse
+disk allocation, `docker system df`, active Drem workloads, and thresholds.
+Unused-object pruning requires the exact `cleanup-unused --confirm-unused-prune`
+command and refuses while orchestration, inference, or task containers run.
+Registry GC and Colima trim are separate explicit workflows; automated Colima
+recreation is intentionally refused because it destroys local Docker state.
 
 For an apples-to-apples comparison, `experiment-init` freezes identical spec
 bytes and base commit, `direct-prepare` creates the Drem-owned direct-arm
@@ -270,14 +284,17 @@ admission still rejects any out-of-scope diff.
 
 Direct-worker token limits bound cumulative replay input across model requests;
 they are not the SGLang model's live context-window size. Generated project
-configuration uses phase-aware ceilings: 65k for tests, 90k for implementation,
+configuration uses phase-aware ceilings: 90k for tests, 90k for implementation,
 75k for integration, and 30k for review, with a 60k generic fallback. A response
 that has already produced repository mutations is preserved as a checkpoint
 when a cumulative-input ceiling is crossed, then deterministic gates decide
 whether it is usable. Empty budget-exhausted runs still fail closed.
 
-Scoped coder/fixer runs also enforce a 12-call run-wide ceiling and a smaller
-pre-mutation input budget (18k test, 30k implementation, 24k integration).
+Scoped coder/fixer runs also enforce a 20-call run-wide ceiling and a smaller
+pre-mutation input budget (55k test, 30k implementation, 24k integration).
+The runtime reserves at least 20k cumulative input tokens after every configured
+pre-mutation ceiling so a denied reconnaissance turn can be followed by a real
+mutation-only response.
 Reads, structured searches, and discovery-like shell commands share the same
 reconnaissance budget; all shell commands are rejected before the first mutation.
 Older large tool results are compacted in replay history. Test subtasks receive
@@ -359,6 +376,8 @@ Older tmux settings may still be accepted by the config loader for compatibility
 Drem planner prompts ask agents to design for module depth before work begins. A plan should describe `module_boundaries`, typed `interface_contracts` (or legacy `interface_shapes`), and export pressure so reviewers can tell whether the design creates meaningful internal logic or only moves code around.
 
 Planner self-checks should reject shallow designs. A shallow plan often creates a thin wrapper, pass-through package, or exported function with no real decision-making behind it. A deep plan puts policy, state transitions, validation, or orchestration behind a small interface and keeps exports proportional to the module's responsibility.
+
+Adapter-authored execution plans also enforce semantic granularity before inference. Every implementation subtask owns exactly one module boundary, no more than two files, and files that no other implementation subtask owns. A cohesive header/implementation pair may remain together; manifests, registration, persistence, and other cross-boundary assembly belong in the final integration subtask. Test subtasks retain a strict one-to-one mapping to implementation subtasks. These are admission rules rather than planner suggestions, so an ambiguous decomposition is rejected before a worker consumes model context.
 
 ## What Changed From The Older README
 

@@ -407,6 +407,9 @@ type WorkerAttempt struct {
 	FailedAt                *time.Time `gorm:"index"`
 	TokensIn                int        `gorm:"default:0"`
 	TokensOut               int        `gorm:"default:0"`
+	PeakRequestInput        int        `gorm:"default:0"`
+	ResumedTurns            int        `gorm:"default:0"`
+	FoldedBytes             int        `gorm:"default:0"`
 	TotalCostUSD            float64    `gorm:"type:float"`
 	FinalContextPct         int        `gorm:"default:0"`
 	ArtifactURI             string     `gorm:"not null;default:''"`

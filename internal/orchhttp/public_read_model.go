@@ -496,6 +496,9 @@ func toWorkerAttemptDTOFromDurable(attempt model.WorkerAttempt, a model.Agent, h
 		TokensOut:             attempt.TokensOut,
 		TotalCostUSD:          attempt.TotalCostUSD,
 		FinalContextPct:       attempt.FinalContextPct,
+		PeakRequestInput:      attempt.PeakRequestInput,
+		ResumedTurns:          attempt.ResumedTurns,
+		FoldedBytes:           attempt.FoldedBytes,
 		ArtifactURI:           attempt.ArtifactURI,
 	}
 	if attempt.AgentID != nil {
@@ -526,6 +529,9 @@ func toWorkerAttemptDTOFromDurable(attempt model.WorkerAttempt, a model.Agent, h
 		fromAgent.TokensOut = firstNonZeroInt(d.TokensOut, fromAgent.TokensOut)
 		fromAgent.TotalCostUSD = firstNonZeroFloat(d.TotalCostUSD, fromAgent.TotalCostUSD)
 		fromAgent.FinalContextPct = firstNonZeroInt(d.FinalContextPct, fromAgent.FinalContextPct)
+		fromAgent.PeakRequestInput = d.PeakRequestInput
+		fromAgent.ResumedTurns = d.ResumedTurns
+		fromAgent.FoldedBytes = d.FoldedBytes
 		fromAgent.ArtifactURI = d.ArtifactURI
 		return fromAgent
 	}

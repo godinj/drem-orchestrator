@@ -23,8 +23,12 @@ case "$url" in
             printf 'not-json\n'
             exit 0
         fi
-        content="${FAKE_CANARY_CONTENT:-DREM_INFERENCE_CANARY_OK}"
-        printf '{"id":"request-1","choices":[{"message":{"content":"%s"}}]}\n' "$content"
+        if [ "${DREM_INFERENCE_CANARY_PROFILE:-basic}" = "reviewer" ]; then
+            content='{"coverage":"full","uncovered_criteria":[],"file_overlap_risk":"low","overlapping_pairs":[],"integration_gap":false,"tdd_assessment":{"test_coverage_adequate":true,"exceptions_justified":true,"issues":[]},"issues":[],"recommendation":"approve"}'
+        else
+            content="${FAKE_CANARY_CONTENT:-DREM_INFERENCE_CANARY_OK}"
+        fi
+        printf '{"id":"request-1","choices":[{"message":{"content":%s},"finish_reason":"stop"}],"usage":{"prompt_tokens":42,"completion_tokens":12}}\n' "$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$content")"
         ;;
     *) exit 2 ;;
 esac
@@ -47,6 +51,12 @@ check_contains "$out" '"ok":true'
 check_contains "$out" '"model":"fake-sglang-model"'
 check_contains "$out" '"repository_data_sent":false'
 check_contains "$out" '"orchestration_state_mutated":false'
+
+out="$(PATH="$TEST_ROOT/bin:$PATH" DREM_INFERENCE_CANARY_PROFILE=reviewer bash "$CANARY")"
+check_contains "$out" '"ok":true'
+check_contains "$out" '"profile":"reviewer"'
+check_contains "$out" '"finish_reason":"stop"'
+check_contains "$out" '"prompt_tokens":42'
 
 set +e
 out="$(PATH="$TEST_ROOT/bin:$PATH" FAKE_CANARY_CONTENT=wrong bash "$CANARY")"

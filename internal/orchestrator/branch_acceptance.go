@@ -135,6 +135,13 @@ func (o *Orchestrator) acceptWorkerBranchCompletion(ctx context.Context, ag *mod
 		return true, nil
 	}
 	baseRef := o.worktree.DefaultBranchName()
+	testContractBaseRef := strings.TrimSpace(task.WorktreeBaseSHA)
+	if testContractBaseRef == "" && task.ParentTaskID != nil {
+		var parent model.Task
+		if loadErr := o.db.Select("worktree_base_sha").First(&parent, "id = ?", *task.ParentTaskID).Error; loadErr == nil {
+			testContractBaseRef = strings.TrimSpace(parent.WorktreeBaseSHA)
+		}
+	}
 	var attempt model.WorkerAttempt
 	if loadErr := o.db.Where("task_id = ? AND agent_id = ?", task.ID, ag.ID).
 		Order("created_at DESC").First(&attempt).Error; loadErr == nil && attempt.BaseSHA != "" {
@@ -147,6 +154,7 @@ func (o *Orchestrator) acceptWorkerBranchCompletion(ctx context.Context, ag *mod
 	res, err := branchpolicy.Accept(ctx, branchpolicy.AcceptanceRequest{
 		RepoDir:                  featureDir,
 		BaseRef:                  baseRef,
+		TestContractBaseRef:      testContractBaseRef,
 		HeadRef:                  ag.WorktreeBranch,
 		AllowedScopes:            branchAcceptanceScopes(task),
 		RejectDestructiveRewrite: true,
@@ -197,7 +205,11 @@ func (o *Orchestrator) acceptWorkerBranchCompletion(ctx context.Context, ag *mod
 		return false, fmt.Errorf("record branch acceptance: %w", err)
 	}
 	if !res.Accepted {
-		o.markAttemptFailedForBranchAcceptance(task.ID, ag.ID)
+		class := failureClassBranchContam
+		if task.Phase == "test" && testContractRejectionsOnly(res.Rejected) {
+			class = failureClassTestContract
+		}
+		o.markAttemptFailedForBranchAcceptance(task.ID, ag.ID, class, res.Rejected)
 	}
 	return res.Accepted, nil
 }
@@ -210,7 +222,7 @@ func testContractForAcceptance(task *model.Task) string {
 	return contract
 }
 
-func (o *Orchestrator) rejectWorkerBranchCompletion(ag *model.Agent, task *model.Task) error {
+func (o *Orchestrator) rejectWorkerBranchCompletion(ctx context.Context, ag *model.Agent, task *model.Task) error {
 	ag.Status = model.AgentIdle
 	ag.CurrentTaskID = nil
 	if err := o.db.Save(ag).Error; err != nil {
@@ -218,6 +230,9 @@ func (o *Orchestrator) rejectWorkerBranchCompletion(ag *model.Agent, task *model
 	}
 	task.AssignedAgentID = nil
 	now := time.Now()
+	if rejections, ok := testContractOnlyRejections(task); ok {
+		return o.retryTestContractRejection(ctx, ag, task, rejections, now)
+	}
 	summary := "worker branch contained changes outside the task's accepted file scope"
 	budget := consumeRetryBudget(task, retryEdgeForTask(*task, string(ag.AgentType)), failureClassBranchContam, summary, now)
 	if err := o.failTaskWithFailureEvidence(task,
@@ -225,6 +240,76 @@ func (o *Orchestrator) rejectWorkerBranchCompletion(ag *model.Agent, task *model
 		return fmt.Errorf("fail task after branch rejection: %w", err)
 	}
 	o.logger.Warn("branch acceptance rejected worker completion", "task_id", task.ID, "agent_id", ag.ID)
+	return nil
+}
+
+func testContractOnlyRejections(task *model.Task) ([]branchpolicy.Rejection, bool) {
+	if task == nil || task.Phase != "test" || task.Context == nil {
+		return nil, false
+	}
+	detail, ok := task.Context["branch_acceptance"].(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	raw, ok := detail["rejected"].([]any)
+	if !ok || len(raw) == 0 {
+		return nil, false
+	}
+	rejections := make([]branchpolicy.Rejection, 0, len(raw))
+	for _, item := range raw {
+		entry, ok := item.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		rejection := branchpolicy.Rejection{
+			Path: stringFromAny(entry["path"]), Status: stringFromAny(entry["status"]), Reason: stringFromAny(entry["reason"]),
+		}
+		rejections = append(rejections, rejection)
+	}
+	return rejections, testContractRejectionsOnly(rejections)
+}
+
+func testContractRejectionsOnly(rejections []branchpolicy.Rejection) bool {
+	if len(rejections) == 0 {
+		return false
+	}
+	for _, rejection := range rejections {
+		switch rejection.Reason {
+		case "missing_active_contract_assertion", "missing_active_runtime_assertion", "invalid_test_checkpoint":
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func (o *Orchestrator) retryTestContractRejection(ctx context.Context, ag *model.Agent, task *model.Task, rejections []branchpolicy.Rejection, now time.Time) error {
+	parts := make([]string, 0, len(rejections))
+	for _, rejection := range rejections {
+		parts = append(parts, fmt.Sprintf("%s (%s: %s)", rejection.Path, rejection.Reason, rejection.Status))
+	}
+	summary := "deterministic test admission rejected the checkpoint: " + strings.Join(parts, ", ")
+	budget := consumeRetryBudget(task, retryEdgeForTask(*task, string(ag.AgentType)), failureClassTestContract, summary, now)
+	if budget.Exhausted {
+		return o.failTaskWithFailureEvidence(task,
+			"test checkpoint did not satisfy the planned interface contract", failureClassTestContract, summary, now, budget)
+	}
+
+	delete(task.Context, "branch_acceptance")
+	task.Context["prompt_adjustment"] = "Preserve the existing in-scope checkpoint. Make the smallest test-only edit needed to satisfy deterministic admission. The active added test code must address: " + strings.Join(parts, "; ") + ". Do not edit files outside writable_files and do not replace the existing test."
+	task.Context["test_contract_rework"] = map[string]any{
+		"previous_agent_id": ag.ID.String(), "reason": summary, "attempt": float64(budget.Attempts), "max_retries": float64(budget.MaxRetries),
+	}
+	if err := o.db.Save(task).Error; err != nil {
+		return fmt.Errorf("save bounded test-contract rework: %w", err)
+	}
+	launch, err := o.workerLaunchService().Launch(ctx, task, model.AgentCoder)
+	if err != nil {
+		return o.failTaskWithFailureEvidence(task,
+			"bounded test-contract rework could not launch", failureClassTestContract, err.Error(), now, budget)
+	}
+	o.logger.Warn("test checkpoint rejected; dispatched bounded contract rework",
+		"task_id", task.ID, "prior_agent_id", ag.ID, "replacement_agent_id", launch.AgentID, "rejections", parts)
 	return nil
 }
 
@@ -246,11 +331,15 @@ func acceptanceDetails(res branchpolicy.AcceptanceResult, agentID uuid.UUID) (mo
 	return detail, nil
 }
 
-func (o *Orchestrator) markAttemptFailedForBranchAcceptance(taskID, agentID uuid.UUID) {
+func (o *Orchestrator) markAttemptFailedForBranchAcceptance(taskID, agentID uuid.UUID, class string, rejections []branchpolicy.Rejection) {
 	now := time.Now()
+	summary := fmt.Sprintf("deterministic branch acceptance rejected checkpoint: %v", rejections)
 	if err := o.db.Model(&model.WorkerAttempt{}).
 		Where("task_id = ? AND agent_id = ? AND state IN ?", taskID, agentID, []string{model.WorkerAttemptReserved, model.WorkerAttemptRunning}).
-		Updates(map[string]any{"state": model.WorkerAttemptFailed, "completed_at": &now}).Error; err != nil {
+		Updates(map[string]any{
+			"state": model.WorkerAttemptFailed, "completed_at": &now, "failed_at": &now,
+			"failure_classification": class, "first_error": truncate(summary, maxErrorSnippetLen),
+		}).Error; err != nil {
 		o.logger.Error("mark attempt failed after branch acceptance rejection", "task_id", taskID, "agent_id", agentID, "error", err)
 	}
 }
@@ -258,6 +347,9 @@ func (o *Orchestrator) markAttemptFailedForBranchAcceptance(taskID, agentID uuid
 func branchAcceptanceScopes(task *model.Task) []string {
 	if task == nil || task.Context == nil {
 		return nil
+	}
+	if files := extractFileList(task.Context["writable_files"]); len(files) > 0 {
+		return files
 	}
 	return extractFileList(task.Context["estimated_files"])
 }

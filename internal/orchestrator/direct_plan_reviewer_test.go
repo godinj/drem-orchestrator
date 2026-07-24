@@ -246,15 +246,20 @@ func TestSpawnReviewerSession_DirectPathOnlyForPlanReview(t *testing.T) {
 // Direct path propagates API errors
 // ---------------------------------------------------------------------------
 
-func TestSpawnReviewerSession_DirectPathAPIError(t *testing.T) {
+func TestSpawnReviewerSession_DirectPathPersistsMeasuredFailure(t *testing.T) {
 	orch, bareRepo := setupDirectPlanReviewerTest(t)
 
 	featureName := "direct-plan-review-api-error"
 	createFeatureWorktree(t, bareRepo, featureName)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":"boom"}`))
+		writeJSON := map[string]any{
+			"choices": []map[string]any{{
+				"message": map[string]any{"content": nil}, "finish_reason": "length",
+			}},
+			"usage": map[string]any{"prompt_tokens": 5406, "completion_tokens": 1024, "total_tokens": 6430},
+		}
+		_ = json.NewEncoder(w).Encode(writeJSON)
 	}))
 	defer server.Close()
 
@@ -266,8 +271,8 @@ func TestSpawnReviewerSession_DirectPathAPIError(t *testing.T) {
 	task := model.Task{
 		ID:             taskID,
 		ProjectID:      orch.projectID,
-		Title:          "api-error",
-		Description:    "boom",
+		Title:          "measured-review-failure",
+		Description:    "empty visible completion",
 		Status:         model.StatusPlanReview,
 		WorktreeBranch: "feature/" + featureName,
 		Plan:           model.JSONField{"subtasks": []any{}},
@@ -280,8 +285,25 @@ func TestSpawnReviewerSession_DirectPathAPIError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected API error, got nil")
 	}
-	if !strings.Contains(strings.ToLower(err.Error()), "api") {
-		t.Errorf("expected error to mention API, got: %v", err)
+	if !strings.Contains(strings.ToLower(err.Error()), "empty response content") {
+		t.Errorf("expected empty-completion error, got: %v", err)
+	}
+	var usage model.TaskEvent
+	if err := orch.db.Where("task_id = ? AND event_type = ?", taskID, inferenceUsageEventType).First(&usage).Error; err != nil {
+		t.Fatalf("expected durable failed inference usage: %v", err)
+	}
+	if usage.Details["outcome"] != "failed" || usage.Details["failure_code"] != "empty_visible_completion" {
+		t.Fatalf("unexpected failed usage details: %#v", usage.Details)
+	}
+	if got := usage.Details["tokens_in"]; got != float64(5406) {
+		t.Fatalf("tokens_in = %#v, want 5406", got)
+	}
+	if got := usage.Details["tokens_out"]; got != float64(1024) {
+		t.Fatalf("tokens_out = %#v, want 1024", got)
+	}
+	var failure model.TaskEvent
+	if err := orch.db.Where("task_id = ? AND event_type = ?", taskID, "review_attempt_failed").First(&failure).Error; err != nil {
+		t.Fatalf("expected durable review failure diagnostic: %v", err)
 	}
 }
 

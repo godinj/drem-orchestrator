@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/stretchr/testify/require"
@@ -54,6 +55,7 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 		DirectToolAgent struct {
 			Endpoint                                   string         `toml:"endpoint"`
 			Model                                      string         `toml:"model"`
+			Timeout                                    time.Duration  `toml:"timeout"`
 			MaxIterations                              int            `toml:"max_iterations"`
 			MaxCumulativeInputTokens                   int            `toml:"max_cumulative_input_tokens"`
 			TestMaxCumulativeInputTokens               int            `toml:"test_max_cumulative_input_tokens"`
@@ -80,16 +82,17 @@ func TestRenderConfig_EnablesDirectClassifier(t *testing.T) {
 	require.Equal(t, "sglang-direct", parsed.Agents.Coder.Provider)
 	require.Equal(t, "gemma4-26b", parsed.Agents.Coder.Model)
 	require.Equal(t, "http://gq:8090/v1/chat/completions", parsed.DirectToolAgent.Endpoint)
+	require.Equal(t, 10*time.Minute, parsed.DirectToolAgent.Timeout)
 	require.Equal(t, 16, parsed.DirectToolAgent.MaxIterations)
 	require.Equal(t, 60_000, parsed.DirectToolAgent.MaxCumulativeInputTokens)
-	require.Equal(t, 65_000, parsed.DirectToolAgent.TestMaxCumulativeInputTokens)
+	require.Equal(t, 90_000, parsed.DirectToolAgent.TestMaxCumulativeInputTokens)
 	require.Equal(t, 90_000, parsed.DirectToolAgent.ImplementationMaxCumulativeInputTokens)
 	require.Equal(t, 75_000, parsed.DirectToolAgent.IntegrationMaxCumulativeInputTokens)
 	require.Equal(t, 30_000, parsed.DirectToolAgent.ReviewMaxCumulativeInputTokens)
 	require.Equal(t, 4, parsed.DirectToolAgent.MaxReadsBeforeMutation)
-	require.Equal(t, 12, parsed.DirectToolAgent.MaxToolCalls)
+	require.Equal(t, 20, parsed.DirectToolAgent.MaxToolCalls)
 	require.Equal(t, 20_000, parsed.DirectToolAgent.MaxInputTokensBeforeMutation)
-	require.Equal(t, 18_000, parsed.DirectToolAgent.TestMaxInputTokensBeforeMutation)
+	require.Equal(t, 55_000, parsed.DirectToolAgent.TestMaxInputTokensBeforeMutation)
 	require.Equal(t, 30_000, parsed.DirectToolAgent.ImplementationMaxInputTokensBeforeMutation)
 	require.Equal(t, 24_000, parsed.DirectToolAgent.IntegrationMaxInputTokensBeforeMutation)
 	require.Equal(t, 8, parsed.DirectToolAgent.TestMaxReadsBeforeMutation)

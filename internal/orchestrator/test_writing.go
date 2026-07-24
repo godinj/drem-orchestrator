@@ -84,6 +84,17 @@ func (o *Orchestrator) processTestWriting(parent *model.Task) error {
 		o.logger.Warn("baseline tests failed but proceeding with test scheduling — agents work on worktree branches",
 			"task_id", parent.ID)
 	}
+	if taskExecutionLane(parent) == executionLaneAtomic {
+		// The manifest compiler collapsed a tightly coupled multi-writer plan
+		// into one implementation owner. Skip the procedural test-writing and
+		// model-review phases; deterministic branch/native/CU gates remain in
+		// force after the atomic worker finishes.
+		if err := o.transitionTaskAtomic(parent, model.StatusInProgress, "orchestrator", "atomic_execution_lane",
+			"compiled execution manifest selected one atomic repair owner", nil); err != nil {
+			return fmt.Errorf("process test writing: enter atomic execution lane: %w", err)
+		}
+		return nil
+	}
 	if err := o.scheduleSubtasks(parent, "test"); err != nil {
 		return fmt.Errorf("process test writing: schedule: %w", err)
 	}

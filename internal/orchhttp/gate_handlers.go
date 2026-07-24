@@ -394,6 +394,51 @@ func (s *Server) handleAdoptFailedChild(w http.ResponseWriter, r *http.Request) 
 	s.writeUpdatedTask(w, task.ID)
 }
 
+// handleResumeFailedCheckpoint continues an incomplete, scope-admitted worker
+// checkpoint. It is deliberately separate from adoption: adoption declares a
+// repaired child complete, while continuation must run the remaining contract.
+func (s *Server) handleResumeFailedCheckpoint(w http.ResponseWriter, r *http.Request) {
+	if s.Orch == nil {
+		writeJSONError(w, http.StatusServiceUnavailable, "gate mutations not configured")
+		return
+	}
+	if !s.requireProject(w, r) {
+		return
+	}
+	task, ok := s.loadTaskForMutation(w, r)
+	if !ok {
+		return
+	}
+	if task.Status != model.StatusFailed || task.ParentTaskID == nil {
+		writeJSONError(w, http.StatusConflict, "checkpoint continuation requires a failed child task")
+		return
+	}
+	actor, ok := requireMutationActor(w, r)
+	if !ok {
+		return
+	}
+	var req orchdto.ResumeFailedCheckpointRequest
+	if err := decodeOptionalJSON(r.Body, &req); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid JSON body: "+err.Error())
+		return
+	}
+	req.CommitSHA = strings.TrimSpace(req.CommitSHA)
+	if req.CommitSHA == "" {
+		writeJSONError(w, http.StatusBadRequest, "commit_sha is required")
+		return
+	}
+	if err := s.Orch.ResumeFailedCheckpoint(task.ID, req.CommitSHA, actor); err != nil {
+		slog.Error("orchhttp: checkpoint continuation failed", "task_id", task.ID, "err", err)
+		if errors.Is(err, orchestrator.ErrCheckpointResumeConflict) {
+			writeJSONError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "internal: "+err.Error())
+		return
+	}
+	s.writeUpdatedTask(w, task.ID)
+}
+
 // handleArchiveTask marks obsolete non-running work as cancelled without
 // spawning, retrying, deleting, or otherwise moving it through the lifecycle.
 func (s *Server) handleArchiveTask(w http.ResponseWriter, r *http.Request) {

@@ -247,11 +247,12 @@ func renderPlannerPrompt(req planRequest) (string, error) {
 	var b strings.Builder
 	b.WriteString("You are a software engineering planner. Given the following task, produce a plan.json that decomposes the work into TDD-paired subtasks.\n\n")
 	b.WriteString("The plan MUST be a single JSON object with this shape:\n")
-	b.WriteString("  {\"subtasks\": [ {\"title\":..., \"description\":..., \"agent_type\":\"coder\", \"phase\":\"test\"|\"implementation\", \"files\":[...], \"tests_for\":[indices], \"dependencies\":[indices]} ] }\n\n")
+	b.WriteString("  {\"subtasks\": [ {\"title\":..., \"description\":..., \"agent_type\":\"coder\", \"phase\":\"test\"|\"implementation\"|\"integration\", \"files\":[...], \"writable_files\":[...], \"tests_for\":[indices], \"dependencies\":[indices]} ] }\n\n")
 	b.WriteString("Constraints:\n")
 	b.WriteString("- subtasks must be non-empty.\n")
 	b.WriteString("- every tests_for / dependencies index must be within the subtasks slice.\n")
 	b.WriteString("- every implementation subtask should be paired with exactly one test subtask via tests_for.\n\n")
+	b.WriteString("- writable_files is only for integration: files is complete read/merge/verify scope (including immutable seam-required files), while writable_files is the non-empty subset the worker may mutate. Omit it when they are identical.\n\n")
 	b.WriteString("Emit EXACTLY one JSON object on stdout. No markdown fences, no prose before or after.\n\n")
 	if strings.TrimSpace(req.Prompt) != "" {
 		b.WriteString("### Repository-aware planning context\n")

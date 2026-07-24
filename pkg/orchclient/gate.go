@@ -237,6 +237,24 @@ func (c *Client) AdoptFailedChildWithIdempotencyKey(ctx context.Context, project
 	return out, nil
 }
 
+// ResumeFailedCheckpoint continues a partial worker checkpoint without
+// declaring the child complete.
+func (c *Client) ResumeFailedCheckpoint(ctx context.Context, project string, taskID uuid.UUID, commitSHA string) (orchdto.TaskDTO, error) {
+	return c.ResumeFailedCheckpointWithIdempotencyKey(ctx, project, taskID, commitSHA, "")
+}
+
+func (c *Client) ResumeFailedCheckpointWithIdempotencyKey(ctx context.Context, project string, taskID uuid.UUID, commitSHA, idempotencyKey string) (orchdto.TaskDTO, error) {
+	commitSHA = strings.TrimSpace(commitSHA)
+	if commitSHA == "" {
+		return orchdto.TaskDTO{}, &ErrBadRequest{Message: "checkpoint commit SHA is required"}
+	}
+	var out orchdto.TaskDTO
+	if err := c.postGateWithIdempotencyKey(ctx, gatePath(project, taskID, "continue-checkpoint"), orchdto.ResumeFailedCheckpointRequest{CommitSHA: commitSHA}, &out, idempotencyKey); err != nil {
+		return orchdto.TaskDTO{}, err
+	}
+	return out, nil
+}
+
 // CreateTask files a new task for the named project. title and description
 // must both be non-empty; empty values are rejected client-side so callers do
 // not spend a request on input the server is expected to reject.
@@ -503,7 +521,7 @@ func (c *Client) legacyMutationMetadata(ctx context.Context, path string, body [
 	}
 	verb := strings.Join(parts[4:], "/")
 	guarded := map[string]bool{
-		"approve": true, "reject": true, "revise-plan": true, "answer": true, "retry": true, "resume": true, "adopt": true,
+		"approve": true, "reject": true, "revise-plan": true, "answer": true, "retry": true, "resume": true, "adopt": true, "continue-checkpoint": true,
 		"archive": true, "comments": true, "audit-events": true,
 	}
 	if strings.HasPrefix(verb, "recover/") {

@@ -218,6 +218,71 @@ func TestAcceptAllowsActiveCompileRedContractCall(t *testing.T) {
 	}
 }
 
+func TestAcceptAllowsInferredReturnTypeForPlannedFunctionContract(t *testing.T) {
+	repo := newRepo(t)
+	writeCommit(t, repo, "tests/test_feature.cpp", "// existing tests\n")
+	base := branch(t, repo, "base")
+	runGit(t, repo, "checkout", "-b", "feature")
+	writeCommit(t, repo, "tests/test_feature.cpp", `
+dc::AudioClip::TransientSlicingSettings settings;
+const auto result = dc::AudioClip::divideAtTransients(track, clip, settings);
+CHECK(result.eventsSplit == 1);
+`)
+	contract := `{"red_mode":"compile_missing_symbol","expected_missing_symbols":["dc::AudioClip::TransientSlicingSettings","dc::AudioClip::TransientSlicingResult","dc::AudioClip::divideAtTransients(track, clip, settings)"],"semantic_contracts":[{"kind":"cpp_type","state":"planned","symbol":"dc::AudioClip::TransientSlicingSettings"},{"kind":"cpp_type","state":"planned","symbol":"dc::AudioClip::TransientSlicingResult"},{"kind":"cpp_function","state":"planned","signature":"dc::AudioClip::divideAtTransients(track, clip, settings)"}]}`
+
+	res, err := Accept(context.Background(), AcceptanceRequest{
+		RepoDir: repo, BaseRef: base, AllowedScopes: []string{"tests/test_feature.cpp"}, TestContract: contract,
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("expected inferred return type with active planned call to pass, got %+v", res.Rejected)
+	}
+}
+
+func TestAcceptRejectsTypedSetupWithoutPlannedFunctionCall(t *testing.T) {
+	repo := newRepo(t)
+	writeCommit(t, repo, "tests/test_feature.cpp", "// existing tests\n")
+	base := branch(t, repo, "base")
+	runGit(t, repo, "checkout", "-b", "feature")
+	writeCommit(t, repo, "tests/test_feature.cpp", "dc::AudioClip::TransientSlicingSettings settings;\nCHECK(settings.threshold > 0);\n")
+	contract := `{"red_mode":"compile_missing_symbol","expected_missing_symbols":["dc::AudioClip::TransientSlicingSettings","dc::AudioClip::TransientSlicingResult","dc::AudioClip::divideAtTransients(track, clip, settings)"],"semantic_contracts":[{"kind":"cpp_type","state":"planned","symbol":"dc::AudioClip::TransientSlicingSettings"},{"kind":"cpp_type","state":"planned","symbol":"dc::AudioClip::TransientSlicingResult"},{"kind":"cpp_function","state":"planned","signature":"dc::AudioClip::divideAtTransients(track, clip, settings)"}]}`
+
+	res, err := Accept(context.Background(), AcceptanceRequest{
+		RepoDir: repo, BaseRef: base, AllowedScopes: []string{"tests/test_feature.cpp"}, TestContract: contract,
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	assertRejectedPath(t, res, "divideAtTransients", "compile_missing_symbol", "missing_active_contract_assertion")
+}
+
+func TestAcceptUsesOriginalContractBaseAcrossBoundedRepair(t *testing.T) {
+	repo := newRepo(t)
+	writeCommit(t, repo, "tests/test_feature.cpp", "// existing tests\n")
+	originalBase := branch(t, repo, "original-base")
+	runGit(t, repo, "checkout", "-b", "feature")
+	writeCommit(t, repo, "tests/test_feature.cpp", "const auto result = clip.divideAtTransients(settings);\n")
+	repairBase := branch(t, repo, "repair-base")
+	writeCommit(t, repo, "tests/test_feature.cpp", "const auto result = clip.divideAtTransients(settings);\nCHECK(result.eventsSplit == 1);\n")
+	contract := `{"red_mode":"compile_missing_symbol","semantic_contracts":[{"kind":"cpp_function","state":"planned","signature":"AudioClip::divideAtTransients(const Settings &)"}]}`
+
+	res, err := Accept(context.Background(), AcceptanceRequest{
+		RepoDir: repo, BaseRef: repairBase, TestContractBaseRef: originalBase,
+		AllowedScopes: []string{"tests/test_feature.cpp"}, TestContract: contract,
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("expected cumulative contract scan with repair-local scope scan, got %+v", res.Rejected)
+	}
+	if res.BaseRef != repairBase {
+		t.Fatalf("scope acceptance base changed: got %q want %q", res.BaseRef, repairBase)
+	}
+}
+
 func TestPreflightRejectsNonWritableBranchMetadata(t *testing.T) {
 	repo := newBareRepo(t)
 	work := clone(t, repo)

@@ -51,7 +51,14 @@ project_language = "{{.Language}}"
 [direct_tool_agent]
   endpoint = "{{.InferenceEndpoint}}"
   model    = "{{.InferenceModel}}"
+  # Qwen coding turns on a 3090 can take several minutes while actively
+  # generating. Keep the HTTP deadline above the measured worst-case turn;
+  # inference/token budgets remain the deterministic run-wide ceilings.
+  timeout  = "10m"
   tool_arguments_format = "{{.InferenceToolArgumentsFormat}}"
+  # Per-request live context. Cumulative phase budgets below may be larger
+  # because they account for several folded/resumed turns.
+  context_limit = 32768
   # A bounded stop with a non-empty diff is preserved for deterministic gates,
   # so long post-edit command loops no longer need a 50-turn budget.
   max_iterations = 16
@@ -59,19 +66,23 @@ project_language = "{{.Language}}"
   # Phase overrides give complex local coding work more room while reviews
   # remain cheap. Useful mutation checkpoints proceed to deterministic gates.
   max_cumulative_input_tokens = 60000
-  test_max_cumulative_input_tokens = 65000
+  test_max_cumulative_input_tokens = 90000
   implementation_max_cumulative_input_tokens = 90000
   integration_max_cumulative_input_tokens = 75000
   review_max_cumulative_input_tokens = 30000
   # Hard run-wide and pre-mutation limits stop search loops before they consume
   # the larger checkpoint-preserving phase budget.
-  max_tool_calls = 12
+  max_tool_calls = 20
   max_input_tokens_before_mutation = 20000
-  test_max_input_tokens_before_mutation = 18000
+  # C++ behavioral tests commonly need the owned test TU plus several
+  # production-seam reads. Stop reconnaissance at 55k so the 90k cumulative
+  # budget retains ample room for a complete mutation-only response.
+  test_max_input_tokens_before_mutation = 55000
   implementation_max_input_tokens_before_mutation = 30000
   integration_max_input_tokens_before_mutation = 24000
   # This compatibility-named budget counts all reconnaissance, including
-  # structured search and discovery-like bash; scoped bash is denied pre-edit.
+  # structured search and discovery-like bash; read-only discovery is allowed
+  # within this budget before the first edit.
   max_reads_before_mutation = 4
   test_max_reads_before_mutation = 8
   implementation_max_reads_before_mutation = 6

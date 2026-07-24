@@ -705,6 +705,7 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 		{name: "resume", args: []string{"resume", "12345678"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/resume", wantOut: "in_progress"},
 		{name: "adopt", args: []string{"adopt", "12345678", "--commit", "abc123"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/adopt", wantBody: `{"commit_sha":"abc123"}`, wantOut: "in_progress"},
 		{name: "adopt explicit key", args: []string{"adopt", "12345678", "--commit", "abc123", "--idempotency-key", "adopt-after-detach"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/adopt", wantBody: `{"commit_sha":"abc123"}`, wantOut: "in_progress"},
+		{name: "continue checkpoint", args: []string{"continue-checkpoint", "12345678", "--commit", "abc123", "--idempotency-key", "resume-checkpoint-v1"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/continue-checkpoint", wantBody: `{"commit_sha":"abc123"}`, wantOut: "in_progress"},
 		{name: "archive", args: []string{"archive", "12345678", "--reason", "superseded", "--actor", "codex:kyle:test"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/archive", wantBody: `{"actor":"codex:kyle:test","reason":"superseded","mode":"obsolete"}`, wantOut: "in_progress"},
 		{name: "comment", args: []string{"comment", "12345678", "--body", "supersede from current base"}, wantPath: "/projects/canvas/tasks/" + testTaskID + "/comments", wantBody: `{"body":"supersede from current base"}`, wantOut: "comment"},
 	}
@@ -765,6 +766,9 @@ func TestMutationsResolvePrefixesAndPostExpectedBodies(t *testing.T) {
 			}
 			if tt.name == "adopt explicit key" && posts[0].IdempotencyKey != "adopt-after-detach" {
 				t.Fatalf("Idempotency-Key = %q, want adopt-after-detach", posts[0].IdempotencyKey)
+			}
+			if tt.name == "continue checkpoint" && posts[0].IdempotencyKey != "resume-checkpoint-v1" {
+				t.Fatalf("Idempotency-Key = %q, want resume-checkpoint-v1", posts[0].IdempotencyKey)
 			}
 			if !strings.Contains(out.String(), tt.wantOut) {
 				t.Fatalf("mutation output %q missing %q", out.String(), tt.wantOut)

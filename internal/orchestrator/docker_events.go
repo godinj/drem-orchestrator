@@ -370,6 +370,10 @@ func (o *Orchestrator) handleWorkerExitZero(ctx context.Context, taskID uuid.UUI
 		return
 	}
 	if accepted.Status != model.StatusDone && accepted.Status != model.StatusTestingReady {
+		if testContractReworkDispatched(&accepted, attempt) {
+			o.recordWorkerCompletionEvidence(taskID, attempt, ev, "accepted", "test_contract_rework_dispatched")
+			return
+		}
 		o.recordWorkerCompletionEvidence(taskID, attempt, ev, "failed", "branch_acceptance_pending")
 		return
 	}
@@ -379,6 +383,17 @@ func (o *Orchestrator) handleWorkerExitZero(ctx context.Context, taskID uuid.UUI
 		return
 	}
 	o.recordWorkerCompletionEvidence(taskID, attempt, ev, "accepted", "exit_zero_current_attempt")
+}
+
+func testContractReworkDispatched(task *model.Task, prior *model.WorkerAttempt) bool {
+	if task == nil || prior == nil || task.Context == nil || task.AssignedAgentID == nil || prior.AgentID == nil {
+		return false
+	}
+	if *task.AssignedAgentID == *prior.AgentID || task.Status != model.StatusInProgress {
+		return false
+	}
+	_, ok := task.Context["test_contract_rework"].(map[string]any)
+	return ok
 }
 
 // parseTaskIDFromLabels extracts the drem.task_id label value as a UUID.

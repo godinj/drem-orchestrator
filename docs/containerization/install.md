@@ -172,11 +172,29 @@ ephemeral workers on stale behavior. Confirm the source-state labels on
 measured pilot. Restart/deploy control-plane services with `--no-deps` so this
 verification never restarts the warm SGLang service.
 
+The generated Canvas profile sets `[direct_tool_agent].timeout = "10m"`.
+Measured Qwen turns on the remote RTX 3090 exceeded two minutes while still
+making steady generation progress, so this deadline protects against a dead
+request without aborting a healthy long turn. Token, tool-call, and
+pre-mutation budgets remain the primary bounded-work controls.
+
 `[direct_tool_agent].*_max_cumulative_input_tokens` are cumulative replay-cost
-ceilings, not SGLang context-window settings. The Canvas profile uses 65k for
+ceilings, not SGLang context-window settings. The Canvas profile uses 90k for
 tests, 90k for implementation, 75k for integration, and 30k for review. A paid
 response that already mutated the repository is checkpointed at the ceiling;
 an empty run fails closed.
+
+The test pre-mutation ceiling is 55k cumulative input tokens. Unlike the
+read-count limit, this includes the repeated system prompt and verified source
+pack on every tool turn. The 90k cumulative test budget leaves at least one
+complete corrective mutation-only turn after reconnaissance is denied. The
+runtime enforces the same minimum headroom if a hand-edited profile requests an
+unsafe larger value. The 8-read and 20-tool ceilings still bound the run. Test prompts treat
+content-addressed source excerpts as completed reads and direct sequential
+writers to inspect their shared test TU once before editing it. A default read
+of an authorized scoped file returns up to 800 lines, so bounded dependency
+artifacts such as a generated C++ test TU are handed to the next writer in one
+turn instead of being rediscovered through repeated 200-line pages.
 
 `max_tool_calls` is a hard run-wide limit. The
 `*_max_input_tokens_before_mutation` settings are earlier no-progress limits,
@@ -433,6 +451,37 @@ non-integrating delivery, and repeated Computer Use stages in
 stage is directly executable with `scripts/drem-remote-inference-canary.sh` and
 does not read a checkout or mutate orchestration state.
 
+Run `DREM_INFERENCE_CANARY_PROFILE=reviewer
+scripts/drem-remote-inference-canary.sh` before a real Canvas task. It exercises
+the structured plan-review schema, explicit non-thinking template mode, GQ
+reviewer lane, terminal finish reason, and token accounting without reading a
+repository. The control plane sends reviewers a compact immutable contract:
+acceptance criteria, scope, exclusions, integration edges, and hashes for
+source evidence already verified locally. Literal source excerpts and
+reference-media details are not duplicated into the model request.
+
+Before spending a supervisory Codex goal on a Canvas implementation, also run
+the model-in-the-loop worker canary against the exact intended Canvas base:
+
+```bash
+scripts/drem-canvas-worker-canary.sh --base <canvas-base-sha>
+```
+
+This clones the base into a temporary workspace, seeds an existing C++ test
+fixture, and requires the live Qwen worker image to make one surgical edit in
+the declared scope. It fails on no mutation, out-of-scope work, overwritten
+coverage, missing trace evidence, image-attestation mismatch, or diff errors.
+It creates no orchestration task, commit, push, or Canvas repository mutation.
+Run the repository-free reviewer canary, this worker canary, and the Go/shell
+regression suites before using a full Canvas goal as the end-to-end acceptance
+test.
+
+The focused command `scripts/drem-canvas-orchestration-regressions.sh` groups
+the failure modes that previously consumed full supervisory goals. It also
+checks the durable turn-journal, compiled execution-lane, formula-budget, and
+semantic-recovery contracts described in
+`docs/canvas-orchestration-reliability.md`.
+
 Codex tasks and operators advance approval gates through the same HTTP-only
 CLI. No gate mutation should edit `drem.db` directly:
 
@@ -454,6 +503,12 @@ dremctl verify <task-id-prefix> \
   --binary-sha256 '<sha256-if-produced>'
 dremctl integrate <task-id-prefix>
 ```
+
+`reject` is non-terminal and returns the current review to planning. Use
+`archive --reason ...` only to terminally cancel an obsolete or intentionally
+abandoned task that has no active worker. A provider/protocol review failure is
+recorded durably with its measured usage and failure code; do not use a second
+identical review call as a diagnostic probe.
 
 For Canvas, use the host adapter rather than duplicating artifact parsing or
 running project-native commands in the Linux control plane:
@@ -477,12 +532,31 @@ scripts/drem-canvas-pilot.sh report <task-id-prefix> --output canary-report.md
 scripts/drem-canvas-pilot.sh report <task-id-prefix> --json --output canary-report.json
 ```
 
+The adapter stores host-verification worktrees and experiment evidence under
+`~/.drem/projects/<project>` by default. A workspace-sandboxed Codex task may
+set `DREM_CANVAS_PILOT_ROOT` to an absolute writable directory inside its
+workspace; `doctor`, preparation, evidence, and cleanup then use that root
+without changing the registered repository or Docker control plane. For
+example:
+
+```bash
+export DREM_CANVAS_PILOT_ROOT=/absolute/writable/workspace/.drem-pilot
+scripts/drem-canvas-pilot.sh doctor --base <canvas-base-sha> --min-free-gib 8
+```
+
 `doctor` is a pre-goal gate: do not activate subscription inference until it
 confirms the registered base, control-plane connectivity, shared Skia cache,
 writable evidence roots, local tools, and disk headroom. Phrase the explicit
 Codex goal as “supervise this run to a measured terminal report.” A terminal
 worker or verification failure is an experiment outcome, not a failure to
 complete the supervisory goal.
+
+For a non-mutating Docker/Colima capacity report at this boundary, use
+`scripts/drem-canvas-pilot.sh doctor --container-disk-audit` or run
+`scripts/drem-container-disk.sh audit`. The latter is read-only by default and
+will not restart or touch `drem-sglang`. Its cleanup, registry-GC, and Colima
+trim modes each require an exact confirmation and refuse while protected Drem
+or task containers are active; Colima VM recreation has no automated mode.
 
 Paired comparisons use one immutable contract:
 
@@ -530,6 +604,15 @@ When a failed child has a deterministic host repair on its canonical branch,
 and merges only the accepted head. It is not a general force-complete command:
 active attempts, a non-failed child/parent, ref drift, or out-of-scope paths are
 refused.
+
+Test checkpoints receive a separate semantic admission pass. For typed C++
+contracts, an active planned function call is the compile-red anchor; a return
+type inferred with `auto` does not have to be repeated literally. Type-only
+contracts still require an active type use. If a clean, in-scope checkpoint
+misses a required active contract assertion, orchestration preserves it and
+dispatches one bounded test-only correction with the exact rejected token.
+A second semantic rejection fails the child. File-scope, destructive-rewrite,
+credential, and trace contamination never enter this repair path.
 
 Computer Use evidence is supplied as a JSON array with one object per
 acceptance criterion. Each object records its criterion ID, scenario, ordered

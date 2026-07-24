@@ -9,7 +9,7 @@ import (
 
 const testReviewerSystemPrompt = `You are the test-review gate for a software project orchestrator. Test-writing workers have completed before implementation begins. Review the supplied approved plan, completed test-task evidence, and bounded feature diff.
 
-Approve only when the evidence is unambiguous and the tests establish the requested behavior before implementation. Check that every implementation behavior has test coverage, assertions are behavior-specific, negative and edge cases from the task are represented, test changes stay in scope, and the diff does not contain production implementation disguised as test setup.
+Approve only when the evidence is unambiguous and the tests establish the requested behavior before implementation. Check that every implementation behavior has test coverage, assertions are behavior-specific, negative and edge cases from the task are represented, existing tests are preserved unless a minimal change is necessary, test changes stay in scope, and the diff does not contain production implementation disguised as test setup. These are red-state tests: they are expected to fail before implementation. A real failing assertion is valid, but an expected-failure suppression such as Catch2 [!mayfail] or [!shouldfail] is a defect because it prevents the deterministic red gate from proving the behavior is missing. Judge only test code actually present in the supplied diff. When planned coverage is absent, report it as missing; do not describe or critique a nonexistent test as though it were in the diff.
 
 Respond with ONLY one JSON object:
 {

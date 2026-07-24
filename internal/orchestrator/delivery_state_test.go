@@ -392,6 +392,12 @@ func TestFailedVerificationRetainedAndArtifactInvalidated(t *testing.T) {
 	orch, task, snapshot := deliveryFixture(t)
 	artifact, err := orch.FreezeDeliveryArtifact(task.ID, snapshot)
 	require.NoError(t, err)
+	repair := testutil.CreateTask(t, orch.db, task.ProjectID, "validate assembled artifact", model.StatusDone)
+	repair.ParentTaskID = &task.ID
+	repair.Phase = "integration"
+	repair.WorktreeBranch = "feature/completed-integration"
+	repair.Context = model.JSONField{"estimated_files": []any{"src/ui/LowerZoneLayout.h"}}
+	require.NoError(t, orch.db.Save(&repair).Error)
 	var current model.Task
 	require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
 	now := time.Now()
@@ -400,13 +406,21 @@ func TestFailedVerificationRetainedAndArtifactInvalidated(t *testing.T) {
 		ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
 		Actor: "codex:verifier", Source: "test", EnvironmentFingerprint: "macos-arm64",
 		CommandEvidence: []CommandEvidence{{Command: "scripts/dev verify", Passed: false, ExitCode: 1, StartedAt: now, FinishedAt: now}},
-		Result:          model.VerificationFailed, Notes: "GUI regression", IdempotencyKey: "failed-verification",
+		Result:          model.VerificationFailed, Notes: "GUI regression",
+		FailureMode: model.DeliveryReworkOrchestrated, FailureReason: "native compile failed",
+		IdempotencyKey: "failed-verification",
 	})
 	require.NoError(t, err)
 	require.Equal(t, model.VerificationFailed, record.Result)
 	var updated model.Task
 	require.NoError(t, orch.db.First(&updated, "id = ?", task.ID).Error)
 	require.Equal(t, model.StatusInProgress, updated.Status)
+	require.NoError(t, orch.db.First(&repair, "id = ?", repair.ID).Error)
+	require.Equal(t, model.StatusBacklog, repair.Status)
+	require.Equal(t, "native compile failed", repair.Context["prompt_adjustment"])
+	require.Equal(t, true, repair.Context["delivery_rework_pending"])
+	require.Equal(t, true, repair.Context["skip_existing_work_dedup"])
+	require.Contains(t, repair.WorktreeBranch, "-rework-")
 	var invalidated model.DeliveryArtifact
 	require.NoError(t, orch.db.First(&invalidated, "id = ?", artifact.ID).Error)
 	require.NotNil(t, invalidated.InvalidatedAt)
@@ -474,6 +488,10 @@ func TestRequestDeliveryReworkIsExactAtomicAndIdempotent(t *testing.T) {
 			orch, task, snapshot := deliveryFixture(t)
 			artifact, err := orch.FreezeDeliveryArtifact(task.ID, snapshot)
 			require.NoError(t, err)
+			repair := testutil.CreateTask(t, orch.db, task.ProjectID, "repair verified artifact", model.StatusDone)
+			repair.ParentTaskID = &task.ID
+			repair.Phase = "implementation"
+			require.NoError(t, orch.db.Save(&repair).Error)
 			var current model.Task
 			require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
 			if afterVerification {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 
 	"github.com/godinj/drem-orchestrator/internal/constraints"
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -591,6 +592,45 @@ func TestOnAgentEmptyWork_FirstRetry(t *testing.T) {
 	if v, ok := updatedTask.Context["empty_work"].(bool); !ok || !v {
 		t.Error("expected empty_work=true in context")
 	}
+}
+
+func TestOnAgentEmptyWork_AcceptsReadOnlyIntegrationValidation(t *testing.T) {
+	o, _ := agentResultOrchestrator(t, "/tmp/fake")
+
+	parentID := uuid.New()
+	require.NoError(t, o.db.Create(&model.Task{
+		ID: parentID, ProjectID: o.projectID, Title: "parent", Description: "assembled feature",
+		Status: model.StatusInProgress,
+	}).Error)
+	taskID := uuid.New()
+	agentID := uuid.New()
+	ag := &model.Agent{
+		ID: agentID, ProjectID: o.projectID, AgentType: model.AgentCoder,
+		Name: "integration-validator", Status: model.AgentWorking, CurrentTaskID: &taskID,
+	}
+	require.NoError(t, o.db.Create(ag).Error)
+	task := &model.Task{
+		ID: taskID, ProjectID: o.projectID, ParentTaskID: &parentID,
+		Title: "validate assembled feature", Description: "run integration checks",
+		Status: model.StatusInProgress, Phase: "integration", AssignedAgentID: &agentID,
+	}
+	require.NoError(t, o.db.Create(task).Error)
+
+	require.NoError(t, o.onAgentEmptyWork(ag, task, "validated; no edits needed"))
+
+	var updatedTask model.Task
+	require.NoError(t, o.db.First(&updatedTask, taskID).Error)
+	require.Equal(t, model.StatusDone, updatedTask.Status)
+	require.Nil(t, updatedTask.AssignedAgentID)
+	require.Equal(t, true, updatedTask.Context["read_only_integration_validation"])
+	_, hasEmptyWork := updatedTask.Context["empty_work"]
+	require.False(t, hasEmptyWork)
+	_, hasRetry := updatedTask.Context["retry_count"]
+	require.False(t, hasRetry)
+
+	var updatedAgent model.Agent
+	require.NoError(t, o.db.First(&updatedAgent, agentID).Error)
+	require.Equal(t, model.AgentIdle, updatedAgent.Status)
 }
 
 func TestOnAgentEmptyWork_MaxRetries_FailsTask(t *testing.T) {

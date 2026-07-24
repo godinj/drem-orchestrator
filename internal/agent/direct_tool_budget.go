@@ -12,7 +12,8 @@ import (
 const (
 	defaultMaxToolCalls                 = 12
 	defaultMaxInputTokensBeforeMutation = 20_000
-	toolHistoryKeepRecent               = 2
+	minimumMutationTurnHeadroom         = 20_000
+	toolHistoryKeepRecent               = 1
 	toolHistoryCompactedPrefix          = 240
 	ToolArgumentsString                 = "string"
 	ToolArgumentsObject                 = "object"
@@ -38,7 +39,9 @@ type DirectToolAgentConfig struct {
 
 	// MaxReadsBeforeMutation is retained as the configuration name for
 	// compatibility, but bounds all reconnaissance: structured reads/searches
-	// plus discovery-like bash. Scoped workers reject all bash before mutation.
+	// plus discovery-like bash. Read-only shell discovery is allowed within the
+	// same budget because small models commonly use rg/ls despite the structured
+	// tool guidance.
 	MaxReadsBeforeMutation               int
 	TestMaxReadsBeforeMutation           int
 	ImplementationMaxReadsBeforeMutation int
@@ -55,16 +58,32 @@ type DirectToolAgentConfig struct {
 	WorkDir     string
 	BashTimeout time.Duration
 	TraceWriter io.Writer
-	GQCaller    string
-	GQPriority  string
+	// JournalPath persists the exact completed-turn replay state on a
+	// host-backed mount. A replacement container resumes from it only when the
+	// immutable prompt fingerprint matches.
+	JournalPath          string
+	RequireJournalResume bool
+	GQCaller             string
+	GQPriority           string
 
 	ChatTemplateKwargs  map[string]any
 	ToolArgumentsFormat string
 	ContextLimit        int
 	ContextWarnPct      int
 	ContextStopPct      int
-	OnIteration         func(iteration, tokensIn, tokensOut, contextPct int)
-	OnToolCall          func(toolName string, args map[string]any, resultLen int)
+	// AllowReadOnlyCompletion is reserved for integration workers whose
+	// assembled inputs may already be correct. They may inspect and run gates
+	// without manufacturing a no-op source mutation.
+	AllowReadOnlyCompletion bool
+	// ProtectExistingFiles rejects whole-file write calls for paths that already
+	// exist. Test-writing workers use this to preserve established coverage and
+	// must make surgical edits; genuinely new test files may still be written.
+	ProtectExistingFiles bool
+	// ScopedFiles lets corrective mutation turns omit write when every
+	// authorized path already exists.
+	ScopedFiles []string
+	OnIteration func(iteration, tokensIn, tokensOut, contextPct int)
+	OnToolCall  func(toolName string, args map[string]any, resultLen int)
 }
 
 func DefaultDirectToolAgentConfig() DirectToolAgentConfig {
@@ -91,6 +110,9 @@ type DirectToolAgentResult struct {
 	FinalContextPct  int
 	StopReason       string
 	MutationObserved bool
+	PeakRequestInput int
+	ResumedTurns     int
+	FoldedBytes      int
 }
 
 const (
@@ -140,6 +162,23 @@ func (cfg DirectToolAgentConfig) ForWorkload(role, phase string) DirectToolAgent
 		cfg.MaxCumulativeInputTokens = positiveOverride(cfg.IntegrationMaxCumulativeInputTokens, cfg.MaxCumulativeInputTokens)
 		cfg.MaxReadsBeforeMutation = positiveOverride(cfg.IntegrationMaxReadsBeforeMutation, cfg.MaxReadsBeforeMutation)
 		cfg.MaxInputTokensBeforeMutation = positiveOverride(cfg.IntegrationMaxInputTokensBeforeMutation, cfg.MaxInputTokensBeforeMutation)
+		cfg.AllowReadOnlyCompletion = true
+	}
+	return reserveMutationTurnHeadroom(cfg)
+}
+
+// reserveMutationTurnHeadroom prevents a pre-mutation reconnaissance response
+// from consuming the entire cumulative replay budget. The next response still
+// needs enough room to receive the harness refusal and emit an edit/write call.
+// This is a runtime invariant so a stale or hand-edited project config cannot
+// recreate the failure even if its phase overrides are internally inconsistent.
+func reserveMutationTurnHeadroom(cfg DirectToolAgentConfig) DirectToolAgentConfig {
+	if cfg.MaxCumulativeInputTokens <= minimumMutationTurnHeadroom || cfg.MaxInputTokensBeforeMutation <= 0 {
+		return cfg
+	}
+	maxBeforeMutation := cfg.MaxCumulativeInputTokens - minimumMutationTurnHeadroom
+	if cfg.MaxInputTokensBeforeMutation > maxBeforeMutation {
+		cfg.MaxInputTokensBeforeMutation = maxBeforeMutation
 	}
 	return cfg
 }
@@ -149,6 +188,85 @@ func positiveOverride(value, fallback int) int {
 		return value
 	}
 	return fallback
+}
+
+// DeriveWorkloadBudget raises static role defaults to the minimum viable
+// budget implied by the actual prompt and scope. MaxCumulativeInputTokens is
+// cumulative replay cost, not the model context window: a six-turn worker can
+// legitimately consume far more than one 65k request. Operator values remain
+// floors, while the formula guarantees one mutation turn of reserve.
+func DeriveWorkloadBudget(cfg DirectToolAgentConfig, role, phase string, promptBytes, scopeFiles int) DirectToolAgentConfig {
+	if promptBytes < 0 {
+		promptBytes = 0
+	}
+	if scopeFiles < 0 {
+		scopeFiles = 0
+	}
+	expectedTurns := 8
+	switch phase {
+	case "implementation":
+		expectedTurns = 10
+	case "integration", "test":
+		expectedTurns = 8
+	}
+	if role == "reviewer" {
+		expectedTurns = 2
+	}
+	return DeriveExpectedTurnsBudget(cfg, role, promptBytes, scopeFiles, expectedTurns)
+}
+
+// DeriveExpectedTurnsBudget applies the same prompt/scope formula using an
+// execution-manifest turn count. Atomic workers own several ordered plan
+// stages, so treating them as one ordinary implementation phase starves the
+// very lane that was selected to avoid cross-worker inference and handoffs.
+func DeriveExpectedTurnsBudget(cfg DirectToolAgentConfig, role string, promptBytes, scopeFiles, expectedTurns int) DirectToolAgentConfig {
+	if promptBytes < 0 {
+		promptBytes = 0
+	}
+	if scopeFiles < 0 {
+		scopeFiles = 0
+	}
+	if expectedTurns <= 0 {
+		expectedTurns = 1
+	}
+	promptTokens := (promptBytes + 2) / 3
+	derived := promptTokens*2 + expectedTurns*6_000 + scopeFiles*1_500
+	if role != "reviewer" {
+		derived += minimumMutationTurnHeadroom
+	}
+	if derived > cfg.MaxCumulativeInputTokens {
+		cfg.MaxCumulativeInputTokens = derived
+	}
+	if expectedTurns+2 > cfg.MaxIterations {
+		cfg.MaxIterations = expectedTurns + 2
+	}
+	if role != "reviewer" {
+		minimumPreMutation := promptTokens + 12_000
+		if minimumPreMutation > cfg.MaxInputTokensBeforeMutation {
+			cfg.MaxInputTokensBeforeMutation = minimumPreMutation
+		}
+		if expectedTurns*2 > cfg.MaxToolCalls {
+			cfg.MaxToolCalls = expectedTurns * 2
+		}
+	}
+	return reserveMutationTurnHeadroom(cfg)
+}
+
+// ExtendBudgetForJournalResume turns run-wide ceilings into continuation
+// ceilings. Journal counters remain cumulative for telemetry, so a resumed
+// process must add a fresh, formula-derived segment to the already-consumed
+// totals or it will terminate immediately after loading the checkpoint.
+func ExtendBudgetForJournalResume(cfg DirectToolAgentConfig, consumedInput, completedIterations, consumedToolCalls int) DirectToolAgentConfig {
+	if consumedInput > 0 {
+		cfg.MaxCumulativeInputTokens += consumedInput
+	}
+	if completedIterations > 0 {
+		cfg.MaxIterations += completedIterations
+	}
+	if consumedToolCalls > 0 {
+		cfg.MaxToolCalls += consumedToolCalls
+	}
+	return cfg
 }
 
 func isReconnaissanceToolCall(name, argsJSON string) bool {
@@ -184,13 +302,20 @@ func bashLooksLikeDiscovery(command string) bool {
 }
 
 func compactToolResultHistory(messages []toolChatMsg) []toolChatMsg {
-	remaining := toolHistoryKeepRecent
+	compacted, _ := compactToolResultHistoryWithStats(messages)
+	return compacted
+}
+
+func compactToolResultHistoryWithStats(messages []toolChatMsg) ([]toolChatMsg, int) {
+	messages, exchangeFolded := compactHistoricalToolExchanges(messages)
+	remainingResults := toolHistoryKeepRecent
+	foldedBytes := exchangeFolded
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role != "tool" {
 			continue
 		}
-		if remaining > 0 {
-			remaining--
+		if remainingResults > 0 {
+			remainingResults--
 			continue
 		}
 		if len(messages[i].Content) <= toolHistoryCompactedPrefix {
@@ -203,6 +328,87 @@ func compactToolResultHistory(messages []toolChatMsg) []toolChatMsg {
 		digest := sha256.Sum256([]byte(original))
 		prefix := strings.TrimSpace(original[:toolHistoryCompactedPrefix])
 		messages[i].Content = fmt.Sprintf("[HARNESS: prior %s result compacted; bytes=%d sha256=%x]\n%s", messages[i].Name, len(original), digest, prefix)
+		foldedBytes += len(original) - len(messages[i].Content)
 	}
-	return messages
+	return messages, foldedBytes
+}
+
+// compactHistoricalToolExchanges converts old assistant tool calls and their
+// paired tool results into ordinary system summaries. Keeping compacted calls
+// structurally executable taught Qwen to copy `_drem_compacted` arguments as
+// its next mutation. Only the latest valid exchange remains as tool protocol;
+// summaries preserve path, outcome prefix, byte count, and digest without
+// becoming callable examples.
+func compactHistoricalToolExchanges(messages []toolChatMsg) ([]toolChatMsg, int) {
+	latestValid := -1
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "assistant" || len(messages[i].ToolCalls) == 0 {
+			continue
+		}
+		valid := true
+		for _, call := range messages[i].ToolCalls {
+			if strings.Contains(call.Function.Arguments, `"_drem_compacted"`) {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			latestValid = i
+			break
+		}
+	}
+
+	resultByID := make(map[string]toolChatMsg)
+	resultIndexByID := make(map[string]int)
+	for i, message := range messages {
+		if message.Role == "tool" && message.ToolCallID != "" {
+			resultByID[message.ToolCallID] = message
+			resultIndexByID[message.ToolCallID] = i
+		}
+	}
+	skip := make(map[int]struct{})
+	foldedBytes := 0
+	compacted := make([]toolChatMsg, 0, len(messages))
+	seenHarness := make(map[string]struct{})
+	for i, message := range messages {
+		if _, omitted := skip[i]; omitted {
+			continue
+		}
+		if message.Role == "system" && strings.HasPrefix(message.Content, "[HARNESS]") {
+			if _, duplicate := seenHarness[message.Content]; duplicate {
+				foldedBytes += len(message.Content)
+				continue
+			}
+			seenHarness[message.Content] = struct{}{}
+		}
+		if message.Role != "assistant" || len(message.ToolCalls) == 0 || i == latestValid {
+			compacted = append(compacted, message)
+			continue
+		}
+
+		var summary strings.Builder
+		summary.WriteString("[HARNESS: prior tool exchange compacted]")
+		if content := strings.TrimSpace(message.Content); content != "" {
+			summary.WriteString(" assistant=")
+			summary.WriteString(truncateForStub(content, 160))
+		}
+		for _, call := range message.ToolCalls {
+			arguments := call.Function.Arguments
+			argumentDigest := sha256.Sum256([]byte(arguments))
+			fmt.Fprintf(&summary, "\n- %s path=%q args_bytes=%d args_sha256=%x",
+				call.Function.Name, toolCallPath(arguments), len(arguments), argumentDigest)
+			foldedBytes += len(arguments)
+			if toolResult, ok := resultByID[call.ID]; ok {
+				resultDigest := sha256.Sum256([]byte(toolResult.Content))
+				fmt.Fprintf(&summary, " result_bytes=%d result_sha256=%x result=%q",
+					len(toolResult.Content), resultDigest, truncateForStub(toolResult.Content, 180))
+				if resultIndex, exists := resultIndexByID[call.ID]; exists {
+					skip[resultIndex] = struct{}{}
+					foldedBytes += len(toolResult.Content)
+				}
+			}
+		}
+		compacted = append(compacted, toolChatMsg{Role: "system", Content: summary.String()})
+	}
+	return compacted, foldedBytes
 }

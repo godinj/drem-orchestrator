@@ -133,7 +133,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 				return fmt.Errorf("on agent completed: pre-merge branch acceptance: %w", acceptErr)
 			}
 			if !accepted {
-				return o.rejectWorkerBranchCompletion(ag, task)
+				return o.rejectWorkerBranchCompletion(context.Background(), ag, task)
 			}
 			branchAccepted = true
 
@@ -277,7 +277,7 @@ func (o *Orchestrator) onAgentCompleted(ag *model.Agent, task *model.Task) error
 			return fmt.Errorf("on agent completed: branch acceptance: %w", acceptErr)
 		}
 		if !accepted {
-			return o.rejectWorkerBranchCompletion(ag, task)
+			return o.rejectWorkerBranchCompletion(context.Background(), ag, task)
 		}
 	}
 

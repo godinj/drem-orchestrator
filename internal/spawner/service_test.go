@@ -350,6 +350,30 @@ func TestService_SpawnWorker_PromptMountProducesReadOnlyMountAndEnv(t *testing.T
 	require.Equal(t, "bar", spawn.Spec.Env["FOO"])
 }
 
+func TestService_SpawnWorker_JournalMountIsWritableAndDeterministic(t *testing.T) {
+	fake, client, cleanup := startHarness(t)
+	defer cleanup()
+	journalPath := filepath.Join(t.TempDir(), "attempt")
+	require.NoError(t, os.MkdirAll(journalPath, 0o700))
+
+	_, err := client.SpawnWorker(context.Background(), SpawnWorkerParams{
+		Project: "drem-orch", AgentType: "coder", WorkerID: "w-journal", Branch: "feature/x",
+		Labels: map[string]string{"drem.language": "go"}, JournalMount: journalPath,
+	})
+	require.NoError(t, err)
+
+	var spawn *container.Call
+	for _, call := range fake.Calls() {
+		if call.Op == "Spawn" {
+			copy := call
+			spawn = &copy
+		}
+	}
+	require.NotNil(t, spawn)
+	require.Contains(t, spawn.Spec.Mounts, container.Mount{Source: journalPath, Target: "/home/drem/.drem/state", ReadOnly: false})
+	require.Equal(t, "/home/drem/.drem/state/journal.json", spawn.Spec.Env["DREM_DIRECT_JOURNAL_PATH"])
+}
+
 // TestService_SpawnWorker_PromptMountMissingFileFails verifies the
 // fail-closed pre-flight check: a PromptMount that does not exist on
 // host returns an error without reaching the runtime.

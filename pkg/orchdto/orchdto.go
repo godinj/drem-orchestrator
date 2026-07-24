@@ -113,10 +113,18 @@ type TaskExecutionPlanDTO struct {
 }
 
 type TaskExecutionSubtaskDTO struct {
-	Title              string                     `json:"title"`
-	Description        string                     `json:"description"`
-	AgentType          string                     `json:"agent_type,omitempty"`
-	Files              []string                   `json:"files"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	AgentType   string `json:"agent_type,omitempty"`
+	// Files is the complete declared scope. For integration subtasks it
+	// includes every file needed to read, merge, and verify the production
+	// seam, even when the worker must not mutate each of those files.
+	Files []string `json:"files"`
+	// WritableFiles narrows an integration worker's mutation and branch-
+	// acceptance scope. It must be a non-blank subset of Files. Omission is
+	// backwards compatible: Files remains the writable scope. Non-integration
+	// subtasks may not set this field.
+	WritableFiles      []string                   `json:"writable_files,omitempty"`
 	Dependencies       []int                      `json:"dependencies,omitempty"`
 	Priority           int                        `json:"priority,omitempty"`
 	Phase              string                     `json:"phase"`
@@ -480,6 +488,9 @@ type WorkerAttemptDTO struct {
 	TokensOut             int        `json:"tokens_out"`
 	TotalCostUSD          float64    `json:"total_cost_usd"`
 	FinalContextPct       int        `json:"final_context_pct"`
+	PeakRequestInput      int        `json:"peak_request_input,omitempty"`
+	ResumedTurns          int        `json:"resumed_turns,omitempty"`
+	FoldedBytes           int        `json:"folded_bytes,omitempty"`
 	ConstraintViolations  int        `json:"constraint_violations"`
 	ArtifactURI           string     `json:"artifact_uri,omitempty"`
 }
@@ -487,6 +498,12 @@ type WorkerAttemptDTO struct {
 // AdoptFailedChildRequest identifies the exact repaired head a host Codex
 // task wants the orchestrator to admit in place of a rejected worker result.
 type AdoptFailedChildRequest struct {
+	CommitSHA string `json:"commit_sha"`
+}
+
+// ResumeFailedCheckpointRequest identifies the exact partial worker head to
+// continue with its durable turn journal. It does not mark the child done.
+type ResumeFailedCheckpointRequest struct {
 	CommitSHA string `json:"commit_sha"`
 }
 

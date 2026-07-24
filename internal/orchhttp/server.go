@@ -67,6 +67,7 @@ type GateOrchestrator interface {
 	// in its paused_from context. Used by POST /tasks/{id}/resume.
 	ResumeTask(taskID uuid.UUID) error
 	AdoptFailedChild(taskID uuid.UUID, commitSHA, actor string) error
+	ResumeFailedCheckpoint(taskID uuid.UUID, commitSHA, actor string) error
 }
 
 // ProjectInfo is the static description of the single project this
@@ -151,6 +152,7 @@ func (s *Server) Routes() http.Handler {
 	mux.Handle("POST /projects/{name}/tasks/{id}/retry", mutation(s.guardTaskMutation("retry", s.handleRetryTask)))
 	mux.Handle("POST /projects/{name}/tasks/{id}/resume", mutation(s.guardTaskMutation("resume", s.handleResumeTask)))
 	mux.Handle("POST /projects/{name}/tasks/{id}/adopt", mutation(s.guardTaskMutation("adopt", s.handleAdoptFailedChild)))
+	mux.Handle("POST /projects/{name}/tasks/{id}/continue-checkpoint", mutation(s.guardTaskMutation("continue-checkpoint", s.handleResumeFailedCheckpoint)))
 	mux.Handle("POST /projects/{name}/tasks/{id}/archive", mutation(s.guardTaskMutation("archive", s.handleArchiveTask)))
 	mux.Handle("POST /projects/{name}/tasks/{id}/comments", mutation(s.guardTaskMutation("comment", s.handleCommentTask)))
 	mux.Handle("POST /projects/{name}/tasks/{id}/audit-events", mutation(s.guardTaskMutation("recovery-audit", s.handleRecoveryAuditTask)))

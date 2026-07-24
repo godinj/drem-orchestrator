@@ -372,6 +372,54 @@ func TestCreateTaskSpecExecutionPlanValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "implementation spans too many files",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				file := "src/model/TakeCompHelpers.cpp"
+				spec.ProposedScope = append(spec.ProposedScope, file)
+				spec.ExecutionPlan.Subtasks[1].Files = append(spec.ExecutionPlan.Subtasks[1].Files, file)
+			},
+		},
+		{
+			name: "implementation spans multiple module boundaries",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[1].ModuleBoundaries = append(
+					spec.ExecutionPlan.Subtasks[1].ModuleBoundaries,
+					orchdto.TaskModuleBoundaryDTO{
+						Package: "src/ui/TakeCompCoordinator", Description: "Coordinates range comp selection.", Exports: 1,
+					})
+				spec.ExecutionPlan.Subtasks[1].InterfaceShapes = append(
+					spec.ExecutionPlan.Subtasks[1].InterfaceShapes,
+					orchdto.TaskInterfaceShapeDTO{
+						Package: "src/ui/TakeCompCoordinator", Functions: []string{"TakeCompCoordinator::selectRange(...)"},
+					})
+			},
+		},
+		{
+			name: "implementation files have multiple owners",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				testFile := "tests/unit/test_take_comp_coordinator.cpp"
+				spec.ProposedScope = append(spec.ProposedScope, testFile)
+				integration := spec.ExecutionPlan.Subtasks[2]
+				integration.Dependencies = []int{1, 3}
+				spec.ExecutionPlan.Subtasks = append(spec.ExecutionPlan.Subtasks[:2],
+					orchdto.TaskExecutionSubtaskDTO{
+						Title: "Specify coordinator behavior", Description: "Add focused coordinator coverage.",
+						Files: []string{testFile}, Phase: "test", TestsFor: []int{3},
+					},
+					orchdto.TaskExecutionSubtaskDTO{
+						Title: "Implement coordinator behavior", Description: "Implement the coordinator seam.",
+						Files: []string{"src/model/TakeCompModel.h"}, Phase: "implementation",
+						ModuleBoundaries: []orchdto.TaskModuleBoundaryDTO{{
+							Package: "src/ui/TakeCompCoordinator", Description: "Coordinates range comp selection.", Exports: 1,
+						}},
+						InterfaceShapes: []orchdto.TaskInterfaceShapeDTO{{
+							Package: "src/ui/TakeCompCoordinator", Functions: []string{"TakeCompCoordinator::selectRange(...)"},
+						}},
+					},
+					integration)
+			},
+		},
+		{
 			name: "mismatched implementation interface package",
 			mutate: func(spec *orchdto.TaskSpecDTO) {
 				spec.ExecutionPlan.Subtasks[1].InterfaceShapes[0].Package = "src/model/Other"
@@ -424,6 +472,116 @@ func TestCreateTaskSpecExecutionPlanValidation(t *testing.T) {
 			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 		})
 	}
+}
+
+func TestCreateTaskSpecIntegrationWritableFilesSeparatesAdmissionFromMutation(t *testing.T) {
+	srv, ts, _ := setupHTTPTest(t, nil)
+	spec := validTaskSpecWithExecutionPlan()
+	integration := &spec.ExecutionPlan.Subtasks[2]
+	integration.Files = append([]string(nil), spec.ProposedScope...)
+	integration.WritableFiles = []string{"cmake/DremCanvasSources.cmake"}
+
+	resp := postTaskSpec(t, ts.URL, spec)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&dto))
+	var stored model.Task
+	require.NoError(t, srv.DB.First(&stored, "id = ?", dto.ID).Error)
+	encoded, err := json.Marshal(stored.Plan)
+	require.NoError(t, err)
+	require.Contains(t, string(encoded), `"writable_files":["cmake/DremCanvasSources.cmake"]`)
+}
+
+func TestCreateTaskSpecExecutionPlanRejectsInvalidWritableFiles(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*orchdto.TaskSpecDTO)
+	}{
+		{
+			name: "integration writable path outside proposed scope",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[2].WritableFiles = []string{"src/ui/Outside.cpp"}
+			},
+		},
+		{
+			name: "integration writable path is blank after normalization",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[2].WritableFiles = []string{" "}
+			},
+		},
+		{
+			name: "integration writable path is not declared files subset",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[2].WritableFiles = []string{"src/model/TakeCompModel.cpp"}
+			},
+		},
+		{
+			name: "non integration writable files bypass ownership",
+			mutate: func(spec *orchdto.TaskSpecDTO) {
+				spec.ExecutionPlan.Subtasks[0].WritableFiles = []string{"tests/integration/test_take_comp_model.cpp"}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, ts, _ := setupHTTPTest(t, nil)
+			spec := validTaskSpecWithExecutionPlan()
+			tc.mutate(&spec)
+			resp := postTaskSpec(t, ts.URL, spec)
+			defer resp.Body.Close()
+			require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+		})
+	}
+}
+
+func TestCreateTaskSpecSerializedSharedTestTranslationUnitAccepted(t *testing.T) {
+	_, ts, _ := setupHTTPTest(t, nil)
+	spec := validTaskSpecWithExecutionPlan()
+	spec.ProposedScope = append(spec.ProposedScope, "src/model/TakeCompHelpers.cpp")
+	integration := spec.ExecutionPlan.Subtasks[2]
+	integration.Dependencies = []int{1, 3}
+	spec.ExecutionPlan.Subtasks = append(spec.ExecutionPlan.Subtasks[:2],
+		orchdto.TaskExecutionSubtaskDTO{
+			Title: "Specify helper behavior", Description: "Extend the shared test translation unit after the first test writer.",
+			Files: []string{"tests/integration/test_take_comp_model.cpp"}, Phase: "test", TestsFor: []int{3}, Dependencies: []int{0},
+		},
+		orchdto.TaskExecutionSubtaskDTO{
+			Title: "Implement helper behavior", Description: "Implement the isolated helper seam.",
+			Files: []string{"src/model/TakeCompHelpers.cpp"}, Phase: "implementation",
+			ModuleBoundaries: []orchdto.TaskModuleBoundaryDTO{{Package: "src/model/TakeCompHelpers", Description: "Owns helper behavior.", Exports: 1}},
+			InterfaceShapes:  []orchdto.TaskInterfaceShapeDTO{{Package: "src/model/TakeCompHelpers", Functions: []string{"TakeCompHelpers::apply(...)"}}},
+		},
+		integration,
+	)
+
+	resp := postTaskSpec(t, ts.URL, spec)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+}
+
+func TestCreateTaskSpecUnserializedSharedTestTranslationUnitRejected(t *testing.T) {
+	_, ts, _ := setupHTTPTest(t, nil)
+	spec := validTaskSpecWithExecutionPlan()
+	spec.ProposedScope = append(spec.ProposedScope, "src/model/TakeCompHelpers.cpp")
+	integration := spec.ExecutionPlan.Subtasks[2]
+	integration.Dependencies = []int{1, 3}
+	spec.ExecutionPlan.Subtasks = append(spec.ExecutionPlan.Subtasks[:2],
+		orchdto.TaskExecutionSubtaskDTO{
+			Title: "Specify helper behavior", Description: "Competes for the same test translation unit.",
+			Files: []string{"tests/integration/test_take_comp_model.cpp"}, Phase: "test", TestsFor: []int{3},
+		},
+		orchdto.TaskExecutionSubtaskDTO{
+			Title: "Implement helper behavior", Description: "Implement the isolated helper seam.",
+			Files: []string{"src/model/TakeCompHelpers.cpp"}, Phase: "implementation",
+			ModuleBoundaries: []orchdto.TaskModuleBoundaryDTO{{Package: "src/model/TakeCompHelpers", Description: "Owns helper behavior.", Exports: 1}},
+			InterfaceShapes:  []orchdto.TaskInterfaceShapeDTO{{Package: "src/model/TakeCompHelpers", Functions: []string{"TakeCompHelpers::apply(...)"}}},
+		},
+		integration,
+	)
+
+	resp := postTaskSpec(t, ts.URL, spec)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
 }
 
 func TestCreateTaskSpecAcceptsSemanticInterfaceContracts(t *testing.T) {

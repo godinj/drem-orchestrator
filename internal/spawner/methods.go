@@ -43,6 +43,11 @@ const promptMountPath = "/home/drem/.drem/prompt.md"
 // value so the env always agrees with promptMountPath.
 const workerPromptPathEnv = "DREM_PROMPT_PATH"
 
+const (
+	journalMountPath     = "/home/drem/.drem/state"
+	workerJournalPathEnv = "DREM_DIRECT_JOURNAL_PATH"
+)
+
 // SpawnWorker builds a Spec, creates the container, and records it in the
 // in-memory registry. The identifying labels (project, project_id, agent_type,
 // worker_id) and the branch label are set here and are NOT overridable by
@@ -155,6 +160,18 @@ func (s *Service) SpawnWorker(ctx context.Context, p SpawnWorkerParams) (SpawnWo
 			copied[k] = v
 		}
 		copied[workerPromptPathEnv] = promptMountPath
+		env = copied
+	}
+	if p.JournalMount != "" {
+		if _, err := os.Stat(p.JournalMount); err != nil {
+			return SpawnWorkerResult{}, fmt.Errorf("journal file not found at %s: orchestrator must pre-create it: %w", p.JournalMount, err)
+		}
+		mounts = append(mounts, container.Mount{Source: p.JournalMount, Target: journalMountPath, ReadOnly: false})
+		copied := make(map[string]string, len(env)+1)
+		for k, v := range env {
+			copied[k] = v
+		}
+		copied[workerJournalPathEnv] = journalMountPath + "/journal.json"
 		env = copied
 	}
 

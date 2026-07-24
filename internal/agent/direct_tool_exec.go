@@ -11,12 +11,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
 
 const (
 	maxReadLines        = 200
+	maxScopedReadLines  = 800
 	maxBashOutput       = 2000 // characters
 	maxGrepMatches      = 50
 	maxGlobResults      = 100
@@ -28,6 +30,81 @@ const (
 type toolExecutor struct {
 	workDir     string
 	bashTimeout time.Duration
+	scopedFiles map[string]struct{}
+}
+
+var quotedIncludePattern = regexp.MustCompile(`(?m)^\s*#\s*include\s*"([^"]+)"`)
+
+func isCPlusPlusPath(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx":
+		return true
+	default:
+		return false
+	}
+}
+
+func quotedIncludes(content string) map[string]struct{} {
+	includes := make(map[string]struct{})
+	for _, match := range quotedIncludePattern.FindAllStringSubmatch(content, -1) {
+		if len(match) == 2 {
+			includes[filepath.ToSlash(filepath.Clean(match[1]))] = struct{}{}
+		}
+	}
+	return includes
+}
+
+func pathSuffixMatches(candidate, include string) bool {
+	candidate = filepath.ToSlash(filepath.Clean(candidate))
+	include = filepath.ToSlash(filepath.Clean(include))
+	return candidate == include || strings.HasSuffix(candidate, "/"+include)
+}
+
+// validateNewQuotedIncludes prevents a scoped C/C++ writer from introducing
+// a repository-local header name that does not exist in the exact worktree or
+// the immutable writable scope. This catches model-invented/obsolete headers
+// at the mutation boundary, before they consume a compile/rework cycle. Existing
+// includes are grandfathered so an unrelated edit cannot be blocked by legacy
+// source, and a planned header/source pair may be written in either order.
+func (te *toolExecutor) validateNewQuotedIncludes(path, before, after string) error {
+	if !isCPlusPlusPath(path) {
+		return nil
+	}
+	oldIncludes := quotedIncludes(before)
+	for include := range quotedIncludes(after) {
+		if _, existed := oldIncludes[include]; existed {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(filepath.Dir(path), filepath.FromSlash(include))); err == nil {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(te.workDir, filepath.FromSlash(include))); err == nil {
+			continue
+		}
+		known := false
+		for scoped := range te.scopedFiles {
+			if pathSuffixMatches(scoped, include) {
+				known = true
+				break
+			}
+		}
+		if !known {
+			cmd := exec.Command("git", "ls-files", "--cached", "--others", "--exclude-standard")
+			cmd.Dir = te.workDir
+			if output, err := cmd.Output(); err == nil {
+				for _, repositoryPath := range strings.Split(string(output), "\n") {
+					if pathSuffixMatches(repositoryPath, include) {
+						known = true
+						break
+					}
+				}
+			}
+		}
+		if !known {
+			return fmt.Errorf("[HARNESS] rejected new quoted include %q in %s: no matching exact-worktree or planned scoped file exists; use an include already grounded by the verified source pack or a neighboring source file", include, filepath.Base(path))
+		}
+	}
+	return nil
 }
 
 // execute dispatches a tool call by name and returns the result string.
@@ -96,12 +173,18 @@ func (te *toolExecutor) execRead(argsJSON string) (string, error) {
 	}
 	lines = lines[offset:]
 
+	readLimit := maxReadLines
+	if args.Offset == 0 {
+		if _, scoped := te.scopedFiles[resolved]; scoped {
+			readLimit = maxScopedReadLines
+		}
+	}
 	limit := args.Limit
 	if limit <= 0 {
-		limit = maxReadLines
+		limit = readLimit
 	}
-	if limit > maxReadLines {
-		limit = maxReadLines
+	if limit > readLimit {
+		limit = readLimit
 	}
 	truncated := false
 	if len(lines) > limit {
@@ -150,6 +233,9 @@ func (te *toolExecutor) execEdit(argsJSON string) (string, error) {
 		return "", fmt.Errorf("old string appears %d times in %s (must be unique)", count, args.Path)
 	}
 	newContent := strings.Replace(content, args.Old, args.New, 1)
+	if err := te.validateNewQuotedIncludes(resolved, content, newContent); err != nil {
+		return "", err
+	}
 	if err := os.WriteFile(resolved, []byte(newContent), 0o644); err != nil {
 		return "", fmt.Errorf("write %s after edit: %w", args.Path, err)
 	}
@@ -169,6 +255,13 @@ func (te *toolExecutor) execWrite(argsJSON string) (string, error) {
 		return "", err
 	}
 	dir := filepath.Dir(resolved)
+	before := ""
+	if existing, err := os.ReadFile(resolved); err == nil {
+		before = string(existing)
+	}
+	if err := te.validateNewQuotedIncludes(resolved, before, args.Content); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", fmt.Errorf("create directory %s: %w", dir, err)
 	}

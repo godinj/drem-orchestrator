@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -320,13 +321,16 @@ func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
 	setWorkerPromptRootEnv(t, t.TempDir())
 	o, fake, _ := workerSpawnTestRig(t)
 	o.SetDirectToolAgentConfig(&agent.DirectToolAgentConfig{
-		Endpoint:                         "http://gq:8090/v1/chat/completions",
-		Model:                            "gemma4-26b",
-		MaxTokens:                        2048,
-		MaxIterations:                    7,
-		MaxCumulativeInputTokens:         12345,
-		MaxReadsBeforeMutation:           4,
-		TestMaxCumulativeInputTokens:     23456,
+		Endpoint:                 "http://gq:8090/v1/chat/completions",
+		Model:                    "gemma4-26b",
+		MaxTokens:                2048,
+		MaxIterations:            7,
+		MaxCumulativeInputTokens: 12345,
+		MaxReadsBeforeMutation:   4,
+		// Keep enough cumulative headroom for the configured 18k
+		// pre-mutation ceiling. Smaller totals are deliberately clamped by
+		// DirectToolAgentConfig.ForPhase to reserve one mutation turn.
+		TestMaxCumulativeInputTokens:     40000,
 		TestMaxReadsBeforeMutation:       8,
 		MaxToolCalls:                     12,
 		TestMaxInputTokensBeforeMutation: 18000,
@@ -351,6 +355,7 @@ func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
 		WorktreeBranch: "feature/no-container-sglang",
 		Context: model.JSONField{
 			"estimated_files":            []any{"tests/unit/test_marker.cpp"},
+			"writable_files":             []any{"tests/unit/test_marker.cpp"},
 			"planned_interface_contract": `{"kind":"planned_api","expected_missing_symbols":["Marker::set()"]}`,
 			"internal_retry_failure":     "must not leak",
 		},
@@ -364,11 +369,21 @@ func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
 	require.Equal(t, "http://gq:8090/v1/chat/completions", p.Env["DREM_DIRECT_ENDPOINT"])
 	require.Equal(t, "gemma4-26b", p.Env["DREM_MODEL"])
 	require.Equal(t, "2048", p.Env["DREM_DIRECT_MAX_TOKENS"])
-	require.Equal(t, "7", p.Env["DREM_DIRECT_MAX_ITERATIONS"])
-	require.Equal(t, "23456", p.Env["DREM_DIRECT_MAX_CUMULATIVE_INPUT_TOKENS"])
+	iterations, err := strconv.Atoi(p.Env["DREM_DIRECT_MAX_ITERATIONS"])
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, iterations, 10)
+	cumulative, err := strconv.Atoi(p.Env["DREM_DIRECT_MAX_CUMULATIVE_INPUT_TOKENS"])
+	require.NoError(t, err)
+	require.Greater(t, cumulative, 40000)
 	require.Equal(t, "8", p.Env["DREM_DIRECT_MAX_READS_BEFORE_MUTATION"])
-	require.Equal(t, "12", p.Env["DREM_DIRECT_MAX_TOOL_CALLS"])
-	require.Equal(t, "18000", p.Env["DREM_DIRECT_MAX_INPUT_TOKENS_BEFORE_MUTATION"])
+	toolCalls, err := strconv.Atoi(p.Env["DREM_DIRECT_MAX_TOOL_CALLS"])
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, toolCalls, 16)
+	preMutation, err := strconv.Atoi(p.Env["DREM_DIRECT_MAX_INPUT_TOKENS_BEFORE_MUTATION"])
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, preMutation, 18000)
+	require.LessOrEqual(t, preMutation, cumulative-20000)
+	require.Equal(t, "true", p.Env["DREM_DIRECT_PROTECT_EXISTING_FILES"])
 	require.Equal(t, "0.2", p.Env["DREM_DIRECT_TEMPERATURE"])
 	require.Equal(t, "30s", p.Env["DREM_DIRECT_TIMEOUT"])
 	require.JSONEq(t, `{"enable_thinking":false}`, p.Env["DREM_DIRECT_CHAT_TEMPLATE_KWARGS"])
@@ -388,6 +403,33 @@ func TestSpawnCoder_UsesSGLangDirectContainerHarness(t *testing.T) {
 	require.NotContains(t, rendered, "Repository Map")
 	require.NotContains(t, rendered, "must not leak")
 	require.Less(t, len(rendered), 8000)
+
+	integrationTask := *task
+	integrationTask.ID = uuid.New()
+	integrationTask.Title = "Validate assembled change"
+	integrationTask.Phase = "integration"
+	integrationTask.Context["estimated_files"] = []any{"src/ui/ActionCoordinator.cpp", "cmake/DremCanvasSources.cmake"}
+	integrationTask.Context["writable_files"] = []any{"cmake/DremCanvasSources.cmake"}
+	integrationTask.WorktreeBranch = "feature/read-only-integration"
+	integrationTask.AssignedAgentID = nil
+	require.NoError(t, o.db.Create(&integrationTask).Error)
+	require.NoError(t, o.spawnCoder(context.Background(), &integrationTask))
+	require.Len(t, fake.spawnCalls, 2)
+	require.JSONEq(t, `["cmake/DremCanvasSources.cmake"]`, fake.spawnCalls[1].Env["DREM_SCOPED_FILES_JSON"])
+	require.Equal(t, "true", fake.spawnCalls[1].Env["DREM_DIRECT_ALLOW_READ_ONLY_COMPLETION"])
+	require.Empty(t, fake.spawnCalls[1].Env["DREM_DIRECT_PROTECT_EXISTING_FILES"])
+
+	reworkTask := integrationTask
+	reworkTask.ID = uuid.New()
+	reworkTask.Title = "Repair failed exact artifact"
+	reworkTask.WorktreeBranch = "feature/delivery-rework"
+	reworkTask.AssignedAgentID = nil
+	reworkTask.Context["delivery_rework_pending"] = true
+	require.NoError(t, o.db.Create(&reworkTask).Error)
+	require.NoError(t, o.spawnCoder(context.Background(), &reworkTask))
+	require.Len(t, fake.spawnCalls, 3)
+	require.Empty(t, fake.spawnCalls[2].Env["DREM_DIRECT_ALLOW_READ_ONLY_COMPLETION"])
+	require.Equal(t, "true", fake.spawnCalls[2].Env["DREM_DIRECT_PROTECT_EXISTING_FILES"])
 }
 
 func TestSpawnCoder_RecordsContainerIDAndModelMetadataOnAgent(t *testing.T) {

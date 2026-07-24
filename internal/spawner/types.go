@@ -70,6 +70,9 @@ type SpawnWorkerParams struct {
 	CredsMount        string            `json:"creds_mount,omitempty"`
 	CodexAuthMount    string            `json:"codex_auth_mount,omitempty"`
 	PromptMount       string            `json:"prompt_mount,omitempty"`
+	// JournalMount is a host-persistent directory used by direct workers to
+	// resume from the last completed model/tool turn after container loss.
+	JournalMount string `json:"journal_mount,omitempty"`
 }
 
 // SpawnWorkerResult is the return value of SpawnWorker. ContainerID is

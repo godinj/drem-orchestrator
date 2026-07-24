@@ -59,6 +59,27 @@ func TestGenerateDirectCoder_WithParentCtx(t *testing.T) {
 	assert.Contains(t, result, "Parent Feature", "should include parent context")
 }
 
+func TestGenerateDirectCoder_IncludesImmutableAtomicContract(t *testing.T) {
+	task := &model.Task{
+		Title:       "Implement an atomic repair",
+		Description: "Execute the accepted dependency-ordered steps.",
+		Phase:       "implementation",
+		Context: model.JSONField{
+			"writable_files":          []any{"src/model/Clip.cpp", "tests/test_clip.cpp"},
+			"execution_manifest":      map[string]any{"lane": "atomic_repair", "hash": "manifest-sha"},
+			"accepted_execution_plan": `{"subtasks":[{"phase":"test","interface_contract":{"functions":["divideAtTransients(Settings)"]}}]}`,
+		},
+	}
+	task.ID = uuid.New()
+
+	result := GenerateDirectCoder(Opts{Task: task, AgentType: model.AgentCoder, WorktreePath: "/tmp/atomic"})
+
+	assert.Contains(t, result, "Immutable execution manifest")
+	assert.Contains(t, result, "atomic_repair")
+	assert.Contains(t, result, "Accepted execution plan and API contract")
+	assert.Contains(t, result, "divideAtTransients(Settings)")
+}
+
 func TestGenerateDirectCoder_CppUsesProjectAssets(t *testing.T) {
 	task := &model.Task{Title: "Add CMake test", Description: "Add a focused C++ test."}
 	task.ID = uuid.New()
@@ -76,6 +97,7 @@ func TestGenerateDirectCoder_CppUsesProjectAssets(t *testing.T) {
 	})
 
 	assert.Contains(t, result, "cmake --preset test")
+	assert.Contains(t, result, "Every new quoted #include must name a header grounded in the exact worktree")
 	assert.NotContains(t, result, "go vet ./... && go test ./...")
 	assert.NotContains(t, result, "testutil.NewTestDB")
 }
@@ -109,9 +131,14 @@ func TestGenerateDirectCoder_ExternalVerificationIsPhaseAwareAndCompact(t *testi
 
 	assert.Contains(t, result, "TEST phase")
 	assert.Contains(t, result, "focused red-state test")
+	assert.Contains(t, result, "Preserve existing tests")
+	assert.Contains(t, result, "[!mayfail]")
 	assert.Contains(t, result, "planned interface contract")
+	assert.Contains(t, result, "verified source excerpt is already a read")
+	assert.Contains(t, result, "read that file once")
 	assert.Contains(t, result, "do not mock the production type")
-	assert.Contains(t, result, "blocks all shell commands")
+	assert.Contains(t, result, "bounded reconnaissance")
+	assert.Contains(t, result, "shell is unavailable before the first mutation")
 	assert.NotContains(t, result, "Do not read more than 2 files")
 	assert.Contains(t, result, "external host")
 	assert.Contains(t, result, "git diff --check")

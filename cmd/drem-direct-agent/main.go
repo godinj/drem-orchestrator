@@ -73,6 +73,10 @@ func main() {
 	cfg.ToolArgumentsFormat = envDefault("DREM_DIRECT_TOOL_ARGUMENTS_FORMAT", cfg.ToolArgumentsFormat)
 	cfg.GQCaller = envDefault("DREM_GQ_CALLER", *role)
 	cfg.GQPriority = strings.TrimSpace(os.Getenv("DREM_GQ_PRIORITY"))
+	cfg.JournalPath = strings.TrimSpace(os.Getenv("DREM_DIRECT_JOURNAL_PATH"))
+	cfg.RequireJournalResume = strings.EqualFold(strings.TrimSpace(os.Getenv("DREM_DIRECT_REQUIRE_JOURNAL_RESUME")), "true")
+	cfg.AllowReadOnlyCompletion = strings.EqualFold(strings.TrimSpace(os.Getenv("DREM_DIRECT_ALLOW_READ_ONLY_COMPLETION")), "true")
+	cfg.ProtectExistingFiles = strings.EqualFold(strings.TrimSpace(os.Getenv("DREM_DIRECT_PROTECT_EXISTING_FILES")), "true")
 
 	traceFile, err := openTrace()
 	if err != nil {
@@ -85,6 +89,7 @@ func main() {
 	systemPrompt := systemPromptForRole(*role)
 	startSHA := gitValue(*workDir, "rev-parse", "HEAD")
 	scopedFiles := envJSONStrings("DREM_SCOPED_FILES_JSON")
+	cfg.ScopedFiles = scopedFiles
 	defaultReadBudget := 0
 	defaultToolBudget := 0
 	defaultPreMutationInputBudget := 0
@@ -103,8 +108,8 @@ func main() {
 	result, runErr := agent.RunDirectToolAgent(cfg, systemPrompt, string(promptBytes), agent.ToolsForRoleScope(*role, scopedFiles), "")
 	if result != nil {
 		_, _ = fmt.Fprintf(os.Stdout, "%s\n", strings.TrimSpace(result.Output))
-		_, _ = fmt.Fprintf(os.Stderr, "drem-direct-agent: iterations=%d tokens_in=%d tokens_out=%d duration=%s stop_reason=%s\n",
-			result.Iterations, result.TokensIn, result.TokensOut, result.Duration, result.StopReason)
+		_, _ = fmt.Fprintf(os.Stderr, "drem-direct-agent: iterations=%d tokens_in=%d tokens_out=%d peak_request_input=%d resumed_turns=%d folded_bytes=%d duration=%s stop_reason=%s\n",
+			result.Iterations, result.TokensIn, result.TokensOut, result.PeakRequestInput, result.ResumedTurns, result.FoldedBytes, result.Duration, result.StopReason)
 	}
 	if runErr != nil {
 		if result != nil && boundedStopWithWork(*workDir, startSHA, result.StopReason) {

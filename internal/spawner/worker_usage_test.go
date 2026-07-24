@@ -91,3 +91,11 @@ func TestParseWorkerUsageCombinesTerminalUsageWithProgressContext(t *testing.T) 
 			"drem-direct-agent: iterations=3 tokens_in=42 tokens_out=8 duration=2s stop_reason=success\n"))
 	require.Equal(t, &WorkerUsage{Iterations: 3, TokensIn: 42, TokensOut: 8, ContextPct: 63, StopReason: "success"}, got)
 }
+
+func TestParseWorkerUsageIncludesContextCompactionAndResumeTelemetry(t *testing.T) {
+	usage := parseWorkerUsage([]byte("drem-direct-agent: iterations=7 tokens_in=90114 tokens_out=1812 peak_request_input=31114 resumed_turns=2 folded_bytes=48000 duration=3m3s stop_reason=token_budget\n"))
+	require.NotNil(t, usage)
+	require.Equal(t, 31_114, usage.PeakRequestInput)
+	require.Equal(t, 2, usage.ResumedTurns)
+	require.Equal(t, 48_000, usage.FoldedBytes)
+}

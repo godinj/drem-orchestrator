@@ -52,6 +52,9 @@ func (f *fakeGateOrch) RevisePlan(uuid.UUID, uint64, model.JSONField, string, st
 func (f *fakeGateOrch) RetryTask(taskID uuid.UUID) error                 { return nil }
 func (f *fakeGateOrch) ResumeTask(taskID uuid.UUID) error                { return nil }
 func (f *fakeGateOrch) AdoptFailedChild(uuid.UUID, string, string) error { return nil }
+func (f *fakeGateOrch) ResumeFailedCheckpoint(uuid.UUID, string, string) error {
+	return nil
+}
 
 // TestCLIApproveAgainstRealOrchHTTP is the end-to-end regression test
 // for Phase 2 of the orch API gate-mutation pivot. It wires a real

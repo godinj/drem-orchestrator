@@ -376,6 +376,9 @@ func main() {
 		reviewerCfg := agent.DefaultDirectPlanReviewerConfig()
 		reviewerCfg.Endpoint = dta.Endpoint
 		reviewerCfg.Model = dta.Model
+		if dta.ChatTemplateKwargs != nil {
+			reviewerCfg.ChatTemplateKwargs = cloneAnyMap(dta.ChatTemplateKwargs)
+		}
 		if dta.Timeout > 0 {
 			reviewerCfg.Timeout = dta.Timeout
 		}
@@ -633,6 +636,17 @@ func main() {
 
 	// Cleanup.
 	cancel()
+}
+
+func cloneAnyMap(source map[string]any) map[string]any {
+	if source == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(source))
+	for key, value := range source {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 // envOr returns the value of env var key, or def when the var is unset or empty.

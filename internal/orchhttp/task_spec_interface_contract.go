@@ -7,9 +7,14 @@ import (
 	"github.com/godinj/drem-orchestrator/pkg/orchdto"
 )
 
+const maxImplementationFiles = 2
+
 func validateImplementationDepth(index int, sub orchdto.TaskExecutionSubtaskDTO, scope map[string]struct{}) error {
-	if len(sub.ModuleBoundaries) == 0 {
-		return fmt.Errorf("implementation subtask %d requires module_boundaries", index)
+	if len(sub.Files) > maxImplementationFiles {
+		return fmt.Errorf("implementation subtask %d owns %d files; split it into semantic contracts of at most %d files and leave manifests or cross-boundary wiring to integration", index, len(sub.Files), maxImplementationFiles)
+	}
+	if len(sub.ModuleBoundaries) != 1 {
+		return fmt.Errorf("implementation subtask %d must own exactly one module boundary, got %d", index, len(sub.ModuleBoundaries))
 	}
 	if len(sub.InterfaceShapes) == 0 && len(sub.InterfaceContracts) == 0 {
 		return fmt.Errorf("implementation subtask %d requires interface_shapes or interface_contracts", index)

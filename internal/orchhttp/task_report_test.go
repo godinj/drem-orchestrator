@@ -120,3 +120,46 @@ func TestTaskReportCorrelatesLifecycleInferenceAndHostEvidence(t *testing.T) {
 	require.InDelta(t, 66.67, report.MeasurementCoverage.Percent, 0.01)
 	require.Len(t, report.Warnings, 1)
 }
+
+func TestTaskReportCountsResumedJournalUsageOnce(t *testing.T) {
+	srv, ts, project := setupHTTPTest(t, nil)
+	parent := testutil.CreateTask(t, srv.DB, project.ID, "resumed worker", model.StatusFailed)
+	child := testutil.CreateTask(t, srv.DB, project.ID, "atomic repair", model.StatusFailed)
+	require.NoError(t, srv.DB.Model(&child).Update("parent_task_id", parent.ID).Error)
+	now := time.Now().UTC()
+	completedAt := now
+	for i, attempt := range []model.WorkerAttempt{
+		{ID: uuid.New(), TaskID: child.ID, Branch: "feature/resume", State: model.WorkerAttemptFailed, TokensIn: 100, TokensOut: 10},
+		{ID: uuid.New(), TaskID: child.ID, Branch: "feature/resume", State: model.WorkerAttemptFailed, TokensIn: 175, TokensOut: 15},
+		{ID: uuid.New(), TaskID: child.ID, Branch: "feature/resume", State: model.WorkerAttemptCompleted, TokensIn: 240, TokensOut: 22, ResumedTurns: 4},
+		{ID: uuid.New(), TaskID: child.ID, Branch: "feature/independent", State: model.WorkerAttemptCompleted, TokensIn: 50, TokensOut: 5},
+	} {
+		attempt.AgentType = "coder"
+		attempt.CompletedAt = &completedAt
+		attempt.CreatedAt = now.Add(time.Duration(i) * time.Second)
+		// Production attempts retain an Agent row. The durable usage fields must
+		// survive that projection merge or resumed journals are overcounted.
+		agent := model.Agent{
+			ID: uuid.New(), ProjectID: project.ID, CurrentTaskID: &child.ID,
+			Name: "coder", AgentType: model.AgentCoder,
+			Status: model.AgentIdle, WorktreeBranch: attempt.Branch,
+			TokensIn: attempt.TokensIn, TokensOut: attempt.TokensOut,
+		}
+		require.NoError(t, srv.DB.Create(&agent).Error)
+		attempt.AgentID = &agent.ID
+		require.NoError(t, srv.DB.Create(&attempt).Error)
+	}
+
+	resp, err := http.Get(ts.URL + "/projects/" + projectName + "/tasks/" + parent.ID.String() + "/report")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	var report orchdto.TaskReportDTO
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&report))
+	require.Equal(t, 290, report.Totals.TokensIn)
+	require.Equal(t, 27, report.Totals.TokensOut)
+	require.Equal(t, 4, report.Totals.WorkerAttempts)
+	require.Equal(t, 4, report.MeasurementCoverage.EligibleInferenceRuns)
+	require.Equal(t, 4, report.MeasurementCoverage.MeasuredInferenceRuns)
+	require.Equal(t, 4, report.Attempts[2].ResumedTurns)
+}

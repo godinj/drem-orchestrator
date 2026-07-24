@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/agent"
@@ -89,6 +90,40 @@ func TestProcessTestWriting_IgnoresSupersededRejectedRevisions(t *testing.T) {
 // ---------------------------------------------------------------------------
 // processTestWriting tests
 // ---------------------------------------------------------------------------
+
+func TestProcessTestWriting_AtomicLaneSkipsProceduralTestReview(t *testing.T) {
+	db := testutil.NewSharedTestDB(t)
+	wt := &FakeWorktreeManager{BarePath: "/tmp/fake", Default: "main"}
+	o := testOrchestratorWithRunner(t, db, wt)
+
+	project := model.Project{ID: o.projectID, Name: "test", BareRepoPath: "/tmp/fake"}
+	require.NoError(t, db.Create(&project).Error)
+	parent := model.Task{
+		ID:             uuid.New(),
+		ProjectID:      o.projectID,
+		Title:          "atomic repair",
+		Description:    "one owner executes the accepted plan",
+		Status:         model.StatusTestWriting,
+		WorktreeBranch: "feature/atomic-repair",
+		Context: model.JSONField{
+			"baseline_tests_checked": true,
+			"execution_lane":         string(executionLaneAtomic),
+		},
+	}
+	require.NoError(t, db.Create(&parent).Error)
+
+	require.NoError(t, o.processTestWriting(&parent))
+
+	var reloaded model.Task
+	require.NoError(t, db.First(&reloaded, "id = ?", parent.ID).Error)
+	require.Equal(t, model.StatusInProgress, reloaded.Status)
+	require.Equal(t, uint64(2), reloaded.StateVersion)
+	var event model.TaskEvent
+	require.NoError(t, db.Where("task_id = ? AND event_type = ?", parent.ID, "status_change").First(&event).Error)
+	evidence, ok := event.Details["evidence"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "atomic_execution_lane", evidence["source"])
+}
 
 func TestProcessTestWriting_CreatesMissingFeatureWorktree(t *testing.T) {
 	db := testutil.NewSharedTestDB(t)

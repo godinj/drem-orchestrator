@@ -413,6 +413,20 @@ func TestAdoptFailedChildHappyPath(t *testing.T) {
 	require.Equal(t, "adopt-after-detach", h.idempotencyKey)
 }
 
+func TestResumeFailedCheckpointHappyPath(t *testing.T) {
+	id := uuid.New()
+	h := &gateHandler{status: http.StatusOK, respBody: sampleDTOJSON(t, id, "in_progress")}
+	c, _ := newGateClient(t, h)
+	c.WithActor("codex:supervisor")
+
+	got, err := c.ResumeFailedCheckpointWithIdempotencyKey(context.Background(), "canvas", id, "abc123", "resume-checkpoint-v1")
+	require.NoError(t, err)
+	require.Equal(t, "in_progress", got.Status)
+	require.Equal(t, "/projects/canvas/tasks/"+id.String()+"/continue-checkpoint", h.path)
+	require.JSONEq(t, `{"commit_sha":"abc123"}`, string(h.rawBody))
+	require.Equal(t, "resume-checkpoint-v1", h.idempotencyKey)
+}
+
 // TestAnswerEmptyBodyGuardsNetwork asserts that Answer with an empty
 // body fails client-side (before any network call) so callers don't
 // waste a roundtrip on input the server is guaranteed to reject.

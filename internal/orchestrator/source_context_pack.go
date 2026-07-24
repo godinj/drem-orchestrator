@@ -12,10 +12,13 @@ import (
 )
 
 type verifiedSourcePack struct {
-	SpecFingerprint    string                               `json:"spec_fingerprint"`
-	Subtask            string                               `json:"subtask"`
-	Phase              string                               `json:"phase"`
+	SpecFingerprint string `json:"spec_fingerprint"`
+	Subtask         string `json:"subtask"`
+	Phase           string `json:"phase"`
+	// OwnedFiles is the writable scope; ReadFiles remains available to an
+	// integration worker for seam admission, merge, and verification.
 	OwnedFiles         []string                             `json:"owned_files"`
+	ReadFiles          []string                             `json:"read_files,omitempty"`
 	PairedFiles        []string                             `json:"paired_files,omitempty"`
 	AcceptanceCriteria []orchdto.TaskAcceptanceCriterionDTO `json:"acceptance_criteria"`
 	IntegrationSeams   []orchdto.TaskIntegrationSeamDTO     `json:"integration_seams"`
@@ -46,7 +49,8 @@ func verifiedSourcePacks(db *gorm.DB, task *model.Task, plans []planEntry) ([]st
 			SpecFingerprint:    stored.SpecFingerprint,
 			Subtask:            plan.Title,
 			Phase:              plan.Phase,
-			OwnedFiles:         allFiles(plan),
+			OwnedFiles:         writablePlanFiles(plan),
+			ReadFiles:          allFiles(plan),
 			PairedFiles:        paired,
 			AcceptanceCriteria: spec.AcceptanceCriteria,
 			IntegrationSeams:   spec.IntegrationSeams,

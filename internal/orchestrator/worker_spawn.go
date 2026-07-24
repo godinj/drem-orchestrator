@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/godinj/drem-orchestrator/internal/agent"
 	"github.com/godinj/drem-orchestrator/internal/branchpolicy"
 	"github.com/godinj/drem-orchestrator/internal/gitexec"
 	"github.com/godinj/drem-orchestrator/internal/gitref"
@@ -47,6 +50,7 @@ type spawnWorkerContext struct {
 	credsMount          string
 	codexAuth           string
 	promptMount         string
+	journalMount        string
 	promptHash          string
 	promptAssetVersions string
 	provider            string
@@ -162,6 +166,7 @@ func (o *Orchestrator) spawnTypedWorker(ctx context.Context, task *model.Task, a
 		CredsMount:        swc.credsMount,
 		CodexAuthMount:    swc.codexAuth,
 		PromptMount:       swc.promptMount,
+		JournalMount:      swc.journalMount,
 	}
 
 	store := workeridentity.NewStore(o.db)
@@ -269,6 +274,11 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 	projectName := o.projectName
 	projectID := o.projectID.String()
 	branch := task.WorktreeBranch
+	if resume, ok := task.Context["checkpoint_resume"].(map[string]any); ok {
+		if resumeBranch, _ := resume["branch"].(string); strings.TrimSpace(resumeBranch) != "" {
+			branch = strings.TrimSpace(resumeBranch)
+		}
+	}
 	if branch == "" {
 		branch = "feature/" + taskFeatureName(task)
 	}
@@ -307,7 +317,7 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		env["DREM_AGENT_HARNESS"] = "sglang-direct"
 		env["DREM_GQ_CALLER"] = agentType
 		env["DREM_GQ_PRIORITY"] = "normal"
-		scopedFiles := extractEstimatedFiles(*task)
+		scopedFiles := extractWritableFiles(*task)
 		if len(scopedFiles) > 0 {
 			encoded, err := json.Marshal(scopedFiles)
 			if err != nil {
@@ -317,6 +327,13 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		}
 		if o.directToolAgentCfg != nil {
 			workerCfg := o.directToolAgentCfg.ForWorkload(agentType, task.Phase)
+			_, deliveryRework := task.Context["delivery_rework_pending"]
+			if task.Phase == "test" || deliveryRework {
+				workerCfg.ProtectExistingFiles = true
+			}
+			if deliveryRework {
+				workerCfg.AllowReadOnlyCompletion = false
+			}
 			env["DREM_DIRECT_ENDPOINT"] = workerCfg.Endpoint
 			if workerCfg.ChatTemplateKwargs != nil {
 				encoded, err := json.Marshal(workerCfg.ChatTemplateKwargs)
@@ -342,6 +359,12 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 			}
 			if workerCfg.MaxInputTokensBeforeMutation > 0 {
 				env["DREM_DIRECT_MAX_INPUT_TOKENS_BEFORE_MUTATION"] = fmt.Sprintf("%d", workerCfg.MaxInputTokensBeforeMutation)
+			}
+			if workerCfg.AllowReadOnlyCompletion {
+				env["DREM_DIRECT_ALLOW_READ_ONLY_COMPLETION"] = "true"
+			}
+			if workerCfg.ProtectExistingFiles {
+				env["DREM_DIRECT_PROTECT_EXISTING_FILES"] = "true"
 			}
 			if (agentType == "coder" || agentType == "fixer") && len(scopedFiles) > 0 && workerCfg.MaxReadsBeforeMutation > 0 {
 				env["DREM_DIRECT_MAX_READS_BEFORE_MUTATION"] = fmt.Sprintf("%d", workerCfg.MaxReadsBeforeMutation)
@@ -417,6 +440,8 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 	// /home/drem/.drem/prompt.md and sets DREM_PROMPT_PATH there.
 	// See plans/worker-prompt-delivery.md §§2, 4.
 	promptMount := ""
+	journalMount := ""
+	var resumeJournal *checkpointJournalHeader
 	promptHash := ""
 	promptAssetVersions := ""
 	if promptRequired(agentType) {
@@ -450,6 +475,47 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		promptMount = promptInfo.Path
 		promptHash = promptInfo.Hash
 		promptAssetVersions = promptInfo.AssetVersions
+		if provider == model.ProviderSGLangDirect {
+			journalMount = filepath.Join(promptRoot, "journals", task.ID.String())
+			if resume, ok := task.Context["checkpoint_resume"].(map[string]any); ok {
+				expectedPromptHash, _ := resume["rendered_prompt_hash"].(string)
+				if expectedPromptHash == "" || !strings.EqualFold(expectedPromptHash, promptHash) {
+					return spawnWorkerContext{}, fmt.Errorf("checkpoint resume prompt fingerprint changed: got %s want %s", promptHash, expectedPromptHash)
+				}
+				env["DREM_DIRECT_REQUIRE_JOURNAL_RESUME"] = "true"
+				journal, err := loadCheckpointJournalHeader(filepath.Join(journalMount, "journal.json"))
+				if err != nil {
+					return spawnWorkerContext{}, fmt.Errorf("checkpoint resume journal unavailable: %w", err)
+				}
+				resumeJournal = &journal
+			}
+			if err := os.MkdirAll(journalMount, 0o700); err != nil {
+				return spawnWorkerContext{}, fmt.Errorf("create direct worker journal directory %s: %w", journalMount, err)
+			}
+			if o.directToolAgentCfg != nil {
+				promptStat, err := os.Stat(promptMount)
+				if err != nil {
+					return spawnWorkerContext{}, fmt.Errorf("measure direct worker prompt %s: %w", promptMount, err)
+				}
+				workerCfg := o.directToolAgentCfg.ForWorkload(agentType, task.Phase)
+				workerCfg = agent.DeriveWorkloadBudget(workerCfg, agentType, task.Phase, int(promptStat.Size()), len(extractWritableFiles(*task)))
+				if taskExecutionLane(task) == executionLaneAtomic {
+					workerCfg = agent.DeriveExpectedTurnsBudget(workerCfg, agentType, int(promptStat.Size()), len(extractWritableFiles(*task)), taskManifestExpectedTurns(task))
+				}
+				if resumeJournal != nil {
+					workerCfg = agent.ExtendBudgetForJournalResume(workerCfg, resumeJournal.TokensIn, resumeJournal.NextIteration, resumeJournal.TotalToolCalls)
+				}
+				env["DREM_DIRECT_MAX_CUMULATIVE_INPUT_TOKENS"] = fmt.Sprintf("%d", workerCfg.MaxCumulativeInputTokens)
+				env["DREM_DIRECT_MAX_ITERATIONS"] = fmt.Sprintf("%d", workerCfg.MaxIterations)
+				if workerCfg.MaxToolCalls > 0 {
+					env["DREM_DIRECT_MAX_TOOL_CALLS"] = fmt.Sprintf("%d", workerCfg.MaxToolCalls)
+				}
+				if workerCfg.MaxInputTokensBeforeMutation > 0 {
+					env["DREM_DIRECT_MAX_INPUT_TOKENS_BEFORE_MUTATION"] = fmt.Sprintf("%d", workerCfg.MaxInputTokensBeforeMutation)
+				}
+				env["DREM_EXECUTION_LANE"] = string(taskExecutionLane(task))
+			}
+		}
 	}
 
 	return spawnWorkerContext{
@@ -462,6 +528,7 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 		credsMount:          credsMount,
 		codexAuth:           codexAuth,
 		promptMount:         promptMount,
+		journalMount:        journalMount,
 		promptHash:          promptHash,
 		promptAssetVersions: promptAssetVersions,
 		provider:            string(provider),

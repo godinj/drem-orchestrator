@@ -15,7 +15,7 @@ func TestBuildTestReviewerUserMessage(t *testing.T) {
 }
 
 func TestTestReviewerPromptIsFailClosed(t *testing.T) {
-	for _, required := range []string{"Approve only", "ambiguous", "recommendation", "revise", "reject", "Do not modify"} {
+	for _, required := range []string{"Approve only", "ambiguous", "red-state tests", "[!mayfail]", "actually present", "recommendation", "revise", "reject", "Do not modify"} {
 		require.True(t, strings.Contains(testReviewerSystemPrompt, required), "missing %q", required)
 	}
 }

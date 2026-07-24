@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/godinj/drem-orchestrator/internal/model"
 )
 
@@ -297,4 +299,13 @@ func TestParsePlan(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParsePlanLegacyIntegrationWritableScopeFallsBackToFiles(t *testing.T) {
+	parsed, err := parsePlan(model.JSONField{"subtasks": []any{map[string]any{
+		"title": "assemble", "description": "wire", "phase": "integration", "files": []any{"src/a.cpp", "cmake/a.cmake"},
+	}}})
+	require.NoError(t, err)
+	require.Nil(t, parsed.Subtasks[0].WritableFiles)
+	require.Equal(t, []string{"src/a.cpp", "cmake/a.cmake"}, writablePlanFiles(parsed.Subtasks[0]))
 }

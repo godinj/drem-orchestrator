@@ -91,7 +91,8 @@ func (o *Orchestrator) AdoptFailedChild(taskID uuid.UUID, commitSHA, actor strin
 	}
 
 	acceptance, acceptErr := branchpolicy.Accept(context.Background(), branchpolicy.AcceptanceRequest{
-		RepoDir: featureDir, BaseRef: attempt.BaseSHA, HeadRef: attempt.Branch, AllowedScopes: allowedScopes,
+		RepoDir: featureDir, BaseRef: attempt.BaseSHA, TestContractBaseRef: parent.WorktreeBaseSHA,
+		HeadRef: attempt.Branch, AllowedScopes: allowedScopes, TestContract: testContractForAcceptance(&child),
 	})
 	if acceptErr != nil {
 		return fmt.Errorf("adopt failed child: branch acceptance: %w", acceptErr)

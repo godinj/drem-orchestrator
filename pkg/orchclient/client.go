@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -63,6 +64,23 @@ func New(baseURL string) *Client {
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		http:    &http.Client{Timeout: DefaultTimeout},
+	}
+}
+
+// NewUnix builds a Client that reaches the orchestrator through a Unix-domain
+// socket. The HTTP request shape, bearer token, actor attribution, and server
+// validation are identical to New; only the transport changes. This is useful
+// for workspace-sandboxed supervisors that may use filesystem IPC but cannot
+// open an AF_INET loopback connection.
+func NewUnix(socketPath string) *Client {
+	dialer := &net.Dialer{Timeout: DefaultTimeout}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return dialer.DialContext(ctx, "unix", socketPath)
+	}
+	return &Client{
+		baseURL: "http://drem-orch",
+		http:    &http.Client{Transport: transport, Timeout: DefaultTimeout},
 	}
 }
 
@@ -225,7 +243,7 @@ func (c *Client) streamLogs(ctx context.Context, q url.Values, since time.Time, 
 		return nil, err
 	}
 	// Streaming: do not apply the default per-request timeout.
-	client := &http.Client{}
+	client := &http.Client{Transport: c.http.Transport}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err

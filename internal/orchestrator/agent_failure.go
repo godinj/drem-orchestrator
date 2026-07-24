@@ -229,6 +229,33 @@ func (o *Orchestrator) onAgentEmptyWork(ag *model.Agent, task *model.Task, agent
 	if task.Context == nil {
 		task.Context = make(model.JSONField)
 	}
+	if task.Phase == "integration" {
+		// Integration workers validate the cumulative parent branch. A clean,
+		// successful exit with no child commit means the assembled work already
+		// satisfied the integration contract; requiring a synthetic edit here
+		// turns valid verification into an empty-work retry loop.
+		delete(task.Context, "empty_work")
+		delete(task.Context, "last_error")
+		task.Context["read_only_integration_validation"] = true
+		preStatus := string(task.Status)
+		refs := map[string]any{
+			"reason":   "read-only-integration-validation",
+			"agent_id": ag.ID.String(),
+			"phase":    task.Phase,
+		}
+		if err := o.db.Transaction(func(tx *gorm.DB) error {
+			if task.ParentTaskID != nil {
+				return casAcceptedExistingSubtask(tx, task, refs)
+			}
+			return casTaskTransition(tx, task, task.Status, model.StatusTestingReady, "orchestrator",
+				"existing_work_completion", "read-only integration validation completed", refs)
+		}); err != nil {
+			return fmt.Errorf("on agent empty work: accept read-only integration validation: %w", err)
+		}
+		o.emit("task_updated", task)
+		o.publishTaskTransition(task.ID.String(), preStatus, string(task.Status), "read-only integration validation accepted")
+		return nil
+	}
 	task.Context["empty_work"] = true
 	task.Context["last_error"] = "agent completed without committing any changes"
 

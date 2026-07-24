@@ -76,7 +76,7 @@ func (sp *SchedulingPolicy) EvaluateDispatch(
 	// Pre-extract file lists for in-progress tasks.
 	ipFiles := make(map[uuid.UUID][]string, len(inProgress))
 	for _, ip := range inProgress {
-		ipFiles[ip.ID] = extractEstimatedFiles(ip)
+		ipFiles[ip.ID] = extractWritableFiles(ip)
 	}
 
 	// Build a set of in-progress task IDs for wave group checking.
@@ -97,7 +97,7 @@ func (sp *SchedulingPolicy) EvaluateDispatch(
 		if !decisions[i].Dispatchable {
 			continue
 		}
-		candFiles := extractEstimatedFiles(cand)
+		candFiles := extractWritableFiles(cand)
 		if len(candFiles) == 0 {
 			continue
 		}
@@ -167,7 +167,7 @@ func (sp *SchedulingPolicy) evaluateCandidate(
 	}
 
 	// 3. Check file conflicts against in-progress tasks.
-	candFiles := extractEstimatedFiles(cand)
+	candFiles := extractWritableFiles(cand)
 	for _, ip := range inProgress {
 		files := ipFiles[ip.ID]
 		if len(candFiles) == 0 || len(files) == 0 {
@@ -395,7 +395,7 @@ func (sp *SchedulingPolicy) activeTaskFiles() (map[uuid.UUID][]string, error) {
 
 	result := make(map[uuid.UUID][]string, len(tasks))
 	for _, t := range tasks {
-		files := extractEstimatedFiles(t)
+		files := extractWritableFiles(t)
 		if len(files) > 0 {
 			result[t.ID] = files
 		}
@@ -458,7 +458,7 @@ func BuildSchedule(subtasks []model.Task) Schedule {
 	fileLists := make([][]string, n)
 	anyFiles := false
 	for i, sub := range subtasks {
-		fileLists[i] = extractEstimatedFiles(sub)
+		fileLists[i] = extractWritableFiles(sub)
 		if len(fileLists[i]) > 0 {
 			anyFiles = true
 		}
@@ -679,4 +679,15 @@ func extractEstimatedFiles(task model.Task) []string {
 	default:
 		return nil
 	}
+}
+
+// extractWritableFiles returns the mutation scope carried by new materialized
+// plans, with estimated_files as the legacy fallback.
+func extractWritableFiles(task model.Task) []string {
+	if task.Context != nil {
+		if files := extractFileList(task.Context["writable_files"]); len(files) > 0 {
+			return files
+		}
+	}
+	return extractEstimatedFiles(task)
 }

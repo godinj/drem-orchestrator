@@ -1156,6 +1156,12 @@ func TestTaskLifecycle_TestFailedBackToPlanning(t *testing.T) {
 	o, db := setupLifecycleTest(t)
 
 	task := createLifecycleTask(t, db, o.projectID, "test-fail-replan", model.StatusTestingReady, makePlan(1))
+	repair := testutil.CreateTask(t, db, task.ProjectID, "repair failed delivery", model.StatusDone)
+	repair.ParentTaskID = &task.ID
+	repair.Phase = "integration"
+	repair.WorktreeBranch = "feature/completed-integration"
+	repair.Context = model.JSONField{"estimated_files": []any{"src/ui/LowerZoneLayout.h"}}
+	require.NoError(t, db.Save(&repair).Error)
 
 	now := time.Now()
 	artifact, err := o.FreezeDeliveryArtifact(task.ID, ArtifactSnapshot{
@@ -1186,6 +1192,9 @@ func TestTaskLifecycle_TestFailedBackToPlanning(t *testing.T) {
 	if updated.Status != model.StatusInProgress {
 		t.Errorf("expected in_progress, got %s", updated.Status)
 	}
+	require.NoError(t, db.First(&repair, "id = ?", repair.ID).Error)
+	require.Equal(t, model.StatusBacklog, repair.Status)
+	require.Equal(t, true, repair.Context["delivery_rework_pending"])
 }
 
 func TestTaskLifecycle_PlanRejectReplanApprove(t *testing.T) {

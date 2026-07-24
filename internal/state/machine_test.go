@@ -26,7 +26,7 @@ func TestValidateTransition(t *testing.T) {
 		{"test_writing to test_review is valid", model.StatusTestWriting, model.StatusTestReview, false},
 		{"test_writing to failed is valid", model.StatusTestWriting, model.StatusFailed, false},
 		{"test_writing to paused is valid", model.StatusTestWriting, model.StatusPaused, false},
-		{"test_writing to in_progress is INVALID", model.StatusTestWriting, model.StatusInProgress, true},
+		{"test_writing to in_progress is valid for an atomic execution lane", model.StatusTestWriting, model.StatusInProgress, false},
 		{"test_writing to done is INVALID", model.StatusTestWriting, model.StatusDone, true},
 
 		// TEST_REVIEW transitions

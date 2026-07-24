@@ -109,6 +109,20 @@ func TestPlannerPromptContainsDepthSection(t *testing.T) {
 	}
 }
 
+func TestPlannerPromptContainsSemanticGranularityGuardrails(t *testing.T) {
+	output := strings.Join(plannerInstructions(), "\n")
+	for _, required := range []string{
+		"exactly ONE semantic module boundary/API contract",
+		"at most TWO files",
+		"exclusive ownership of its files",
+		"move manifests, registration, and cross-boundary wiring to the final integration subtask",
+	} {
+		if !strings.Contains(output, required) {
+			t.Errorf("planner prompt missing granularity guardrail: %q", required)
+		}
+	}
+}
+
 func TestPlannerPromptSchemaIncludesDepthFields(t *testing.T) {
 	sections := plannerInstructions()
 	output := strings.Join(sections, "\n")

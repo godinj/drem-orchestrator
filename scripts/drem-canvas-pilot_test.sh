@@ -49,6 +49,21 @@ run_pilot() {
 doctor_output="$(run_pilot doctor --base "$base_sha" --min-free-gib 0)"
 [[ "$doctor_output" == doctor=ready* ]]
 
+# The optional capacity audit is advisory: Docker/Colima absence must not make
+# the normal host-doctor gate fragile.
+doctor_audit_output="$(run_pilot doctor --base "$base_sha" --min-free-gib 0 --container-disk-audit)"
+[[ "$doctor_audit_output" == *'audit=read_only'* ]]
+[[ "$doctor_audit_output" == *'doctor=ready'* ]]
+
+# Sandboxed Codex tasks can keep host-side pilot state inside their writable
+# workspace while the registered project and control plane remain unchanged.
+override_root="$tmp_root/workspace-state"
+override_doctor_output="$(DREM_CANVAS_PILOT_ROOT="$override_root" run_pilot doctor --base "$base_sha" --min-free-gib 0)"
+[[ "$override_doctor_output" == doctor=ready* ]]
+[[ -d "$override_root/host-verification" ]]
+override_worktree="$(DREM_CANVAS_PILOT_ROOT="$override_root" run_pilot direct-prepare --base "$base_sha" --run-id sandbox-direct)"
+[[ "$override_worktree" == "$override_root/direct-runs/sandbox-direct" ]]
+
 direct_worktree="$(run_pilot direct-prepare --base "$base_sha" --run-id arm-direct)"
 [[ "$(git -C "$direct_worktree" rev-parse HEAD)" == "$base_sha" ]]
 [[ -L "$direct_worktree/libs/skia" ]]

@@ -9,6 +9,7 @@ package agent
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -27,11 +28,14 @@ import (
 // DirectPlanReviewerConfig holds connection and generation parameters for the
 // direct SGLang plan reviewer.
 type DirectPlanReviewerConfig struct {
-	Endpoint    string        // Full URL for chat completions endpoint
-	Model       string        // Model identifier sent in the API request
-	MaxTokens   int           // Maximum tokens in the response
-	Temperature float64       // Sampling temperature (low = deterministic)
-	Timeout     time.Duration // HTTP request timeout
+	Endpoint           string         // Full URL for chat completions endpoint
+	Model              string         // Model identifier sent in the API request
+	MaxTokens          int            // Maximum tokens in the response
+	Temperature        float64        // Sampling temperature (low = deterministic)
+	Timeout            time.Duration  // HTTP request timeout
+	GQCaller           string         // Queue caller identity
+	GQPriority         string         // Queue priority lane
+	ChatTemplateKwargs map[string]any // Model-template controls forwarded to the server
 }
 
 // DefaultDirectPlanReviewerConfig returns a config targeting the local SGLang
@@ -40,9 +44,14 @@ func DefaultDirectPlanReviewerConfig() DirectPlanReviewerConfig {
 	return DirectPlanReviewerConfig{
 		Endpoint:    "http://localhost:8081/v1/chat/completions",
 		Model:       "qwen3-coder-30b",
-		MaxTokens:   2048,
+		MaxTokens:   1024,
 		Temperature: 0.1,
 		Timeout:     120 * time.Second,
+		GQCaller:    "reviewer",
+		GQPriority:  "high",
+		ChatTemplateKwargs: map[string]any{
+			"enable_thinking": false,
+		},
 	}
 }
 
@@ -52,10 +61,32 @@ func DefaultDirectPlanReviewerConfig() DirectPlanReviewerConfig {
 
 // DirectPlanReviewerResult holds the outcome of a direct plan review call.
 type DirectPlanReviewerResult struct {
-	OutputPath string        // Path to the written review.json file
-	TokensIn   int           // Prompt tokens consumed
-	TokensOut  int           // Completion tokens generated
-	Duration   time.Duration // Wall-clock time for the API call
+	OutputPath   string        // Path to the written review.json file
+	TokensIn     int           // Prompt tokens consumed
+	TokensOut    int           // Completion tokens generated
+	Duration     time.Duration // Wall-clock time for the API call
+	FinishReason string        // Provider completion reason
+	ContentBytes int           // Visible response size, including failed responses
+}
+
+// DirectReviewError identifies a provider or protocol failure without losing
+// any measured result returned alongside it.
+type DirectReviewError struct {
+	Code string
+	Err  error
+}
+
+func (e *DirectReviewError) Error() string { return e.Err.Error() }
+func (e *DirectReviewError) Unwrap() error { return e.Err }
+
+// DirectReviewFailureCode returns a stable diagnostic code for durable task
+// telemetry. Unknown transport errors retain the generic request_failed code.
+func DirectReviewFailureCode(err error) string {
+	var reviewErr *DirectReviewError
+	if errors.As(err, &reviewErr) {
+		return reviewErr.Code
+	}
+	return "request_failed"
 }
 
 // ---------------------------------------------------------------------------
@@ -72,12 +103,12 @@ const planReviewerSystemPrompt = `You are a plan reviewer agent for a software p
 Evaluate the plan for:
 
 1. **Coverage**: Does every acceptance criterion from the task description have at least one subtask addressing it? List any uncovered criteria verbatim.
-2. **File overlap risk**: Do subtasks share files? High overlap causes merge conflicts and serialized execution. Flag pairs of subtasks that touch the same files.
+2. **File overlap risk**: Evaluate mutation overlap, not merely declared read scope. ` + "`" + `writable_files` + "`" + ` is an integration subtask's mutation scope; if omitted, its ` + "`" + `files` + "`" + ` list is the legacy mutation scope. For all other subtasks, ` + "`" + `files` + "`" + ` is the mutation scope. A shared file is not actionable when an explicit dependency path serializes the two subtasks. In particular, two test subtasks may share one test translation unit only when that path exists; report unsequenced shared mutation as overlap.
 3. **Integration gap**: Is there a final integration subtask that wires the pieces together? A plan that produces isolated components with no wiring subtask has an integration gap.
 4. **TDD structure**: Does every implementation subtask have a corresponding test subtask with ` + "`" + `tests_for` + "`" + `? Are test descriptions specific about the behavior they verify? Are any TDD exceptions justified (integration wiring / research are valid; "too hard to test" is not)?
 5. **Depth**: Does each subtask whose ` + "`" + `phase` + "`" + ` is exactly ` + "`" + `implementation` + "`" + ` include ` + "`" + `module_boundaries` + "`" + ` and either typed ` + "`" + `interface_contracts` + "`" + ` or legacy ` + "`" + `interface_shapes` + "`" + `? Are modules deep (rich internal logic, few exports) rather than shallow pass-through wrappers? Do not require depth metadata on ` + "`" + `test` + "`" + ` or wiring-only ` + "`" + `integration` + "`" + ` subtasks.
-6. **Decomposition quality**: Are subtasks sized appropriately (3-6 is typical)? Are dependencies between subtasks correct?
-7. **Source-backed entrypoint chain**: Treat the task's production-entrypoint seams and content-addressed source excerpts as authoritative evidence. Verify every declared missing-edge file is present in the integration subtask and that the runtime verification exercises the production entrypoint, not merely a helper or source-text assertion. If the evidence shows an unlisted caller/registration/manifest edge, mark an integration gap and require the file in scope.
+6. **Decomposition quality**: Are subtasks sized appropriately (3-6 is typical)? Each implementation must own exactly one semantic module boundary, at most two files, and files that no other implementation owns. A cohesive header/implementation pair is one boundary; model + coordinator, widget + persistence, or implementation + manifest/registration is not. Are dependencies between subtasks correct?
+7. **Source-backed entrypoint chain**: Treat the task's production-entrypoint seams and content-addressed source excerpts as authoritative evidence. Verify every declared missing-edge file is present in the integration subtask and that the runtime verification exercises the production entrypoint, not merely a helper or source-text assertion. Integration ` + "`" + `files` + "`" + ` is the required read/merge/verify declaration, so do not demand removal of immutable seam-required paths merely because they are outside ` + "`" + `writable_files` + "`" + `. If the evidence shows an unlisted caller/registration/manifest edge, mark an integration gap and require the file in scope.
 
 ## Output Format
 
@@ -157,9 +188,10 @@ func runDirectStructuredReviewer(cfg DirectPlanReviewerConfig, taskID uuid.UUID,
 			{Role: "system", Content: systemPrompt},
 			{Role: "user", Content: userMsg},
 		},
-		MaxTokens:      cfg.MaxTokens,
-		Temperature:    cfg.Temperature,
-		ResponseFormat: &chatRespFormat{Type: "json_object"},
+		MaxTokens:          cfg.MaxTokens,
+		Temperature:        cfg.Temperature,
+		ResponseFormat:     &chatRespFormat{Type: "json_object"},
+		ChatTemplateKwargs: cfg.ChatTemplateKwargs,
 	}
 
 	reqJSON, err := json.Marshal(reqBody)
@@ -180,6 +212,12 @@ func runDirectStructuredReviewer(cfg DirectPlanReviewerConfig, taskID uuid.UUID,
 		return nil, fmt.Errorf("direct %s reviewer: create request: %w", reviewKind, err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
+	if cfg.GQCaller != "" {
+		httpReq.Header.Set("X-GQ-Caller", cfg.GQCaller)
+	}
+	if cfg.GQPriority != "" {
+		httpReq.Header.Set("X-GQ-Priority", cfg.GQPriority)
+	}
 
 	client := &http.Client{Timeout: cfg.Timeout}
 	resp, err := client.Do(httpReq)
@@ -201,22 +239,35 @@ func runDirectStructuredReviewer(cfg DirectPlanReviewerConfig, taskID uuid.UUID,
 	if err := json.Unmarshal(body, &chatResp); err != nil {
 		return nil, fmt.Errorf("direct %s reviewer: parse response: %w", reviewKind, err)
 	}
+	duration := time.Since(start)
+	result := &DirectPlanReviewerResult{
+		TokensIn:  chatResp.Usage.PromptTokens,
+		TokensOut: chatResp.Usage.CompletionTokens,
+		Duration:  duration,
+	}
 
 	if len(chatResp.Choices) == 0 {
-		return nil, fmt.Errorf("direct %s reviewer: no choices in response", reviewKind)
+		return result, &DirectReviewError{Code: "no_choices", Err: fmt.Errorf("direct %s reviewer: no choices in response", reviewKind)}
 	}
 
 	content := chatResp.Choices[0].Message.Content
+	result.FinishReason = chatResp.Choices[0].FinishReason
+	result.ContentBytes = len(content)
 	if content == "" {
-		return nil, fmt.Errorf("direct %s reviewer: empty response content (finish_reason: %s)",
-			reviewKind, chatResp.Choices[0].FinishReason)
+		return result, &DirectReviewError{Code: "empty_visible_completion", Err: fmt.Errorf(
+			"direct %s reviewer: empty response content (finish_reason: %s)", reviewKind, result.FinishReason)}
+	}
+	if result.FinishReason != "stop" {
+		return result, &DirectReviewError{Code: "incomplete_completion", Err: fmt.Errorf(
+			"direct %s reviewer: incomplete response (finish_reason: %s)", reviewKind, result.FinishReason)}
 	}
 
 	// Validate that the response is valid JSON before writing.
 	var jsonCheck json.RawMessage
 	if err := json.Unmarshal([]byte(content), &jsonCheck); err != nil {
-		return nil, fmt.Errorf("direct %s reviewer: response is not valid JSON: %w\nraw: %s",
-			reviewKind, err, truncateBody([]byte(content), 500))
+		return result, &DirectReviewError{Code: "invalid_json", Err: fmt.Errorf(
+			"direct %s reviewer: response is not valid JSON: %w\nraw: %s",
+			reviewKind, err, truncateBody([]byte(content), 500))}
 	}
 
 	// Pretty-print the JSON for consistency with agent-produced files.
@@ -229,10 +280,9 @@ func runDirectStructuredReviewer(cfg DirectPlanReviewerConfig, taskID uuid.UUID,
 	// Write review.json at the exact path onReviewerCompleted expects.
 	outputPath := filepath.Join(outputDir, "review.json")
 	if err := os.WriteFile(outputPath, prettyJSON.Bytes(), 0o644); err != nil {
-		return nil, fmt.Errorf("direct %s reviewer: write output: %w", reviewKind, err)
+		return result, &DirectReviewError{Code: "write_output", Err: fmt.Errorf(
+			"direct %s reviewer: write output: %w", reviewKind, err)}
 	}
-
-	duration := time.Since(start)
 
 	slog.Info("direct structured reviewer: completed",
 		"review_kind", reviewKind,
@@ -244,10 +294,6 @@ func runDirectStructuredReviewer(cfg DirectPlanReviewerConfig, taskID uuid.UUID,
 		"finish_reason", chatResp.Choices[0].FinishReason,
 	)
 
-	return &DirectPlanReviewerResult{
-		OutputPath: outputPath,
-		TokensIn:   chatResp.Usage.PromptTokens,
-		TokensOut:  chatResp.Usage.CompletionTokens,
-		Duration:   duration,
-	}, nil
+	result.OutputPath = outputPath
+	return result, nil
 }

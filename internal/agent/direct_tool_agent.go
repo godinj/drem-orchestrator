@@ -7,15 +7,12 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -51,8 +48,8 @@ var builtinTools = map[string]toolDefinition{
 		Type: "function",
 		Function: toolFunction{
 			Name:        "read",
-			Description: "Read file contents with line numbers. ALWAYS use this instead of cat/head/tail/sed -n. Returns formatted output with line numbers for precise editing. Supports offset and limit for large files.",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path to read"},"offset":{"type":"integer","description":"Line number to start from (0-based)"},"limit":{"type":"integer","description":"Max lines to return (default 200)"}},"required":["path"]}`),
+			Description: "Read file contents with line numbers. ALWAYS use this instead of cat/head/tail/sed -n. Returns formatted output with line numbers for precise editing. A default read of an authorized scoped file returns up to 800 lines so dependency artifacts usually arrive in one turn; other files default to 200. Supports offset and limit for larger files.",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path to read"},"offset":{"type":"integer","description":"Line number to start from (0-based)"},"limit":{"type":"integer","description":"Max lines to return (default 800 for an authorized scoped file, otherwise 200)"}},"required":["path"]}`),
 		},
 	},
 	"edit": {
@@ -154,12 +151,27 @@ func toolsByName(names []string) []toolDefinition {
 // ends when the model returns finish_reason "stop" or max iterations are hit.
 //
 // The final text output is written to outputPath if provided.
-func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage string, tools []toolDefinition, outputPath string) (*DirectToolAgentResult, error) {
+func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage string, tools []toolDefinition, outputPath string) (finalResult *DirectToolAgentResult, finalErr error) {
 	start := time.Now()
+	var peakRequestInput, resumedTurns, foldedBytes int
+	defer func() {
+		if finalResult != nil {
+			finalResult.PeakRequestInput = peakRequestInput
+			finalResult.ResumedTurns = resumedTurns
+			finalResult.FoldedBytes = foldedBytes
+		}
+	}()
 
 	exec := &toolExecutor{
 		workDir:     cfg.WorkDir,
 		bashTimeout: cfg.BashTimeout,
+		scopedFiles: make(map[string]struct{}, len(cfg.ScopedFiles)),
+	}
+	for _, path := range cfg.ScopedFiles {
+		resolved, err := exec.resolvePath(path)
+		if err == nil {
+			exec.scopedFiles[resolved] = struct{}{}
+		}
 	}
 
 	messages := []toolChatMsg{
@@ -168,6 +180,23 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 	}
 
 	var totalTokensIn, totalTokensOut int
+	startIteration := 0
+	promptHash := directToolPromptHash(systemPrompt, userMessage)
+	resumedJournal, journalErr := loadDirectToolJournal(cfg.JournalPath, promptHash)
+	if journalErr != nil {
+		return nil, journalErr
+	}
+	if cfg.RequireJournalResume && resumedJournal == nil {
+		return nil, fmt.Errorf("required durable journal resume was unavailable or its immutable prompt fingerprint changed")
+	}
+	if resumedJournal != nil {
+		messages = resumedJournal.Messages
+		totalTokensIn = resumedJournal.TokensIn
+		totalTokensOut = resumedJournal.TokensOut
+		peakRequestInput = resumedJournal.PeakRequestInput
+		startIteration = resumedJournal.NextIteration
+		resumedTurns = startIteration
+	}
 
 	// Context-window monitor state. finalPct mirrors the most recent
 	// prompt_tokens / ContextLimit and is propagated into every result return.
@@ -194,23 +223,58 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 	// same-match text each time).
 	var prevToolKey, prevToolOut string
 	var consecutiveRepeats int
+	var semanticLoops semanticLoopDetector
+	var failedMutationLoops failedMutationLoopDetector
+	if resumedJournal != nil {
+		failedMutationLoops.Restore(messages)
+	}
 
 	// File re-read tracker: counts how many times each resolved file path
 	// has been read via the read tool. After maxFileReads, the tool result
 	// includes a warning nudging the model to stop re-reading and act.
 	fileReadCounts := map[string]int{}
 	reconnaissanceBeforeMutation := 0
-	blockedReconBeforeMutation := 0
+	blockedReconCallsBeforeMutation := 0
+	blockedReconBatchesBeforeMutation := 0
+	finalScopedReadGranted := false
+	protectedWriteCallsBeforeMutation := 0
+	protectedWriteBatchesBeforeMutation := 0
+	scopeViolationCallsBeforeMutation := 0
+	scopeViolationBatchesBeforeMutation := 0
+	failedEditRecoveryPath := ""
+	failedEditRecoveryAvailable := false
+	failedEditRecoveryGranted := false
+	mutationOnlyNudgeInjected := false
 	totalToolCalls := 0
 	mutationObserved := false
+	if resumedJournal != nil {
+		totalToolCalls = resumedJournal.TotalToolCalls
+		mutationObserved = resumedJournal.MutationObserved
+	}
+	persistJournal := func(nextIteration int, completed bool, lastTurn *TraceEvent) error {
+		return saveDirectToolJournal(cfg.JournalPath, directToolJournal{
+			PromptHash:       promptHash,
+			Messages:         messages,
+			NextIteration:    nextIteration,
+			TokensIn:         totalTokensIn,
+			TokensOut:        totalTokensOut,
+			PeakRequestInput: peakRequestInput,
+			MutationObserved: mutationObserved,
+			TotalToolCalls:   totalToolCalls,
+			Completed:        completed,
+			LastTurn:         lastTurn,
+		})
+	}
 
 	maxIter := cfg.MaxIterations
 	if maxIter <= 0 {
 		maxIter = 20
 	}
 
-	for iteration := 0; iteration < maxIter; iteration++ {
-		messages = compactToolResultHistory(messages)
+	for iteration := startIteration; iteration < maxIter; iteration++ {
+		var folded int
+		messages, folded = compactToolResultHistoryWithStats(messages)
+		foldedBytes += folded
 		slog.Info("direct tool agent: calling API",
 			"iteration", iteration,
 			"messages", len(messages),
@@ -218,7 +282,16 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			"tokens_out_total", totalTokensOut,
 		)
 
-		resp, err := callToolAPI(cfg, messages, tools)
+		activeTools := tools
+		if !mutationObserved {
+			activeTools = preMutationTools(cfg, activeTools)
+		}
+		if failedEditRecoveryAvailable {
+			activeTools = toolsByName([]string{"read", "edit"})
+		} else if !mutationObserved && (blockedReconBatchesBeforeMutation > 0 || protectedWriteBatchesBeforeMutation > 0 || scopeViolationBatchesBeforeMutation > 0) {
+			activeTools = mutationOnlyTools(cfg, tools)
+		}
+		resp, err := callToolAPI(cfg, messages, activeTools)
 		if err != nil {
 			stopReason := ""
 			if isTimeoutError(err) {
@@ -236,6 +309,9 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 
 		totalTokensIn += resp.Usage.PromptTokens
 		totalTokensOut += resp.Usage.CompletionTokens
+		if resp.Usage.PromptTokens > peakRequestInput {
+			peakRequestInput = resp.Usage.PromptTokens
+		}
 
 		// Context monitor: derive current usage from the most recent
 		// prompt_tokens. PromptTokens reflects the size of the inbound
@@ -282,7 +358,17 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		// context_limit even if usage already crossed the stop threshold.
 		if choice.FinishReason == "stop" || choice.FinishReason == "end_of_turn" {
 			writeTrace(cfg.TraceWriter, traceEvent)
-			if !mutationObserved && cfg.MaxInputTokensBeforeMutation > 0 && totalTokensIn >= cfg.MaxInputTokensBeforeMutation {
+			if err := persistJournal(iteration+1, true, &traceEvent); err != nil {
+				return nil, err
+			}
+			if !cfg.AllowReadOnlyCompletion && !mutationObserved && strings.HasPrefix(strings.TrimSpace(choice.Message.Content), "BLOCKED:") {
+				return &DirectToolAgentResult{
+					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+					StopReason: DirectToolStopReasonNoProgress, PeakRequestInput: peakRequestInput, ResumedTurns: resumedTurns, FoldedBytes: foldedBytes,
+				}, fmt.Errorf("agent reported typed blocker: %s", strings.TrimSpace(choice.Message.Content))
+			}
+			if !cfg.AllowReadOnlyCompletion && !mutationObserved && cfg.MaxInputTokensBeforeMutation > 0 && totalTokensIn >= cfg.MaxInputTokensBeforeMutation {
 				return &DirectToolAgentResult{
 					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
 					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
@@ -298,6 +384,9 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				Duration:         time.Since(start),
 				FinalContextPct:  finalPct,
 				MutationObserved: mutationObserved,
+				PeakRequestInput: peakRequestInput,
+				ResumedTurns:     resumedTurns,
+				FoldedBytes:      foldedBytes,
 			}
 
 			// Write output file if requested.
@@ -328,6 +417,24 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 
 		// If the model wants to call tools, execute them.
 		if choice.FinishReason == "tool_calls" || len(choice.Message.ToolCalls) > 0 {
+			for i := range choice.Message.ToolCalls {
+				repaired, ok := repairMalformedScopedMutation(choice.Message.ToolCalls[i], cfg.ScopedFiles)
+				if !ok {
+					continue
+				}
+				slog.Warn("direct tool agent: repaired malformed scoped mutation call",
+					"iteration", iteration,
+					"original_tool", choice.Message.ToolCalls[i].Function.Name,
+					"tool", repaired.Function.Name,
+					"path", toolCallPath(repaired.Function.Arguments),
+				)
+				choice.Message.ToolCalls[i] = repaired
+			}
+			blockedReconThisBatch := false
+			protectedWriteThisBatch := false
+			scopeViolationThisBatch := false
+			failedEditRecoveryReadThisBatch := false
+			failedMutationStopReason := ""
 			// Per-turn cap: if the model emits more than maxToolCallsPerTurn
 			// calls, only keep the first N and stub the rest. This prevents
 			// degenerate generation (observed: model starts paginating a file
@@ -374,6 +481,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				slog.Info("direct tool agent: executing tool",
 					"iteration", iteration,
 					"tool", tc.Function.Name,
+					"path", toolCallPath(tc.Function.Arguments),
 					"call_id", tc.ID,
 				)
 
@@ -404,23 +512,59 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 
 				var result string
 				var toolErr error
-				scopedBashBeforeMutation := !mutationObserved && tc.Function.Name == "bash" && cfg.MaxReadsBeforeMutation > 0
-				reconnaissance := !mutationObserved && (scopedBashBeforeMutation || isReconnaissanceToolCall(tc.Function.Name, tc.Function.Arguments))
-				reconBudgetReached := reconnaissance && cfg.MaxReadsBeforeMutation > 0 &&
+				reconnaissance := !mutationObserved && isReconnaissanceToolCall(tc.Function.Name, tc.Function.Arguments)
+				unavailableBeforeMutation := !mutationObserved && !toolIsAvailable(activeTools, tc.Function.Name)
+				recoveryRead := failedEditRecoveryAvailable && tc.Function.Name == "read" &&
+					toolCallTargetsPath(tc.Function.Arguments, failedEditRecoveryPath)
+				reconBudgetReached := !recoveryRead && !cfg.AllowReadOnlyCompletion && reconnaissance && cfg.MaxReadsBeforeMutation > 0 &&
 					reconnaissanceBeforeMutation >= cfg.MaxReadsBeforeMutation
-				inputBudgetReached := reconnaissance && cfg.MaxInputTokensBeforeMutation > 0 &&
+				inputBudgetReached := !recoveryRead && !cfg.AllowReadOnlyCompletion && reconnaissance && cfg.MaxInputTokensBeforeMutation > 0 &&
 					totalTokensIn >= cfg.MaxInputTokensBeforeMutation
-				blockedRecon := scopedBashBeforeMutation || reconBudgetReached || inputBudgetReached
-				if blockedRecon {
-					blockedReconBeforeMutation++
+				finalScopedRead := !recoveryRead && !finalScopedReadGranted && tc.Function.Name == "read" &&
+					(reconBudgetReached || inputBudgetReached) && toolCallTargetsAnyPath(cfg.WorkDir, tc.Function.Arguments, cfg.ScopedFiles)
+				blockedRecon := (reconBudgetReached || inputBudgetReached) && !finalScopedRead
+				protectedWrite := cfg.ProtectExistingFiles && tc.Function.Name == "write" && writeTargetsExistingFile(cfg.WorkDir, tc.Function.Arguments)
+				outOfScopeMutation := mutationTargetsOutsideScope(cfg.WorkDir, tc.Function.Name, tc.Function.Arguments, cfg.ScopedFiles)
+				if unavailableBeforeMutation {
+					blockedReconCallsBeforeMutation++
+					blockedReconThisBatch = true
+					result = fmt.Sprintf("[HARNESS: Tool %q is unavailable before the first scoped mutation. Use structured read only for missing source detail, then edit/write an authorized path. Shell verification becomes available after a mutation checkpoint.]", tc.Function.Name)
+				} else if outOfScopeMutation {
+					scopeViolationCallsBeforeMutation++
+					scopeViolationThisBatch = true
+					result = fmt.Sprintf("[HARNESS: Mutation refused because %q is outside this worker's writable scope. Authorized paths: %s. Read-only inspection of adjacent files is allowed, but edit/write must stay within this exact list.]",
+						toolCallPath(tc.Function.Arguments), strings.Join(cfg.ScopedFiles, ", "))
+				} else if protectedWrite {
+					protectedWriteCallsBeforeMutation++
+					protectedWriteThisBatch = true
+					result = "[HARNESS: Whole-file write refused because this path already exists. Preserve established coverage and use edit with an exact existing substring. The write tool remains available for genuinely new files.]"
+				} else if blockedRecon {
+					blockedReconCallsBeforeMutation++
+					blockedReconThisBatch = true
 					result = fmt.Sprintf("[HARNESS: Scoped reconnaissance stopped (used=%d limit=%d, input=%d/%d). "+
-						"Shell commands are not allowed before the first mutation. Use the declared files and planned interface contract; your next call must be edit or write.]",
+						"The pre-mutation discovery budget is exhausted. Use the declared files and planned interface contract; your next call must be edit or write.]",
 						reconnaissanceBeforeMutation, cfg.MaxReadsBeforeMutation, totalTokensIn, cfg.MaxInputTokensBeforeMutation)
 				} else {
 					result, toolErr = exec.execute(tc.Function.Name, tc.Function.Arguments)
 					if (tc.Function.Name == "edit" || tc.Function.Name == "write") && toolErr == nil {
 						mutationObserved = true
+						failedEditRecoveryAvailable = false
+						failedMutationLoops.Reset()
 					}
+					if tc.Function.Name == "edit" && toolErr != nil && !failedEditRecoveryGranted && editErrorIsRecoverable(toolErr) {
+						failedEditRecoveryPath = toolCallPath(tc.Function.Arguments)
+						failedEditRecoveryAvailable = failedEditRecoveryPath != ""
+						failedEditRecoveryGranted = failedEditRecoveryAvailable
+					}
+				}
+				if finalScopedRead {
+					finalScopedReadGranted = true
+					blockedReconThisBatch = true
+					result += "\n\n[HARNESS] This was the single scoped final-look read. The next turn is edit-only; use this exact content to make the planned mutation."
+				}
+				if recoveryRead && !blockedRecon {
+					failedEditRecoveryAvailable = false
+					failedEditRecoveryReadThisBatch = true
 				}
 				if reconnaissance && !blockedRecon {
 					reconnaissanceBeforeMutation++
@@ -432,6 +576,12 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				if toolErr != nil {
 					traceCall.Error = toolErr.Error()
 					result = "ERROR: " + toolErr.Error()
+					if count := failedMutationLoops.Observe(tc.Function.Name, tc.Function.Arguments, toolErr.Error()); count == 2 {
+						result += "\n\n[HARNESS] This exact mutation has now failed twice with the same error, even across intervening reads. Change the mutation arguments; do not repeat this call."
+					} else if count >= 3 {
+						failedMutationStopReason = fmt.Sprintf("identical %s mutation failed %d times across interleaved calls: %s", tc.Function.Name, count, toolErr.Error())
+						result += "\n\n[HARNESS] Stopping this no-progress cycle after the third identical failed mutation."
+					}
 				}
 
 				// File re-read tracker: warn when the same file is read
@@ -457,6 +607,20 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				// We store the pre-note result in prevToolOut so the comparison
 				// fires every consecutive repeat, not just every other one.
 				preNoteResult := result
+				decision, semanticReason := semanticRecoveryNone, ""
+				if !unavailableBeforeMutation && !blockedRecon && !protectedWrite && !outOfScopeMutation {
+					decision, semanticReason = semanticLoops.Observe(curKey, preNoteResult)
+				}
+				if !mutationObserved && decision == semanticRecoveryRehydrate {
+					result += "\n\n[HARNESS SEMANTIC RECOVERY: " + semanticReason + ". The exact task contract and latest scoped artifact remain authoritative. Do not repeat discovery. Your next response must mutate an authorized path or respond `BLOCKED: <concrete missing fact>`."
+				} else if !mutationObserved && decision == semanticRecoveryStop {
+					writeTrace(cfg.TraceWriter, traceEvent)
+					return &DirectToolAgentResult{
+						Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+						Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+						StopReason: DirectToolStopReasonNoProgress, PeakRequestInput: peakRequestInput, ResumedTurns: resumedTurns, FoldedBytes: foldedBytes,
+					}, fmt.Errorf("semantic no-progress detector: %s", semanticReason)
+				}
 				if curKey == prevToolKey && result == prevToolOut {
 					consecutiveRepeats++
 					slog.Warn("direct tool agent: loop detector triggered",
@@ -512,13 +676,68 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				})
 			}
 			writeTrace(cfg.TraceWriter, traceEvent)
-			if !mutationObserved && blockedReconBeforeMutation >= 2 {
+			if blockedReconThisBatch {
+				blockedReconBatchesBeforeMutation++
+			}
+			if protectedWriteThisBatch {
+				protectedWriteBatchesBeforeMutation++
+			}
+			if scopeViolationThisBatch {
+				scopeViolationBatchesBeforeMutation++
+			}
+			if (blockedReconThisBatch || protectedWriteThisBatch || scopeViolationThisBatch) && !mutationOnlyNudgeInjected {
+				messages = append(messages, toolChatMsg{
+					Role:    "system",
+					Content: "[HARNESS] The next turn is mutation-only. Read, search, and shell tools are intentionally unavailable. Use edit for an existing file; write is available only when an authorized path is genuinely new.",
+				})
+				mutationOnlyNudgeInjected = true
+			}
+			if failedEditRecoveryAvailable {
+				messages = append(messages, toolChatMsg{
+					Role:    "system",
+					Content: fmt.Sprintf("[HARNESS] Your surgical edit did not match. You have one recovery read of %s, followed by an edit-only turn. Read only that file and then retry with an exact unique substring.", failedEditRecoveryPath),
+				})
+			}
+			if err := persistJournal(iteration+1, false, &traceEvent); err != nil {
+				return nil, err
+			}
+			if failedMutationStopReason != "" {
+				return &DirectToolAgentResult{
+					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+					StopReason: DirectToolStopReasonNoProgress, MutationObserved: mutationObserved,
+					PeakRequestInput: peakRequestInput, ResumedTurns: resumedTurns, FoldedBytes: foldedBytes,
+				}, fmt.Errorf("failed-mutation no-progress detector: %s", failedMutationStopReason)
+			}
+			// Count denied reconnaissance by assistant response, not by raw tool
+			// call. Models commonly emit paired reads in a single response. Failing
+			// after the second denied call meant the process exited before the model
+			// ever received the harness results telling it to mutate. One complete
+			// corrective response is allowed; a second response that still contains
+			// denied reconnaissance is genuine refusal to make progress.
+			if !cfg.AllowReadOnlyCompletion && !mutationObserved && blockedReconBatchesBeforeMutation >= 2 {
 				return &DirectToolAgentResult{
 						Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
 						Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
 						StopReason: DirectToolStopReasonNoProgress,
-					}, fmt.Errorf("scoped agent refused to mutate after %d reconnaissance calls and %d blocked attempts",
-						reconnaissanceBeforeMutation, blockedReconBeforeMutation)
+					}, fmt.Errorf("scoped agent refused to mutate after %d reconnaissance calls, %d blocked calls, and %d blocked response batches",
+						reconnaissanceBeforeMutation, blockedReconCallsBeforeMutation, blockedReconBatchesBeforeMutation)
+			}
+			if !cfg.AllowReadOnlyCompletion && !mutationObserved && protectedWriteBatchesBeforeMutation >= 2 {
+				return &DirectToolAgentResult{
+						Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+						Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+						StopReason: DirectToolStopReasonNoProgress,
+					}, fmt.Errorf("scoped agent refused surgical editing after %d protected whole-file writes in %d response batches",
+						protectedWriteCallsBeforeMutation, protectedWriteBatchesBeforeMutation)
+			}
+			if !cfg.AllowReadOnlyCompletion && !mutationObserved && scopeViolationBatchesBeforeMutation >= 2 {
+				return &DirectToolAgentResult{
+						Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+						Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+						StopReason: DirectToolStopReasonNoProgress,
+					}, fmt.Errorf("scoped agent attempted %d out-of-scope mutations in %d response batches without an authorized mutation",
+						scopeViolationCallsBeforeMutation, scopeViolationBatchesBeforeMutation)
 			}
 
 			if cfg.MaxToolCalls > 0 && totalToolCalls >= cfg.MaxToolCalls {
@@ -527,12 +746,15 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
 					StopReason: DirectToolStopReasonToolBudget, MutationObserved: mutationObserved,
 				}
-				if mutationObserved {
+				if mutationObserved || cfg.AllowReadOnlyCompletion {
 					return result, nil
 				}
 				return result, fmt.Errorf("tool-call budget reached without a mutation checkpoint: %d/%d", totalToolCalls, cfg.MaxToolCalls)
 			}
-			if !mutationObserved && cfg.MaxInputTokensBeforeMutation > 0 && totalTokensIn >= cfg.MaxInputTokensBeforeMutation {
+			// If this response was the first blocked reconnaissance batch, return
+			// its tool results to the model before enforcing the input ceiling. The
+			// next response must mutate; a second blocked batch fails above.
+			if !cfg.AllowReadOnlyCompletion && !mutationObserved && !blockedReconThisBatch && !protectedWriteThisBatch && !scopeViolationThisBatch && !failedEditRecoveryAvailable && !failedEditRecoveryReadThisBatch && cfg.MaxInputTokensBeforeMutation > 0 && totalTokensIn >= cfg.MaxInputTokensBeforeMutation {
 				return &DirectToolAgentResult{
 					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
 					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
@@ -546,7 +768,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
 					StopReason: DirectToolStopReasonTokenBudget, MutationObserved: mutationObserved,
 				}
-				if mutationObserved {
+				if mutationObserved || cfg.AllowReadOnlyCompletion {
 					return result, nil
 				}
 				return result, fmt.Errorf("cumulative input token budget reached without a mutation checkpoint: %d/%d", totalTokensIn, cfg.MaxCumulativeInputTokens)
@@ -593,7 +815,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
 				StopReason: DirectToolStopReasonTokenBudget, MutationObserved: mutationObserved,
 			}
-			if mutationObserved {
+			if mutationObserved || cfg.AllowReadOnlyCompletion {
 				return result, nil
 			}
 			return result, fmt.Errorf("cumulative input token budget reached without a mutation checkpoint: %d/%d", totalTokensIn, cfg.MaxCumulativeInputTokens)
@@ -658,42 +880,4 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		FinalContextPct: finalPct,
 		StopReason:      DirectToolStopReasonMaxIterations,
 	}, fmt.Errorf("exceeded max iterations (%d)", maxIter)
-}
-
-func isTimeoutError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if os.IsTimeout(err) || errors.Is(err, context.DeadlineExceeded) {
-		return true
-	}
-	var netErr net.Error
-	return errors.As(err, &netErr) && netErr.Timeout()
-}
-
-// truncateForStub clamps a result string to n characters so dedup stubs do
-// not blow the context when the original result was large. Used when a
-// duplicate tool call is elided — the second+ result just points back at the
-// first and does not need the full body repeated.
-func truncateForStub(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "\n[...truncated]"
-}
-
-// writeTrace emits one JSON-line TraceEvent if the trace writer is configured.
-// Failures are logged but never surface — tracing is strictly opt-in diagnostic.
-func writeTrace(w io.Writer, ev TraceEvent) {
-	if w == nil {
-		return
-	}
-	data, err := json.Marshal(ev)
-	if err != nil {
-		slog.Warn("direct tool agent: trace marshal failed", "err", err)
-		return
-	}
-	if _, err := w.Write(append(data, '\n')); err != nil {
-		slog.Warn("direct tool agent: trace write failed", "err", err)
-	}
 }

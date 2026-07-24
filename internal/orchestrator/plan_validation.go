@@ -12,6 +12,8 @@ import (
 // exempted from TDD before a plan-level warning is raised.
 const maxTDDExceptionRatio = 0.5
 
+const maxImplementationOwnedFiles = 2
+
 // PlanValidationResult contains the outcome of validating a plan.
 type PlanValidationResult struct {
 	Valid    bool     `json:"valid"`
@@ -54,7 +56,7 @@ func ValidatePlan(subtasks []planEntry, exceptions []tddException) PlanValidatio
 	// 3. File overlap detection.
 	overlaps := computeFileOverlaps(subtasks)
 	for _, overlap := range overlaps {
-		if !hasDependency(subtasks, overlap.SubtaskA, overlap.SubtaskB) {
+		if !hasDependencyPath(subtasks, overlap.SubtaskA, overlap.SubtaskB) {
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("Subtasks %d and %d overlap on [%s] but have no dependency — they will be serialized",
 					overlap.SubtaskA, overlap.SubtaskB, strings.Join(overlap.Files, ", ")))
@@ -70,7 +72,16 @@ func ValidatePlan(subtasks []planEntry, exceptions []tddException) PlanValidatio
 			"Dependency cycle detected in subtask dependencies")
 	}
 
-	// 6. TDD validation (only if at least one subtask has a non-empty Phase).
+	// 6. writable_files narrows only integration mutation scope. It cannot be
+	// used by another phase to bypass that phase's exclusive file ownership.
+	validateWritableFileScopes(subtasks, &result)
+
+	// 7. Keep implementation work at one semantic ownership boundary. Legacy
+	// plans without depth metadata remain readable, but any declared boundaries
+	// must already satisfy the current one-boundary contract.
+	validateImplementationGranularity(subtasks, &result)
+
+	// 8. TDD validation (only if at least one subtask has a non-empty Phase).
 	if hasTDDPhases(subtasks) {
 		validateTDD(subtasks, exceptions, &result)
 	} else {
@@ -78,7 +89,7 @@ func ValidatePlan(subtasks []planEntry, exceptions []tddException) PlanValidatio
 		validateLegacyTestOrdering(subtasks, &result)
 	}
 
-	// 7. Documentation coverage heuristic.
+	// 9. Documentation coverage heuristic.
 	if !planTouchesDocFiles(subtasks) {
 		result.Warnings = append(result.Warnings,
 			"No subtask lists documentation files (README, docs/) — if this feature "+
@@ -87,6 +98,69 @@ func ValidatePlan(subtasks []planEntry, exceptions []tddException) PlanValidatio
 
 	result.Valid = len(result.Errors) == 0
 	return result
+}
+
+func validateWritableFileScopes(subtasks []planEntry, result *PlanValidationResult) {
+	for index, subtask := range subtasks {
+		if len(subtask.WritableFiles) == 0 {
+			continue // omitted: legacy fallback to Files
+		}
+		if subtask.Phase != "integration" {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("Subtask %d ('%s') sets writable_files outside integration", index, subtask.Title))
+			continue
+		}
+		declared := make(map[string]struct{}, len(allFiles(subtask)))
+		for _, file := range allFiles(subtask) {
+			declared[file] = struct{}{}
+		}
+		seen := make(map[string]struct{}, len(subtask.WritableFiles))
+		for _, file := range subtask.WritableFiles {
+			if strings.TrimSpace(file) == "" {
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("Integration subtask %d ('%s') has a blank writable_files entry", index, subtask.Title))
+				continue
+			}
+			if _, ok := declared[file]; !ok {
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("Integration subtask %d ('%s') writable file %q is not in files", index, subtask.Title, file))
+			}
+			if _, duplicate := seen[file]; duplicate {
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("Integration subtask %d ('%s') duplicates writable file %q", index, subtask.Title, file))
+			}
+			seen[file] = struct{}{}
+		}
+	}
+}
+
+func validateImplementationGranularity(subtasks []planEntry, result *PlanValidationResult) {
+	owners := make(map[string]int)
+	for index, subtask := range subtasks {
+		if subtask.Phase != "implementation" {
+			continue
+		}
+		files := allFiles(subtask)
+		if len(files) > maxImplementationOwnedFiles {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("Implementation subtask %d ('%s') owns %d files; split it into semantic contracts of at most %d files",
+					index, subtask.Title, len(files), maxImplementationOwnedFiles))
+		}
+		if len(subtask.ModuleBoundaries) > 1 {
+			result.Errors = append(result.Errors,
+				fmt.Sprintf("Implementation subtask %d ('%s') declares %d module boundaries; split it so each implementation owns one",
+					index, subtask.Title, len(subtask.ModuleBoundaries)))
+		}
+		for _, file := range files {
+			if owner, exists := owners[file]; exists {
+				result.Errors = append(result.Errors,
+					fmt.Sprintf("Implementation subtasks %d and %d both own file %q; use one semantic owner and integration for assembly",
+						owner, index, file))
+				continue
+			}
+			owners[file] = index
+		}
+	}
 }
 
 // hasTDDPhases returns true if at least one subtask has a non-empty Phase field.
@@ -385,7 +459,7 @@ func containsInt(slice []int, val int) bool {
 func computeFileOverlaps(subtasks []planEntry) []fileOverlap {
 	var overlaps []fileOverlap
 	for i := 0; i < len(subtasks); i++ {
-		filesI := allFiles(subtasks[i])
+		filesI := writablePlanFiles(subtasks[i])
 		if len(filesI) == 0 {
 			continue
 		}
@@ -395,7 +469,7 @@ func computeFileOverlaps(subtasks []planEntry) []fileOverlap {
 		}
 
 		for j := i + 1; j < len(subtasks); j++ {
-			filesJ := allFiles(subtasks[j])
+			filesJ := writablePlanFiles(subtasks[j])
 			var shared []string
 			for _, f := range filesJ {
 				if setI[f] {
@@ -423,6 +497,17 @@ func allFiles(entry planEntry) []string {
 	return entry.EstimatedFiles
 }
 
+// writablePlanFiles returns the worker mutation scope. Files remains the
+// complete read/merge/verify declaration, while integration may opt into a
+// smaller writable_files list. Parsed legacy plans deliberately fall back to
+// Files so existing behavior is unchanged.
+func writablePlanFiles(entry planEntry) []string {
+	if len(entry.WritableFiles) > 0 {
+		return entry.WritableFiles
+	}
+	return allFiles(entry)
+}
+
 // hasDependency checks whether subtask a depends on b or b depends on a.
 func hasDependency(subtasks []planEntry, a, b int) bool {
 	for _, dep := range subtasks[a].Dependencies {
@@ -436,6 +521,34 @@ func hasDependency(subtasks []planEntry, a, b int) bool {
 		}
 	}
 	return false
+}
+
+// hasDependencyPath reports whether either subtask is explicitly sequenced
+// after the other, including through intermediate subtasks. A direct edge is
+// insufficient for a plan such as test A -> shared fixture -> test B.
+func hasDependencyPath(subtasks []planEntry, a, b int) bool {
+	return dependsOnPath(subtasks, a, b) || dependsOnPath(subtasks, b, a)
+}
+
+func dependsOnPath(subtasks []planEntry, from, target int) bool {
+	seen := make(map[int]struct{}, len(subtasks))
+	var visit func(int) bool
+	visit = func(current int) bool {
+		if current < 0 || current >= len(subtasks) || current == target {
+			return current == target
+		}
+		if _, ok := seen[current]; ok {
+			return false
+		}
+		seen[current] = struct{}{}
+		for _, dependency := range subtasks[current].Dependencies {
+			if visit(dependency) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(from)
 }
 
 // hasCycle detects cycles in the dependency graph using iterative DFS.

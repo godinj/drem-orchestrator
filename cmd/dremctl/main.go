@@ -21,9 +21,9 @@ import (
 	"github.com/godinj/drem-orchestrator/pkg/projectconfig"
 )
 
-const usage = `usage: dremctl [--orch-url URL] [--orch-token TOKEN] [--actor ID] [--project NAME] [--json] <command> [args]
+const usage = `usage: dremctl [--orch-url URL] [--orch-unix-socket PATH] [--orch-token TOKEN] [--actor ID] [--project NAME] [--json] <command> [args]
 
-HTTP-only C-Suite persona CLI. Defaults come from DREM_ORCH_URL and DREM_PROJECT.
+HTTP C-Suite persona CLI. Defaults come from DREM_ORCH_URL, DREM_ORCH_UNIX_SOCKET, and DREM_PROJECT.
 
 Commands:
   projects
@@ -40,7 +40,7 @@ Commands:
   create-task (--title TEXT --description TEXT | --spec FILE|JSON)
   file-task (--title TEXT --description TEXT | --spec FILE|JSON)
   approve <task-id-prefix>
-  reject <task-id-prefix> [--reason TEXT]
+  reject <task-id-prefix> [--reason TEXT]          reject the current review and return the task to planning
   revise-plan <task-id-prefix> --spec FILE|JSON --reason TEXT [--idempotency-key KEY]
   artifact <task-id-prefix>
   report <task-id-prefix>                       correlated phase/token/evidence report
@@ -57,7 +57,8 @@ Commands:
   retry <task-id-prefix> [--idempotency-key KEY]
   resume <task-id-prefix>                        restore a diagnostic pause to its recorded phase
   adopt <failed-child-id-prefix> --commit SHA [--idempotency-key KEY]
-  archive <task-id-prefix> --reason TEXT [--actor TEXT]
+  continue-checkpoint <failed-child-id-prefix> --commit SHA [--idempotency-key KEY]
+  archive <task-id-prefix> --reason TEXT [--actor TEXT]  terminally cancel an obsolete/non-running task
   comment <task-id-prefix> --body TEXT
   recover stale-assignment <task-id-prefix> (--dry-run|--apply)
   kyle recover [--mission-file PATH] (--dry-run|--apply)
@@ -66,11 +67,12 @@ Commands:
 const taskPageLimit = 500
 
 type cliConfig struct {
-	orchURL   string
-	orchToken string
-	actor     string
-	project   string
-	json      bool
+	orchURL        string
+	orchUnixSocket string
+	orchToken      string
+	actor          string
+	project        string
+	json           bool
 }
 
 type envLookup func(string) string
@@ -99,11 +101,17 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 		fmt.Fprint(stdout, usage)
 		return nil
 	}
-	if strings.TrimSpace(cfg.orchURL) == "" {
-		return errors.New("DREM_ORCH_URL is required, or pass --orch-url")
+	if strings.TrimSpace(cfg.orchURL) == "" && strings.TrimSpace(cfg.orchUnixSocket) == "" {
+		return errors.New("DREM_ORCH_URL or DREM_ORCH_UNIX_SOCKET is required")
 	}
 
-	client := orchclient.New(cfg.orchURL).WithToken(cfg.orchToken).WithActor(cfg.actor)
+	var client *orchclient.Client
+	if socketPath := strings.TrimSpace(cfg.orchUnixSocket); socketPath != "" {
+		client = orchclient.NewUnix(socketPath)
+	} else {
+		client = orchclient.New(cfg.orchURL)
+	}
+	client.WithToken(cfg.orchToken).WithActor(cfg.actor)
 	command, commandArgs := rest[0], rest[1:]
 	switch command {
 	case "projects":
@@ -154,7 +162,7 @@ func run(ctx context.Context, args []string, getenv envLookup, stdout, stderr io
 			return err
 		}
 		return handleCreateTask(ctx, client, cfg, command, commandArgs, stdout)
-	case "approve", "reject", "pass", "fail", "answer", "accept-assumptions", "retry", "resume", "adopt", "archive", "comment":
+	case "approve", "reject", "pass", "fail", "answer", "accept-assumptions", "retry", "resume", "adopt", "continue-checkpoint", "archive", "comment":
 		if err := requireProject(cfg); err != nil {
 			return err
 		}
@@ -255,10 +263,11 @@ func resolveLocalProjectConfig(cfg cliConfig, getenv envLookup) (cliConfig, erro
 
 func parseGlobalFlags(args []string, getenv envLookup) (cliConfig, []string, error) {
 	cfg := cliConfig{
-		orchURL:   getenv("DREM_ORCH_URL"),
-		orchToken: getenv("DREM_ORCH_TOKEN"),
-		actor:     getenv("DREM_ACTOR"),
-		project:   getenv("DREM_PROJECT"),
+		orchURL:        getenv("DREM_ORCH_URL"),
+		orchUnixSocket: getenv("DREM_ORCH_UNIX_SOCKET"),
+		orchToken:      getenv("DREM_ORCH_TOKEN"),
+		actor:          getenv("DREM_ACTOR"),
+		project:        getenv("DREM_PROJECT"),
 	}
 	var rest []string
 	for i := 0; i < len(args); i++ {
@@ -274,6 +283,14 @@ func parseGlobalFlags(args []string, getenv envLookup) (cliConfig, []string, err
 			cfg.orchURL = args[i]
 		case strings.HasPrefix(arg, "--orch-url="):
 			cfg.orchURL = strings.TrimPrefix(arg, "--orch-url=")
+		case arg == "--orch-unix-socket":
+			i++
+			if i >= len(args) {
+				return cfg, nil, errors.New("--orch-unix-socket requires a value")
+			}
+			cfg.orchUnixSocket = args[i]
+		case strings.HasPrefix(arg, "--orch-unix-socket="):
+			cfg.orchUnixSocket = strings.TrimPrefix(arg, "--orch-unix-socket=")
 		case arg == "--orch-token":
 			i++
 			if i >= len(args) {
@@ -651,7 +668,7 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 			return err
 		}
 	}
-	if command == "adopt" {
+	if command == "adopt" || command == "continue-checkpoint" {
 		commitSHA, args, err = parseStringOption(args, "commit")
 		if err != nil {
 			return err
@@ -703,6 +720,12 @@ func handleMutation(ctx context.Context, client *orchclient.Client, cfg cliConfi
 			dto, err = client.AdoptFailedChild(ctx, cfg.project, taskID, commitSHA)
 		} else {
 			dto, err = client.AdoptFailedChildWithIdempotencyKey(ctx, cfg.project, taskID, commitSHA, idempotencyKey)
+		}
+	case "continue-checkpoint":
+		if idempotencyKey == "" {
+			dto, err = client.ResumeFailedCheckpoint(ctx, cfg.project, taskID, commitSHA)
+		} else {
+			dto, err = client.ResumeFailedCheckpointWithIdempotencyKey(ctx, cfg.project, taskID, commitSHA, idempotencyKey)
 		}
 	case "archive":
 		dto, err = client.Archive(ctx, cfg.project, taskID, reason, actor)
@@ -1135,6 +1158,8 @@ func mutationUsage(command string) string {
 		return "resume <task-id-prefix>"
 	case "adopt":
 		return "adopt <failed-child-id-prefix> --commit SHA [--idempotency-key KEY]"
+	case "continue-checkpoint":
+		return "continue-checkpoint <failed-child-id-prefix> --commit SHA [--idempotency-key KEY]"
 	case "create", "create-task", "file-task":
 		return command + " (--title TEXT --description TEXT | --spec FILE|JSON)"
 	default:

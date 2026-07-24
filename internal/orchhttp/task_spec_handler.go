@@ -283,6 +283,7 @@ func normalizeTaskSpec(spec *orchdto.TaskSpecDTO) {
 			}
 			sub.Phase = strings.ToLower(strings.TrimSpace(sub.Phase))
 			trimStrings(sub.Files)
+			trimStrings(sub.WritableFiles)
 			for j := range sub.ModuleBoundaries {
 				boundary := &sub.ModuleBoundaries[j]
 				boundary.Package = strings.TrimSpace(boundary.Package)
@@ -469,6 +470,7 @@ func validateExecutionPlan(planDTO orchdto.TaskExecutionPlanDTO, proposedScope [
 	}
 
 	implCoverage := make(map[int]int)
+	implementationFileOwners := make(map[string]int)
 	var implIndices []int
 	integrationIndex := -1
 	for i, sub := range planDTO.Subtasks {
@@ -497,6 +499,27 @@ func validateExecutionPlan(planDTO orchdto.TaskExecutionPlanDTO, proposedScope [
 			}
 			seenFiles[file] = struct{}{}
 		}
+		if len(sub.WritableFiles) > 0 {
+			if sub.Phase != "integration" {
+				return fmt.Errorf("subtasks[%d].writable_files is only allowed for integration subtasks", i)
+			}
+			seenWritable := map[string]struct{}{}
+			for j, file := range sub.WritableFiles {
+				if err := validatePlanPath(file); err != nil {
+					return fmt.Errorf("subtasks[%d].writable_files[%d]: %w", i, j, err)
+				}
+				if _, ok := scope[file]; !ok {
+					return fmt.Errorf("subtasks[%d].writable_files[%d] %q is outside proposed_scope", i, j, file)
+				}
+				if _, ok := seenFiles[file]; !ok {
+					return fmt.Errorf("subtasks[%d].writable_files[%d] %q is not a subset of files", i, j, file)
+				}
+				if _, exists := seenWritable[file]; exists {
+					return fmt.Errorf("subtasks[%d].writable_files path %q is duplicated", i, file)
+				}
+				seenWritable[file] = struct{}{}
+			}
+		}
 		for _, dep := range sub.Dependencies {
 			if dep < 0 || dep >= len(planDTO.Subtasks) || dep == i {
 				return fmt.Errorf("subtasks[%d] has invalid dependency index %d", i, dep)
@@ -523,6 +546,12 @@ func validateExecutionPlan(planDTO orchdto.TaskExecutionPlanDTO, proposedScope [
 			if len(sub.TestsFor) > 0 {
 				return fmt.Errorf("implementation subtask %d cannot set tests_for", i)
 			}
+			for _, file := range sub.Files {
+				if owner, exists := implementationFileOwners[file]; exists {
+					return fmt.Errorf("implementation subtasks %d and %d both own file %q; assign one semantic owner and move cross-boundary assembly to integration", owner, i, file)
+				}
+				implementationFileOwners[file] = i
+			}
 			if err := validateImplementationDepth(i, sub, scope); err != nil {
 				return err
 			}
@@ -538,6 +567,9 @@ func validateExecutionPlan(planDTO orchdto.TaskExecutionPlanDTO, proposedScope [
 	}
 	if hasPlanCycle(planDTO.Subtasks) {
 		return errors.New("dependency cycle detected")
+	}
+	if err := validateWritableFileSerialization(planDTO.Subtasks); err != nil {
+		return err
 	}
 	exceptions := map[int]struct{}{}
 	for i, exception := range planDTO.TDDExceptions {

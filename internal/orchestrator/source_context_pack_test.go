@@ -41,3 +41,22 @@ func TestVerifiedSourcePacksCarryImmutableEvidenceAndPairing(t *testing.T) {
 	require.Contains(t, packs[1], "tests/test_action.cpp")
 	require.Contains(t, packs[1], "fingerprint-1")
 }
+
+func TestVerifiedSourcePackSeparatesIntegrationReadAndWriteScopes(t *testing.T) {
+	db := testutil.NewTestDB(t)
+	task := model.Task{ID: uuid.New(), ProjectID: uuid.New(), Title: "feature", Status: model.StatusPlanReview}
+	require.NoError(t, db.Create(&task).Error)
+	spec, err := json.Marshal(orchdto.TaskSpecDTO{})
+	require.NoError(t, err)
+	require.NoError(t, db.Create(&model.TaskSpecification{ID: uuid.New(), TaskID: task.ID, ProjectID: task.ProjectID, IdempotencyKey: "write-scope", SpecFingerprint: "fingerprint-2", SpecJSON: string(spec)}).Error)
+
+	packs, err := verifiedSourcePacks(db, &task, []planEntry{{
+		Title: "integrate", Phase: "integration",
+		Files:         []string{"src/ui/ActionCoordinator.cpp", "cmake/DremCanvasSources.cmake"},
+		WritableFiles: []string{"cmake/DremCanvasSources.cmake"},
+	}})
+	require.NoError(t, err)
+	require.Len(t, packs, 1)
+	require.Contains(t, packs[0], "\"owned_files\": [\n    \"cmake/DremCanvasSources.cmake\"")
+	require.Contains(t, packs[0], "\"read_files\": [\n    \"src/ui/ActionCoordinator.cpp\"")
+}

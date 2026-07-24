@@ -163,7 +163,7 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 - In-process SGLang reviewer usage is persisted as a task-correlated inference event. The task report combines those events with descendant WorkerAttempts and reports measurement coverage so pre-instrumentation zeroes are never presented as zero-cost inference.
 - Final supervising-Codex usage is accepted only as a terminal explicit-goal record (`complete` or `blocked`), with thread/actor equality and idempotent replay. Reports keep Codex goal tokens and elapsed time separate from SGLang input/output totals so subscription inference can be compared rather than estimated.
 - Direct-worker limits distinguish the model context window from cumulative replay cost. Test, implementation, integration, and review phases may receive different cumulative-input and read-before-mutation ceilings. Any already-applied mutation is preserved as a checkpoint at a ceiling and admitted only through deterministic repository gates; a budget-exhausted worker with no mutation fails closed.
-- Scoped mutation workers enforce total-tool-call and pre-mutation inference ceilings. Structured reads/searches and discovery-like bash share one reconnaissance budget, all shell commands are denied before mutation, and older large tool results are compacted without breaking assistant/tool protocol pairs.
+- Scoped mutation workers enforce total-tool-call and pre-mutation inference ceilings. The runtime reserves one full cumulative-input turn after the reconnaissance ceiling, structured reads/searches and discovery-like bash share one reconnaissance budget, all shell commands are denied before mutation, and older large tool results are compacted without breaking assistant/tool protocol pairs.
 - Every paired red-test subtask receives a semantic planned-interface contract materialized from its implementation plan plus the adapter's verified source-evidence pack. C++ symbols, registry actions, keymap routes, and call edges have distinct validation/red-state rules; action IDs cannot masquerade as callable signatures. Adapter-authored implementation plans are rejected without typed contracts or legacy interface shapes.
 - Child branch admission rejects destructive rewrites and invalid red-test checkpoints before model review. A failed child cancels dependency-blocked backlog work but allows already-running independent siblings to drain to an immutable checkpoint before the parent terminalizes.
 - A measured deployment is image-coherent: orchestrator, spawner, and selected worker image carry the same source-state attestation. Direct-agent runtime changes are not considered deployed when only the orchestrator image was rebuilt.
@@ -214,6 +214,19 @@ Prior art conventions from the existing codebase should be preserved: database f
 - **Restricting worker outbound network access.** Workers have full outbound network access initially. A scoped network policy (allowlist for package registries and the project's bare repository only) is a follow-up.
 - **TUI rewrite.** The TUI continues to function as-is, switching its data source from direct database queries to the orchestrator HTTP API. No visual or interaction changes are in scope.
 - **Retiring the `claude` CLI or `opencode` in favor of a custom agent harness.** The existing agent entry points continue to be used inside the worker containers. Only the surrounding orchestration is containerized.
+
+### Canvas weak-model reliability boundary
+
+An accepted Canvas plan is compiled into an immutable execution manifest. The
+compiler—not the reviewer—selects atomic versus decomposed ownership, freezes
+read/write scopes and dependency artifacts, derives a minimum viable budget
+from the rendered prompt, and names every deterministic delivery gate. Direct
+workers persist completed turns on a host-backed mount and resume only when the
+prompt fingerprint matches. Model-facing context folds old tool observations
+without deleting the durable journal. Semantic cycles receive one recovery
+turn and no blind retries. The executable acceptance corpus is
+`scripts/drem-canvas-orchestration-regressions.sh`; the detailed contract is
+`docs/canvas-orchestration-reliability.md`.
 - **Migration of existing in-flight tasks.** The cutover is expected to happen against a clean state (no running tasks). Any in-flight tasks at the time of migration are completed or cancelled on the old system first.
 
 ## Further Notes

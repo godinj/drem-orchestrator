@@ -6,6 +6,12 @@ set -euo pipefail
 project="${DREM_PROJECT:-canvas-local}"
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "${script_dir}/.." && pwd -P)"
+pilot_root="${DREM_CANVAS_PILOT_ROOT:-${HOME}/.drem/projects/${project}}"
+pilot_root="${pilot_root%/}"
+[[ "$pilot_root" == /* && "$pilot_root" != "/" ]] || {
+    echo "DREM_CANVAS_PILOT_ROOT must be an absolute non-root path: $pilot_root" >&2
+    exit 2
+}
 
 dremctl_cmd() {
     if command -v dremctl >/dev/null 2>&1; then
@@ -98,7 +104,7 @@ usage() {
     cat <<'EOF'
 usage: drem-canvas-pilot <doctor|start|revise|await|prepare|direct-prepare|build|verify|goal-usage|report|experiment-init|experiment-record|experiment-report|cleanup> ...
 
-  doctor [--base SHA] [--min-free-gib N]
+  doctor [--base SHA] [--min-free-gib N] [--container-disk-audit]
       Fail fast on repository, disk, cache, toolchain, and control-plane readiness.
 
   start --spec FILE
@@ -133,11 +139,12 @@ EOF
 }
 
 doctor() {
-    local base="" min_free_gib=8 bare available_kib required_kib path
+    local base="" min_free_gib=8 container_disk_audit=0 bare available_kib required_kib path
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --base) base="$2"; shift 2 ;;
             --min-free-gib) min_free_gib="$2"; shift 2 ;;
+            --container-disk-audit) container_disk_audit=1; shift ;;
             *) echo "unknown doctor argument: $1" >&2; return 2 ;;
         esac
     done
@@ -150,7 +157,7 @@ doctor() {
     if [[ -n "$base" ]]; then
         git --git-dir="$bare" cat-file -e "${base}^{commit}" 2>/dev/null || { echo "base commit is absent from registered repository: $base" >&2; return 1; }
     fi
-    for path in "${HOME}/.drem/projects/${project}" "${HOME}/.drem/projects/${project}/host-verification" "${HOME}/.drem/projects/${project}/direct-runs" "${HOME}/.drem/projects/${project}/experiments"; do
+    for path in "$pilot_root" "$pilot_root/host-verification" "$pilot_root/direct-runs" "$pilot_root/experiments"; do
         mkdir -p "$path"
         [[ -w "$path" ]] || { echo "path is not writable: $path" >&2; return 1; }
     done
@@ -159,6 +166,11 @@ doctor() {
     required_kib=$((min_free_gib * 1024 * 1024))
     (( available_kib >= required_kib )) || { echo "insufficient disk: ${available_kib} KiB available, ${required_kib} KiB required" >&2; return 1; }
     dremctl_cmd status >/dev/null
+    if (( container_disk_audit )); then
+        if ! "$repo_root/scripts/drem-container-disk.sh" audit; then
+            printf 'doctor_warning=container_disk_audit_unavailable action="rerun scripts/drem-container-disk.sh audit directly"\n' >&2
+        fi
+    fi
     printf 'doctor=ready project=%s bare_repo=%s available_kib=%s min_free_gib=%s\n' "$project" "$bare" "$available_kib" "$min_free_gib"
 }
 
@@ -174,7 +186,7 @@ direct_prepare() {
     [[ -n "$base" && "$run_id" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "direct-prepare requires --base SHA and a safe --run-id" >&2; return 2; }
     bare="$(registered_bare_repo)"
     resolved="$(git --git-dir="$bare" rev-parse "${base}^{commit}")"
-    root="${HOME}/.drem/projects/${project}/direct-runs"
+    root="$pilot_root/direct-runs"
     target="${root}/${run_id}"
     mkdir -p "$root"
     if [[ -e "$target" ]]; then
@@ -194,7 +206,7 @@ direct_prepare() {
 experiment_root() {
     local experiment_id="$1"
     [[ "$experiment_id" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "unsafe experiment id: $experiment_id" >&2; return 2; }
-    printf '%s/.drem/projects/%s/experiments/%s\n' "$HOME" "$project" "$experiment_id"
+    printf '%s/experiments/%s\n' "$pilot_root" "$experiment_id"
 }
 
 prepare() {
@@ -205,7 +217,7 @@ prepare() {
     commit="$(artifact_field "$artifact_json" commit_sha)"
     version="$(artifact_field "$artifact_json" artifact_version)"
     rm -f "$artifact_json"
-    root="${HOME}/.drem/projects/${project}/host-verification"
+    root="$pilot_root/host-verification"
     target="${root}/${task:0:8}-v${version}-${commit:0:12}"
     mkdir -p "$root"
     if [[ -e "$target" ]]; then
@@ -477,7 +489,7 @@ PY
         shift
         [[ "${1:-}" == "--worktree" && $# -eq 2 ]] || { usage >&2; exit 2; }
         target="$2"
-        root="${HOME}/.drem/projects/${project}/host-verification"
+        root="$pilot_root/host-verification"
         case "$target" in
             "$root"/*) ;;
             *) echo "refusing to remove non-pilot path: $target" >&2; exit 1 ;;

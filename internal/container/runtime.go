@@ -127,11 +127,14 @@ type Event struct {
 
 // WorkerUsage is the terminal token summary emitted by a direct worker.
 type WorkerUsage struct {
-	Iterations int    `json:"iterations"`
-	TokensIn   int    `json:"tokens_in"`
-	TokensOut  int    `json:"tokens_out"`
-	ContextPct int    `json:"context_pct,omitempty"`
-	StopReason string `json:"stop_reason"`
+	Iterations       int    `json:"iterations"`
+	TokensIn         int    `json:"tokens_in"`
+	TokensOut        int    `json:"tokens_out"`
+	ContextPct       int    `json:"context_pct,omitempty"`
+	StopReason       string `json:"stop_reason"`
+	PeakRequestInput int    `json:"peak_request_input,omitempty"`
+	ResumedTurns     int    `json:"resumed_turns,omitempty"`
+	FoldedBytes      int    `json:"folded_bytes,omitempty"`
 }
 
 // Runtime is the single I/O surface of this package. Every operation is

@@ -40,13 +40,15 @@ func GenerateDirectCoder(opts Opts) string {
 	}
 
 	if task != nil && len(task.Context) > 0 {
-		if files, ok := firstContextValue(task.Context, "estimated_files", "actual_test_files"); ok {
+		if files, ok := firstContextValue(task.Context, "writable_files", "estimated_files", "actual_test_files"); ok {
 			b.WriteString("## Files to create/modify\n\n")
 			writeFileList(&b, files)
 			b.WriteString("\n")
 		}
 		writeDirectContext(&b, task.Context, "prep_data", "Prepared context")
 		writeDirectContext(&b, task.Context, "verified_source_pack", "Verified source pack")
+		writeDirectContext(&b, task.Context, "execution_manifest", "Immutable execution manifest")
+		writeDirectContext(&b, task.Context, "accepted_execution_plan", "Accepted execution plan and API contract")
 		writeDirectContext(&b, task.Context, "planned_interface_contract", "Planned interface contract")
 		writeDirectContext(&b, task.Context, "implementation_interface_contract", "Implementation interface contract")
 		writeDirectContext(&b, task.Context, "prompt_adjustment", "Prior actionable failure")
@@ -73,14 +75,14 @@ func GenerateDirectCoder(opts Opts) string {
 	switch phase {
 	case "test":
 		if hasPlannedInterfaceContract {
-			b.WriteString("This is the TEST phase. Treat the planned interface contract and verified source pack above as authoritative, then write the focused red-state test. Follow its red_mode exactly: compile failure is valid only for listed missing C++ symbols; registry, keymap, and call-edge contracts require a compiling behavioral assertion. Exercise production APIs: do not mock the production type, fabricate headers, comment out the contract, hardcode a failure, or implement behavior.\n")
+			b.WriteString("This is the TEST phase. Treat the planned interface contract and verified source pack above as authoritative, then write every focused red-state test required by the task. A verified source excerpt is already a read: do not re-read a production file merely to recover content already present in that pack. For an existing writable test file, read that file once, without offset or limit; the harness returns up to 800 lines for a scoped dependency artifact so you can make the surgical edit from that one result. Read additional source only when a required signature or construction detail is genuinely absent. Preserve existing tests and their tags; add or minimally extend coverage instead of rewriting unrelated cases. The harness refuses whole-file write calls for existing paths, so use edit for existing test files; write remains available for new files. Follow red_mode exactly: compile failure is valid only for listed missing C++ symbols; registry, keymap routes, and call-edge contracts require a compiling behavioral assertion. For Catch2, never use [!mayfail], [!shouldfail], or another expected-failure annotation: the deterministic red gate must observe a real failing assertion. Exercise production APIs: do not mock the production type, fabricate headers, comment out the contract, hardcode a failure, or implement behavior.\n")
 		} else {
 			b.WriteString("This is the TEST phase, but no planned interface contract was supplied. Use only existing production APIs. If the task requires a new symbol, stop with a concise missing-contract result instead of searching or inventing an API.\n")
 		}
 	case "implementation":
 		b.WriteString("This is the IMPLEMENTATION phase. The implementation interface contract and verified source pack are authoritative. Read the paired test and named production seam, implement the smallest behavior that satisfies them, and do not modify tests. Read at most 6 relevant files before the first edit.\n")
 	case "integration":
-		b.WriteString("This is the INTEGRATION phase. Inspect the declared production entrypoint chain, then do only manifest/wiring/assembly work; do not broaden behavior. Read at most 6 relevant files before the first edit.\n")
+		b.WriteString("This is the INTEGRATION phase. The listed files are the writable assembly scope. The verified source pack may name additional read/merge/verify seam files; inspect them when needed but never mutate them unless they are listed above. Do only manifest/wiring/assembly work; do not broaden behavior. Read at most 6 relevant files before the first edit.\n")
 	default:
 		b.WriteString("Implement the smallest complete scoped change. Read at most 4 relevant files before the first edit.\n")
 	}
@@ -92,7 +94,10 @@ func GenerateDirectCoder(opts Opts) string {
 	} else {
 		b.WriteString("Run `go vet ./... && go test ./...` after editing.\n")
 	}
-	b.WriteString("The harness enforces a 12-call total budget and blocks all shell commands before the first mutation. Do not inventory the repository. If a check fails, make one focused repair attempt; preserve useful scoped work rather than looping.\n\n")
+	b.WriteString("The harness enforces bounded reconnaissance and total tool-call budgets. For a scoped writer, shell is unavailable before the first mutation; use the structured read tool only for genuinely missing detail, then edit or write an authorized path. Shell becomes available for one lightweight check after a checkpoint exists. Do not inventory the repository. Make the first scoped mutation early enough to leave calls for every declared file and one lightweight check. If a check fails, make one focused repair attempt; preserve useful scoped work rather than looping.\n\n")
+	if projectLanguage(opts) == "cpp" {
+		b.WriteString("Every new quoted #include must name a header grounded in the exact worktree, a neighboring source file, or the declared scoped file pair. The mutation harness rejects invented and obsolete quoted headers before writing.\n\n")
+	}
 	if projectLanguage(opts) != "cpp" {
 		b.WriteString("Test Infrastructure:\n")
 		b.WriteString("- DB: use `testutil.NewTestDB(t)`, never `gorm.Open` directly.\n")

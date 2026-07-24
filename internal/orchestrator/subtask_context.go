@@ -7,7 +7,11 @@ import (
 )
 
 func materializedSubtaskContext(sp planEntry, plans []planEntry, index int, sourcePacks []string) (model.JSONField, error) {
-	ctx := model.JSONField{"agent_type": sp.AgentType, "estimated_files": sp.EstimatedFiles}
+	ctx := model.JSONField{
+		"agent_type":      sp.AgentType,
+		"estimated_files": allFiles(sp),
+		"writable_files":  writablePlanFiles(sp),
+	}
 	if sp.Phase != "" {
 		ctx["phase"] = sp.Phase
 	}

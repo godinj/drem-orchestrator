@@ -33,7 +33,7 @@ func planReviewerInstructions(opts Opts) []string {
 		"",
 		"Evaluate the plan for:",
 		"1. **Coverage**: Does every acceptance criterion from the task description have at least one subtask addressing it?",
-		"2. **File overlap**: Do subtasks share files? High overlap means merge conflicts and serialized execution.",
+		"2. **File overlap**: Evaluate mutation overlap. Integration files is complete read/merge/verify scope; use writable_files (or files when omitted) as its write scope. A shared test file is acceptable only with an explicit dependency path that serializes the two tests.",
 		"3. **Integration**: Is there a final integration subtask that wires pieces together?",
 		"4. **Decomposition quality**: Are subtasks sized appropriately? (3-6 is typical)",
 		"5. **Dependency correctness**: Are dependencies between subtasks correct?",
@@ -45,6 +45,7 @@ func planReviewerInstructions(opts Opts) []string {
 		"10. **Depth**: Does each implementation subtask include `module_boundaries` and either typed `interface_contracts` or legacy `interface_shapes`? "+
 			"Are modules deep (rich internal logic, few exports) rather than shallow wrappers? "+
 			"Flag subtasks that lack depth metadata or define pass-through modules with no real internal logic.",
+		"11. **Granularity**: Does every implementation own exactly one semantic module boundary, at most two files, and files no other implementation owns? Keep cohesive header/implementation pairs together; move manifests, registration, and cross-boundary wiring to integration. Never ask to remove immutable missing_edges.required_files from integration files; those are required admission/read/merge/verify scope.",
 		"",
 		"## Output",
 		"",

@@ -92,7 +92,8 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 	toolCfg.GQCaller = "coder"
 	toolCfg.GQPriority = "normal"
 	toolCfg.WorkDir = featureDir
-	if sub.Context == nil || len(extractFileList(sub.Context["estimated_files"])) == 0 {
+	toolCfg.ScopedFiles = extractWritableFiles(*sub)
+	if len(toolCfg.ScopedFiles) == 0 {
 		toolCfg.MaxReadsBeforeMutation = 0
 	}
 	o.applyContextThresholds(&toolCfg)
@@ -225,7 +226,7 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 			}
 		}()
 
-		result, runErr := agent.RunDirectToolAgent(toolCfg, systemPrompt, userMessage, agent.ToolsForRole("coder"), "")
+		result, runErr := agent.RunDirectToolAgent(toolCfg, systemPrompt, userMessage, agent.ToolsForRoleScope("coder", toolCfg.ScopedFiles), "")
 		if result != nil {
 			ag.TokensIn = result.TokensIn
 			ag.TokensOut = result.TokensOut

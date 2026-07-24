@@ -15,6 +15,9 @@ type checkpointContract struct {
 	ExpectedMissingSymbols []string `json:"expected_missing_symbols"`
 	SemanticContracts      []struct {
 		Kind         string `json:"kind"`
+		State        string `json:"state"`
+		Signature    string `json:"signature"`
+		Symbol       string `json:"symbol"`
 		ActionID     string `json:"action_id"`
 		Route        string `json:"route"`
 		TargetAction string `json:"target_action"`
@@ -31,7 +34,11 @@ func testCheckpointRejections(ctx context.Context, req AcceptanceRequest, headRe
 	if err := json.Unmarshal([]byte(req.TestContract), &contract); err != nil {
 		return nil, fmt.Errorf("decode test checkpoint contract: %w", err)
 	}
-	patch, err := gitexec.RunGit(ctx, req.RepoDir, "diff", "--unified=0", req.BaseRef+".."+headRef)
+	baseRef := strings.TrimSpace(req.TestContractBaseRef)
+	if baseRef == "" {
+		baseRef = req.BaseRef
+	}
+	patch, err := gitexec.RunGit(ctx, req.RepoDir, "diff", "--unified=0", baseRef+".."+headRef)
 	if err != nil {
 		return nil, fmt.Errorf("inspect test checkpoint: %w", err)
 	}
@@ -48,7 +55,7 @@ func testCheckpointRejections(ctx context.Context, req AcceptanceRequest, headRe
 			return []Rejection{{Reason: "invalid_test_checkpoint", Status: "language_mismatch", Path: path}}, nil
 		}
 	}
-	for _, symbol := range contract.ExpectedMissingSymbols {
+	for _, symbol := range activeCompileContractSymbols(contract) {
 		token := callableToken(symbol)
 		if token != "" && !strings.Contains(active, token) {
 			return []Rejection{{Reason: "missing_active_contract_assertion", Status: contract.RedMode, Path: token}}, nil
@@ -67,6 +74,38 @@ func testCheckpointRejections(ctx context.Context, req AcceptanceRequest, headRe
 		}
 	}
 	return nil, nil
+}
+
+// activeCompileContractSymbols returns the minimum planned C++ surface that
+// must appear in executable added code. A function call is the compile-red
+// anchor for a callable contract; its return type may be idiomatically
+// inferred with auto and does not need to be repeated. Type-only contracts
+// still require an explicit type use. Legacy contracts without typed semantic
+// metadata retain the original all-symbol behavior.
+func activeCompileContractSymbols(contract checkpointContract) []string {
+	var functions, types []string
+	for _, semantic := range contract.SemanticContracts {
+		if semantic.State == "existing" {
+			continue
+		}
+		switch semantic.Kind {
+		case "cpp_function":
+			if strings.TrimSpace(semantic.Signature) != "" {
+				functions = append(functions, semantic.Signature)
+			}
+		case "cpp_type":
+			if strings.TrimSpace(semantic.Symbol) != "" {
+				types = append(types, semantic.Symbol)
+			}
+		}
+	}
+	if len(functions) > 0 {
+		return functions
+	}
+	if len(types) > 0 {
+		return types
+	}
+	return contract.ExpectedMissingSymbols
 }
 
 func activeAddedLinesByPath(patch string) map[string]string {

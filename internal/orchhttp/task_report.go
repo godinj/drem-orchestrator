@@ -176,12 +176,47 @@ func summarizeAttempts(attempts []orchdto.WorkerAttemptDTO, phases map[string]*o
 	var totals orchdto.TaskReportTotalsDTO
 	var coverage orchdto.TaskReportCoverageDTO
 	worker := ensurePhase(phases, "worker")
+	// Durable-journal continuations report the journal's cumulative token
+	// counters on every container attempt. Summing those rows charges the same
+	// paid turns repeatedly. A resumed branch is one inference session, even
+	// when failed containers only expose a cumulative progress line and thus
+	// have ResumedTurns == 0 themselves. Collapse the whole task/branch group
+	// to its high-water marks whenever any attempt proves journal resumption.
+	type usageKey struct{ taskID, branch string }
+	resumedGroups := make(map[usageKey]bool)
+	groupUsage := make(map[usageKey][2]int)
+	for _, attempt := range attempts {
+		key := usageKey{attempt.TaskID, attempt.Branch}
+		if attempt.ResumedTurns > 0 {
+			resumedGroups[key] = true
+		}
+		usage := groupUsage[key]
+		if attempt.TokensIn > usage[0] {
+			usage[0] = attempt.TokensIn
+		}
+		if attempt.TokensOut > usage[1] {
+			usage[1] = attempt.TokensOut
+		}
+		groupUsage[key] = usage
+	}
+	countedResumedUsage := make(map[usageKey]bool)
 	for _, attempt := range attempts {
 		totals.WorkerAttempts++
-		totals.TokensIn += attempt.TokensIn
-		totals.TokensOut += attempt.TokensOut
-		worker.TokensIn += attempt.TokensIn
-		worker.TokensOut += attempt.TokensOut
+		key := usageKey{attempt.TaskID, attempt.Branch}
+		tokensIn, tokensOut := attempt.TokensIn, attempt.TokensOut
+		if resumedGroups[key] {
+			if countedResumedUsage[key] {
+				tokensIn, tokensOut = 0, 0
+			} else {
+				usage := groupUsage[key]
+				tokensIn, tokensOut = usage[0], usage[1]
+				countedResumedUsage[key] = true
+			}
+		}
+		totals.TokensIn += tokensIn
+		totals.TokensOut += tokensOut
+		worker.TokensIn += tokensIn
+		worker.TokensOut += tokensOut
 		switch attempt.LeaseState {
 		case model.WorkerAttemptCompleted:
 			totals.CompletedAttempts++

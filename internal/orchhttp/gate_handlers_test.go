@@ -45,6 +45,7 @@ type fakeGateOrch struct {
 	ErrRetryTask          error
 	ErrResumeTask         error
 	ErrAdoptFailedChild   error
+	ErrResumeCheckpoint   error
 	ErrVerifyDelivery     error
 	ErrIntegrateDelivery  error
 	LastVerify            *orchestrator.VerifyDeliveryRequest
@@ -189,6 +190,14 @@ func (f *fakeGateOrch) AdoptFailedChild(taskID uuid.UUID, commitSHA, actor strin
 		return f.ErrAdoptFailedChild
 	}
 	return f.transition(taskID, model.StatusDone)
+}
+
+func (f *fakeGateOrch) ResumeFailedCheckpoint(taskID uuid.UUID, commitSHA, actor string) error {
+	f.logCall("ResumeFailedCheckpoint", taskID, commitSHA+"|"+actor)
+	if f.ErrResumeCheckpoint != nil {
+		return f.ErrResumeCheckpoint
+	}
+	return f.transition(taskID, model.StatusInProgress)
 }
 
 func (f *fakeGateOrch) VerifyDelivery(req orchestrator.VerifyDeliveryRequest) (*model.VerificationRecord, error) {
@@ -410,6 +419,10 @@ func resumeURL(base, task string) string {
 }
 func adoptURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/adopt", base, projectName, task)
+}
+
+func continueCheckpointURL(base, task string) string {
+	return fmt.Sprintf("%s/projects/%s/tasks/%s/continue-checkpoint", base, projectName, task)
 }
 func archiveURL(base, task string) string {
 	return fmt.Sprintf("%s/projects/%s/tasks/%s/archive", base, projectName, task)
@@ -958,6 +971,37 @@ func TestServer_AdoptFailedChildMapsAdmissionConflict(t *testing.T) {
 	fake.ErrAdoptFailedChild = fmt.Errorf("%w: stale head", orchestrator.ErrCodexAdoptionConflict)
 
 	resp, body := doJSON(t, http.MethodPost, adoptURL(base, child.ID.String()), `{"commit_sha":"deadbeef"}`)
+	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
+	require.Contains(t, decodeErr(t, body), "stale head")
+}
+
+func TestServer_ResumeFailedCheckpointEndpoint(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	parent := testutil.CreateTask(t, srv.DB, project.ID, "parent", model.StatusFailed)
+	child := testutil.CreateTask(t, srv.DB, project.ID, "child", model.StatusFailed)
+	child.ParentTaskID = &parent.ID
+	require.NoError(t, srv.DB.Save(child).Error)
+	commit := strings.Repeat("b", 40)
+
+	resp, body := doJSON(t, http.MethodPost, continueCheckpointURL(base, child.ID.String()), `{"commit_sha":"`+commit+`"}`)
+	require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+	var dto orchdto.TaskDTO
+	require.NoError(t, json.Unmarshal(body, &dto))
+	require.Equal(t, string(model.StatusInProgress), dto.Status)
+	require.Len(t, fake.Calls, 1)
+	require.Equal(t, "ResumeFailedCheckpoint", fake.Calls[0].Method)
+	require.Contains(t, fake.Calls[0].Body, commit)
+}
+
+func TestServer_ResumeFailedCheckpointMapsConflict(t *testing.T) {
+	fake, project, srv, base := setupGateHTTPTest(t)
+	parent := testutil.CreateTask(t, srv.DB, project.ID, "parent", model.StatusFailed)
+	child := testutil.CreateTask(t, srv.DB, project.ID, "child", model.StatusFailed)
+	child.ParentTaskID = &parent.ID
+	require.NoError(t, srv.DB.Save(child).Error)
+	fake.ErrResumeCheckpoint = fmt.Errorf("%w: stale head", orchestrator.ErrCheckpointResumeConflict)
+
+	resp, body := doJSON(t, http.MethodPost, continueCheckpointURL(base, child.ID.String()), `{"commit_sha":"deadbeef"}`)
 	require.Equal(t, http.StatusConflict, resp.StatusCode, string(body))
 	require.Contains(t, decodeErr(t, body), "stale head")
 }

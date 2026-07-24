@@ -253,7 +253,20 @@ func Generate(opts Opts) string {
 	// Skip for classifiers: they don't write code.
 	if opts.AgentType != model.AgentClassifier {
 		sections = append(sections, "## Scope", "")
-		if files := taskContextStrings(opts.Task, "estimated_files"); len(files) > 0 {
+		if files := taskContextStrings(opts.Task, "writable_files"); len(files) == 0 {
+			files = taskContextStrings(opts.Task, "estimated_files")
+			if len(files) > 0 {
+				quoted := make([]string, 0, len(files))
+				for _, file := range files {
+					quoted = append(quoted, "`"+file+"`")
+				}
+				sections = append(sections,
+					"Exact allowed files: "+strings.Join(quoted, ", ")+".",
+					"Do not modify, delete, or generate any other repository file; deterministic branch acceptance will reject the entire attempt.",
+					"",
+				)
+			}
+		} else {
 			quoted := make([]string, 0, len(files))
 			for _, file := range files {
 				quoted = append(quoted, "`"+file+"`")

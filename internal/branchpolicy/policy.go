@@ -25,6 +25,7 @@ type PreflightRequest struct {
 type AcceptanceRequest struct {
 	RepoDir                  string
 	BaseRef                  string
+	TestContractBaseRef      string
 	HeadRef                  string
 	AllowedScopes            []string
 	RejectDestructiveRewrite bool

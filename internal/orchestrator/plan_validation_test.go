@@ -3,6 +3,10 @@ package orchestrator
 import (
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/godinj/drem-orchestrator/pkg/score"
 )
 
 // TestSamePackageTestPhaseOverlap_Warning verifies that ValidatePlan produces
@@ -49,6 +53,21 @@ func TestSamePackageTestPhaseOverlap_Warning(t *testing.T) {
 	if !found {
 		t.Errorf("expected warning about test subtasks in same Go package needing shared stubs, got warnings: %v", result.Warnings)
 	}
+}
+
+func TestValidatePlanWritableFilesOnlyNarrowIntegrationMutationScope(t *testing.T) {
+	valid := ValidatePlan([]planEntry{
+		{Title: "test", Phase: "test", Files: []string{"tests/audio_test.cpp"}, TestsFor: []int{1}},
+		{Title: "implementation", Phase: "implementation", Files: []string{"src/audio.cpp"}, Dependencies: []int{0}},
+		{Title: "integration", Phase: "integration", Files: []string{"src/audio.cpp", "cmake/audio.cmake"}, WritableFiles: []string{"cmake/audio.cmake"}, Dependencies: []int{1}},
+	}, nil)
+	require.Empty(t, valid.Errors)
+	for _, warning := range valid.Warnings {
+		require.NotContains(t, warning, "src/audio.cpp")
+	}
+
+	invalid := ValidatePlan([]planEntry{{Title: "test", Phase: "test", Files: []string{"tests/audio_test.cpp"}, WritableFiles: []string{"tests/audio_test.cpp"}}}, nil)
+	require.Contains(t, invalid.Errors, "Subtask 0 ('test') sets writable_files outside integration")
 }
 
 // TestSamePackageTestPhaseOverlap_DifferentPackages verifies that no warning
@@ -201,5 +220,49 @@ func TestSamePackageTestPhase_DifferentWaveGroups_NoWarning(t *testing.T) {
 		if strings.Contains(w, "same Go package") && strings.Contains(w, "shared stub") {
 			t.Errorf("unexpected same-package warning when subtasks are in different wave groups: %s", w)
 		}
+	}
+}
+
+func TestValidatePlanRejectsOversizedImplementationOwnership(t *testing.T) {
+	subtasks := []planEntry{
+		{Title: "Test feature", Phase: "test", TestsFor: []int{1}, Files: []string{"feature_test.cpp"}},
+		{Title: "Implement feature", Phase: "implementation", Files: []string{"Feature.h", "Feature.cpp", "FeatureRegistry.cpp"}},
+	}
+
+	result := ValidatePlan(subtasks, nil)
+	if result.Valid || !strings.Contains(strings.Join(result.Errors, "\n"), "at most 2 files") {
+		t.Fatalf("expected implementation file-limit error, got %v", result.Errors)
+	}
+}
+
+func TestValidatePlanRejectsMultipleDeclaredImplementationBoundaries(t *testing.T) {
+	subtasks := []planEntry{
+		{Title: "Test feature", Phase: "test", TestsFor: []int{1}, Files: []string{"feature_test.cpp"}},
+		{
+			Title: "Implement feature", Phase: "implementation", Files: []string{"Feature.cpp"},
+			ModuleBoundaries: []score.ModuleBoundary{
+				{Package: "model", Description: "Owns model behavior", Exports: 1},
+				{Package: "ui", Description: "Owns UI behavior", Exports: 1},
+			},
+		},
+	}
+
+	result := ValidatePlan(subtasks, nil)
+	if result.Valid || !strings.Contains(strings.Join(result.Errors, "\n"), "declares 2 module boundaries") {
+		t.Fatalf("expected module-boundary granularity error, got %v", result.Errors)
+	}
+}
+
+func TestValidatePlanRejectsSharedImplementationFileOwnership(t *testing.T) {
+	subtasks := []planEntry{
+		{Title: "Test model", Phase: "test", TestsFor: []int{1}, Files: []string{"model_test.cpp"}},
+		{Title: "Implement model", Phase: "implementation", Files: []string{"Shared.cpp"}},
+		{Title: "Test UI", Phase: "test", TestsFor: []int{3}, Files: []string{"ui_test.cpp"}},
+		{Title: "Implement UI", Phase: "implementation", Files: []string{"Shared.cpp"}},
+	}
+
+	result := ValidatePlan(subtasks, nil)
+	if result.Valid || !strings.Contains(strings.Join(result.Errors, "\n"), "both own file") {
+		t.Fatalf("expected exclusive implementation ownership error, got %v", result.Errors)
 	}
 }

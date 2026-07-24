@@ -16,7 +16,7 @@ const (
 )
 
 var directWorkerUsagePattern = regexp.MustCompile(
-	`drem-direct-agent:\s+iterations=(\d+)\s+tokens_in=(\d+)\s+tokens_out=(\d+)\s+duration=\S+\s+stop_reason=([^\s\x00]*)`,
+	`drem-direct-agent:\s+iterations=(\d+)\s+tokens_in=(\d+)\s+tokens_out=(\d+)(?:\s+peak_request_input=(\d+)\s+resumed_turns=(\d+)\s+folded_bytes=(\d+))?\s+duration=\S+\s+stop_reason=([^\s\x00]*)`,
 )
 
 var directWorkerProgressPattern = regexp.MustCompile(
@@ -75,7 +75,12 @@ func parseWorkerUsage(body []byte) *WorkerUsage {
 		Iterations: iterations,
 		TokensIn:   tokensIn,
 		TokensOut:  tokensOut,
-		StopReason: string(last[4]),
+		StopReason: string(last[7]),
+	}
+	if len(last[4]) > 0 {
+		usage.PeakRequestInput, _ = strconv.Atoi(string(last[4]))
+		usage.ResumedTurns, _ = strconv.Atoi(string(last[5]))
+		usage.FoldedBytes, _ = strconv.Atoi(string(last[6]))
 	}
 	if progress := parseWorkerProgress(body); progress != nil {
 		usage.ContextPct = progress.ContextPct
