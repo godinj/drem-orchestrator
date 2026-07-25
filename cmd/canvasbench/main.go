@@ -88,7 +88,7 @@ func main() {
 
 func usageAttestorForHarness(ctx context.Context, harness benchv2.HarnessConfig, adminURL, publicBaseURL, tokenFile string) (benchv2.ServerUsageAttestor, error) {
 	switch harness.Name {
-	case benchv2.AdapterOpenCode, benchv2.AdapterQwenCode, benchv2.AdapterMiniSWE, benchv2.AdapterPi, benchv2.AdapterAider, benchv2.AdapterOpenHands:
+	case benchv2.AdapterOpenCode, benchv2.AdapterQwenCode, benchv2.AdapterMiniSWE, benchv2.AdapterPi, benchv2.AdapterAider, benchv2.AdapterOpenHands, benchv2.AdapterGoose:
 		if adminURL == "" || publicBaseURL == "" || tokenFile == "" {
 			return nil, fmt.Errorf("external harness requires usage proxy admin URL, public base URL, and admin token file")
 		}

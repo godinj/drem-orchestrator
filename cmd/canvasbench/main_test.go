@@ -31,6 +31,10 @@ func TestUsageAttestorCLIWiringRequiresPrivateAdminCredentialForExternalHarness(
 	}
 	_, err := usageAttestorForHarness(context.Background(), harness, "", "", "")
 	require.ErrorContains(t, err, "requires usage proxy")
+	harness.Name = benchv2.AdapterGoose
+	_, err = usageAttestorForHarness(context.Background(), harness, "", "", "")
+	require.ErrorContains(t, err, "requires usage proxy")
+	harness.Name = benchv2.AdapterQwenCode
 
 	tokenFile := filepath.Join(t.TempDir(), "admin.token")
 	require.NoError(t, os.WriteFile(tokenFile, []byte("admin-secret\n"), 0o600))
