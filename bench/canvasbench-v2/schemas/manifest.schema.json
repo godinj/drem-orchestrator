@@ -1,0 +1,5 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "canvasbench.manifest.v2", "type": "object", "additionalProperties": false,
+  "required": ["schema", "suite_id", "threshold", "cases"],
+  "properties": {"schema": {"const": "canvasbench.manifest.v2"}, "suite_id": {"type": "string"}, "threshold": {"const": 90}, "cases": {"type": "array", "minItems": 9, "maxItems": 9, "items": {"type": "object", "additionalProperties": false, "required": ["id", "task_file", "sha256", "weight", "status", "hard_gate"], "properties": {"id": {"type": "string"}, "task_file": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "weight": {"type": "integer"}, "status": {"enum": ["runnable", "placeholder"]}, "hard_gate": {"type": "boolean"}}}}}
+}

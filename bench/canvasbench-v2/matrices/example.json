@@ -1,0 +1,38 @@
+{
+  "schema": "canvasbench.matrix.v2",
+  "id": "replace-with-content-addressed-run-id",
+  "task_files": ["../tasks/case-01.json", "../tasks/case-02.json", "../tasks/case-03.json", "../tasks/case-04.json", "../tasks/case-05.json", "../tasks/case-06.json", "../tasks/case-07.json", "../tasks/case-08.json", "../tasks/case-09.json"],
+  "trials": 5,
+  "seeds": [1001, 1002, 1003, 1004, 1005],
+  "temperature": 0.6,
+  "top_p": 0.95,
+  "top_k": 20,
+  "context_window": 131072,
+  "preserve_thinking": true,
+  "seed_policy": "fixed_per_trial",
+  "harness": {
+    "name": "",
+    "version": "",
+    "source_state": "",
+    "config_sha256": "",
+    "history_mode": "retain_recent",
+    "tool_policy": "structured_only",
+    "keep_recent_exchanges": 4,
+    "retention_threshold_pct": 70,
+    "adapter_model_ref": "",
+    "outer_isolation": "",
+    "trajectory_normalizer": ""
+  },
+  "runtime": {
+    "backend_name": "",
+    "backend_version": "",
+    "model_id": "",
+    "model_sha256": "",
+    "quantization": "",
+    "runtime_config_sha256": "",
+    "image_digest": "",
+    "endpoint_class": "",
+    "api_flavor": "",
+    "inference_measured": false
+  }
+}

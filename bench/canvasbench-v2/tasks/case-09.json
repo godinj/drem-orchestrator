@@ -1,0 +1,28 @@
+{
+  "schema": "canvasbench.task.v2",
+  "id": "case-09",
+  "title": "Full take-cycling capstone",
+  "description": "End-to-end five-path exact-artifact pilot with one ownership-aware rework; hidden canonical patch, mutants, and UI script are not yet supplied.",
+  "status": "placeholder",
+  "mode": "orchestrated",
+  "inference_policy": "required",
+  "allowed_tool_policies": ["structured_only", "sandboxed_shell"],
+  "weight": 16,
+  "role": "coder",
+  "system_prompt": "Execute the frozen test -> implementation -> integration graph. One automatic ownership-aware repair is allowed. No host edits or adoptions.",
+  "user_message": "Implement and verify Alt+j/Alt+k take-lane cycling, wrap, source change, status, one-step undo, native gates, Release hash, and scripted UI proof.",
+  "fixture": {"repo_id": "drem-canvas", "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274", "visible_blobs": [
+    {"path": "tests/integration/LaneVersionCommandTest.cpp", "git_blob_sha": "e013d01be19945e0c009ac16987f7c2b5c49b32f"},
+    {"path": "src/vim/adapters/EditorAdapter.h", "git_blob_sha": "f317c4391fcf48cc4e496a06231f1661f7489871"},
+    {"path": "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "git_blob_sha": "42a9aae475fdd7cb8e8a572d3c716e3bb5f51fc6"},
+    {"path": "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "git_blob_sha": "f62cd413a41d34d706859eba27e29f82e5aa7eb3"},
+    {"path": "config/default_keymap.yaml", "git_blob_sha": "84e6d556020acb234b79586008f27e22ed2b568c"}
+  ]},
+  "read_paths": ["tests/integration/LaneVersionCommandTest.cpp", "src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "config/default_keymap.yaml"],
+  "write_paths": ["tests/integration/LaneVersionCommandTest.cpp", "src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "config/default_keymap.yaml"],
+  "required_changed_paths": ["tests/integration/LaneVersionCommandTest.cpp", "src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "config/default_keymap.yaml"],
+  "result_artifact": "",
+  "required_mutation": true,
+  "oracle_id": "take-cycling-capstone-canonical-v1",
+  "budget": {"max_input_tokens": 180000, "max_output_tokens": 12000, "max_tool_calls": 60, "max_iterations": 40, "timeout_seconds": 1200}
+}

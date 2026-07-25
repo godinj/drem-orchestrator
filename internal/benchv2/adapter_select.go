@@ -1,0 +1,44 @@
+package benchv2
+
+import "fmt"
+
+const AdapterDirect = "direct_tool_agent"
+
+// SelectAdapter binds the declared harness identity to one concrete adapter.
+// It never falls back to DirectToolAgent for an unknown or external harness.
+func SelectAdapter(harness HarnessConfig, task TaskSpec, endpoint string) (HarnessAdapter, error) {
+	if task.Mode == "deterministic_replay" {
+		if !taskAllowsToolPolicy(task, ToolPolicyReplay) {
+			return nil, fmt.Errorf("deterministic replay policy is not allowed")
+		}
+		return ReplayAdapter{}, nil
+	}
+	switch harness.Name {
+	case AdapterDirect:
+		if harness.ToolPolicy != ToolPolicyStructured || !taskAllowsToolPolicy(task, ToolPolicyStructured) {
+			return nil, fmt.Errorf("direct harness requires allowed %s policy", ToolPolicyStructured)
+		}
+		return DirectToolAdapter{Endpoint: endpoint}, nil
+	case AdapterOpenCode, AdapterQwenCode, AdapterMiniSWE, AdapterPi:
+		if harness.ToolPolicy != ToolPolicySandboxed || !taskAllowsToolPolicy(task, ToolPolicySandboxed) {
+			return nil, fmt.Errorf("external harness requires allowed %s policy", ToolPolicySandboxed)
+		}
+		return ExternalCLIAdapter{
+			Kind: harness.Name, Executable: externalExecutable(harness.Name), Version: harness.Version,
+			Isolation: harness.OuterIsolation,
+		}, nil
+	default:
+		return nil, fmt.Errorf("unknown CanvasBench harness %q", harness.Name)
+	}
+}
+
+func externalExecutable(adapter string) string {
+	switch adapter {
+	case AdapterQwenCode:
+		return "qwen"
+	case AdapterMiniSWE:
+		return "mini"
+	default:
+		return adapter
+	}
+}

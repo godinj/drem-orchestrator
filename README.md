@@ -1,5 +1,16 @@
 # Drem Orchestrator
 
+## Canvas model/harness qualification
+
+Use `cmd/canvasbench` and `bench/canvasbench-v2` for Canvas coding-agent
+qualification. The v2 workflow provides content-addressed fixtures, hidden
+semantic verification, exact scopes, ATIF trajectories, server-usage truth,
+and harness-neutral matrices. See `docs/canvasbench-v2.md`.
+
+The older `cmd/drembench` remains available as v1 for synthetic harness
+diagnostics only; its historical substring scores are not authoritative Canvas
+capability evidence.
+
 Drem Orchestrator is a local system for coordinating AI coding agents across software projects.
 
 In plain English: you give Drem a project and a goal, and it helps turn that goal into planned work, agent tasks, review steps, merges, and status reports. It is built for a solo developer who wants several AI agents working in parallel without losing track of what each agent is doing.

@@ -1,0 +1,31 @@
+{
+  "schema": "canvasbench.task.v2",
+  "id": "case-05",
+  "title": "Multi-file take-cycling implementation",
+  "description": "Implement the frozen red contract; hidden canonical red tests are not yet supplied.",
+  "status": "placeholder",
+  "mode": "direct_worker",
+  "inference_policy": "required",
+  "allowed_tool_policies": ["structured_only", "sandboxed_shell"],
+  "weight": 16,
+  "role": "coder",
+  "system_prompt": "Implement only the declared EditorAdapter header and two action fragments. Use private member methods takeNext(int), takePrev(int), and cycleSelectedTake(int); do not create a free helper.",
+  "user_message": "Implement forward/backward wrap through TrackVersionService, audio-only validation, no-op handling, status, and one-step undo against the frozen hidden red tests.",
+  "fixture": {"repo_id": "drem-canvas", "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274", "visible_blobs": [
+    {"path": "src/vim/adapters/EditorAdapter.h", "git_blob_sha": "f317c4391fcf48cc4e496a06231f1661f7489871"},
+    {"path": "src/vim/adapters/EditorAdapter.cpp", "git_blob_sha": "ccbda6a4d6b97265b36424412ace222c7051674b"},
+    {"path": "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "git_blob_sha": "42a9aae475fdd7cb8e8a572d3c716e3bb5f51fc6"},
+    {"path": "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "git_blob_sha": "f62cd413a41d34d706859eba27e29f82e5aa7eb3"},
+    {"path": "src/model/TrackVersionService.h", "git_blob_sha": "63f51af2905f9520bf8f723f41c9a272a19a2faa"},
+    {"path": "src/model/TrackVersionService.cpp", "git_blob_sha": "2f51e05e6d8466c922045495d83096eb6be8ad63"},
+    {"path": "src/model/Track.h", "git_blob_sha": "4dd48d4ab90412bf4fb77bbf5e668d80ae2a0135"},
+    {"path": "src/model/LaneVersion.h", "git_blob_sha": "87f9709b1ed977f121ef8877e0847d8c39a19b23"}
+  ]},
+  "read_paths": ["src/vim/adapters/EditorAdapter.h", "src/vim/adapters/EditorAdapter.cpp", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "src/model/TrackVersionService.h", "src/model/TrackVersionService.cpp", "src/model/Track.h", "src/model/LaneVersion.h"],
+  "write_paths": ["src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
+  "required_changed_paths": ["src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
+  "result_artifact": "",
+  "required_mutation": true,
+  "oracle_id": "take-cycling-implementation-canonical-v1",
+  "budget": {"max_input_tokens": 65000, "max_output_tokens": 7000, "max_tool_calls": 22, "max_iterations": 22, "timeout_seconds": 600}
+}

@@ -16,131 +16,6 @@ import (
 	"time"
 )
 
-// TraceEvent is a single entry in the optional agent trace log. One is written
-// per iteration capturing the assistant reply and every tool call/result pair.
-type TraceEvent struct {
-	Iteration    int         `json:"iteration"`
-	FinishReason string      `json:"finish_reason"`
-	TokensIn     int         `json:"tokens_in"`
-	TokensOut    int         `json:"tokens_out"`
-	Assistant    string      `json:"assistant_content,omitempty"`
-	ToolCalls    []TraceCall `json:"tool_calls,omitempty"`
-}
-
-// TraceCall is one tool invocation and its result as seen by the loop.
-type TraceCall struct {
-	Name   string `json:"name"`
-	Args   string `json:"args"`
-	Result string `json:"result"`
-	Error  string `json:"error,omitempty"`
-}
-
-// ---------------------------------------------------------------------------
-// Tool schemas
-// ---------------------------------------------------------------------------
-
-// builtinTools defines the complete set of available tool definitions.
-// Descriptions are deliberately detailed to steer models (especially smaller
-// ones like Gemma-4 26B) toward the structured tools instead of routing
-// everything through bash. Bash is restricted to build/test/run commands.
-var builtinTools = map[string]toolDefinition{
-	"read": {
-		Type: "function",
-		Function: toolFunction{
-			Name:        "read",
-			Description: "Read file contents with line numbers. ALWAYS use this instead of cat/head/tail/sed -n. Returns formatted output with line numbers for precise editing. A default read of an authorized scoped file returns up to 800 lines so dependency artifacts usually arrive in one turn; other files default to 200. Supports offset and limit for larger files.",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path to read"},"offset":{"type":"integer","description":"Line number to start from (0-based)"},"limit":{"type":"integer","description":"Max lines to return (default 800 for an authorized scoped file, otherwise 200)"}},"required":["path"]}`),
-		},
-	},
-	"edit": {
-		Type: "function",
-		Function: toolFunction{
-			Name:        "edit",
-			Description: "Replace exact text in a file. Use for surgical changes — provide the exact existing text and its replacement. The old text must appear exactly once in the file. Safer than write for modifications to existing files.",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path"},"old":{"type":"string","description":"Exact existing text to find (must be unique in file)"},"new":{"type":"string","description":"Replacement text"}},"required":["path","old","new"]}`),
-		},
-	},
-	"write": {
-		Type: "function",
-		Function: toolFunction{
-			Name:        "write",
-			Description: "Write content to a file (creates or overwrites). ALWAYS use this instead of bash heredocs (cat <<EOF), echo >, or tee. Handles all special characters safely — no shell escaping issues with backticks, quotes, or dollar signs. Creates parent directories automatically.",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"File path"},"content":{"type":"string","description":"Complete file content to write"}},"required":["path","content"]}`),
-		},
-	},
-	"bash": {
-		Type: "function",
-		Function: toolFunction{
-			Name:        "bash",
-			Description: "Run a shell command for building, testing, and running programs (go test, go vet, make, etc.). Do NOT use bash for file operations — use the dedicated tools instead: read (not cat/head/tail), write (not cat <<EOF or echo >), edit (not sed -i), grep (not grep/rg), glob (not find/ls).",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"cmd":{"type":"string","description":"Shell command to execute. Must not be used for file reading (use read), file writing (use write), file editing (use edit), or searching (use grep/glob)."}},"required":["cmd"]}`),
-		},
-	},
-	"grep": {
-		Type: "function",
-		Function: toolFunction{
-			Name:        "grep",
-			Description: "Search file contents with regex. ALWAYS use this instead of bash grep/rg. Returns matched lines with file paths and line numbers. Supports glob filtering to narrow search scope.",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Regex pattern to search for"},"path":{"type":"string","description":"Directory or file to search (default: working directory)"},"glob":{"type":"string","description":"File glob filter (e.g. *.go)"}},"required":["pattern"]}`),
-		},
-	},
-	"glob": {
-		Type: "function",
-		Function: toolFunction{
-			Name:        "glob",
-			Description: "Find files by glob pattern. ALWAYS use this instead of find or ls for locating files. Returns matching file paths.",
-			Parameters:  json.RawMessage(`{"type":"object","properties":{"pattern":{"type":"string","description":"Glob pattern (e.g. **/*.go)"},"path":{"type":"string","description":"Base directory (default: working directory)"}},"required":["pattern"]}`),
-		},
-	},
-}
-
-// roleTools maps agent roles to their permitted tool names.
-var roleTools = map[string][]string{
-	"coder":    {"read", "edit", "write", "bash", "grep", "glob"},
-	"fixer":    {"read", "edit", "write", "bash", "grep", "glob"},
-	"reviewer": {"read", "bash", "grep", "glob"},
-	"prep":     {"read", "grep", "glob"},
-}
-
-// ToolsForRole returns the tool definitions permitted for the given agent role.
-// Unknown roles get read-only tools (read, grep, glob).
-func ToolsForRole(role string) []toolDefinition {
-	names, ok := roleTools[role]
-	if !ok {
-		names = []string{"read", "grep", "glob"}
-	}
-	tools := make([]toolDefinition, 0, len(names))
-	for _, name := range names {
-		if td, exists := builtinTools[name]; exists {
-			tools = append(tools, td)
-		}
-	}
-	return tools
-}
-
-// ToolsForRoleScope removes repository-discovery tools from bounded coder and
-// fixer runs whose exact file scope is already supplied by the planner. The
-// pilot showed that exposing grep/glob to a one-file integration worker caused
-// repeated repository exploration without producing an edit. Read/edit/write
-// remain available for the named files and bash remains available for the
-// lightweight deterministic gate.
-func ToolsForRoleScope(role string, scopedFiles []string) []toolDefinition {
-	if (role == "coder" || role == "fixer") && len(scopedFiles) > 0 {
-		return toolsByName([]string{"read", "edit", "write", "bash"})
-	}
-	return ToolsForRole(role)
-}
-
-func toolsByName(names []string) []toolDefinition {
-	tools := make([]toolDefinition, 0, len(names))
-	for _, name := range names {
-		if td, exists := builtinTools[name]; exists {
-			tools = append(tools, td)
-		}
-	}
-	return tools
-}
-
 // ---------------------------------------------------------------------------
 // Core tool-call loop
 // ---------------------------------------------------------------------------
@@ -154,18 +29,38 @@ func toolsByName(names []string) []toolDefinition {
 func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage string, tools []toolDefinition, outputPath string) (finalResult *DirectToolAgentResult, finalErr error) {
 	start := time.Now()
 	var peakRequestInput, resumedTurns, foldedBytes int
+	readPaths := map[string]int{}
+	deniedCalls := 0
+	firstMutationIteration := 0
+	var firstMutationMs int64
 	defer func() {
 		if finalResult != nil {
 			finalResult.PeakRequestInput = peakRequestInput
 			finalResult.ResumedTurns = resumedTurns
 			finalResult.FoldedBytes = foldedBytes
+			finalResult.DeniedCalls = deniedCalls
+			finalResult.FirstMutationIteration = firstMutationIteration
+			finalResult.FirstMutationMs = firstMutationMs
+			for _, count := range readPaths {
+				finalResult.UniqueReads++
+				if count > 1 {
+					finalResult.RedundantReads += count - 1
+				}
+			}
 		}
 	}()
 
 	exec := &toolExecutor{
-		workDir:     cfg.WorkDir,
-		bashTimeout: cfg.BashTimeout,
-		scopedFiles: make(map[string]struct{}, len(cfg.ScopedFiles)),
+		workDir:       cfg.WorkDir,
+		bashTimeout:   cfg.BashTimeout,
+		scopedFiles:   make(map[string]struct{}, len(cfg.ScopedFiles)),
+		readableFiles: make(map[string]struct{}, len(cfg.ReadableFiles)),
+	}
+	for _, path := range cfg.ReadableFiles {
+		resolved, err := exec.resolvePath(path)
+		if err == nil {
+			exec.readableFiles[resolved] = struct{}{}
+		}
 	}
 	for _, path := range cfg.ScopedFiles {
 		resolved, err := exec.resolvePath(path)
@@ -273,7 +168,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 
 	for iteration := startIteration; iteration < maxIter; iteration++ {
 		var folded int
-		messages, folded = compactToolResultHistoryWithStats(messages)
+		messages, folded = compactToolResultHistoryForConfig(messages, cfg, finalPct)
 		foldedBytes += folded
 		slog.Info("direct tool agent: calling API",
 			"iteration", iteration,
@@ -350,6 +245,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			TokensIn:     resp.Usage.PromptTokens,
 			TokensOut:    resp.Usage.CompletionTokens,
 			Assistant:    choice.Message.Content,
+			ElapsedMs:    time.Since(start).Milliseconds(),
 		}
 
 		// If the model is done, return the final content. A natural stop
@@ -547,6 +443,10 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				} else {
 					result, toolErr = exec.execute(tc.Function.Name, tc.Function.Arguments)
 					if (tc.Function.Name == "edit" || tc.Function.Name == "write") && toolErr == nil {
+						if !mutationObserved {
+							firstMutationIteration = iteration + 1
+							firstMutationMs = time.Since(start).Milliseconds()
+						}
 						mutationObserved = true
 						failedEditRecoveryAvailable = false
 						failedMutationLoops.Reset()
@@ -574,6 +474,9 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					Args: tc.Function.Arguments,
 				}
 				if toolErr != nil {
+					if strings.Contains(toolErr.Error(), "allowlist") {
+						deniedCalls++
+					}
 					traceCall.Error = toolErr.Error()
 					result = "ERROR: " + toolErr.Error()
 					if count := failedMutationLoops.Observe(tc.Function.Name, tc.Function.Arguments, toolErr.Error()); count == 2 {
@@ -591,6 +494,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 						Path string `json:"path"`
 					}
 					if json.Unmarshal([]byte(tc.Function.Arguments), &readArgs) == nil && readArgs.Path != "" {
+						readPaths[filepath.Clean(readArgs.Path)]++
 						resolved, _ := filepath.Abs(filepath.Join(cfg.WorkDir, readArgs.Path))
 						fileReadCounts[resolved]++
 						if fileReadCounts[resolved] > maxFileReads {

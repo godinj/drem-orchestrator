@@ -1,0 +1,80 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log"
+	"os"
+	"path/filepath"
+
+	"github.com/godinj/drem-orchestrator/internal/benchv2"
+)
+
+func main() {
+	matrixPath := flag.String("matrix", "bench/canvasbench-v2/matrices/example.json", "strict CanvasBench v2 matrix")
+	manifestPath := flag.String("manifest", "bench/canvasbench-v2/manifest.json", "content-addressed CanvasBench v2 manifest")
+	canvasRepo := flag.String("canvas-repo", "../drem-canvas.git/main", "Canvas source repository")
+	orchRepo := flag.String("orchestrator-repo", ".", "orchestrator source repository")
+	scratch := flag.String("scratch", "", "temporary worktree parent (defaults to OS temp)")
+	out := flag.String("out", "bench/results/canvasbench-v2", "report prefix")
+	endpoint := flag.String("endpoint", "http://127.0.0.1:18090/v1/chat/completions", "OpenAI-compatible inference endpoint")
+	flag.Parse()
+	var matrix benchv2.MatrixSpec
+	if err := benchv2.DecodeStrictFile(*matrixPath, &matrix); err != nil {
+		log.Fatal(err)
+	}
+	if err := matrix.Validate(); err != nil {
+		log.Fatal(err)
+	}
+	manifest, tasks, err := benchv2.LoadManifest(*manifestPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	if len(matrix.TaskFiles) != len(manifest.Cases) {
+		log.Fatal("matrix must select every immutable manifest case exactly once")
+	}
+	for index, taskFile := range matrix.TaskFiles {
+		if filepath.Base(taskFile) != filepath.Base(manifest.Cases[index].TaskFile) {
+			log.Fatalf("matrix task %d does not match immutable manifest order", index+1)
+		}
+	}
+	scratchRoot := *scratch
+	if scratchRoot == "" {
+		var err error
+		scratchRoot, err = os.MkdirTemp("", "canvasbench-v2-")
+		if err != nil {
+			log.Fatal(err)
+		}
+		defer os.RemoveAll(scratchRoot)
+	}
+	if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
+		log.Fatal(err)
+	}
+	rawPath := *out + ".jsonl"
+	_ = os.Remove(rawPath)
+	var results []benchv2.TrialResult
+	for _, task := range tasks {
+		for trial := 1; trial <= matrix.Trials; trial++ {
+			adapter, err := benchv2.SelectAdapter(matrix.Harness, task, *endpoint)
+			if err != nil {
+				log.Fatal(err)
+			}
+			runner := benchv2.Runner{
+				Repos:       map[string]string{"drem-canvas": *canvasRepo, "drem-orchestrator": *orchRepo},
+				ScratchRoot: scratchRoot, Adapter: adapter,
+				Verifier: benchv2.BuiltinVerifier{OracleRoot: filepath.Join(filepath.Dir(*manifestPath), "oracles")},
+			}
+			result := runner.RunTrial(context.Background(), matrix, task, trial)
+			if err := benchv2.AppendJSONL(rawPath, result); err != nil {
+				log.Fatal(err)
+			}
+			results = append(results, result)
+			fmt.Printf("%s trial %d: %s score=%.1f\n", task.ID, trial, result.Status, result.Score)
+		}
+	}
+	aggregate := benchv2.AggregateResults(matrix.ID, tasks, results)
+	if err := benchv2.WriteReports(*out, aggregate, results); err != nil {
+		log.Fatal(err)
+	}
+}

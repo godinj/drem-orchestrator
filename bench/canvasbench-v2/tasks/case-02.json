@@ -1,0 +1,31 @@
+{
+  "schema": "canvasbench.task.v2",
+  "id": "case-02",
+  "title": "Real one-file LowerZoneState repair",
+  "description": "Repair the seeded upper-clamp regression in the real Canvas header.",
+  "status": "runnable",
+  "mode": "direct_worker",
+  "inference_policy": "required",
+  "allowed_tool_policies": ["structured_only", "sandboxed_shell"],
+  "weight": 7,
+  "role": "fixer",
+  "system_prompt": "Repair one seeded regression. Read only the declared files, edit only src/model/LowerZoneState.h, preserve all unrelated behavior, and stop after the change.",
+  "user_message": "setArrangementShare must constrain every value to the declared minimum and maximum; restore the smallest correct C++17 implementation.",
+  "fixture": {
+    "repo_id": "drem-canvas",
+    "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274",
+    "visible_blobs": [
+      {"path": "src/model/LowerZoneState.h", "git_blob_sha": "3418767f45bf6624fac1eef3707b9f7c6aa10fc4"},
+      {"path": "tests/unit/model_layer/test_lower_zone_state.cpp", "git_blob_sha": "30b051a6f239abcfda13c47c70e327e571f6eef2"}
+    ],
+    "seed_patch": "../seeds/case-02-lower-zone.patch",
+    "seed_patch_sha256": "7f1e920e790b50128ca8b06ebff82e58d958804df1697080bdcf760c6dd23222"
+  },
+  "read_paths": ["src/model/LowerZoneState.h", "tests/unit/model_layer/test_lower_zone_state.cpp"],
+  "write_paths": ["src/model/LowerZoneState.h"],
+  "required_changed_paths": ["src/model/LowerZoneState.h"],
+  "result_artifact": "",
+  "required_mutation": true,
+  "oracle_id": "lower-zone-clamp-v1",
+  "budget": {"max_input_tokens": 15000, "max_output_tokens": 1500, "max_tool_calls": 8, "max_iterations": 8, "timeout_seconds": 120}
+}

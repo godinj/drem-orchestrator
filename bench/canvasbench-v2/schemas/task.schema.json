@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "canvasbench.task.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "id", "title", "description", "status", "mode", "inference_policy", "allowed_tool_policies", "weight", "role", "system_prompt", "user_message", "fixture", "read_paths", "write_paths", "required_changed_paths", "required_mutation", "oracle_id", "budget"],
+  "properties": {
+    "schema": {"const": "canvasbench.task.v2"}, "id": {"type": "string"}, "title": {"type": "string"}, "description": {"type": "string"},
+    "status": {"enum": ["runnable", "placeholder"]}, "mode": {"enum": ["direct_worker", "deterministic_replay", "orchestrated"]},
+    "inference_policy": {"enum": ["required", "deterministic_exempt"]}, "allowed_tool_policies": {"type": "array", "items": {"enum": ["structured_only", "sandboxed_shell", "deterministic_replay"]}, "minItems": 1, "uniqueItems": true}, "weight": {"type": "integer", "minimum": 1}, "role": {"type": "string"},
+    "system_prompt": {"type": "string"}, "user_message": {"type": "string"},
+    "fixture": {"$ref": "#/$defs/fixture"}, "read_paths": {"$ref": "#/$defs/paths"}, "write_paths": {"$ref": "#/$defs/paths"},
+    "required_changed_paths": {"$ref": "#/$defs/paths"}, "result_artifact": {"type": "string"}, "required_mutation": {"type": "boolean"},
+    "oracle_id": {"type": "string"}, "budget": {"$ref": "#/$defs/budget"}
+  },
+  "$defs": {
+    "paths": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "blob": {"type": "object", "additionalProperties": false, "required": ["path", "git_blob_sha"], "properties": {"path": {"type": "string"}, "git_blob_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}},
+    "fixture": {"type": "object", "additionalProperties": false, "required": ["repo_id", "base_commit", "visible_blobs"], "properties": {"repo_id": {"type": "string"}, "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "visible_blobs": {"type": "array", "items": {"$ref": "#/$defs/blob"}}, "seed_patch": {"type": "string"}, "seed_patch_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "budget": {"type": "object", "additionalProperties": false, "required": ["max_input_tokens", "max_output_tokens", "max_tool_calls", "max_iterations", "timeout_seconds"], "properties": {"max_input_tokens": {"type": "integer", "minimum": 1}, "max_output_tokens": {"type": "integer", "minimum": 1}, "max_tool_calls": {"type": "integer", "minimum": 1}, "max_iterations": {"type": "integer", "minimum": 1}, "timeout_seconds": {"type": "integer", "minimum": 1}}}
+  }
+}

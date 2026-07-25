@@ -1,0 +1,35 @@
+{
+  "schema": "canvasbench.task.v2",
+  "id": "case-01",
+  "title": "API-contract grounding",
+  "description": "Identify exact existing Canvas API signatures without changing source.",
+  "status": "runnable",
+  "mode": "direct_worker",
+  "inference_policy": "required",
+  "allowed_tool_policies": ["structured_only", "sandboxed_shell"],
+  "weight": 8,
+  "role": "coder",
+  "system_prompt": "You are in an immutable Canvas checkout. Read only the declared files. Write result.json containing exactly two arrays named symbols and rejected. Use fully qualified, exact API spellings; do not infer convenience wrappers.",
+  "user_message": "Identify the real APIs for selecting an arrangement track, setting automation-lane context, enumerating/executing actions, naming the panel type, and resolving a key sequence. Explicitly reject the five plausible but nonexistent alternatives you find by comparison.",
+  "fixture": {
+    "repo_id": "drem-canvas",
+    "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274",
+    "visible_blobs": [
+      {"path": "src/model/Arrangement.h", "git_blob_sha": "1692c085cfb8c5e561ed1e08291883e0c17db0d9f"},
+      {"path": "src/vim/ActionRegistry.h", "git_blob_sha": "786e82bab6fbcef3c31031459ad77aa897daf631"},
+      {"path": "src/vim/KeymapRegistry.h", "git_blob_sha": "aef766fa31182af4848c842ff4ff9909aa4da0e0"},
+      {"path": "src/vim/KeySequence.h", "git_blob_sha": "d3c844cb452f966311f038b499af69e4d179cf42"},
+      {"path": "src/vim/VimContext.h", "git_blob_sha": "c143f3153588cfaf0a04cfd4027b25c37dd76068"},
+      {"path": "src/vim/adapters/EditorAdapter.h", "git_blob_sha": "f317c4391fcf48cc4e496a06231f1661f7489871"},
+      {"path": "src/model/TrackVersionService.h", "git_blob_sha": "63f51af2905f9520bf8f723f41c9a272a19a2faa"},
+      {"path": "tests/helpers/VimTestFixture.h", "git_blob_sha": "f68811ee09ec2493b3f1dac19ca9ff0cb0625f47"}
+    ]
+  },
+  "read_paths": ["src/model/Arrangement.h", "src/vim/ActionRegistry.h", "src/vim/KeymapRegistry.h", "src/vim/KeySequence.h", "src/vim/VimContext.h", "src/vim/adapters/EditorAdapter.h", "src/model/TrackVersionService.h", "tests/helpers/VimTestFixture.h"],
+  "write_paths": [],
+  "required_changed_paths": ["result.json"],
+  "result_artifact": "result.json",
+  "required_mutation": false,
+  "oracle_id": "api-contract-grounding-v1",
+  "budget": {"max_input_tokens": 20000, "max_output_tokens": 2000, "max_tool_calls": 10, "max_iterations": 10, "timeout_seconds": 90}
+}

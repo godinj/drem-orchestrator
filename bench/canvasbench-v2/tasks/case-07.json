@@ -1,0 +1,27 @@
+{
+  "schema": "canvasbench.task.v2",
+  "id": "case-07",
+  "title": "Transient-slicing registration seam closure",
+  "description": "Add the single missing production registration call on artifact 2ff61e8; hidden production-registry verifier is not yet supplied.",
+  "status": "placeholder",
+  "mode": "direct_worker",
+  "inference_policy": "required",
+  "allowed_tool_policies": ["structured_only", "sandboxed_shell"],
+  "weight": 8,
+  "role": "fixer",
+  "system_prompt": "Close one production registration seam. Read only the declared files and edit only src/ui/ActionCoordinator.cpp.",
+  "user_message": "Ensure registerAllActions invokes registerAudioProcessActions so audio.divide_transients is discoverable and executable.",
+  "fixture": {"repo_id": "drem-canvas", "base_commit": "2ff61e8be0020395554bc6945b221253376b818e", "visible_blobs": [
+    {"path": "src/ui/ActionCoordinator.cpp", "git_blob_sha": "0ef26c0cce03da647c284f22ffcdf7793ea8e613"},
+    {"path": "src/ui/ActionCoordinator.h", "git_blob_sha": "90f5de2362e3d0b8811a4d193a548f83cc7fa4da"},
+    {"path": "src/ui/ActionAudioProcesses.cpp", "git_blob_sha": "3a315aee7c949617fe1e75112adeecdf72dfdfc0"},
+    {"path": "tests/integration/test_audio_transient_slicing.cpp", "git_blob_sha": "2732fab77ef99e4557e8d48f0960b3283e0bcb67"}
+  ]},
+  "read_paths": ["src/ui/ActionCoordinator.cpp", "src/ui/ActionCoordinator.h", "src/ui/ActionAudioProcesses.cpp", "tests/integration/test_audio_transient_slicing.cpp"],
+  "write_paths": ["src/ui/ActionCoordinator.cpp"],
+  "required_changed_paths": ["src/ui/ActionCoordinator.cpp"],
+  "result_artifact": "",
+  "required_mutation": true,
+  "oracle_id": "transient-registration-production-v1",
+  "budget": {"max_input_tokens": 20000, "max_output_tokens": 2000, "max_tool_calls": 10, "max_iterations": 10, "timeout_seconds": 180}
+}

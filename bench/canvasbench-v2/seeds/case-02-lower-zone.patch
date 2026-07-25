@@ -1,0 +1,15 @@
+diff --git a/src/model/LowerZoneState.h b/src/model/LowerZoneState.h
+index 3418767..ce2d4c1 100644
+--- a/src/model/LowerZoneState.h
++++ b/src/model/LowerZoneState.h
+@@ -39,9 +39,7 @@ public:
+     float getArrangementShare() const { return arrangementShare; }
+     void setArrangementShare (float share)
+     {
+-        arrangementShare = std::clamp (share,
+-                                       LowerZoneDefaults::minArrangementShare,
+-                                       LowerZoneDefaults::maxArrangementShare);
++        arrangementShare = std::max (share, LowerZoneDefaults::minArrangementShare);
+     }
+ 
+     bool isTabVisible (LowerZoneTab tab) const

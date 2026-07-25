@@ -1,5 +1,10 @@
 # PRD: Containerization of Drem Orchestrator Services and Agents
 
+Canvas coding-harness qualification uses the outer-isolated,
+content-addressed CanvasBench v2 workflow in `docs/canvasbench-v2.md`.
+Benchmark-only OpenCode/Qwen Code/mini-SWE/Pi adapters do not restore the
+retired host/worktree execution path.
+
 ## Problem Statement
 
 The current Drem Orchestrator runs all services, daemons, and agent harnesses directly on the host. This causes several recurring pains:

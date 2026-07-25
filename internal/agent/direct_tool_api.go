@@ -32,6 +32,9 @@ type toolChatRequest struct {
 	Messages           []toolChatMsg    `json:"messages"`
 	MaxTokens          int              `json:"max_tokens"`
 	Temperature        float64          `json:"temperature"`
+	TopP               float64          `json:"top_p,omitempty"`
+	TopK               int              `json:"top_k,omitempty"`
+	Seed               *int64           `json:"seed,omitempty"`
 	Tools              []toolDefinition `json:"tools,omitempty"`
 	ChatTemplateKwargs map[string]any   `json:"chat_template_kwargs,omitempty"`
 }
@@ -161,6 +164,9 @@ func callToolAPI(cfg DirectToolAgentConfig, messages []toolChatMsg, tools []tool
 		Messages:           wireMessages,
 		MaxTokens:          maxTokens,
 		Temperature:        cfg.Temperature,
+		TopP:               cfg.TopP,
+		TopK:               cfg.TopK,
+		Seed:               cfg.Seed,
 		Tools:              tools,
 		ChatTemplateKwargs: cfg.ChatTemplateKwargs,
 	}

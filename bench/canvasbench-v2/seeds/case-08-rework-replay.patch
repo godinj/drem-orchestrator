@@ -1,0 +1,82 @@
+diff --git a/internal/orchestrator/canvasbench_rework_replay_test.go b/internal/orchestrator/canvasbench_rework_replay_test.go
+new file mode 100644
+index 0000000..7200b11
+--- /dev/null
++++ b/internal/orchestrator/canvasbench_rework_replay_test.go
+@@ -0,0 +1,76 @@
++package orchestrator
++
++import (
++    "fmt"
++    "math/rand"
++    "testing"
++
++    "github.com/stretchr/testify/require"
++
++    "github.com/godinj/drem-orchestrator/internal/model"
++    "github.com/godinj/drem-orchestrator/internal/testutil"
++)
++
++func TestCanvasBenchOwnershipReworkDiagnosticPermutations(t *testing.T) {
++    diagnostics := []string{
++        "test APIs do not compile",
++        "action APIs are undeclared",
++        "config/default_keymap.yaml is missing Alt+j/Alt+k",
++    }
++    for seed := 0; seed < 100; seed++ {
++        t.Run(fmt.Sprintf("order-%03d", seed), func(t *testing.T) {
++            orch, task, snapshot := deliveryFixture(t)
++            testOwner := testutil.CreateTask(t, orch.db, task.ProjectID, "test owner", model.StatusDone)
++            testOwner.ParentTaskID = &task.ID
++            testOwner.Phase = "test"
++            testOwner.Context = model.JSONField{"writable_files": []any{"tests/integration/LaneVersionCommandTest.cpp"}}
++            require.NoError(t, orch.db.Save(&testOwner).Error)
++
++            implementation := testutil.CreateTask(t, orch.db, task.ProjectID, "implementation owner", model.StatusDone)
++            implementation.ParentTaskID = &task.ID
++            implementation.Phase = "implementation"
++            implementation.DependencyIDs = model.JSONArray{testOwner.ID.String()}
++            implementation.Context = model.JSONField{"writable_files": []any{
++                "src/vim/adapters/EditorAdapter.h",
++                "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
++                "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc",
++            }}
++            require.NoError(t, orch.db.Save(&implementation).Error)
++            testOwner.TestsFor = model.JSONArray{implementation.ID.String()}
++            require.NoError(t, orch.db.Save(&testOwner).Error)
++
++            integration := testutil.CreateTask(t, orch.db, task.ProjectID, "integration owner", model.StatusDone)
++            integration.ParentTaskID = &task.ID
++            integration.Phase = "integration"
++            integration.DependencyIDs = model.JSONArray{implementation.ID.String()}
++            integration.Context = model.JSONField{"writable_files": []any{"config/default_keymap.yaml"}}
++            require.NoError(t, orch.db.Save(&integration).Error)
++
++            artifact, err := orch.FreezeDeliveryArtifact(task.ID, snapshot)
++            require.NoError(t, err)
++            var current model.Task
++            require.NoError(t, orch.db.First(&current, "id = ?", task.ID).Error)
++            shuffled := append([]string(nil), diagnostics...)
++            rand.New(rand.NewSource(int64(seed))).Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
++            _, err = orch.RequestDeliveryRework(RequestDeliveryReworkRequest{
++                TaskID: current.ID, ObservedStateVersion: current.StateVersion,
++                ArtifactVersion: artifact.ArtifactVersion, CommitSHA: artifact.CommitSHA,
++                Actor: "canvasbench", Source: "deterministic_replay",
++                Reason: fmt.Sprintf("%s; %s; %s", shuffled[0], shuffled[1], shuffled[2]),
++                Mode: model.DeliveryReworkOrchestrated, IdempotencyKey: fmt.Sprintf("canvasbench-%03d", seed),
++            })
++            require.NoError(t, err)
++            var repairs []model.Task
++            require.NoError(t, orch.db.Where("parent_task_id = ? AND status = ?", task.ID, model.StatusBacklog).Find(&repairs).Error)
++            require.Len(t, repairs, 3)
++            byPhase := map[string]model.Task{}
++            for _, repair := range repairs { byPhase[repair.Phase] = repair }
++            require.Equal(t, []string{"tests/integration/LaneVersionCommandTest.cpp"}, extractWritableFiles(byPhase["test"]))
++            require.Equal(t, []string{"src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"}, extractWritableFiles(byPhase["implementation"]))
++            require.Equal(t, []string{"config/default_keymap.yaml"}, extractWritableFiles(byPhase["integration"]))
++            require.Equal(t, model.JSONArray{byPhase["test"].ID.String()}, byPhase["implementation"].DependencyIDs)
++            require.Equal(t, model.JSONArray{byPhase["implementation"].ID.String()}, byPhase["integration"].DependencyIDs)
++            require.Equal(t, model.JSONArray{byPhase["implementation"].ID.String()}, byPhase["test"].TestsFor)
++        })
++    }
++}

@@ -1,0 +1,27 @@
+{
+  "schema": "canvasbench.task.v2",
+  "id": "case-06",
+  "title": "Compiler-directed take-cycling artifact repair",
+  "description": "Repair the preserved non-compiling artifact 861eebff using exact compiler evidence; the hidden artifact/diagnostic bundle is not yet supplied.",
+  "status": "placeholder",
+  "mode": "direct_worker",
+  "inference_policy": "required",
+  "allowed_tool_policies": ["structured_only", "sandboxed_shell"],
+  "weight": 14,
+  "role": "fixer",
+  "system_prompt": "Repair only the declared test, header, and action fragments. Remove invented APIs, align declarations/definitions/action pointers, and use exact compiler diagnostics. Do not edit the keymap.",
+  "user_message": "Make the preserved take-cycling artifact compile and satisfy the hidden behavioral and mutant suite without broadening scope.",
+  "fixture": {"repo_id": "drem-canvas", "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274", "visible_blobs": [
+    {"path": "tests/integration/LaneVersionCommandTest.cpp", "git_blob_sha": "e013d01be19945e0c009ac16987f7c2b5c49b32f"},
+    {"path": "src/vim/adapters/EditorAdapter.h", "git_blob_sha": "f317c4391fcf48cc4e496a06231f1661f7489871"},
+    {"path": "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "git_blob_sha": "42a9aae475fdd7cb8e8a572d3c716e3bb5f51fc6"},
+    {"path": "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "git_blob_sha": "f62cd413a41d34d706859eba27e29f82e5aa7eb3"}
+  ]},
+  "read_paths": ["tests/integration/LaneVersionCommandTest.cpp", "src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
+  "write_paths": ["tests/integration/LaneVersionCommandTest.cpp", "src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
+  "required_changed_paths": ["tests/integration/LaneVersionCommandTest.cpp", "src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
+  "result_artifact": "",
+  "required_mutation": true,
+  "oracle_id": "take-cycling-bad-artifact-861eebff-v1",
+  "budget": {"max_input_tokens": 75000, "max_output_tokens": 8000, "max_tool_calls": 24, "max_iterations": 24, "timeout_seconds": 720}
+}

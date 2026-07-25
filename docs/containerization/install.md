@@ -172,6 +172,23 @@ ephemeral workers on stale behavior. Confirm the source-state labels on
 measured pilot. Restart/deploy control-plane services with `--no-deps` so this
 verification never restarts the warm SGLang service.
 
+Before spending another supervisory Codex goal on a model/harness candidate,
+qualify it with the content-addressed CanvasBench v2 manifest. The host-side
+runner does not require restarting inference services:
+
+```bash
+go run ./cmd/canvasbench \
+  -manifest bench/canvasbench-v2/manifest.json \
+  -matrix /absolute/path/to/attested-matrix.json \
+  -canvas-repo /absolute/path/to/drem-canvas.git/main \
+  -orchestrator-repo /absolute/path/to/drem-orchestrator.git/master \
+  -out /absolute/path/to/results/run-id
+```
+
+See `docs/canvasbench-v2.md` for immutable fixtures, tool policies, external
+adapter isolation, and qualification requirements. Placeholder cases are not
+passes, and runs with incomplete attestation are not comparable.
+
 The generated Canvas profile sets `[direct_tool_agent].timeout = "10m"`.
 Measured Qwen turns on the remote RTX 3090 exceeded two minutes while still
 making steady generation progress, so this deadline protects against a dead

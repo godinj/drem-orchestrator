@@ -28,9 +28,18 @@ const (
 
 // toolExecutor bundles the working directory and config needed to run tools.
 type toolExecutor struct {
-	workDir     string
-	bashTimeout time.Duration
-	scopedFiles map[string]struct{}
+	workDir       string
+	bashTimeout   time.Duration
+	scopedFiles   map[string]struct{}
+	readableFiles map[string]struct{}
+}
+
+func (te *toolExecutor) readable(path string) bool {
+	if len(te.readableFiles) == 0 {
+		return true
+	}
+	_, ok := te.readableFiles[path]
+	return ok
 }
 
 var quotedIncludePattern = regexp.MustCompile(`(?m)^\s*#\s*include\s*"([^"]+)"`)
@@ -157,6 +166,9 @@ func (te *toolExecutor) execRead(argsJSON string) (string, error) {
 	resolved, err := te.resolvePath(args.Path)
 	if err != nil {
 		return "", err
+	}
+	if !te.readable(resolved) {
+		return "", fmt.Errorf("read %s: path is outside the benchmark read allowlist", args.Path)
 	}
 	data, err := os.ReadFile(resolved)
 	if err != nil {
@@ -388,6 +400,9 @@ func (te *toolExecutor) execGrep(argsJSON string) (string, error) {
 		searchPath = resolved
 	}
 	rgArgs = append(rgArgs, searchPath)
+	if len(te.readableFiles) > 0 {
+		return "", fmt.Errorf("grep is disabled when an exact benchmark read allowlist is active; read an authorized file directly")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -425,6 +440,9 @@ func (te *toolExecutor) execGlob(argsJSON string) (string, error) {
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse glob args: %w", err)
+	}
+	if len(te.readableFiles) > 0 {
+		return "", fmt.Errorf("glob is disabled when an exact benchmark read allowlist is active; use the declared file list")
 	}
 
 	baseDir := te.workDir

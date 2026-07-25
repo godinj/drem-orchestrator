@@ -19,6 +19,11 @@ const (
 	ToolArgumentsObject                 = "object"
 )
 
+const (
+	ToolHistoryAggressive   = "aggressive"
+	ToolHistoryRetainRecent = "retain_recent"
+)
+
 // DirectToolAgentConfig holds connection, generation, and execution parameters
 // for the direct tool-calling agent.
 type DirectToolAgentConfig struct {
@@ -26,6 +31,9 @@ type DirectToolAgentConfig struct {
 	Model         string
 	MaxTokens     int
 	Temperature   float64
+	TopP          float64
+	TopK          int
+	Seed          *int64
 	Timeout       time.Duration
 	MaxIterations int
 
@@ -82,8 +90,20 @@ type DirectToolAgentConfig struct {
 	// ScopedFiles lets corrective mutation turns omit write when every
 	// authorized path already exists.
 	ScopedFiles []string
-	OnIteration func(iteration, tokensIn, tokensOut, contextPct int)
-	OnToolCall  func(toolName string, args map[string]any, resultLen int)
+	// ReadableFiles is an optional exact read allowlist. When non-empty, the
+	// structured read/search tools reject every repository path not named here.
+	// DisableBash closes the shell escape hatch for benchmark runs so the read
+	// contract is enforced by the tool layer rather than prompt text.
+	ReadableFiles []string
+	DisableBash   bool
+	// ToolHistoryMode selects the historical-tool retention policy. The legacy
+	// zero value is "aggressive". "retain_recent" keeps the configured number
+	// of complete recent exchanges until live context reaches the threshold.
+	ToolHistoryMode                string
+	ToolHistoryKeepRecentExchanges int
+	ToolHistoryRetentionPct        int
+	OnIteration                    func(iteration, tokensIn, tokensOut, contextPct int)
+	OnToolCall                     func(toolName string, args map[string]any, resultLen int)
 }
 
 func DefaultDirectToolAgentConfig() DirectToolAgentConfig {
@@ -101,18 +121,23 @@ func DefaultDirectToolAgentConfig() DirectToolAgentConfig {
 }
 
 type DirectToolAgentResult struct {
-	Output           string
-	OutputPath       string
-	TokensIn         int
-	TokensOut        int
-	Iterations       int
-	Duration         time.Duration
-	FinalContextPct  int
-	StopReason       string
-	MutationObserved bool
-	PeakRequestInput int
-	ResumedTurns     int
-	FoldedBytes      int
+	Output                 string
+	OutputPath             string
+	TokensIn               int
+	TokensOut              int
+	Iterations             int
+	Duration               time.Duration
+	FinalContextPct        int
+	StopReason             string
+	MutationObserved       bool
+	PeakRequestInput       int
+	ResumedTurns           int
+	FoldedBytes            int
+	UniqueReads            int
+	RedundantReads         int
+	DeniedCalls            int
+	FirstMutationIteration int
+	FirstMutationMs        int64
 }
 
 const (
@@ -307,8 +332,30 @@ func compactToolResultHistory(messages []toolChatMsg) []toolChatMsg {
 }
 
 func compactToolResultHistoryWithStats(messages []toolChatMsg) ([]toolChatMsg, int) {
-	messages, exchangeFolded := compactHistoricalToolExchanges(messages)
-	remainingResults := toolHistoryKeepRecent
+	return compactToolResultHistoryPolicy(messages, toolHistoryKeepRecent)
+}
+
+func compactToolResultHistoryForConfig(messages []toolChatMsg, cfg DirectToolAgentConfig, liveContextPct int) ([]toolChatMsg, int) {
+	if cfg.ToolHistoryMode != ToolHistoryRetainRecent {
+		return compactToolResultHistoryPolicy(messages, toolHistoryKeepRecent)
+	}
+	threshold := cfg.ToolHistoryRetentionPct
+	if threshold <= 0 {
+		threshold = 70
+	}
+	keep := cfg.ToolHistoryKeepRecentExchanges
+	if keep < 3 {
+		keep = 3
+	}
+	if liveContextPct >= threshold {
+		keep = toolHistoryKeepRecent
+	}
+	return compactToolResultHistoryPolicy(messages, keep)
+}
+
+func compactToolResultHistoryPolicy(messages []toolChatMsg, keepRecent int) ([]toolChatMsg, int) {
+	messages, exchangeFolded := compactHistoricalToolExchangesKeeping(messages, keepRecent)
+	remainingResults := keepRecent
 	foldedBytes := exchangeFolded
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role != "tool" {
@@ -340,7 +387,15 @@ func compactToolResultHistoryWithStats(messages []toolChatMsg) ([]toolChatMsg, i
 // summaries preserve path, outcome prefix, byte count, and digest without
 // becoming callable examples.
 func compactHistoricalToolExchanges(messages []toolChatMsg) ([]toolChatMsg, int) {
-	latestValid := -1
+	return compactHistoricalToolExchangesKeeping(messages, 1)
+}
+
+func compactHistoricalToolExchangesKeeping(messages []toolChatMsg, keepRecent int) ([]toolChatMsg, int) {
+	if keepRecent < 1 {
+		keepRecent = 1
+	}
+	keepAssistant := make(map[int]struct{}, keepRecent)
+	remaining := keepRecent
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role != "assistant" || len(messages[i].ToolCalls) == 0 {
 			continue
@@ -353,8 +408,11 @@ func compactHistoricalToolExchanges(messages []toolChatMsg) ([]toolChatMsg, int)
 			}
 		}
 		if valid {
-			latestValid = i
-			break
+			keepAssistant[i] = struct{}{}
+			remaining--
+			if remaining == 0 {
+				break
+			}
 		}
 	}
 
@@ -381,7 +439,8 @@ func compactHistoricalToolExchanges(messages []toolChatMsg) ([]toolChatMsg, int)
 			}
 			seenHarness[message.Content] = struct{}{}
 		}
-		if message.Role != "assistant" || len(message.ToolCalls) == 0 || i == latestValid {
+		_, retained := keepAssistant[i]
+		if message.Role != "assistant" || len(message.ToolCalls) == 0 || retained {
 			compacted = append(compacted, message)
 			continue
 		}

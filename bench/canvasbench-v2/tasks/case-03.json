@@ -1,0 +1,31 @@
+{
+  "schema": "canvasbench.task.v2",
+  "id": "case-03",
+  "title": "One-file take-cycling keymap assembly",
+  "description": "Add the two exact take-cycling routes without disturbing adjacent slip routes.",
+  "status": "runnable",
+  "mode": "direct_worker",
+  "inference_policy": "required",
+  "allowed_tool_policies": ["structured_only", "sandboxed_shell"],
+  "weight": 7,
+  "role": "coder",
+  "system_prompt": "Perform one assembly mutation. Read only the declared files and edit only config/default_keymap.yaml. Preserve every existing route.",
+  "user_message": "Add Alt+j -> take.next and Alt+k -> take.prev alongside the existing Alt+h/Alt+l slip actions.",
+  "fixture": {
+    "repo_id": "drem-canvas",
+    "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274",
+    "visible_blobs": [
+      {"path": "config/default_keymap.yaml", "git_blob_sha": "84e6d556020acb234b79586008f27e22ed2b568c"},
+      {"path": "src/vim/KeymapRegistry.h", "git_blob_sha": "aef766fa31182af4848c842ff4ff9909aa4da0e0"},
+      {"path": "src/vim/KeySequence.h", "git_blob_sha": "d3c844cb452f966311f038b499af69e4d179cf42"},
+      {"path": "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "git_blob_sha": "f62cd413a41d34d706859eba27e29f82e5aa7eb3"}
+    ]
+  },
+  "read_paths": ["config/default_keymap.yaml", "src/vim/KeymapRegistry.h", "src/vim/KeySequence.h", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
+  "write_paths": ["config/default_keymap.yaml"],
+  "required_changed_paths": ["config/default_keymap.yaml"],
+  "result_artifact": "",
+  "required_mutation": true,
+  "oracle_id": "keymap-take-cycling-v1",
+  "budget": {"max_input_tokens": 15000, "max_output_tokens": 1500, "max_tool_calls": 7, "max_iterations": 7, "timeout_seconds": 120}
+}

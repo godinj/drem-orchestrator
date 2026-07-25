@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "canvasbench.result.v2", "type": "object", "additionalProperties": false,
+  "required": ["schema", "run_id", "matrix_id", "task_id", "trial", "seed", "status", "score", "harness", "runtime", "fixture", "telemetry", "server_usage", "trajectory", "gates", "stop_reason"],
+  "properties": {
+    "schema": {"const": "canvasbench.result.v2"}, "run_id": {"type": "string"}, "matrix_id": {"type": "string"}, "task_id": {"type": "string"},
+    "trial": {"type": "integer"}, "seed": {"type": "integer"}, "status": {"enum": ["passed", "failed", "non_runnable"]}, "score": {"type": "number"},
+    "harness": {"type": "object"}, "runtime": {"type": "object"}, "fixture": {"type": "object"}, "telemetry": {"type": "object"}, "server_usage": {"type": "object"},
+    "trajectory": {"type": "object"}, "gates": {"type": "object"}, "stop_reason": {"type": "string"}, "error": {"type": "string"}, "codex_tokens": {"type": "integer"}
+  }
+}
