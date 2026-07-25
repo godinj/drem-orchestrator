@@ -112,7 +112,16 @@ func normalizeQwenCode(raw []byte, started time.Time) (normalizedExternal, error
 		}
 	}
 	if !seenStart || !seenResult || !seenAssistant || result.SessionID == "" || result.Output == "" {
-		return normalizedExternal{}, fmt.Errorf("incomplete Qwen trajectory")
+		if seenStart && seenAssistant && result.SessionID != "" {
+			result.StopReason = "incomplete"
+			for index := len(result.Steps) - 1; index >= 0; index-- {
+				if result.Steps[index].Message != "" {
+					result.Output = result.Steps[index].Message
+					break
+				}
+			}
+		}
+		return result, fmt.Errorf("incomplete Qwen trajectory")
 	}
 	return result, nil
 }

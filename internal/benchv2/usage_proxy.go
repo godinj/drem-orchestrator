@@ -91,6 +91,15 @@ type proxyUsage struct {
 	CompletionTokens *int `json:"completion_tokens"`
 }
 
+type usageProxyAdminError struct {
+	Status int
+	Body   string
+}
+
+func (err *usageProxyAdminError) Error() string {
+	return fmt.Sprintf("usage proxy admin returned HTTP %d: %s", err.Status, err.Body)
+}
+
 func NewUsageProxyHandler(config UsageProxyServerConfig) (http.Handler, error) {
 	for name, value := range map[string]string{
 		"upstream chat-completions URL": config.UpstreamChatCompletions,
@@ -303,7 +312,11 @@ func (server *usageProxyServer) forwardChatCompletions(writer http.ResponseWrite
 		writeProxyError(writer, http.StatusBadRequest, "invalid OpenAI request")
 		return nil, err
 	}
-	upstreamRequest, err := http.NewRequestWithContext(request.Context(), http.MethodPost, server.config.UpstreamChatCompletions, bytes.NewReader(forwardBody))
+	// A harness may stop reading as soon as it reaches a tool/turn/wall budget.
+	// Keep draining the already-authorized upstream request so the final
+	// server-reported usage frame is still recorded. The proxy HTTP client's
+	// timeout remains the hard upper bound.
+	upstreamRequest, err := http.NewRequestWithContext(context.WithoutCancel(request.Context()), http.MethodPost, server.config.UpstreamChatCompletions, bytes.NewReader(forwardBody))
 	if err != nil {
 		writeProxyError(writer, http.StatusBadGateway, "upstream request failed")
 		return nil, err
@@ -561,16 +574,27 @@ func (client *UsageProxyClient) VerifyLiveAttestation(ctx context.Context) error
 }
 
 func (client *UsageProxyClient) AttestServerUsage(ctx context.Context, session UsageSession) (ServerUsage, error) {
-	var usage ServerUsage
 	path := "/admin/v1/trials/" + url.PathEscape(session.CorrelationID) + "/consume"
-	if err := client.adminJSON(ctx, http.MethodPost, path, nil, &usage); err != nil {
-		return ServerUsage{}, err
+	for {
+		var usage ServerUsage
+		err := client.adminJSON(ctx, http.MethodPost, path, nil, &usage)
+		if err == nil {
+			if usage.Source != ServerUsageSourceProxy || usage.CorrelationID != session.CorrelationID || !usage.Complete ||
+				usage.RequestsMeasured <= 0 || usage.RequestsMeasured != usage.RequestsTotal || usage.PromptTokens < 0 || usage.CompletionTokens < 0 {
+				return ServerUsage{}, errors.New("trusted usage proxy returned incomplete usage")
+			}
+			return usage, nil
+		}
+		var adminErr *usageProxyAdminError
+		if !errors.As(err, &adminErr) || adminErr.Status != http.StatusConflict || !strings.Contains(adminErr.Body, "in-flight") {
+			return ServerUsage{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return ServerUsage{}, ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
 	}
-	if usage.Source != ServerUsageSourceProxy || usage.CorrelationID != session.CorrelationID || !usage.Complete ||
-		usage.RequestsMeasured <= 0 || usage.RequestsMeasured != usage.RequestsTotal || usage.PromptTokens < 0 || usage.CompletionTokens < 0 {
-		return ServerUsage{}, errors.New("trusted usage proxy returned incomplete usage")
-	}
-	return usage, nil
 }
 
 func (client *UsageProxyClient) adminJSON(ctx context.Context, method, path string, body, target any) error {
@@ -597,7 +621,7 @@ func (client *UsageProxyClient) adminJSON(ctx context.Context, method, path stri
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		raw, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
-		return fmt.Errorf("usage proxy admin returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(raw)))
+		return &usageProxyAdminError{Status: response.StatusCode, Body: strings.TrimSpace(string(raw))}
 	}
 	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
 	decoder.DisallowUnknownFields()

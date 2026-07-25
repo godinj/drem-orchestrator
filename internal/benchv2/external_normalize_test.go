@@ -76,3 +76,16 @@ func TestQwenHarnessUsageCannotPopulateServerTruth(t *testing.T) {
 	require.Equal(t, 0, run.Telemetry.TokensIn)
 	require.Equal(t, ServerUsage{}, run.ServerUsage)
 }
+
+func TestQwenIncompleteTrajectoryPreservesMeasuredSteps(t *testing.T) {
+	raw := []byte("{\"type\":\"system\",\"subtype\":\"session_start\",\"session_id\":\"s\"}\n" +
+		"{\"type\":\"assistant\",\"session_id\":\"s\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"thinking\",\"thinking\":\"Inspect first.\"},{\"type\":\"tool_use\",\"id\":\"t\",\"name\":\"read\",\"input\":{\"path\":\"x\"}}]}}\n")
+	run, err := NormalizeExternal(AdapterQwenCode, NormalizerQwenCode,
+		TrialRequest{Harness: HarnessConfig{Name: AdapterQwenCode, Version: "1", ConfigSHA256: "cfg"}, Runtime: RuntimeAttestation{ModelID: "model"}},
+		OuterExecutionResult{Stdout: raw, StartedAt: time.Unix(0, 0), Duration: time.Second})
+	require.ErrorContains(t, err, "incomplete Qwen trajectory")
+	require.Equal(t, "invalid_trajectory", run.StopReason)
+	require.Len(t, run.Trajectory.Steps, 1)
+	require.Equal(t, 1, run.Telemetry.ToolCalls)
+	require.Contains(t, run.Trajectory.Steps[0].Message, "Inspect first.")
+}

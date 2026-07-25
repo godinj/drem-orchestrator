@@ -38,11 +38,21 @@ func NormalizeExternal(kind, normalizer string, request TrialRequest, execution 
 		err = fmt.Errorf("unsupported external normalizer %q", kind)
 	}
 	if err != nil {
-		return HarnessRun{Output: string(execution.Stdout), StopReason: "invalid_trajectory"}, err
+		if normalized.SessionID == "" || len(normalized.Steps) == 0 {
+			return HarnessRun{Output: string(execution.Stdout), StopReason: "invalid_trajectory"}, err
+		}
+		run := externalHarnessRun(normalized, normalizer, request, execution)
+		run.StopReason = "invalid_trajectory"
+		return run, err
 	}
+	run := externalHarnessRun(normalized, normalizer, request, execution)
 	if execution.ExitCode != 0 {
-		return HarnessRun{Output: normalized.Output, StopReason: normalized.StopReason}, fmt.Errorf("outer harness exited %d", execution.ExitCode)
+		return run, fmt.Errorf("outer harness exited %d", execution.ExitCode)
 	}
+	return run, nil
+}
+
+func externalHarnessRun(normalized normalizedExternal, normalizer string, request TrialRequest, execution OuterExecutionResult) HarnessRun {
 	trajectory := ATIFTrajectory{
 		SchemaVersion: ATIFVersion, SessionID: normalized.SessionID,
 		Agent: ATIFAgent{Name: request.Harness.Name, Version: request.Harness.Version, Model: request.Runtime.ModelID},
@@ -50,7 +60,7 @@ func NormalizeExternal(kind, normalizer string, request TrialRequest, execution 
 		Extra: map[string]any{"normalizer": normalizer, "harness_config_sha256": request.Harness.ConfigSHA256},
 	}
 	telemetry := Telemetry{DurationMs: execution.Duration.Milliseconds(), ToolCalls: countATIFToolCalls(normalized.Steps)}
-	return HarnessRun{Output: normalized.Output, StopReason: normalized.StopReason, Telemetry: telemetry, Trajectory: trajectory}, nil
+	return HarnessRun{Output: normalized.Output, StopReason: normalized.StopReason, Telemetry: telemetry, Trajectory: trajectory}
 }
 
 func decodeJSONLines(raw []byte) ([]json.RawMessage, error) {

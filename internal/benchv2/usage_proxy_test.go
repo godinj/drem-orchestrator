@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -229,8 +230,19 @@ func TestUsageProxyRefusesToFreezeInFlightLedger(t *testing.T) {
 		responseDone <- response
 	}()
 	<-started
-	_, err := client.AttestServerUsage(context.Background(), session)
-	require.ErrorContains(t, err, "HTTP 409")
+	usageDone := make(chan ServerUsage, 1)
+	usageErr := make(chan error, 1)
+	go func() {
+		usage, err := client.AttestServerUsage(context.Background(), session)
+		usageDone <- usage
+		usageErr <- err
+	}()
+	require.Eventually(t, func() bool {
+		server := proxy.Config.Handler.(*usageProxyServer)
+		server.mu.Lock()
+		defer server.mu.Unlock()
+		return server.trials[session.CorrelationID].Frozen
+	}, time.Second, 10*time.Millisecond)
 	frozenResponse := postTestCompletion(t, proxy.URL, session.APIKey, `{"messages":[]}`)
 	require.Equal(t, http.StatusUnauthorized, frozenResponse.StatusCode)
 	_ = frozenResponse.Body.Close()
@@ -238,9 +250,45 @@ func TestUsageProxyRefusesToFreezeInFlightLedger(t *testing.T) {
 	response := <-responseDone
 	require.NotNil(t, response)
 	_ = response.Body.Close()
-	usage, err := client.AttestServerUsage(context.Background(), session)
-	require.NoError(t, err)
+	usage := <-usageDone
+	require.NoError(t, <-usageErr)
 	require.Equal(t, 1, usage.RequestsMeasured)
+}
+
+func TestUsageProxyDrainsUsageAfterHarnessDisconnect(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		close(started)
+		<-release
+		_, _ = io.WriteString(writer, "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":13,\"completion_tokens\":5}}\n\ndata: [DONE]\n\n")
+	}))
+	defer upstream.Close()
+	proxy, client := usageProxyFixture(t, upstream.URL+"/v1/chat/completions", "")
+	session := startTestUsageSession(t, client)
+	requestCtx, cancelRequest := context.WithCancel(context.Background())
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodPost, proxy.URL+"/v1/chat/completions", bytes.NewBufferString(`{"stream":true,"messages":[]}`))
+	require.NoError(t, err)
+	request.Header.Set("Authorization", "Bearer "+session.APIKey)
+	requestDone := make(chan error, 1)
+	go func() {
+		response, err := http.DefaultClient.Do(request)
+		if response != nil {
+			_ = response.Body.Close()
+		}
+		requestDone <- err
+	}()
+	<-started
+	cancelRequest()
+	require.Error(t, <-requestDone)
+	close(release)
+	attestCtx, cancelAttest := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelAttest()
+	usage, err := client.AttestServerUsage(attestCtx, session)
+	require.NoError(t, err)
+	require.Equal(t, 13, usage.PromptTokens)
+	require.Equal(t, 5, usage.CompletionTokens)
 }
 
 func TestUsageProxyRejectsMissingAndDuplicateUsage(t *testing.T) {

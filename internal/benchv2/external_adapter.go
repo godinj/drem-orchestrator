@@ -153,7 +153,9 @@ func (adapter ExternalCLIAdapter) Run(ctx context.Context, request TrialRequest)
 		return HarnessRun{}, err
 	}
 	execution, execErr := adapter.Executor.Execute(ctx, spec)
-	attestCtx, cancelAttest := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	// The trusted proxy may still be draining a final server usage frame after
+	// an external harness closes its stream at a local budget boundary.
+	attestCtx, cancelAttest := context.WithTimeout(context.WithoutCancel(ctx), 60*time.Second)
 	usage, usageErr := adapter.UsageAttestor.AttestServerUsage(attestCtx, usageSession)
 	cancelAttest()
 	if usageErr != nil {
