@@ -13,6 +13,9 @@ printf 'fixture\n' > "$local_canvas/fixture.txt"
 git -C "$local_canvas" add fixture.txt
 git -C "$local_canvas" commit -qm 'fixture base'
 canvas_base="$(git -C "$local_canvas" rev-parse HEAD)"
+printf 'fixture two\n' >> "$local_canvas/fixture.txt"
+git -C "$local_canvas" commit -qam 'second fixture base'
+canvas_base_two="$(git -C "$local_canvas" rev-parse HEAD)"
 remote_canvas="$test_root/remote/canvas.git"
 remote_orch="$test_root/remote/orch.git"
 git init -q --bare "$remote_canvas"
@@ -20,8 +23,9 @@ git init -q --bare "$remote_orch"
 fixture_repo="$test_root/repo"
 mkdir -p "$fixture_repo/scripts" "$fixture_repo/bench/canvasbench-v2/tasks"
 cp "$repo_root/scripts/canvasbench-remote.sh" "$fixture_repo/scripts/canvasbench-remote.sh"
-printf '{"cases":[{"task_file":"tasks/case.json"}]}\n' > "$fixture_repo/bench/canvasbench-v2/manifest.json"
+printf '{"cases":[{"task_file":"tasks/case.json"},{"task_file":"tasks/case-two.json"}]}\n' > "$fixture_repo/bench/canvasbench-v2/manifest.json"
 printf '{"fixture":{"repo_id":"drem-canvas","base_commit":"%s"}}\n' "$canvas_base" > "$fixture_repo/bench/canvasbench-v2/tasks/case.json"
+printf '{"fixture":{"repo_id":"drem-canvas","base_commit":"%s"}}\n' "$canvas_base_two" > "$fixture_repo/bench/canvasbench-v2/tasks/case-two.json"
 git -C "$fixture_repo" init -q
 git -C "$fixture_repo" config user.name CanvasBench
 git -C "$fixture_repo" config user.email canvasbench@example.invalid
@@ -97,6 +101,7 @@ grep -Fxq "$remote_canvas" "$test_root/args"
 grep -Fxq "$remote_orch" "$test_root/args"
 grep -Fxq '/run/secrets/canvasbench-admin.token' "$test_root/args"
 test "$(git -C "$remote_canvas" rev-parse "refs/canvasbench/fixtures/$canvas_base^{commit}")" = "$canvas_base"
+test "$(git -C "$remote_canvas" rev-parse "refs/canvasbench/fixtures/$canvas_base_two^{commit}")" = "$canvas_base_two"
 if find "$test_root/remote/runs" -mindepth 1 -print -quit | grep -q .; then
     echo 'successful remote run staging was not cleaned' >&2
     exit 1
