@@ -17,6 +17,8 @@ func TestValidateCanaryAcceptsEverySupportedNormalizerWireFormat(t *testing.T) {
 		{benchv2.AdapterQwenCode, "qwen-code.jsonl", "Qwen finished exactly."},
 		{benchv2.AdapterMiniSWE, "mini-swe-agent.json", "Mini-SWE finished exactly."},
 		{benchv2.AdapterPi, "pi.jsonl", "Pi finished exactly."},
+		{benchv2.AdapterAider, "aider.json", "Aider finished exactly."},
+		{benchv2.AdapterOpenHands, "openhands.json", "OpenHands finished exactly."},
 	}
 	for _, test := range tests {
 		t.Run(test.harness, func(t *testing.T) {

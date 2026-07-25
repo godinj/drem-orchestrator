@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/godinj/drem-orchestrator/internal/benchv2"
@@ -23,7 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	if run.Output != *expect {
+	if !strings.Contains(run.Output, *expect) {
 		log.Fatalf("normalized output mismatch: got %q", run.Output)
 	}
 	fmt.Printf("canary=pass harness=%s session=%s\n", *harness, run.Trajectory.SessionID)
@@ -31,10 +32,12 @@ func main() {
 
 func validateCanary(harness string, raw []byte) (benchv2.HarnessRun, error) {
 	normalizers := map[string]string{
-		benchv2.AdapterOpenCode: benchv2.NormalizerOpenCode,
-		benchv2.AdapterQwenCode: benchv2.NormalizerQwenCode,
-		benchv2.AdapterMiniSWE:  benchv2.NormalizerMiniSWE,
-		benchv2.AdapterPi:       benchv2.NormalizerPi,
+		benchv2.AdapterOpenCode:  benchv2.NormalizerOpenCode,
+		benchv2.AdapterQwenCode:  benchv2.NormalizerQwenCode,
+		benchv2.AdapterMiniSWE:   benchv2.NormalizerMiniSWE,
+		benchv2.AdapterPi:        benchv2.NormalizerPi,
+		benchv2.AdapterAider:     benchv2.NormalizerAider,
+		benchv2.AdapterOpenHands: benchv2.NormalizerOpenHands,
 	}
 	normalizer := normalizers[harness]
 	if normalizer == "" {

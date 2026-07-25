@@ -9,15 +9,19 @@ import (
 )
 
 const (
-	AdapterOpenCode = "opencode"
-	AdapterQwenCode = "qwen-code"
-	AdapterMiniSWE  = "mini-swe-agent"
-	AdapterPi       = "pi"
+	AdapterOpenCode  = "opencode"
+	AdapterQwenCode  = "qwen-code"
+	AdapterMiniSWE   = "mini-swe-agent"
+	AdapterPi        = "pi"
+	AdapterAider     = "aider"
+	AdapterOpenHands = "openhands"
 
-	NormalizerOpenCode = "opencode-json-v1"
-	NormalizerQwenCode = "qwen-code-stream-json-v1"
-	NormalizerMiniSWE  = "mini-swe-agent-1.1"
-	NormalizerPi       = "pi-json-v3"
+	NormalizerOpenCode  = "opencode-json-v1"
+	NormalizerQwenCode  = "qwen-code-stream-json-v1"
+	NormalizerMiniSWE   = "mini-swe-agent-1.1"
+	NormalizerPi        = "pi-json-v3"
+	NormalizerAider     = "aider-wrapper-json-v1"
+	NormalizerOpenHands = "openhands-wrapper-json-v1"
 )
 
 type CommandInvocation struct {
@@ -95,6 +99,20 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 		invocation.Args = []string{"-t", prompt, "-m", request.Harness.AdapterModelRef, "-y", "--exit-immediately", "-o", trajectory}
 	case AdapterPi:
 		invocation.Args = []string{"--mode", "json", "--no-session", "--no-context-files", "--model", request.Harness.AdapterModelRef, "--system-prompt", request.Task.SystemPrompt, prompt}
+	case AdapterAider:
+		invocation.Args = []string{"--model", request.Harness.AdapterModelRef, "--message", prompt, "--edit-format", "diff",
+			"--yes-always", "--no-git", "--no-auto-commits", "--no-dirty-commits", "--no-stream", "--no-pretty",
+			"--no-check-update", "--no-analytics", "--no-cache-prompts", "--map-tokens", "0"}
+		for _, path := range request.Task.ReadPaths {
+			if !containsString(request.Task.WritePaths, path) {
+				invocation.Args = append(invocation.Args, "--read", path)
+			}
+		}
+		for _, path := range request.Task.WritePaths {
+			invocation.Args = append(invocation.Args, "--file", path)
+		}
+	case AdapterOpenHands:
+		invocation.Args = []string{"--model", request.Harness.AdapterModelRef, "--headless", "--json", "--yolo", "--override-with-envs", "-t", prompt}
 	default:
 		return CommandInvocation{}, fmt.Errorf("unsupported external adapter %q", adapter.Kind)
 	}
@@ -230,7 +248,7 @@ func inferenceEnvContractForAdapter(kind string) string {
 		return "openai_api_base_api_key.v1"
 	}
 	switch kind {
-	case AdapterOpenCode, AdapterQwenCode, AdapterPi:
+	case AdapterOpenCode, AdapterQwenCode, AdapterPi, AdapterAider, AdapterOpenHands:
 		return "openai_base_url_api_key.v1"
 	default:
 		return ""
@@ -263,7 +281,20 @@ func normalizerForAdapter(kind string) string {
 		return NormalizerMiniSWE
 	case AdapterPi:
 		return NormalizerPi
+	case AdapterAider:
+		return NormalizerAider
+	case AdapterOpenHands:
+		return NormalizerOpenHands
 	default:
 		return ""
 	}
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }

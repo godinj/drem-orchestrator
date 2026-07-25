@@ -402,7 +402,7 @@ func ValidateAttestation(h HarnessConfig, r RuntimeAttestation) error {
 	if h.Name == AdapterMiniSWE && !validMiniSWEModelRef(h.AdapterModelRef) {
 		return fmt.Errorf("mini-SWE adapter model reference must use openai/<served-model>")
 	}
-	if h.Name == AdapterOpenCode || h.Name == AdapterQwenCode || h.Name == AdapterMiniSWE || h.Name == AdapterPi {
+	if h.Name == AdapterOpenCode || h.Name == AdapterQwenCode || h.Name == AdapterMiniSWE || h.Name == AdapterPi || h.Name == AdapterAider || h.Name == AdapterOpenHands {
 		if h.ToolPolicy != ToolPolicySandboxed || h.OuterIsolation != "outer_container" || !pinnedOCIImage.MatchString(h.OuterImage) ||
 			h.OuterNetworkPolicy != OuterNetworkIsolatedInference || h.OuterNetworkName == "" || h.OuterNetworkName == "host" ||
 			h.OuterNetworkName == "bridge" || h.OuterNetworkName == "default" || h.TrajectoryNormalizer != normalizerForAdapter(h.Name) ||

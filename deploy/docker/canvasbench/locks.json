@@ -51,6 +51,24 @@
       "executable": "pi",
       "env_contract": "openai_base_url_api_key.v1",
       "normalizer": "pi-json-v3"
+    },
+    "aider": {
+      "version": "0.86.2",
+      "upstream": "pypi:aider-chat==0.86.2",
+      "integrity": "sha256:f38a9d322f5609f0c13af82d50c6a11170185b3fdf26956e4a7e89ba19819159",
+      "dockerfile": "deploy/docker/canvasbench/aider.Dockerfile",
+      "executable": "aider",
+      "env_contract": "openai_base_url_api_key.v1",
+      "normalizer": "aider-wrapper-json-v1"
+    },
+    "openhands": {
+      "version": "1.16.0",
+      "upstream": "pypi:openhands==1.16.0",
+      "integrity": "sha256:f3ac39c86b1c0fabcf4d88f9c65c353d9cf83e457063e6b87d67f9a94f832e97",
+      "dockerfile": "deploy/docker/canvasbench/openhands.Dockerfile",
+      "executable": "openhands",
+      "env_contract": "openai_base_url_api_key.v1",
+      "normalizer": "openhands-wrapper-json-v1"
     }
   }
 }

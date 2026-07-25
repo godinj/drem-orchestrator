@@ -51,7 +51,7 @@ field claims Computer Use or live UI evidence.
 Fixtures, oracles, scoring, and results depend on `HarnessAdapter`, not a
 particular loop. Initial adapters cover DirectToolAgent, deterministic case-8
 replay, and documented JSON or JSONL contracts for OpenCode 1.17+, Qwen Code,
-mini-SWE-agent, and Pi.
+mini-SWE-agent, Pi, Aider, and OpenHands CLI.
 
 External CLI adapters are benchmark-only and always execute through an
 injectable outer-container boundary. Production command construction requires
@@ -69,8 +69,11 @@ outputs back into the full fixture. This is structural scope isolation, not a
 prompt convention, and it does not revive the retired OpenCode host/worktree
 path.
 
-Documented harness output normalizes to ATIF v1.7 without synthesizing
-assistant text. Malformed, incomplete, or unsupported streams fail closed.
+Documented harness output normalizes to ATIF v1.7 without inventing assistant
+text. Aider and OpenHands lack the same stable event stream as the other CLIs,
+so their pinned image shims wrap the real captured terminal output in a strict
+terminal JSON record; the normalizer does not infer hidden tool events.
+Malformed, incomplete, or unsupported streams fail closed.
 Harness-reported usage is retained only as harness output and can never attest
 inference-server truth. External trials use the trusted CanvasBench usage proxy.
 Before each trial, the host creates an in-memory ledger through the
@@ -84,7 +87,7 @@ chat-completions. Trial creation sends the matrix model ID, seed, temperature,
 top-p, top-k, context declaration, per-case output limit, and thinking policy
 over the authenticated admin channel. The proxy overwrites those request fields
 on every harness call, preserving only unrelated chat-template arguments. This
-makes the trusted boundary—not four CLI defaults—the sampling authority. It
+makes the trusted boundary—not individual CLI defaults—the sampling authority. It
 also forces `stream_options.include_usage=true`, parses usage from the server
 response, and aggregates every request. The host consumes the ledger exactly
 once after execution. Zero requests, invalid trial policies, in-flight requests,
@@ -101,7 +104,7 @@ Case 8 declares an explicit deterministic no-inference exemption.
 
 External matrix attestation binds the proxy source state, digest-pinned image,
 effective config SHA-256, and adapter environment contract. OpenCode, Qwen Code,
-and Pi use `openai_base_url_api_key.v1` (`OPENAI_BASE_URL` and
+Pi, Aider, and OpenHands use `openai_base_url_api_key.v1` (`OPENAI_BASE_URL` and
 `OPENAI_API_KEY`). mini-SWE-agent uses `openai_api_base_api_key.v1`
 (`OPENAI_API_BASE` and `OPENAI_API_KEY`) and requires its adapter-side model
 reference to use LiteLLM's explicit `openai/<served-model>` form. The trusted
@@ -123,10 +126,11 @@ the trial before candidate outputs are applied.
 ### Reproducible external images and compatibility canary
 
 `deploy/docker/canvasbench/locks.json` is the build authority for the trusted
-usage proxy and the four external harness images. It pins every base image by
+usage proxy and the six external harness images. It pins every base image by
 manifest digest and pins harness inputs to OpenCode `opencode-ai@1.18.5`, Qwen
-Code `@qwen-code/qwen-code@0.21.0`, mini-SWE-agent `2.4.6`, and Pi
-`@earendil-works/pi-coding-agent@0.82.0`. npm lockfiles and a fully hashed Python
+Code `@qwen-code/qwen-code@0.21.0`, mini-SWE-agent `2.4.6`, Pi
+`@earendil-works/pi-coding-agent@0.82.0`, Aider `0.86.2`, and OpenHands CLI
+`1.16.0`. npm lockfiles and fully hashed Python
 requirements closure bind the transitive package inputs. Floating tags,
 uncommitted source trees, missing upstream integrity, absent BuildKit digests,
 wrong image labels, and a runtime user other than uid/gid 65532 fail the build
@@ -141,10 +145,10 @@ contract, normalizer, and hashes of canonical non-secret image and proxy
 configuration. The tool never emits `latest`.
 
 The adapter also gives each shim the matrix seed, sampling values, effective
-context window, per-case output limit, and thinking policy. OpenCode and Pi use
-those values for truthful model context/output metadata; Qwen Code writes a
-private ephemeral generation configuration; mini-SWE-agent receives equivalent
-LiteLLM arguments. The trusted proxy still overwrites the wire request, so a
+context window, per-case output limit, and thinking policy. OpenCode, Pi, Aider,
+and OpenHands use those values for model context/output metadata; Qwen Code
+writes a private ephemeral generation configuration; mini-SWE-agent receives
+equivalent LiteLLM arguments. The trusted proxy still overwrites the wire request, so a
 harness cannot silently weaken or substitute the benchmark policy.
 
 From a clean committed checkout, build but do not deploy the canonical image
@@ -189,7 +193,8 @@ environment contract, proxy identity mismatch, missing usage, or changed output
 wire exits nonzero with `unsupported canary:`. There is intentionally no
 fallback or compatibility guess. Revision `4ca7b96ab621` was built natively on
 the Debian AMD64 execution host, published to GHCR, and passed the combined
-four-harness canary. The retained attestation SHA-256 is
+four-harness canary. That historical evidence remains valid for its original
+image set; current builds and canaries cover all six harnesses. The retained attestation SHA-256 is
 `7808d44d279c252c5c6258ed96796e75d0edcb6952dddd569133a5ae1b191c0e`;
 the canary document SHA-256 is
 `40bc0c477dc7aa23bc3460715f076b9ffb0b2c08d2ad65231729f17c63c034ab`.

@@ -34,6 +34,8 @@ func NormalizeExternal(kind, normalizer string, request TrialRequest, execution 
 		normalized, err = normalizeMiniSWE(raw, execution.StartedAt)
 	case AdapterPi:
 		normalized, err = normalizePi(execution.Stdout, execution.StartedAt)
+	case AdapterAider, AdapterOpenHands:
+		normalized, err = normalizeWrappedCLI(execution.Stdout, execution.StartedAt, kind)
 	default:
 		err = fmt.Errorf("unsupported external normalizer %q", kind)
 	}

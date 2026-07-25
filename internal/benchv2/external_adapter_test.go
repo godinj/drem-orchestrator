@@ -136,6 +136,8 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 		{AdapterQwenCode, NormalizerQwenCode, []string{"--output-format", "stream-json", "--auth-type", "openai", "--safe-mode", "--yolo", "--max-tool-calls", "12", "--max-session-turns", "8", "--max-wall-time", "600s", "--exclude-tools", "agent"}, nil},
 		{AdapterMiniSWE, NormalizerMiniSWE, []string{"-t", "-m", "openai/qwen36", "-y", "--exit-immediately", "-o", "/workspace/.canvasbench/mini-swe-agent-trajectory.json"}, nil},
 		{AdapterPi, NormalizerPi, []string{"--mode", "json", "--no-session", "--no-context-files", "--model", "provider/qwen36", "--system-prompt"}, []string{"-p", "--prompt"}},
+		{AdapterAider, NormalizerAider, []string{"--model", "provider/qwen36", "--message", "--edit-format", "diff", "--read", "read.cpp", "--file", "write.cpp"}, []string{"raw-qwen-attestation"}},
+		{AdapterOpenHands, NormalizerOpenHands, []string{"--model", "provider/qwen36", "--headless", "--json", "--yolo", "--override-with-envs", "-t"}, []string{"raw-qwen-attestation"}},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {
@@ -181,6 +183,8 @@ func TestExternalAdaptersExecuteOnlyThroughInjectedOuterBoundary(t *testing.T) {
 		{AdapterQwenCode, NormalizerQwenCode, "qwen-code.jsonl", false},
 		{AdapterMiniSWE, NormalizerMiniSWE, "mini-swe-agent.json", true},
 		{AdapterPi, NormalizerPi, "pi.jsonl", false},
+		{AdapterAider, NormalizerAider, "aider.json", false},
+		{AdapterOpenHands, NormalizerOpenHands, "openhands.json", false},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {

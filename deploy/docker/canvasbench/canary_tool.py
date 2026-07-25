@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the four CanvasBench harness images against a deterministic fake model.
+"""Run the canonical CanvasBench harness images against a deterministic fake model.
 
 This is a runtime compatibility canary, not an inference benchmark. Any image,
 environment, CLI, proxy-ledger, or normalizer mismatch is reported as an
@@ -21,7 +21,7 @@ import sys
 import tempfile
 
 
-HARNESSES = ("opencode", "qwen-code", "mini-swe-agent", "pi")
+HARNESSES = ("opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands")
 PINNED_IMAGE = re.compile(r"^[A-Za-z0-9._/:@+-]+:[A-Za-z0-9._+-]+@sha256:[0-9a-f]{64}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PROMPT = "Respond with exactly CANVASBENCH_CANARY_OK and do not use tools."
@@ -138,6 +138,10 @@ def harness_command(name: str) -> list[str]:
         return ["mini", "-t", PROMPT, "-m", "openai/canvasbench-canary", "-y", "--exit-immediately", "-o", "/workspace/.canvasbench/mini-swe-agent-trajectory.json"]
     if name == "pi":
         return ["pi", "--mode", "json", "--no-session", "--no-context-files", "--model", "canvasbench/canary", "--system-prompt", PROMPT, PROMPT]
+    if name == "aider":
+        return ["aider", "--model", "openai/canvasbench-canary", "--message", PROMPT, "--edit-format", "diff", "--yes-always", "--no-git", "--no-auto-commits", "--no-dirty-commits", "--no-stream", "--no-pretty", "--no-check-update", "--no-analytics", "--no-cache-prompts", "--map-tokens", "0"]
+    if name == "openhands":
+        return ["openhands", "--model", "openai/canvasbench-canary", "--headless", "--json", "--yolo", "--override-with-envs", "-t", PROMPT]
     raise UnsupportedCanary(f"unsupported canary harness {name!r}")
 
 
@@ -162,7 +166,7 @@ def run_canary(options: argparse.Namespace) -> None:
     attestation, lock = load_inputs(attestation_path, lock_path)
     selected = tuple(options.harness or HARNESSES)
     if not selected or any(name not in HARNESSES for name in selected) or len(set(selected)) != len(selected):
-        raise UnsupportedCanary("harness selection must be unique members of the canonical four")
+        raise UnsupportedCanary("harness selection must be unique members of the canonical set")
 
     run_id = secrets.token_hex(6)
     network = f"canvasbench-canary-{run_id}"

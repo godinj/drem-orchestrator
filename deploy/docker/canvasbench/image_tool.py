@@ -17,7 +17,7 @@ DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 PINNED_IMAGE = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9._/-]+$")
 INTEGRITY = re.compile(r"^(?:sha256:[0-9a-f]{64}|sha512-[A-Za-z0-9+/]+={0,2})$")
-ORDER = ("usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi")
+ORDER = ("usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands")
 
 
 def run(command: list[str], *, capture: bool = False) -> str:
@@ -107,7 +107,7 @@ def build_args(lock: dict, name: str, image: dict, state: str) -> list[str]:
     if name == "usage-proxy":
         values["GO_BASE_IMAGE"] = lock["base_images"]["golang"]
         values["RUNTIME_BASE_IMAGE"] = lock["base_images"]["runtime"]
-    elif name == "mini-swe-agent":
+    elif name in {"mini-swe-agent", "aider", "openhands"}:
         values["PYTHON_BASE_IMAGE"] = lock["base_images"]["python"]
     else:
         values["NODE_BASE_IMAGE"] = lock["base_images"]["node"]

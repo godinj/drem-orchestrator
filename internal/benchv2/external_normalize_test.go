@@ -22,6 +22,8 @@ func TestExternalGoldenTrajectoriesNormalizeToATIF17(t *testing.T) {
 		{AdapterQwenCode, NormalizerQwenCode, "qwen-code.jsonl", "Qwen finished exactly.", 1, false},
 		{AdapterMiniSWE, NormalizerMiniSWE, "mini-swe-agent.json", "Mini-SWE finished exactly.", 1, true},
 		{AdapterPi, NormalizerPi, "pi.jsonl", "Pi finished exactly.", 1, false},
+		{AdapterAider, NormalizerAider, "aider.json", "Aider finished exactly.", 0, false},
+		{AdapterOpenHands, NormalizerOpenHands, "openhands.json", "OpenHands finished exactly.", 0, false},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {
@@ -58,6 +60,8 @@ func TestExternalNormalizersFailClosedOnMalformedOrIncompleteData(t *testing.T) 
 		{AdapterQwenCode, NormalizerQwenCode, `{"type":"system","subtype":"session_start","session_id":"s"}` + "\n", nil},
 		{AdapterMiniSWE, NormalizerMiniSWE, "", map[string][]byte{".canvasbench/mini-swe-agent-trajectory.json": []byte(`{"trajectory_format":"mini-swe-agent-1.0"}`)}},
 		{AdapterPi, NormalizerPi, `{"type":"session","version":3,"id":"s"}` + "\n", nil},
+		{AdapterAider, NormalizerAider, `{"schema":"canvasbench.cli-wrapper.v1","harness":"aider"}`, nil},
+		{AdapterOpenHands, NormalizerOpenHands, `{"schema":"canvasbench.cli-wrapper.v1","harness":"openhands"}`, nil},
 	} {
 		t.Run(test.kind, func(t *testing.T) {
 			_, err := NormalizeExternal(test.kind, test.normalizer, request, OuterExecutionResult{Stdout: []byte(test.stdout), Artifacts: test.artifacts})
