@@ -3,6 +3,7 @@ package benchv2
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -12,6 +13,8 @@ import (
 // TestTakeCycleOraclesAgainstPinnedCanvas is an opt-in native acceptance test.
 // It is intentionally excluded from ordinary Go-only gates because it builds
 // the pinned Canvas fixture several times and requires Canvas's Skia cache.
+// Run it with -timeout 20m; the complete red/green/mutant matrix exceeds Go's
+// default ten-minute package timeout on the reference Mac.
 func TestTakeCycleOraclesAgainstPinnedCanvas(t *testing.T) {
 	repo := os.Getenv("CANVASBENCH_REAL_CANVAS_REPO")
 	if repo == "" {
@@ -52,6 +55,7 @@ func TestTakeCycleOraclesAgainstPinnedCanvas(t *testing.T) {
 
 		canonical := prepareRealTakeCandidate(t, repo, task)
 		applyRealTakeOracle(t, canonical.WorkDir, filepath.Join(oracles.OracleRoot, takeImplPatch))
+		runRealTakeChangedGate(t, canonical.WorkDir)
 		outcome = oracles.Verify(context.Background(), task, canonical.WorkDir, HarnessRun{})
 		require.True(t, outcome.Passed, outcome.Failures)
 		require.NoError(t, canonical.Cleanup())
@@ -67,12 +71,14 @@ func TestTakeCycleOraclesAgainstPinnedCanvas(t *testing.T) {
 		canonical := prepareRealTakeCandidate(t, repo, task)
 		require.NoError(t, restoreTakeCycleBaseFiles(canonical.WorkDir, task.Fixture.BaseCommit, []string{
 			takeTestFile,
-			"src/vim/adapters/EditorAdapter.h",
-			"src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
-			"src/vim/adapters/fragments/EditorAdapterActionRegistration.inc",
+			takeHeaderFile,
+			takeSourceFile,
+			takeHandlerFile,
+			takeRegisterFile,
 		}))
 		applyRealTakeOracle(t, canonical.WorkDir, filepath.Join(oracles.OracleRoot, takeTestsPatch))
 		applyRealTakeOracle(t, canonical.WorkDir, filepath.Join(oracles.OracleRoot, takeImplPatch))
+		runRealTakeChangedGate(t, canonical.WorkDir)
 		outcome = oracles.Verify(context.Background(), task, canonical.WorkDir, HarnessRun{})
 		require.True(t, outcome.Passed, outcome.Failures)
 		require.NoError(t, canonical.Cleanup())
@@ -92,4 +98,12 @@ func applyRealTakeOracle(t *testing.T, workDir, path string) {
 	raw, err := os.ReadFile(path)
 	require.NoError(t, err)
 	require.NoError(t, applyPatchBytes(workDir, raw))
+}
+
+func runRealTakeChangedGate(t *testing.T, workDir string) {
+	t.Helper()
+	cmd := exec.Command(filepath.Join(workDir, "scripts", "dev"), "check", "changed")
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
 }

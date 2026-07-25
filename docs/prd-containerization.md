@@ -25,6 +25,9 @@ a disposable detached Canvas worktree through `scripts/dev`; candidate tests
 and candidate production are graded in independent reset states so neither can
 weaken the other's oracle. Oracle bytes are SHA-256 pinned by task documents
 and remain outside every agent-visible file projection.
+Production definitions live in a focused `EditorAdapterTakeActions.inc` rather
+than growing the ceiling-bound action-handler fragment, and cases 5 and 6 run
+Canvas's changed-file architecture checks in addition to behavioral tests.
 
 ## Problem Statement
 

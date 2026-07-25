@@ -203,6 +203,17 @@ phases. It never builds in Canvas main or another shared worktree. Case 6
 grades candidate production and candidate tests in reset source states so a
 trivial or deleted test cannot
 approve the matching implementation.
+The canonical implementation keeps `EditorAdapterActionHandlers.inc` at its
+597-line pinned baseline, includes a new focused
+`EditorAdapterTakeActions.inc` from `EditorAdapter.cpp`, and must pass
+`scripts/dev check changed` in the disposable worktree for cases 5 and 6.
+Run the complete opt-in native acceptance with a 20-minute Go timeout:
+
+```bash
+CANVASBENCH_REAL_CANVAS_REPO=/path/to/drem-canvas.git \
+  go test ./internal/benchv2 \
+  -run TestTakeCycleOraclesAgainstPinnedCanvas -count=1 -v -timeout 20m
+```
 
 An external harness matrix entry must also declare `outer_image` as an exact
 OCI digest, `outer_network_policy` as `isolated_inference`, a dedicated

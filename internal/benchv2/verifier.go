@@ -13,8 +13,9 @@ import (
 )
 
 type BuiltinVerifier struct {
-	OracleRoot string
-	NativeGate func(context.Context, string) (string, error)
+	OracleRoot  string
+	NativeGate  func(context.Context, string) (string, error)
+	ChangedGate func(context.Context, string) (string, error)
 }
 
 func (verifier BuiltinVerifier) Verify(ctx context.Context, task TaskSpec, workDir string, run HarnessRun) VerifyOutcome {

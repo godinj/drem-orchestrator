@@ -80,8 +80,11 @@ Cases 4–6 are runnable take-cycling stages. Case 4 grades a candidate red-test
 TU first on the clean base, then against the hidden canonical implementation
 and eight deterministic mutants: missing wrap, automation-focus leakage,
 non-audio mutation, empty no-op undo, missing status, missing notification,
-declaration mismatch, and registration mismatch. Case 5 grades the three-file
-member implementation against the hidden canonical test patch. Case 6 starts
+declaration mismatch, and registration mismatch. Case 5 grades the four-file
+member implementation—header declarations, the EditorAdapter include seam, a
+focused `EditorAdapterTakeActions.inc`, and action registrations—against the
+hidden canonical test patch. The existing action-handler fragment remains at
+its pinned 597-line baseline. Case 6 starts
 from the exact `96db6b7..861eebff` bad-artifact diff plus verbatim pinned
 compiler diagnostics, then grades production with hidden tests and independently
 grades the repaired candidate tests on clean-base red, canonical green, and the
@@ -95,7 +98,10 @@ gate, `scripts/dev test --filter '(Take cycling|take\.)'`. The pinned historical
 Canvas base has unrelated integration failures, so the focused gate keeps
 benchmark outcomes attributable to the candidate and hidden corpus.
 It may reuse only that worktree's generated build while resetting source files
-to the exact base between independent grading phases. Case 9 remains a
+to the exact base between independent grading phases. Production grading for
+cases 5 and 6 also runs `scripts/dev check changed`, so a behaviorally correct
+candidate cannot pass while violating Canvas's file-size or architecture
+constraints. Case 9 remains a
 fail-closed placeholder until its canonical patch, native checks, and scripted
 UI verification exist. A placeholder returns `non_runnable`, scores zero, and
 makes a matrix ineligible; it never silently passes.

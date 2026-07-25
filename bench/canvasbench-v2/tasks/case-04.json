@@ -35,8 +35,8 @@
   "oracle_id": "take-cycling-red-tests-canonical-v1",
   "oracle_artifacts": [
     {"path": "take-cycling-canonical-tests.patch", "sha256": "9f532bd3958d00ee4637cea4ae2f2088ea6940b82ae4044da601e172d9af698f"},
-    {"path": "take-cycling-canonical-implementation.patch", "sha256": "2530c04e37018d3ed44d8ed6354202158d3f6692b214237f64b708375765ff3d"},
-    {"path": "take-cycling-mutants.json", "sha256": "6c4c9a678122c36ee6d88a3552d77534f19c5b7576526442d7d6fc8021b3fb3a"}
+    {"path": "take-cycling-canonical-implementation.patch", "sha256": "247a217b09f63f634f6ce22ce726d9386d3ba19eac243fe74c08d64a5992511a"},
+    {"path": "take-cycling-mutants.json", "sha256": "28116d85ce8941d7612c82d667a950ce8dc57a3fa4f3e994da881d0f5759b79f"}
   ],
   "budget": {"max_input_tokens": 50000, "max_output_tokens": 5000, "max_tool_calls": 18, "max_iterations": 18, "timeout_seconds": 480}
 }

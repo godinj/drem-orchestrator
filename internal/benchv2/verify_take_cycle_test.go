@@ -61,6 +61,19 @@ func TestTakeCycleGateInjectionAvoidsNativeExecution(t *testing.T) {
 	require.True(t, called)
 }
 
+func TestTakeCycleChangedGateInjectionAvoidsCanvasExecution(t *testing.T) {
+	called := false
+	verifier := BuiltinVerifier{ChangedGate: func(_ context.Context, workDir string) (string, error) {
+		called = true
+		require.Equal(t, "/fixture", workDir)
+		return "ok", nil
+	}}
+	output, err := verifier.runTakeCycleChangedGate(context.Background(), "/fixture")
+	require.NoError(t, err)
+	require.Equal(t, "ok", output)
+	require.True(t, called)
+}
+
 func TestTakeCycleStructureRejectsFreeHelperAndAcceptsMembers(t *testing.T) {
 	root := t.TempDir()
 	write := func(relative, body string) {
@@ -69,9 +82,14 @@ func TestTakeCycleStructureRejectsFreeHelperAndAcceptsMembers(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
 	}
 	write("src/vim/adapters/EditorAdapter.h", "private:\n void takeNext(int);\n void takePrev(int count);\n void cycleSelectedTake(int delta);\n")
-	write("src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "void EditorAdapter::takeNext(int) {}\nvoid EditorAdapter::takePrev(int) {}\nvoid EditorAdapter::cycleSelectedTake(int) {}\n")
+	write("src/vim/adapters/EditorAdapter.cpp", "#include \"fragments/EditorAdapterTakeActions.inc\"\n")
+	write("src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "")
+	write("src/vim/adapters/fragments/EditorAdapterTakeActions.inc", "void EditorAdapter::takeNext(int) {}\nvoid EditorAdapter::takePrev(int) {}\nvoid EditorAdapter::cycleSelectedTake(int) {}\n")
 	write("src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "{ \"take.next\", \"Next Take\", \"Take\", \"\", &EditorAdapter::takeNext }\n{ \"take.prev\", \"Previous Take\", \"Take\", \"\", &EditorAdapter::takePrev }\n")
 	require.NoError(t, verifyTakeCycleStructure(root))
-	write("src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "static void cycleSelectedTake (EditorAdapter&) {}\nvoid EditorAdapter::takeNext(int) {}\nvoid EditorAdapter::takePrev(int) {}\nvoid EditorAdapter::cycleSelectedTake(int) {}\n")
+	write("src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "void EditorAdapter::takeNext(int) {}\n")
+	require.ErrorContains(t, verifyTakeCycleStructure(root), "only in EditorAdapterTakeActions.inc")
+	write("src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "")
+	write("src/vim/adapters/fragments/EditorAdapterTakeActions.inc", "static void cycleSelectedTake (EditorAdapter&) {}\nvoid EditorAdapter::takeNext(int) {}\nvoid EditorAdapter::takePrev(int) {}\nvoid EditorAdapter::cycleSelectedTake(int) {}\n")
 	require.ErrorContains(t, verifyTakeCycleStructure(root), "must be an EditorAdapter member")
 }

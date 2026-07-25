@@ -22,6 +22,8 @@ Status: cases 1–8 runnable; capstone case 9 pending.
 - Two-sided case-6 repair grading: hidden tests grade candidate production,
   while candidate tests independently prove clean-base red, canonical green,
   and mutant sensitivity.
+- Constitution-safe take production in a focused include fragment, with
+  exact-base `scripts/dev check changed` acceptance for cases 5 and 6.
 - Fully specified fail-closed placeholder for case 9.
 
 ## Before model comparison

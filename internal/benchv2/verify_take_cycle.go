@@ -13,11 +13,16 @@ import (
 )
 
 const (
-	takeTestsPatch  = "take-cycling-canonical-tests.patch"
-	takeImplPatch   = "take-cycling-canonical-implementation.patch"
-	takeMutants     = "take-cycling-mutants.json"
-	takeDiagnostics = "take-cycling-bad-artifact-diagnostics.txt"
-	takeTestFile    = "tests/integration/LaneVersionCommandTest.cpp"
+	takeTestsPatch   = "take-cycling-canonical-tests.patch"
+	takeImplPatch    = "take-cycling-canonical-implementation.patch"
+	takeMutants      = "take-cycling-mutants.json"
+	takeDiagnostics  = "take-cycling-bad-artifact-diagnostics.txt"
+	takeTestFile     = "tests/integration/LaneVersionCommandTest.cpp"
+	takeHeaderFile   = "src/vim/adapters/EditorAdapter.h"
+	takeSourceFile   = "src/vim/adapters/EditorAdapter.cpp"
+	takeHandlerFile  = "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc"
+	takeActionsFile  = "src/vim/adapters/fragments/EditorAdapterTakeActions.inc"
+	takeRegisterFile = "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"
 )
 
 type takeMutantCorpus struct {
@@ -69,9 +74,10 @@ func (verifier BuiltinVerifier) verifyTakeCycling(ctx context.Context, task Task
 		}
 	case "take-cycling-implementation-canonical-v1":
 		if err := copyCandidateFiles(candidate, workDir, []string{
-			"src/vim/adapters/EditorAdapter.h",
-			"src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
-			"src/vim/adapters/fragments/EditorAdapterActionRegistration.inc",
+			takeHeaderFile,
+			takeSourceFile,
+			takeActionsFile,
+			takeRegisterFile,
 		}); err != nil {
 			return takeCycleFailure(err)
 		}
@@ -84,6 +90,9 @@ func (verifier BuiltinVerifier) verifyTakeCycling(ctx context.Context, task Task
 		if output, err := verifier.runTakeCycleGate(ctx, workDir); err != nil {
 			return takeCycleFailure(fmt.Errorf("candidate implementation failed canonical tests: %w: %s", err, tailOutput(output)))
 		}
+		if output, err := verifier.runTakeCycleChangedGate(ctx, workDir); err != nil {
+			return takeCycleFailure(fmt.Errorf("candidate implementation failed Canvas changed-file checks: %w: %s", err, tailOutput(output)))
+		}
 	case "take-cycling-bad-artifact-861eebff-v1":
 		diagnostics, err := verifier.readOracleArtifact(task, takeDiagnostics)
 		if err != nil {
@@ -93,9 +102,11 @@ func (verifier BuiltinVerifier) verifyTakeCycling(ctx context.Context, task Task
 			return takeCycleFailure(fmt.Errorf("content-addressed compiler diagnostics are not supplied verbatim to the candidate"))
 		}
 		if err := copyCandidateFiles(candidate, workDir, []string{
-			"src/vim/adapters/EditorAdapter.h",
-			"src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
-			"src/vim/adapters/fragments/EditorAdapterActionRegistration.inc",
+			takeHeaderFile,
+			takeSourceFile,
+			takeHandlerFile,
+			takeActionsFile,
+			takeRegisterFile,
 		}); err != nil {
 			return takeCycleFailure(err)
 		}
@@ -108,13 +119,20 @@ func (verifier BuiltinVerifier) verifyTakeCycling(ctx context.Context, task Task
 		if output, err := verifier.runTakeCycleGate(ctx, workDir); err != nil {
 			return takeCycleFailure(fmt.Errorf("candidate production failed hidden canonical tests: %w: %s", err, tailOutput(output)))
 		}
+		if output, err := verifier.runTakeCycleChangedGate(ctx, workDir); err != nil {
+			return takeCycleFailure(fmt.Errorf("candidate production failed Canvas changed-file checks: %w: %s", err, tailOutput(output)))
+		}
 
 		if err := restoreTakeCycleBaseFiles(workDir, task.Fixture.BaseCommit, []string{
 			takeTestFile,
-			"src/vim/adapters/EditorAdapter.h",
-			"src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
-			"src/vim/adapters/fragments/EditorAdapterActionRegistration.inc",
+			takeHeaderFile,
+			takeSourceFile,
+			takeHandlerFile,
+			takeRegisterFile,
 		}); err != nil {
+			return takeCycleFailure(err)
+		}
+		if err := os.Remove(filepath.Join(workDir, filepath.FromSlash(takeActionsFile))); err != nil && !os.IsNotExist(err) {
 			return takeCycleFailure(err)
 		}
 		if err := copyCandidateFiles(candidate, workDir, []string{takeTestFile}); err != nil {
@@ -211,6 +229,16 @@ func (verifier BuiltinVerifier) runTakeCycleGate(ctx context.Context, workDir st
 	return string(output), err
 }
 
+func (verifier BuiltinVerifier) runTakeCycleChangedGate(ctx context.Context, workDir string) (string, error) {
+	if verifier.ChangedGate != nil {
+		return verifier.ChangedGate(ctx, workDir)
+	}
+	cmd := exec.CommandContext(ctx, filepath.Join(workDir, "scripts", "dev"), "check", "changed")
+	cmd.Dir = workDir
+	output, err := cmd.CombinedOutput()
+	return string(output), err
+}
+
 func createTakeCycleWorktree(candidate, base string) (string, func(), error) {
 	parent, err := os.MkdirTemp("", "canvasbench-take-oracle-")
 	if err != nil {
@@ -298,15 +326,23 @@ func applyPatchBytes(workDir string, patch []byte) error {
 }
 
 func verifyTakeCycleStructure(workDir string) error {
-	header, err := readFixtureFile(workDir, "src/vim/adapters/EditorAdapter.h")
+	header, err := readFixtureFile(workDir, takeHeaderFile)
 	if err != nil {
 		return err
 	}
-	handlers, err := readFixtureFile(workDir, "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc")
+	source, err := readFixtureFile(workDir, takeSourceFile)
 	if err != nil {
 		return err
 	}
-	registration, err := readFixtureFile(workDir, "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc")
+	handlers, err := readFixtureFile(workDir, takeHandlerFile)
+	if err != nil {
+		return err
+	}
+	takeActions, err := readFixtureFile(workDir, takeActionsFile)
+	if err != nil {
+		return err
+	}
+	registration, err := readFixtureFile(workDir, takeRegisterFile)
 	if err != nil {
 		return err
 	}
@@ -324,11 +360,19 @@ func verifyTakeCycleStructure(workDir string) error {
 			return fmt.Errorf("missing exact private take-cycling declaration")
 		}
 	}
-	if strings.Contains(handlers, "cycleSelectedTake (EditorAdapter&") || strings.Contains(handlers, "static void cycleSelectedTake") {
+	if strings.Count(source, `#include "fragments/EditorAdapterTakeActions.inc"`) != 1 {
+		return fmt.Errorf("EditorAdapter.cpp must include the focused take-actions fragment exactly once")
+	}
+	for _, misplaced := range []string{"EditorAdapter::takeNext", "EditorAdapter::takePrev", "EditorAdapter::cycleSelectedTake", "cycleSelectedTake (EditorAdapter&", "static void cycleSelectedTake"} {
+		if strings.Contains(source, misplaced) || strings.Contains(handlers, misplaced) {
+			return fmt.Errorf("take-cycling definitions must live only in EditorAdapterTakeActions.inc")
+		}
+	}
+	if strings.Contains(takeActions, "cycleSelectedTake (EditorAdapter&") || strings.Contains(takeActions, "static void cycleSelectedTake") {
 		return fmt.Errorf("cycleSelectedTake must be an EditorAdapter member")
 	}
 	for _, definition := range []string{`\bvoid\s+EditorAdapter::takeNext\s*\(`, `\bvoid\s+EditorAdapter::takePrev\s*\(`, `\bvoid\s+EditorAdapter::cycleSelectedTake\s*\(`} {
-		if len(regexp.MustCompile(definition).FindAllStringIndex(handlers, -1)) != 1 {
+		if len(regexp.MustCompile(definition).FindAllStringIndex(takeActions, -1)) != 1 {
 			return fmt.Errorf("missing exact member definition %s", definition)
 		}
 	}

@@ -2,14 +2,14 @@
   "schema": "canvasbench.task.v2",
   "id": "case-05",
   "title": "Multi-file take-cycling implementation",
-  "description": "Implement the frozen take-cycling contract against content-addressed hidden red tests.",
+  "description": "Implement the frozen take-cycling contract in a focused take-actions fragment against content-addressed hidden red tests.",
   "status": "runnable",
   "mode": "direct_worker",
   "inference_policy": "required",
   "allowed_tool_policies": ["structured_only", "sandboxed_shell"],
   "weight": 16,
   "role": "coder",
-  "system_prompt": "Implement only the declared EditorAdapter header and two action fragments. Use private member methods takeNext(int), takePrev(int), and cycleSelectedTake(int); do not create a free helper.",
+  "system_prompt": "Implement only the declared EditorAdapter header, implementation include seam, focused take-actions fragment, and action registration fragment. Put takeNext(int), takePrev(int), and cycleSelectedTake(int) private member definitions in the new EditorAdapterTakeActions.inc; do not grow EditorAdapterActionHandlers.inc or create a free helper.",
   "user_message": "Implement forward/backward wrap through TrackVersionService, audio-only validation, no-op handling, status, and one-step undo against the frozen hidden red tests.",
   "fixture": {"repo_id": "drem-canvas", "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274", "visible_blobs": [
     {"path": "src/vim/adapters/EditorAdapter.h", "git_blob_sha": "f317c4391fcf48cc4e496a06231f1661f7489871"},
@@ -27,15 +27,15 @@
     {"path": "src/vim/ContextAdapter.h", "git_blob_sha": "b6a4f9142dae45b73e307ca0b96e0da9f3b21724"},
     {"path": "src/vim/VimContext.h", "git_blob_sha": "c143f3153588cfaf0a04cfd4027b25c37dd76068"}
   ]},
-  "read_paths": ["src/vim/adapters/EditorAdapter.h", "src/vim/adapters/EditorAdapter.cpp", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "src/model/Arrangement.h", "src/model/Project.h", "src/model/TrackVersionService.h", "src/model/TrackVersionService.cpp", "src/model/Track.h", "src/model/LaneVersion.h", "src/utils/UndoSystem.h", "src/vim/ActionRegistry.h", "src/vim/ContextAdapter.h", "src/vim/VimContext.h"],
-  "write_paths": ["src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
-  "required_changed_paths": ["src/vim/adapters/EditorAdapter.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
+  "read_paths": ["src/vim/adapters/EditorAdapter.h", "src/vim/adapters/EditorAdapter.cpp", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterTakeActions.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "src/model/Arrangement.h", "src/model/Project.h", "src/model/TrackVersionService.h", "src/model/TrackVersionService.cpp", "src/model/Track.h", "src/model/LaneVersion.h", "src/utils/UndoSystem.h", "src/vim/ActionRegistry.h", "src/vim/ContextAdapter.h", "src/vim/VimContext.h"],
+  "write_paths": ["src/vim/adapters/EditorAdapter.h", "src/vim/adapters/EditorAdapter.cpp", "src/vim/adapters/fragments/EditorAdapterTakeActions.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
+  "required_changed_paths": ["src/vim/adapters/EditorAdapter.h", "src/vim/adapters/EditorAdapter.cpp", "src/vim/adapters/fragments/EditorAdapterTakeActions.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
   "result_artifact": "",
   "required_mutation": true,
   "oracle_id": "take-cycling-implementation-canonical-v1",
   "oracle_artifacts": [
     {"path": "take-cycling-canonical-tests.patch", "sha256": "9f532bd3958d00ee4637cea4ae2f2088ea6940b82ae4044da601e172d9af698f"},
-    {"path": "take-cycling-canonical-implementation.patch", "sha256": "2530c04e37018d3ed44d8ed6354202158d3f6692b214237f64b708375765ff3d"}
+    {"path": "take-cycling-canonical-implementation.patch", "sha256": "247a217b09f63f634f6ce22ce726d9386d3ba19eac243fe74c08d64a5992511a"}
   ],
   "budget": {"max_input_tokens": 65000, "max_output_tokens": 7000, "max_tool_calls": 22, "max_iterations": 22, "timeout_seconds": 600}
 }

@@ -1,3 +1,15 @@
+diff --git i/src/vim/adapters/EditorAdapter.cpp w/src/vim/adapters/EditorAdapter.cpp
+index ccbda6a..1116787 100644
+--- i/src/vim/adapters/EditorAdapter.cpp
++++ w/src/vim/adapters/EditorAdapter.cpp
+@@ -123,6 +123,7 @@ EditorAdapter::EditorAdapter (Project& p, Arrangement& a,
+ #include "fragments/EditorAdapterVisualKeys.inc"
+ #include "fragments/EditorAdapterAutomationAndClipShape.inc"
+ #include "fragments/EditorAdapterActionHandlers.inc"
++#include "fragments/EditorAdapterTakeActions.inc"
+ #include "fragments/EditorAdapterActionRegistration.inc"
+ #include "fragments/EditorAdapterJumpMotions.inc"
+ 
 diff --git i/src/vim/adapters/EditorAdapter.h w/src/vim/adapters/EditorAdapter.h
 index f317c43..db6da29 100644
 --- i/src/vim/adapters/EditorAdapter.h
@@ -14,14 +26,27 @@ index f317c43..db6da29 100644
      // Helper for lane version name extraction
      static std::string extractQuotedName (const std::string& args);
  
-diff --git i/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc w/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc
-index 42a9aae..f18cf97 100644
---- i/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc
-+++ w/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc
-@@ -595,3 +595,36 @@ void EditorAdapter::laneVersionPrev (int /*count*/)
-     }
-     if (onContextChanged) onContextChanged();
- }
+diff --git i/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc w/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
+index f62cd41..fd3e068 100644
+--- i/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
++++ w/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
+@@ -171,6 +171,8 @@ void EditorAdapter::registerActions (ActionRegistry& registry)
+     { "lv.list",   "List Lane Versions",    "Lane Version", "", &EditorAdapter::laneVersionList   },
+     { "lv.next",   "Next Lane Version",     "Lane Version", "Alt+l", &EditorAdapter::laneVersionNext },
+     { "lv.prev",   "Previous Lane Version", "Lane Version", "Alt+h", &EditorAdapter::laneVersionPrev },
++    { "take.next", "Next Take",             "Take",         "", &EditorAdapter::takeNext },
++    { "take.prev", "Previous Take",         "Take",         "", &EditorAdapter::takePrev },
+ };
+ 
+     static const ExActionDef editorExActions[] = {
+diff --git i/src/vim/adapters/fragments/EditorAdapterTakeActions.inc w/src/vim/adapters/fragments/EditorAdapterTakeActions.inc
+new file mode 100644
+index 0000000..43ae270
+--- /dev/null
++++ w/src/vim/adapters/fragments/EditorAdapterTakeActions.inc
+@@ -0,0 +1,35 @@
++// Dedicated audio-take cycling actions. These always target clip-lane versions,
++// even while an automation lane has focus.
 +
 +void EditorAdapter::takeNext (int /*count*/)
 +{
@@ -55,16 +80,3 @@ index 42a9aae..f18cf97 100644
 +    if (onContextChanged)
 +        onContextChanged();
 +}
-diff --git i/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc w/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
-index f62cd41..fd3e068 100644
---- i/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
-+++ w/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
-@@ -171,6 +171,8 @@ void EditorAdapter::registerActions (ActionRegistry& registry)
-     { "lv.list",   "List Lane Versions",    "Lane Version", "", &EditorAdapter::laneVersionList   },
-     { "lv.next",   "Next Lane Version",     "Lane Version", "Alt+l", &EditorAdapter::laneVersionNext },
-     { "lv.prev",   "Previous Lane Version", "Lane Version", "Alt+h", &EditorAdapter::laneVersionPrev },
-+    { "take.next", "Next Take",             "Take",         "", &EditorAdapter::takeNext },
-+    { "take.prev", "Previous Take",         "Take",         "", &EditorAdapter::takePrev },
- };
- 
-     static const ExActionDef editorExActions[] = {
