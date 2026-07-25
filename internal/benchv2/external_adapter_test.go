@@ -108,7 +108,8 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 			}
 			require.Equal(t, outerWorkspace, invocation.WorkDir)
 			require.NotContains(t, invocation.Env, "CANVASBENCH_USAGE_PROXY_ADMIN_TOKEN")
-			require.Equal(t, "trial-secret", invocation.Env["OPENAI_API_KEY"])
+			require.NotContains(t, invocation.Env, "OPENAI_API_KEY")
+			require.Equal(t, "trial-secret", invocation.SensitiveEnv["OPENAI_API_KEY"])
 			if test.kind == AdapterMiniSWE {
 				require.Equal(t, "http://usage-proxy:8080/v1", invocation.Env["OPENAI_API_BASE"])
 				require.NotContains(t, invocation.Env, "OPENAI_BASE_URL")

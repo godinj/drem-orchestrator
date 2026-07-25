@@ -18,6 +18,8 @@ import (
 )
 
 const testProxyPublicBaseURL = "http://canvasbench-usage-proxy:8080/v1"
+const testProxySourceState = "0123456789abcdef-dirty-fedcba9876543210"
+const testProxyConfigSHA = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 
 func TestUsageProxyMeasuresNonStreamingServerUsage(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -113,6 +115,54 @@ func TestUsageProxyAdminAuthAndCrossTrialIsolation(t *testing.T) {
 	secondUsage, err := client.AttestServerUsage(context.Background(), second)
 	require.NoError(t, err)
 	require.Equal(t, 1, secondUsage.RequestsTotal, "first trial traffic must not enter the second ledger")
+}
+
+func TestUsageProxyLiveAttestationRejectsEveryMismatchBeforeTrialCreation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*UsageProxyAttestation)
+	}{
+		{"source state", func(attestation *UsageProxyAttestation) { attestation.SourceState = "wrong-source" }},
+		{"image", func(attestation *UsageProxyAttestation) {
+			attestation.Image = "ghcr.io/godinj/wrong@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+		}},
+		{"config", func(attestation *UsageProxyAttestation) {
+			attestation.ConfigSHA256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler, err := NewUsageProxyHandler(UsageProxyServerConfig{
+				UpstreamChatCompletions: "http://127.0.0.1:1/v1/chat/completions",
+				PublicBaseURL:           testProxyPublicBaseURL, AdminToken: "admin-secret",
+				SourceState: testProxySourceState, Image: testUsageProxyImage, ConfigSHA256: testProxyConfigSHA,
+			})
+			require.NoError(t, err)
+			proxyState := handler.(*usageProxyServer)
+			proxy := httptest.NewServer(handler)
+			defer proxy.Close()
+			expected := testUsageProxyAttestation()
+			test.mutate(&expected)
+			client, err := NewUsageProxyClient(UsageProxyClientConfig{
+				AdminURL: proxy.URL, PublicBaseURL: testProxyPublicBaseURL, AdminToken: "admin-secret",
+				ExpectedAttestation: expected,
+			})
+			require.NoError(t, err)
+			_, err = client.StartServerUsage(context.Background(), TrialRequest{})
+			require.ErrorContains(t, err, "does not match the matrix")
+			proxyState.mu.Lock()
+			require.Empty(t, proxyState.trials, "attestation mismatch must precede trial credential creation")
+			proxyState.mu.Unlock()
+		})
+	}
+}
+
+func TestUsageProxyLiveAttestationRequiresAdminAuthentication(t *testing.T) {
+	proxy, _ := usageProxyFixture(t, "http://127.0.0.1:1/v1/chat/completions", "")
+	response, err := http.Get(proxy.URL + "/admin/v1/attestation")
+	require.NoError(t, err)
+	require.Equal(t, http.StatusUnauthorized, response.StatusCode)
+	_ = response.Body.Close()
 }
 
 func TestUsageProxyFailsClosedAcrossUpstreamRetry(t *testing.T) {
@@ -212,12 +262,14 @@ func usageProxyFixture(t *testing.T, upstreamURL, upstreamKey string) (*httptest
 	handler, err := NewUsageProxyHandler(UsageProxyServerConfig{
 		UpstreamChatCompletions: upstreamURL, UpstreamAPIKey: upstreamKey,
 		PublicBaseURL: testProxyPublicBaseURL, AdminToken: "admin-secret",
+		SourceState: testProxySourceState, Image: testUsageProxyImage, ConfigSHA256: testProxyConfigSHA,
 	})
 	require.NoError(t, err)
 	proxy := httptest.NewServer(handler)
 	t.Cleanup(proxy.Close)
 	client, err := NewUsageProxyClient(UsageProxyClientConfig{
 		AdminURL: proxy.URL, PublicBaseURL: testProxyPublicBaseURL, AdminToken: "admin-secret",
+		ExpectedAttestation: testUsageProxyAttestation(),
 	})
 	require.NoError(t, err)
 	return proxy, client
@@ -242,11 +294,18 @@ func postTestCompletion(t *testing.T, proxyURL, apiKey, body string) *http.Respo
 }
 
 func TestUsageProxyClientRejectsPublicBaseURLMismatch(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/admin/v1/attestation" {
+			writeProxyJSON(writer, http.StatusOK, testUsageProxyAttestation())
+			return
+		}
 		_, _ = fmt.Fprintln(writer, `{"correlation_id":"id","base_url":"http://wrong/v1","api_key":"key"}`)
 	}))
 	defer server.Close()
-	client, err := NewUsageProxyClient(UsageProxyClientConfig{AdminURL: server.URL, PublicBaseURL: testProxyPublicBaseURL, AdminToken: "admin"})
+	client, err := NewUsageProxyClient(UsageProxyClientConfig{
+		AdminURL: server.URL, PublicBaseURL: testProxyPublicBaseURL, AdminToken: "admin",
+		ExpectedAttestation: testUsageProxyAttestation(),
+	})
 	require.NoError(t, err)
 	_, err = client.StartServerUsage(context.Background(), TrialRequest{})
 	require.ErrorContains(t, err, "invalid trial credential")
@@ -273,6 +332,7 @@ func TestUsageProxyErrorResponseDoesNotLeakSecrets(t *testing.T) {
 	handler, err := NewUsageProxyHandler(UsageProxyServerConfig{
 		UpstreamChatCompletions: "http://127.0.0.1:1/v1/chat/completions",
 		PublicBaseURL:           testProxyPublicBaseURL, AdminToken: "admin-secret",
+		SourceState: testProxySourceState, Image: testUsageProxyImage, ConfigSHA256: testProxyConfigSHA,
 	})
 	require.NoError(t, err)
 	proxy := httptest.NewServer(handler)
@@ -283,4 +343,8 @@ func TestUsageProxyErrorResponseDoesNotLeakSecrets(t *testing.T) {
 	_ = response.Body.Close()
 	require.Equal(t, http.StatusUnauthorized, response.StatusCode)
 	require.NotContains(t, strings.ToLower(string(raw)), "admin-secret")
+}
+
+func testUsageProxyAttestation() UsageProxyAttestation {
+	return UsageProxyAttestation{SourceState: testProxySourceState, Image: testUsageProxyImage, ConfigSHA256: testProxyConfigSHA}
 }

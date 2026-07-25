@@ -86,6 +86,16 @@ and Pi use `openai_base_url_api_key.v1` (`OPENAI_BASE_URL` and
 contract is rejected before container launch. The digest-pinned harness image
 must provide an executable/config shim that honors its declared contract; the
 benchmark does not assume the upstream CLI's native environment behavior.
+Before creating any trial credential, the CLI performs an authenticated,
+operator-rooted identity/config handshake with the proxy and compares all three
+fields byte-for-byte with the matrix. This handshake does not independently
+inspect Docker's live container digest; deployment must root the configured
+identity in its pinned image launch. A mismatch stops the run before
+`/admin/v1/trials` is called. The per-trial API key is delivered through a
+temporary owner-only Docker env file; the key bytes never appear in Docker argv
+and the file is removed on every executor exit. Captured output and errors are
+defensively scrubbed, while key bytes written into the scoped workspace reject
+the trial before candidate outputs are applied.
 
 ## Corpus and qualification
 

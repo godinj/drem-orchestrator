@@ -36,6 +36,9 @@ Status: all nine cases runnable; exact-base native capstone acceptance passed.
 - External CLI wiring with owner-only admin token files and validated
   adapter-specific inference environment contracts. Matrix attestation binds
   proxy source, digest-pinned image, and effective config hash.
+- Authenticated live proxy identity preflight before credential creation, plus
+  ephemeral mode-0600 secret env files so trial key bytes never enter Docker
+  argv and are cleaned on every executor exit.
 
 ## Before model comparison
 

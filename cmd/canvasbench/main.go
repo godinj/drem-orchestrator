@@ -30,7 +30,7 @@ func main() {
 	if err := matrix.Validate(); err != nil {
 		log.Fatal(err)
 	}
-	usageAttestor, err := usageAttestorForHarness(matrix.Harness, *usageProxyAdminURL, *usageProxyPublicBaseURL, *usageProxyAdminTokenFile)
+	usageAttestor, err := usageAttestorForHarness(context.Background(), matrix.Harness, *usageProxyAdminURL, *usageProxyPublicBaseURL, *usageProxyAdminTokenFile)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -86,7 +86,7 @@ func main() {
 	}
 }
 
-func usageAttestorForHarness(harness benchv2.HarnessConfig, adminURL, publicBaseURL, tokenFile string) (benchv2.ServerUsageAttestor, error) {
+func usageAttestorForHarness(ctx context.Context, harness benchv2.HarnessConfig, adminURL, publicBaseURL, tokenFile string) (benchv2.ServerUsageAttestor, error) {
 	switch harness.Name {
 	case benchv2.AdapterOpenCode, benchv2.AdapterQwenCode, benchv2.AdapterMiniSWE, benchv2.AdapterPi:
 		if adminURL == "" || publicBaseURL == "" || tokenFile == "" {
@@ -96,9 +96,20 @@ func usageAttestorForHarness(harness benchv2.HarnessConfig, adminURL, publicBase
 		if err != nil {
 			return nil, fmt.Errorf("read usage proxy admin token: %w", err)
 		}
-		return benchv2.NewUsageProxyClient(benchv2.UsageProxyClientConfig{
+		client, err := benchv2.NewUsageProxyClient(benchv2.UsageProxyClientConfig{
 			AdminURL: adminURL, PublicBaseURL: publicBaseURL, AdminToken: token,
+			ExpectedAttestation: benchv2.UsageProxyAttestation{
+				SourceState: harness.UsageProxySourceState,
+				Image:       harness.UsageProxyImage, ConfigSHA256: harness.UsageProxyConfigSHA,
+			},
 		})
+		if err != nil {
+			return nil, err
+		}
+		if err := client.VerifyLiveAttestation(ctx); err != nil {
+			return nil, err
+		}
+		return client, nil
 	default:
 		return nil, nil
 	}

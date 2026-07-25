@@ -21,10 +21,11 @@ const (
 )
 
 type CommandInvocation struct {
-	Executable string            `json:"executable"`
-	Args       []string          `json:"args"`
-	Env        map[string]string `json:"env"`
-	WorkDir    string            `json:"work_dir"`
+	Executable   string            `json:"executable"`
+	Args         []string          `json:"args"`
+	Env          map[string]string `json:"env"`
+	SensitiveEnv map[string]string `json:"-"`
+	WorkDir      string            `json:"work_dir"`
 }
 
 type ExternalCLIAdapter struct {
@@ -57,7 +58,7 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 	if adapter.Normalizer != normalizerForAdapter(adapter.Kind) || request.Harness.TrajectoryNormalizer != adapter.Normalizer {
 		return CommandInvocation{}, fmt.Errorf("external adapter normalizer is missing or mismatched")
 	}
-	inferenceEnv, err := inferenceEnvironment(adapter.Kind, request.Harness.InferenceEnvContract, usage)
+	inferenceEnv, sensitiveEnv, err := inferenceEnvironment(adapter.Kind, request.Harness.InferenceEnvContract, usage)
 	if err != nil {
 		return CommandInvocation{}, err
 	}
@@ -65,6 +66,7 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 	trajectory := filepath.ToSlash(filepath.Join(outerWorkspace, ".canvasbench", adapter.Kind+"-trajectory.json"))
 	invocation := CommandInvocation{
 		Executable: adapter.Executable, WorkDir: outerWorkspace,
+		SensitiveEnv: sensitiveEnv,
 		Env: map[string]string{
 			"CANVASBENCH_SEED": fmt.Sprint(request.Seed), "CANVASBENCH_TEMPERATURE": fmt.Sprint(request.Temperature),
 		},
@@ -107,7 +109,7 @@ func (adapter ExternalCLIAdapter) BuildOuterSpec(request TrialRequest, usage Usa
 	if adapter.Kind == AdapterMiniSWE {
 		spec.CaptureRelativePath = filepath.ToSlash(filepath.Join(".canvasbench", adapter.Kind+"-trajectory.json"))
 	}
-	if _, err := DockerCommand(spec); err != nil {
+	if _, err := validateOuterSpec(spec); err != nil {
 		return OuterExecutionSpec{}, err
 	}
 	return spec, nil
@@ -209,20 +211,20 @@ func inferenceEnvContractForAdapter(kind string) string {
 	}
 }
 
-func inferenceEnvironment(kind, contract string, usage UsageSession) (map[string]string, error) {
+func inferenceEnvironment(kind, contract string, usage UsageSession) (map[string]string, map[string]string, error) {
 	if usage.CorrelationID == "" || usage.BaseURL == "" || usage.APIKey == "" {
-		return nil, fmt.Errorf("per-trial usage proxy credential is incomplete")
+		return nil, nil, fmt.Errorf("per-trial usage proxy credential is incomplete")
 	}
 	if contract == "" || contract != inferenceEnvContractForAdapter(kind) {
-		return nil, fmt.Errorf("external adapter inference environment contract is missing or mismatched")
+		return nil, nil, fmt.Errorf("external adapter inference environment contract is missing or mismatched")
 	}
-	environment := map[string]string{"OPENAI_API_KEY": usage.APIKey}
+	environment := map[string]string{}
 	if kind == AdapterMiniSWE {
 		environment["OPENAI_API_BASE"] = strings.TrimRight(usage.BaseURL, "/")
 	} else {
 		environment["OPENAI_BASE_URL"] = strings.TrimRight(usage.BaseURL, "/")
 	}
-	return environment, nil
+	return environment, map[string]string{"OPENAI_API_KEY": usage.APIKey}, nil
 }
 
 func normalizerForAdapter(kind string) string {

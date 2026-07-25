@@ -38,7 +38,16 @@ type UsageProxyServerConfig struct {
 	UpstreamAPIKey          string
 	PublicBaseURL           string
 	AdminToken              string
+	SourceState             string
+	Image                   string
+	ConfigSHA256            string
 	HTTPClient              *http.Client
+}
+
+type UsageProxyAttestation struct {
+	SourceState  string `json:"source_state"`
+	Image        string `json:"image"`
+	ConfigSHA256 string `json:"config_sha256"`
 }
 
 type usageProxyServer struct {
@@ -72,6 +81,9 @@ func NewUsageProxyHandler(config UsageProxyServerConfig) (http.Handler, error) {
 		"upstream chat-completions URL": config.UpstreamChatCompletions,
 		"public base URL":               config.PublicBaseURL,
 		"admin token":                   config.AdminToken,
+		"source state":                  config.SourceState,
+		"image":                         config.Image,
+		"config SHA-256":                config.ConfigSHA256,
 	} {
 		if strings.TrimSpace(value) == "" {
 			return nil, fmt.Errorf("%s is required", name)
@@ -85,6 +97,9 @@ func NewUsageProxyHandler(config UsageProxyServerConfig) (http.Handler, error) {
 	if err != nil || strings.TrimRight(publicURL.Path, "/") != "/v1" {
 		return nil, fmt.Errorf("public base must be an absolute /v1 URL")
 	}
+	if !pinnedOCIImage.MatchString(config.Image) || !validSHA256Text(config.ConfigSHA256) {
+		return nil, fmt.Errorf("usage proxy image and config SHA-256 must be content-addressed")
+	}
 	client := config.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Minute}
@@ -96,6 +111,8 @@ func NewUsageProxyHandler(config UsageProxyServerConfig) (http.Handler, error) {
 
 func (server *usageProxyServer) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	switch {
+	case request.Method == http.MethodGet && request.URL.Path == "/admin/v1/attestation":
+		server.liveAttestation(writer, request)
 	case request.Method == http.MethodPost && request.URL.Path == "/admin/v1/trials":
 		server.startTrial(writer, request)
 	case request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, "/admin/v1/trials/") && strings.HasSuffix(request.URL.Path, "/consume"):
@@ -105,6 +122,18 @@ func (server *usageProxyServer) ServeHTTP(writer http.ResponseWriter, request *h
 	default:
 		http.NotFound(writer, request)
 	}
+}
+
+func (server *usageProxyServer) liveAttestation(writer http.ResponseWriter, request *http.Request) {
+	if !server.adminAuthorized(request) {
+		writeProxyError(writer, http.StatusUnauthorized, "admin authentication failed")
+		return
+	}
+	writeProxyJSON(writer, http.StatusOK, UsageProxyAttestation{
+		SourceState:  server.config.SourceState,
+		Image:        server.config.Image,
+		ConfigSHA256: server.config.ConfigSHA256,
+	})
 }
 
 func (server *usageProxyServer) startTrial(writer http.ResponseWriter, request *http.Request) {
@@ -380,10 +409,11 @@ func writeProxyJSON(writer http.ResponseWriter, status int, value any) {
 }
 
 type UsageProxyClientConfig struct {
-	AdminURL      string
-	PublicBaseURL string
-	AdminToken    string
-	HTTPClient    *http.Client
+	AdminURL            string
+	PublicBaseURL       string
+	AdminToken          string
+	ExpectedAttestation UsageProxyAttestation
+	HTTPClient          *http.Client
 }
 
 type UsageProxyClient struct {
@@ -424,6 +454,11 @@ func NewUsageProxyClient(config UsageProxyClientConfig) (*UsageProxyClient, erro
 	if err != nil || strings.TrimRight(publicURL.Path, "/") != "/v1" {
 		return nil, fmt.Errorf("usage proxy public base must be an absolute /v1 URL")
 	}
+	if strings.TrimSpace(config.ExpectedAttestation.SourceState) == "" ||
+		!pinnedOCIImage.MatchString(config.ExpectedAttestation.Image) ||
+		!validSHA256Text(config.ExpectedAttestation.ConfigSHA256) {
+		return nil, fmt.Errorf("expected usage proxy attestation is incomplete")
+	}
 	client := config.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: 15 * time.Second}
@@ -441,6 +476,9 @@ func parseAbsoluteURL(raw string) (*url.URL, error) {
 }
 
 func (client *UsageProxyClient) StartServerUsage(ctx context.Context, _ TrialRequest) (UsageSession, error) {
+	if err := client.VerifyLiveAttestation(ctx); err != nil {
+		return UsageSession{}, err
+	}
 	var response struct {
 		CorrelationID string `json:"correlation_id"`
 		BaseURL       string `json:"base_url"`
@@ -453,6 +491,18 @@ func (client *UsageProxyClient) StartServerUsage(ctx context.Context, _ TrialReq
 		return UsageSession{}, errors.New("usage proxy returned an invalid trial credential")
 	}
 	return UsageSession{CorrelationID: response.CorrelationID, BaseURL: response.BaseURL, APIKey: response.APIKey}, nil
+}
+
+func (client *UsageProxyClient) VerifyLiveAttestation(ctx context.Context) error {
+	var live UsageProxyAttestation
+	if err := client.adminJSON(ctx, http.MethodGet, "/admin/v1/attestation", &live); err != nil {
+		return fmt.Errorf("read live usage proxy attestation: %w", err)
+	}
+	expected := client.config.ExpectedAttestation
+	if live != expected {
+		return fmt.Errorf("live usage proxy attestation does not match the matrix")
+	}
+	return nil
 }
 
 func (client *UsageProxyClient) AttestServerUsage(ctx context.Context, session UsageSession) (ServerUsage, error) {

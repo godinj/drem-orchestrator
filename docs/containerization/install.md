@@ -257,7 +257,10 @@ canvasbench-usage-proxy \
   -listen 0.0.0.0:8080 \
   -public-base-url http://canvasbench-usage-proxy:8080/v1 \
   -upstream http://inference:8000/v1/chat/completions \
-  -admin-token-file /run/secrets/canvasbench-admin.token
+  -admin-token-file /run/secrets/canvasbench-admin.token \
+  -source-state "$PROXY_SOURCE_STATE" \
+  -image 'ghcr.io/godinj/canvasbench-usage-proxy@sha256:<64 lowercase hex>' \
+  -config-sha256 '<SHA-256 of canonical non-secret effective config>'
 # Add `-upstream-api-key-file /run/secrets/upstream.token` only when required.
 ```
 
@@ -284,6 +287,15 @@ The admin token file must be regular and owner-only. A missing ledger, zero
 requests, upstream error/retry without measurable usage, missing or duplicate
 usage, cross-trial correlation, or repeated consume makes the trial fail.
 Harness JSON/JSONL usage summaries are never used as fallback server evidence.
+The host authenticates `/admin/v1/attestation` and treats the response as an
+operator-rooted identity/config handshake: source state, image digest, and
+configuration hash must match the matrix before the proxy may issue a trial
+key. The endpoint does not independently inspect Docker's runtime image, so the
+operator must bind these flags to the digest-pinned launch. Docker receives the
+trial key through a temporary mode-0600 `--env-file`; only its path appears in
+process argv, and the host executor removes it on success, failure, timeout,
+and startup error. If a harness writes the key into its scoped workspace, the
+executor rejects the trial before those outputs can be applied.
 This section defines the deployment contract; this change does not build or
 start the proxy image or any inference service.
 

@@ -15,6 +15,9 @@ func main() {
 	upstream := flag.String("upstream", "", "trusted upstream /v1/chat/completions URL")
 	adminTokenFile := flag.String("admin-token-file", "", "owner-only admin token file")
 	upstreamAPIKeyFile := flag.String("upstream-api-key-file", "", "optional owner-only upstream API key file")
+	sourceState := flag.String("source-state", "", "attested source state for this exact proxy build")
+	image := flag.String("image", "", "digest-pinned OCI identity for this exact proxy build")
+	configSHA256 := flag.String("config-sha256", "", "SHA-256 of the non-secret effective proxy configuration")
 	flag.Parse()
 	adminToken, err := benchv2.ReadPrivateTokenFile(*adminTokenFile)
 	if err != nil {
@@ -30,6 +33,7 @@ func main() {
 	handler, err := benchv2.NewUsageProxyHandler(benchv2.UsageProxyServerConfig{
 		UpstreamChatCompletions: *upstream, UpstreamAPIKey: upstreamAPIKey,
 		PublicBaseURL: *publicBaseURL, AdminToken: adminToken,
+		SourceState: *sourceState, Image: *image, ConfigSHA256: *configSHA256,
 	})
 	if err != nil {
 		log.Fatal(err)

@@ -22,6 +22,13 @@ errored, or mismatched evidence. Matrix attestation binds its source state,
 digest-pinned image, effective config hash, and an explicit adapter-specific
 environment contract. Admin and upstream credentials never cross into the
 harness container.
+The host must compare an admin-authenticated, operator-rooted proxy
+identity/config handshake with those matrix fields before any trial credential
+is created; deployment, not the endpoint, roots the claimed identity in the
+live OCI digest. Trial bearer bytes are passed to Docker only through an
+ephemeral owner-only env file, never argv, and are scrubbed from captured
+executor output before reporting. Sensitive bytes in the scoped workspace fail
+the trial before candidate outputs are applied.
 
 The corpus includes a pinned production-registration seam taken from the
 otherwise verified Canvas transient-slicing artifact. Its verifier accepts
