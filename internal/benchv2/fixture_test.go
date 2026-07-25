@@ -44,6 +44,28 @@ func TestPrepareFixtureAttestsSeedAndCleansUp(t *testing.T) {
 	require.True(t, os.IsNotExist(err))
 }
 
+func TestChangedPathsPreservesLeadingPorcelainStatusColumns(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		out, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "bench@example.com")
+	runGit("config", "user.name", "Bench")
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "src", "ui"), 0o755))
+	path := filepath.Join(repo, "src", "ui", "ActionCoordinator.cpp")
+	require.NoError(t, os.WriteFile(path, []byte("before\n"), 0o644))
+	runGit("add", "src/ui/ActionCoordinator.cpp")
+	runGit("commit", "-m", "fixture")
+	require.NoError(t, os.WriteFile(path, []byte("after\n"), 0o644))
+
+	paths, err := ChangedPaths(repo)
+	require.NoError(t, err)
+	require.Equal(t, []string{"src/ui/ActionCoordinator.cpp"}, paths)
+}
+
 func sha256Hex(raw []byte) string {
 	value := sha256.Sum256(raw)
 	return hex.EncodeToString(value[:])

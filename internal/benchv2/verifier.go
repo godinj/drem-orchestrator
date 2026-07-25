@@ -24,6 +24,8 @@ func (verifier BuiltinVerifier) Verify(ctx context.Context, task TaskSpec, workD
 		return verifier.verifyLowerZone(ctx, workDir)
 	case "keymap-take-cycling-v1":
 		return verifyKeymap(workDir)
+	case "transient-registration-production-v1":
+		return verifyAudioProcessRegistration(workDir)
 	case "ownership-rework-99894b1a-v1":
 		if run.StopReason != "deterministic" || !run.Telemetry.CheckpointObserved {
 			return VerifyOutcome{Failures: []string{"production ownership replay did not pass"}}

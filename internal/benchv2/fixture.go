@@ -95,7 +95,7 @@ func ChangedPaths(workDir string) ([]string, error) {
 		return nil, err
 	}
 	var paths []string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for _, line := range strings.Split(strings.TrimSuffix(out, "\n"), "\n") {
 		if len(line) < 4 {
 			continue
 		}

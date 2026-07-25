@@ -12,6 +12,12 @@ fixture, `.git`, or hidden oracle—and only validated declared writes are copie
 back. Complete usage must come from an independent inference-server response
 attestor; harness logs cannot masquerade as server truth.
 
+The corpus includes a pinned production-registration seam taken from the
+otherwise verified Canvas transient-slicing artifact. Its verifier accepts
+only one executable call in `registerAllActions` and rejects comments,
+literals, duplicate calls, calls in other functions, or drift in the pinned
+declaration, definition, action ID, and keymap route.
+
 ## Problem Statement
 
 The current Drem Orchestrator runs all services, daemons, and agent harnesses directly on the host. This causes several recurring pains:

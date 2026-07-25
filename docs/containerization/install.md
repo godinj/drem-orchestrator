@@ -188,6 +188,10 @@ go run ./cmd/canvasbench \
 See `docs/canvasbench-v2.md` for immutable fixtures, tool policies, external
 adapter isolation, and qualification requirements. Placeholder cases are not
 passes, and runs with incomplete attestation are not comparable.
+The runnable transient-registration case requires the exact Canvas object
+`2ff61e8be0020395554bc6945b221253376b818e`; the runner verifies that object
+before creating its disposable worktree and keeps the production seam oracle
+outside the agent-visible projection.
 
 An external harness matrix entry must also declare `outer_image` as an exact
 OCI digest, `outer_network_policy` as `isolated_inference`, a dedicated

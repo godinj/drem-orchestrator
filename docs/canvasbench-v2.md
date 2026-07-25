@@ -69,8 +69,14 @@ Cases 1–3 are runnable against Canvas commit
 LowerZoneState repair, and keymap assembly. Case 8 runs production
 ownership-aware delivery rework from orchestrator commit
 `1d1796eb98222ca8de743730efaa5de8f9f61277` over 100 diagnostic orders.
+Case 7 isolates the missing `registerAllActions` →
+`registerAudioProcessActions` seam on the otherwise verified transient-slicing
+artifact `2ff61e8be0020395554bc6945b221253376b818e`. Its hidden verifier strips C++
+comments and literals, requires exactly one executable call in the correct
+function body, and revalidates the pinned declaration, definition, action ID,
+and production keymap route.
 
-Cases 4–7 and 9 are fully specified but marked `placeholder` until reviewed
+Cases 4–6 and 9 are fully specified but marked `placeholder` until reviewed
 hidden canonical patches, diagnostics, mutants, production checks, and UI
 scripts exist. Placeholders return `non_runnable`, score zero, and make a matrix
 ineligible; they never silently pass.
