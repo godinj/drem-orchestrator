@@ -21,7 +21,7 @@ import sys
 import tempfile
 
 
-HARNESSES = ("opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands")
+HARNESSES = ("opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands", "goose")
 PINNED_IMAGE = re.compile(r"^[A-Za-z0-9._/:@+-]+:[A-Za-z0-9._+-]+@sha256:[0-9a-f]{64}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PROMPT = "Respond with exactly CANVASBENCH_CANARY_OK and do not use tools."
@@ -142,6 +142,8 @@ def harness_command(name: str) -> list[str]:
         return ["aider", "--model", "openai/canvasbench-canary", "--message", PROMPT, "--edit-format", "diff", "--yes-always", "--no-git", "--no-auto-commits", "--no-dirty-commits", "--no-stream", "--no-pretty", "--no-check-update", "--no-analytics", "--no-cache-prompts", "--map-tokens", "0"]
     if name == "openhands":
         return ["openhands", "--model", "openai/canvasbench-canary", "--headless", "--json", "--yolo", "--override-with-envs", "-t", PROMPT]
+    if name == "goose":
+        return ["goose", "run", "--no-session", "--no-profile", "--with-builtin", "developer", "--provider", "openai", "--model", "canvasbench-canary", "--max-turns", "2", "--quiet", "--output-format", "json", "--text", PROMPT]
     raise UnsupportedCanary(f"unsupported canary harness {name!r}")
 
 

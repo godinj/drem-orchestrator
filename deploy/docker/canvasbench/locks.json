@@ -69,6 +69,15 @@
       "executable": "openhands",
       "env_contract": "openai_base_url_api_key.v1",
       "normalizer": "openhands-wrapper-json-v1"
+    },
+    "goose": {
+      "version": "1.44.0",
+      "upstream": "github:aaif-goose/goose@v1.44.0",
+      "integrity": "sha256:07febc8b4f73bdfdc3ece3d34d0e21b005f3a4f43008f95b85d6538da8f6bac1",
+      "dockerfile": "deploy/docker/canvasbench/goose.Dockerfile",
+      "executable": "goose",
+      "env_contract": "openai_base_url_api_key.v1",
+      "normalizer": "goose-wrapper-json-v1"
     }
   }
 }

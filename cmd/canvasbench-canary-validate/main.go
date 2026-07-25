@@ -38,6 +38,7 @@ func validateCanary(harness string, raw []byte) (benchv2.HarnessRun, error) {
 		benchv2.AdapterPi:        benchv2.NormalizerPi,
 		benchv2.AdapterAider:     benchv2.NormalizerAider,
 		benchv2.AdapterOpenHands: benchv2.NormalizerOpenHands,
+		benchv2.AdapterGoose:     benchv2.NormalizerGoose,
 	}
 	normalizer := normalizers[harness]
 	if normalizer == "" {

@@ -15,6 +15,7 @@ const (
 	AdapterPi        = "pi"
 	AdapterAider     = "aider"
 	AdapterOpenHands = "openhands"
+	AdapterGoose     = "goose"
 
 	NormalizerOpenCode  = "opencode-json-v1"
 	NormalizerQwenCode  = "qwen-code-stream-json-v1"
@@ -22,6 +23,7 @@ const (
 	NormalizerPi        = "pi-json-v3"
 	NormalizerAider     = "aider-wrapper-json-v1"
 	NormalizerOpenHands = "openhands-wrapper-json-v1"
+	NormalizerGoose     = "goose-wrapper-json-v1"
 )
 
 type CommandInvocation struct {
@@ -116,6 +118,10 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 		}
 	case AdapterOpenHands:
 		invocation.Args = []string{"--model", request.Harness.AdapterModelRef, "--headless", "--json", "--yolo", "--override-with-envs", "-t", prompt}
+	case AdapterGoose:
+		invocation.Args = []string{"run", "--no-session", "--no-profile", "--with-builtin", "developer",
+			"--provider", "openai", "--model", request.Harness.AdapterModelRef,
+			"--max-turns", fmt.Sprint(request.Task.Budget.MaxIterations), "--quiet", "--output-format", "json", "--text", prompt}
 	default:
 		return CommandInvocation{}, fmt.Errorf("unsupported external adapter %q", adapter.Kind)
 	}
@@ -260,7 +266,7 @@ func inferenceEnvContractForAdapter(kind string) string {
 		return "openai_api_base_api_key.v1"
 	}
 	switch kind {
-	case AdapterOpenCode, AdapterQwenCode, AdapterPi, AdapterAider, AdapterOpenHands:
+	case AdapterOpenCode, AdapterQwenCode, AdapterPi, AdapterAider, AdapterOpenHands, AdapterGoose:
 		return "openai_base_url_api_key.v1"
 	default:
 		return ""
@@ -297,6 +303,8 @@ func normalizerForAdapter(kind string) string {
 		return NormalizerAider
 	case AdapterOpenHands:
 		return NormalizerOpenHands
+	case AdapterGoose:
+		return NormalizerGoose
 	default:
 		return ""
 	}

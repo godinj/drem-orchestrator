@@ -17,7 +17,7 @@ DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 PINNED_IMAGE = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9._-]+(?::[0-9]+)?(?:/[A-Za-z0-9._-]+)+$")
 INTEGRITY = re.compile(r"^(?:sha256:[0-9a-f]{64}|sha512-[A-Za-z0-9+/]+={0,2})$")
-ORDER = ("usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands")
+ORDER = ("usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands", "goose")
 
 
 def run(command: list[str], *, capture: bool = False) -> str:
@@ -40,7 +40,7 @@ def load_lock(path: Path, root: Path | None = None) -> dict:
     if lock.get("schema") != "canvasbench.images.v1" or lock.get("platform") != "linux/amd64":
         raise SystemExit("invalid CanvasBench image lock schema/platform")
     if tuple(lock.get("images", {}).keys()) != ORDER:
-        raise SystemExit("image lock must contain the canonical five-image order")
+        raise SystemExit("image lock must contain the canonical image order")
     for base in lock.get("base_images", {}).values():
         if not PINNED_IMAGE.fullmatch(base):
             raise SystemExit(f"base image is not digest-pinned: {base}")
@@ -103,11 +103,12 @@ def build_args(lock: dict, name: str, image: dict, state: str) -> list[str]:
         "HARNESS_VERSION": image["version"],
         "ENV_CONTRACT": image["env_contract"],
         "NORMALIZER": image["normalizer"],
+        "UPSTREAM_INTEGRITY": image.get("integrity", ""),
     }
     if name == "usage-proxy":
         values["GO_BASE_IMAGE"] = lock["base_images"]["golang"]
         values["RUNTIME_BASE_IMAGE"] = lock["base_images"]["runtime"]
-    elif name in {"mini-swe-agent", "aider", "openhands"}:
+    elif name in {"mini-swe-agent", "aider", "openhands", "goose"}:
         values["PYTHON_BASE_IMAGE"] = lock["base_images"]["python"]
     else:
         values["NODE_BASE_IMAGE"] = lock["base_images"]["node"]

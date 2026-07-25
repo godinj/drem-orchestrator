@@ -24,6 +24,7 @@ func TestExternalGoldenTrajectoriesNormalizeToATIF17(t *testing.T) {
 		{AdapterPi, NormalizerPi, "pi.jsonl", "Pi finished exactly.", 1, false},
 		{AdapterAider, NormalizerAider, "aider.json", "Aider finished exactly.", 0, false},
 		{AdapterOpenHands, NormalizerOpenHands, "openhands.json", "OpenHands finished exactly.", 0, false},
+		{AdapterGoose, NormalizerGoose, "goose.json", "Goose finished exactly.", 0, false},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {
@@ -62,6 +63,7 @@ func TestExternalNormalizersFailClosedOnMalformedOrIncompleteData(t *testing.T) 
 		{AdapterPi, NormalizerPi, `{"type":"session","version":3,"id":"s"}` + "\n", nil},
 		{AdapterAider, NormalizerAider, `{"schema":"canvasbench.cli-wrapper.v1","harness":"aider"}`, nil},
 		{AdapterOpenHands, NormalizerOpenHands, `{"schema":"canvasbench.cli-wrapper.v1","harness":"openhands"}`, nil},
+		{AdapterGoose, NormalizerGoose, `{"schema":"canvasbench.cli-wrapper.v1","harness":"goose"}`, nil},
 	} {
 		t.Run(test.kind, func(t *testing.T) {
 			_, err := NormalizeExternal(test.kind, test.normalizer, request, OuterExecutionResult{Stdout: []byte(test.stdout), Artifacts: test.artifacts})

@@ -146,7 +146,7 @@ import sys
 
 document = json.loads(Path(sys.argv[1]).read_text())
 assert document["schema"] == "canvasbench.image-attestation.v1"
-assert set(document["images"]) == {"usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands"}
+assert set(document["images"]) == {"usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands", "goose"}
 for name, image in document["images"].items():
     assert re.fullmatch(r".+@sha256:[0-9a-f]{64}", image["image"]), (name, image["image"])
     assert ":latest" not in image["image"]
