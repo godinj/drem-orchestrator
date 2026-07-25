@@ -34,11 +34,18 @@ class UnsupportedCanary(RuntimeError):
     pass
 
 
-def run(command: list[str], *, capture: bool = False, check: bool = True) -> subprocess.CompletedProcess[str]:
+def run(
+    command: list[str],
+    *,
+    capture: bool = False,
+    check: bool = True,
+    input_text: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         command,
         check=check,
         text=True,
+        input=input_text,
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.PIPE if capture else None,
     )
@@ -136,20 +143,31 @@ def run_canary(options: argparse.Namespace) -> None:
 
     run_id = secrets.token_hex(6)
     network = f"canvasbench-canary-{run_id}"
+    secret_volume = f"canvasbench-canary-secrets-{run_id}"
     proxy_name = f"canvasbench-usage-proxy-{run_id}"
     fake_name = f"canvasbench-fake-openai-{run_id}"
     temporary = Path(tempfile.mkdtemp(prefix="canvasbench-canary-"))
     admin_token = secrets.token_urlsafe(32)
-    admin_file = temporary / "admin.token"
-    write_secret(admin_file, admin_token)
     records: list[dict] = []
     created_network = False
+    created_secret_volume = False
     containers: list[str] = []
     try:
+        fake_image = lock["base_images"]["python"]
+        run(["docker", "volume", "create", secret_volume], capture=True)
+        created_secret_volume = True
+        run([
+            "docker", "run", "--rm", "--network", "none", "--user", "0:0",
+            "--read-only", "--cap-drop", "ALL", "--cap-add", "CHOWN",
+            "--security-opt", "no-new-privileges",
+            "--mount", f"type=volume,src={secret_volume},dst=/run/secrets",
+            fake_image, "python", "-c",
+            "import os,pathlib,sys; p=pathlib.Path('/run/secrets/admin.token'); "
+            "p.write_text(sys.stdin.read()); p.chmod(0o400); os.chown(p,65532,65532)",
+        ], input_text=admin_token + "\n")
         run(["docker", "network", "create", "--internal", network])
         created_network = True
         fake_script = root / "deploy/docker/canvasbench/fake_openai.py"
-        fake_image = lock["base_images"]["python"]
         run([
             "docker", "run", "--detach", "--name", fake_name, "--network", network,
             "--network-alias", "canvasbench-fake-openai", "--user", "65532:65532",
@@ -166,7 +184,7 @@ def run_canary(options: argparse.Namespace) -> None:
             "--network-alias", "canvasbench-usage-proxy", "--publish", "127.0.0.1::8080",
             "--user", "65532:65532", "--read-only", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
-            "--mount", f"type=bind,src={admin_file},dst=/run/secrets/admin.token,readonly",
+            "--mount", f"type=volume,src={secret_volume},dst=/run/secrets,readonly",
             proxy["image"], "--listen", "0.0.0.0:8080",
             "--public-base-url", proxy_runtime["public_base_url"],
             "--upstream", proxy_runtime["upstream_chat_completions"],
@@ -238,6 +256,8 @@ def run_canary(options: argparse.Namespace) -> None:
             run(["docker", "rm", "--force", container], capture=True, check=False)
         if created_network:
             run(["docker", "network", "rm", network], capture=True, check=False)
+        if created_secret_volume:
+            run(["docker", "volume", "rm", "--force", secret_volume], capture=True, check=False)
         shutil.rmtree(temporary, ignore_errors=True)
 
     result = {

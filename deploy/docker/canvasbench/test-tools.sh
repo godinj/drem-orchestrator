@@ -80,6 +80,12 @@ PATH="$TEST_ROOT/bin:$PATH" FAKE_DOCKER_STATE="$TEST_ROOT/state" \
   --output "$TEST_ROOT/attestation.json"
 
 python3 "$SCRIPT_DIR/canary_tool.py" validate --attestation "$TEST_ROOT/attestation.json"
+grep -q 'type=volume,src={secret_volume},dst=/run/secrets,readonly' "$SCRIPT_DIR/canary_tool.py"
+grep -q 'volume", "rm", "--force", secret_volume' "$SCRIPT_DIR/canary_tool.py"
+if grep -q 'type=bind,src={admin_file}' "$SCRIPT_DIR/canary_tool.py"; then
+  echo "admin token unexpectedly uses a host bind mount" >&2
+  exit 1
+fi
 python3 - "$TEST_ROOT/attestation.json" <<'PY'
 import json
 from pathlib import Path
