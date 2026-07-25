@@ -7,7 +7,7 @@
   "temperature": 0.6,
   "top_p": 0.95,
   "top_k": 20,
-  "context_window": 131072,
+  "context_window": 32768,
   "preserve_thinking": true,
   "seed_policy": "fixed_per_trial",
   "harness": {

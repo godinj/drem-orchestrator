@@ -50,6 +50,20 @@ func TestAttestationFailsClosed(t *testing.T) {
 	require.ErrorContains(t, matrix.Validate(), "harness attestation")
 }
 
+func TestMatrixRejectsInvalidInferencePolicy(t *testing.T) {
+	for _, mutate := range []func(*MatrixSpec){
+		func(matrix *MatrixSpec) { matrix.Temperature = -0.1 },
+		func(matrix *MatrixSpec) { matrix.TopP = 0 },
+		func(matrix *MatrixSpec) { matrix.TopP = 1.1 },
+		func(matrix *MatrixSpec) { matrix.TopK = -1 },
+		func(matrix *MatrixSpec) { matrix.ContextWindow = 0 },
+	} {
+		matrix := validMatrix()
+		mutate(&matrix)
+		require.ErrorContains(t, matrix.Validate(), "invalid matrix")
+	}
+}
+
 func TestExternalAttestationRequiresPinnedOuterRuntime(t *testing.T) {
 	matrix := validMatrix()
 	matrix.Harness = selectableExternalHarness()

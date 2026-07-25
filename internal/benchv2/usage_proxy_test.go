@@ -27,6 +27,16 @@ func TestUsageProxyMeasuresNonStreamingServerUsage(t *testing.T) {
 		var payload map[string]any
 		require.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
 		require.NotEqual(t, true, payload["stream"])
+		require.Equal(t, "qwen-runtime", payload["model"])
+		require.Equal(t, float64(42), payload["seed"])
+		require.Equal(t, 0.2, payload["temperature"])
+		require.Equal(t, 0.9, payload["top_p"])
+		require.Equal(t, float64(20), payload["top_k"])
+		require.Equal(t, float64(1024), payload["max_tokens"])
+		kwargs, ok := payload["chat_template_kwargs"].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, true, kwargs["preserve_thinking"])
+		require.Equal(t, "retained", kwargs["other"])
 		writeProxyJSON(writer, http.StatusOK, map[string]any{
 			"choices": []any{map[string]any{"message": map[string]any{"role": "assistant", "content": "done"}}},
 			"usage":   map[string]int{"prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14},
@@ -36,10 +46,11 @@ func TestUsageProxyMeasuresNonStreamingServerUsage(t *testing.T) {
 	proxy, client := usageProxyFixture(t, upstream.URL+"/v1/chat/completions", "upstream-secret")
 	session := startTestUsageSession(t, client)
 
-	response := postTestCompletion(t, proxy.URL, session.APIKey, `{"model":"qwen","messages":[]}`)
+	requestBody := `{"model":"wrong","seed":1,"temperature":1,"top_p":0.1,"top_k":1,"max_tokens":1,"chat_template_kwargs":{"preserve_thinking":false,"other":"retained"},"messages":[]}`
+	response := postTestCompletion(t, proxy.URL, session.APIKey, requestBody)
 	require.Equal(t, http.StatusOK, response.StatusCode)
 	_ = response.Body.Close()
-	response = postTestCompletion(t, proxy.URL, session.APIKey, `{"model":"qwen","messages":[]}`)
+	response = postTestCompletion(t, proxy.URL, session.APIKey, requestBody)
 	require.Equal(t, http.StatusOK, response.StatusCode)
 	_ = response.Body.Close()
 	usage, err := client.AttestServerUsage(context.Background(), session)
@@ -115,6 +126,16 @@ func TestUsageProxyAdminAuthAndCrossTrialIsolation(t *testing.T) {
 	secondUsage, err := client.AttestServerUsage(context.Background(), second)
 	require.NoError(t, err)
 	require.Equal(t, 1, secondUsage.RequestsTotal, "first trial traffic must not enter the second ledger")
+}
+
+func TestUsageProxyRejectsInvalidTrialPolicyBeforeCredentialCreation(t *testing.T) {
+	proxy, client := usageProxyFixture(t, "http://127.0.0.1:1/v1/chat/completions", "")
+	server := proxy.Config.Handler.(*usageProxyServer)
+	_, err := client.StartServerUsage(context.Background(), TrialRequest{})
+	require.ErrorContains(t, err, "HTTP 400")
+	server.mu.Lock()
+	require.Empty(t, server.trials)
+	server.mu.Unlock()
 }
 
 func TestUsageProxyLiveAttestationRejectsEveryMismatchBeforeTrialCreation(t *testing.T) {
@@ -277,9 +298,16 @@ func usageProxyFixture(t *testing.T, upstreamURL, upstreamKey string) (*httptest
 
 func startTestUsageSession(t *testing.T, client *UsageProxyClient) UsageSession {
 	t.Helper()
-	session, err := client.StartServerUsage(context.Background(), TrialRequest{})
+	session, err := client.StartServerUsage(context.Background(), testUsageTrialRequest())
 	require.NoError(t, err)
 	return session
+}
+
+func testUsageTrialRequest() TrialRequest {
+	return TrialRequest{
+		Task: TaskSpec{Budget: Budget{MaxOutputTokens: 1024}}, Runtime: RuntimeAttestation{ModelID: "qwen-runtime"},
+		Seed: 42, Temperature: 0.2, TopP: 0.9, TopK: 20, ContextWindow: 32768, PreserveThinking: true,
+	}
 }
 
 func postTestCompletion(t *testing.T, proxyURL, apiKey, body string) *http.Response {

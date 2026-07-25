@@ -358,7 +358,9 @@ func (manifest ManifestSpec) Validate() error {
 }
 
 func (matrix MatrixSpec) Validate() error {
-	if matrix.Schema != MatrixSchemaVersion || matrix.ID == "" || matrix.Trials <= 0 || len(matrix.TaskFiles) == 0 || matrix.ContextWindow <= 0 || matrix.SeedPolicy != "fixed_per_trial" {
+	if matrix.Schema != MatrixSchemaVersion || matrix.ID == "" || matrix.Trials <= 0 || len(matrix.TaskFiles) == 0 ||
+		matrix.Temperature < 0 || matrix.TopP <= 0 || matrix.TopP > 1 || matrix.TopK < 0 || matrix.ContextWindow <= 0 ||
+		matrix.SeedPolicy != "fixed_per_trial" {
 		return fmt.Errorf("invalid matrix identity, schema, or trials")
 	}
 	if len(matrix.Seeds) < matrix.Trials {

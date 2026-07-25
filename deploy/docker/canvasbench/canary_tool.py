@@ -99,14 +99,17 @@ def docker_admin_json(
     method: str = "GET",
     *,
     attempts: int = 1,
+    body: dict | None = None,
 ) -> dict:
     script = (
         "import json,pathlib,sys,time,urllib.request; "
         "token=pathlib.Path('/run/secrets/admin.token').read_text().strip(); "
-        "url,method,attempts=sys.argv[1],sys.argv[2],int(sys.argv[3]); last=None; "
+        "url,method,attempts,raw=sys.argv[1],sys.argv[2],int(sys.argv[3]),sys.argv[4]; last=None; "
         "\nfor _ in range(attempts):\n"
         " try:\n"
-        "  request=urllib.request.Request(url,method=method,headers={'Authorization':'Bearer '+token}); "
+        "  data=raw.encode() if raw else None; headers={'Authorization':'Bearer '+token}; "
+        "headers.update({'Content-Type':'application/json'} if data else {}); "
+        "request=urllib.request.Request(url,data=data,method=method,headers=headers); "
         "response=urllib.request.urlopen(request,timeout=5); print(json.dumps(json.load(response))); sys.exit(0)\n"
         " except Exception as error:\n  last=error; time.sleep(0.25)\n"
         "raise SystemExit(str(last))"
@@ -116,6 +119,7 @@ def docker_admin_json(
         "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
         "--mount", f"type=volume,src={secret_volume},dst=/run/secrets,readonly",
         image, "python", "-c", script, url, method, str(attempts),
+        json.dumps(body, sort_keys=True, separators=(",", ":")) if body is not None else "",
     ], capture=True, check=False)
     if completed.returncode != 0:
         raise UnsupportedCanary(f"trusted proxy admin endpoint failed: {completed.stderr.strip()[-1200:]}")
@@ -221,8 +225,14 @@ def run_canary(options: argparse.Namespace) -> None:
             raise UnsupportedCanary("live trusted proxy identity does not match the build attestation")
 
         for harness in selected:
+            trial_policy = {
+                "model_id": "canvasbench-canary-runtime", "seed": 42,
+                "temperature": 0.2, "top_p": 0.9, "top_k": 20,
+                "context_window": 32768, "max_output_tokens": 1024,
+                "preserve_thinking": True,
+            }
             session = docker_admin_json(
-                fake_image, network, secret_volume, admin_url + "/admin/v1/trials", "POST",
+                fake_image, network, secret_volume, admin_url + "/admin/v1/trials", "POST", body=trial_policy,
             )
             if not all(session.get(key) for key in ("correlation_id", "base_url", "api_key")):
                 raise UnsupportedCanary(f"{harness} received an incomplete trial credential")
@@ -233,7 +243,13 @@ def run_canary(options: argparse.Namespace) -> None:
             os.chmod(workspace / ".canvasbench", 0o777)
             env_file = temporary / f"{harness}.env"
             base_key = "OPENAI_API_BASE" if harness == "mini-swe-agent" else "OPENAI_BASE_URL"
-            environment = f"{base_key}={session['base_url']}\nOPENAI_API_KEY={session['api_key']}"
+            environment = (
+                f"{base_key}={session['base_url']}\nOPENAI_API_KEY={session['api_key']}\n"
+                "CANVASBENCH_SEED=42\nCANVASBENCH_TEMPERATURE=0.2\n"
+                "CANVASBENCH_TOP_P=0.9\nCANVASBENCH_TOP_K=20\n"
+                "CANVASBENCH_CONTEXT_WINDOW=32768\nCANVASBENCH_MAX_OUTPUT_TOKENS=1024\n"
+                "CANVASBENCH_PRESERVE_THINKING=true"
+            )
             if harness == "mini-swe-agent":
                 environment += "\nMSWEA_CONFIGURED=true\nMSWEA_COST_TRACKING=ignore_errors\nMSWEA_GLOBAL_CONFIG_DIR=/tmp/mini-swe-agent\nMSWEA_SILENT_STARTUP=1"
             write_secret(env_file, environment)

@@ -148,10 +148,11 @@ func TestCanvasBenchFakeOpenAIProvidesMeasuredStreamingAndNonStreamingResponses(
 	}()
 
 	endpoint := "http://" + address + "/v1/chat/completions"
+	policy := `"model":"canvasbench-canary-runtime","seed":42,"temperature":0.2,"top_p":0.9,"top_k":20,"max_tokens":1024,"chat_template_kwargs":{"preserve_thinking":true}`
 	client := &http.Client{Timeout: 2 * time.Second}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		request, _ := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(`{"model":"canary"}`))
+		request, _ := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(`{`+policy+`}`))
 		request.Header.Set("Content-Type", "application/json")
 		response, requestErr := client.Do(request)
 		if requestErr == nil {
@@ -186,8 +187,8 @@ func TestCanvasBenchFakeOpenAIProvidesMeasuredStreamingAndNonStreamingResponses(
 		statusCode int
 		contains   string
 	}{
-		{`{"model":"canary","stream":true,"stream_options":{"include_usage":true}}`, http.StatusOK, `"prompt_tokens": 17`},
-		{`{"model":"canary","stream":true}`, http.StatusUnprocessableEntity, "streaming usage was not requested"},
+		{`{` + policy + `,"stream":true,"stream_options":{"include_usage":true}}`, http.StatusOK, `"prompt_tokens": 17`},
+		{`{` + policy + `,"stream":true}`, http.StatusUnprocessableEntity, "streaming usage was not requested"},
 	} {
 		request, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(test.body))
 		if err != nil {

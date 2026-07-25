@@ -61,6 +61,7 @@ type usageProxyServer struct {
 type usageTrial struct {
 	ID                  string
 	KeyDigest           [sha256.Size]byte
+	Policy              UsageProxyTrialPolicy
 	Frozen              bool
 	Consumed            bool
 	InFlight            int
@@ -69,6 +70,20 @@ type usageTrial struct {
 	PromptTokens        int
 	CompletionTokens    int
 	MeasurementFailures int
+}
+
+// UsageProxyTrialPolicy is the benchmark-owned inference contract applied by
+// the trusted proxy to every request in a trial. Harness request defaults are
+// deliberately ignored so all adapters exercise the same model policy.
+type UsageProxyTrialPolicy struct {
+	ModelID          string  `json:"model_id"`
+	Seed             int64   `json:"seed"`
+	Temperature      float64 `json:"temperature"`
+	TopP             float64 `json:"top_p"`
+	TopK             int     `json:"top_k"`
+	ContextWindow    int     `json:"context_window"`
+	MaxOutputTokens  int     `json:"max_output_tokens"`
+	PreserveThinking bool    `json:"preserve_thinking"`
 }
 
 type proxyUsage struct {
@@ -141,6 +156,17 @@ func (server *usageProxyServer) startTrial(writer http.ResponseWriter, request *
 		writeProxyError(writer, http.StatusUnauthorized, "admin authentication failed")
 		return
 	}
+	var policy UsageProxyTrialPolicy
+	decoder := json.NewDecoder(io.LimitReader(request.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&policy); err != nil {
+		writeProxyError(writer, http.StatusBadRequest, "invalid trial policy")
+		return
+	}
+	if err := validateUsageProxyTrialPolicy(policy); err != nil {
+		writeProxyError(writer, http.StatusBadRequest, err.Error())
+		return
+	}
 	id, err := randomCredential(24)
 	if err != nil {
 		writeProxyError(writer, http.StatusInternalServerError, "credential generation failed")
@@ -152,7 +178,7 @@ func (server *usageProxyServer) startTrial(writer http.ResponseWriter, request *
 		return
 	}
 	digest := sha256.Sum256([]byte(key))
-	trial := &usageTrial{ID: id, KeyDigest: digest}
+	trial := &usageTrial{ID: id, KeyDigest: digest, Policy: policy}
 	server.mu.Lock()
 	server.trials[id] = trial
 	server.keys[digest] = id
@@ -214,7 +240,7 @@ func (server *usageProxyServer) chatCompletions(writer http.ResponseWriter, requ
 		writeProxyError(writer, http.StatusUnauthorized, "trial authentication failed")
 		return
 	}
-	usage, forwardErr := server.forwardChatCompletions(writer, request)
+	usage, forwardErr := server.forwardChatCompletions(writer, request, trial.Policy)
 	server.finishRequest(trial, usage, forwardErr)
 }
 
@@ -249,7 +275,7 @@ func (server *usageProxyServer) finishRequest(trial *usageTrial, usage *proxyUsa
 	trial.CompletionTokens += *usage.CompletionTokens
 }
 
-func (server *usageProxyServer) forwardChatCompletions(writer http.ResponseWriter, request *http.Request) (*proxyUsage, error) {
+func (server *usageProxyServer) forwardChatCompletions(writer http.ResponseWriter, request *http.Request, policy UsageProxyTrialPolicy) (*proxyUsage, error) {
 	raw, err := io.ReadAll(io.LimitReader(request.Body, 32<<20))
 	if err != nil {
 		writeProxyError(writer, http.StatusBadRequest, "read request body")
@@ -262,6 +288,7 @@ func (server *usageProxyServer) forwardChatCompletions(writer http.ResponseWrite
 		writeProxyError(writer, http.StatusBadRequest, "invalid OpenAI request")
 		return nil, err
 	}
+	applyUsageProxyTrialPolicy(payload, policy)
 	stream, _ := payload["stream"].(bool)
 	if stream {
 		options, _ := payload["stream_options"].(map[string]any)
@@ -312,6 +339,29 @@ func (server *usageProxyServer) forwardChatCompletions(writer http.ResponseWrite
 		return nil, errors.New("non-streaming response omitted valid usage")
 	}
 	return usage, nil
+}
+
+func validateUsageProxyTrialPolicy(policy UsageProxyTrialPolicy) error {
+	if strings.TrimSpace(policy.ModelID) == "" || policy.ContextWindow <= 0 || policy.MaxOutputTokens <= 0 ||
+		policy.Temperature < 0 || policy.TopP <= 0 || policy.TopP > 1 || policy.TopK < 0 {
+		return errors.New("trial inference policy is invalid")
+	}
+	return nil
+}
+
+func applyUsageProxyTrialPolicy(payload map[string]any, policy UsageProxyTrialPolicy) {
+	payload["model"] = policy.ModelID
+	payload["seed"] = policy.Seed
+	payload["temperature"] = policy.Temperature
+	payload["top_p"] = policy.TopP
+	payload["top_k"] = policy.TopK
+	payload["max_tokens"] = policy.MaxOutputTokens
+	kwargs, _ := payload["chat_template_kwargs"].(map[string]any)
+	if kwargs == nil {
+		kwargs = map[string]any{}
+	}
+	kwargs["preserve_thinking"] = policy.PreserveThinking
+	payload["chat_template_kwargs"] = kwargs
 }
 
 func proxyStreamResponse(writer http.ResponseWriter, body io.Reader) (*proxyUsage, error) {
@@ -475,7 +525,7 @@ func parseAbsoluteURL(raw string) (*url.URL, error) {
 	return parsed, nil
 }
 
-func (client *UsageProxyClient) StartServerUsage(ctx context.Context, _ TrialRequest) (UsageSession, error) {
+func (client *UsageProxyClient) StartServerUsage(ctx context.Context, request TrialRequest) (UsageSession, error) {
 	if err := client.VerifyLiveAttestation(ctx); err != nil {
 		return UsageSession{}, err
 	}
@@ -484,7 +534,12 @@ func (client *UsageProxyClient) StartServerUsage(ctx context.Context, _ TrialReq
 		BaseURL       string `json:"base_url"`
 		APIKey        string `json:"api_key"`
 	}
-	if err := client.adminJSON(ctx, http.MethodPost, "/admin/v1/trials", &response); err != nil {
+	policy := UsageProxyTrialPolicy{
+		ModelID: request.Runtime.ModelID, Seed: request.Seed, Temperature: request.Temperature,
+		TopP: request.TopP, TopK: request.TopK, ContextWindow: request.ContextWindow,
+		MaxOutputTokens: request.Task.Budget.MaxOutputTokens, PreserveThinking: request.PreserveThinking,
+	}
+	if err := client.adminJSON(ctx, http.MethodPost, "/admin/v1/trials", policy, &response); err != nil {
 		return UsageSession{}, err
 	}
 	if response.CorrelationID == "" || response.APIKey == "" || strings.TrimRight(response.BaseURL, "/") != strings.TrimRight(client.config.PublicBaseURL, "/") {
@@ -495,7 +550,7 @@ func (client *UsageProxyClient) StartServerUsage(ctx context.Context, _ TrialReq
 
 func (client *UsageProxyClient) VerifyLiveAttestation(ctx context.Context) error {
 	var live UsageProxyAttestation
-	if err := client.adminJSON(ctx, http.MethodGet, "/admin/v1/attestation", &live); err != nil {
+	if err := client.adminJSON(ctx, http.MethodGet, "/admin/v1/attestation", nil, &live); err != nil {
 		return fmt.Errorf("read live usage proxy attestation: %w", err)
 	}
 	expected := client.config.ExpectedAttestation
@@ -508,7 +563,7 @@ func (client *UsageProxyClient) VerifyLiveAttestation(ctx context.Context) error
 func (client *UsageProxyClient) AttestServerUsage(ctx context.Context, session UsageSession) (ServerUsage, error) {
 	var usage ServerUsage
 	path := "/admin/v1/trials/" + url.PathEscape(session.CorrelationID) + "/consume"
-	if err := client.adminJSON(ctx, http.MethodPost, path, &usage); err != nil {
+	if err := client.adminJSON(ctx, http.MethodPost, path, nil, &usage); err != nil {
 		return ServerUsage{}, err
 	}
 	if usage.Source != ServerUsageSourceProxy || usage.CorrelationID != session.CorrelationID || !usage.Complete ||
@@ -518,12 +573,23 @@ func (client *UsageProxyClient) AttestServerUsage(ctx context.Context, session U
 	return usage, nil
 }
 
-func (client *UsageProxyClient) adminJSON(ctx context.Context, method, path string, target any) error {
-	request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(client.config.AdminURL, "/")+path, nil)
+func (client *UsageProxyClient) adminJSON(ctx context.Context, method, path string, body, target any) error {
+	var requestBody io.Reader
+	if body != nil {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		requestBody = bytes.NewReader(raw)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(client.config.AdminURL, "/")+path, requestBody)
 	if err != nil {
 		return err
 	}
 	request.Header.Set("Authorization", "Bearer "+client.config.AdminToken)
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
 	response, err := client.client.Do(request)
 	if err != nil {
 		return err

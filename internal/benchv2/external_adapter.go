@@ -68,7 +68,13 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 		Executable: adapter.Executable, WorkDir: outerWorkspace,
 		SensitiveEnv: sensitiveEnv,
 		Env: map[string]string{
-			"CANVASBENCH_SEED": fmt.Sprint(request.Seed), "CANVASBENCH_TEMPERATURE": fmt.Sprint(request.Temperature),
+			"CANVASBENCH_SEED":              fmt.Sprint(request.Seed),
+			"CANVASBENCH_TEMPERATURE":       fmt.Sprint(request.Temperature),
+			"CANVASBENCH_TOP_P":             fmt.Sprint(request.TopP),
+			"CANVASBENCH_TOP_K":             fmt.Sprint(request.TopK),
+			"CANVASBENCH_CONTEXT_WINDOW":    fmt.Sprint(request.ContextWindow),
+			"CANVASBENCH_MAX_OUTPUT_TOKENS": fmt.Sprint(request.Task.Budget.MaxOutputTokens),
+			"CANVASBENCH_PRESERVE_THINKING": fmt.Sprint(request.PreserveThinking),
 		},
 	}
 	for key, value := range inferenceEnv {

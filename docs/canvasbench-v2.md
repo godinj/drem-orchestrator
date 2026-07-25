@@ -70,9 +70,14 @@ outer harness. The admin credential and any upstream credential remain on the
 host/proxy side.
 
 The proxy forwards streaming and non-streaming OpenAI-compatible
-chat-completions. It forces `stream_options.include_usage=true`, parses usage
-from the server response, and aggregates every request. The host consumes the
-ledger exactly once after execution. Zero requests, in-flight requests,
+chat-completions. Trial creation sends the matrix model ID, seed, temperature,
+top-p, top-k, context declaration, per-case output limit, and thinking policy
+over the authenticated admin channel. The proxy overwrites those request fields
+on every harness call, preserving only unrelated chat-template arguments. This
+makes the trusted boundary—not four CLI defaults—the sampling authority. It
+also forces `stream_options.include_usage=true`, parses usage from the server
+response, and aggregates every request. The host consumes the ledger exactly
+once after execution. Zero requests, invalid trial policies, in-flight requests,
 upstream errors, missing or duplicate usage, request-count mismatch, wrong
 correlation, or a second consume fail closed. A successful record has source
 `trusted_usage_proxy`; harness JSON/JSONL token fields are never a fallback.
@@ -116,6 +121,13 @@ environment values, or command-line values. Build output records the immutable
 image reference, source/upstream identity, package integrity, environment
 contract, normalizer, and hashes of canonical non-secret image and proxy
 configuration. The tool never emits `latest`.
+
+The adapter also gives each shim the matrix seed, sampling values, effective
+context window, per-case output limit, and thinking policy. OpenCode and Pi use
+those values for truthful model context/output metadata; Qwen Code writes a
+private ephemeral generation configuration; mini-SWE-agent receives equivalent
+LiteLLM arguments. The trusted proxy still overwrites the wire request, so a
+harness cannot silently weaken or substitute the benchmark policy.
 
 From a clean committed checkout, build but do not deploy the canonical image
 set:
@@ -234,7 +246,10 @@ attestation caps a case at 40. Cases 8 and 9 are mandatory hard gates.
 
 Copy `bench/canvasbench-v2/matrices/example.json` and fill every attestation.
 The Qwen precise-coding baseline is temperature 0.6, top-p 0.95, top-k 20,
-a 131072-token context window, and thinking preserved.
+and thinking preserved. `context_window` must equal the effective context limit
+in the attested live runtime; the current Debian Qwen3.6-27B vLLM qualification
+uses 32768. A future 65536/131072 runtime must receive a new runtime-config hash
+and matrix rather than merely advertising the larger value to a harness.
 
 The canonical two-host topology keeps the Mac as the control plane and runs
 the entire benchmark process on Debian. This is stronger than setting

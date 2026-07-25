@@ -60,9 +60,9 @@ func adapterRequest(workDir, kind, normalizer string) TrialRequest {
 		Task: TaskSpec{
 			SystemPrompt: "system", UserMessage: "task", AllowedToolPolicies: []string{ToolPolicyStructured, ToolPolicySandboxed},
 			ReadPaths: []string{"read.cpp", "write.cpp"}, WritePaths: []string{"write.cpp"},
-			Budget: Budget{MaxToolCalls: 12, MaxIterations: 8, TimeoutSeconds: 600},
+			Budget: Budget{MaxOutputTokens: 1024, MaxToolCalls: 12, MaxIterations: 8, TimeoutSeconds: 600},
 		},
-		WorkDir: workDir, Seed: 42, Temperature: .6,
+		WorkDir: workDir, Seed: 42, Temperature: .6, TopP: .95, TopK: 20, ContextWindow: 32768, PreserveThinking: true,
 		Harness: HarnessConfig{
 			Name: kind, Version: "pinned", ConfigSHA256: "cfg", AdapterModelRef: "provider/qwen36",
 			OuterIsolation: "outer_container", ToolPolicy: ToolPolicySandboxed, TrajectoryNormalizer: normalizer,
@@ -116,6 +116,13 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 			} else {
 				require.Equal(t, "http://usage-proxy:8080/v1", invocation.Env["OPENAI_BASE_URL"])
 			}
+			require.Equal(t, "42", invocation.Env["CANVASBENCH_SEED"])
+			require.Equal(t, "0.6", invocation.Env["CANVASBENCH_TEMPERATURE"])
+			require.Equal(t, "0.95", invocation.Env["CANVASBENCH_TOP_P"])
+			require.Equal(t, "20", invocation.Env["CANVASBENCH_TOP_K"])
+			require.Equal(t, "32768", invocation.Env["CANVASBENCH_CONTEXT_WINDOW"])
+			require.Equal(t, "1024", invocation.Env["CANVASBENCH_MAX_OUTPUT_TOKENS"])
+			require.Equal(t, "true", invocation.Env["CANVASBENCH_PRESERVE_THINKING"])
 		})
 	}
 }

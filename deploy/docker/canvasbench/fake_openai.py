@@ -5,6 +5,16 @@ import os
 import time
 
 
+EXPECTED_POLICY = {
+    "model": "canvasbench-canary-runtime",
+    "seed": 42,
+    "temperature": 0.2,
+    "top_p": 0.9,
+    "top_k": 20,
+    "max_tokens": 1024,
+}
+
+
 def non_stream_response(request):
     usage = {"prompt_tokens": 17, "completion_tokens": 4, "total_tokens": 21}
     tool_names = {
@@ -46,6 +56,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", "0"))
         request = json.loads(self.rfile.read(length))
+        if any(request.get(key) != value for key, value in EXPECTED_POLICY.items()):
+            self.send_error(422, "benchmark inference policy was not enforced")
+            return
+        if request.get("chat_template_kwargs", {}).get("preserve_thinking") is not True:
+            self.send_error(422, "benchmark thinking policy was not enforced")
+            return
         usage = {"prompt_tokens": 17, "completion_tokens": 4, "total_tokens": 21}
         if request.get("stream"):
             if not request.get("stream_options", {}).get("include_usage"):
