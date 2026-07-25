@@ -160,6 +160,12 @@ func (adapter ExternalCLIAdapter) Run(ctx context.Context, request TrialRequest)
 		if execErr != nil {
 			return HarnessRun{Output: string(execution.Stdout)}, fmt.Errorf("independent server usage failed: %w (outer execution also failed: %v)", usageErr, execErr)
 		}
+		if execution.ExitCode != 0 {
+			return HarnessRun{Output: string(execution.Stdout)}, fmt.Errorf(
+				"independent server usage failed: %w (outer harness exited %d: %s)",
+				usageErr, execution.ExitCode, strings.TrimSpace(string(execution.Stderr)),
+			)
+		}
 		return HarnessRun{Output: string(execution.Stdout)}, fmt.Errorf("independent server usage failed: %w", usageErr)
 	}
 	if usage.Source != ServerUsageSourceProxy || usage.CorrelationID != usageSession.CorrelationID || !usage.Complete ||

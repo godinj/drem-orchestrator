@@ -40,6 +40,17 @@ func TestTaskRejectsNonHexOracleArtifactDigest(t *testing.T) {
 	require.ErrorContains(t, task.Validate(), "invalid oracle artifact pin")
 }
 
+func TestTaskRejectsMalformedVisibleBlobPin(t *testing.T) {
+	task := TaskSpec{
+		Schema: TaskSchemaVersion, ID: "fixture", Title: "Fixture", OracleID: "fixture-v1",
+		Status: "runnable", Mode: "direct_worker", InferencePolicy: "required",
+		AllowedToolPolicies: []string{ToolPolicyStructured, ToolPolicySandboxed},
+		Fixture:             Fixture{RepoID: "repo", BaseCommit: strings.Repeat("a", 40), VisibleBlobs: []BlobPin{{Path: "file.cpp", SHA: strings.Repeat("b", 41)}}},
+		Budget:              Budget{MaxInputTokens: 1, TimeoutSeconds: 1},
+	}
+	require.ErrorContains(t, task.Validate(), "invalid visible blob pin")
+}
+
 func TestAttestationFailsClosed(t *testing.T) {
 	matrix := validMatrix()
 	require.NoError(t, matrix.Validate())

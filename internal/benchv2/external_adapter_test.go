@@ -2,6 +2,7 @@ package benchv2
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,6 +34,7 @@ func (executor fakeOuterExecutor) Execute(_ context.Context, spec OuterExecution
 type fakeUsageAttestor struct {
 	usage   ServerUsage
 	session UsageSession
+	err     error
 }
 
 func (attestor fakeUsageAttestor) StartServerUsage(context.Context, TrialRequest) (UsageSession, error) {
@@ -43,10 +45,27 @@ func (attestor fakeUsageAttestor) StartServerUsage(context.Context, TrialRequest
 }
 
 func (attestor fakeUsageAttestor) AttestServerUsage(_ context.Context, session UsageSession) (ServerUsage, error) {
+	if attestor.err != nil {
+		return ServerUsage{}, attestor.err
+	}
 	if attestor.usage.CorrelationID == "" {
 		attestor.usage.CorrelationID = session.CorrelationID
 	}
 	return attestor.usage, nil
+}
+
+func TestExternalAdapterRetainsOuterExitEvidenceWhenUsageIsIncomplete(t *testing.T) {
+	fixture := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fixture, "read.cpp"), []byte("read"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(fixture, "write.cpp"), []byte("before"), 0o644))
+	seen := OuterExecutionSpec{}
+	adapter := externalAdapter(AdapterQwenCode, NormalizerQwenCode)
+	adapter.Executor = fakeOuterExecutor{
+		result: OuterExecutionResult{ExitCode: 125, Stderr: []byte("invalid mount contract"), Artifacts: map[string][]byte{}}, seen: &seen,
+	}
+	adapter.UsageAttestor = fakeUsageAttestor{err: errors.New("ledger incomplete")}
+	_, err := adapter.Run(context.Background(), adapterRequest(fixture, AdapterQwenCode, NormalizerQwenCode))
+	require.ErrorContains(t, err, "outer harness exited 125: invalid mount contract")
 }
 
 var errUnexpectedVisibleFixture = &scopeTestError{"full fixture leaked into outer workspace"}

@@ -15,7 +15,7 @@
     "repo_id": "drem-canvas",
     "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274",
     "visible_blobs": [
-      {"path": "src/model/Arrangement.h", "git_blob_sha": "1692c085cfb8c5e561ed1e08291883e0c17db0d9f"},
+      {"path": "src/model/Arrangement.h", "git_blob_sha": "1692c085cfb8c5e561ed1e08291883e0c17db0d9"},
       {"path": "src/vim/ActionRegistry.h", "git_blob_sha": "786e82bab6fbcef3c31031459ad77aa897daf631"},
       {"path": "src/vim/KeymapRegistry.h", "git_blob_sha": "aef766fa31182af4848c842ff4ff9909aa4da0e0"},
       {"path": "src/vim/KeySequence.h", "git_blob_sha": "d3c844cb452f966311f038b499af69e4d179cf42"},

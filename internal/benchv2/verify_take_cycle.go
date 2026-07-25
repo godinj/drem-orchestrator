@@ -226,6 +226,12 @@ func (verifier BuiltinVerifier) runTakeCycleGate(ctx context.Context, workDir st
 	}
 	cmd := exec.CommandContext(ctx, filepath.Join(workDir, "scripts", "dev"), "test", "--filter", `(Take cycling|take\.)`)
 	cmd.Dir = workDir
+	// The pinned Canvas fixture predates the explicit <cmath> include in an
+	// unrelated tempo-map test. Force that standard header only in the hidden
+	// native verifier so Debian toolchain transitive-include drift cannot grade
+	// a take-cycling candidate. The candidate workspace and production sources
+	// remain unchanged.
+	cmd.Env = append(os.Environ(), "CXXFLAGS="+strings.TrimSpace(os.Getenv("CXXFLAGS")+" -include cmath"))
 	output, err := cmd.CombinedOutput()
 	return string(output), err
 }

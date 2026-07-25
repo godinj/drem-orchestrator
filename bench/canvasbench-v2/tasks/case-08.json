@@ -22,8 +22,8 @@
     "seed_patch_sha256": "6792d5caf16b5b1ff34d87ccf138686cee599e42d622f1982f173f6beabf6ea3"
   },
   "read_paths": [],
-  "write_paths": [],
-  "required_changed_paths": [],
+  "write_paths": ["internal/orchestrator/canvasbench_rework_replay_test.go"],
+  "required_changed_paths": ["internal/orchestrator/canvasbench_rework_replay_test.go"],
   "result_artifact": "",
   "required_mutation": false,
   "oracle_id": "ownership-rework-99894b1a-v1",

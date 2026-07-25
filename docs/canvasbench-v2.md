@@ -169,12 +169,12 @@ and are deleted with the network and containers on exit.
 Any package install/entrypoint mismatch, unsupported CLI option, ignored
 environment contract, proxy identity mismatch, missing usage, or changed output
 wire exits nonzero with `unsupported canary:`. There is intentionally no
-fallback or compatibility guess. Revision `377f6920cb96` was built natively on
+fallback or compatibility guess. Revision `4ca7b96ab621` was built natively on
 the Debian AMD64 execution host, published to GHCR, and passed the combined
 four-harness canary. The retained attestation SHA-256 is
-`f1b5ca93f11fa2c56217b09aaa4740556c6798a12427946b8c99a8ef588dc5ba`;
+`7808d44d279c252c5c6258ed96796e75d0edcb6952dddd569133a5ae1b191c0e`;
 the canary document SHA-256 is
-`c0a3421d0b3bf82671420d5007a0e364b015d3483bef96a1246ce7c69d75e17f`.
+`40bc0c477dc7aa23bc3460715f076b9ffb0b2c08d2ad65231729f17c63c034ab`.
 This qualifies the pinned CLI/runtime contracts only. It does not qualify any
 model or quantization, which still requires the full matrix.
 
@@ -213,6 +213,10 @@ uses a separate disposable detached worktree and the smallest stable native
 gate, `scripts/dev test --filter '(Take cycling|take\.)'`. The pinned historical
 Canvas base has unrelated integration failures, so the focused gate keeps
 benchmark outcomes attributable to the candidate and hidden corpus.
+That base also relied on a transitive `<cmath>` include in an unrelated
+tempo-map unit test. The hidden take-cycling gate injects `cmath` through its
+compiler environment on Debian; it does not edit or expose another candidate
+file and cannot change the scoped take-cycling behavior being graded.
 It may reuse only that worktree's generated build while resetting source files
 to the exact base between independent grading phases. Production grading for
 cases 5 and 6 also runs `scripts/dev check changed`, so a behaviorally correct

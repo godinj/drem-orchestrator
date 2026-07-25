@@ -314,6 +314,17 @@ func (task TaskSpec) Validate() error {
 			return fmt.Errorf("runnable task %s lacks fixed budgets", task.ID)
 		}
 	}
+	seenBlobs := map[string]bool{}
+	for _, blob := range task.Fixture.VisibleBlobs {
+		digest, decodeErr := hex.DecodeString(blob.SHA)
+		clean := filepath.Clean(blob.Path)
+		if blob.Path == "" || filepath.IsAbs(blob.Path) || clean == "." || clean == ".." ||
+			strings.HasPrefix(clean, ".."+string(filepath.Separator)) || decodeErr != nil || len(digest) != 20 ||
+			blob.SHA != strings.ToLower(blob.SHA) || seenBlobs[blob.Path] {
+			return fmt.Errorf("task %s has an invalid visible blob pin", task.ID)
+		}
+		seenBlobs[blob.Path] = true
+	}
 	seenArtifacts := map[string]bool{}
 	for _, artifact := range task.OracleArtifacts {
 		digest, decodeErr := hex.DecodeString(artifact.SHA256)

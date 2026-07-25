@@ -138,7 +138,8 @@ func TestDockerCommandIsPinnedNonRootAndNarrowlyMounted(t *testing.T) {
 	require.Contains(t, joined, "--cap-drop=ALL")
 	require.Contains(t, joined, "no-new-privileges:true")
 	require.Contains(t, joined, "--network canvasbench-inference")
-	require.Contains(t, joined, "src="+workspace+",dst=/workspace,rw")
+	require.Contains(t, joined, "src="+workspace+",dst=/workspace")
+	require.NotContains(t, joined, "dst=/workspace,rw")
 	require.Contains(t, joined, testOuterImage+" opencode run task")
 	for _, forbidden := range []string{"--privileged", "/var/run/docker.sock", "--network host", "src=/,", "src=/Users/", "--user 0"} {
 		require.NotContains(t, joined, forbidden)
