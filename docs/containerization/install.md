@@ -173,17 +173,30 @@ measured pilot. Restart/deploy control-plane services with `--no-deps` so this
 verification never restarts the warm SGLang service.
 
 Before spending another supervisory Codex goal on a model/harness candidate,
-qualify it with the content-addressed CanvasBench v2 manifest. The host-side
-runner does not require restarting inference services:
+qualify it with the content-addressed CanvasBench v2 manifest. In the supported
+two-host topology the Mac is only the control plane; harness containers, model
+access, disposable Canvas worktrees, builds, and verification all run on the
+Debian desktop. Do not use a remote `DOCKER_HOST` with a Mac workspace path.
+Use the remote adapter, which does not require restarting inference services:
 
 ```bash
-go run ./cmd/canvasbench \
-  -manifest bench/canvasbench-v2/manifest.json \
-  -matrix /absolute/path/to/attested-matrix.json \
-  -canvas-repo /absolute/path/to/drem-canvas.git/main \
-  -orchestrator-repo /absolute/path/to/drem-orchestrator.git/master \
-  -out /absolute/path/to/results/run-id
+export DREM_CANVASBENCH_REMOTE_HOST=user@debian-host
+export DREM_CANVASBENCH_LOCAL_CANVAS_REPO=/absolute/mac/path/to/drem-canvas.git/main
+export DREM_CANVASBENCH_REMOTE_CANVAS_REPO=/absolute/debian/path/to/drem-canvas.git
+export DREM_CANVASBENCH_REMOTE_ORCH_REPO=/absolute/debian/path/to/drem-orchestrator.git
+export DREM_CANVASBENCH_REMOTE_USAGE_PROXY_TOKEN_FILE=/absolute/debian/path/to/admin.token
+scripts/canvasbench-remote.sh \
+  --matrix /absolute/mac/path/to/attested-matrix.json \
+  --out /absolute/mac/path/to/results/run-id
 ```
+
+Set `DREM_CANVASBENCH_REMOTE_PORT`, `DREM_CANVASBENCH_REMOTE_ROOT`, and the
+remote inference/proxy URLs when they differ from defaults. The adapter rejects
+dirty source, pushes each exact manifest commit into a namespaced Debian
+fixture ref, verifies the remote SHA, keeps the proxy token on Debian, and
+returns only the four report files. It retains failed remote staging for
+diagnosis and removes successful staging unless
+`DREM_CANVASBENCH_REMOTE_KEEP_RUN=yes`.
 
 See `docs/canvasbench-v2.md` for immutable fixtures, tool policies, external
 adapter isolation, and qualification requirements. Placeholder cases are not

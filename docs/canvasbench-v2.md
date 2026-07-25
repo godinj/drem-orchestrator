@@ -157,11 +157,14 @@ and are deleted with the network and containers on exit.
 Any package install/entrypoint mismatch, unsupported CLI option, ignored
 environment contract, proxy identity mismatch, missing usage, or changed output
 wire exits nonzero with `unsupported canary:`. There is intentionally no
-fallback or compatibility guess. At this source revision the definitions,
-locks, fake upstream, fake-Docker attestation test, and normalizer fixtures are
-verified, but actual Docker builds and all four runtime canaries remain
-**UNPROVEN**. No model/harness comparison may treat an image as supported until
-the resulting canary document records all four harnesses as `supported`.
+fallback or compatibility guess. Revision `377f6920cb96` was built natively on
+the Debian AMD64 execution host, published to GHCR, and passed the combined
+four-harness canary. The retained attestation SHA-256 is
+`f1b5ca93f11fa2c56217b09aaa4740556c6798a12427946b8c99a8ef588dc5ba`;
+the canary document SHA-256 is
+`c0a3421d0b3bf82671420d5007a0e364b015d3483bef96a1246ce7c69d75e17f`.
+This qualifies the pinned CLI/runtime contracts only. It does not qualify any
+model or quantization, which still requires the full matrix.
 
 ## Corpus and qualification
 
@@ -232,6 +235,38 @@ attestation caps a case at 40. Cases 8 and 9 are mandatory hard gates.
 Copy `bench/canvasbench-v2/matrices/example.json` and fill every attestation.
 The Qwen precise-coding baseline is temperature 0.6, top-p 0.95, top-k 20,
 a 131072-token context window, and thinking preserved.
+
+The canonical two-host topology keeps the Mac as the control plane and runs
+the entire benchmark process on Debian. This is stronger than setting
+`DOCKER_HOST`: a remote Docker daemon cannot safely bind-mount a Mac scoped
+workspace, and native Canvas verification must execute on the same Debian
+filesystem as the candidate. Configure the remote paths and invoke the adapter:
+
+```bash
+export DREM_CANVASBENCH_REMOTE_HOST=godinj@script.dremhome.org
+export DREM_CANVASBENCH_REMOTE_PORT=21337
+export DREM_CANVASBENCH_REMOTE_ROOT=/home/godinj/.cache/drem/canvasbench/remote-runs
+export DREM_CANVASBENCH_LOCAL_CANVAS_REPO=/Users/jonathangodin/git/drem-canvas.git/main
+export DREM_CANVASBENCH_REMOTE_CANVAS_REPO=/home/godinj/git/drem-canvas.git
+export DREM_CANVASBENCH_REMOTE_ORCH_REPO=/home/godinj/git/drem-orchestrator.git
+export DREM_CANVASBENCH_REMOTE_USAGE_PROXY_TOKEN_FILE=/home/godinj/.drem/secrets/canvasbench-admin.token
+
+scripts/canvasbench-remote.sh \
+  --matrix /absolute/path/to/matrix.json \
+  --out /absolute/path/to/results/run-id
+```
+
+The adapter refuses dirty source and first pushes every manifest fixture commit
+from the authoritative Mac repositories to a content-addressed
+`refs/canvasbench/fixtures/<sha>` ref in the Debian repositories. It verifies
+each remote ref byte-for-byte before streaming the committed runner archive and
+matrix. CanvasBench then runs wholly on Debian. The usage-proxy admin token is
+a Debian path and never crosses to the Mac. On success only JSONL, JSON,
+Markdown, and CSV reports return to the Mac, and remote staging is removed. On
+failure staging is retained and its exact path is reported.
+
+Running `go run ./cmd/canvasbench` directly remains supported for an all-in-one
+Debian host:
 
 ```bash
 go run ./cmd/canvasbench \

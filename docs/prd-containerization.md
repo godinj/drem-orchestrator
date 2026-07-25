@@ -5,6 +5,16 @@ content-addressed CanvasBench v2 workflow in `docs/canvasbench-v2.md`.
 Benchmark-only OpenCode/Qwen Code/mini-SWE/Pi adapters do not restore the
 retired host/worktree execution path.
 
+The supported qualification topology uses the Mac only for control and report
+collection. A clean committed runner archive is dispatched over SSH and the
+exact fixture commits move through namespaced, content-addressed Git refs—not
+filesystem RPC—and the entire CanvasBench process runs on the Debian execution
+host: harness containers, model access, scoped Canvas worktrees, native builds,
+hidden host verification, and the trusted usage proxy. A remote Docker daemon
+alone is not an acceptable substitute because it cannot bind-mount Mac
+workspace paths. Proxy credentials remain Debian-local and only reports return
+to the Mac.
+
 Those external benchmark harnesses run only in digest-pinned, unprivileged OCI
 containers on a named isolated inference network. Each receives a disposable
 workspace projection containing only declared read/write files—never the full
@@ -256,7 +266,10 @@ Prior art conventions from the existing codebase should be preserved: database f
 
 ## Out of Scope
 
-- **Remote host deployment.** The first cut assumes every container runs on the single developer host. Multi-host scheduling, cross-host networking, and shared state across hosts are deferred.
+- **General remote host deployment.** Production multi-host scheduling,
+  cross-host shared state, and arbitrary remote workers remain deferred. The
+  bounded Mac-control/Debian-execution CanvasBench qualification adapter above
+  is the explicit exception.
 - **Remote image registry.** The first cut uses a local registry container. Pushing to GHCR, Docker Hub, or another remote registry is a follow-up.
 - **GPU scheduling across projects.** A single SGLang container is shared, with GQ serializing access. Fine-grained per-project GPU allocation is deferred.
 - **Windows host support.** Linux remains the primary all-in-one deployment.

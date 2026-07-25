@@ -155,6 +155,7 @@ serialized = json.dumps(document).lower()
 for secret in ("api_key=", "authorization: bearer", "admin.token="):
     assert secret not in serialized
 PY
+"$SCRIPT_DIR/../../../scripts/test-canvasbench-remote.sh"
 
 if PATH="$TEST_ROOT/bin:$PATH" FAKE_DOCKER_STATE="$TEST_ROOT/state" \
   python3 "$SCRIPT_DIR/image_tool.py" build --repository example:latest --output "$TEST_ROOT/rejected.json" \

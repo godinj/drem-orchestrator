@@ -1,8 +1,9 @@
 # CanvasBench v2 plan
 
 Status: all nine cases runnable; exact-base native capstone acceptance passed;
-pre-comparison image definitions and no-inference canary tooling are delivered,
-but the five images have not yet been built or runtime-qualified.
+five digest-pinned images are published to GHCR and all four real harness CLIs
+passed the combined no-inference canary on Debian. Model/harness matrix runs are
+the next qualification boundary.
 
 ## Delivered
 
@@ -47,18 +48,20 @@ but the five images have not yet been built or runtime-qualified.
 - A deterministic fake OpenAI-compatible upstream and fail-closed runtime
   canary that exercises the real harness CLI, trusted proxy usage ledger, and
   production normalizer wire without spending inference tokens.
+- A Mac-control/Debian-execution adapter that stages only a clean committed
+  orchestrator archive and matrix, keeps proxy secrets remote, runs harnesses,
+  Canvas worktrees, native builds, and model access on Debian, and returns only
+  the four report artifacts.
 
 ## Before model comparison
 
-1. From a clean committed checkout, run the actual five-image build and retain
-   the generated digest/config attestation. The definitions and fake-Docker
-   regression are complete; real BuildKit output is still required.
-2. Run all four no-inference container canaries through the trusted proxy.
-   Structural tests are green, but executable compatibility is deliberately
-   `UNPROVEN` until every canary emits a supported record.
-3. Run current/candidate history on Qwen, then the qualified harness across
+1. Retain the revision-`377f6920cb96` build attestation and combined canary
+   evidence. Re-run both whenever a lock, wrapper, normalizer, proxy, or image
+   definition changes.
+2. Run current/candidate history on Qwen through the Debian remote adapter,
+   then the qualified harness across
    model and quantization candidates.
-4. After a model/harness qualifies, run a separate exact-Release Canvas pilot
+3. After a model/harness qualifies, run a separate exact-Release Canvas pilot
    with live Computer Use. Do not score that evidence in CanvasBench until a
    deterministic multi-take UI fixture and transport exist.
 
