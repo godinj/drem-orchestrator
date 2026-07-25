@@ -96,6 +96,15 @@
       "executable": "cn",
       "env_contract": "openai_base_url_api_key.v1",
       "normalizer": "continue-wrapper-json-v1"
+    },
+    "swe-agent": {
+      "version": "1.1.0",
+      "upstream": "https://github.com/SWE-agent/SWE-agent/archive/0f3acafacabc0def8cc76b4e48acb4b6cf302cb9.tar.gz",
+      "integrity": "sha256:2b41fb02041ba570268450e150a5a263e35a2ca8daa87c82a9d2dc14f2b7a104",
+      "dockerfile": "deploy/docker/canvasbench/swe-agent.Dockerfile",
+      "executable": "sweagent",
+      "env_contract": "openai_base_url_api_key.v1",
+      "normalizer": "swe-agent-wrapper-json-v1"
     }
   }
 }

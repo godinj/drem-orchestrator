@@ -21,7 +21,7 @@ import sys
 import tempfile
 
 
-HARNESSES = ("opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands", "goose", "cline", "continue")
+HARNESSES = ("opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands", "goose", "cline", "continue", "swe-agent")
 PINNED_IMAGE = re.compile(r"^[A-Za-z0-9._/:@+-]+:[A-Za-z0-9._+-]+@sha256:[0-9a-f]{64}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PROMPT = "Respond with exactly CANVASBENCH_CANARY_OK and do not use tools."
@@ -148,6 +148,8 @@ def harness_command(name: str) -> list[str]:
         return ["cline", "--json", "--auto-approve", "--cwd", "/workspace", "--provider", "openai-compatible", "--model", "canvasbench-canary", "--system", PROMPT, "--retries", "1", "--timeout", "60", PROMPT]
     if name == "continue":
         return ["cn", "--config", "__CANVASBENCH_CONFIG__", "--auto", "--print", "--format", "json", PROMPT]
+    if name == "swe-agent":
+        return ["sweagent", "--canvasbench-task", PROMPT]
     raise UnsupportedCanary(f"unsupported canary harness {name!r}")
 
 
@@ -258,8 +260,14 @@ def run_canary(options: argparse.Namespace) -> None:
                 "CANVASBENCH_SEED=42\nCANVASBENCH_TEMPERATURE=0.2\n"
                 "CANVASBENCH_TOP_P=0.9\nCANVASBENCH_TOP_K=20\n"
                 "CANVASBENCH_CONTEXT_WINDOW=32768\nCANVASBENCH_MAX_OUTPUT_TOKENS=1024\n"
+                "CANVASBENCH_MAX_ITERATIONS=2\n"
                 "CANVASBENCH_PRESERVE_THINKING=true\nCANVASBENCH_ADAPTER_MODEL=canvasbench-canary"
             )
+            if harness == "swe-agent":
+                environment = environment.replace(
+                    "CANVASBENCH_ADAPTER_MODEL=canvasbench-canary",
+                    "CANVASBENCH_ADAPTER_MODEL=openai/canvasbench-canary",
+                )
             if harness == "mini-swe-agent":
                 environment += "\nMSWEA_CONFIGURED=true\nMSWEA_COST_TRACKING=ignore_errors\nMSWEA_GLOBAL_CONFIG_DIR=/tmp/mini-swe-agent\nMSWEA_SILENT_STARTUP=1"
             write_secret(env_file, environment)
@@ -271,6 +279,7 @@ def run_canary(options: argparse.Namespace) -> None:
                 "--mount", f"type=bind,src={workspace},dst=/workspace",
                 "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m,uid=65532,gid=65532,mode=1777",
                 "--tmpfs", "/home/bench:rw,nosuid,size=64m,uid=65532,gid=65532,mode=0700",
+                "--tmpfs", "/root:rw,nosuid,size=64m,uid=65532,gid=65532,mode=0700",
                 image, *harness_command(harness),
             ]
             completed = run(command, capture=True, check=False)

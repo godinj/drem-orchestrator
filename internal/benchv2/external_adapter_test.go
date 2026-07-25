@@ -141,6 +141,7 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 		{AdapterGoose, NormalizerGoose, []string{"run", "--no-session", "--no-profile", "--with-builtin", "developer", "--provider", "openai", "--model", "provider/qwen36", "--max-turns", "8", "--quiet", "--output-format", "json", "--text"}, []string{"raw-qwen-attestation"}},
 		{AdapterCline, NormalizerCline, []string{"--json", "--auto-approve", "--cwd", "/workspace", "--provider", "openai-compatible", "--model", "provider/qwen36", "--system", "--retries", "3", "--timeout", "600"}, []string{"raw-qwen-attestation", "trial-secret"}},
 		{AdapterContinue, NormalizerContinue, []string{"--config", "__CANVASBENCH_CONFIG__", "--auto", "--print", "--format", "json"}, []string{"raw-qwen-attestation", "trial-secret"}},
+		{AdapterSWEAgent, NormalizerSWEAgent, []string{"--canvasbench-task"}, []string{"raw-qwen-attestation", "trial-secret"}},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {
@@ -173,6 +174,7 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 			require.Equal(t, "20", invocation.Env["CANVASBENCH_TOP_K"])
 			require.Equal(t, "32768", invocation.Env["CANVASBENCH_CONTEXT_WINDOW"])
 			require.Equal(t, "1024", invocation.Env["CANVASBENCH_MAX_OUTPUT_TOKENS"])
+			require.Equal(t, "8", invocation.Env["CANVASBENCH_MAX_ITERATIONS"])
 			require.Equal(t, "true", invocation.Env["CANVASBENCH_PRESERVE_THINKING"])
 		})
 	}
@@ -192,6 +194,7 @@ func TestExternalAdaptersExecuteOnlyThroughInjectedOuterBoundary(t *testing.T) {
 		{AdapterGoose, NormalizerGoose, "goose.json", false},
 		{AdapterCline, NormalizerCline, "cline.json", false},
 		{AdapterContinue, NormalizerContinue, "continue.json", false},
+		{AdapterSWEAgent, NormalizerSWEAgent, "swe-agent.json", false},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {

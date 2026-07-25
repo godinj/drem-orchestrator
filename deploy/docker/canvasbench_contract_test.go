@@ -54,7 +54,7 @@ func TestCanvasBenchImageBuildContractIsImmutableAndUnprivileged(t *testing.T) {
 			t.Fatalf("base %s is not immutably pinned: %s", name, image)
 		}
 	}
-	canonical := []string{"usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands"}
+	canonical := []string{"usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands", "goose", "cline", "continue", "swe-agent"}
 	for _, name := range canonical {
 		image, ok := lock.Images[name]
 		if !ok {
@@ -99,6 +99,10 @@ func TestCanvasBenchWrappersImplementOnlyDeclaredEnvironmentContracts(t *testing
 		"context/pi/pi-wrapper.mjs":              {"OPENAI_BASE_URL", "OPENAI_API_KEY", "openai-completions"},
 		"context/aider/aider-wrapper.py":         {"OPENAI_BASE_URL", "OPENAI_API_KEY", "OPENAI_API_BASE"},
 		"context/openhands/openhands-wrapper.py": {"OPENAI_BASE_URL", "OPENAI_API_KEY", "LLM_BASE_URL", "LLM_MODEL"},
+		"context/goose/goose-wrapper.py":         {"OPENAI_BASE_URL", "OPENAI_API_KEY"},
+		"context/cline/cline-wrapper.mjs":        {"OPENAI_BASE_URL", "OPENAI_API_KEY"},
+		"context/continue/continue-wrapper.mjs":  {"OPENAI_BASE_URL", "OPENAI_API_KEY"},
+		"context/swe-agent/swe-agent-wrapper.py": {"OPENAI_BASE_URL", "OPENAI_API_KEY", "type\": \"local"},
 	}
 	base := filepath.Join(root, "deploy", "docker", "canvasbench")
 	for relative, required := range paths {

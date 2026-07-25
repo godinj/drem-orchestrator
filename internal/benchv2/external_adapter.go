@@ -18,6 +18,7 @@ const (
 	AdapterGoose     = "goose"
 	AdapterCline     = "cline"
 	AdapterContinue  = "continue"
+	AdapterSWEAgent  = "swe-agent"
 
 	NormalizerOpenCode  = "opencode-json-v1"
 	NormalizerQwenCode  = "qwen-code-stream-json-v1"
@@ -28,6 +29,7 @@ const (
 	NormalizerGoose     = "goose-wrapper-json-v1"
 	NormalizerCline     = "cline-wrapper-json-v1"
 	NormalizerContinue  = "continue-wrapper-json-v1"
+	NormalizerSWEAgent  = "swe-agent-wrapper-json-v1"
 )
 
 type CommandInvocation struct {
@@ -87,6 +89,7 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 			"CANVASBENCH_TOP_K":             fmt.Sprint(request.TopK),
 			"CANVASBENCH_CONTEXT_WINDOW":    fmt.Sprint(request.ContextWindow),
 			"CANVASBENCH_MAX_OUTPUT_TOKENS": fmt.Sprint(request.Task.Budget.MaxOutputTokens),
+			"CANVASBENCH_MAX_ITERATIONS":    fmt.Sprint(request.Task.Budget.MaxIterations),
 			"CANVASBENCH_PRESERVE_THINKING": fmt.Sprint(request.PreserveThinking),
 			"CANVASBENCH_ADAPTER_MODEL":     request.Harness.AdapterModelRef,
 		},
@@ -134,6 +137,8 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 			"--timeout", fmt.Sprint(request.Task.Budget.TimeoutSeconds), prompt}
 	case AdapterContinue:
 		invocation.Args = []string{"--config", "__CANVASBENCH_CONFIG__", "--auto", "--print", "--format", "json", prompt}
+	case AdapterSWEAgent:
+		invocation.Args = []string{"--canvasbench-task", prompt}
 	default:
 		return CommandInvocation{}, fmt.Errorf("unsupported external adapter %q", adapter.Kind)
 	}
@@ -142,7 +147,7 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 
 func adapterUsesLiteLLM(kind string) bool {
 	switch kind {
-	case AdapterMiniSWE, AdapterAider, AdapterOpenHands:
+	case AdapterMiniSWE, AdapterAider, AdapterOpenHands, AdapterSWEAgent:
 		return true
 	default:
 		return false
@@ -278,7 +283,7 @@ func inferenceEnvContractForAdapter(kind string) string {
 		return "openai_api_base_api_key.v1"
 	}
 	switch kind {
-	case AdapterOpenCode, AdapterQwenCode, AdapterPi, AdapterAider, AdapterOpenHands, AdapterGoose, AdapterCline, AdapterContinue:
+	case AdapterOpenCode, AdapterQwenCode, AdapterPi, AdapterAider, AdapterOpenHands, AdapterGoose, AdapterCline, AdapterContinue, AdapterSWEAgent:
 		return "openai_base_url_api_key.v1"
 	default:
 		return ""
@@ -321,6 +326,8 @@ func normalizerForAdapter(kind string) string {
 		return NormalizerCline
 	case AdapterContinue:
 		return NormalizerContinue
+	case AdapterSWEAgent:
+		return NormalizerSWEAgent
 	default:
 		return ""
 	}

@@ -17,7 +17,7 @@ DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 PINNED_IMAGE = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}$")
 REPOSITORY = re.compile(r"^[A-Za-z0-9._-]+(?::[0-9]+)?(?:/[A-Za-z0-9._-]+)+$")
 INTEGRITY = re.compile(r"^(?:sha256:[0-9a-f]{64}|sha512-[A-Za-z0-9+/]+={0,2})$")
-ORDER = ("usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands", "goose", "cline", "continue")
+ORDER = ("usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands", "goose", "cline", "continue", "swe-agent")
 
 
 def run(command: list[str], *, capture: bool = False) -> str:
@@ -74,6 +74,9 @@ def load_lock(path: Path, root: Path | None = None) -> dict:
         mini = lock["images"]["mini-swe-agent"]
         if f"mini-swe-agent=={mini['version']} " not in mini_lock or f"--hash={mini['integrity']}" not in mini_lock:
             raise SystemExit("mini-SWE-agent dependency lock does not match image lock")
+        swe_agent_lock = (root / "deploy/docker/canvasbench/swe-agent-requirements.lock").read_text()
+        if "swe-rex==1.2.1 " not in swe_agent_lock:
+            raise SystemExit("SWE-agent dependency lock does not pin the recommended SWE-ReX runtime")
     return lock
 
 
@@ -110,7 +113,7 @@ def build_args(lock: dict, name: str, image: dict, state: str) -> list[str]:
     if name == "usage-proxy":
         values["GO_BASE_IMAGE"] = lock["base_images"]["golang"]
         values["RUNTIME_BASE_IMAGE"] = lock["base_images"]["runtime"]
-    elif name in {"mini-swe-agent", "aider", "openhands", "goose"}:
+    elif name in {"mini-swe-agent", "aider", "openhands", "goose", "swe-agent"}:
         values["PYTHON_BASE_IMAGE"] = lock["base_images"]["python"]
     else:
         values["NODE_BASE_IMAGE"] = lock["base_images"]["node"]

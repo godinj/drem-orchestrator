@@ -56,7 +56,8 @@ field claims Computer Use or live UI evidence.
 Fixtures, oracles, scoring, and results depend on `HarnessAdapter`, not a
 particular loop. Initial adapters cover DirectToolAgent, deterministic case-8
 replay, and documented JSON or JSONL contracts for OpenCode 1.17+, Qwen Code,
-mini-SWE-agent, Pi, Aider, OpenHands CLI, Goose, Cline CLI, and Continue CLI.
+mini-SWE-agent, Pi, Aider, OpenHands CLI, Goose, Cline CLI, Continue CLI, and
+SWE-agent 1.1.0.
 
 External CLI adapters are benchmark-only and always execute through an
 injectable outer-container boundary. Production command construction requires
@@ -75,7 +76,7 @@ prompt convention, and it does not revive the retired OpenCode host/worktree
 path.
 
 Documented harness output normalizes to ATIF v1.7 without inventing assistant
-text. Aider, OpenHands, Goose, Cline, and Continue lack the same stable event stream as the other CLIs,
+text. Aider, OpenHands, Goose, Cline, Continue, and SWE-agent lack the same stable event stream as the other CLIs,
 so their pinned image shims wrap the real captured terminal output in a strict
 terminal JSON record; the normalizer does not infer hidden tool events.
 Malformed, incomplete, or unsupported streams fail closed.
@@ -109,7 +110,7 @@ Case 8 declares an explicit deterministic no-inference exemption.
 
 External matrix attestation binds the proxy source state, digest-pinned image,
 effective config SHA-256, and adapter environment contract. OpenCode, Qwen Code,
-Pi, Aider, OpenHands, Goose, Cline, and Continue use `openai_base_url_api_key.v1` (`OPENAI_BASE_URL` and
+Pi, Aider, OpenHands, Goose, Cline, Continue, and SWE-agent use `openai_base_url_api_key.v1` (`OPENAI_BASE_URL` and
 `OPENAI_API_KEY`). mini-SWE-agent uses `openai_api_base_api_key.v1`
 (`OPENAI_API_BASE` and `OPENAI_API_KEY`) and requires its adapter-side model
 reference to use LiteLLM's explicit `openai/<served-model>` form. The trusted
@@ -131,11 +132,12 @@ the trial before candidate outputs are applied.
 ### Reproducible external images and compatibility canary
 
 `deploy/docker/canvasbench/locks.json` is the build authority for the trusted
-usage proxy and the nine external harness images. It pins every base image by
+usage proxy and the ten external harness images. It pins every base image by
 manifest digest and pins harness inputs to OpenCode `opencode-ai@1.18.5`, Qwen
 Code `@qwen-code/qwen-code@0.21.0`, mini-SWE-agent `2.4.6`, Pi
 `@earendil-works/pi-coding-agent@0.82.0`, Aider `0.86.2`, OpenHands CLI
-`1.16.0`, Goose `1.44.0`, Cline CLI `3.0.46`, and Continue CLI `1.5.47`. npm lockfiles, fully hashed Python
+`1.16.0`, Goose `1.44.0`, Cline CLI `3.0.46`, Continue CLI `1.5.47`, and the
+official maintenance release SWE-agent `1.1.0` at commit `0f3acaf`. npm lockfiles, fully hashed Python
 requirements closure bind the transitive package inputs. Floating tags,
 uncommitted source trees, missing upstream integrity, absent BuildKit digests,
 wrong image labels, and a runtime user other than uid/gid 65532 fail the build
@@ -151,10 +153,13 @@ configuration. The tool never emits `latest`.
 
 The adapter also gives each shim the matrix seed, sampling values, effective
 context window, per-case output limit, and thinking policy. OpenCode, Pi, Aider,
-OpenHands, Goose, Cline, and Continue use those values for model context/output metadata; Qwen Code
+OpenHands, Goose, Cline, Continue, and SWE-agent use those values for model context/output metadata; Qwen Code
 writes a private ephemeral generation configuration; mini-SWE-agent receives
 equivalent LiteLLM arguments. The trusted proxy still overwrites the wire request, so a
-harness cannot silently weaken or substitute the benchmark policy.
+harness cannot silently weaken or substitute the benchmark policy. SWE-agent
+uses its official local deployment inside the existing outer container: the
+container remains the isolation boundary, receives no Docker socket, and gets
+only ephemeral non-root `/root`, `/tmp`, and home tmpfs state.
 
 From a clean committed checkout, build but do not deploy the canonical image
 set:
@@ -199,7 +204,7 @@ wire exits nonzero with `unsupported canary:`. There is intentionally no
 fallback or compatibility guess. Revision `4ca7b96ab621` was built natively on
 the Debian AMD64 execution host, published to GHCR, and passed the combined
 four-harness canary. That historical evidence remains valid for its original
-image set; current builds and canaries cover all seven harnesses. The retained attestation SHA-256 is
+image set; current builds and canaries cover all ten harnesses. The retained attestation SHA-256 is
 `7808d44d279c252c5c6258ed96796e75d0edcb6952dddd569133a5ae1b191c0e`;
 the canary document SHA-256 is
 `40bc0c477dc7aa23bc3460715f076b9ffb0b2c08d2ad65231729f17c63c034ab`.

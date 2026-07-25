@@ -247,9 +247,10 @@ inference proxy; host, bridge, and default networks are rejected.
 External matrices must additionally bind `usage_proxy_source_state`, a
 digest-pinned `usage_proxy_image`, `usage_proxy_config_sha256`, and the exact
 `inference_env_contract`. Use `openai_base_url_api_key.v1` for OpenCode, Qwen
-Code, and Pi; use `openai_api_base_api_key.v1` for mini-SWE-agent. These names
+Code, Pi, Aider, OpenHands, Goose, Cline, Continue, and SWE-agent; use
+`openai_api_base_api_key.v1` for mini-SWE-agent. These names
 are validated container contracts, not a claim that every CLI honors one common
-variable. mini-SWE-agent matrices must also use an adapter model reference of
+variable. mini-SWE-agent, Aider, OpenHands, and SWE-agent matrices must also use an adapter model reference of
 `openai/<served-model>` so LiteLLM selects the OpenAI-compatible provider; the
 trusted proxy replaces that adapter reference with the attested raw model ID on
 the wire. Each digest-pinned image must supply a tested executable/config shim

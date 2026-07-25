@@ -101,6 +101,7 @@ func TestLiteLLMAdaptersRequireExplicitOpenAIProvider(t *testing.T) {
 		{AdapterMiniSWE, NormalizerMiniSWE},
 		{AdapterAider, NormalizerAider},
 		{AdapterOpenHands, NormalizerOpenHands},
+		{AdapterSWEAgent, NormalizerSWEAgent},
 	} {
 		t.Run(adapter.name, func(t *testing.T) {
 			matrix := validMatrix()

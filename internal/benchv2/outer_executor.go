@@ -164,6 +164,7 @@ func dockerCommand(spec OuterExecutionSpec, sensitiveEnvFile, cidFile string) ([
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=%s", workspace, outerWorkspace),
 		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m",
 		"--tmpfs", "/home/bench:rw,nosuid,nodev,size=64m",
+		"--tmpfs", "/root:rw,nosuid,nodev,size=64m,uid=65532,gid=65532,mode=0700",
 		"--workdir", outerWorkspace,
 	}
 	if cidFile != "" {
