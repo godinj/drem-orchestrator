@@ -143,7 +143,7 @@ while read -r repo_id commit; do
     fixture_ref="refs/canvasbench/fixtures/$commit"
     GIT_SSH_COMMAND="$git_ssh_command" git -C "$local_repo" push --porcelain \
         "$remote_host:$remote_repo" "$commit:$fixture_ref" </dev/null >/dev/null
-    remote_commit="$(remote_exec "git -C $(quote_remote "$remote_repo") rev-parse $(quote_remote "$fixture_ref^{commit}")")"
+    remote_commit="$(remote_exec "git -C $(quote_remote "$remote_repo") rev-parse $(quote_remote "$fixture_ref^{commit}")" </dev/null)"
     if [[ "$remote_commit" != "$commit" ]]; then
         printf 'Debian fixture ref mismatch for %s:%s\n' "$repo_id" "$commit" >&2
         exit 1

@@ -42,7 +42,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 shift
-exec bash -c "$1"
+command="$1"
+if [[ "$command" == git\ -C*rev-parse* ]]; then
+    cat >/dev/null
+fi
+exec bash -c "$command"
 EOF
 cat > "$test_root/bin/scp" <<'EOF'
 #!/usr/bin/env bash
