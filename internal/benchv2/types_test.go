@@ -93,6 +93,20 @@ func TestExternalAttestationRequiresPinnedOuterRuntime(t *testing.T) {
 	require.ErrorContains(t, matrix.Validate(), "external harness attestation")
 }
 
+func TestMiniSWEAttestationRequiresExplicitOpenAIProvider(t *testing.T) {
+	matrix := validMatrix()
+	matrix.Harness = selectableExternalHarness()
+	matrix.Harness.Name = AdapterMiniSWE
+	matrix.Harness.SourceState = "source"
+	matrix.Harness.ConfigSHA256 = "config"
+	matrix.Harness.AdapterModelRef = "qwen3.6-27b-code"
+	matrix.Harness.TrajectoryNormalizer = NormalizerMiniSWE
+	matrix.Harness.InferenceEnvContract = inferenceEnvContractForAdapter(AdapterMiniSWE)
+	require.ErrorContains(t, matrix.Validate(), "openai/<served-model>")
+	matrix.Harness.AdapterModelRef = "openai/qwen3.6-27b-code"
+	require.NoError(t, matrix.Validate())
+}
+
 func TestManifestAndTaskDigestsValidate(t *testing.T) {
 	root := filepath.Join("..", "..", "bench", "canvasbench-v2")
 	manifest, tasks, err := LoadManifest(filepath.Join(root, "manifest.json"))

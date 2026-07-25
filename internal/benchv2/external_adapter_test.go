@@ -97,6 +97,10 @@ type scopeTestError struct{ message string }
 func (err *scopeTestError) Error() string { return err.message }
 
 func adapterRequest(workDir, kind, normalizer string) TrialRequest {
+	modelRef := "provider/qwen36"
+	if kind == AdapterMiniSWE {
+		modelRef = "openai/qwen36"
+	}
 	return TrialRequest{
 		Task: TaskSpec{
 			SystemPrompt: "system", UserMessage: "task", AllowedToolPolicies: []string{ToolPolicyStructured, ToolPolicySandboxed},
@@ -105,7 +109,7 @@ func adapterRequest(workDir, kind, normalizer string) TrialRequest {
 		},
 		WorkDir: workDir, Seed: 42, Temperature: .6, TopP: .95, TopK: 20, ContextWindow: 32768, PreserveThinking: true,
 		Harness: HarnessConfig{
-			Name: kind, Version: "pinned", ConfigSHA256: "cfg", AdapterModelRef: "provider/qwen36",
+			Name: kind, Version: "pinned", ConfigSHA256: "cfg", AdapterModelRef: modelRef,
 			OuterIsolation: "outer_container", ToolPolicy: ToolPolicySandboxed, TrajectoryNormalizer: normalizer,
 			InferenceEnvContract: inferenceEnvContractForAdapter(kind),
 		},
@@ -130,7 +134,7 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 	}{
 		{AdapterOpenCode, NormalizerOpenCode, []string{"run", "--pure", "--auto", "--format", "json", "--agent", "build", "--dir", "/workspace", "--model", "provider/qwen36"}, []string{"raw-qwen-attestation"}},
 		{AdapterQwenCode, NormalizerQwenCode, []string{"--output-format", "stream-json", "--auth-type", "openai", "--safe-mode", "--yolo", "--max-tool-calls", "12", "--max-session-turns", "8", "--max-wall-time", "600s", "--exclude-tools", "agent"}, nil},
-		{AdapterMiniSWE, NormalizerMiniSWE, []string{"-t", "-m", "provider/qwen36", "-y", "--exit-immediately", "-o", "/workspace/.canvasbench/mini-swe-agent-trajectory.json"}, nil},
+		{AdapterMiniSWE, NormalizerMiniSWE, []string{"-t", "-m", "openai/qwen36", "-y", "--exit-immediately", "-o", "/workspace/.canvasbench/mini-swe-agent-trajectory.json"}, nil},
 		{AdapterPi, NormalizerPi, []string{"--mode", "json", "--no-session", "--no-context-files", "--model", "provider/qwen36", "--system-prompt"}, []string{"-p", "--prompt"}},
 	}
 	for _, test := range tests {

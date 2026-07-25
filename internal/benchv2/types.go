@@ -399,6 +399,9 @@ func ValidateAttestation(h HarnessConfig, r RuntimeAttestation) error {
 	if !r.InferenceMeasured {
 		return fmt.Errorf("inference telemetry is unmeasured")
 	}
+	if h.Name == AdapterMiniSWE && !validMiniSWEModelRef(h.AdapterModelRef) {
+		return fmt.Errorf("mini-SWE adapter model reference must use openai/<served-model>")
+	}
 	if h.Name == AdapterOpenCode || h.Name == AdapterQwenCode || h.Name == AdapterMiniSWE || h.Name == AdapterPi {
 		if h.ToolPolicy != ToolPolicySandboxed || h.OuterIsolation != "outer_container" || !pinnedOCIImage.MatchString(h.OuterImage) ||
 			h.OuterNetworkPolicy != OuterNetworkIsolatedInference || h.OuterNetworkName == "" || h.OuterNetworkName == "host" ||
@@ -409,6 +412,10 @@ func ValidateAttestation(h HarnessConfig, r RuntimeAttestation) error {
 		}
 	}
 	return nil
+}
+
+func validMiniSWEModelRef(value string) bool {
+	return strings.HasPrefix(value, "openai/") && strings.TrimPrefix(value, "openai/") != ""
 }
 
 func validSHA256Text(value string) bool {

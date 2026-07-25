@@ -178,7 +178,7 @@ func TestDockerCommandRejectsSensitiveValueInOrdinaryInvocationFields(t *testing
 	const secret = "argv-leak-secret"
 	spec.Invocation.SensitiveEnv = map[string]string{"OPENAI_API_KEY": secret}
 	spec.Invocation.Args = append(spec.Invocation.Args, "--token="+secret)
-	_, err := dockerCommand(spec, filepath.Join(t.TempDir(), "env-file"))
+	_, err := dockerCommand(spec, filepath.Join(t.TempDir(), "env-file"), "")
 	require.ErrorContains(t, err, "leaked into ordinary invocation")
 	require.NotContains(t, err.Error(), secret)
 
@@ -187,4 +187,33 @@ func TestDockerCommandRejectsSensitiveValueInOrdinaryInvocationFields(t *testing
 	_, err = DockerCommand(spec)
 	require.ErrorContains(t, err, "must use sensitive environment")
 	require.NotContains(t, err.Error(), secret)
+}
+
+func TestDockerOuterExecutorForceRemovesTimedOutContainer(t *testing.T) {
+	toolDir := t.TempDir()
+	tool := filepath.Join(toolDir, "fake-docker")
+	cleanupCapture := filepath.Join(toolDir, "cleanup")
+	require.NoError(t, os.WriteFile(tool, []byte(`#!/bin/sh
+if [ "$1" = "rm" ]; then
+  printf '%s\n' "$@" > "$CANVASBENCH_TEST_CLEANUP"
+  exit 0
+fi
+previous=""
+cid_file=""
+for argument in "$@"; do
+  if [ "$previous" = "--cidfile" ]; then cid_file="$argument"; fi
+  previous="$argument"
+done
+test -n "$cid_file" || exit 91
+printf 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n' > "$cid_file"
+exec sleep 30
+`), 0o700))
+	t.Setenv("CANVASBENCH_TEST_CLEANUP", cleanupCapture)
+	spec := validOuterSpec(t.TempDir())
+	spec.Timeout = 300 * time.Millisecond
+	_, err := (DockerOuterExecutor{Binary: tool}).Execute(context.Background(), spec)
+	require.ErrorContains(t, err, "outer container timed out")
+	cleanup, readErr := os.ReadFile(cleanupCapture)
+	require.NoError(t, readErr)
+	require.Equal(t, "rm\n-f\n"+strings.Repeat("a", 64)+"\n", string(cleanup))
 }

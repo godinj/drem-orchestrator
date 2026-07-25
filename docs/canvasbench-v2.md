@@ -103,8 +103,10 @@ External matrix attestation binds the proxy source state, digest-pinned image,
 effective config SHA-256, and adapter environment contract. OpenCode, Qwen Code,
 and Pi use `openai_base_url_api_key.v1` (`OPENAI_BASE_URL` and
 `OPENAI_API_KEY`). mini-SWE-agent uses `openai_api_base_api_key.v1`
-(`OPENAI_API_BASE` and `OPENAI_API_KEY`). A mismatched or assumed common
-contract is rejected before container launch. The digest-pinned harness image
+(`OPENAI_API_BASE` and `OPENAI_API_KEY`) and requires its adapter-side model
+reference to use LiteLLM's explicit `openai/<served-model>` form. The trusted
+proxy still pins the wire request to the runtime's attested raw model ID. A
+mismatched or assumed common contract is rejected before container launch. The digest-pinned harness image
 must provide an executable/config shim that honors its declared contract; the
 benchmark does not assume the upstream CLI's native environment behavior.
 Before creating any trial credential, the CLI performs an authenticated,

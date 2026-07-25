@@ -23,6 +23,7 @@ const (
 
 var pinnedOCIImage = regexp.MustCompile(`^[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}$`)
 var environmentName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+var containerID = regexp.MustCompile(`^[0-9a-f]{12,64}$`)
 
 type OuterNetworkPolicy struct {
 	Mode        string `json:"mode"`
@@ -74,7 +75,13 @@ func (executor DockerOuterExecutor) Execute(ctx context.Context, spec OuterExecu
 		return OuterExecutionResult{}, err
 	}
 	defer cleanup()
-	args, err := dockerCommand(spec, envFile)
+	cidDir, err := os.MkdirTemp("", "canvasbench-container-*")
+	if err != nil {
+		return OuterExecutionResult{}, fmt.Errorf("create outer container identity directory: %w", err)
+	}
+	defer os.RemoveAll(cidDir)
+	cidFile := filepath.Join(cidDir, "container.cid")
+	args, err := dockerCommand(spec, envFile, cidFile)
 	if err != nil {
 		return OuterExecutionResult{}, err
 	}
@@ -82,6 +89,7 @@ func (executor DockerOuterExecutor) Execute(ctx context.Context, spec OuterExecu
 	if binary == "" {
 		binary = "docker"
 	}
+	defer forceRemoveOuterContainer(binary, cidFile)
 	runCtx, cancel := context.WithTimeout(ctx, spec.Timeout)
 	defer cancel()
 	var stdout, stderr bytes.Buffer
@@ -97,11 +105,11 @@ func (executor DockerOuterExecutor) Execute(ctx context.Context, spec OuterExecu
 	var executionErr error
 	if err != nil {
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			result.ExitCode = exitErr.ExitCode()
-		} else if runCtx.Err() != nil {
+		if runCtx.Err() != nil {
 			result.ExitCode = -1
 			executionErr = fmt.Errorf("outer container timed out: %w", runCtx.Err())
+		} else if errors.As(err, &exitErr) {
+			result.ExitCode = exitErr.ExitCode()
 		} else {
 			result.ExitCode = -1
 			executionErr = fmt.Errorf("start outer container: %w", err)
@@ -135,10 +143,10 @@ func DockerCommand(spec OuterExecutionSpec) ([]string, error) {
 	if len(spec.Invocation.SensitiveEnv) != 0 {
 		return nil, fmt.Errorf("sensitive environment requires executor-managed env file")
 	}
-	return dockerCommand(spec, "")
+	return dockerCommand(spec, "", "")
 }
 
-func dockerCommand(spec OuterExecutionSpec, sensitiveEnvFile string) ([]string, error) {
+func dockerCommand(spec OuterExecutionSpec, sensitiveEnvFile, cidFile string) ([]string, error) {
 	workspace, err := validateOuterSpec(spec)
 	if err != nil {
 		return nil, err
@@ -157,6 +165,9 @@ func dockerCommand(spec OuterExecutionSpec, sensitiveEnvFile string) ([]string, 
 		"--tmpfs", "/tmp:rw,noexec,nosuid,nodev,size=256m",
 		"--tmpfs", "/home/bench:rw,nosuid,nodev,size=64m",
 		"--workdir", outerWorkspace,
+	}
+	if cidFile != "" {
+		args = append(args, "--cidfile", cidFile)
 	}
 	if sensitiveEnvFile != "" {
 		args = append(args, "--env-file", sensitiveEnvFile)
@@ -181,6 +192,20 @@ func dockerCommand(spec OuterExecutionSpec, sensitiveEnvFile string) ([]string, 
 	args = append(args, spec.Image, spec.Invocation.Executable)
 	args = append(args, spec.Invocation.Args...)
 	return args, nil
+}
+
+func forceRemoveOuterContainer(binary, cidFile string) {
+	raw, err := os.ReadFile(cidFile)
+	if err != nil {
+		return
+	}
+	id := strings.TrimSpace(string(raw))
+	if !containerID.MatchString(id) {
+		return
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_ = exec.CommandContext(cleanupCtx, binary, "rm", "-f", id).Run()
 }
 
 func validateOuterSpec(spec OuterExecutionSpec) (string, error) {
