@@ -39,7 +39,7 @@ try {
   fs.writeFileSync(configPath, `${JSON.stringify(config)}\n`, { mode: 0o600 });
   const originalArgs = process.argv.slice(2);
   const args = originalArgs.map((value) => value === "__CANVASBENCH_CONFIG__" ? configPath : value);
-  const completed = spawnSync(process.execPath, ["/opt/harness/cn-real.js", ...args], {
+  const completed = spawnSync(process.execPath, ["/opt/harness/node_modules/@continuedev/cli/dist/cn.js", ...args], {
     env: process.env,
     encoding: "utf8",
     maxBuffer: 32 * 1024 * 1024,

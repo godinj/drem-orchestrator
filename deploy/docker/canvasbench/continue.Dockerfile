@@ -11,8 +11,7 @@ WORKDIR /opt/harness
 COPY deploy/docker/canvasbench/context/continue/package.json deploy/docker/canvasbench/context/continue/package-lock.json ./
 RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
     && node -e 'const [version, integrity] = process.argv.slice(1); const pkg = require("./node_modules/@continuedev/cli/package.json"); const lock = require("./package-lock.json"); if (pkg.version !== version || lock.packages["node_modules/@continuedev/cli"].integrity !== integrity) process.exit(1)' "$HARNESS_VERSION" "$UPSTREAM_INTEGRITY" \
-    && cp node_modules/@continuedev/cli/dist/cn.js /opt/harness/cn-real.js \
-    && chmod 0555 /opt/harness/cn-real.js \
+    && chmod 0555 node_modules/@continuedev/cli/dist/cn.js \
     && test -n "$SOURCE_STATE" && test -n "$UPSTREAM_SOURCE" && test -n "$ENV_CONTRACT" && test -n "$NORMALIZER"
 COPY deploy/docker/canvasbench/context/continue/continue-wrapper.mjs /usr/local/bin/cn
 RUN chmod 0555 /usr/local/bin/cn

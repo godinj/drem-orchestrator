@@ -166,7 +166,7 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 			} else {
 				require.Equal(t, "http://usage-proxy:8080/v1", invocation.Env["OPENAI_BASE_URL"])
 			}
-			require.Equal(t, "provider/qwen36", invocation.Env["CANVASBENCH_ADAPTER_MODEL"])
+			require.Equal(t, adapterRequest("/host/fixture", test.kind, test.normalizer).Harness.AdapterModelRef, invocation.Env["CANVASBENCH_ADAPTER_MODEL"])
 			require.Equal(t, "42", invocation.Env["CANVASBENCH_SEED"])
 			require.Equal(t, "0.6", invocation.Env["CANVASBENCH_TEMPERATURE"])
 			require.Equal(t, "0.95", invocation.Env["CANVASBENCH_TOP_P"])
