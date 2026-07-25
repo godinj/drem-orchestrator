@@ -1,0 +1,424 @@
+diff --git a/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc b/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc
+index 42a9aae475fdd7cb8e8a572d3c716e3bb5f51fc6..9a8bd694c222436a633e90976853c8cd1003ed86 100644
+--- a/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc
++++ b/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc
+@@ -595,3 +595,49 @@ void EditorAdapter::laneVersionPrev (int /*count*/)
+     }
+     if (onContextChanged) onContextChanged();
+ }
++
++// ── Take-cycle helper (translation-unit local) ──────────────────────────────
++
++static void cycleSelectedTake (EditorAdapter& adapter, int delta)
++{
++    Arrangement& arrangement = adapter.getArrangement();
++    Project& project = adapter.getProject();
++    VimContext& context = adapter.getContext();
++
++    int trackIdx = arrangement.getSelectedTrackIndex();
++    if (trackIdx < 0 || trackIdx >= arrangement.getNumTracks())
++    {
++        adapter.setStatusMessage ("No selected track");
++        return;
++    }
++
++    Track track (arrangement.getTrack (trackIdx));
++    if (track.getType() != TrackType::Audio)
++    {
++        adapter.setStatusMessage ("Not an audio track");
++        return;
++    }
++
++    int versionCount = track.getClipLaneVersionCount();
++    if (versionCount < 2)
++    {
++        adapter.setStatusMessage ("Track has fewer than two takes");
++        return;
++    }
++
++    // Ignore automation-lane focus — always operate on clip-lane versions
++    ScopedTransaction txn (project.getUndoSystem(), "Cycle Take");
++    bool changed = TrackVersionService (project).cycle (
++        trackVersionTargets (arrangement, context),
++        trackIdx, delta, &project.getUndoManager());
++
++    if (changed)
++    {
++        Track trackAfter (arrangement.getTrack (trackIdx));
++        int activeIdx = trackAfter.getActiveClipLaneVersionIndex();
++        std::string versionName = trackAfter.getClipLaneVersionName (activeIdx);
++        adapter.setStatusMessage ("Take: " + versionName);
++        if (adapter.onContextChanged)
++            adapter.onContextChanged();
++    }
++}
+diff --git a/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc b/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
+index f62cd413a41d34d706859eba27e29f82e5aa7eb3..7260a612185fc1d94f44af5802c9b914a0942d6f 100644
+--- a/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
++++ b/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
+@@ -171,6 +171,10 @@ void EditorAdapter::registerActions (ActionRegistry& registry)
+     { "lv.list",   "List Lane Versions",    "Lane Version", "", &EditorAdapter::laneVersionList   },
+     { "lv.next",   "Next Lane Version",     "Lane Version", "Alt+l", &EditorAdapter::laneVersionNext },
+     { "lv.prev",   "Previous Lane Version", "Lane Version", "Alt+h", &EditorAdapter::laneVersionPrev },
++
++    // Take cycling (clip-lane versions only)
++    { "take.next", "Next Take",             "Take",         "Alt+j", &EditorAdapter::takeNext },
++    { "take.prev", "Previous Take",         "Take",         "Alt+k", &EditorAdapter::takePrev },
+ };
+ 
+     static const ExActionDef editorExActions[] = {
+diff --git a/tests/integration/LaneVersionCommandTest.cpp b/tests/integration/LaneVersionCommandTest.cpp
+index e013d01be19945e0c009ac16987f7c2b5c49b32f..67828954d5f70d934c7b9d3e84d650a11e311266 100644
+--- a/tests/integration/LaneVersionCommandTest.cpp
++++ b/tests/integration/LaneVersionCommandTest.cpp
+@@ -698,3 +698,350 @@ TEST_CASE ("Track versions: non-event tracks reject version creation",
+     CHECK (bus.getClipLaneVersionCount() == 1);
+     CHECK (f.engine.getStatusMessage().find ("not support") != std::string::npos);
+ }
++
++// ── Take cycling actions (take.next / take.prev) ────────────────────────────
++
++static void setupThreeTakeAudioTrack (LvTestFixture& f)
++{
++    f.addTracks (1);
++    f.selectTrack (0);
++    f.focusClipLane();
++
++    dc::Track track (f.project.getTrack (0));
++    track.addClipLaneVersion ("Take 2");
++    track.addClipLaneVersion ("Take 3");
++    REQUIRE (track.getClipLaneVersionCount() == 3);
++}
++
++TEST_CASE ("take.next advances clip-lane version (non-wrap 0->1)", "[integration][take_cycle]")
++{
++    LvTestFixture f;
++    setupThreeTakeAudioTrack (f);
++
++    dc::Track track (f.project.getTrack (0));
++    track.switchClipLaneVersion (0);
++    REQUIRE (track.getActiveClipLaneVersionIndex() == 0);
++
++    f.engine.getActionRegistry().executeAction ("take.next");
++
++    dc::Track trackAfter (f.project.getTrack (0));
++    CHECK (trackAfter.getActiveClipLaneVersionIndex() == 1);
++    CHECK (dc::LaneVersion (trackAfter.getActiveClipLaneVersion()).getName() == "Take 2");
++}
++
++TEST_CASE ("take.next wraps last-to-first (2->0)", "[integration][take_cycle]")
++{
++    LvTestFixture f;
++    setupThreeTakeAudioTrack (f);
++
++    dc::Track track (f.project.getTrack (0));
++    track.switchClipLaneVersion (2);
++    REQUIRE (track.getActiveClipLaneVersionIndex() == 2);
++
++    f.engine.getActionRegistry().executeAction ("take.next");
++
++    dc::Track trackAfter (f.project.getTrack (0));
++    CHECK (trackAfter.getActiveClipLaneVersionIndex() == 0);
++    CHECK (dc::LaneVersion (trackAfter.getActiveClipLaneVersion()).getName() == "Take 1");
++}
++
++TEST_CASE ("take.prev moves backward (non-wrap 2->1)", "[integration][take_cycle]")
++{
++    LvTestFixture f;
++    setupThreeTakeAudioTrack (f);
++
++    dc::Track track (f.project.getTrack (0));
++    track.switchClipLaneVersion (2);
++    REQUIRE (track.getActiveClipLaneVersionIndex() == 2);
++
++    f.engine.getActionRegistry().executeAction ("take.prev");
++
++    dc::Track trackAfter (f.project.getTrack (0));
++    CHECK (trackAfter.getActiveClipLaneVersionIndex() == 1);
++    CHECK (dc::LaneVersion (trackAfter.getActiveClipLaneVersion()).getName() == "Take 2");
++}
++
++TEST_CASE ("take.prev wraps first-to-last (0->2)", "[integration][take_cycle]")
++{
++    LvTestFixture f;
++    setupThreeTakeAudioTrack (f);
++
++    dc::Track track (f.project.getTrack (0));
++    track.switchClipLaneVersion (0);
++    REQUIRE (track.getActiveClipLaneVersionIndex() == 0);
++
++    f.engine.getActionRegistry().executeAction ("take.prev");
++
++    dc::Track trackAfter (f.project.getTrack (0));
++    CHECK (trackAfter.getActiveClipLaneVersionIndex() == 2);
++    CHECK (dc::LaneVersion (trackAfter.getActiveClipLaneVersion()).getName() == "Take 3");
++}
++
++// ── Take cycling safety: no-op cases ────────────────────────────────────────
++
++TEST_CASE ("take.next with no selected track is a no-op", "[integration][take_cycle][safety]")
++{
++    LvTestFixture f;
++    setupThreeTakeAudioTrack (f);
++
++    f.arrangement.setSelectedTrackIndex (-1);
++
++    int undoBefore = f.project.getUndoSystem().canUndo() ? 1 : 0;
++
++    f.engine.getActionRegistry().executeAction ("take.next");
++
++    dc::Track track (f.project.getTrack (0));
++    CHECK (track.getActiveClipLaneVersionIndex() == 0);
++    CHECK (f.engine.getStatusMessage().find ("no") != std::string::npos
++           || f.engine.getStatusMessage().find ("select") != std::string::npos
++           || f.engine.getStatusMessage().empty());
++    // No undo history created
++    CHECK (f.project.getUndoSystem().canUndo() == (undoBefore != 0));
++}
++
++TEST_CASE ("take.prev with no selected track is a no-op", "[integration][take_cycle][safety]")
++{
++    LvTestFixture f;
++    setupThreeTakeAudioTrack (f);
++
++    f.arrangement.setSelectedTrackIndex (-1);
++
++    int undoBefore = f.project.getUndoSystem().canUndo() ? 1 : 0;
++
++    f.engine.getActionRegistry().executeAction ("take.prev");
++
++    dc::Track track (f.project.getTrack (0));
++    CHECK (track.getActiveClipLaneVersionIndex() == 0);
++    // No undo history created
++    CHECK (f.project.getUndoSystem().canUndo() == (undoBefore != 0));
++}
++
++TEST_CASE ("take.next on non-audio track is a no-op", "[integration][take_cycle][safety]")
++{
++    LvTestFixture f;
++    f.arrangement.addBusTrack ("Mix Bus");
++    f.selectTrack (0);
++    f.focusClipLane();
++
++    int undoBefore = f.project.getUndoSystem().canUndo() ? 1 : 0;
++
++    f.engine.getActionRegistry().executeAction ("take.next");
++
++    dc::Track bus (f.project.getTrack (0));
++    CHECK (bus.getClipLaneVersionCount() == 1);
++    CHECK (bus.getActiveClipLaneVersionIndex() == 0);
++    // No undo history created
++    CHECK (f.project.getUndoSystem().canUndo() == (undoBefore != 0));
++}
++
++TEST_CASE ("take.prev on non-audio track is a no-op", "[integration][take_cycle][safety]")
++{
++    LvTestFixture f;
++    f.arrangement.addBusTrack ("Mix Bus");
++    f.selectTrack (0);
++    f.focusClipLane();
++
++    int undoBefore = f.project.getUndoSystem().canUndo() ? 1 : 0;
++
++    f.engine.getActionRegistry().executeAction ("take.prev");
++
++    dc::Track bus (f.project.getTrack (0));
++    CHECK (bus.getClipLaneVersionCount() == 1);
++    CHECK (bus.getActiveClipLaneVersionIndex() == 0);
++    // No undo history created
++    CHECK (f.project.getUndoSystem().canUndo() == (undoBefore != 0));
++}
++
++TEST_CASE ("take.next on one-take audio track is a no-op", "[integration][take_cycle][safety]")
++{
++    LvTestFixture f;
++    f.addTracks (1);
++    f.selectTrack (0);
++    f.focusClipLane();
++
++    dc::Track track (f.project.getTrack (0));
++    REQUIRE (track.getClipLaneVersionCount() == 1);
++
++    int undoBefore = f.project.getUndoSystem().canUndo() ? 1 : 0;
++
++    f.engine.getActionRegistry().executeAction ("take.next");
++
++    dc::Track trackAfter (f.project.getTrack (0));
++    CHECK (trackAfter.getActiveClipLaneVersionIndex() == 0);
++    CHECK (trackAfter.getClipLaneVersionCount() == 1);
++    // No undo history created
++    CHECK (f.project.getUndoSystem().canUndo() == (undoBefore != 0));
++}
++
++TEST_CASE ("take.prev on one-take audio track is a no-op", "[integration][take_cycle][safety]")
++{
++    LvTestFixture f;
++    f.addTracks (1);
++    f.selectTrack (0);
++    f.focusClipLane();
++
++    dc::Track track (f.project.getTrack (0));
++    REQUIRE (track.getClipLaneVersionCount() == 1);
++
++    int undoBefore = f.project.getUndoSystem().canUndo() ? 1 : 0;
++
++    f.engine.getActionRegistry().executeAction ("take.prev");
++
++    dc::Track trackAfter (f.project.getTrack (0));
++    CHECK (trackAfter.getActiveClipLaneVersionIndex() == 0);
++    CHECK (trackAfter.getClipLaneVersionCount() == 1);
++    // No undo history created
++    CHECK (f.project.getUndoSystem().canUndo() == (undoBefore != 0));
++}
++
++// ── Take cycling undo ───────────────────────────────────────────────────────
++
++TEST_CASE ("take.next creates one undoable transaction; undo restores prior take",
++           "[integration][take_cycle][undo]")
++{
++    LvTestFixture f;
++    setupThreeTakeAudioTrack (f);
++
++    dc::Track track (f.project.getTrack (0));
++    track.switchClipLaneVersion (0);
++    REQUIRE (track.getActiveClipLaneVersionIndex() == 0);
++
++    f.engine.getActionRegistry().executeAction ("take.next");
++
++    dc::Track trackAfter (f.project.getTrack (0));
++    REQUIRE (trackAfter.getActiveClipLaneVersionIndex() == 1);
++    REQUIRE (f.project.getUndoSystem().canUndo());
++
++    f.project.getUndoSystem().undo();
++
++    dc::Track trackRestored (f.project.getTrack (0));
++    CHECK (trackRestored.getActiveClipLaneVersionIndex() == 0);
++    CHECK (dc::LaneVersion (trackRestored.getActiveClipLaneVersion()).getName() == "Take 1");
++}
++
++TEST_CASE ("take.prev creates one undoable transaction; undo restores prior take",
++           "[integration][take_cycle][undo]")
++{
++    LvTestFixture f;
++    setupThreeTakeAudioTrack (f);
++
++    dc::Track track (f.project.getTrack (0));
++    track.switchClipLaneVersion (2);
++    REQUIRE (track.getActiveClipLaneVersionIndex() == 2);
++
++    f.engine.getActionRegistry().executeAction ("take.prev");
++
++    dc::Track trackAfter (f.project.getTrack (0));
++    REQUIRE (trackAfter.getActiveClipLaneVersionIndex() == 1);
++    REQUIRE (f.project.getUndoSystem().canUndo());
++
++    f.project.getUndoSystem().undo();
++
++    dc::Track trackRestored (f.project.getTrack (0));
++    CHECK (trackRestored.getActiveClipLaneVersionIndex() == 2);
++    CHECK (dc::LaneVersion (trackRestored.getActiveClipLaneVersion()).getName() == "Take 3");
++}
++
++// ── Take cycling with automation-lane focus ─────────────────────────────────
++
++TEST_CASE ("take.next changes clip-lane version even when automation lane is focused",
++           "[integration][take_cycle][automation_focus]")
++{
++    LvTestFixture f;
++    setupThreeTakeAudioTrack (f);
++
++    dc::Track track (f.project.getTrack (0));
++    track.switchClipLaneVersion (0);
++    REQUIRE (track.getActiveClipLaneVersionIndex() == 0);
++
++    // Enter automation lane focus
++    f.context.setInAutomationLane (true);
++    f.context.setAutomationLaneIndex (0);
++
++    f.engine.getActionRegistry().executeAction ("take.next");
++
++    dc::Track trackAfter (f.project.getTrack (0));
++    // Clip-lane version should have changed
++    CHECK (trackAfter.getActiveClipLaneVersionIndex() == 1);
++    CHECK (dc::LaneVersion (trackAfter.getActiveClipLaneVersion()).getName() == "Take 2");
++}
++
++TEST_CASE ("take.prev changes clip-lane version even when automation lane is focused",
++           "[integration][take_cycle][automation_focus]")
++{
++    LvTestFixture f;
++    setupThreeTakeAudioTrack (f);
++
++    dc::Track track (f.project.getTrack (0));
++    track.switchClipLaneVersion (2);
++    REQUIRE (track.getActiveClipLaneVersionIndex() == 2);
++
++    // Enter automation lane focus
++    f.context.setInAutomationLane (true);
++    f.context.setAutomationLaneIndex (0);
++
++    f.engine.getActionRegistry().executeAction ("take.prev");
++
++    dc::Track trackAfter (f.project.getTrack (0));
++    // Clip-lane version should have changed
++    CHECK (trackAfter.getActiveClipLaneVersionIndex() == 1);
++    CHECK (dc::LaneVersion (trackAfter.getActiveClipLaneVersion()).getName() == "Take 2");
++}
++
++// ── Action registration and keymap regression ───────────────────────────────
++
++TEST_CASE ("take.next and take.prev are registered in ActionRegistry",
++           "[integration][take_cycle][registration]")
++{
++    LvTestFixture f;
++
++    auto& registry = f.engine.getActionRegistry();
++    CHECK (registry.getAction ("take.next") != nullptr);
++    CHECK (registry.getAction ("take.prev") != nullptr);
++}
++
++TEST_CASE ("lv.next and lv.prev remain registered",
++           "[integration][take_cycle][registration]")
++{
++    LvTestFixture f;
++
++    auto& registry = f.engine.getActionRegistry();
++    CHECK (registry.getAction ("lv.next") != nullptr);
++    CHECK (registry.getAction ("lv.prev") != nullptr);
++}
++
++TEST_CASE ("Alt+j resolves to take.next in default keymap", "[integration][take_cycle][keymap]")
++{
++    LvTestFixture f;
++
++    auto keySeq = dc::KeySequence::parse ("Alt+j");
++    auto actionId = f.engine.getKeymapRegistry().resolve (keySeq, dc::Panel::Editor);
++    CHECK (actionId == "take.next");
++}
++
++TEST_CASE ("Alt+k resolves to take.prev in default keymap", "[integration][take_cycle][keymap]")
++{
++    LvTestFixture f;
++
++    auto keySeq = dc::KeySequence::parse ("Alt+k");
++    auto actionId = f.engine.getKeymapRegistry().resolve (keySeq, dc::Panel::Editor);
++    CHECK (actionId == "take.prev");
++}
++
++TEST_CASE ("Alt+h retains edit.slip_left route", "[integration][take_cycle][keymap]")
++{
++    LvTestFixture f;
++
++    auto keySeq = dc::KeySequence::parse ("Alt+h");
++    auto actionId = f.engine.getKeymapRegistry().resolve (keySeq, dc::Panel::Editor);
++    CHECK (actionId == "edit.slip_left");
++}
++
++TEST_CASE ("Alt+l retains edit.slip_right route", "[integration][take_cycle][keymap]")
++{
++    LvTestFixture f;
++
++    auto keySeq = dc::KeySequence::parse ("Alt+l");
++    auto actionId = f.engine.getKeymapRegistry().resolve (keySeq, dc::Panel::Editor);
++    CHECK (actionId == "edit.slip_right");
++}

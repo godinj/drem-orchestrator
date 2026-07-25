@@ -3,6 +3,7 @@ package benchv2
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,6 +42,11 @@ type BlobPin struct {
 	SHA  string `json:"git_blob_sha"`
 }
 
+type OracleArtifactPin struct {
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
 type Fixture struct {
 	RepoID       string    `json:"repo_id"`
 	BaseCommit   string    `json:"base_commit"`
@@ -58,26 +64,27 @@ type Budget struct {
 }
 
 type TaskSpec struct {
-	Schema               string   `json:"schema"`
-	ID                   string   `json:"id"`
-	Title                string   `json:"title"`
-	Description          string   `json:"description"`
-	Status               string   `json:"status"`
-	Mode                 string   `json:"mode"`
-	InferencePolicy      string   `json:"inference_policy"`
-	AllowedToolPolicies  []string `json:"allowed_tool_policies"`
-	Weight               int      `json:"weight"`
-	Role                 string   `json:"role"`
-	SystemPrompt         string   `json:"system_prompt"`
-	UserMessage          string   `json:"user_message"`
-	Fixture              Fixture  `json:"fixture"`
-	ReadPaths            []string `json:"read_paths"`
-	WritePaths           []string `json:"write_paths"`
-	RequiredChangedPaths []string `json:"required_changed_paths"`
-	ResultArtifact       string   `json:"result_artifact,omitempty"`
-	RequiredMutation     bool     `json:"required_mutation"`
-	OracleID             string   `json:"oracle_id"`
-	Budget               Budget   `json:"budget"`
+	Schema               string              `json:"schema"`
+	ID                   string              `json:"id"`
+	Title                string              `json:"title"`
+	Description          string              `json:"description"`
+	Status               string              `json:"status"`
+	Mode                 string              `json:"mode"`
+	InferencePolicy      string              `json:"inference_policy"`
+	AllowedToolPolicies  []string            `json:"allowed_tool_policies"`
+	Weight               int                 `json:"weight"`
+	Role                 string              `json:"role"`
+	SystemPrompt         string              `json:"system_prompt"`
+	UserMessage          string              `json:"user_message"`
+	Fixture              Fixture             `json:"fixture"`
+	ReadPaths            []string            `json:"read_paths"`
+	WritePaths           []string            `json:"write_paths"`
+	RequiredChangedPaths []string            `json:"required_changed_paths"`
+	ResultArtifact       string              `json:"result_artifact,omitempty"`
+	RequiredMutation     bool                `json:"required_mutation"`
+	OracleID             string              `json:"oracle_id"`
+	OracleArtifacts      []OracleArtifactPin `json:"oracle_artifacts,omitempty"`
+	Budget               Budget              `json:"budget"`
 }
 
 type HarnessConfig struct {
@@ -221,6 +228,16 @@ func LoadManifest(path string) (ManifestSpec, []TaskSpec, error) {
 		if task.ID != item.ID || task.Weight != item.Weight || task.Status != item.Status {
 			return manifest, nil, fmt.Errorf("manifest metadata mismatch for %s", item.ID)
 		}
+		for _, artifact := range task.OracleArtifacts {
+			artifactRaw, err := os.ReadFile(filepath.Join(root, "oracles", artifact.Path))
+			if err != nil {
+				return manifest, nil, fmt.Errorf("read oracle artifact for %s: %w", item.ID, err)
+			}
+			artifactDigest := fmt.Sprintf("%x", sha256.Sum256(artifactRaw))
+			if artifactDigest != artifact.SHA256 {
+				return manifest, nil, fmt.Errorf("oracle artifact digest mismatch for %s", item.ID)
+			}
+		}
 		if task.Fixture.SeedPatch != "" && !filepath.IsAbs(task.Fixture.SeedPatch) {
 			task.Fixture.SeedPatch = filepath.Join(filepath.Dir(taskPath), task.Fixture.SeedPatch)
 		}
@@ -280,6 +297,14 @@ func (task TaskSpec) Validate() error {
 		if task.Budget.MaxInputTokens <= 0 || task.Budget.TimeoutSeconds <= 0 {
 			return fmt.Errorf("runnable task %s lacks fixed budgets", task.ID)
 		}
+	}
+	seenArtifacts := map[string]bool{}
+	for _, artifact := range task.OracleArtifacts {
+		digest, decodeErr := hex.DecodeString(artifact.SHA256)
+		if artifact.Path == "" || filepath.Base(artifact.Path) != artifact.Path || decodeErr != nil || len(digest) != sha256.Size || seenArtifacts[artifact.Path] {
+			return fmt.Errorf("task %s has an invalid oracle artifact pin", task.ID)
+		}
+		seenArtifacts[artifact.Path] = true
 	}
 	return nil
 }

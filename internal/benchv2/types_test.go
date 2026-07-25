@@ -3,6 +3,7 @@ package benchv2
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -27,6 +28,16 @@ func TestStrictDecodersRejectUnknownFields(t *testing.T) {
 	require.Error(t, DecodeStrict([]byte(`{"schema":"canvasbench.matrix.v2","unknown":true}`), &matrix))
 	var result TrialResult
 	require.Error(t, DecodeStrict([]byte(`{"schema":"canvasbench.result.v2","unknown":true}`), &result))
+}
+
+func TestTaskRejectsNonHexOracleArtifactDigest(t *testing.T) {
+	task := TaskSpec{
+		Schema: TaskSchemaVersion, ID: "oracle", Title: "Oracle", OracleID: "oracle-v1",
+		Status: "placeholder", Mode: "direct_worker", InferencePolicy: "required",
+		AllowedToolPolicies: []string{ToolPolicyStructured, ToolPolicySandboxed},
+		OracleArtifacts:     []OracleArtifactPin{{Path: "oracle.patch", SHA256: strings.Repeat("z", 64)}},
+	}
+	require.ErrorContains(t, task.Validate(), "invalid oracle artifact pin")
 }
 
 func TestAttestationFailsClosed(t *testing.T) {
@@ -57,7 +68,10 @@ func TestManifestAndTaskDigestsValidate(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tasks, 9)
 	require.NoError(t, manifest.Validate())
-	require.Equal(t, "runnable", tasks[7].Status)
+	for _, task := range tasks[:8] {
+		require.Equal(t, "runnable", task.Status)
+	}
+	require.Equal(t, "placeholder", tasks[8].Status)
 	require.Equal(t, "deterministic_exempt", tasks[7].InferencePolicy)
 	require.Equal(t, []string{ToolPolicyReplay}, tasks[7].AllowedToolPolicies)
 	for _, task := range tasks[:3] {

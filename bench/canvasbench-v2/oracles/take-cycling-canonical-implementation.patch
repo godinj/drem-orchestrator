@@ -1,0 +1,70 @@
+diff --git i/src/vim/adapters/EditorAdapter.h w/src/vim/adapters/EditorAdapter.h
+index f317c43..db6da29 100644
+--- i/src/vim/adapters/EditorAdapter.h
++++ w/src/vim/adapters/EditorAdapter.h
+@@ -390,6 +390,11 @@ private:
+     void laneVersionNext (int count);
+     void laneVersionPrev (int count);
+ 
++    // Dedicated audio-take cycling (always targets clip-lane versions).
++    void takeNext (int count);
++    void takePrev (int count);
++    void cycleSelectedTake (int delta);
++
+     // Helper for lane version name extraction
+     static std::string extractQuotedName (const std::string& args);
+ 
+diff --git i/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc w/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc
+index 42a9aae..f18cf97 100644
+--- i/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc
++++ w/src/vim/adapters/fragments/EditorAdapterActionHandlers.inc
+@@ -595,3 +595,36 @@ void EditorAdapter::laneVersionPrev (int /*count*/)
+     }
+     if (onContextChanged) onContextChanged();
+ }
++
++void EditorAdapter::takeNext (int /*count*/)
++{
++    cycleSelectedTake (1);
++}
++
++void EditorAdapter::takePrev (int /*count*/)
++{
++    cycleSelectedTake (-1);
++}
++
++void EditorAdapter::cycleSelectedTake (int delta)
++{
++    const int trackIndex = arrangement.getSelectedTrackIndex();
++    if (trackIndex < 0 || trackIndex >= arrangement.getNumTracks())
++        return;
++
++    Track track (arrangement.getTrack (trackIndex));
++    if (track.getType() != TrackType::Audio || track.getClipLaneVersionCount() <= 1)
++        return;
++
++    ScopedTransaction transaction (project.getUndoSystem(), "Cycle Take");
++    if (! TrackVersionService (project).cycle ({ trackIndex }, trackIndex, delta,
++                                                &project.getUndoManager()))
++        return;
++
++    Track updated (arrangement.getTrack (trackIndex));
++    LaneVersion active (updated.getActiveClipLaneVersion());
++    if (onStatusMessage)
++        onStatusMessage ("Take: " + active.getName());
++    if (onContextChanged)
++        onContextChanged();
++}
+diff --git i/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc w/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
+index f62cd41..fd3e068 100644
+--- i/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
++++ w/src/vim/adapters/fragments/EditorAdapterActionRegistration.inc
+@@ -171,6 +171,8 @@ void EditorAdapter::registerActions (ActionRegistry& registry)
+     { "lv.list",   "List Lane Versions",    "Lane Version", "", &EditorAdapter::laneVersionList   },
+     { "lv.next",   "Next Lane Version",     "Lane Version", "Alt+l", &EditorAdapter::laneVersionNext },
+     { "lv.prev",   "Previous Lane Version", "Lane Version", "Alt+h", &EditorAdapter::laneVersionPrev },
++    { "take.next", "Next Take",             "Take",         "", &EditorAdapter::takeNext },
++    { "take.prev", "Previous Take",         "Take",         "", &EditorAdapter::takePrev },
+ };
+ 
+     static const ExActionDef editorExActions[] = {

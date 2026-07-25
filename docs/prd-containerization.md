@@ -18,6 +18,14 @@ only one executable call in `registerAllActions` and rejects comments,
 literals, duplicate calls, calls in other functions, or drift in the pinned
 declaration, definition, action ID, and keymap route.
 
+The take-cycling benchmark corpus freezes exact-base canonical red tests,
+private-member production behavior, a preserved bad artifact and compiler
+diagnostics, plus deterministic mutants. Hidden native verification happens in
+a disposable detached Canvas worktree through `scripts/dev`; candidate tests
+and candidate production are graded in independent reset states so neither can
+weaken the other's oracle. Oracle bytes are SHA-256 pinned by task documents
+and remain outside every agent-visible file projection.
+
 ## Problem Statement
 
 The current Drem Orchestrator runs all services, daemons, and agent harnesses directly on the host. This causes several recurring pains:

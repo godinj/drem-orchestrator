@@ -193,6 +193,17 @@ The runnable transient-registration case requires the exact Canvas object
 before creating its disposable worktree and keeps the production seam oracle
 outside the agent-visible projection.
 
+Runnable take-cycling cases 4–6 require Canvas base
+`96db6b709f0a4f2069db4a7d3415ef17867b0274`, a readable shared
+`libs/skia/lib/libskia.a`, AppleClang/GCC C++17 tooling, and the repository's
+`scripts/dev` wrapper. Their hidden verifier creates its own detached
+worktree, runs `scripts/dev test --filter '(Take cycling|take\.)'`, and reuses
+only that disposable worktree's generated build for red/green and mutant
+phases. It never builds in Canvas main or another shared worktree. Case 6
+grades candidate production and candidate tests in reset source states so a
+trivial or deleted test cannot
+approve the matching implementation.
+
 An external harness matrix entry must also declare `outer_image` as an exact
 OCI digest, `outer_network_policy` as `isolated_inference`, a dedicated
 `outer_network_name`, and the adapter's exact documented normalizer. Bake the

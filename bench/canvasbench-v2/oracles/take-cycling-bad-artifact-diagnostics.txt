@@ -1,0 +1,20 @@
+Pinned Canvas base: 96db6b709f0a4f2069db4a7d3415ef17867b0274
+Preserved artifact: 861eebff00cae0515ca580afb0ab101fd050de49
+
+Focused integration compile diagnostics (AppleClang 17, C++17):
+- LaneVersionCommandTest.cpp:787,807: no member named 'setSelectedTrackIndex' in 'dc::Arrangement'
+- LaneVersionCommandTest.cpp:958,980: no member named 'setInAutomationLane' in 'dc::VimContext'; did you mean 'setAutomationLaneIndex'?
+- LaneVersionCommandTest.cpp:999,1000,1009,1010: no member named 'getAction' in 'dc::ActionRegistry'
+- LaneVersionCommandTest.cpp:1018+: no member named 'Panel' in namespace 'dc'; did you mean 'dc::VimContext::Panel'?
+- LaneVersionCommandTest.cpp:1018+: KeymapRegistry::resolve expected 3 arguments, but 2 were provided
+
+Focused EditorAdapter compile diagnostics (AppleClang 17, C++17):
+- EditorAdapterActionHandlers.inc:603: no member named 'getArrangement' in 'dc::EditorAdapter'
+- EditorAdapterActionHandlers.inc:604: no member named 'getProject' in 'dc::EditorAdapter'
+- EditorAdapterActionHandlers.inc:605: no member named 'getContext' in 'dc::EditorAdapter'
+- EditorAdapterActionHandlers.inc:610,617,624,639: no member named 'setStatusMessage' in 'dc::EditorAdapter'
+- EditorAdapterActionHandlers.inc:638: no member named 'getClipLaneVersionName' in 'dc::Track'
+- EditorAdapterActionHandlers.inc:640,641: 'onContextChanged' is a protected member of 'dc::ContextAdapter'
+- EditorAdapterActionRegistration.inc:176: no member named 'takeNext' in 'dc::EditorAdapter'
+- EditorAdapterActionRegistration.inc:177: no member named 'takePrev' in 'dc::EditorAdapter'
+- EditorAdapterActionRegistration.inc:192: cannot use incomplete type 'const ActionDef[]' as a range

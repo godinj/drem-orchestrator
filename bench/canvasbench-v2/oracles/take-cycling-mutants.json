@@ -1,0 +1,53 @@
+{
+  "schema": "canvasbench.take-cycling-mutants.v1",
+  "mutants": [
+    {
+      "id": "missing-wrap",
+      "path": "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
+      "old": "    ScopedTransaction transaction (project.getUndoSystem(), \"Cycle Take\");",
+      "new": "    const int activeIndex = track.getActiveClipLaneVersionIndex();\n    if ((delta > 0 && activeIndex + delta >= track.getClipLaneVersionCount())\n        || (delta < 0 && activeIndex + delta < 0))\n        return;\n\n    ScopedTransaction transaction (project.getUndoSystem(), \"Cycle Take\");"
+    },
+    {
+      "id": "automation-focus-leakage",
+      "path": "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
+      "old": "void EditorAdapter::cycleSelectedTake (int delta)\n{\n    const int trackIndex = arrangement.getSelectedTrackIndex();",
+      "new": "void EditorAdapter::cycleSelectedTake (int delta)\n{\n    if (context.getAutomationLaneIndex() >= 0)\n        return;\n\n    const int trackIndex = arrangement.getSelectedTrackIndex();"
+    },
+    {
+      "id": "non-audio-mutation",
+      "path": "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
+      "old": "    if (track.getType() != TrackType::Audio || track.getClipLaneVersionCount() <= 1)",
+      "new": "    if (track.getClipLaneVersionCount() <= 1)"
+    },
+    {
+      "id": "no-op-undo-entry",
+      "path": "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
+      "old": "    Track track (arrangement.getTrack (trackIndex));\n    if (track.getType() != TrackType::Audio || track.getClipLaneVersionCount() <= 1)\n        return;\n\n    ScopedTransaction transaction (project.getUndoSystem(), \"Cycle Take\");",
+      "new": "    Track track (arrangement.getTrack (trackIndex));\n    ScopedTransaction transaction (project.getUndoSystem(), \"Cycle Take\");\n    if (track.getType() != TrackType::Audio || track.getClipLaneVersionCount() <= 1)\n        return;"
+    },
+    {
+      "id": "missing-status",
+      "path": "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
+      "old": "    if (onStatusMessage)\n        onStatusMessage (\"Take: \" + active.getName());",
+      "new": "    (void) active;"
+    },
+    {
+      "id": "missing-notify",
+      "path": "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc",
+      "old": "    if (onStatusMessage)\n        onStatusMessage (\"Take: \" + active.getName());\n    if (onContextChanged)\n        onContextChanged();",
+      "new": "    if (onStatusMessage)\n        onStatusMessage (\"Take: \" + active.getName());"
+    },
+    {
+      "id": "declaration-mismatch",
+      "path": "src/vim/adapters/EditorAdapter.h",
+      "old": "    void takePrev (int count);",
+      "new": "    void takePrevious (int count);"
+    },
+    {
+      "id": "registration-mismatch",
+      "path": "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc",
+      "old": "    { \"take.prev\", \"Previous Take\",         \"Take\",         \"\", &EditorAdapter::takePrev },",
+      "new": "    { \"take.previous\", \"Previous Take\",     \"Take\",         \"\", &EditorAdapter::takePrev },"
+    }
+  ]
+}
