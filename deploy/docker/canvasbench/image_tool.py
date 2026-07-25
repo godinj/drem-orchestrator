@@ -150,18 +150,18 @@ def build(options: argparse.Namespace) -> None:
         image = lock["images"][name]
         state = source_state(revision, image, name)
         tag = f"{repository}/{name}:{image['version']}-{revision[:12]}"
-        with tempfile.NamedTemporaryFile(prefix="canvasbench-build-", suffix=".json") as metadata:
+        with tempfile.TemporaryDirectory(prefix="canvasbench-build-") as build_directory:
+            metadata = Path(build_directory) / "metadata.json"
             command = [
                 "docker", "buildx", "build", "--platform", lock["platform"], "--push",
-                "--provenance=false", "--metadata-file", metadata.name,
+                "--provenance=false", "--metadata-file", str(metadata),
                 "--tag", tag, "--file", str(root / image["dockerfile"]),
                 "--build-arg", f"SOURCE_DATE_EPOCH={source_epoch}",
             ]
             command.extend(build_args(lock, name, image, state))
             command.append(str(root))
             run(command)
-            metadata.seek(0)
-            build_metadata = json.load(metadata)
+            build_metadata = json.loads(metadata.read_text())
         digest = build_metadata.get("containerimage.digest", "")
         if not DIGEST.fullmatch(digest):
             raise SystemExit(f"build did not report an immutable digest: {name}")

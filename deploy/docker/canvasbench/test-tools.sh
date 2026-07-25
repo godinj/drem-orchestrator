@@ -56,7 +56,9 @@ if args[:2] == ["buildx", "build"]:
         labels["io.drem.canvasbench.normalizer"] = build_args["NORMALIZER"]
     key = hashlib.sha256(tag.encode()).hexdigest()
     (state / (key + ".json")).write_text(json.dumps({"User": "65532:65532", "Labels": labels}))
-    metadata.write_text(json.dumps({"containerimage.digest": "sha256:" + hashlib.sha256((tag + "-digest").encode()).hexdigest()}))
+    replacement = metadata.with_suffix(".replacement")
+    replacement.write_text(json.dumps({"containerimage.digest": "sha256:" + hashlib.sha256((tag + "-digest").encode()).hexdigest()}))
+    os.replace(replacement, metadata)
     sys.exit(0)
 if args[:2] == ["image", "inspect"]:
     tag = args[2].split("@", 1)[0]
