@@ -91,6 +91,9 @@ type HarnessConfig struct {
 	RetentionThresholdPC int    `json:"retention_threshold_pct"`
 	AdapterModelRef      string `json:"adapter_model_ref"`
 	OuterIsolation       string `json:"outer_isolation"`
+	OuterImage           string `json:"outer_image,omitempty"`
+	OuterNetworkPolicy   string `json:"outer_network_policy,omitempty"`
+	OuterNetworkName     string `json:"outer_network_name,omitempty"`
 	TrajectoryNormalizer string `json:"trajectory_normalizer"`
 }
 
@@ -325,6 +328,13 @@ func ValidateAttestation(h HarnessConfig, r RuntimeAttestation) error {
 	}
 	if !r.InferenceMeasured {
 		return fmt.Errorf("inference telemetry is unmeasured")
+	}
+	if h.Name == AdapterOpenCode || h.Name == AdapterQwenCode || h.Name == AdapterMiniSWE || h.Name == AdapterPi {
+		if h.ToolPolicy != ToolPolicySandboxed || h.OuterIsolation != "outer_container" || !pinnedOCIImage.MatchString(h.OuterImage) ||
+			h.OuterNetworkPolicy != OuterNetworkIsolatedInference || h.OuterNetworkName == "" || h.OuterNetworkName == "host" ||
+			h.OuterNetworkName == "bridge" || h.OuterNetworkName == "default" || h.TrajectoryNormalizer != normalizerForAdapter(h.Name) {
+			return fmt.Errorf("external harness attestation is incomplete or mismatched")
+		}
 	}
 	return nil
 }

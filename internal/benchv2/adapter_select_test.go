@@ -24,9 +24,7 @@ func TestRunnableTaskSelectsDirectAndExternalContracts(t *testing.T) {
 	require.NoError(t, err)
 	require.IsType(t, DirectToolAdapter{}, direct)
 
-	external, err := SelectAdapter(HarnessConfig{
-		Name: AdapterOpenCode, Version: "1.17.0", ToolPolicy: ToolPolicySandboxed, OuterIsolation: "outer_container",
-	}, task, "http://unused")
+	external, err := SelectAdapter(selectableExternalHarness(), task, "http://unused")
 	require.NoError(t, err)
 	require.IsType(t, ExternalCLIAdapter{}, external)
 	require.Equal(t, AdapterOpenCode, external.Name())
@@ -34,14 +32,20 @@ func TestRunnableTaskSelectsDirectAndExternalContracts(t *testing.T) {
 
 func TestExternalHarnessNeverFallsBackToDirectToolAgent(t *testing.T) {
 	task := crossHarnessTask()
-	adapter, err := SelectAdapter(HarnessConfig{
-		Name: AdapterOpenCode, Version: "1.17.0", ToolPolicy: ToolPolicySandboxed, OuterIsolation: "outer_container",
-	}, task, "http://direct")
+	adapter, err := SelectAdapter(selectableExternalHarness(), task, "http://direct")
 	require.NoError(t, err)
 	require.NotEqual(t, AdapterDirect, adapter.Name())
 
 	_, err = SelectAdapter(HarnessConfig{Name: "unattested-custom-harness", ToolPolicy: ToolPolicyStructured}, task, "http://direct")
 	require.ErrorContains(t, err, "unknown CanvasBench harness")
+}
+
+func selectableExternalHarness() HarnessConfig {
+	return HarnessConfig{
+		Name: AdapterOpenCode, Version: "1.17.0", ToolPolicy: ToolPolicySandboxed, OuterIsolation: "outer_container",
+		OuterImage: testOuterImage, OuterNetworkPolicy: OuterNetworkIsolatedInference, OuterNetworkName: "canvasbench-inference",
+		TrajectoryNormalizer: NormalizerOpenCode,
+	}
 }
 
 func TestAdapterSelectionRejectsPolicyMismatch(t *testing.T) {

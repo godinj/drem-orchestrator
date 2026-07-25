@@ -78,9 +78,23 @@ func ValidateATIF(trajectory ATIFTrajectory) error {
 	if trajectory.FinalMetrics.PromptTokens < 0 || trajectory.FinalMetrics.CompletionTokens < 0 || trajectory.FinalMetrics.DurationMs < 0 {
 		return fmt.Errorf("invalid ATIF final metrics")
 	}
+	if len(trajectory.Steps) == 0 {
+		return fmt.Errorf("ATIF trajectory has no steps")
+	}
 	for _, step := range trajectory.Steps {
 		if step.StepID == "" || step.Timestamp == "" || step.Source == "" {
 			return fmt.Errorf("invalid ATIF step")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, step.Timestamp); err != nil {
+			return fmt.Errorf("invalid ATIF timestamp")
+		}
+		if step.Message == "" && len(step.ToolCalls) == 0 {
+			return fmt.Errorf("empty ATIF step")
+		}
+		for _, call := range step.ToolCalls {
+			if call.Name == "" || call.Arguments == "" {
+				return fmt.Errorf("invalid ATIF tool call")
+			}
 		}
 	}
 	return nil

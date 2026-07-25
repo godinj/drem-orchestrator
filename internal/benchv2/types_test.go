@@ -39,6 +39,18 @@ func TestAttestationFailsClosed(t *testing.T) {
 	require.ErrorContains(t, matrix.Validate(), "harness attestation")
 }
 
+func TestExternalAttestationRequiresPinnedOuterRuntime(t *testing.T) {
+	matrix := validMatrix()
+	matrix.Harness = selectableExternalHarness()
+	matrix.Harness.SourceState = "source"
+	matrix.Harness.ConfigSHA256 = "config"
+	matrix.Harness.AdapterModelRef = "provider/model"
+	matrix.Harness.TrajectoryNormalizer = NormalizerOpenCode
+	require.NoError(t, matrix.Validate())
+	matrix.Harness.OuterImage = "opencode:latest"
+	require.ErrorContains(t, matrix.Validate(), "external harness attestation")
+}
+
 func TestManifestAndTaskDigestsValidate(t *testing.T) {
 	root := filepath.Join("..", "..", "bench", "canvasbench-v2")
 	manifest, tasks, err := LoadManifest(filepath.Join(root, "manifest.json"))

@@ -189,6 +189,20 @@ See `docs/canvasbench-v2.md` for immutable fixtures, tool policies, external
 adapter isolation, and qualification requirements. Placeholder cases are not
 passes, and runs with incomplete attestation are not comparable.
 
+An external harness matrix entry must also declare `outer_image` as an exact
+OCI digest, `outer_network_policy` as `isolated_inference`, a dedicated
+`outer_network_name`, and the adapter's exact documented normalizer. Bake the
+CLI and its configuration into that image. Never bind credentials, a home
+directory, the Docker socket, the complete fixture, or another broad host path.
+The dedicated internal network should connect only the harness and the
+inference proxy; host, bridge, and default networks are rejected.
+
+The stock CLI intentionally refuses external execution before container launch
+until a deployment-specific independent server-usage attestor is wired.
+Harness JSON/JSONL usage summaries are not sufficient server evidence. This
+installation section documents the boundary; it does not authorize starting a
+container or inference service.
+
 The generated Canvas profile sets `[direct_tool_agent].timeout = "10m"`.
 Measured Qwen turns on the remote RTX 3090 exceeded two minutes while still
 making steady generation progress, so this deadline protects against a dead

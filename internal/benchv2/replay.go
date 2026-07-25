@@ -23,7 +23,10 @@ func (ReplayAdapter) Run(ctx context.Context, request TrialRequest) (HarnessRun,
 	duration := time.Since(start)
 	trajectory := ATIFTrajectory{
 		SchemaVersion: ATIFVersion, SessionID: request.Task.ID,
-		Agent:        ATIFAgent{Name: "ownership-replay", Version: request.Harness.Version},
+		Agent: ATIFAgent{Name: "ownership-replay", Version: request.Harness.Version},
+		Steps: []ATIFStep{{
+			StepID: "ownership-replay", Timestamp: start.UTC().Format(time.RFC3339Nano), Source: "verifier", Message: string(out),
+		}},
 		FinalMetrics: ATIFMetrics{DurationMs: duration.Milliseconds()},
 		Extra:        map[string]any{"inference_calls": 0, "diagnostic_permutations": 100, "command": cmd.Args},
 	}

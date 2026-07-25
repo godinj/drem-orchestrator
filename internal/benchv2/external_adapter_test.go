@@ -1,52 +1,156 @@
 package benchv2
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-func adapterRequest() TrialRequest {
+type fakeOuterExecutor struct {
+	result OuterExecutionResult
+	seen   *OuterExecutionSpec
+}
+
+func (executor fakeOuterExecutor) Execute(_ context.Context, spec OuterExecutionSpec) (OuterExecutionResult, error) {
+	*executor.seen = spec
+	if _, err := os.Stat(filepath.Join(spec.HostWorkspace, "secret.cpp")); !os.IsNotExist(err) {
+		return OuterExecutionResult{}, errUnexpectedVisibleFixture
+	}
+	if _, err := os.Stat(filepath.Join(spec.HostWorkspace, ".git")); !os.IsNotExist(err) {
+		return OuterExecutionResult{}, errUnexpectedVisibleFixture
+	}
+	if err := os.WriteFile(filepath.Join(spec.HostWorkspace, "write.cpp"), []byte("after"), 0o644); err != nil {
+		return OuterExecutionResult{}, err
+	}
+	return executor.result, nil
+}
+
+type fakeUsageAttestor struct{ usage ServerUsage }
+
+func (attestor fakeUsageAttestor) AttestServerUsage(context.Context, TrialRequest) (ServerUsage, error) {
+	return attestor.usage, nil
+}
+
+var errUnexpectedVisibleFixture = &scopeTestError{"full fixture leaked into outer workspace"}
+
+type scopeTestError struct{ message string }
+
+func (err *scopeTestError) Error() string { return err.message }
+
+func adapterRequest(workDir, kind, normalizer string) TrialRequest {
 	return TrialRequest{
-		Task:    TaskSpec{SystemPrompt: "system", UserMessage: "task", AllowedToolPolicies: []string{ToolPolicyStructured, ToolPolicySandboxed}, ReadPaths: []string{"read.cpp"}, WritePaths: []string{"write.cpp"}, Budget: Budget{MaxToolCalls: 12, MaxIterations: 8, TimeoutSeconds: 600}},
-		WorkDir: "/bench/work", Seed: 42, Temperature: .6,
-		Harness: HarnessConfig{AdapterModelRef: "provider/qwen36", OuterIsolation: "outer_container", ToolPolicy: ToolPolicySandboxed},
+		Task: TaskSpec{
+			SystemPrompt: "system", UserMessage: "task", AllowedToolPolicies: []string{ToolPolicyStructured, ToolPolicySandboxed},
+			ReadPaths: []string{"read.cpp", "write.cpp"}, WritePaths: []string{"write.cpp"},
+			Budget: Budget{MaxToolCalls: 12, MaxIterations: 8, TimeoutSeconds: 600},
+		},
+		WorkDir: workDir, Seed: 42, Temperature: .6,
+		Harness: HarnessConfig{
+			Name: kind, Version: "pinned", ConfigSHA256: "cfg", AdapterModelRef: "provider/qwen36",
+			OuterIsolation: "outer_container", ToolPolicy: ToolPolicySandboxed, TrajectoryNormalizer: normalizer,
+		},
 		Runtime: RuntimeAttestation{ModelID: "raw-qwen-attestation"},
+	}
+}
+
+func externalAdapter(kind, normalizer string) ExternalCLIAdapter {
+	return ExternalCLIAdapter{
+		Kind: kind, Executable: externalExecutable(kind), Version: "pinned", Isolation: "outer_container",
+		Image: testOuterImage, Network: OuterNetworkPolicy{Mode: OuterNetworkIsolatedInference, NetworkName: "canvasbench-inference"},
+		Normalizer: normalizer,
 	}
 }
 
 func TestExternalAdapterInvocationContracts(t *testing.T) {
 	tests := []struct {
-		kind   string
-		want   []string
-		forbid []string
+		kind       string
+		normalizer string
+		want       []string
+		forbid     []string
 	}{
-		{AdapterOpenCode, []string{"run", "--pure", "--auto", "--format", "json", "--agent", "build", "--dir", "/bench/work", "--model", "provider/qwen36"}, []string{"raw-qwen-attestation"}},
-		{AdapterQwenCode, []string{"--output-format", "stream-json", "--safe-mode", "--yolo", "--max-tool-calls", "12", "--max-session-turns", "8", "--max-wall-time", "600s", "--exclude-tools", "agent"}, nil},
-		{AdapterMiniSWE, []string{"-t", "-m", "provider/qwen36", "-y", "--exit-immediately", "-o"}, nil},
-		{AdapterPi, []string{"--mode", "json", "--no-session", "--no-context-files", "--model", "provider/qwen36", "--system-prompt"}, []string{"-p", "--prompt"}},
+		{AdapterOpenCode, NormalizerOpenCode, []string{"run", "--pure", "--auto", "--format", "json", "--agent", "build", "--dir", "/workspace", "--model", "provider/qwen36"}, []string{"raw-qwen-attestation"}},
+		{AdapterQwenCode, NormalizerQwenCode, []string{"--output-format", "stream-json", "--safe-mode", "--yolo", "--max-tool-calls", "12", "--max-session-turns", "8", "--max-wall-time", "600s", "--exclude-tools", "agent"}, nil},
+		{AdapterMiniSWE, NormalizerMiniSWE, []string{"-t", "-m", "provider/qwen36", "-y", "--exit-immediately", "-o", "/workspace/.canvasbench/mini-swe-agent-trajectory.json"}, nil},
+		{AdapterPi, NormalizerPi, []string{"--mode", "json", "--no-session", "--no-context-files", "--model", "provider/qwen36", "--system-prompt"}, []string{"-p", "--prompt"}},
 	}
-	for _, tc := range tests {
-		t.Run(tc.kind, func(t *testing.T) {
-			adapter := ExternalCLIAdapter{Kind: tc.kind, Executable: tc.kind, Version: "1.17.0", DryRun: true, Isolation: "outer_container"}
-			invocation, err := adapter.BuildInvocation(adapterRequest())
+	for _, test := range tests {
+		t.Run(test.kind, func(t *testing.T) {
+			adapter := externalAdapter(test.kind, test.normalizer)
+			invocation, err := adapter.BuildInvocation(adapterRequest("/host/fixture", test.kind, test.normalizer))
 			require.NoError(t, err)
 			joined := strings.Join(invocation.Args, " ")
-			for _, want := range tc.want {
+			for _, want := range test.want {
 				require.Contains(t, joined, want)
 			}
-			for _, forbidden := range tc.forbid {
+			for _, forbidden := range test.forbid {
 				require.NotContains(t, invocation.Args, forbidden)
 			}
-			require.Equal(t, "/bench/work", invocation.WorkDir)
+			require.Equal(t, outerWorkspace, invocation.WorkDir)
 		})
 	}
 }
 
+func TestExternalAdaptersExecuteOnlyThroughInjectedOuterBoundary(t *testing.T) {
+	tests := []struct {
+		kind, normalizer, fixture string
+		artifact                  bool
+	}{
+		{AdapterOpenCode, NormalizerOpenCode, "opencode.jsonl", false},
+		{AdapterQwenCode, NormalizerQwenCode, "qwen-code.jsonl", false},
+		{AdapterMiniSWE, NormalizerMiniSWE, "mini-swe-agent.json", true},
+		{AdapterPi, NormalizerPi, "pi.jsonl", false},
+	}
+	for _, test := range tests {
+		t.Run(test.kind, func(t *testing.T) {
+			fixture := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(fixture, ".git"), 0o755))
+			require.NoError(t, os.WriteFile(filepath.Join(fixture, ".git", "config"), []byte("git"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(fixture, "read.cpp"), []byte("read"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(fixture, "write.cpp"), []byte("before"), 0o644))
+			require.NoError(t, os.WriteFile(filepath.Join(fixture, "secret.cpp"), []byte("secret"), 0o644))
+			raw, err := os.ReadFile(filepath.Join("testdata", "external", test.fixture))
+			require.NoError(t, err)
+			result := OuterExecutionResult{Stdout: raw, StartedAt: time.Unix(1784937600, 0), Duration: time.Second, Artifacts: map[string][]byte{}}
+			if test.artifact {
+				result.Stdout = nil
+				result.Artifacts[".canvasbench/mini-swe-agent-trajectory.json"] = raw
+			}
+			seen := OuterExecutionSpec{}
+			adapter := externalAdapter(test.kind, test.normalizer)
+			adapter.Executor = fakeOuterExecutor{result: result, seen: &seen}
+			adapter.UsageAttestor = fakeUsageAttestor{ServerUsage{Source: "server_response", RequestsMeasured: 2, RequestsTotal: 2, PromptTokens: 100, CompletionTokens: 20, Complete: true}}
+			run, err := adapter.Run(context.Background(), adapterRequest(fixture, test.kind, test.normalizer))
+			require.NoError(t, err)
+			require.Equal(t, 100, run.Telemetry.TokensIn)
+			require.NotEqual(t, fixture, seen.HostWorkspace)
+			updated, err := os.ReadFile(filepath.Join(fixture, "write.cpp"))
+			require.NoError(t, err)
+			require.Equal(t, "after", string(updated))
+			secret, err := os.ReadFile(filepath.Join(fixture, "secret.cpp"))
+			require.NoError(t, err)
+			require.Equal(t, "secret", string(secret))
+		})
+	}
+}
+
+func TestExternalAdapterFailsBeforeExecutionWithoutServerUsageTruth(t *testing.T) {
+	adapter := externalAdapter(AdapterOpenCode, NormalizerOpenCode)
+	seen := OuterExecutionSpec{}
+	adapter.Executor = fakeOuterExecutor{seen: &seen}
+	_, err := adapter.Run(context.Background(), adapterRequest(t.TempDir(), AdapterOpenCode, NormalizerOpenCode))
+	require.ErrorContains(t, err, "server-usage attestor")
+	require.Empty(t, seen.Image)
+}
+
 func TestExternalAdaptersRequireOuterIsolation(t *testing.T) {
-	request := adapterRequest()
-	adapter := ExternalCLIAdapter{Kind: AdapterOpenCode, Executable: "opencode", Version: "1.17.0", DryRun: true}
+	request := adapterRequest("/host/fixture", AdapterOpenCode, NormalizerOpenCode)
+	adapter := externalAdapter(AdapterOpenCode, NormalizerOpenCode)
+	adapter.Isolation = ""
 	_, err := adapter.BuildInvocation(request)
 	require.ErrorContains(t, err, "outer-container")
 }

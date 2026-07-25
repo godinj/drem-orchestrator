@@ -23,7 +23,8 @@ The model receives only the public prompt and read/write contracts. Oracle
 sources remain outside its worktree. Inference tasks allow both
 `structured_only` and `sandboxed_shell`; the attested harness selects exactly
 one. DirectToolAgent uses exact structured read/write lists without shell.
-External adapters require the future outer-container sandboxed-shell wrapper.
+External adapters require the outer-container sandboxed-shell wrapper described
+below.
 Case 8 allows only `deterministic_replay`. This keeps fixture, oracle, scope,
 and budget identical across harnesses without claiming that unlike execution
 policies are equivalent. Host verification runs only after the adapter exits
@@ -33,17 +34,33 @@ and the exact changed-path gate is collected.
 
 Fixtures, oracles, scoring, and results depend on `HarnessAdapter`, not a
 particular loop. Initial adapters cover DirectToolAgent, deterministic case-8
-replay, and dry-run command contracts for OpenCode 1.17+, Qwen Code,
+replay, and documented JSON or JSONL contracts for OpenCode 1.17+, Qwen Code,
 mini-SWE-agent, and Pi.
 
-External CLI adapters are benchmark-only and require Harbor-style outer
-container isolation. They do not revive the retired OpenCode host/worktree
-path. Until filesystem wrappers and ATIF normalizers are installed, their run
-methods fail closed after producing a dry-run invocation.
+External CLI adapters are benchmark-only and always execute through an
+injectable outer-container boundary. Production command construction requires
+a digest-pinned OCI image, an unprivileged user, a read-only root filesystem,
+all capabilities dropped, `no-new-privileges`, and a named isolated inference
+network. Host, bridge, and default networking are rejected. The image must
+contain the harness and its configuration; credentials, the Docker socket,
+home directories, and broad host paths are never mounted.
 
-Trajectories normalize to ATIF v1.7. Inference trials require complete
-server-reported request/token usage; estimates do not qualify. Case 8 declares
-an explicit deterministic no-inference exemption.
+The runner creates a disposable agent-visible projection containing only the
+declared read and write paths. The full fixture, `.git`, and oracle material are
+not present in the mounted workspace. On successful completion it rejects
+undeclared files and read-only mutations, then copies only declared writable
+outputs back into the full fixture. This is structural scope isolation, not a
+prompt convention, and it does not revive the retired OpenCode host/worktree
+path.
+
+Documented harness output normalizes to ATIF v1.7 without synthesizing
+assistant text. Malformed, incomplete, or unsupported streams fail closed.
+Harness-reported usage is retained only as harness output and can never attest
+inference-server truth. Inference trials require a separate, complete
+server-response usage attestor before an outer container is launched; the
+stock CLI therefore refuses external execution until a deployment-specific
+attestor is wired. Case 8 declares an explicit deterministic no-inference
+exemption.
 
 ## Corpus and qualification
 

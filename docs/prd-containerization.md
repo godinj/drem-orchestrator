@@ -5,6 +5,13 @@ content-addressed CanvasBench v2 workflow in `docs/canvasbench-v2.md`.
 Benchmark-only OpenCode/Qwen Code/mini-SWE/Pi adapters do not restore the
 retired host/worktree execution path.
 
+Those external benchmark harnesses run only in digest-pinned, unprivileged OCI
+containers on a named isolated inference network. Each receives a disposable
+workspace projection containing only declared read/write files—never the full
+fixture, `.git`, or hidden oracle—and only validated declared writes are copied
+back. Complete usage must come from an independent inference-server response
+attestor; harness logs cannot masquerade as server truth.
+
 ## Problem Statement
 
 The current Drem Orchestrator runs all services, daemons, and agent harnesses directly on the host. This causes several recurring pains:

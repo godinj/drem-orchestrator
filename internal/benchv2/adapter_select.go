@@ -23,9 +23,17 @@ func SelectAdapter(harness HarnessConfig, task TaskSpec, endpoint string) (Harne
 		if harness.ToolPolicy != ToolPolicySandboxed || !taskAllowsToolPolicy(task, ToolPolicySandboxed) {
 			return nil, fmt.Errorf("external harness requires allowed %s policy", ToolPolicySandboxed)
 		}
+		if !pinnedOCIImage.MatchString(harness.OuterImage) || harness.OuterNetworkPolicy != OuterNetworkIsolatedInference || harness.OuterNetworkName == "" {
+			return nil, fmt.Errorf("external harness requires pinned outer image and isolated inference network")
+		}
+		if harness.TrajectoryNormalizer != normalizerForAdapter(harness.Name) {
+			return nil, fmt.Errorf("external harness normalizer is missing or mismatched")
+		}
 		return ExternalCLIAdapter{
 			Kind: harness.Name, Executable: externalExecutable(harness.Name), Version: harness.Version,
-			Isolation: harness.OuterIsolation,
+			Isolation: harness.OuterIsolation, Image: harness.OuterImage,
+			Network:    OuterNetworkPolicy{Mode: harness.OuterNetworkPolicy, NetworkName: harness.OuterNetworkName},
+			Normalizer: harness.TrajectoryNormalizer, Executor: DockerOuterExecutor{},
 		}, nil
 	default:
 		return nil, fmt.Errorf("unknown CanvasBench harness %q", harness.Name)

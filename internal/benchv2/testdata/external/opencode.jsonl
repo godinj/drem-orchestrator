@@ -1,0 +1,4 @@
+{"type":"step_start","timestamp":1784937600000,"sessionID":"oc-session","part":{"id":"step-1","type":"step-start"}}
+{"type":"tool_use","timestamp":1784937600100,"sessionID":"oc-session","part":{"id":"tool-1","type":"tool","tool":"edit","state":{"status":"completed","input":{"path":"write.cpp","old":"before","new":"after"},"output":"edited"}}}
+{"type":"text","timestamp":1784937600200,"sessionID":"oc-session","part":{"id":"text-1","type":"text","text":"OpenCode finished exactly."}}
+{"type":"step_finish","timestamp":1784937600300,"sessionID":"oc-session","part":{"id":"step-2","type":"step-finish","reason":"stop"}}

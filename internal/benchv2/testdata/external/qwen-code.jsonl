@@ -1,0 +1,4 @@
+{"type":"system","subtype":"session_start","uuid":"sys-1","session_id":"qwen-session"}
+{"type":"assistant","uuid":"assistant-1","session_id":"qwen-session","message":{"id":"message-1","type":"message","role":"assistant","model":"qwen3.6-27b-code","content":[{"type":"text","text":"Qwen editing exactly."},{"type":"tool_use","id":"tool-1","name":"edit","input":{"path":"write.cpp","old":"before","new":"after"}}],"usage":{"input_tokens":111,"output_tokens":22}}}
+{"type":"user","uuid":"user-1","session_id":"qwen-session","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool-1","content":"edited","is_error":false}]}}
+{"type":"result","subtype":"success","uuid":"result-1","session_id":"qwen-session","is_error":false,"duration_ms":1200,"result":"Qwen finished exactly.","usage":{"input_tokens":111,"output_tokens":22}}
