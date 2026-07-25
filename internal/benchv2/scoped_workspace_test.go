@@ -24,6 +24,9 @@ func TestScopedAgentWorkspaceHidesFixtureAndAppliesOnlyDeclaredWrites(t *testing
 	_, err = os.Stat(filepath.Join(workspace.WorkDir, ".git"))
 	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NoError(t, os.WriteFile(filepath.Join(workspace.WorkDir, "write.cpp"), []byte("after"), 0o644))
+	mutation, err := workspace.MutationObserved()
+	require.NoError(t, err)
+	require.True(t, mutation)
 	require.NoError(t, workspace.ValidateAndApply())
 	updated, err := os.ReadFile(filepath.Join(fixture, "write.cpp"))
 	require.NoError(t, err)
@@ -31,6 +34,21 @@ func TestScopedAgentWorkspaceHidesFixtureAndAppliesOnlyDeclaredWrites(t *testing
 	hidden, err := os.ReadFile(filepath.Join(fixture, "secret.cpp"))
 	require.NoError(t, err)
 	require.Equal(t, "hidden", string(hidden))
+}
+
+func TestScopedAgentWorkspaceObservesCreatedAndDeletedWritableFiles(t *testing.T) {
+	fixture := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fixture, "existing.cpp"), []byte("before"), 0o644))
+	workspace, err := PrepareScopedAgentWorkspace(fixture, nil, []string{"existing.cpp", "new.cpp"}, nil)
+	require.NoError(t, err)
+	defer workspace.Cleanup()
+	mutation, err := workspace.MutationObserved()
+	require.NoError(t, err)
+	require.False(t, mutation)
+	require.NoError(t, os.Remove(filepath.Join(workspace.WorkDir, "existing.cpp")))
+	mutation, err = workspace.MutationObserved()
+	require.NoError(t, err)
+	require.True(t, mutation)
 }
 
 func TestScopedAgentWorkspaceRejectsUndeclaredAndReadOnlyWrites(t *testing.T) {

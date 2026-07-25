@@ -9,6 +9,7 @@ import (
 type qwenContentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text"`
+	Thinking  string          `json:"thinking"`
 	ID        string          `json:"id"`
 	Name      string          `json:"name"`
 	Input     any             `json:"input"`
@@ -61,6 +62,11 @@ func normalizeQwenCode(raw []byte, started time.Time) (normalizedExternal, error
 			step := ATIFStep{StepID: nonemptyID(event.SessionID, index), Timestamp: atifTimestamp(started, index), Source: "assistant"}
 			for _, block := range event.Message.Content {
 				switch block.Type {
+				case "thinking":
+					if block.Thinking == "" {
+						return normalizedExternal{}, fmt.Errorf("invalid Qwen thinking content")
+					}
+					step.Message += block.Thinking
 				case "text":
 					step.Message += block.Text
 				case "tool_use":

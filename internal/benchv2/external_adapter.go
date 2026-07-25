@@ -177,8 +177,14 @@ func (adapter ExternalCLIAdapter) Run(ctx context.Context, request TrialRequest)
 		applyTrustedUsage(&run, usage)
 		return run, scopeErr
 	}
+	mutationObserved, mutationErr := workspace.MutationObserved()
+	if mutationErr != nil {
+		return HarnessRun{Output: string(execution.Stdout)}, fmt.Errorf("inspect scoped mutation: %w", mutationErr)
+	}
 	run, normalizeErr := NormalizeExternal(adapter.Kind, adapter.Normalizer, request, execution)
 	applyTrustedUsage(&run, usage)
+	run.Telemetry.MutationObserved = mutationObserved
+	run.Telemetry.CheckpointObserved = mutationObserved
 	if normalizeErr != nil {
 		return run, normalizeErr
 	}

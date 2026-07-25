@@ -37,6 +37,9 @@ func TestExternalGoldenTrajectoriesNormalizeToATIF17(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, test.output, run.Output)
 			require.Equal(t, test.toolCalls, run.Telemetry.ToolCalls)
+			if test.kind == AdapterQwenCode {
+				require.Contains(t, run.Trajectory.Steps[0].Message, "Inspect the declared file before editing.")
+			}
 			require.Equal(t, 0, run.Trajectory.FinalMetrics.PromptTokens, "harness logs must not supply server usage")
 			require.NoError(t, ValidateATIF(run.Trajectory))
 		})

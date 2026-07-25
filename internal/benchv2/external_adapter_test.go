@@ -178,6 +178,8 @@ func TestExternalAdaptersExecuteOnlyThroughInjectedOuterBoundary(t *testing.T) {
 			run, err := adapter.Run(context.Background(), adapterRequest(fixture, test.kind, test.normalizer))
 			require.NoError(t, err)
 			require.Equal(t, 100, run.Telemetry.TokensIn)
+			require.True(t, run.Telemetry.MutationObserved)
+			require.True(t, run.Telemetry.CheckpointObserved)
 			require.NotEqual(t, fixture, seen.HostWorkspace)
 			updated, err := os.ReadFile(filepath.Join(fixture, "write.cpp"))
 			require.NoError(t, err)

@@ -11,11 +11,17 @@ import (
 )
 
 type ScopedAgentWorkspace struct {
-	WorkDir  string
-	fixture  string
-	readOnly map[string][]byte
-	writable map[string]bool
-	internal map[string]bool
+	WorkDir          string
+	fixture          string
+	readOnly         map[string][]byte
+	writable         map[string]bool
+	writableOriginal map[string]scopedFileSnapshot
+	internal         map[string]bool
+}
+
+type scopedFileSnapshot struct {
+	exists bool
+	raw    []byte
 }
 
 func PrepareScopedAgentWorkspace(fixture string, readPaths, writePaths, internalPaths []string) (*ScopedAgentWorkspace, error) {
@@ -31,7 +37,10 @@ func PrepareScopedAgentWorkspace(fixture string, readPaths, writePaths, internal
 		_ = os.RemoveAll(root)
 		return nil, err
 	}
-	workspace := &ScopedAgentWorkspace{WorkDir: root, fixture: fixture, readOnly: map[string][]byte{}, writable: map[string]bool{}, internal: map[string]bool{}}
+	workspace := &ScopedAgentWorkspace{
+		WorkDir: root, fixture: fixture, readOnly: map[string][]byte{}, writable: map[string]bool{},
+		writableOriginal: map[string]scopedFileSnapshot{}, internal: map[string]bool{},
+	}
 	fail := func(err error) (*ScopedAgentWorkspace, error) {
 		_ = workspace.Cleanup()
 		return nil, err
@@ -69,6 +78,7 @@ func PrepareScopedAgentWorkspace(fixture string, readPaths, writePaths, internal
 		source := filepath.Join(fixture, filepath.FromSlash(relative))
 		info, err := os.Lstat(source)
 		if os.IsNotExist(err) && workspace.writable[relative] {
+			workspace.writableOriginal[relative] = scopedFileSnapshot{}
 			if err := os.MkdirAll(filepath.Dir(filepath.Join(root, filepath.FromSlash(relative))), 0o755); err != nil {
 				return fail(err)
 			}
@@ -92,6 +102,7 @@ func PrepareScopedAgentWorkspace(fixture string, readPaths, writePaths, internal
 			return fail(err)
 		}
 		if workspace.writable[relative] {
+			workspace.writableOriginal[relative] = scopedFileSnapshot{exists: true, raw: append([]byte(nil), raw...)}
 			if err := os.Chmod(destination, 0o666); err != nil {
 				return fail(err)
 			}
@@ -100,6 +111,28 @@ func PrepareScopedAgentWorkspace(fixture string, readPaths, writePaths, internal
 		}
 	}
 	return workspace, nil
+}
+
+func (workspace *ScopedAgentWorkspace) MutationObserved() (bool, error) {
+	if workspace == nil || workspace.WorkDir == "" {
+		return false, fmt.Errorf("scoped workspace is unavailable")
+	}
+	for relative, original := range workspace.writableOriginal {
+		raw, err := os.ReadFile(filepath.Join(workspace.WorkDir, filepath.FromSlash(relative)))
+		if os.IsNotExist(err) {
+			if original.exists {
+				return true, nil
+			}
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if !original.exists || !bytes.Equal(raw, original.raw) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func makeWritableParent(root, relative string) error {

@@ -13,7 +13,7 @@ func crossHarnessTask() TaskSpec {
 		Status: "runnable", Mode: "direct_worker", InferencePolicy: "required", Weight: 1,
 		AllowedToolPolicies: []string{ToolPolicyStructured, ToolPolicySandboxed},
 		Role:                "coder", OracleID: "hidden",
-		Fixture: Fixture{RepoID: "repo", BaseCommit: "base", VisibleBlobs: []BlobPin{{Path: "file", SHA: "blob"}}},
+		Fixture: Fixture{RepoID: "repo", BaseCommit: strings.Repeat("a", 40), VisibleBlobs: []BlobPin{{Path: "file", SHA: strings.Repeat("b", 40)}}},
 		Budget:  Budget{MaxInputTokens: 1, TimeoutSeconds: 1},
 	}
 }
