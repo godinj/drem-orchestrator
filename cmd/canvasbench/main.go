@@ -19,12 +19,19 @@ func main() {
 	scratch := flag.String("scratch", "", "temporary worktree parent (defaults to OS temp)")
 	out := flag.String("out", "bench/results/canvasbench-v2", "report prefix")
 	endpoint := flag.String("endpoint", "http://127.0.0.1:18090/v1/chat/completions", "OpenAI-compatible inference endpoint")
+	usageProxyAdminURL := flag.String("usage-proxy-admin-url", "", "host-reachable trusted usage proxy admin URL")
+	usageProxyPublicBaseURL := flag.String("usage-proxy-public-base-url", "", "outer-harness-reachable trusted usage proxy /v1 base URL")
+	usageProxyAdminTokenFile := flag.String("usage-proxy-admin-token-file", "", "owner-only file containing the trusted usage proxy admin token")
 	flag.Parse()
 	var matrix benchv2.MatrixSpec
 	if err := benchv2.DecodeStrictFile(*matrixPath, &matrix); err != nil {
 		log.Fatal(err)
 	}
 	if err := matrix.Validate(); err != nil {
+		log.Fatal(err)
+	}
+	usageAttestor, err := usageAttestorForHarness(matrix.Harness, *usageProxyAdminURL, *usageProxyPublicBaseURL, *usageProxyAdminTokenFile)
+	if err != nil {
 		log.Fatal(err)
 	}
 	manifest, tasks, err := benchv2.LoadManifest(*manifestPath)
@@ -56,7 +63,7 @@ func main() {
 	var results []benchv2.TrialResult
 	for _, task := range tasks {
 		for trial := 1; trial <= matrix.Trials; trial++ {
-			adapter, err := benchv2.SelectAdapter(matrix.Harness, task, *endpoint)
+			adapter, err := benchv2.SelectAdapter(matrix.Harness, task, *endpoint, usageAttestor)
 			if err != nil {
 				log.Fatal(err)
 			}
@@ -76,5 +83,23 @@ func main() {
 	aggregate := benchv2.AggregateResults(matrix.ID, tasks, results)
 	if err := benchv2.WriteReports(*out, aggregate, results); err != nil {
 		log.Fatal(err)
+	}
+}
+
+func usageAttestorForHarness(harness benchv2.HarnessConfig, adminURL, publicBaseURL, tokenFile string) (benchv2.ServerUsageAttestor, error) {
+	switch harness.Name {
+	case benchv2.AdapterOpenCode, benchv2.AdapterQwenCode, benchv2.AdapterMiniSWE, benchv2.AdapterPi:
+		if adminURL == "" || publicBaseURL == "" || tokenFile == "" {
+			return nil, fmt.Errorf("external harness requires usage proxy admin URL, public base URL, and admin token file")
+		}
+		token, err := benchv2.ReadPrivateTokenFile(tokenFile)
+		if err != nil {
+			return nil, fmt.Errorf("read usage proxy admin token: %w", err)
+		}
+		return benchv2.NewUsageProxyClient(benchv2.UsageProxyClientConfig{
+			AdminURL: adminURL, PublicBaseURL: publicBaseURL, AdminToken: token,
+		})
+	default:
+		return nil, nil
 	}
 }

@@ -1,0 +1,489 @@
+package benchv2
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"strings"
+	"sync"
+	"time"
+)
+
+const ServerUsageSourceProxy = "trusted_usage_proxy"
+
+type UsageSession struct {
+	CorrelationID string
+	BaseURL       string
+	APIKey        string
+}
+
+type ServerUsageAttestor interface {
+	StartServerUsage(context.Context, TrialRequest) (UsageSession, error)
+	AttestServerUsage(context.Context, UsageSession) (ServerUsage, error)
+}
+
+type UsageProxyServerConfig struct {
+	UpstreamChatCompletions string
+	UpstreamAPIKey          string
+	PublicBaseURL           string
+	AdminToken              string
+	HTTPClient              *http.Client
+}
+
+type usageProxyServer struct {
+	config UsageProxyServerConfig
+	client *http.Client
+	mu     sync.Mutex
+	trials map[string]*usageTrial
+	keys   map[[sha256.Size]byte]string
+}
+
+type usageTrial struct {
+	ID                  string
+	KeyDigest           [sha256.Size]byte
+	Frozen              bool
+	Consumed            bool
+	InFlight            int
+	RequestsTotal       int
+	RequestsMeasured    int
+	PromptTokens        int
+	CompletionTokens    int
+	MeasurementFailures int
+}
+
+type proxyUsage struct {
+	PromptTokens     *int `json:"prompt_tokens"`
+	CompletionTokens *int `json:"completion_tokens"`
+}
+
+func NewUsageProxyHandler(config UsageProxyServerConfig) (http.Handler, error) {
+	for name, value := range map[string]string{
+		"upstream chat-completions URL": config.UpstreamChatCompletions,
+		"public base URL":               config.PublicBaseURL,
+		"admin token":                   config.AdminToken,
+	} {
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("%s is required", name)
+		}
+	}
+	upstreamURL, err := parseAbsoluteURL(config.UpstreamChatCompletions)
+	if err != nil || strings.TrimRight(upstreamURL.Path, "/") != "/v1/chat/completions" {
+		return nil, fmt.Errorf("upstream must be an absolute /v1/chat/completions URL")
+	}
+	publicURL, err := parseAbsoluteURL(config.PublicBaseURL)
+	if err != nil || strings.TrimRight(publicURL.Path, "/") != "/v1" {
+		return nil, fmt.Errorf("public base must be an absolute /v1 URL")
+	}
+	client := config.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Minute}
+	}
+	return &usageProxyServer{
+		config: config, client: client, trials: map[string]*usageTrial{}, keys: map[[sha256.Size]byte]string{},
+	}, nil
+}
+
+func (server *usageProxyServer) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	switch {
+	case request.Method == http.MethodPost && request.URL.Path == "/admin/v1/trials":
+		server.startTrial(writer, request)
+	case request.Method == http.MethodPost && strings.HasPrefix(request.URL.Path, "/admin/v1/trials/") && strings.HasSuffix(request.URL.Path, "/consume"):
+		server.consumeTrial(writer, request)
+	case request.Method == http.MethodPost && request.URL.Path == "/v1/chat/completions":
+		server.chatCompletions(writer, request)
+	default:
+		http.NotFound(writer, request)
+	}
+}
+
+func (server *usageProxyServer) startTrial(writer http.ResponseWriter, request *http.Request) {
+	if !server.adminAuthorized(request) {
+		writeProxyError(writer, http.StatusUnauthorized, "admin authentication failed")
+		return
+	}
+	id, err := randomCredential(24)
+	if err != nil {
+		writeProxyError(writer, http.StatusInternalServerError, "credential generation failed")
+		return
+	}
+	key, err := randomCredential(32)
+	if err != nil {
+		writeProxyError(writer, http.StatusInternalServerError, "credential generation failed")
+		return
+	}
+	digest := sha256.Sum256([]byte(key))
+	trial := &usageTrial{ID: id, KeyDigest: digest}
+	server.mu.Lock()
+	server.trials[id] = trial
+	server.keys[digest] = id
+	server.mu.Unlock()
+	writeProxyJSON(writer, http.StatusCreated, map[string]string{
+		"correlation_id": id, "base_url": strings.TrimRight(server.config.PublicBaseURL, "/"), "api_key": key,
+	})
+}
+
+func (server *usageProxyServer) consumeTrial(writer http.ResponseWriter, request *http.Request) {
+	if !server.adminAuthorized(request) {
+		writeProxyError(writer, http.StatusUnauthorized, "admin authentication failed")
+		return
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, "/admin/v1/trials/"), "/consume")
+	if id == "" || strings.Contains(id, "/") {
+		http.NotFound(writer, request)
+		return
+	}
+	server.mu.Lock()
+	trial := server.trials[id]
+	if trial == nil {
+		server.mu.Unlock()
+		http.NotFound(writer, request)
+		return
+	}
+	if trial.Consumed {
+		server.mu.Unlock()
+		writeProxyError(writer, http.StatusConflict, "usage ledger was already consumed")
+		return
+	}
+	if trial.InFlight != 0 {
+		trial.Frozen = true
+		delete(server.keys, trial.KeyDigest)
+		server.mu.Unlock()
+		writeProxyError(writer, http.StatusConflict, "usage ledger still has in-flight requests")
+		return
+	}
+	trial.Frozen = true
+	trial.Consumed = true
+	delete(server.keys, trial.KeyDigest)
+	usage := ServerUsage{
+		Source: ServerUsageSourceProxy, CorrelationID: trial.ID,
+		RequestsMeasured: trial.RequestsMeasured, RequestsTotal: trial.RequestsTotal,
+		PromptTokens: trial.PromptTokens, CompletionTokens: trial.CompletionTokens,
+	}
+	usage.Complete = trial.RequestsTotal > 0 && trial.RequestsMeasured == trial.RequestsTotal && trial.MeasurementFailures == 0
+	server.mu.Unlock()
+	if !usage.Complete {
+		writeProxyError(writer, http.StatusUnprocessableEntity, "usage ledger is incomplete")
+		return
+	}
+	writeProxyJSON(writer, http.StatusOK, usage)
+}
+
+func (server *usageProxyServer) chatCompletions(writer http.ResponseWriter, request *http.Request) {
+	trial, ok := server.beginRequest(request)
+	if !ok {
+		writeProxyError(writer, http.StatusUnauthorized, "trial authentication failed")
+		return
+	}
+	usage, forwardErr := server.forwardChatCompletions(writer, request)
+	server.finishRequest(trial, usage, forwardErr)
+}
+
+func (server *usageProxyServer) beginRequest(request *http.Request) (*usageTrial, bool) {
+	key, ok := bearerToken(request.Header.Get("Authorization"))
+	if !ok {
+		return nil, false
+	}
+	digest := sha256.Sum256([]byte(key))
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	id := server.keys[digest]
+	trial := server.trials[id]
+	if trial == nil || trial.Frozen || trial.Consumed {
+		return nil, false
+	}
+	trial.RequestsTotal++
+	trial.InFlight++
+	return trial, true
+}
+
+func (server *usageProxyServer) finishRequest(trial *usageTrial, usage *proxyUsage, forwardErr error) {
+	server.mu.Lock()
+	defer server.mu.Unlock()
+	trial.InFlight--
+	if forwardErr != nil || usage == nil || usage.PromptTokens == nil || usage.CompletionTokens == nil || *usage.PromptTokens < 0 || *usage.CompletionTokens < 0 {
+		trial.MeasurementFailures++
+		return
+	}
+	trial.RequestsMeasured++
+	trial.PromptTokens += *usage.PromptTokens
+	trial.CompletionTokens += *usage.CompletionTokens
+}
+
+func (server *usageProxyServer) forwardChatCompletions(writer http.ResponseWriter, request *http.Request) (*proxyUsage, error) {
+	raw, err := io.ReadAll(io.LimitReader(request.Body, 32<<20))
+	if err != nil {
+		writeProxyError(writer, http.StatusBadRequest, "read request body")
+		return nil, err
+	}
+	var payload map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&payload); err != nil {
+		writeProxyError(writer, http.StatusBadRequest, "invalid OpenAI request")
+		return nil, err
+	}
+	stream, _ := payload["stream"].(bool)
+	if stream {
+		options, _ := payload["stream_options"].(map[string]any)
+		if options == nil {
+			options = map[string]any{}
+		}
+		options["include_usage"] = true
+		payload["stream_options"] = options
+	}
+	forwardBody, err := json.Marshal(payload)
+	if err != nil {
+		writeProxyError(writer, http.StatusBadRequest, "invalid OpenAI request")
+		return nil, err
+	}
+	upstreamRequest, err := http.NewRequestWithContext(request.Context(), http.MethodPost, server.config.UpstreamChatCompletions, bytes.NewReader(forwardBody))
+	if err != nil {
+		writeProxyError(writer, http.StatusBadGateway, "upstream request failed")
+		return nil, err
+	}
+	upstreamRequest.Header.Set("Content-Type", "application/json")
+	if server.config.UpstreamAPIKey != "" {
+		upstreamRequest.Header.Set("Authorization", "Bearer "+server.config.UpstreamAPIKey)
+	}
+	response, err := server.client.Do(upstreamRequest)
+	if err != nil {
+		writeProxyError(writer, http.StatusBadGateway, "upstream request failed")
+		return nil, err
+	}
+	defer response.Body.Close()
+	if contentType := response.Header.Get("Content-Type"); contentType != "" {
+		writer.Header().Set("Content-Type", contentType)
+	}
+	writer.WriteHeader(response.StatusCode)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		_, _ = io.Copy(writer, response.Body)
+		return nil, fmt.Errorf("upstream returned HTTP %d", response.StatusCode)
+	}
+	if stream {
+		return proxyStreamResponse(writer, response.Body)
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 64<<20))
+	if err != nil {
+		return nil, err
+	}
+	_, _ = writer.Write(responseBody)
+	usage, present, err := parseProxyUsage(responseBody)
+	if err != nil || !present {
+		return nil, errors.New("non-streaming response omitted valid usage")
+	}
+	return usage, nil
+}
+
+func proxyStreamResponse(writer http.ResponseWriter, body io.Reader) (*proxyUsage, error) {
+	reader := bufio.NewReader(body)
+	var measured *proxyUsage
+	for {
+		line, readErr := reader.ReadBytes('\n')
+		if len(line) > 0 {
+			_, _ = writer.Write(line)
+			if flusher, ok := writer.(http.Flusher); ok {
+				flusher.Flush()
+			}
+			trimmed := strings.TrimSpace(string(line))
+			if strings.HasPrefix(trimmed, "data:") {
+				data := strings.TrimSpace(strings.TrimPrefix(trimmed, "data:"))
+				if data != "" && data != "[DONE]" {
+					usage, present, parseErr := parseProxyUsage([]byte(data))
+					if parseErr != nil {
+						return nil, parseErr
+					}
+					if present {
+						if measured != nil {
+							return nil, errors.New("streaming response contained duplicate usage")
+						}
+						measured = usage
+					}
+				}
+			}
+		}
+		if readErr != nil {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return nil, readErr
+		}
+	}
+	if measured == nil {
+		return nil, errors.New("streaming response omitted usage")
+	}
+	return measured, nil
+}
+
+func parseProxyUsage(raw []byte) (*proxyUsage, bool, error) {
+	var envelope struct {
+		Usage json.RawMessage `json:"usage"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return nil, false, err
+	}
+	if len(envelope.Usage) == 0 || bytes.Equal(bytes.TrimSpace(envelope.Usage), []byte("null")) {
+		return nil, false, nil
+	}
+	var usage proxyUsage
+	if err := json.Unmarshal(envelope.Usage, &usage); err != nil {
+		return nil, false, err
+	}
+	if usage.PromptTokens == nil || usage.CompletionTokens == nil {
+		return nil, false, errors.New("usage fields are incomplete")
+	}
+	return &usage, true, nil
+}
+
+func (server *usageProxyServer) adminAuthorized(request *http.Request) bool {
+	token, ok := bearerToken(request.Header.Get("Authorization"))
+	if !ok || len(token) != len(server.config.AdminToken) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(token), []byte(server.config.AdminToken)) == 1
+}
+
+func bearerToken(header string) (string, bool) {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(header, prefix) || len(header) == len(prefix) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(header, prefix)), true
+}
+
+func randomCredential(size int) (string, error) {
+	raw := make([]byte, size)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
+func writeProxyError(writer http.ResponseWriter, status int, message string) {
+	writeProxyJSON(writer, status, map[string]string{"error": message})
+}
+
+func writeProxyJSON(writer http.ResponseWriter, status int, value any) {
+	writer.Header().Set("Content-Type", "application/json")
+	writer.WriteHeader(status)
+	_ = json.NewEncoder(writer).Encode(value)
+}
+
+type UsageProxyClientConfig struct {
+	AdminURL      string
+	PublicBaseURL string
+	AdminToken    string
+	HTTPClient    *http.Client
+}
+
+type UsageProxyClient struct {
+	config UsageProxyClientConfig
+	client *http.Client
+}
+
+func ReadPrivateTokenFile(path string) (string, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&0o077 != 0 {
+		return "", fmt.Errorf("token file must be regular and readable only by its owner")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return "", fmt.Errorf("token file is empty")
+	}
+	return token, nil
+}
+
+func NewUsageProxyClient(config UsageProxyClientConfig) (*UsageProxyClient, error) {
+	for name, value := range map[string]string{"admin URL": config.AdminURL, "public base URL": config.PublicBaseURL, "admin token": config.AdminToken} {
+		if strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("usage proxy %s is required", name)
+		}
+	}
+	adminURL, err := parseAbsoluteURL(config.AdminURL)
+	if err != nil || (adminURL.Path != "" && adminURL.Path != "/") {
+		return nil, fmt.Errorf("usage proxy admin URL must not contain a path")
+	}
+	publicURL, err := parseAbsoluteURL(config.PublicBaseURL)
+	if err != nil || strings.TrimRight(publicURL.Path, "/") != "/v1" {
+		return nil, fmt.Errorf("usage proxy public base must be an absolute /v1 URL")
+	}
+	client := config.HTTPClient
+	if client == nil {
+		client = &http.Client{Timeout: 15 * time.Second}
+	}
+	return &UsageProxyClient{config: config, client: client}, nil
+}
+
+func parseAbsoluteURL(raw string) (*url.URL, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || parsed.User != nil ||
+		parsed.RawQuery != "" || parsed.Fragment != "" {
+		return nil, fmt.Errorf("invalid absolute URL")
+	}
+	return parsed, nil
+}
+
+func (client *UsageProxyClient) StartServerUsage(ctx context.Context, _ TrialRequest) (UsageSession, error) {
+	var response struct {
+		CorrelationID string `json:"correlation_id"`
+		BaseURL       string `json:"base_url"`
+		APIKey        string `json:"api_key"`
+	}
+	if err := client.adminJSON(ctx, http.MethodPost, "/admin/v1/trials", &response); err != nil {
+		return UsageSession{}, err
+	}
+	if response.CorrelationID == "" || response.APIKey == "" || strings.TrimRight(response.BaseURL, "/") != strings.TrimRight(client.config.PublicBaseURL, "/") {
+		return UsageSession{}, errors.New("usage proxy returned an invalid trial credential")
+	}
+	return UsageSession{CorrelationID: response.CorrelationID, BaseURL: response.BaseURL, APIKey: response.APIKey}, nil
+}
+
+func (client *UsageProxyClient) AttestServerUsage(ctx context.Context, session UsageSession) (ServerUsage, error) {
+	var usage ServerUsage
+	path := "/admin/v1/trials/" + url.PathEscape(session.CorrelationID) + "/consume"
+	if err := client.adminJSON(ctx, http.MethodPost, path, &usage); err != nil {
+		return ServerUsage{}, err
+	}
+	if usage.Source != ServerUsageSourceProxy || usage.CorrelationID != session.CorrelationID || !usage.Complete ||
+		usage.RequestsMeasured <= 0 || usage.RequestsMeasured != usage.RequestsTotal || usage.PromptTokens < 0 || usage.CompletionTokens < 0 {
+		return ServerUsage{}, errors.New("trusted usage proxy returned incomplete usage")
+	}
+	return usage, nil
+}
+
+func (client *UsageProxyClient) adminJSON(ctx context.Context, method, path string, target any) error {
+	request, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(client.config.AdminURL, "/")+path, nil)
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Authorization", "Bearer "+client.config.AdminToken)
+	response, err := client.client.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		raw, _ := io.ReadAll(io.LimitReader(response.Body, 4096))
+		return fmt.Errorf("usage proxy admin returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(raw)))
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(target)
+}

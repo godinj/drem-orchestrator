@@ -60,6 +60,12 @@ func TestExternalAttestationRequiresPinnedOuterRuntime(t *testing.T) {
 	require.NoError(t, matrix.Validate())
 	matrix.Harness.OuterImage = "opencode:latest"
 	require.ErrorContains(t, matrix.Validate(), "external harness attestation")
+	matrix.Harness = selectableExternalHarness()
+	matrix.Harness.SourceState = "source"
+	matrix.Harness.ConfigSHA256 = "config"
+	matrix.Harness.AdapterModelRef = "provider/model"
+	matrix.Harness.InferenceEnvContract = "assumed-common-env"
+	require.ErrorContains(t, matrix.Validate(), "external harness attestation")
 }
 
 func TestManifestAndTaskDigestsValidate(t *testing.T) {

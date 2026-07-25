@@ -9,6 +9,7 @@ import (
 )
 
 const testOuterImage = "ghcr.io/godinj/canvasbench-opencode@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const testUsageProxyImage = "ghcr.io/godinj/canvasbench-usage-proxy@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 func validOuterSpec(workspace string) OuterExecutionSpec {
 	return OuterExecutionSpec{

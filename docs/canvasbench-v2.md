@@ -62,11 +62,30 @@ path.
 Documented harness output normalizes to ATIF v1.7 without synthesizing
 assistant text. Malformed, incomplete, or unsupported streams fail closed.
 Harness-reported usage is retained only as harness output and can never attest
-inference-server truth. Inference trials require a separate, complete
-server-response usage attestor before an outer container is launched; the
-stock CLI therefore refuses external execution until a deployment-specific
-attestor is wired. Case 8 declares an explicit deterministic no-inference
-exemption.
+inference-server truth. External trials use the trusted CanvasBench usage proxy.
+Before each trial, the host creates an in-memory ledger through the
+admin-authenticated endpoint. The proxy generates an unguessable correlation ID
+and 256-bit bearer key; only that key and the public `/v1` base URL enter the
+outer harness. The admin credential and any upstream credential remain on the
+host/proxy side.
+
+The proxy forwards streaming and non-streaming OpenAI-compatible
+chat-completions. It forces `stream_options.include_usage=true`, parses usage
+from the server response, and aggregates every request. The host consumes the
+ledger exactly once after execution. Zero requests, in-flight requests,
+upstream errors, missing or duplicate usage, request-count mismatch, wrong
+correlation, or a second consume fail closed. A successful record has source
+`trusted_usage_proxy`; harness JSON/JSONL token fields are never a fallback.
+Case 8 declares an explicit deterministic no-inference exemption.
+
+External matrix attestation binds the proxy source state, digest-pinned image,
+effective config SHA-256, and adapter environment contract. OpenCode, Qwen Code,
+and Pi use `openai_base_url_api_key.v1` (`OPENAI_BASE_URL` and
+`OPENAI_API_KEY`). mini-SWE-agent uses `openai_api_base_api_key.v1`
+(`OPENAI_API_BASE` and `OPENAI_API_KEY`). A mismatched or assumed common
+contract is rejected before container launch. The digest-pinned harness image
+must provide an executable/config shim that honors its declared contract; the
+benchmark does not assume the upstream CLI's native environment behavior.
 
 ## Corpus and qualification
 
@@ -144,8 +163,15 @@ go run ./cmd/canvasbench \
   -matrix /absolute/path/to/matrix.json \
   -canvas-repo /absolute/path/to/drem-canvas.git/main \
   -orchestrator-repo /absolute/path/to/drem-orchestrator.git/master \
-  -out /absolute/path/to/results/run-id
+  -out /absolute/path/to/results/run-id \
+  -usage-proxy-admin-url http://127.0.0.1:18091 \
+  -usage-proxy-public-base-url http://canvasbench-usage-proxy:8080/v1 \
+  -usage-proxy-admin-token-file /absolute/private/path/admin.token
 ```
+
+The three usage-proxy flags are required only for external harness matrices.
+The token file must be a regular owner-only file. DirectToolAgent and the
+deterministic replay case do not receive or require it.
 
 Each trial appends raw JSONL. Completion writes aggregate JSON, Markdown, and
 CSV with pass rates and Wilson 95% confidence intervals. Codex usage is nullable

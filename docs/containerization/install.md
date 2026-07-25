@@ -231,11 +231,61 @@ directory, the Docker socket, the complete fixture, or another broad host path.
 The dedicated internal network should connect only the harness and the
 inference proxy; host, bridge, and default networks are rejected.
 
-The stock CLI intentionally refuses external execution before container launch
-until a deployment-specific independent server-usage attestor is wired.
-Harness JSON/JSONL usage summaries are not sufficient server evidence. This
-installation section documents the boundary; it does not authorize starting a
-container or inference service.
+External matrices must additionally bind `usage_proxy_source_state`, a
+digest-pinned `usage_proxy_image`, `usage_proxy_config_sha256`, and the exact
+`inference_env_contract`. Use `openai_base_url_api_key.v1` for OpenCode, Qwen
+Code, and Pi; use `openai_api_base_api_key.v1` for mini-SWE-agent. These names
+are validated container contracts, not a claim that every CLI honors one common
+variable. Each digest-pinned image must supply a tested executable/config shim
+when its native CLI differs. Hash the canonical non-secret effective proxy
+configuration (listen/public/upstream routes, timeouts, and image inputs) into
+`usage_proxy_config_sha256`; never hash or record credential bytes.
+
+Create owner-only credentials before starting the separately pinned proxy:
+
+```bash
+install -m 600 /dev/null /private/path/canvasbench-admin.token
+openssl rand -base64 48 > /private/path/canvasbench-admin.token
+# Optional only when the upstream requires authentication:
+install -m 600 /dev/null /private/path/upstream.token
+```
+
+The image entrypoint is the equivalent of:
+
+```bash
+canvasbench-usage-proxy \
+  -listen 0.0.0.0:8080 \
+  -public-base-url http://canvasbench-usage-proxy:8080/v1 \
+  -upstream http://inference:8000/v1/chat/completions \
+  -admin-token-file /run/secrets/canvasbench-admin.token
+# Add `-upstream-api-key-file /run/secrets/upstream.token` only when required.
+```
+
+Publish the same listener only to host loopback for the admin client and attach
+the proxy plus harness containers to the named isolated inference network. Do
+not mount the admin or upstream token into a harness container. The proxy gives
+each trial only a random bearer key and public base URL, forces streaming usage,
+and freezes its in-memory ledger on the first consume. Configure the benchmark
+host with:
+
+```bash
+go run ./cmd/canvasbench \
+  -manifest bench/canvasbench-v2/manifest.json \
+  -matrix /absolute/path/to/attested-external-matrix.json \
+  -canvas-repo /absolute/path/to/drem-canvas.git/main \
+  -orchestrator-repo /absolute/path/to/drem-orchestrator.git/master \
+  -out /absolute/path/to/results/run-id \
+  -usage-proxy-admin-url http://127.0.0.1:18091 \
+  -usage-proxy-public-base-url http://canvasbench-usage-proxy:8080/v1 \
+  -usage-proxy-admin-token-file /private/path/canvasbench-admin.token
+```
+
+The admin token file must be regular and owner-only. A missing ledger, zero
+requests, upstream error/retry without measurable usage, missing or duplicate
+usage, cross-trial correlation, or repeated consume makes the trial fail.
+Harness JSON/JSONL usage summaries are never used as fallback server evidence.
+This section defines the deployment contract; this change does not build or
+start the proxy image or any inference service.
 
 The generated Canvas profile sets `[direct_tool_agent].timeout = "10m"`.
 Measured Qwen turns on the remote RTX 3090 exceeded two minutes while still

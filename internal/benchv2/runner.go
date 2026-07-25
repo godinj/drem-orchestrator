@@ -217,7 +217,7 @@ func (runner Runner) RunTrial(ctx context.Context, matrix MatrixSpec, task TaskS
 			}
 		}
 	}
-	if task.InferencePolicy == "required" && (!result.ServerUsage.Complete || result.ServerUsage.Source != "server_response") {
+	if task.InferencePolicy == "required" && (!result.ServerUsage.Complete || !trustedServerUsageSource(result.ServerUsage.Source)) {
 		result.Gates.Attested = false
 		result.Gates.Failures = append(result.Gates.Failures, "server-reported inference usage is incomplete")
 	}
@@ -226,6 +226,10 @@ func (runner Runner) RunTrial(ctx context.Context, matrix MatrixSpec, task TaskS
 		result.Status = "passed"
 	}
 	return result
+}
+
+func trustedServerUsageSource(source string) bool {
+	return source == "server_response" || source == ServerUsageSourceProxy
 }
 
 func pathContainsOracle(workDir string) bool {

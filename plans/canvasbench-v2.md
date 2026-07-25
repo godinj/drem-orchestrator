@@ -29,13 +29,20 @@ Status: all nine cases runnable; exact-base native capstone acceptance passed.
   Release SHA-256/size evidence.
 - Explicit evidence boundary: case 8 owns deterministic rework scheduling;
   case 9 owns a single worker/artifact. Neither claims live UI or Computer Use.
+- Trusted OpenAI-compatible usage proxy and host attestor for external harness
+  trials: random per-trial credentials, stream/non-stream server parsing,
+  aggregate consume-once ledgers, fail-closed correlation, and no harness-log
+  fallback.
+- External CLI wiring with owner-only admin token files and validated
+  adapter-specific inference environment contracts. Matrix attestation binds
+  proxy source, digest-pinned image, and effective config hash.
 
 ## Before model comparison
 
-1. Wire a deployment-specific independent inference-server usage attestor into
-   the external CLI path; harness summaries cannot provide this evidence.
-2. Build and attest digest-pinned harness images on a named isolated inference
-   network without credential or broad host mounts.
+1. Build and attest the usage-proxy plus harness images on a named isolated
+   inference network without credential or broad host mounts.
+2. Verify each pinned harness image honors its declared environment contract
+   through the trusted proxy before collecting comparison trials.
 3. Run current/candidate history on Qwen, then the corrected harness across
    model and quantization candidates.
 4. After a model/harness qualifies, run a separate exact-Release Canvas pilot

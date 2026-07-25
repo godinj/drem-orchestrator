@@ -30,9 +30,22 @@ func (executor fakeOuterExecutor) Execute(_ context.Context, spec OuterExecution
 	return executor.result, nil
 }
 
-type fakeUsageAttestor struct{ usage ServerUsage }
+type fakeUsageAttestor struct {
+	usage   ServerUsage
+	session UsageSession
+}
 
-func (attestor fakeUsageAttestor) AttestServerUsage(context.Context, TrialRequest) (ServerUsage, error) {
+func (attestor fakeUsageAttestor) StartServerUsage(context.Context, TrialRequest) (UsageSession, error) {
+	if attestor.session.CorrelationID == "" {
+		return UsageSession{CorrelationID: "trial", BaseURL: "http://usage-proxy:8080/v1", APIKey: "trial-secret"}, nil
+	}
+	return attestor.session, nil
+}
+
+func (attestor fakeUsageAttestor) AttestServerUsage(_ context.Context, session UsageSession) (ServerUsage, error) {
+	if attestor.usage.CorrelationID == "" {
+		attestor.usage.CorrelationID = session.CorrelationID
+	}
 	return attestor.usage, nil
 }
 
@@ -53,6 +66,7 @@ func adapterRequest(workDir, kind, normalizer string) TrialRequest {
 		Harness: HarnessConfig{
 			Name: kind, Version: "pinned", ConfigSHA256: "cfg", AdapterModelRef: "provider/qwen36",
 			OuterIsolation: "outer_container", ToolPolicy: ToolPolicySandboxed, TrajectoryNormalizer: normalizer,
+			InferenceEnvContract: inferenceEnvContractForAdapter(kind),
 		},
 		Runtime: RuntimeAttestation{ModelID: "raw-qwen-attestation"},
 	}
@@ -81,7 +95,9 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {
 			adapter := externalAdapter(test.kind, test.normalizer)
-			invocation, err := adapter.BuildInvocation(adapterRequest("/host/fixture", test.kind, test.normalizer))
+			invocation, err := adapter.BuildInvocation(adapterRequest("/host/fixture", test.kind, test.normalizer), UsageSession{
+				CorrelationID: "trial", BaseURL: "http://usage-proxy:8080/v1", APIKey: "trial-secret",
+			})
 			require.NoError(t, err)
 			joined := strings.Join(invocation.Args, " ")
 			for _, want := range test.want {
@@ -91,6 +107,14 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 				require.NotContains(t, invocation.Args, forbidden)
 			}
 			require.Equal(t, outerWorkspace, invocation.WorkDir)
+			require.NotContains(t, invocation.Env, "CANVASBENCH_USAGE_PROXY_ADMIN_TOKEN")
+			require.Equal(t, "trial-secret", invocation.Env["OPENAI_API_KEY"])
+			if test.kind == AdapterMiniSWE {
+				require.Equal(t, "http://usage-proxy:8080/v1", invocation.Env["OPENAI_API_BASE"])
+				require.NotContains(t, invocation.Env, "OPENAI_BASE_URL")
+			} else {
+				require.Equal(t, "http://usage-proxy:8080/v1", invocation.Env["OPENAI_BASE_URL"])
+			}
 		})
 	}
 }
@@ -123,7 +147,7 @@ func TestExternalAdaptersExecuteOnlyThroughInjectedOuterBoundary(t *testing.T) {
 			seen := OuterExecutionSpec{}
 			adapter := externalAdapter(test.kind, test.normalizer)
 			adapter.Executor = fakeOuterExecutor{result: result, seen: &seen}
-			adapter.UsageAttestor = fakeUsageAttestor{ServerUsage{Source: "server_response", RequestsMeasured: 2, RequestsTotal: 2, PromptTokens: 100, CompletionTokens: 20, Complete: true}}
+			adapter.UsageAttestor = fakeUsageAttestor{usage: ServerUsage{Source: ServerUsageSourceProxy, RequestsMeasured: 2, RequestsTotal: 2, PromptTokens: 100, CompletionTokens: 20, Complete: true}}
 			run, err := adapter.Run(context.Background(), adapterRequest(fixture, test.kind, test.normalizer))
 			require.NoError(t, err)
 			require.Equal(t, 100, run.Telemetry.TokensIn)
@@ -151,6 +175,26 @@ func TestExternalAdaptersRequireOuterIsolation(t *testing.T) {
 	request := adapterRequest("/host/fixture", AdapterOpenCode, NormalizerOpenCode)
 	adapter := externalAdapter(AdapterOpenCode, NormalizerOpenCode)
 	adapter.Isolation = ""
-	_, err := adapter.BuildInvocation(request)
+	_, err := adapter.BuildInvocation(request, UsageSession{CorrelationID: "trial", BaseURL: "http://proxy/v1", APIKey: "key"})
 	require.ErrorContains(t, err, "outer-container")
+}
+
+func TestExternalAdapterRejectsHarnessLikeOrUncorrelatedUsage(t *testing.T) {
+	fixture := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fixture, "read.cpp"), []byte("read"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(fixture, "write.cpp"), []byte("before"), 0o644))
+	raw, err := os.ReadFile(filepath.Join("testdata", "external", "opencode.jsonl"))
+	require.NoError(t, err)
+	for _, usage := range []ServerUsage{
+		{Source: "server_response", CorrelationID: "trial", RequestsMeasured: 1, RequestsTotal: 1, Complete: true},
+		{Source: ServerUsageSourceProxy, CorrelationID: "other-trial", RequestsMeasured: 1, RequestsTotal: 1, Complete: true},
+		{Source: ServerUsageSourceProxy, CorrelationID: "trial", RequestsMeasured: 1, RequestsTotal: 2, Complete: false},
+	} {
+		seen := OuterExecutionSpec{}
+		adapter := externalAdapter(AdapterOpenCode, NormalizerOpenCode)
+		adapter.Executor = fakeOuterExecutor{result: OuterExecutionResult{Stdout: raw, StartedAt: time.Now(), Artifacts: map[string][]byte{}}, seen: &seen}
+		adapter.UsageAttestor = fakeUsageAttestor{usage: usage}
+		_, runErr := adapter.Run(context.Background(), adapterRequest(fixture, AdapterOpenCode, NormalizerOpenCode))
+		require.ErrorContains(t, runErr, "usage is incomplete")
+	}
 }

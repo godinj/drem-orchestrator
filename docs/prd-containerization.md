@@ -12,6 +12,17 @@ fixture, `.git`, or hidden oracle—and only validated declared writes are copie
 back. Complete usage must come from an independent inference-server response
 attestor; harness logs cannot masquerade as server truth.
 
+The attestor is a small trusted OpenAI-compatible proxy with a consume-once
+in-memory ledger. The host creates each trial through an admin-authenticated
+endpoint; the proxy generates the correlation ID and random trial bearer key.
+Harness containers receive only that key and the public proxy base URL. The
+proxy forces and parses server response usage for streaming and non-streaming
+calls, aggregates all requests, and fails the trial on missing, duplicate,
+errored, or mismatched evidence. Matrix attestation binds its source state,
+digest-pinned image, effective config hash, and an explicit adapter-specific
+environment contract. Admin and upstream credentials never cross into the
+harness container.
+
 The corpus includes a pinned production-registration seam taken from the
 otherwise verified Canvas transient-slicing artifact. Its verifier accepts
 only one executable call in `registerAllActions` and rejects comments,

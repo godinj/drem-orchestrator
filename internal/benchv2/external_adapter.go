@@ -27,13 +27,6 @@ type CommandInvocation struct {
 	WorkDir    string            `json:"work_dir"`
 }
 
-// ServerUsageAttestor obtains usage from an independent inference-server
-// truth source. Harness stdout/stderr is deliberately absent from this API so
-// a CLI-reported token count cannot masquerade as server telemetry.
-type ServerUsageAttestor interface {
-	AttestServerUsage(context.Context, TrialRequest) (ServerUsage, error)
-}
-
 type ExternalCLIAdapter struct {
 	Kind          string
 	Executable    string
@@ -48,7 +41,7 @@ type ExternalCLIAdapter struct {
 
 func (adapter ExternalCLIAdapter) Name() string { return adapter.Kind }
 
-func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest) (CommandInvocation, error) {
+func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage UsageSession) (CommandInvocation, error) {
 	if adapter.Executable == "" || adapter.Version == "" {
 		return CommandInvocation{}, fmt.Errorf("external adapter executable/version must be attested")
 	}
@@ -64,6 +57,10 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest) (Command
 	if adapter.Normalizer != normalizerForAdapter(adapter.Kind) || request.Harness.TrajectoryNormalizer != adapter.Normalizer {
 		return CommandInvocation{}, fmt.Errorf("external adapter normalizer is missing or mismatched")
 	}
+	inferenceEnv, err := inferenceEnvironment(adapter.Kind, request.Harness.InferenceEnvContract, usage)
+	if err != nil {
+		return CommandInvocation{}, err
+	}
 	prompt := strings.TrimSpace(request.Task.SystemPrompt + "\n\n" + request.Task.UserMessage)
 	trajectory := filepath.ToSlash(filepath.Join(outerWorkspace, ".canvasbench", adapter.Kind+"-trajectory.json"))
 	invocation := CommandInvocation{
@@ -71,6 +68,9 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest) (Command
 		Env: map[string]string{
 			"CANVASBENCH_SEED": fmt.Sprint(request.Seed), "CANVASBENCH_TEMPERATURE": fmt.Sprint(request.Temperature),
 		},
+	}
+	for key, value := range inferenceEnv {
+		invocation.Env[key] = value
 	}
 	switch adapter.Kind {
 	case AdapterOpenCode:
@@ -90,8 +90,8 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest) (Command
 	return invocation, nil
 }
 
-func (adapter ExternalCLIAdapter) BuildOuterSpec(request TrialRequest) (OuterExecutionSpec, error) {
-	invocation, err := adapter.BuildInvocation(request)
+func (adapter ExternalCLIAdapter) BuildOuterSpec(request TrialRequest, usage UsageSession) (OuterExecutionSpec, error) {
+	invocation, err := adapter.BuildInvocation(request, usage)
 	if err != nil {
 		return OuterExecutionSpec{}, err
 	}
@@ -135,30 +135,39 @@ func (adapter ExternalCLIAdapter) Run(ctx context.Context, request TrialRequest)
 	defer workspace.Cleanup()
 	scopedRequest := request
 	scopedRequest.WorkDir = workspace.WorkDir
-	spec, err := adapter.BuildOuterSpec(scopedRequest)
+	usageSession, err := adapter.UsageAttestor.StartServerUsage(ctx, request)
 	if err != nil {
+		return HarnessRun{}, fmt.Errorf("start independent server usage: %w", err)
+	}
+	spec, err := adapter.BuildOuterSpec(scopedRequest, usageSession)
+	if err != nil {
+		freezeUsageLedger(ctx, adapter.UsageAttestor, usageSession)
 		return HarnessRun{}, err
 	}
 	execution, execErr := adapter.Executor.Execute(ctx, spec)
+	attestCtx, cancelAttest := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	usage, usageErr := adapter.UsageAttestor.AttestServerUsage(attestCtx, usageSession)
+	cancelAttest()
+	if usageErr != nil {
+		if execErr != nil {
+			return HarnessRun{Output: string(execution.Stdout)}, fmt.Errorf("independent server usage failed: %w (outer execution also failed: %v)", usageErr, execErr)
+		}
+		return HarnessRun{Output: string(execution.Stdout)}, fmt.Errorf("independent server usage failed: %w", usageErr)
+	}
+	if usage.Source != ServerUsageSourceProxy || usage.CorrelationID != usageSession.CorrelationID || !usage.Complete ||
+		usage.RequestsMeasured <= 0 || usage.RequestsMeasured != usage.RequestsTotal || usage.PromptTokens < 0 || usage.CompletionTokens < 0 {
+		return HarnessRun{Output: string(execution.Stdout)}, fmt.Errorf("independent server usage is incomplete")
+	}
 	if scopeErr := workspace.Validate(); scopeErr != nil {
-		return HarnessRun{Output: string(execution.Stdout), StopReason: "scope_violation"}, scopeErr
+		run := HarnessRun{Output: string(execution.Stdout), StopReason: "scope_violation"}
+		applyTrustedUsage(&run, usage)
+		return run, scopeErr
 	}
 	run, normalizeErr := NormalizeExternal(adapter.Kind, adapter.Normalizer, request, execution)
+	applyTrustedUsage(&run, usage)
 	if normalizeErr != nil {
 		return run, normalizeErr
 	}
-	usage, usageErr := adapter.UsageAttestor.AttestServerUsage(ctx, request)
-	if usageErr != nil {
-		return run, fmt.Errorf("independent server usage failed: %w", usageErr)
-	}
-	if usage.Source != "server_response" || !usage.Complete || usage.RequestsMeasured <= 0 || usage.RequestsMeasured != usage.RequestsTotal {
-		return run, fmt.Errorf("independent server usage is incomplete")
-	}
-	run.ServerUsage = usage
-	run.Telemetry.TokensIn = usage.PromptTokens
-	run.Telemetry.TokensOut = usage.CompletionTokens
-	run.Trajectory.FinalMetrics.PromptTokens = usage.PromptTokens
-	run.Trajectory.FinalMetrics.CompletionTokens = usage.CompletionTokens
 	if err := ValidateATIF(run.Trajectory); err != nil {
 		return run, err
 	}
@@ -172,6 +181,48 @@ func (adapter ExternalCLIAdapter) Run(ctx context.Context, request TrialRequest)
 		return run, fmt.Errorf("apply scoped outputs: %w", err)
 	}
 	return run, nil
+}
+
+func applyTrustedUsage(run *HarnessRun, usage ServerUsage) {
+	run.ServerUsage = usage
+	run.Telemetry.TokensIn = usage.PromptTokens
+	run.Telemetry.TokensOut = usage.CompletionTokens
+	run.Trajectory.FinalMetrics.PromptTokens = usage.PromptTokens
+	run.Trajectory.FinalMetrics.CompletionTokens = usage.CompletionTokens
+}
+
+func freezeUsageLedger(ctx context.Context, attestor ServerUsageAttestor, session UsageSession) {
+	freezeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	_, _ = attestor.AttestServerUsage(freezeCtx, session)
+}
+
+func inferenceEnvContractForAdapter(kind string) string {
+	if kind == AdapterMiniSWE {
+		return "openai_api_base_api_key.v1"
+	}
+	switch kind {
+	case AdapterOpenCode, AdapterQwenCode, AdapterPi:
+		return "openai_base_url_api_key.v1"
+	default:
+		return ""
+	}
+}
+
+func inferenceEnvironment(kind, contract string, usage UsageSession) (map[string]string, error) {
+	if usage.CorrelationID == "" || usage.BaseURL == "" || usage.APIKey == "" {
+		return nil, fmt.Errorf("per-trial usage proxy credential is incomplete")
+	}
+	if contract == "" || contract != inferenceEnvContractForAdapter(kind) {
+		return nil, fmt.Errorf("external adapter inference environment contract is missing or mismatched")
+	}
+	environment := map[string]string{"OPENAI_API_KEY": usage.APIKey}
+	if kind == AdapterMiniSWE {
+		environment["OPENAI_API_BASE"] = strings.TrimRight(usage.BaseURL, "/")
+	} else {
+		environment["OPENAI_BASE_URL"] = strings.TrimRight(usage.BaseURL, "/")
+	}
+	return environment, nil
 }
 
 func normalizerForAdapter(kind string) string {

@@ -90,20 +90,24 @@ type TaskSpec struct {
 }
 
 type HarnessConfig struct {
-	Name                 string `json:"name"`
-	Version              string `json:"version"`
-	SourceState          string `json:"source_state"`
-	ConfigSHA256         string `json:"config_sha256"`
-	HistoryMode          string `json:"history_mode"`
-	ToolPolicy           string `json:"tool_policy"`
-	KeepRecentExchanges  int    `json:"keep_recent_exchanges"`
-	RetentionThresholdPC int    `json:"retention_threshold_pct"`
-	AdapterModelRef      string `json:"adapter_model_ref"`
-	OuterIsolation       string `json:"outer_isolation"`
-	OuterImage           string `json:"outer_image,omitempty"`
-	OuterNetworkPolicy   string `json:"outer_network_policy,omitempty"`
-	OuterNetworkName     string `json:"outer_network_name,omitempty"`
-	TrajectoryNormalizer string `json:"trajectory_normalizer"`
+	Name                  string `json:"name"`
+	Version               string `json:"version"`
+	SourceState           string `json:"source_state"`
+	ConfigSHA256          string `json:"config_sha256"`
+	HistoryMode           string `json:"history_mode"`
+	ToolPolicy            string `json:"tool_policy"`
+	KeepRecentExchanges   int    `json:"keep_recent_exchanges"`
+	RetentionThresholdPC  int    `json:"retention_threshold_pct"`
+	AdapterModelRef       string `json:"adapter_model_ref"`
+	OuterIsolation        string `json:"outer_isolation"`
+	OuterImage            string `json:"outer_image,omitempty"`
+	OuterNetworkPolicy    string `json:"outer_network_policy,omitempty"`
+	OuterNetworkName      string `json:"outer_network_name,omitempty"`
+	TrajectoryNormalizer  string `json:"trajectory_normalizer"`
+	InferenceEnvContract  string `json:"inference_env_contract,omitempty"`
+	UsageProxySourceState string `json:"usage_proxy_source_state,omitempty"`
+	UsageProxyImage       string `json:"usage_proxy_image,omitempty"`
+	UsageProxyConfigSHA   string `json:"usage_proxy_config_sha256,omitempty"`
 }
 
 type RuntimeAttestation struct {
@@ -155,6 +159,7 @@ type Telemetry struct {
 
 type ServerUsage struct {
 	Source           string `json:"source"`
+	CorrelationID    string `json:"correlation_id,omitempty"`
 	RequestsMeasured int    `json:"requests_measured"`
 	RequestsTotal    int    `json:"requests_total"`
 	PromptTokens     int    `json:"prompt_tokens"`
@@ -377,9 +382,16 @@ func ValidateAttestation(h HarnessConfig, r RuntimeAttestation) error {
 	if h.Name == AdapterOpenCode || h.Name == AdapterQwenCode || h.Name == AdapterMiniSWE || h.Name == AdapterPi {
 		if h.ToolPolicy != ToolPolicySandboxed || h.OuterIsolation != "outer_container" || !pinnedOCIImage.MatchString(h.OuterImage) ||
 			h.OuterNetworkPolicy != OuterNetworkIsolatedInference || h.OuterNetworkName == "" || h.OuterNetworkName == "host" ||
-			h.OuterNetworkName == "bridge" || h.OuterNetworkName == "default" || h.TrajectoryNormalizer != normalizerForAdapter(h.Name) {
+			h.OuterNetworkName == "bridge" || h.OuterNetworkName == "default" || h.TrajectoryNormalizer != normalizerForAdapter(h.Name) ||
+			h.InferenceEnvContract != inferenceEnvContractForAdapter(h.Name) || h.UsageProxySourceState == "" ||
+			!pinnedOCIImage.MatchString(h.UsageProxyImage) || !validSHA256Text(h.UsageProxyConfigSHA) {
 			return fmt.Errorf("external harness attestation is incomplete or mismatched")
 		}
 	}
 	return nil
+}
+
+func validSHA256Text(value string) bool {
+	digest, err := hex.DecodeString(value)
+	return err == nil && len(digest) == sha256.Size && value == strings.ToLower(value)
 }

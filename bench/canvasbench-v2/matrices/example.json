@@ -21,7 +21,11 @@
     "retention_threshold_pct": 70,
     "adapter_model_ref": "",
     "outer_isolation": "",
-    "trajectory_normalizer": ""
+    "trajectory_normalizer": "",
+    "inference_env_contract": "",
+    "usage_proxy_source_state": "",
+    "usage_proxy_image": "",
+    "usage_proxy_config_sha256": ""
   },
   "runtime": {
     "backend_name": "",
