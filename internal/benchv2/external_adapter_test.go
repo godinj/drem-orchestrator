@@ -136,7 +136,7 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 		{AdapterQwenCode, NormalizerQwenCode, []string{"--output-format", "stream-json", "--auth-type", "openai", "--safe-mode", "--yolo", "--max-tool-calls", "12", "--max-session-turns", "8", "--max-wall-time", "600s", "--exclude-tools", "agent"}, nil},
 		{AdapterMiniSWE, NormalizerMiniSWE, []string{"-t", "-m", "openai/qwen36", "-y", "--exit-immediately", "-o", "/workspace/.canvasbench/mini-swe-agent-trajectory.json"}, nil},
 		{AdapterPi, NormalizerPi, []string{"--mode", "json", "--no-session", "--no-context-files", "--model", "provider/qwen36", "--system-prompt"}, []string{"-p", "--prompt"}},
-		{AdapterAider, NormalizerAider, []string{"--model", "openai/qwen36", "--message", "--edit-format", "diff", "--read", "read.cpp", "--file", "write.cpp"}, []string{"raw-qwen-attestation"}},
+		{AdapterAider, NormalizerAider, []string{"--model", "openai/qwen36", "--message", "--edit-format", "diff", "--input-history-file", "/home/bench/.aider.input.history", "--chat-history-file", "/home/bench/.aider.chat.history.md", "--llm-history-file", "/home/bench/.aider.llm.history", "--read", "read.cpp", "--file", "write.cpp"}, []string{"raw-qwen-attestation"}},
 		{AdapterOpenHands, NormalizerOpenHands, []string{"--model", "openai/qwen36", "--headless", "--json", "--yolo", "--override-with-envs", "-t"}, []string{"raw-qwen-attestation"}},
 	}
 	for _, test := range tests {

@@ -102,7 +102,10 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 	case AdapterAider:
 		invocation.Args = []string{"--model", request.Harness.AdapterModelRef, "--message", prompt, "--edit-format", "diff",
 			"--yes-always", "--no-git", "--no-auto-commits", "--no-dirty-commits", "--no-stream", "--no-pretty",
-			"--no-check-update", "--no-analytics", "--no-cache-prompts", "--map-tokens", "0"}
+			"--no-check-update", "--no-analytics", "--no-cache-prompts", "--map-tokens", "0",
+			"--input-history-file", "/home/bench/.aider.input.history",
+			"--chat-history-file", "/home/bench/.aider.chat.history.md",
+			"--llm-history-file", "/home/bench/.aider.llm.history"}
 		for _, path := range request.Task.ReadPaths {
 			if !containsString(request.Task.WritePaths, path) {
 				invocation.Args = append(invocation.Args, "--read", path)
