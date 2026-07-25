@@ -15,7 +15,7 @@ import tempfile
 
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 PINNED_IMAGE = re.compile(r"^[A-Za-z0-9._/:@-]+@sha256:[0-9a-f]{64}$")
-REPOSITORY = re.compile(r"^[A-Za-z0-9._/-]+$")
+REPOSITORY = re.compile(r"^[A-Za-z0-9._-]+(?::[0-9]+)?(?:/[A-Za-z0-9._-]+)+$")
 INTEGRITY = re.compile(r"^(?:sha256:[0-9a-f]{64}|sha512-[A-Za-z0-9+/]+={0,2})$")
 ORDER = ("usage-proxy", "opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands")
 

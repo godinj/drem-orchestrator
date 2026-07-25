@@ -75,7 +75,7 @@ PY
 
 PATH="$TEST_ROOT/bin:$PATH" FAKE_DOCKER_STATE="$TEST_ROOT/state" \
   python3 "$SCRIPT_DIR/image_tool.py" build \
-  --repository registry.example/canvasbench \
+  --repository localhost:5000/canvasbench \
   --publish \
   --output "$TEST_ROOT/attestation.json"
 
