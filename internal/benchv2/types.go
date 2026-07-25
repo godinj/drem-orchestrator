@@ -417,7 +417,7 @@ func ValidateAttestation(h HarnessConfig, r RuntimeAttestation) error {
 	if adapterUsesLiteLLM(h.Name) && !validLiteLLMModelRef(h.AdapterModelRef) {
 		return fmt.Errorf("%s adapter model reference must use openai/<served-model>", h.Name)
 	}
-	if h.Name == AdapterOpenCode || h.Name == AdapterQwenCode || h.Name == AdapterMiniSWE || h.Name == AdapterPi || h.Name == AdapterAider || h.Name == AdapterOpenHands || h.Name == AdapterGoose {
+	if h.Name == AdapterOpenCode || h.Name == AdapterQwenCode || h.Name == AdapterMiniSWE || h.Name == AdapterPi || h.Name == AdapterAider || h.Name == AdapterOpenHands || h.Name == AdapterGoose || h.Name == AdapterCline || h.Name == AdapterContinue {
 		if h.ToolPolicy != ToolPolicySandboxed || h.OuterIsolation != "outer_container" || !pinnedOCIImage.MatchString(h.OuterImage) ||
 			h.OuterNetworkPolicy != OuterNetworkIsolatedInference || h.OuterNetworkName == "" || h.OuterNetworkName == "host" ||
 			h.OuterNetworkName == "bridge" || h.OuterNetworkName == "default" || h.TrajectoryNormalizer != normalizerForAdapter(h.Name) ||

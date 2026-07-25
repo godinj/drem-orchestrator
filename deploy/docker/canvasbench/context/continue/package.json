@@ -1,0 +1,8 @@
+{
+  "name": "canvasbench-continue-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@continuedev/cli": "1.5.47"
+  }
+}

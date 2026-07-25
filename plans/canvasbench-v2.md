@@ -1,8 +1,9 @@
 # CanvasBench v2 plan
 
 Status: all nine cases runnable; exact-base native capstone acceptance passed;
-seven digest-pinned images are buildable and all six real harness CLIs
-passed the combined no-inference canary on Debian. Model/harness matrix runs are
+nine digest-pinned harness images are defined and the previously released harnesses
+passed the combined no-inference canary on Debian. Cline and Continue runtime canaries
+and controlled matrices are the current qualification work; model/harness matrix runs are
 the next qualification boundary.
 
 ## Delivered
@@ -15,7 +16,7 @@ the next qualification boundary.
   attested execution policy, and ATIF v1.7 trajectories.
 - Full runtime/model/quantization/image/harness and server-usage attestation.
 - Injectable digest-pinned outer-container execution for OpenCode, Qwen Code,
-  mini-SWE-agent, Pi, Aider, and OpenHands, with structural declared-file workspace projection.
+  mini-SWE-agent, Pi, Aider, OpenHands, Goose, Cline, and Continue, with structural declared-file workspace projection.
 - Fail-closed ATIF v1.7 normalizers and deterministic golden/fake-executor
   coverage for each documented external wire format.
 - Repeated seeded trials, raw JSONL, weighted scoring, and confidence reports.
@@ -44,7 +45,7 @@ the next qualification boundary.
   argv and are cleaned on every executor exit.
 - Digest-only base-image locks, exact package/dependency locks, non-root
   Dockerfiles, executable environment shims, and reproducible build attestation
-  for the trusted proxy and all six external harnesses.
+  for the trusted proxy and all nine external harnesses.
 - A deterministic fake OpenAI-compatible upstream and fail-closed runtime
   canary that exercises the real harness CLI, trusted proxy usage ledger, and
   production normalizer wire without spending inference tokens.

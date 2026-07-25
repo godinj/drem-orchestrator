@@ -139,6 +139,8 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 		{AdapterAider, NormalizerAider, []string{"--model", "openai/qwen36", "--message", "--edit-format", "diff", "--input-history-file", "/home/bench/.aider.input.history", "--chat-history-file", "/home/bench/.aider.chat.history.md", "--llm-history-file", "/home/bench/.aider.llm.history", "--read", "read.cpp", "--file", "write.cpp"}, []string{"raw-qwen-attestation"}},
 		{AdapterOpenHands, NormalizerOpenHands, []string{"--model", "openai/qwen36", "--headless", "--json", "--yolo", "--override-with-envs", "-t"}, []string{"raw-qwen-attestation"}},
 		{AdapterGoose, NormalizerGoose, []string{"run", "--no-session", "--no-profile", "--with-builtin", "developer", "--provider", "openai", "--model", "provider/qwen36", "--max-turns", "8", "--quiet", "--output-format", "json", "--text"}, []string{"raw-qwen-attestation"}},
+		{AdapterCline, NormalizerCline, []string{"--json", "--auto-approve", "--cwd", "/workspace", "--provider", "openai-compatible", "--model", "provider/qwen36", "--system", "--retries", "3", "--timeout", "600"}, []string{"raw-qwen-attestation", "trial-secret"}},
+		{AdapterContinue, NormalizerContinue, []string{"--config", "__CANVASBENCH_CONFIG__", "--auto", "--print", "--format", "json"}, []string{"raw-qwen-attestation", "trial-secret"}},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {
@@ -164,6 +166,7 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 			} else {
 				require.Equal(t, "http://usage-proxy:8080/v1", invocation.Env["OPENAI_BASE_URL"])
 			}
+			require.Equal(t, "provider/qwen36", invocation.Env["CANVASBENCH_ADAPTER_MODEL"])
 			require.Equal(t, "42", invocation.Env["CANVASBENCH_SEED"])
 			require.Equal(t, "0.6", invocation.Env["CANVASBENCH_TEMPERATURE"])
 			require.Equal(t, "0.95", invocation.Env["CANVASBENCH_TOP_P"])
@@ -187,6 +190,8 @@ func TestExternalAdaptersExecuteOnlyThroughInjectedOuterBoundary(t *testing.T) {
 		{AdapterAider, NormalizerAider, "aider.json", false},
 		{AdapterOpenHands, NormalizerOpenHands, "openhands.json", false},
 		{AdapterGoose, NormalizerGoose, "goose.json", false},
+		{AdapterCline, NormalizerCline, "cline.json", false},
+		{AdapterContinue, NormalizerContinue, "continue.json", false},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {

@@ -21,7 +21,7 @@ import sys
 import tempfile
 
 
-HARNESSES = ("opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands", "goose")
+HARNESSES = ("opencode", "qwen-code", "mini-swe-agent", "pi", "aider", "openhands", "goose", "cline", "continue")
 PINNED_IMAGE = re.compile(r"^[A-Za-z0-9._/:@+-]+:[A-Za-z0-9._+-]+@sha256:[0-9a-f]{64}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 PROMPT = "Respond with exactly CANVASBENCH_CANARY_OK and do not use tools."
@@ -144,6 +144,10 @@ def harness_command(name: str) -> list[str]:
         return ["openhands", "--model", "openai/canvasbench-canary", "--headless", "--json", "--yolo", "--override-with-envs", "-t", PROMPT]
     if name == "goose":
         return ["goose", "run", "--no-session", "--no-profile", "--with-builtin", "developer", "--provider", "openai", "--model", "canvasbench-canary", "--max-turns", "2", "--quiet", "--output-format", "json", "--text", PROMPT]
+    if name == "cline":
+        return ["cline", "--json", "--auto-approve", "--cwd", "/workspace", "--provider", "openai-compatible", "--model", "canvasbench-canary", "--system", PROMPT, "--retries", "1", "--timeout", "60", PROMPT]
+    if name == "continue":
+        return ["cn", "--config", "__CANVASBENCH_CONFIG__", "--auto", "--print", "--format", "json", PROMPT]
     raise UnsupportedCanary(f"unsupported canary harness {name!r}")
 
 
@@ -254,7 +258,7 @@ def run_canary(options: argparse.Namespace) -> None:
                 "CANVASBENCH_SEED=42\nCANVASBENCH_TEMPERATURE=0.2\n"
                 "CANVASBENCH_TOP_P=0.9\nCANVASBENCH_TOP_K=20\n"
                 "CANVASBENCH_CONTEXT_WINDOW=32768\nCANVASBENCH_MAX_OUTPUT_TOKENS=1024\n"
-                "CANVASBENCH_PRESERVE_THINKING=true"
+                "CANVASBENCH_PRESERVE_THINKING=true\nCANVASBENCH_ADAPTER_MODEL=canvasbench-canary"
             )
             if harness == "mini-swe-agent":
                 environment += "\nMSWEA_CONFIGURED=true\nMSWEA_COST_TRACKING=ignore_errors\nMSWEA_GLOBAL_CONFIG_DIR=/tmp/mini-swe-agent\nMSWEA_SILENT_STARTUP=1"

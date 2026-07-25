@@ -19,7 +19,7 @@ func SelectAdapter(harness HarnessConfig, task TaskSpec, endpoint string, usageA
 			return nil, fmt.Errorf("direct harness requires allowed %s policy", ToolPolicyStructured)
 		}
 		return DirectToolAdapter{Endpoint: endpoint}, nil
-	case AdapterOpenCode, AdapterQwenCode, AdapterMiniSWE, AdapterPi, AdapterAider, AdapterOpenHands, AdapterGoose:
+	case AdapterOpenCode, AdapterQwenCode, AdapterMiniSWE, AdapterPi, AdapterAider, AdapterOpenHands, AdapterGoose, AdapterCline, AdapterContinue:
 		if usageAttestor == nil {
 			return nil, fmt.Errorf("external harness requires a trusted usage proxy attestor")
 		}
@@ -49,6 +49,8 @@ func externalExecutable(adapter string) string {
 		return "qwen"
 	case AdapterMiniSWE:
 		return "mini"
+	case AdapterContinue:
+		return "cn"
 	default:
 		return adapter
 	}

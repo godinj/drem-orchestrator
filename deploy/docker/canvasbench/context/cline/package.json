@@ -1,0 +1,8 @@
+{
+  "name": "canvasbench-cline-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "@cline/cli-linux-x64": "3.0.46"
+  }
+}

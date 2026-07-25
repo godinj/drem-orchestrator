@@ -78,6 +78,24 @@
       "executable": "goose",
       "env_contract": "openai_base_url_api_key.v1",
       "normalizer": "goose-wrapper-json-v1"
+    },
+    "cline": {
+      "version": "3.0.46",
+      "upstream": "npm:@cline/cli-linux-x64@3.0.46",
+      "integrity": "sha512-JztvDCeuqU/pnZfbf3fRmYQhoWv+wkL5r2Sb22fLP21lzP5wyV5APerwauEMlRYpb93sQknOMnkKtKe5+MspLg==",
+      "dockerfile": "deploy/docker/canvasbench/cline.Dockerfile",
+      "executable": "cline",
+      "env_contract": "openai_base_url_api_key.v1",
+      "normalizer": "cline-wrapper-json-v1"
+    },
+    "continue": {
+      "version": "1.5.47",
+      "upstream": "npm:@continuedev/cli@1.5.47",
+      "integrity": "sha512-gtpewV3RoIOD9dyTtKIBi1SY0VOHRu3Ehe7C/mmnswm+j34MPyrcQhQaWj/m+jdfGO4fNIKdrgGIlLso1ULDFw==",
+      "dockerfile": "deploy/docker/canvasbench/continue.Dockerfile",
+      "executable": "cn",
+      "env_contract": "openai_base_url_api_key.v1",
+      "normalizer": "continue-wrapper-json-v1"
     }
   }
 }
