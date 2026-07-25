@@ -6,3 +6,4 @@
 {"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"Pi finished exactly."}]}}
 {"type":"turn_end","message":{"role":"assistant","content":[]},"toolResults":[]}
 {"type":"agent_end","messages":[]}
+{"type":"agent_settled"}

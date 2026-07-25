@@ -19,9 +19,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
-import urllib.error
-import urllib.request
 
 
 HARNESSES = ("opencode", "qwen-code", "mini-swe-agent", "pi")
@@ -94,24 +91,45 @@ def load_inputs(attestation_path: Path, lock_path: Path) -> tuple[dict, dict]:
     return attestation, lock
 
 
-def admin_json(url: str, token: str, method: str = "GET", *, attempts: int = 1) -> dict:
-    last_error: Exception | None = None
-    for _ in range(attempts):
-        request = urllib.request.Request(url, method=method, headers={"Authorization": f"Bearer {token}"})
-        try:
-            with urllib.request.urlopen(request, timeout=5) as response:
-                return json.load(response)
-        except (OSError, urllib.error.URLError, urllib.error.HTTPError, json.JSONDecodeError) as error:
-            last_error = error
-            time.sleep(0.25)
-    raise UnsupportedCanary(f"trusted proxy admin endpoint failed: {last_error}")
+def docker_admin_json(
+    image: str,
+    network: str,
+    secret_volume: str,
+    url: str,
+    method: str = "GET",
+    *,
+    attempts: int = 1,
+) -> dict:
+    script = (
+        "import json,pathlib,sys,time,urllib.request; "
+        "token=pathlib.Path('/run/secrets/admin.token').read_text().strip(); "
+        "url,method,attempts=sys.argv[1],sys.argv[2],int(sys.argv[3]); last=None; "
+        "\nfor _ in range(attempts):\n"
+        " try:\n"
+        "  request=urllib.request.Request(url,method=method,headers={'Authorization':'Bearer '+token}); "
+        "response=urllib.request.urlopen(request,timeout=5); print(json.dumps(json.load(response))); sys.exit(0)\n"
+        " except Exception as error:\n  last=error; time.sleep(0.25)\n"
+        "raise SystemExit(str(last))"
+    )
+    completed = run([
+        "docker", "run", "--rm", "--network", network, "--user", "65532:65532",
+        "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
+        "--mount", f"type=volume,src={secret_volume},dst=/run/secrets,readonly",
+        image, "python", "-c", script, url, method, str(attempts),
+    ], capture=True, check=False)
+    if completed.returncode != 0:
+        raise UnsupportedCanary(f"trusted proxy admin endpoint failed: {completed.stderr.strip()[-1200:]}")
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise UnsupportedCanary(f"trusted proxy admin response is invalid: {error}") from error
 
 
 def harness_command(name: str) -> list[str]:
     if name == "opencode":
         return ["opencode", "run", "--pure", "--auto", "--format", "json", "--agent", "build", "--dir", "/workspace", "--model", "canvasbench/canary", PROMPT]
     if name == "qwen-code":
-        return ["qwen", "--prompt", PROMPT, "--output-format", "stream-json", "--system-prompt", PROMPT, "--model", "canvasbench-canary", "--safe-mode", "--yolo", "--max-tool-calls", "1", "--max-session-turns", "2", "--max-wall-time", "60s", "--exclude-tools", "agent"]
+        return ["qwen", "--prompt", PROMPT, "--output-format", "stream-json", "--system-prompt", PROMPT, "--model", "canvasbench-canary", "--auth-type", "openai", "--safe-mode", "--yolo", "--max-tool-calls", "1", "--max-session-turns", "2", "--max-wall-time", "60s", "--exclude-tools", "agent"]
     if name == "mini-swe-agent":
         return ["mini", "-t", PROMPT, "-m", "openai/canvasbench-canary", "-y", "--exit-immediately", "-o", "/workspace/.canvasbench/mini-swe-agent-trajectory.json"]
     if name == "pi":
@@ -124,7 +142,8 @@ def validate_wire(root: Path, harness: str, capture_path: Path) -> None:
     completed = run(command, capture=True, check=False)
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()
-        raise UnsupportedCanary(f"{harness} normalizer wire rejected: {detail}")
+        wire = capture_path.read_text(errors="replace").strip()[-2400:]
+        raise UnsupportedCanary(f"{harness} normalizer wire rejected: {detail}; wire tail: {wire}")
 
 
 def write_secret(path: Path, value: str) -> None:
@@ -157,7 +176,7 @@ def run_canary(options: argparse.Namespace) -> None:
         run(["docker", "volume", "create", secret_volume], capture=True)
         created_secret_volume = True
         run([
-            "docker", "run", "--rm", "--network", "none", "--user", "0:0",
+            "docker", "run", "--rm", "--interactive", "--network", "none", "--user", "0:0",
             "--read-only", "--cap-drop", "ALL", "--cap-add", "CHOWN",
             "--security-opt", "no-new-privileges",
             "--mount", f"type=volume,src={secret_volume},dst=/run/secrets",
@@ -181,7 +200,7 @@ def run_canary(options: argparse.Namespace) -> None:
         proxy_runtime = attestation["proxy_runtime"]
         run([
             "docker", "run", "--detach", "--name", proxy_name, "--network", network,
-            "--network-alias", "canvasbench-usage-proxy", "--publish", "127.0.0.1::8080",
+            "--network-alias", "canvasbench-usage-proxy",
             "--user", "65532:65532", "--read-only", "--cap-drop", "ALL",
             "--security-opt", "no-new-privileges", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
             "--mount", f"type=volume,src={secret_volume},dst=/run/secrets,readonly",
@@ -193,18 +212,18 @@ def run_canary(options: argparse.Namespace) -> None:
             "--config-sha256", proxy["usage_proxy_config_sha256"],
         ], capture=True)
         containers.append(proxy_name)
-        published = run(["docker", "port", proxy_name, "8080/tcp"], capture=True).stdout.strip()
-        match = re.fullmatch(r"127\.0\.0\.1:(\d+)", published)
-        if not match:
-            raise UnsupportedCanary(f"trusted proxy host port is unsupported: {published!r}")
-        admin_url = f"http://127.0.0.1:{match.group(1)}"
-        live = admin_json(admin_url + "/admin/v1/attestation", admin_token, attempts=40)
+        admin_url = "http://canvasbench-usage-proxy:8080"
+        live = docker_admin_json(
+            fake_image, network, secret_volume, admin_url + "/admin/v1/attestation", attempts=40,
+        )
         expected_live = {"source_state": proxy["source_state"], "image": proxy["image"], "config_sha256": proxy["usage_proxy_config_sha256"]}
         if live != expected_live:
             raise UnsupportedCanary("live trusted proxy identity does not match the build attestation")
 
         for harness in selected:
-            session = admin_json(admin_url + "/admin/v1/trials", admin_token, "POST")
+            session = docker_admin_json(
+                fake_image, network, secret_volume, admin_url + "/admin/v1/trials", "POST",
+            )
             if not all(session.get(key) for key in ("correlation_id", "base_url", "api_key")):
                 raise UnsupportedCanary(f"{harness} received an incomplete trial credential")
             workspace = temporary / f"workspace-{harness}"
@@ -214,7 +233,10 @@ def run_canary(options: argparse.Namespace) -> None:
             os.chmod(workspace / ".canvasbench", 0o777)
             env_file = temporary / f"{harness}.env"
             base_key = "OPENAI_API_BASE" if harness == "mini-swe-agent" else "OPENAI_BASE_URL"
-            write_secret(env_file, f"{base_key}={session['base_url']}\nOPENAI_API_KEY={session['api_key']}")
+            environment = f"{base_key}={session['base_url']}\nOPENAI_API_KEY={session['api_key']}"
+            if harness == "mini-swe-agent":
+                environment += "\nMSWEA_CONFIGURED=true\nMSWEA_COST_TRACKING=ignore_errors\nMSWEA_GLOBAL_CONFIG_DIR=/tmp/mini-swe-agent\nMSWEA_SILENT_STARTUP=1"
+            write_secret(env_file, environment)
             image = attestation["images"][harness]["image"]
             command = [
                 "docker", "run", "--rm", "--network", network, "--user", "65532:65532",
@@ -228,16 +250,20 @@ def run_canary(options: argparse.Namespace) -> None:
             completed = run(command, capture=True, check=False)
             capture.write_text(completed.stdout)
             if completed.returncode != 0:
-                detail = completed.stderr.replace(session["api_key"], "[REDACTED]").strip()[-1200:]
+                detail = (completed.stdout + "\n" + completed.stderr).replace(
+                    session["api_key"], "[REDACTED]",
+                ).strip()[-2400:]
                 raise UnsupportedCanary(f"{harness} executable/CLI contract failed: {detail}")
             if harness == "mini-swe-agent":
                 capture = workspace / ".canvasbench" / "mini-swe-agent-trajectory.json"
                 if not capture.is_file():
                     raise UnsupportedCanary("mini-swe-agent did not create its declared trajectory")
             validate_wire(root, harness, capture)
-            usage = admin_json(
+            usage = docker_admin_json(
+                fake_image,
+                network,
+                secret_volume,
                 admin_url + f"/admin/v1/trials/{session['correlation_id']}/consume",
-                admin_token,
                 "POST",
             )
             if usage.get("source") != "trusted_usage_proxy" or not usage.get("complete") or usage.get("requests_measured", 0) <= 0 or usage.get("requests_measured") != usage.get("requests_total"):

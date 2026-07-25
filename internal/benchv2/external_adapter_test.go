@@ -88,7 +88,7 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 		forbid     []string
 	}{
 		{AdapterOpenCode, NormalizerOpenCode, []string{"run", "--pure", "--auto", "--format", "json", "--agent", "build", "--dir", "/workspace", "--model", "provider/qwen36"}, []string{"raw-qwen-attestation"}},
-		{AdapterQwenCode, NormalizerQwenCode, []string{"--output-format", "stream-json", "--safe-mode", "--yolo", "--max-tool-calls", "12", "--max-session-turns", "8", "--max-wall-time", "600s", "--exclude-tools", "agent"}, nil},
+		{AdapterQwenCode, NormalizerQwenCode, []string{"--output-format", "stream-json", "--auth-type", "openai", "--safe-mode", "--yolo", "--max-tool-calls", "12", "--max-session-turns", "8", "--max-wall-time", "600s", "--exclude-tools", "agent"}, nil},
 		{AdapterMiniSWE, NormalizerMiniSWE, []string{"-t", "-m", "provider/qwen36", "-y", "--exit-immediately", "-o", "/workspace/.canvasbench/mini-swe-agent-trajectory.json"}, nil},
 		{AdapterPi, NormalizerPi, []string{"--mode", "json", "--no-session", "--no-context-files", "--model", "provider/qwen36", "--system-prompt"}, []string{"-p", "--prompt"}},
 	}

@@ -10,8 +10,8 @@
   "messages": [
     {"role": "system", "content": "system"},
     {"role": "user", "content": "task"},
-    {"role": "assistant", "content": "Mini-SWE editing exactly.", "extra": {"timestamp": 1784937600.1, "actions": [{"command": "python edit.py"}], "cost": 0.01}},
+    {"role": "assistant", "content": null, "extra": {"timestamp": 1784937600.1, "actions": [{"command": "python edit.py"}], "cost": 0.01}},
     {"role": "user", "content": "<returncode>0</returncode>\n<output>edited</output>", "extra": {"timestamp": 1784937600.2, "returncode": 0}},
-    {"role": "user", "content": "", "extra": {"exit_status": "Submitted", "submission": "Mini-SWE finished exactly."}}
+    {"role": "exit", "content": "Mini-SWE finished exactly.", "extra": {"exit_status": "Submitted", "submission": "Mini-SWE finished exactly."}}
   ]
 }

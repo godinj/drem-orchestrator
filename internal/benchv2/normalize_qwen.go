@@ -50,7 +50,7 @@ func normalizeQwenCode(raw []byte, started time.Time) (normalizedExternal, error
 		}
 		switch event.Type {
 		case "system":
-			if event.Subtype != "session_start" || event.SessionID == "" {
+			if (event.Subtype != "session_start" && event.Subtype != "init") || event.SessionID == "" {
 				return normalizedExternal{}, fmt.Errorf("invalid Qwen session start")
 			}
 			seenStart = true

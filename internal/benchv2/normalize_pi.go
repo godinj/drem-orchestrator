@@ -86,7 +86,7 @@ func normalizePi(raw []byte, started time.Time) (normalizedExternal, error) {
 			}
 			delete(pending, event.ToolCallID)
 			result.Steps = append(result.Steps, ATIFStep{StepID: event.ToolCallID, Timestamp: timestamp, Source: "tool", ToolCalls: []ATIFToolCall{call}})
-		case "turn_start", "turn_end", "message_start", "message_update", "tool_execution_update", "queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end", "summarization_retry_scheduled", "summarization_retry_attempt_start", "summarization_retry_finished":
+		case "turn_start", "turn_end", "message_start", "message_update", "tool_execution_update", "queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end", "summarization_retry_scheduled", "summarization_retry_attempt_start", "summarization_retry_finished", "agent_settled":
 			// Lifecycle and partial-update events carry no additional final text.
 		default:
 			return normalizedExternal{}, fmt.Errorf("unsupported Pi event type %q", event.Type)

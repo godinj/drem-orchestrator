@@ -38,6 +38,7 @@ func normalizeMiniSWE(raw []byte, started time.Time) (normalizedExternal, error)
 	}
 	result := normalizedExternal{SessionID: "mini-swe-agent", Output: trajectory.Info.Submission, StopReason: trajectory.Info.ExitStatus}
 	var lastAssistant int = -1
+	seenExit := false
 	for index, message := range trajectory.Messages {
 		timestamp := atifTimestamp(started, index)
 		if message.Extra.Timestamp > 0 {
@@ -50,7 +51,7 @@ func normalizeMiniSWE(raw []byte, started time.Time) (normalizedExternal, error)
 			continue
 		case "assistant":
 			content := textContent(message.Content)
-			if content == "" {
+			if content == "" && len(message.Extra.Actions) == 0 {
 				return normalizedExternal{}, fmt.Errorf("mini-SWE assistant message is empty")
 			}
 			step := ATIFStep{StepID: fmt.Sprintf("message-%d", index), Timestamp: timestamp, Source: "assistant", Message: content}
@@ -68,6 +69,10 @@ func normalizeMiniSWE(raw []byte, started time.Time) (normalizedExternal, error)
 		case "user", "tool":
 			if message.Extra.ReturnCode == nil {
 				if message.Extra.ExitStatus != "" {
+					if message.Extra.ExitStatus != trajectory.Info.ExitStatus || message.Extra.Submission != trajectory.Info.Submission {
+						return normalizedExternal{}, fmt.Errorf("mini-SWE exit disagrees with trajectory info")
+					}
+					seenExit = true
 					continue
 				}
 				continue
@@ -80,11 +85,16 @@ func normalizeMiniSWE(raw []byte, started time.Time) (normalizedExternal, error)
 			if *message.Extra.ReturnCode != 0 {
 				call.Error = fmt.Sprintf("returncode=%d", *message.Extra.ReturnCode)
 			}
+		case "exit":
+			if message.Extra.ExitStatus != trajectory.Info.ExitStatus || message.Extra.Submission != trajectory.Info.Submission {
+				return normalizedExternal{}, fmt.Errorf("mini-SWE exit disagrees with trajectory info")
+			}
+			seenExit = true
 		default:
 			return normalizedExternal{}, fmt.Errorf("unsupported mini-SWE role %q", message.Role)
 		}
 	}
-	if len(result.Steps) == 0 || result.Output == "" {
+	if !seenExit || len(result.Steps) == 0 || result.Output == "" {
 		return normalizedExternal{}, fmt.Errorf("incomplete mini-SWE trajectory")
 	}
 	return result, nil

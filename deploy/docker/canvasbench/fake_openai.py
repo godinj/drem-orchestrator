@@ -5,6 +5,40 @@ import os
 import time
 
 
+def non_stream_response(request):
+    usage = {"prompt_tokens": 17, "completion_tokens": 4, "total_tokens": 21}
+    tool_names = {
+        tool.get("function", {}).get("name")
+        for tool in request.get("tools", [])
+        if tool.get("type") == "function"
+    }
+    if "bash" in tool_names:
+        message = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{
+                "id": "canvasbench-canary-submit",
+                "type": "function",
+                "function": {
+                    "name": "bash",
+                    "arguments": json.dumps({
+                        "command": "printf 'COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT\\nCANVASBENCH_CANARY_OK'",
+                    }),
+                },
+            }],
+        }
+        finish_reason = "tool_calls"
+    else:
+        message = {"role": "assistant", "content": "CANVASBENCH_CANARY_OK"}
+        finish_reason = "stop"
+    return {
+        "id": "canary", "object": "chat.completion", "created": int(time.time()),
+        "model": request.get("model", "canary"),
+        "choices": [{"index": 0, "message": message, "finish_reason": finish_reason}],
+        "usage": usage,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path != "/v1/chat/completions":
@@ -28,12 +62,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
             self.wfile.write(b"data: [DONE]\n\n")
             return
-        response = {
-            "id": "canary", "object": "chat.completion", "created": int(time.time()),
-            "model": request.get("model", "canary"),
-            "choices": [{"index": 0, "message": {"role": "assistant", "content": "CANVASBENCH_CANARY_OK"}, "finish_reason": "stop"}],
-            "usage": usage,
-        }
+        response = non_stream_response(request)
         raw = json.dumps(response).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

@@ -81,11 +81,63 @@ PATH="$TEST_ROOT/bin:$PATH" FAKE_DOCKER_STATE="$TEST_ROOT/state" \
 
 python3 "$SCRIPT_DIR/canary_tool.py" validate --attestation "$TEST_ROOT/attestation.json"
 grep -q 'type=volume,src={secret_volume},dst=/run/secrets,readonly' "$SCRIPT_DIR/canary_tool.py"
+grep -q '"--rm", "--interactive", "--network", "none"' "$SCRIPT_DIR/canary_tool.py"
+grep -q '"--auth-type", "openai"' "$SCRIPT_DIR/canary_tool.py"
+grep -q 'MSWEA_CONFIGURED=true' "$SCRIPT_DIR/context/mini-swe-agent/mini-wrapper.sh"
+grep -q 'MSWEA_COST_TRACKING=ignore_errors' "$SCRIPT_DIR/context/mini-swe-agent/mini-wrapper.sh"
 grep -q 'volume", "rm", "--force", secret_volume' "$SCRIPT_DIR/canary_tool.py"
+if grep -q '"--publish", "127.0.0.1::8080"' "$SCRIPT_DIR/canary_tool.py"; then
+  echo "internal canary proxy unexpectedly publishes a host port" >&2
+  exit 1
+fi
 if grep -q 'type=bind,src={admin_file}' "$SCRIPT_DIR/canary_tool.py"; then
   echo "admin token unexpectedly uses a host bind mount" >&2
   exit 1
 fi
+python3 - "$SCRIPT_DIR/canary_tool.py" <<'PY'
+import importlib.util
+from pathlib import Path
+import subprocess
+import sys
+
+spec = importlib.util.spec_from_file_location("canvasbench_canary_tool", Path(sys.argv[1]))
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+def fake_run(command, **_kwargs):
+    assert command[:3] == ["docker", "run", "--rm"]
+    assert command[command.index("--network") + 1] == "isolated"
+    assert "type=volume,src=secrets,dst=/run/secrets,readonly" in command
+    return subprocess.CompletedProcess(command, 0, '{"ok": true}\n', "")
+
+module.run = fake_run
+assert module.docker_admin_json("python@sha256:digest", "isolated", "secrets", "http://proxy/admin") == {"ok": True}
+PY
+python3 - "$SCRIPT_DIR/fake_openai.py" <<'PY'
+import importlib.util
+import json
+from pathlib import Path
+import sys
+
+spec = importlib.util.spec_from_file_location("canvasbench_fake_openai", Path(sys.argv[1]))
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+plain = module.non_stream_response({"model": "canary"})
+assert plain["choices"][0]["message"]["content"] == "CANVASBENCH_CANARY_OK"
+assert plain["choices"][0]["finish_reason"] == "stop"
+
+mini = module.non_stream_response({
+    "model": "canary",
+    "tools": [{"type": "function", "function": {"name": "bash"}}],
+})
+choice = mini["choices"][0]
+assert choice["finish_reason"] == "tool_calls"
+call = choice["message"]["tool_calls"][0]
+assert call["function"]["name"] == "bash"
+command = json.loads(call["function"]["arguments"])["command"]
+assert "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT" in command
+assert "CANVASBENCH_CANARY_OK" in command
+PY
 python3 - "$TEST_ROOT/attestation.json" <<'PY'
 import json
 from pathlib import Path

@@ -79,7 +79,7 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 		invocation.Args = []string{"run", "--pure", "--auto", "--format", "json", "--agent", "build", "--dir", outerWorkspace, "--model", request.Harness.AdapterModelRef, prompt}
 	case AdapterQwenCode:
 		invocation.Args = []string{"--prompt", prompt, "--output-format", "stream-json", "--system-prompt", request.Task.SystemPrompt,
-			"--model", request.Harness.AdapterModelRef, "--safe-mode", "--yolo", "--max-tool-calls", fmt.Sprint(request.Task.Budget.MaxToolCalls),
+			"--model", request.Harness.AdapterModelRef, "--auth-type", "openai", "--safe-mode", "--yolo", "--max-tool-calls", fmt.Sprint(request.Task.Budget.MaxToolCalls),
 			"--max-session-turns", fmt.Sprint(request.Task.Budget.MaxIterations), "--max-wall-time", fmt.Sprintf("%ds", request.Task.Budget.TimeoutSeconds),
 			"--exclude-tools", "agent"}
 	case AdapterMiniSWE:
