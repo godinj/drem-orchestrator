@@ -1,0 +1,7 @@
+{
+  "private": true,
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "3.0.14",
+    "opencode-ai": "1.18.5"
+  }
+}

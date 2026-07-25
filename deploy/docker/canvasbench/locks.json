@@ -1,0 +1,56 @@
+{
+  "schema": "canvasbench.images.v1",
+  "platform": "linux/amd64",
+  "base_images": {
+    "node": "node:22.19.0-bookworm-slim@sha256:4a4884e8a44826194dff92ba316264f392056cbe243dcc9fd3551e71cea02b90",
+    "python": "python:3.12.11-slim-bookworm@sha256:519591d6871b7bc437060736b9f7456b8731f1499a57e22e6c285135ae657bf7",
+    "golang": "golang:1.25.0-bookworm@sha256:81dc45d05a7444ead8c92a389621fafabc8e40f8fd1a19d7e5df14e61e98bc1a",
+    "runtime": "gcr.io/distroless/static-debian12:nonroot@sha256:f5b485ea962d9bd1186b2f6b3a061191539b905b82ec395de78cbfae51f20e35"
+  },
+  "images": {
+    "usage-proxy": {
+      "version": "canvasbench-v1",
+      "upstream": "github.com/godinj/drem-orchestrator",
+      "dockerfile": "deploy/docker/canvasbench/usage-proxy.Dockerfile",
+      "executable": "canvasbench-usage-proxy",
+      "env_contract": "admin_file_flags.v1",
+      "normalizer": ""
+    },
+    "opencode": {
+      "version": "1.18.5",
+      "upstream": "npm:opencode-ai@1.18.5",
+      "integrity": "sha512-Q0jlX4ihn7veMeYsLX3c4PYFAKIURU3GIpXt1FnhNxNn3v8+RpIZ8z9umG5D0r8g8Smp9fZLGjgLe/9mJ4NyYw==",
+      "dockerfile": "deploy/docker/canvasbench/opencode.Dockerfile",
+      "executable": "opencode",
+      "env_contract": "openai_base_url_api_key.v1",
+      "normalizer": "opencode-json-v1"
+    },
+    "qwen-code": {
+      "version": "0.21.0",
+      "upstream": "npm:@qwen-code/qwen-code@0.21.0",
+      "integrity": "sha512-h4t8crH1WTKS4I3uolOQGTzvGu7iW9DuqIegaq+v8yRXTyTkNV7k74AARHPWYh5DJL1ZY/ZCDsOuPsNhaLlnog==",
+      "dockerfile": "deploy/docker/canvasbench/qwen-code.Dockerfile",
+      "executable": "qwen",
+      "env_contract": "openai_base_url_api_key.v1",
+      "normalizer": "qwen-code-stream-json-v1"
+    },
+    "mini-swe-agent": {
+      "version": "2.4.6",
+      "upstream": "pypi:mini-swe-agent==2.4.6",
+      "integrity": "sha256:a35463c553ac825c7773b03cfa69cd44958e3af20155dcc5711fdf9e4c67cd54",
+      "dockerfile": "deploy/docker/canvasbench/mini-swe-agent.Dockerfile",
+      "executable": "mini",
+      "env_contract": "openai_api_base_api_key.v1",
+      "normalizer": "mini-swe-agent-1.1"
+    },
+    "pi": {
+      "version": "0.82.0",
+      "upstream": "npm:@earendil-works/pi-coding-agent@0.82.0",
+      "integrity": "sha512-Qnqgn9zhJFQ2HZ8R4iNuGhyCk93XX6+eUw9i+TjTuo47amzCy93ft3bB6yaUCleCrNO58dJDHYSGNHv/GAPWKg==",
+      "dockerfile": "deploy/docker/canvasbench/pi.Dockerfile",
+      "executable": "pi",
+      "env_contract": "openai_base_url_api_key.v1",
+      "normalizer": "pi-json-v3"
+    }
+  }
+}

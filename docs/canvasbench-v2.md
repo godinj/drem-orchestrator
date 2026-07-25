@@ -97,6 +97,72 @@ and the file is removed on every executor exit. Captured output and errors are
 defensively scrubbed, while key bytes written into the scoped workspace reject
 the trial before candidate outputs are applied.
 
+### Reproducible external images and compatibility canary
+
+`deploy/docker/canvasbench/locks.json` is the build authority for the trusted
+usage proxy and the four external harness images. It pins every base image by
+manifest digest and pins harness inputs to OpenCode `opencode-ai@1.18.5`, Qwen
+Code `@qwen-code/qwen-code@0.21.0`, mini-SWE-agent `2.4.6`, and Pi
+`@earendil-works/pi-coding-agent@0.82.0`. npm lockfiles and a fully hashed Python
+requirements closure bind the transitive package inputs. Floating tags,
+uncommitted source trees, missing upstream integrity, absent BuildKit digests,
+wrong image labels, and a runtime user other than uid/gid 65532 fail the build
+tool.
+
+Each image contains a small executable shim for its declared CanvasBench
+environment contract. Credentials are injected only at runtime through
+owner-only env/token files. They are not build arguments, labels, image
+environment values, or command-line values. Build output records the immutable
+image reference, source/upstream identity, package integrity, environment
+contract, normalizer, and hashes of canonical non-secret image and proxy
+configuration. The tool never emits `latest`.
+
+From a clean committed checkout, build but do not deploy the canonical image
+set:
+
+```bash
+deploy/docker/canvasbench/build-images.sh \
+  --repository localhost:5000/canvasbench \
+  --publish \
+  --output /absolute/private/run/image-attestation.json
+```
+
+The build requires Docker Buildx with `linux/amd64` support and an explicitly
+chosen trusted registry. `--publish` is mandatory: a locally loaded mutable tag
+plus detached metadata is not an adequate runtime identity. The tool pushes
+each result, pulls its exact `repository:version-revision@sha256:...` reference,
+and inspects that object before writing the attestation. Use the local registry
+shown above when publication must remain on this machine. Retaining the JSON is
+part of the benchmark evidence. Running only
+`python3 deploy/docker/canvasbench/image_tool.py validate` validates the static
+lock and performs no Docker operation.
+
+Before real inference, run the deterministic compatibility canary:
+
+```bash
+deploy/docker/canvasbench/run-canaries.sh \
+  --attestation /absolute/private/run/image-attestation.json \
+  --output /absolute/private/run/image-canary.json
+```
+
+The canary creates a temporary internal Docker network, starts a pinned Python
+fake OpenAI-compatible server and the exact trusted-proxy image, then runs each
+content-addressed harness image as uid/gid 65532 with a read-only root,
+capabilities dropped, no Docker socket, and only a disposable workspace mount.
+For every harness it requires a real CLI request, complete consume-once proxy
+usage, the exact assistant sentinel, and successful normalization through the
+production ATIF wire parser. Secrets exist only in temporary mode-0600 files
+and are deleted with the network and containers on exit.
+
+Any package install/entrypoint mismatch, unsupported CLI option, ignored
+environment contract, proxy identity mismatch, missing usage, or changed output
+wire exits nonzero with `unsupported canary:`. There is intentionally no
+fallback or compatibility guess. At this source revision the definitions,
+locks, fake upstream, fake-Docker attestation test, and normalizer fixtures are
+verified, but actual Docker builds and all four runtime canaries remain
+**UNPROVEN**. No model/harness comparison may treat an image as supported until
+the resulting canary document records all four harnesses as `supported`.
+
 ## Corpus and qualification
 
 Cases 1–3 are runnable against Canvas commit

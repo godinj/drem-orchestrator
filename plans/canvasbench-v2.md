@@ -1,6 +1,8 @@
 # CanvasBench v2 plan
 
-Status: all nine cases runnable; exact-base native capstone acceptance passed.
+Status: all nine cases runnable; exact-base native capstone acceptance passed;
+pre-comparison image definitions and no-inference canary tooling are delivered,
+but the five images have not yet been built or runtime-qualified.
 
 ## Delivered
 
@@ -39,14 +41,22 @@ Status: all nine cases runnable; exact-base native capstone acceptance passed.
 - Authenticated live proxy identity preflight before credential creation, plus
   ephemeral mode-0600 secret env files so trial key bytes never enter Docker
   argv and are cleaned on every executor exit.
+- Digest-only base-image locks, exact package/dependency locks, non-root
+  Dockerfiles, executable environment shims, and reproducible build attestation
+  for the trusted proxy and all four external harnesses.
+- A deterministic fake OpenAI-compatible upstream and fail-closed runtime
+  canary that exercises the real harness CLI, trusted proxy usage ledger, and
+  production normalizer wire without spending inference tokens.
 
 ## Before model comparison
 
-1. Build and attest the usage-proxy plus harness images on a named isolated
-   inference network without credential or broad host mounts.
-2. Verify each pinned harness image honors its declared environment contract
-   through the trusted proxy before collecting comparison trials.
-3. Run current/candidate history on Qwen, then the corrected harness across
+1. From a clean committed checkout, run the actual five-image build and retain
+   the generated digest/config attestation. The definitions and fake-Docker
+   regression are complete; real BuildKit output is still required.
+2. Run all four no-inference container canaries through the trusted proxy.
+   Structural tests are green, but executable compatibility is deliberately
+   `UNPROVEN` until every canary emits a supported record.
+3. Run current/candidate history on Qwen, then the qualified harness across
    model and quantization candidates.
 4. After a model/harness qualifies, run a separate exact-Release Canvas pilot
    with live Computer Use. Do not score that evidence in CanvasBench until a
