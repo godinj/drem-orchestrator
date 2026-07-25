@@ -28,6 +28,15 @@ and remain outside every agent-visible file projection.
 Production definitions live in a focused `EditorAdapterTakeActions.inc` rather
 than growing the ceiling-bound action-handler fragment, and cases 5 and 6 run
 Canvas's changed-file architecture checks in addition to behavioral tests.
+The case-9 hard gate composes the complete six-path take-cycling artifact,
+including shipped Alt+j/Alt+k routes, while independently grading candidate
+tests and production against hidden canonical assets and ten mutants. Host
+verification runs the focused native gate, Canvas changed-file checks, and a
+Release build, then records the exact `build/DremCanvas` SHA-256 and byte size.
+Case 8 remains the separate ownership-rework hard gate because the benchmark
+runner invokes only one harness adapter per trial. Live Computer Use is not
+fabricated as benchmark evidence; it remains a mandatory post-qualification
+exact-binary Canvas pilot until a deterministic multi-take UI fixture exists.
 
 ## Problem Statement
 

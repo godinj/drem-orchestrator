@@ -1,6 +1,6 @@
 # CanvasBench v2 plan
 
-Status: cases 1–8 runnable; capstone case 9 pending.
+Status: all nine cases runnable; exact-base native capstone acceptance passed.
 
 ## Delivered
 
@@ -24,17 +24,23 @@ Status: cases 1–8 runnable; capstone case 9 pending.
   and mutant sensitivity.
 - Constitution-safe take production in a focused include fragment, with
   exact-base `scripts/dev check changed` acceptance for cases 5 and 6.
-- Fully specified fail-closed placeholder for case 9.
+- Runnable case-9 exact-artifact capstone with six-path scope, two-sided hidden
+  grading, ten mutants, focused native and changed-file gates, and host-attested
+  Release SHA-256/size evidence.
+- Explicit evidence boundary: case 8 owns deterministic rework scheduling;
+  case 9 owns a single worker/artifact. Neither claims live UI or Computer Use.
 
 ## Before model comparison
 
-1. Freeze capstone native and scripted UI verification for case 9.
-2. Wire a deployment-specific independent inference-server usage attestor into
+1. Wire a deployment-specific independent inference-server usage attestor into
    the external CLI path; harness summaries cannot provide this evidence.
-3. Build and attest digest-pinned harness images on a named isolated inference
+2. Build and attest digest-pinned harness images on a named isolated inference
    network without credential or broad host mounts.
-4. Run current/candidate history on Qwen, then the corrected harness across
+3. Run current/candidate history on Qwen, then the corrected harness across
    model and quantization candidates.
+4. After a model/harness qualifies, run a separate exact-Release Canvas pilot
+   with live Computer Use. Do not score that evidence in CanvasBench until a
+   deterministic multi-take UI fixture and transport exist.
 
 Do not use another Ryan goal as a model/harness probe until all nine cases are
 runnable and the chosen combination clears the 90-point and case-8/case-9 hard

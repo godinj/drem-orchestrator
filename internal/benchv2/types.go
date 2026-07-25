@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 const (
@@ -81,6 +82,7 @@ type TaskSpec struct {
 	WritePaths           []string            `json:"write_paths"`
 	RequiredChangedPaths []string            `json:"required_changed_paths"`
 	ResultArtifact       string              `json:"result_artifact,omitempty"`
+	ReleaseArtifactPath  string              `json:"release_artifact_path,omitempty"`
 	RequiredMutation     bool                `json:"required_mutation"`
 	OracleID             string              `json:"oracle_id"`
 	OracleArtifacts      []OracleArtifactPin `json:"oracle_artifacts,omitempty"`
@@ -168,29 +170,38 @@ type Gates struct {
 	OracleIsolated         bool     `json:"oracle_isolated"`
 	Attested               bool     `json:"attested"`
 	RequiredMutationPassed bool     `json:"required_mutation_passed"`
+	ArtifactAttested       bool     `json:"artifact_attested"`
 	ChangedPaths           []string `json:"changed_paths"`
 	Failures               []string `json:"failures"`
 }
 
+type ArtifactEvidence struct {
+	Kind      string `json:"kind"`
+	Path      string `json:"path"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
 type TrialResult struct {
-	Schema      string             `json:"schema"`
-	RunID       string             `json:"run_id"`
-	MatrixID    string             `json:"matrix_id"`
-	TaskID      string             `json:"task_id"`
-	Trial       int                `json:"trial"`
-	Seed        int64              `json:"seed"`
-	Status      string             `json:"status"`
-	Score       float64            `json:"score"`
-	Harness     HarnessConfig      `json:"harness"`
-	Runtime     RuntimeAttestation `json:"runtime"`
-	Fixture     Fixture            `json:"fixture"`
-	Telemetry   Telemetry          `json:"telemetry"`
-	ServerUsage ServerUsage        `json:"server_usage"`
-	Trajectory  ATIFTrajectory     `json:"trajectory"`
-	Gates       Gates              `json:"gates"`
-	StopReason  string             `json:"stop_reason"`
-	Error       string             `json:"error,omitempty"`
-	CodexTokens *int               `json:"codex_tokens,omitempty"`
+	Schema          string             `json:"schema"`
+	RunID           string             `json:"run_id"`
+	MatrixID        string             `json:"matrix_id"`
+	TaskID          string             `json:"task_id"`
+	Trial           int                `json:"trial"`
+	Seed            int64              `json:"seed"`
+	Status          string             `json:"status"`
+	Score           float64            `json:"score"`
+	Harness         HarnessConfig      `json:"harness"`
+	Runtime         RuntimeAttestation `json:"runtime"`
+	Fixture         Fixture            `json:"fixture"`
+	Telemetry       Telemetry          `json:"telemetry"`
+	ServerUsage     ServerUsage        `json:"server_usage"`
+	Trajectory      ATIFTrajectory     `json:"trajectory"`
+	Gates           Gates              `json:"gates"`
+	ReleaseArtifact *ArtifactEvidence  `json:"release_artifact,omitempty"`
+	StopReason      string             `json:"stop_reason"`
+	Error           string             `json:"error,omitempty"`
+	CodexTokens     *int               `json:"codex_tokens,omitempty"`
 }
 
 func DecodeStrictFile(path string, value any) error {
@@ -305,6 +316,15 @@ func (task TaskSpec) Validate() error {
 			return fmt.Errorf("task %s has an invalid oracle artifact pin", task.ID)
 		}
 		seenArtifacts[artifact.Path] = true
+	}
+	if task.ReleaseArtifactPath != "" {
+		clean := filepath.Clean(task.ReleaseArtifactPath)
+		if filepath.IsAbs(task.ReleaseArtifactPath) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return fmt.Errorf("task %s has an invalid release artifact path", task.ID)
+		}
+	}
+	if task.OracleID == "take-cycling-capstone-canonical-v1" && task.ReleaseArtifactPath == "" {
+		return fmt.Errorf("task %s must require a Release artifact", task.ID)
 	}
 	return nil
 }

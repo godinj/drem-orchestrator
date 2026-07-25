@@ -207,12 +207,20 @@ The canonical implementation keeps `EditorAdapterActionHandlers.inc` at its
 597-line pinned baseline, includes a new focused
 `EditorAdapterTakeActions.inc` from `EditorAdapter.cpp`, and must pass
 `scripts/dev check changed` in the disposable worktree for cases 5 and 6.
-Run the complete opt-in native acceptance with a 20-minute Go timeout:
+Case 9 composes those contracts with the shipped Alt+j/Alt+k keymap in one
+six-path candidate. Its hidden host verifier independently grades tests and
+production, kills ten mutants, runs the focused native and changed-file gates,
+builds Release, and records the SHA-256 and byte length of `build/DremCanvas`.
+The benchmark runner has no orchestration-rework or deterministic Canvas UI
+transport. Case 8 separately gates ownership-aware rework, and an exact-binary
+Computer Use pilot remains mandatory after benchmark qualification.
+
+Run the complete opt-in native acceptance with a 35-minute Go timeout:
 
 ```bash
 CANVASBENCH_REAL_CANVAS_REPO=/path/to/drem-canvas.git \
   go test ./internal/benchv2 \
-  -run TestTakeCycleOraclesAgainstPinnedCanvas -count=1 -v -timeout 20m
+  -run TestTakeCycleOraclesAgainstPinnedCanvas -count=1 -v -timeout 35m
 ```
 
 An external harness matrix entry must also declare `outer_image` as an exact

@@ -7,7 +7,7 @@ import (
 )
 
 func passingResult() TrialResult {
-	return TrialResult{Status: "passed", Score: 100, Telemetry: Telemetry{TokensIn: 10, TokensOut: 5, PeakRequestInput: 10}, Gates: Gates{VerifierPassed: true, Compiled: true, ScopePassed: true, ReadScopePassed: true, OracleIsolated: true, Attested: true, RequiredMutationPassed: true}}
+	return TrialResult{Status: "passed", Score: 100, Telemetry: Telemetry{TokensIn: 10, TokensOut: 5, PeakRequestInput: 10}, Gates: Gates{VerifierPassed: true, Compiled: true, ScopePassed: true, ReadScopePassed: true, OracleIsolated: true, Attested: true, RequiredMutationPassed: true, ArtifactAttested: true}}
 }
 
 func TestScoreHardGatesCapFailures(t *testing.T) {
@@ -21,6 +21,9 @@ func TestScoreHardGatesCapFailures(t *testing.T) {
 	require.LessOrEqual(t, Score(task, &result), 40.0)
 	result = passingResult()
 	result.Gates.RequiredMutationPassed = false
+	require.LessOrEqual(t, Score(task, &result), 40.0)
+	result = passingResult()
+	result.Gates.ArtifactAttested = false
 	require.LessOrEqual(t, Score(task, &result), 40.0)
 }
 

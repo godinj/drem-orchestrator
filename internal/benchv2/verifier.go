@@ -16,6 +16,7 @@ type BuiltinVerifier struct {
 	OracleRoot  string
 	NativeGate  func(context.Context, string) (string, error)
 	ChangedGate func(context.Context, string) (string, error)
+	ReleaseGate func(context.Context, string, string) (*ArtifactEvidence, error)
 }
 
 func (verifier BuiltinVerifier) Verify(ctx context.Context, task TaskSpec, workDir string, run HarnessRun) VerifyOutcome {
@@ -30,6 +31,8 @@ func (verifier BuiltinVerifier) Verify(ctx context.Context, task TaskSpec, workD
 		return verifyAudioProcessRegistration(workDir)
 	case "take-cycling-red-tests-canonical-v1", "take-cycling-implementation-canonical-v1", "take-cycling-bad-artifact-861eebff-v1":
 		return verifier.verifyTakeCycling(ctx, task, workDir)
+	case "take-cycling-capstone-canonical-v1":
+		return verifier.verifyTakeCyclingCapstone(ctx, task, workDir)
 	case "ownership-rework-99894b1a-v1":
 		if run.StopReason != "deterministic" || !run.Telemetry.CheckpointObserved {
 			return VerifyOutcome{Failures: []string{"production ownership replay did not pass"}}

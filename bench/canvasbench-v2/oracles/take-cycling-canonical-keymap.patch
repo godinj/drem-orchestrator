@@ -1,0 +1,12 @@
+diff --git a/config/default_keymap.yaml b/config/default_keymap.yaml
+--- a/config/default_keymap.yaml
++++ b/config/default_keymap.yaml
+@@ -116,6 +116,8 @@ modes:
+     "{": edit.trim_start_forward
+     "}": edit.trim_end_backward
+     "Alt+h": edit.slip_left
++    "Alt+j": take.next
++    "Alt+k": take.prev
+     "Alt+l": edit.slip_right
+     "Alt+H": edit.slip_left_bar
+     "Alt+L": edit.slip_right_bar

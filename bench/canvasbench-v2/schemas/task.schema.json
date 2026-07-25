@@ -10,7 +10,7 @@
     "inference_policy": {"enum": ["required", "deterministic_exempt"]}, "allowed_tool_policies": {"type": "array", "items": {"enum": ["structured_only", "sandboxed_shell", "deterministic_replay"]}, "minItems": 1, "uniqueItems": true}, "weight": {"type": "integer", "minimum": 1}, "role": {"type": "string"},
     "system_prompt": {"type": "string"}, "user_message": {"type": "string"},
     "fixture": {"$ref": "#/$defs/fixture"}, "read_paths": {"$ref": "#/$defs/paths"}, "write_paths": {"$ref": "#/$defs/paths"},
-    "required_changed_paths": {"$ref": "#/$defs/paths"}, "result_artifact": {"type": "string"}, "required_mutation": {"type": "boolean"},
+    "required_changed_paths": {"$ref": "#/$defs/paths"}, "result_artifact": {"type": "string"}, "release_artifact_path": {"type": "string"}, "required_mutation": {"type": "boolean"},
     "oracle_id": {"type": "string"}, "oracle_artifacts": {"type": "array", "items": {"$ref": "#/$defs/oracle_artifact"}, "uniqueItems": true}, "budget": {"$ref": "#/$defs/budget"}
   },
   "$defs": {

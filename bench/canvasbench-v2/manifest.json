@@ -11,6 +11,6 @@
     {"id": "case-06", "task_file": "tasks/case-06.json", "sha256": "16bc32668b9b85f2003fa7abe79fe10965c202e4e650c9a50f07a604446a8937", "weight": 14, "status": "runnable", "hard_gate": false},
     {"id": "case-07", "task_file": "tasks/case-07.json", "sha256": "3190e911ce27fbd471c177b9c8a3b20504060b85cc31dc3a3ef3a412f8b4fe40", "weight": 8, "status": "runnable", "hard_gate": false},
     {"id": "case-08", "task_file": "tasks/case-08.json", "sha256": "f015dbe9e53bc52a4f63a1bad0a6c3b93b37705f64014003cbfae1c161a93099", "weight": 10, "status": "runnable", "hard_gate": true},
-    {"id": "case-09", "task_file": "tasks/case-09.json", "sha256": "dde94426018878436e06937098a08010e12178bb867268e0cd0c36fc4b23a59e", "weight": 16, "status": "placeholder", "hard_gate": true}
+    {"id": "case-09", "task_file": "tasks/case-09.json", "sha256": "1c96300d63e1b775f6e1c1cad0d78ffc504dce17652e5639327d9cbad766bbb5", "weight": 16, "status": "runnable", "hard_gate": true}
   ]
 }

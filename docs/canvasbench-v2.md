@@ -30,6 +30,12 @@ and budget identical across harnesses without claiming that unlike execution
 policies are equivalent. Host verification runs only after the adapter exits
 and the exact changed-path gate is collected.
 
+The runner invokes one harness adapter exactly once per trial. It is not the
+production orchestration state machine and does not exercise delivery rework,
+repair routing, or multi-worker ownership. Case 8 is the separate deterministic
+hard gate for ownership-aware delivery-rework scheduling. No benchmark result
+field claims Computer Use or live UI evidence.
+
 ## Harness adapters
 
 Fixtures, oracles, scoring, and results depend on `HarnessAdapter`, not a
@@ -101,10 +107,26 @@ It may reuse only that worktree's generated build while resetting source files
 to the exact base between independent grading phases. Production grading for
 cases 5 and 6 also runs `scripts/dev check changed`, so a behaviorally correct
 candidate cannot pass while violating Canvas's file-size or architecture
-constraints. Case 9 remains a
-fail-closed placeholder until its canonical patch, native checks, and scripted
-UI verification exist. A placeholder returns `non_runnable`, scores zero, and
-makes a matrix ineligible; it never silently passes.
+constraints.
+
+Case 9 is the runnable exact-artifact capstone. A single worker owns the exact
+six changed paths: the test TU, EditorAdapter header and include seam, focused
+take-actions fragment, action registration, and shipped keymap. Candidate tests
+must be compile-valid red on the exact base, green on hidden production, and
+kill eight behavior mutants. The hidden keymap verifier kills two route mutants.
+Candidate production is graded independently with hidden tests and
+structural/keymap checks. The exact
+candidate then runs `scripts/dev check changed` and `scripts/dev build release`;
+the result records the host-computed SHA-256 and byte length of
+`build/DremCanvas`. Missing or malformed Release evidence is a hard-gate
+failure.
+
+Canvas has no deterministic e2e fixture that creates and selects a multi-take
+audio track, so live take-cycling Computer Use is deliberately not scored.
+Operational adoption still requires a post-benchmark Canvas pilot to run the
+attested Release binary and record live Computer Use evidence. That pilot is a
+separate mandatory release decision, not benchmark evidence retroactively
+attributed to case 9.
 
 The weighted threshold is 90. Non-compiling output, out-of-scope access,
 missing required mutation, unmeasured inference, oracle exposure, or missing

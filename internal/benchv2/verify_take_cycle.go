@@ -35,6 +35,7 @@ type takeMutant struct {
 	Path string `json:"path"`
 	Old  string `json:"old"`
 	New  string `json:"new"`
+	Gate string `json:"gate,omitempty"`
 }
 
 func (verifier BuiltinVerifier) verifyTakeCycling(ctx context.Context, task TaskSpec, candidate string) VerifyOutcome {

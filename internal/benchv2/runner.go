@@ -3,6 +3,8 @@ package benchv2
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -124,9 +126,10 @@ func (adapter DirectToolAdapter) Run(ctx context.Context, req TrialRequest) (Har
 }
 
 type VerifyOutcome struct {
-	Passed   bool
-	Compiled bool
-	Failures []string
+	Passed          bool
+	Compiled        bool
+	Failures        []string
+	ReleaseArtifact *ArtifactEvidence
 }
 
 type HostVerifier interface {
@@ -146,7 +149,10 @@ func (runner Runner) RunTrial(ctx context.Context, matrix MatrixSpec, task TaskS
 		Schema: ResultSchemaVersion, RunID: fmt.Sprintf("%s-%s-%d", matrix.ID, task.ID, trial),
 		MatrixID: matrix.ID, TaskID: task.ID, Trial: trial, Harness: matrix.Harness,
 		Runtime: matrix.Runtime, Fixture: task.Fixture, Status: "failed",
-		Gates: Gates{Attested: ValidateAttestation(matrix.Harness, matrix.Runtime) == nil},
+		Gates: Gates{
+			Attested:         ValidateAttestation(matrix.Harness, matrix.Runtime) == nil,
+			ArtifactAttested: task.ReleaseArtifactPath == "",
+		},
 	}
 	if trial < 1 || trial > len(matrix.Seeds) {
 		result.Error = "trial has no fixed seed"
@@ -202,6 +208,14 @@ func (runner Runner) RunTrial(ctx context.Context, matrix MatrixSpec, task TaskS
 		result.Gates.VerifierPassed = verified.Passed
 		result.Gates.Compiled = verified.Compiled
 		result.Gates.Failures = append(result.Gates.Failures, verified.Failures...)
+		if task.ReleaseArtifactPath != "" {
+			if err := validateReleaseArtifact(task.ReleaseArtifactPath, verified.ReleaseArtifact); err != nil {
+				result.Gates.Failures = append(result.Gates.Failures, err.Error())
+			} else {
+				result.Gates.ArtifactAttested = true
+				result.ReleaseArtifact = verified.ReleaseArtifact
+			}
+		}
 	}
 	if task.InferencePolicy == "required" && (!result.ServerUsage.Complete || result.ServerUsage.Source != "server_response") {
 		result.Gates.Attested = false
@@ -255,7 +269,19 @@ func containsPaths(actual, required []string) bool {
 
 func allHardGates(g Gates) bool {
 	return g.VerifierPassed && g.Compiled && g.ScopePassed && g.ReadScopePassed &&
-		g.OracleIsolated && g.Attested && g.RequiredMutationPassed
+		g.OracleIsolated && g.Attested && g.RequiredMutationPassed && g.ArtifactAttested
+}
+
+func validateReleaseArtifact(wantPath string, evidence *ArtifactEvidence) error {
+	if evidence == nil {
+		return fmt.Errorf("host verifier did not attest the required Release artifact")
+	}
+	digest, err := hex.DecodeString(evidence.SHA256)
+	if evidence.Kind != "release_binary" || filepath.ToSlash(filepath.Clean(evidence.Path)) != filepath.ToSlash(filepath.Clean(wantPath)) ||
+		err != nil || len(digest) != sha256.Size || evidence.SHA256 != strings.ToLower(evidence.SHA256) || evidence.SizeBytes <= 0 {
+		return fmt.Errorf("host verifier returned invalid Release artifact evidence")
+	}
+	return nil
 }
 
 func SortedPaths(paths []string) []string {

@@ -68,10 +68,10 @@ func TestManifestAndTaskDigestsValidate(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, tasks, 9)
 	require.NoError(t, manifest.Validate())
-	for _, task := range tasks[:8] {
+	for _, task := range tasks {
 		require.Equal(t, "runnable", task.Status)
 	}
-	require.Equal(t, "placeholder", tasks[8].Status)
+	require.Equal(t, "build/DremCanvas", tasks[8].ReleaseArtifactPath)
 	require.Equal(t, "deterministic_exempt", tasks[7].InferencePolicy)
 	require.Equal(t, []string{ToolPolicyReplay}, tasks[7].AllowedToolPolicies)
 	for _, task := range tasks[:3] {
@@ -89,6 +89,25 @@ func TestManifestAndTaskDigestsValidate(t *testing.T) {
 	require.Error(t, err, "moving the manifest without its immutable task corpus must fail")
 }
 
+func TestTaskRejectsEscapingReleaseArtifactPath(t *testing.T) {
+	task := TaskSpec{
+		Schema: TaskSchemaVersion, ID: "release", Title: "Release", OracleID: "release-v1",
+		Status: "placeholder", Mode: "direct_worker", InferencePolicy: "required",
+		AllowedToolPolicies: []string{ToolPolicyStructured, ToolPolicySandboxed},
+		ReleaseArtifactPath: "../DremCanvas",
+	}
+	require.ErrorContains(t, task.Validate(), "invalid release artifact path")
+}
+
+func TestCapstoneRequiresReleaseArtifact(t *testing.T) {
+	task := TaskSpec{
+		Schema: TaskSchemaVersion, ID: "case-09", Title: "Capstone", OracleID: "take-cycling-capstone-canonical-v1",
+		Status: "placeholder", Mode: "direct_worker", InferencePolicy: "required",
+		AllowedToolPolicies: []string{ToolPolicyStructured, ToolPolicySandboxed},
+	}
+	require.ErrorContains(t, task.Validate(), "must require a Release artifact")
+}
+
 func TestPublishedSchemasAreStrictObjects(t *testing.T) {
 	for _, name := range []string{"task", "matrix", "result", "manifest"} {
 		raw, err := os.ReadFile(filepath.Join("..", "..", "bench", "canvasbench-v2", "schemas", name+".schema.json"))
@@ -97,4 +116,18 @@ func TestPublishedSchemasAreStrictObjects(t *testing.T) {
 		require.NoError(t, DecodeStrict(raw, &schema))
 		require.Equal(t, false, schema["additionalProperties"])
 	}
+}
+
+func TestCase9DoesNotClaimUnmeasuredUIOrReworkEvidence(t *testing.T) {
+	root := filepath.Join("..", "..", "bench", "canvasbench-v2")
+	_, tasks, err := LoadManifest(filepath.Join(root, "manifest.json"))
+	require.NoError(t, err)
+	case9 := tasks[8]
+	publicContract := strings.ToLower(strings.Join([]string{case9.Description, case9.SystemPrompt, case9.UserMessage}, "\n"))
+	for _, forbidden := range []string{"computer use", "ui proof", "ui verification", "ownership-aware rework", "orchestrated rework"} {
+		require.NotContains(t, publicContract, forbidden)
+	}
+	raw := string(MarshalResult(TrialResult{Schema: ResultSchemaVersion, TaskID: "case-09"}))
+	require.NotContains(t, raw, "computer_use")
+	require.NotContains(t, raw, "rework")
 }

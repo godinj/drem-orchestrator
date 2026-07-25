@@ -13,8 +13,8 @@ import (
 // TestTakeCycleOraclesAgainstPinnedCanvas is an opt-in native acceptance test.
 // It is intentionally excluded from ordinary Go-only gates because it builds
 // the pinned Canvas fixture several times and requires Canvas's Skia cache.
-// Run it with -timeout 20m; the complete red/green/mutant matrix exceeds Go's
-// default ten-minute package timeout on the reference Mac.
+// Run it with -timeout 35m; the complete red/green/mutant/Release matrix
+// exceeds Go's default ten-minute package timeout on the reference Mac.
 func TestTakeCycleOraclesAgainstPinnedCanvas(t *testing.T) {
 	repo := os.Getenv("CANVASBENCH_REAL_CANVAS_REPO")
 	if repo == "" {
@@ -81,6 +81,24 @@ func TestTakeCycleOraclesAgainstPinnedCanvas(t *testing.T) {
 		runRealTakeChangedGate(t, canonical.WorkDir)
 		outcome = oracles.Verify(context.Background(), task, canonical.WorkDir, HarnessRun{})
 		require.True(t, outcome.Passed, outcome.Failures)
+		require.NoError(t, canonical.Cleanup())
+	})
+
+	t.Run("case-09", func(t *testing.T) {
+		task := byID["case-09"]
+		uncorrected := prepareRealTakeCandidate(t, repo, task)
+		outcome := oracles.Verify(context.Background(), task, uncorrected.WorkDir, HarnessRun{})
+		require.False(t, outcome.Passed, "clean base must not satisfy the capstone oracle")
+		require.NoError(t, uncorrected.Cleanup())
+
+		canonical := prepareRealTakeCandidate(t, repo, task)
+		applyRealTakeOracle(t, canonical.WorkDir, filepath.Join(oracles.OracleRoot, takeTestsPatch))
+		applyRealTakeOracle(t, canonical.WorkDir, filepath.Join(oracles.OracleRoot, takeImplPatch))
+		applyRealTakeOracle(t, canonical.WorkDir, filepath.Join(oracles.OracleRoot, takeKeymapPatch))
+		runRealTakeChangedGate(t, canonical.WorkDir)
+		outcome = oracles.Verify(context.Background(), task, canonical.WorkDir, HarnessRun{})
+		require.True(t, outcome.Passed, outcome.Failures)
+		require.NoError(t, validateReleaseArtifact(task.ReleaseArtifactPath, outcome.ReleaseArtifact))
 		require.NoError(t, canonical.Cleanup())
 	})
 }

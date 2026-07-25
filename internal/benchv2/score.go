@@ -23,7 +23,7 @@ func Score(task TaskSpec, result *TrialResult) float64 {
 		score += 10
 	}
 	if !result.Gates.Compiled || !result.Gates.ScopePassed || !result.Gates.ReadScopePassed ||
-		!result.Gates.OracleIsolated || !result.Gates.Attested || !result.Gates.RequiredMutationPassed {
+		!result.Gates.OracleIsolated || !result.Gates.Attested || !result.Gates.RequiredMutationPassed || !result.Gates.ArtifactAttested {
 		return math.Min(score, 40)
 	}
 	return score

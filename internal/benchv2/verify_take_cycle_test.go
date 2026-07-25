@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -72,6 +73,37 @@ func TestTakeCycleChangedGateInjectionAvoidsCanvasExecution(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ok", output)
 	require.True(t, called)
+}
+
+func TestReleaseGateInjectionReturnsContentAddressedEvidence(t *testing.T) {
+	want := &ArtifactEvidence{Kind: "release_binary", Path: "build/DremCanvas", SHA256: strings.Repeat("a", 64), SizeBytes: 42}
+	verifier := BuiltinVerifier{ReleaseGate: func(_ context.Context, workDir, path string) (*ArtifactEvidence, error) {
+		require.Equal(t, "/fixture", workDir)
+		require.Equal(t, "build/DremCanvas", path)
+		return want, nil
+	}}
+	actual, err := verifier.runReleaseGate(context.Background(), "/fixture", "build/DremCanvas")
+	require.NoError(t, err)
+	require.Equal(t, want, actual)
+	require.NoError(t, validateReleaseArtifact("build/DremCanvas", actual))
+}
+
+func TestReleaseArtifactEvidenceFailsClosed(t *testing.T) {
+	require.ErrorContains(t, validateReleaseArtifact("build/DremCanvas", nil), "did not attest")
+	evidence := &ArtifactEvidence{Kind: "release_binary", Path: "build/Other", SHA256: strings.Repeat("a", 64), SizeBytes: 42}
+	require.ErrorContains(t, validateReleaseArtifact("build/DremCanvas", evidence), "invalid")
+}
+
+func TestReleaseArtifactHashUsesExactFileBytes(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "build", "DremCanvas")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	raw := []byte("exact release bytes")
+	require.NoError(t, os.WriteFile(path, raw, 0o755))
+	evidence, err := hashReleaseArtifact(root, "build/DremCanvas")
+	require.NoError(t, err)
+	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256(raw)), evidence.SHA256)
+	require.Equal(t, int64(len(raw)), evidence.SizeBytes)
 }
 
 func TestTakeCycleStructureRejectsFreeHelperAndAcceptsMembers(t *testing.T) {
