@@ -353,7 +353,7 @@ func (task TaskSpec) Validate() error {
 }
 
 func (manifest ManifestSpec) Validate() error {
-	if manifest.Schema != ManifestSchemaVersion || manifest.SuiteID == "" || manifest.Threshold != 90 || len(manifest.Cases) != 9 {
+	if manifest.Schema != ManifestSchemaVersion || manifest.Threshold != 90 {
 		return fmt.Errorf("invalid CanvasBench v2 manifest identity or threshold")
 	}
 	weight := 0
@@ -369,8 +369,23 @@ func (manifest ManifestSpec) Validate() error {
 			hard[item.ID] = true
 		}
 	}
-	if weight != 100 || !hard["case-08"] || !hard["case-09"] {
-		return fmt.Errorf("manifest weights or mandatory hard gates are invalid")
+	switch manifest.SuiteID {
+	case "canvasbench-v2-20260725":
+		if len(manifest.Cases) != 9 || weight != 100 || !hard["case-08"] || !hard["case-09"] {
+			return fmt.Errorf("manifest weights or mandatory hard gates are invalid")
+		}
+	case "canvasbench-v2-agent-discriminator-20260725":
+		expected := []string{"case-01", "case-02", "case-03", "case-07"}
+		if len(manifest.Cases) != len(expected) || weight != 30 || len(hard) != 0 {
+			return fmt.Errorf("focused manifest cases, weights, or hard gates are invalid")
+		}
+		for _, id := range expected {
+			if !seen[id] {
+				return fmt.Errorf("focused manifest cases, weights, or hard gates are invalid")
+			}
+		}
+	default:
+		return fmt.Errorf("invalid CanvasBench v2 manifest identity or threshold")
 	}
 	return nil
 }

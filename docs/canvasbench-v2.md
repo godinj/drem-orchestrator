@@ -6,8 +6,13 @@ host-side semantic oracles, not generated prose or substring presence.
 
 ## Reproducibility contract
 
-The suite manifest is `bench/canvasbench-v2/manifest.json`. Every task file is
-bound by SHA-256. Runnable Git fixtures identify a repository, exact base
+The canonical full manifest is `bench/canvasbench-v2/manifest.json`. It mixes
+agent, phase, deterministic replay, and capstone stress cases. Controlled
+harness/model comparisons use `bench/canvasbench-v2/manifest-focused.json`,
+which pins the four inference cases that discriminate agent behavior without
+the multi-phase orchestration and deterministic-replay confounds. Results from
+the two manifests are different suites and must never be pooled into one score.
+Every task file is bound by SHA-256. Runnable Git fixtures identify a repository, exact base
 commit, every model-visible blob SHA, and an optional seed-patch SHA-256. The
 runner creates a detached temporary worktree and removes it after verification;
 it never resets or mutates the source repository.

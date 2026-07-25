@@ -148,6 +148,21 @@ func TestManifestAndTaskDigestsValidate(t *testing.T) {
 	require.Error(t, err, "moving the manifest without its immutable task corpus must fail")
 }
 
+func TestFocusedManifestPinsOnlyAgentDiscriminatorCases(t *testing.T) {
+	root := filepath.Join("..", "..", "bench", "canvasbench-v2")
+	manifest, tasks, err := LoadManifest(filepath.Join(root, "manifest-focused.json"))
+	require.NoError(t, err)
+	require.NoError(t, manifest.Validate())
+	require.Equal(t, "canvasbench-v2-agent-discriminator-20260725", manifest.SuiteID)
+	require.Len(t, tasks, 4)
+	require.Equal(t, []string{"case-01", "case-02", "case-03", "case-07"}, []string{
+		tasks[0].ID, tasks[1].ID, tasks[2].ID, tasks[3].ID,
+	})
+	for _, task := range tasks {
+		require.Equal(t, "required", task.InferencePolicy)
+	}
+}
+
 func TestTaskRejectsEscapingReleaseArtifactPath(t *testing.T) {
 	task := TaskSpec{
 		Schema: TaskSchemaVersion, ID: "release", Title: "Release", OracleID: "release-v1",
