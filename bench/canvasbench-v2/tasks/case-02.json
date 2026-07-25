@@ -19,7 +19,7 @@
       {"path": "tests/unit/model_layer/test_lower_zone_state.cpp", "git_blob_sha": "30b051a6f239abcfda13c47c70e327e571f6eef2"}
     ],
     "seed_patch": "../seeds/case-02-lower-zone.patch",
-    "seed_patch_sha256": "7f1e920e790b50128ca8b06ebff82e58d958804df1697080bdcf760c6dd23222"
+    "seed_patch_sha256": "f41c4740aee68e7880fea0b389fb344185179aaf854b0e1b46d625cd4461b4c2"
   },
   "read_paths": ["src/model/LowerZoneState.h", "tests/unit/model_layer/test_lower_zone_state.cpp"],
   "write_paths": ["src/model/LowerZoneState.h"],

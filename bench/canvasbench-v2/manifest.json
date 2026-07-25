@@ -4,7 +4,7 @@
   "threshold": 90,
   "cases": [
     {"id": "case-01", "task_file": "tasks/case-01.json", "sha256": "1c73efbea9f88c4fb17f574004cf904090758218f4e7a1b3edd9f5e602bd024b", "weight": 8, "status": "runnable", "hard_gate": false},
-    {"id": "case-02", "task_file": "tasks/case-02.json", "sha256": "7db0b2055b228815e1030058689e54383520df0de7ab61e2dac4f88a33ce7393", "weight": 7, "status": "runnable", "hard_gate": false},
+    {"id": "case-02", "task_file": "tasks/case-02.json", "sha256": "10e30f0e2cd183b74bd6f28973bc4fc84be96de5a82e82f40bd25eeeeb6ef0fc", "weight": 7, "status": "runnable", "hard_gate": false},
     {"id": "case-03", "task_file": "tasks/case-03.json", "sha256": "788f7feb279165ce0f38e99118152ba0645e51ccdff227de05212987a5bb61ec", "weight": 7, "status": "runnable", "hard_gate": false},
     {"id": "case-04", "task_file": "tasks/case-04.json", "sha256": "635307fd299b8d13680c718f60596c04be9f204da32f9710c89472a5c41f5ff9", "weight": 14, "status": "placeholder", "hard_gate": false},
     {"id": "case-05", "task_file": "tasks/case-05.json", "sha256": "2eaeac7cab1a189a47d1409733402bf35210f9dc19db21924f1be0a05e90e411", "weight": 16, "status": "placeholder", "hard_gate": false},
