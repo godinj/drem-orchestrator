@@ -1,4 +1,4 @@
-Pinned Canvas base: 96db6b709f0a4f2069db4a7d3415ef17867b0274
+Pinned Canvas base: da8d567ea85a6ffc08e7a1ec0d3d7e49802306fc
 Preserved artifact: 861eebff00cae0515ca580afb0ab101fd050de49
 
 Focused integration compile diagnostics (AppleClang 17, C++17):

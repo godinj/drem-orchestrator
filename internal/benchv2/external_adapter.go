@@ -170,9 +170,8 @@ func (adapter ExternalCLIAdapter) Run(ctx context.Context, request TrialRequest)
 		}
 		return HarnessRun{Output: string(execution.Stdout)}, fmt.Errorf("independent server usage failed: %w", usageErr)
 	}
-	if usage.Source != ServerUsageSourceProxy || usage.CorrelationID != usageSession.CorrelationID || !usage.Complete ||
-		usage.RequestsMeasured <= 0 || usage.RequestsMeasured != usage.RequestsTotal || usage.PromptTokens < 0 || usage.CompletionTokens < 0 {
-		return HarnessRun{Output: string(execution.Stdout)}, fmt.Errorf("independent server usage is incomplete")
+	if err := validateServerUsage(usage, usageSession.CorrelationID); err != nil {
+		return HarnessRun{Output: string(execution.Stdout)}, fmt.Errorf("independent server usage is incomplete: %w", err)
 	}
 	if scopeErr := workspace.Validate(); scopeErr != nil {
 		run := HarnessRun{Output: string(execution.Stdout), StopReason: "scope_violation"}
@@ -187,6 +186,10 @@ func (adapter ExternalCLIAdapter) Run(ctx context.Context, request TrialRequest)
 	applyTrustedUsage(&run, usage)
 	run.Telemetry.MutationObserved = mutationObserved
 	run.Telemetry.CheckpointObserved = mutationObserved
+	if usage.RequestsRejected > 0 {
+		run.StopReason = "upstream_rejected"
+		return run, fmt.Errorf("upstream rejected %d harness request(s) before inference", usage.RequestsRejected)
+	}
 	if normalizeErr != nil {
 		return run, normalizeErr
 	}

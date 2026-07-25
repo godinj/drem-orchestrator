@@ -28,7 +28,17 @@ below.
 Case 8 allows only `deterministic_replay`. This keeps fixture, oracle, scope,
 and budget identical across harnesses without claiming that unlike execution
 policies are equivalent. Host verification runs only after the adapter exits
-and the exact changed-path gate is collected.
+and the exact changed-path gate is collected, except when the inference server
+has already rejected a harness request before inference; those trials fail as
+`upstream_rejected` without spending native-verifier time.
+
+Qualification proceeds in two controlled phases. The model bake-off fixes the
+mini-SWE-agent image, adapter configuration, task corpus, inference policy, and
+seed while changing only the attested model/runtime bundle. Harness comparison
+begins only after selecting a model bundle, and then fixes that bundle while
+changing one content-addressed harness image at a time. A result from a matrix
+that changes both axes is diagnostic, not an attribution to either model or
+harness.
 
 The runner invokes one harness adapter exactly once per trial. It is not the
 production orchestration state machine and does not exercise delivery rework,
@@ -78,9 +88,15 @@ makes the trusted boundary—not four CLI defaults—the sampling authority. It
 also forces `stream_options.include_usage=true`, parses usage from the server
 response, and aggregates every request. The host consumes the ledger exactly
 once after execution. Zero requests, invalid trial policies, in-flight requests,
-upstream errors, missing or duplicate usage, request-count mismatch, wrong
-correlation, or a second consume fail closed. A successful record has source
-`trusted_usage_proxy`; harness JSON/JSONL token fields are never a fallback.
+missing or duplicate usage, request-count mismatch, wrong correlation, or a
+second consume fail closed. Pre-inference request-shape rejections with HTTP
+400, 413, or 422 are classified separately from measured responses. `complete`
+means every request is either measured or classified as one of those
+rejections; prompt and completion token totals aggregate measured successful
+responses only. Auth, endpoint/model configuration, timeout, conflict,
+rate-limit, and 5xx failures remain incomplete infrastructure ledgers. A
+successful record has source `trusted_usage_proxy`; harness JSON/JSONL token
+fields are never a fallback.
 Case 8 declares an explicit deterministic no-inference exemption.
 
 External matrix attestation binds the proxy source state, digest-pinned image,
@@ -180,9 +196,15 @@ model or quantization, which still requires the full matrix.
 
 ## Corpus and qualification
 
-Cases 1–3 are runnable against Canvas commit
-`96db6b709f0a4f2069db4a7d3415ef17867b0274`: API grounding, a real seeded
-LowerZoneState repair, and keymap assembly. Case 8 runs production
+Cases 1–6 and 9 are runnable against content-addressed Canvas fixture
+`da8d567ea85a6ffc08e7a1ec0d3d7e49802306fc`, whose parent is exactly
+`96db6b709f0a4f2069db4a7d3415ef17867b0274`. Its five-file diff contains only
+GCC portability corrections: explicit `<atomic>`, `<cmath>`, and `<cstring>`
+dependencies, the missing Linux integration run-loop source,
+a single-type `std::clamp`, and separate `preRoll`/`postRoll` declarations.
+These sources are not model-visible or writable in the affected cases. Cases
+1–3 cover API grounding, a real seeded LowerZoneState repair, and keymap
+assembly. Case 8 runs production
 ownership-aware delivery rework from orchestrator commit
 `1d1796eb98222ca8de743730efaa5de8f9f61277` over 100 diagnostic orders.
 Case 7 isolates the missing `registerAllActions` →
@@ -201,8 +223,9 @@ member implementation—header declarations, the EditorAdapter include seam, a
 focused `EditorAdapterTakeActions.inc`, and action registrations—against the
 hidden canonical test patch. The existing action-handler fragment remains at
 its pinned 597-line baseline. Case 6 starts
-from the exact `96db6b7..861eebff` bad-artifact diff plus verbatim pinned
-compiler diagnostics, then grades production with hidden tests and independently
+from the preserved `96db6b7..861eebff` bad-artifact diff applied over the
+portable descendant plus verbatim pinned compiler diagnostics, then grades
+production with hidden tests and independently
 grades the repaired candidate tests on clean-base red, canonical green, and the
 same mutant corpus. This two-sided check prevents weakened candidate tests from
 grading their own production.
@@ -210,13 +233,10 @@ grading their own production.
 Every canonical patch, diagnostic file, and mutant corpus has a SHA-256 pin in
 the task document; the manifest pins that task document. The native verifier
 uses a separate disposable detached worktree and the smallest stable native
-gate, `scripts/dev test --filter '(Take cycling|take\.)'`. The pinned historical
-Canvas base has unrelated integration failures, so the focused gate keeps
-benchmark outcomes attributable to the candidate and hidden corpus.
-That base also relied on a transitive `<cmath>` include in an unrelated
-tempo-map unit test. The hidden take-cycling gate injects `cmath` through its
-compiler environment on Debian; it does not edit or expose another candidate
-file and cannot change the scoped take-cycling behavior being graded.
+gate, `scripts/dev test --filter '(Take cycling|take\.)'`. The portable fixture
+removes the prior hidden compiler-header injection, so focused and Release
+verification compile the same content-addressed source tree. The focused gate
+keeps benchmark outcomes attributable to the candidate and hidden corpus.
 It may reuse only that worktree's generated build while resetting source files
 to the exact base between independent grading phases. Production grading for
 cases 5 and 6 also runs `scripts/dev check changed`, so a behaviorally correct

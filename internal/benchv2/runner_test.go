@@ -2,6 +2,7 @@ package benchv2
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,4 +74,42 @@ func TestRunnerRequiresAndRecordsReleaseArtifactEvidence(t *testing.T) {
 	require.Equal(t, "failed", result.Status)
 	require.False(t, result.Gates.ArtifactAttested)
 	require.Contains(t, result.Gates.Failures, "host verifier did not attest the required Release artifact")
+}
+
+func TestRunnerSkipsHostVerificationAfterUpstreamRequestRejection(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) string {
+		cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+		output, err := cmd.CombinedOutput()
+		require.NoError(t, err, string(output))
+		return strings.TrimSpace(string(output))
+	}
+	runGit("init", "-b", "main")
+	runGit("config", "user.email", "bench@example.com")
+	runGit("config", "user.name", "Bench")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "changed.txt"), []byte("before\n"), 0o644))
+	runGit("add", "changed.txt")
+	runGit("commit", "-m", "fixture")
+	task := TaskSpec{
+		ID: "rejected", Status: "runnable", InferencePolicy: "required",
+		Fixture:    Fixture{RepoID: "fixture", BaseCommit: runGit("rev-parse", "HEAD"), VisibleBlobs: []BlobPin{{Path: "changed.txt", SHA: runGit("rev-parse", "HEAD:changed.txt")}}},
+		WritePaths: []string{"changed.txt"}, Budget: Budget{MaxInputTokens: 100, MaxOutputTokens: 100, TimeoutSeconds: 30},
+	}
+	adapter := harnessAdapterFunc(func(context.Context, TrialRequest) (HarnessRun, error) {
+		return HarnessRun{
+			StopReason: "upstream_rejected",
+			ServerUsage: ServerUsage{Source: ServerUsageSourceProxy, RequestsRejected: 1, RequestsTotal: 1,
+				Rejections: []ServerUsageRejection{{HTTPStatus: 400, Count: 1}}, Complete: true},
+		}, errors.New("upstream rejected request")
+	})
+	verifierCalled := false
+	runner := Runner{Repo: repo, ScratchRoot: t.TempDir(), Adapter: adapter, Verifier: hostVerifierFunc(func(context.Context, TaskSpec, string, HarnessRun) VerifyOutcome {
+		verifierCalled = true
+		return VerifyOutcome{Passed: true, Compiled: true}
+	})}
+	result := runner.RunTrial(context.Background(), validMatrix(), task, 1)
+	require.Equal(t, "failed", result.Status)
+	require.Equal(t, "upstream_rejected", result.StopReason)
+	require.True(t, result.Gates.Attested)
+	require.False(t, verifierCalled)
 }

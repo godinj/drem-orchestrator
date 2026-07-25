@@ -13,7 +13,7 @@
   "user_message": "setArrangementShare must constrain every value to the declared minimum and maximum; restore the smallest correct C++17 implementation.",
   "fixture": {
     "repo_id": "drem-canvas",
-    "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274",
+    "base_commit": "da8d567ea85a6ffc08e7a1ec0d3d7e49802306fc",
     "visible_blobs": [
       {"path": "src/model/LowerZoneState.h", "git_blob_sha": "3418767f45bf6624fac1eef3707b9f7c6aa10fc4"},
       {"path": "tests/unit/model_layer/test_lower_zone_state.cpp", "git_blob_sha": "30b051a6f239abcfda13c47c70e327e571f6eef2"}

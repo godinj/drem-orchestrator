@@ -105,6 +105,9 @@ func TestManifestAndTaskDigestsValidate(t *testing.T) {
 	require.Equal(t, "build/DremCanvas", tasks[8].ReleaseArtifactPath)
 	require.Equal(t, "deterministic_exempt", tasks[7].InferencePolicy)
 	require.Equal(t, []string{ToolPolicyReplay}, tasks[7].AllowedToolPolicies)
+	for _, index := range []int{0, 1, 2, 3, 4, 5, 8} {
+		require.Equal(t, "da8d567ea85a6ffc08e7a1ec0d3d7e49802306fc", tasks[index].Fixture.BaseCommit)
+	}
 	for _, task := range tasks[:3] {
 		require.ElementsMatch(t, []string{ToolPolicyStructured, ToolPolicySandboxed}, task.AllowedToolPolicies)
 	}

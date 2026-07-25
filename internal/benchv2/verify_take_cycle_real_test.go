@@ -1,10 +1,12 @@
 package benchv2
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -20,6 +22,7 @@ func TestTakeCycleOraclesAgainstPinnedCanvas(t *testing.T) {
 	if repo == "" {
 		t.Skip("set CANVASBENCH_REAL_CANVAS_REPO to run native Canvas oracle acceptance")
 	}
+	assertPortableCanvasFixture(t, repo)
 
 	suiteRoot, err := filepath.Abs(filepath.Join("..", "..", "bench", "canvasbench-v2"))
 	require.NoError(t, err)
@@ -95,12 +98,35 @@ func TestTakeCycleOraclesAgainstPinnedCanvas(t *testing.T) {
 		applyRealTakeOracle(t, canonical.WorkDir, filepath.Join(oracles.OracleRoot, takeTestsPatch))
 		applyRealTakeOracle(t, canonical.WorkDir, filepath.Join(oracles.OracleRoot, takeImplPatch))
 		applyRealTakeOracle(t, canonical.WorkDir, filepath.Join(oracles.OracleRoot, takeKeymapPatch))
+		changed, changedErr := ChangedPaths(canonical.WorkDir)
+		require.NoError(t, changedErr)
+		require.ElementsMatch(t, task.RequiredChangedPaths, changed, "Release candidate must contain only the six declared candidate paths")
 		runRealTakeChangedGate(t, canonical.WorkDir)
 		outcome = oracles.Verify(context.Background(), task, canonical.WorkDir, HarnessRun{})
 		require.True(t, outcome.Passed, outcome.Failures)
 		require.NoError(t, validateReleaseArtifact(task.ReleaseArtifactPath, outcome.ReleaseArtifact))
 		require.NoError(t, canonical.Cleanup())
 	})
+}
+
+func assertPortableCanvasFixture(t *testing.T, repo string) {
+	t.Helper()
+	const portable = "da8d567ea85a6ffc08e7a1ec0d3d7e49802306fc"
+	const parent = "96db6b709f0a4f2069db4a7d3415ef17867b0274"
+	cmd := exec.Command("git", "-C", repo, "rev-parse", portable+"^")
+	output, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.Equal(t, parent, string(bytes.TrimSpace(output)))
+	cmd = exec.Command("git", "-C", repo, "diff-tree", "--no-commit-id", "--name-only", "-r", portable)
+	output, err = cmd.CombinedOutput()
+	require.NoError(t, err, string(output))
+	require.ElementsMatch(t, []string{
+		"src/dc/plugins/PluginScanner.cpp",
+		"src/engine/AudioPitchProcessor.cpp",
+		"src/model/AudioClip.cpp",
+		"tests/CMakeLists.txt",
+		"tests/unit/model_layer/test_tempo_map.cpp",
+	}, strings.Fields(string(output)))
 }
 
 func prepareRealTakeCandidate(t *testing.T, repo string, task TaskSpec) *PreparedFixture {

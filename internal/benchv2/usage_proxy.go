@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +71,7 @@ type usageTrial struct {
 	PromptTokens        int
 	CompletionTokens    int
 	MeasurementFailures int
+	RejectedByStatus    map[int]int
 }
 
 // UsageProxyTrialPolicy is the benchmark-owned inference contract applied by
@@ -89,6 +91,46 @@ type UsageProxyTrialPolicy struct {
 type proxyUsage struct {
 	PromptTokens     *int `json:"prompt_tokens"`
 	CompletionTokens *int `json:"completion_tokens"`
+}
+
+type proxyUpstreamRejection struct {
+	Status int
+}
+
+func (rejection *proxyUpstreamRejection) Error() string {
+	return fmt.Sprintf("upstream rejected request with HTTP %d", rejection.Status)
+}
+
+func attributableUpstreamRejectionStatus(status int) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateServerUsage(usage ServerUsage, correlationID string) error {
+	if usage.Source != ServerUsageSourceProxy || usage.CorrelationID != correlationID || !usage.Complete ||
+		usage.RequestsTotal <= 0 || usage.RequestsMeasured < 0 || usage.RequestsRejected < 0 ||
+		usage.RequestsMeasured+usage.RequestsRejected != usage.RequestsTotal ||
+		usage.PromptTokens < 0 || usage.CompletionTokens < 0 {
+		return errors.New("trusted usage proxy returned incomplete usage")
+	}
+	rejected := 0
+	previousStatus := 0
+	for _, rejection := range usage.Rejections {
+		if rejection.Count <= 0 || !attributableUpstreamRejectionStatus(rejection.HTTPStatus) ||
+			rejection.HTTPStatus <= previousStatus {
+			return errors.New("trusted usage proxy returned invalid rejection accounting")
+		}
+		rejected += rejection.Count
+		previousStatus = rejection.HTTPStatus
+	}
+	if rejected != usage.RequestsRejected {
+		return errors.New("trusted usage proxy returned invalid rejection accounting")
+	}
+	return nil
 }
 
 type usageProxyAdminError struct {
@@ -187,7 +229,7 @@ func (server *usageProxyServer) startTrial(writer http.ResponseWriter, request *
 		return
 	}
 	digest := sha256.Sum256([]byte(key))
-	trial := &usageTrial{ID: id, KeyDigest: digest, Policy: policy}
+	trial := &usageTrial{ID: id, KeyDigest: digest, Policy: policy, RejectedByStatus: map[int]int{}}
 	server.mu.Lock()
 	server.trials[id] = trial
 	server.keys[digest] = id
@@ -234,7 +276,14 @@ func (server *usageProxyServer) consumeTrial(writer http.ResponseWriter, request
 		RequestsMeasured: trial.RequestsMeasured, RequestsTotal: trial.RequestsTotal,
 		PromptTokens: trial.PromptTokens, CompletionTokens: trial.CompletionTokens,
 	}
-	usage.Complete = trial.RequestsTotal > 0 && trial.RequestsMeasured == trial.RequestsTotal && trial.MeasurementFailures == 0
+	for status, count := range trial.RejectedByStatus {
+		usage.RequestsRejected += count
+		usage.Rejections = append(usage.Rejections, ServerUsageRejection{HTTPStatus: status, Count: count})
+	}
+	sort.Slice(usage.Rejections, func(first, second int) bool {
+		return usage.Rejections[first].HTTPStatus < usage.Rejections[second].HTTPStatus
+	})
+	usage.Complete = trial.RequestsTotal > 0 && trial.RequestsMeasured+usage.RequestsRejected == trial.RequestsTotal && trial.MeasurementFailures == 0
 	server.mu.Unlock()
 	if !usage.Complete {
 		writeProxyError(writer, http.StatusUnprocessableEntity, "usage ledger is incomplete")
@@ -275,6 +324,11 @@ func (server *usageProxyServer) finishRequest(trial *usageTrial, usage *proxyUsa
 	server.mu.Lock()
 	defer server.mu.Unlock()
 	trial.InFlight--
+	var rejection *proxyUpstreamRejection
+	if errors.As(forwardErr, &rejection) && attributableUpstreamRejectionStatus(rejection.Status) {
+		trial.RejectedByStatus[rejection.Status]++
+		return
+	}
 	if forwardErr != nil || usage == nil || usage.PromptTokens == nil || usage.CompletionTokens == nil || *usage.PromptTokens < 0 || *usage.CompletionTokens < 0 {
 		trial.MeasurementFailures++
 		return
@@ -337,6 +391,9 @@ func (server *usageProxyServer) forwardChatCompletions(writer http.ResponseWrite
 	writer.WriteHeader(response.StatusCode)
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		_, _ = io.Copy(writer, response.Body)
+		if attributableUpstreamRejectionStatus(response.StatusCode) {
+			return nil, &proxyUpstreamRejection{Status: response.StatusCode}
+		}
 		return nil, fmt.Errorf("upstream returned HTTP %d", response.StatusCode)
 	}
 	if stream {
@@ -579,9 +636,8 @@ func (client *UsageProxyClient) AttestServerUsage(ctx context.Context, session U
 		var usage ServerUsage
 		err := client.adminJSON(ctx, http.MethodPost, path, nil, &usage)
 		if err == nil {
-			if usage.Source != ServerUsageSourceProxy || usage.CorrelationID != session.CorrelationID || !usage.Complete ||
-				usage.RequestsMeasured <= 0 || usage.RequestsMeasured != usage.RequestsTotal || usage.PromptTokens < 0 || usage.CompletionTokens < 0 {
-				return ServerUsage{}, errors.New("trusted usage proxy returned incomplete usage")
+			if err := validateServerUsage(usage, session.CorrelationID); err != nil {
+				return ServerUsage{}, err
 			}
 			return usage, nil
 		}

@@ -158,13 +158,20 @@ type Telemetry struct {
 }
 
 type ServerUsage struct {
-	Source           string `json:"source"`
-	CorrelationID    string `json:"correlation_id,omitempty"`
-	RequestsMeasured int    `json:"requests_measured"`
-	RequestsTotal    int    `json:"requests_total"`
-	PromptTokens     int    `json:"prompt_tokens"`
-	CompletionTokens int    `json:"completion_tokens"`
-	Complete         bool   `json:"complete"`
+	Source           string                 `json:"source"`
+	CorrelationID    string                 `json:"correlation_id,omitempty"`
+	RequestsMeasured int                    `json:"requests_measured"`
+	RequestsRejected int                    `json:"requests_rejected,omitempty"`
+	Rejections       []ServerUsageRejection `json:"rejections,omitempty"`
+	RequestsTotal    int                    `json:"requests_total"`
+	PromptTokens     int                    `json:"prompt_tokens"`
+	CompletionTokens int                    `json:"completion_tokens"`
+	Complete         bool                   `json:"complete"`
+}
+
+type ServerUsageRejection struct {
+	HTTPStatus int `json:"http_status"`
+	Count      int `json:"count"`
 }
 
 type Gates struct {

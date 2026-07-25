@@ -203,7 +203,7 @@ func (runner Runner) RunTrial(ctx context.Context, matrix MatrixSpec, task TaskS
 	result.Gates.ScopePassed = exactPathSet(paths, append(append([]string{}, task.WritePaths...), task.ResultArtifact))
 	result.Gates.ReadScopePassed = run.Telemetry.DeniedCalls == 0
 	result.Gates.RequiredMutationPassed = (!task.RequiredMutation || run.Telemetry.MutationObserved) && containsPaths(paths, task.RequiredChangedPaths)
-	if runner.Verifier != nil {
+	if runner.Verifier != nil && run.StopReason != "upstream_rejected" {
 		verified := runner.Verifier.Verify(ctx, task, prepared.WorkDir, run)
 		result.Gates.VerifierPassed = verified.Passed
 		result.Gates.Compiled = verified.Compiled

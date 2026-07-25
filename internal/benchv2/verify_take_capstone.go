@@ -43,7 +43,6 @@ func (verifier BuiltinVerifier) verifyTakeCyclingCapstone(ctx context.Context, t
 	if err := prepareTakeCycleDependencies(candidate, workDir); err != nil {
 		return takeCycleFailure(err)
 	}
-
 	// Independently grade the candidate test contract: red on the exact base,
 	// green on hidden production, and sensitive to every hidden mutant.
 	if err := copyCandidateFiles(candidate, workDir, []string{takeTestFile}); err != nil {

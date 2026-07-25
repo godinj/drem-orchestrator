@@ -11,7 +11,7 @@
   "role": "coder",
   "system_prompt": "Implement only the declared test, EditorAdapter header and include seam, focused take-actions fragment, action registration, and default keymap. Put private member definitions takeNext(int), takePrev(int), and cycleSelectedTake(int) in the new EditorAdapterTakeActions.inc. Do not edit EditorAdapterActionHandlers.inc or create free helpers. Complete the artifact in this worker; no orchestration or repair loop is available in this benchmark case.",
   "user_message": "Implement Alt+j/Alt+k next/previous take cycling for the selected audio track. Cover forward/backward wrap, source change, automation-lane focus, non-audio and one-take no-ops, status, context notification, and one-step undo. Register take.next and take.prev and add the shipped keymap routes without changing Alt+h/Alt+l slip routes.",
-  "fixture": {"repo_id": "drem-canvas", "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274", "visible_blobs": [
+  "fixture": {"repo_id": "drem-canvas", "base_commit": "da8d567ea85a6ffc08e7a1ec0d3d7e49802306fc", "visible_blobs": [
     {"path": "tests/integration/LaneVersionCommandTest.cpp", "git_blob_sha": "e013d01be19945e0c009ac16987f7c2b5c49b32f"},
     {"path": "tests/helpers/VimTestFixture.h", "git_blob_sha": "f68811ee09ec2493b3f1dac19ca9ff0cb0625f47"},
     {"path": "src/vim/adapters/EditorAdapter.h", "git_blob_sha": "f317c4391fcf48cc4e496a06231f1661f7489871"},

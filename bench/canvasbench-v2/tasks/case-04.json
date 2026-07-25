@@ -11,7 +11,7 @@
   "role": "coder",
   "system_prompt": "Write only the declared integration test TU. Ground every call in the visible headers. Tests must compile on the base, fail because take.next/take.prev are absent, pass on the hidden canonical implementation, and kill the declared mutants.",
   "user_message": "Cover next/previous wrap, automation-focus leakage, no-op undo, audio-only behavior, and both action routes without inventing APIs. Begin every added regression test title with `Take cycling` so the pinned focused native gate executes it.",
-  "fixture": {"repo_id": "drem-canvas", "base_commit": "96db6b709f0a4f2069db4a7d3415ef17867b0274", "visible_blobs": [
+  "fixture": {"repo_id": "drem-canvas", "base_commit": "da8d567ea85a6ffc08e7a1ec0d3d7e49802306fc", "visible_blobs": [
     {"path": "tests/integration/LaneVersionCommandTest.cpp", "git_blob_sha": "e013d01be19945e0c009ac16987f7c2b5c49b32f"},
     {"path": "src/model/Arrangement.h", "git_blob_sha": "1692c085cfb8c5e561ed1e08291883e0c17db0d9"},
     {"path": "src/vim/ActionRegistry.h", "git_blob_sha": "786e82bab6fbcef3c31031459ad77aa897daf631"},

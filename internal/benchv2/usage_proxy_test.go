@@ -211,6 +211,118 @@ func TestUsageProxyFailsClosedAcrossUpstreamRetry(t *testing.T) {
 	require.ErrorContains(t, err, "HTTP 409", "an incomplete ledger is still consume-once")
 }
 
+func TestUsageProxyAttestsPreInferenceClientRejection(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writeProxyError(writer, http.StatusBadRequest, "context length exceeded")
+	}))
+	defer upstream.Close()
+	proxy, client := usageProxyFixture(t, upstream.URL+"/v1/chat/completions", "")
+	session := startTestUsageSession(t, client)
+	response := postTestCompletion(t, proxy.URL, session.APIKey, `{"messages":[]}`)
+	require.Equal(t, http.StatusBadRequest, response.StatusCode)
+	_ = response.Body.Close()
+	usage, err := client.AttestServerUsage(context.Background(), session)
+	require.NoError(t, err)
+	require.True(t, usage.Complete)
+	require.Equal(t, 0, usage.RequestsMeasured)
+	require.Equal(t, 1, usage.RequestsRejected)
+	require.Equal(t, 1, usage.RequestsTotal)
+	require.Equal(t, []ServerUsageRejection{{HTTPStatus: http.StatusBadRequest, Count: 1}}, usage.Rejections)
+	require.Zero(t, usage.PromptTokens)
+	require.Zero(t, usage.CompletionTokens)
+}
+
+func TestUsageProxyPreservesMeasuredUsageBeforeClientRejection(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			_, _ = io.WriteString(writer, `{"choices":[],"usage":{"prompt_tokens":17,"completion_tokens":4}}`)
+			return
+		}
+		writeProxyError(writer, http.StatusBadRequest, "context length exceeded")
+	}))
+	defer upstream.Close()
+	proxy, client := usageProxyFixture(t, upstream.URL+"/v1/chat/completions", "")
+	session := startTestUsageSession(t, client)
+	first := postTestCompletion(t, proxy.URL, session.APIKey, `{"messages":[]}`)
+	require.Equal(t, http.StatusOK, first.StatusCode)
+	_ = first.Body.Close()
+	second := postTestCompletion(t, proxy.URL, session.APIKey, `{"messages":[]}`)
+	require.Equal(t, http.StatusBadRequest, second.StatusCode)
+	_ = second.Body.Close()
+	usage, err := client.AttestServerUsage(context.Background(), session)
+	require.NoError(t, err)
+	require.Equal(t, 1, usage.RequestsMeasured)
+	require.Equal(t, 1, usage.RequestsRejected)
+	require.Equal(t, 2, usage.RequestsTotal)
+	require.Equal(t, 17, usage.PromptTokens)
+	require.Equal(t, 4, usage.CompletionTokens)
+}
+
+func TestUsageProxyAggregatesOnlyAttributableRequestRejections(t *testing.T) {
+	statuses := []int{http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity, http.StatusRequestEntityTooLarge}
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		status := statuses[int(calls.Add(1))-1]
+		writeProxyError(writer, status, "request validation failed")
+	}))
+	defer upstream.Close()
+	proxy, client := usageProxyFixture(t, upstream.URL+"/v1/chat/completions", "")
+	session := startTestUsageSession(t, client)
+	for _, status := range statuses {
+		response := postTestCompletion(t, proxy.URL, session.APIKey, `{"messages":[]}`)
+		require.Equal(t, status, response.StatusCode)
+		_ = response.Body.Close()
+	}
+	usage, err := client.AttestServerUsage(context.Background(), session)
+	require.NoError(t, err)
+	require.Equal(t, 3, usage.RequestsRejected)
+	require.Equal(t, []ServerUsageRejection{
+		{HTTPStatus: http.StatusRequestEntityTooLarge, Count: 2},
+		{HTTPStatus: http.StatusUnprocessableEntity, Count: 1},
+	}, usage.Rejections)
+}
+
+func TestUsageProxyDoesNotAttributeInfrastructureOrConfigurationFailures(t *testing.T) {
+	for _, status := range []int{
+		http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusRequestTimeout,
+		http.StatusConflict, http.StatusTooEarly, http.StatusTooManyRequests, http.StatusInternalServerError,
+	} {
+		t.Run(fmt.Sprintf("HTTP_%d", status), func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writeProxyError(writer, status, "not attributable")
+			}))
+			defer upstream.Close()
+			proxy, client := usageProxyFixture(t, upstream.URL+"/v1/chat/completions", "")
+			session := startTestUsageSession(t, client)
+			response := postTestCompletion(t, proxy.URL, session.APIKey, `{"messages":[]}`)
+			require.Equal(t, status, response.StatusCode)
+			_ = response.Body.Close()
+			_, err := client.AttestServerUsage(context.Background(), session)
+			require.ErrorContains(t, err, "HTTP 422")
+		})
+	}
+}
+
+func TestValidateServerUsageRejectsMalformedRejectionAccounting(t *testing.T) {
+	valid := ServerUsage{
+		Source: ServerUsageSourceProxy, CorrelationID: "trial", RequestsRejected: 1, RequestsTotal: 1,
+		Rejections: []ServerUsageRejection{{HTTPStatus: http.StatusBadRequest, Count: 1}}, Complete: true,
+	}
+	require.NoError(t, validateServerUsage(valid, "trial"))
+	for _, mutate := range []func(*ServerUsage){
+		func(usage *ServerUsage) { usage.Rejections[0].Count = 2 },
+		func(usage *ServerUsage) { usage.Rejections[0].Count = 0 },
+		func(usage *ServerUsage) { usage.Rejections[0].HTTPStatus = http.StatusTooManyRequests },
+		func(usage *ServerUsage) { usage.Rejections = append(usage.Rejections, usage.Rejections[0]) },
+	} {
+		candidate := valid
+		candidate.Rejections = append([]ServerUsageRejection(nil), valid.Rejections...)
+		mutate(&candidate)
+		require.Error(t, validateServerUsage(candidate, "trial"))
+	}
+}
+
 func TestUsageProxyRefusesToFreezeInFlightLedger(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

@@ -68,6 +68,28 @@ func TestExternalAdapterRetainsOuterExitEvidenceWhenUsageIsIncomplete(t *testing
 	require.ErrorContains(t, err, "outer harness exited 125: invalid mount contract")
 }
 
+func TestExternalAdapterClassifiesUpstreamRequestRejectionBeforeTrajectoryErrors(t *testing.T) {
+	fixture := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(fixture, "read.cpp"), []byte("read"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(fixture, "write.cpp"), []byte("before"), 0o644))
+	seen := OuterExecutionSpec{}
+	adapter := externalAdapter(AdapterQwenCode, NormalizerQwenCode)
+	adapter.Executor = fakeOuterExecutor{result: OuterExecutionResult{Stdout: []byte(`{"type":"system","subtype":"init","session_id":"partial"}`), Artifacts: map[string][]byte{}}, seen: &seen}
+	adapter.UsageAttestor = fakeUsageAttestor{usage: ServerUsage{
+		Source: ServerUsageSourceProxy, RequestsRejected: 1, RequestsTotal: 1,
+		Rejections: []ServerUsageRejection{{HTTPStatus: 400, Count: 1}}, Complete: true,
+	}}
+	run, err := adapter.Run(context.Background(), adapterRequest(fixture, AdapterQwenCode, NormalizerQwenCode))
+	require.ErrorContains(t, err, "upstream rejected 1 harness request")
+	require.Equal(t, "upstream_rejected", run.StopReason)
+	require.Equal(t, 1, run.ServerUsage.RequestsRejected)
+	require.True(t, run.ServerUsage.Complete)
+	require.Zero(t, run.Telemetry.TokensIn)
+	contents, readErr := os.ReadFile(filepath.Join(fixture, "write.cpp"))
+	require.NoError(t, readErr)
+	require.Equal(t, "before", string(contents), "rejected runs must not apply scoped workspace changes")
+}
+
 var errUnexpectedVisibleFixture = &scopeTestError{"full fixture leaked into outer workspace"}
 
 type scopeTestError struct{ message string }

@@ -55,7 +55,6 @@ func (verifier BuiltinVerifier) verifyTakeCycling(ctx context.Context, task Task
 	if err := prepareTakeCycleDependencies(candidate, workDir); err != nil {
 		return takeCycleFailure(err)
 	}
-
 	switch task.OracleID {
 	case "take-cycling-red-tests-canonical-v1":
 		if err := copyCandidateFiles(candidate, workDir, []string{takeTestFile}); err != nil {
@@ -226,12 +225,6 @@ func (verifier BuiltinVerifier) runTakeCycleGate(ctx context.Context, workDir st
 	}
 	cmd := exec.CommandContext(ctx, filepath.Join(workDir, "scripts", "dev"), "test", "--filter", `(Take cycling|take\.)`)
 	cmd.Dir = workDir
-	// The pinned Canvas fixture predates explicit <cmath> and <atomic> includes
-	// in unrelated sources. Force those standard headers only in the hidden
-	// native verifier so Debian toolchain transitive-include drift cannot grade
-	// a take-cycling candidate. The candidate workspace and production sources
-	// remain unchanged.
-	cmd.Env = append(os.Environ(), "CXXFLAGS="+strings.TrimSpace(os.Getenv("CXXFLAGS")+" -include cmath -include atomic"))
 	output, err := cmd.CombinedOutput()
 	return string(output), err
 }
