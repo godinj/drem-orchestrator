@@ -14,7 +14,7 @@ RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
     && cp node_modules/@continuedev/cli/dist/cn.js /opt/harness/cn-real.js \
     && chmod 0555 /opt/harness/cn-real.js \
     && test -n "$SOURCE_STATE" && test -n "$UPSTREAM_SOURCE" && test -n "$ENV_CONTRACT" && test -n "$NORMALIZER"
-COPY deploy/docker/canvasbench/context/continue/continue-wrapper.py /usr/local/bin/cn
+COPY deploy/docker/canvasbench/context/continue/continue-wrapper.mjs /usr/local/bin/cn
 RUN chmod 0555 /usr/local/bin/cn
 LABEL org.opencontainers.image.source="${UPSTREAM_SOURCE}" \
       org.opencontainers.image.revision="${SOURCE_STATE}" \

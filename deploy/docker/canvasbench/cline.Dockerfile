@@ -14,7 +14,7 @@ RUN npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
     && cp node_modules/@cline/cli-linux-x64/bin/cline /opt/harness/cline-real \
     && chmod 0555 /opt/harness/cline-real \
     && test -n "$SOURCE_STATE" && test -n "$UPSTREAM_SOURCE" && test -n "$ENV_CONTRACT" && test -n "$NORMALIZER"
-COPY deploy/docker/canvasbench/context/cline/cline-wrapper.py /usr/local/bin/cline
+COPY deploy/docker/canvasbench/context/cline/cline-wrapper.mjs /usr/local/bin/cline
 RUN chmod 0555 /usr/local/bin/cline
 LABEL org.opencontainers.image.source="${UPSTREAM_SOURCE}" \
       org.opencontainers.image.revision="${SOURCE_STATE}" \
