@@ -56,8 +56,8 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 	if request.Harness.AdapterModelRef == "" {
 		return CommandInvocation{}, fmt.Errorf("adapter-specific model reference is required")
 	}
-	if adapter.Kind == AdapterMiniSWE && !validMiniSWEModelRef(request.Harness.AdapterModelRef) {
-		return CommandInvocation{}, fmt.Errorf("mini-SWE adapter model reference must use openai/<served-model>")
+	if adapterUsesLiteLLM(adapter.Kind) && !validLiteLLMModelRef(request.Harness.AdapterModelRef) {
+		return CommandInvocation{}, fmt.Errorf("%s adapter model reference must use openai/<served-model>", adapter.Kind)
 	}
 	if request.Harness.ToolPolicy != ToolPolicySandboxed || !taskAllowsToolPolicy(request.Task, ToolPolicySandboxed) {
 		return CommandInvocation{}, fmt.Errorf("external CLI adapters require an allowed %s tool policy", ToolPolicySandboxed)
@@ -117,6 +117,15 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 		return CommandInvocation{}, fmt.Errorf("unsupported external adapter %q", adapter.Kind)
 	}
 	return invocation, nil
+}
+
+func adapterUsesLiteLLM(kind string) bool {
+	switch kind {
+	case AdapterMiniSWE, AdapterAider, AdapterOpenHands:
+		return true
+	default:
+		return false
+	}
 }
 
 func (adapter ExternalCLIAdapter) BuildOuterSpec(request TrialRequest, usage UsageSession) (OuterExecutionSpec, error) {

@@ -93,18 +93,29 @@ func TestExternalAttestationRequiresPinnedOuterRuntime(t *testing.T) {
 	require.ErrorContains(t, matrix.Validate(), "external harness attestation")
 }
 
-func TestMiniSWEAttestationRequiresExplicitOpenAIProvider(t *testing.T) {
-	matrix := validMatrix()
-	matrix.Harness = selectableExternalHarness()
-	matrix.Harness.Name = AdapterMiniSWE
-	matrix.Harness.SourceState = "source"
-	matrix.Harness.ConfigSHA256 = "config"
-	matrix.Harness.AdapterModelRef = "qwen3.6-27b-code"
-	matrix.Harness.TrajectoryNormalizer = NormalizerMiniSWE
-	matrix.Harness.InferenceEnvContract = inferenceEnvContractForAdapter(AdapterMiniSWE)
-	require.ErrorContains(t, matrix.Validate(), "openai/<served-model>")
-	matrix.Harness.AdapterModelRef = "openai/qwen3.6-27b-code"
-	require.NoError(t, matrix.Validate())
+func TestLiteLLMAdaptersRequireExplicitOpenAIProvider(t *testing.T) {
+	for _, adapter := range []struct {
+		name       string
+		normalizer string
+	}{
+		{AdapterMiniSWE, NormalizerMiniSWE},
+		{AdapterAider, NormalizerAider},
+		{AdapterOpenHands, NormalizerOpenHands},
+	} {
+		t.Run(adapter.name, func(t *testing.T) {
+			matrix := validMatrix()
+			matrix.Harness = selectableExternalHarness()
+			matrix.Harness.Name = adapter.name
+			matrix.Harness.SourceState = "source"
+			matrix.Harness.ConfigSHA256 = "config"
+			matrix.Harness.AdapterModelRef = "qwen3.6-27b-code"
+			matrix.Harness.TrajectoryNormalizer = adapter.normalizer
+			matrix.Harness.InferenceEnvContract = inferenceEnvContractForAdapter(adapter.name)
+			require.ErrorContains(t, matrix.Validate(), "openai/<served-model>")
+			matrix.Harness.AdapterModelRef = "openai/qwen3.6-27b-code"
+			require.NoError(t, matrix.Validate())
+		})
+	}
 }
 
 func TestManifestAndTaskDigestsValidate(t *testing.T) {

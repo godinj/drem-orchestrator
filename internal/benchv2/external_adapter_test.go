@@ -98,7 +98,7 @@ func (err *scopeTestError) Error() string { return err.message }
 
 func adapterRequest(workDir, kind, normalizer string) TrialRequest {
 	modelRef := "provider/qwen36"
-	if kind == AdapterMiniSWE {
+	if adapterUsesLiteLLM(kind) {
 		modelRef = "openai/qwen36"
 	}
 	return TrialRequest{
@@ -136,8 +136,8 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 		{AdapterQwenCode, NormalizerQwenCode, []string{"--output-format", "stream-json", "--auth-type", "openai", "--safe-mode", "--yolo", "--max-tool-calls", "12", "--max-session-turns", "8", "--max-wall-time", "600s", "--exclude-tools", "agent"}, nil},
 		{AdapterMiniSWE, NormalizerMiniSWE, []string{"-t", "-m", "openai/qwen36", "-y", "--exit-immediately", "-o", "/workspace/.canvasbench/mini-swe-agent-trajectory.json"}, nil},
 		{AdapterPi, NormalizerPi, []string{"--mode", "json", "--no-session", "--no-context-files", "--model", "provider/qwen36", "--system-prompt"}, []string{"-p", "--prompt"}},
-		{AdapterAider, NormalizerAider, []string{"--model", "provider/qwen36", "--message", "--edit-format", "diff", "--read", "read.cpp", "--file", "write.cpp"}, []string{"raw-qwen-attestation"}},
-		{AdapterOpenHands, NormalizerOpenHands, []string{"--model", "provider/qwen36", "--headless", "--json", "--yolo", "--override-with-envs", "-t"}, []string{"raw-qwen-attestation"}},
+		{AdapterAider, NormalizerAider, []string{"--model", "openai/qwen36", "--message", "--edit-format", "diff", "--read", "read.cpp", "--file", "write.cpp"}, []string{"raw-qwen-attestation"}},
+		{AdapterOpenHands, NormalizerOpenHands, []string{"--model", "openai/qwen36", "--headless", "--json", "--yolo", "--override-with-envs", "-t"}, []string{"raw-qwen-attestation"}},
 	}
 	for _, test := range tests {
 		t.Run(test.kind, func(t *testing.T) {
