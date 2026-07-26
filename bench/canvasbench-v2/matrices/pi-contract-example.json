@@ -1,0 +1,43 @@
+{
+  "schema": "canvasbench.matrix.v2",
+  "id": "replace-with-content-addressed-pi-contract-run-id",
+  "task_files": ["../tasks/case-04.json"],
+  "trials": 5,
+  "seeds": [1001, 1002, 1003, 1004, 1005],
+  "temperature": 0.2,
+  "top_p": 0.9,
+  "top_k": 20,
+  "context_window": 32768,
+  "preserve_thinking": true,
+  "seed_policy": "fixed_per_trial",
+  "harness": {
+    "name": "pi",
+    "version": "",
+    "source_state": "",
+    "config_sha256": "",
+    "history_mode": "retain_recent",
+    "tool_policy": "structured_only",
+    "keep_recent_exchanges": 4,
+    "retention_threshold_pct": 70,
+    "adapter_model_ref": "",
+    "outer_isolation": "outer_container",
+    "trajectory_normalizer": "pi-json-v3",
+    "inference_env_contract": "openai_base_url_api_key.v1",
+    "usage_proxy_source_state": "",
+    "usage_proxy_image": "",
+    "usage_proxy_config_sha256": "",
+    "phase_contract_mode": "pi_phase_contract_enforced_v1"
+  },
+  "runtime": {
+    "backend_name": "",
+    "backend_version": "",
+    "model_id": "",
+    "model_sha256": "",
+    "quantization": "",
+    "runtime_config_sha256": "",
+    "image_digest": "",
+    "endpoint_class": "",
+    "api_flavor": "",
+    "inference_measured": false
+  }
+}

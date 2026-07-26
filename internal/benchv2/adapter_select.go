@@ -23,8 +23,12 @@ func SelectAdapter(harness HarnessConfig, task TaskSpec, endpoint string, usageA
 		if usageAttestor == nil {
 			return nil, fmt.Errorf("external harness requires a trusted usage proxy attestor")
 		}
-		if harness.ToolPolicy != ToolPolicySandboxed || !taskAllowsToolPolicy(task, ToolPolicySandboxed) {
-			return nil, fmt.Errorf("external harness requires allowed %s policy", ToolPolicySandboxed)
+		requiredToolPolicy := ToolPolicySandboxed
+		if harness.Name == AdapterPi && harness.PhaseContractMode == PiPhaseContractEnforcedV1 {
+			requiredToolPolicy = ToolPolicyStructured
+		}
+		if harness.ToolPolicy != requiredToolPolicy || !taskAllowsToolPolicy(task, requiredToolPolicy) {
+			return nil, fmt.Errorf("external harness requires allowed %s policy", requiredToolPolicy)
 		}
 		if !pinnedOCIImage.MatchString(harness.OuterImage) || harness.OuterNetworkPolicy != OuterNetworkIsolatedInference || harness.OuterNetworkName == "" {
 			return nil, fmt.Errorf("external harness requires pinned outer image and isolated inference network")

@@ -86,6 +86,7 @@ type UsageProxyTrialPolicy struct {
 	ContextWindow    int     `json:"context_window"`
 	MaxOutputTokens  int     `json:"max_output_tokens"`
 	PreserveThinking bool    `json:"preserve_thinking"`
+	ForcedToolName   string  `json:"forced_tool_name,omitempty"`
 }
 
 type proxyUsage struct {
@@ -351,7 +352,10 @@ func (server *usageProxyServer) forwardChatCompletions(writer http.ResponseWrite
 		writeProxyError(writer, http.StatusBadRequest, "invalid OpenAI request")
 		return nil, err
 	}
-	applyUsageProxyTrialPolicy(payload, policy)
+	if err := applyUsageProxyTrialPolicy(payload, policy); err != nil {
+		writeProxyError(writer, http.StatusBadRequest, err.Error())
+		return nil, err
+	}
 	stream, _ := payload["stream"].(bool)
 	if stream {
 		options, _ := payload["stream_options"].(map[string]any)
@@ -416,10 +420,13 @@ func validateUsageProxyTrialPolicy(policy UsageProxyTrialPolicy) error {
 		policy.Temperature < 0 || policy.TopP <= 0 || policy.TopP > 1 || policy.TopK < 0 {
 		return errors.New("trial inference policy is invalid")
 	}
+	if policy.ForcedToolName != "" && !phaseToolNamePattern.MatchString(policy.ForcedToolName) {
+		return errors.New("trial inference policy has an invalid forced tool")
+	}
 	return nil
 }
 
-func applyUsageProxyTrialPolicy(payload map[string]any, policy UsageProxyTrialPolicy) {
+func applyUsageProxyTrialPolicy(payload map[string]any, policy UsageProxyTrialPolicy) error {
 	payload["model"] = policy.ModelID
 	payload["seed"] = policy.Seed
 	payload["temperature"] = policy.Temperature
@@ -431,7 +438,39 @@ func applyUsageProxyTrialPolicy(payload map[string]any, policy UsageProxyTrialPo
 		kwargs = map[string]any{}
 	}
 	kwargs["preserve_thinking"] = policy.PreserveThinking
+	if policy.ForcedToolName != "" {
+		kwargs["enable_thinking"] = false
+	}
 	payload["chat_template_kwargs"] = kwargs
+	if policy.ForcedToolName == "" {
+		return nil
+	}
+	tools, ok := payload["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		return errors.New("forced tool policy requires exactly one tool")
+	}
+	matched := 0
+	for _, rawTool := range tools {
+		tool, ok := rawTool.(map[string]any)
+		if !ok || tool["type"] != "function" {
+			continue
+		}
+		function, ok := tool["function"].(map[string]any)
+		if !ok || function["name"] != policy.ForcedToolName {
+			continue
+		}
+		function["strict"] = true
+		matched++
+	}
+	if matched != 1 {
+		return fmt.Errorf("forced tool %q must appear exactly once", policy.ForcedToolName)
+	}
+	payload["tool_choice"] = map[string]any{
+		"type":     "function",
+		"function": map[string]any{"name": policy.ForcedToolName},
+	}
+	payload["parallel_tool_calls"] = false
+	return nil
 }
 
 func proxyStreamResponse(writer http.ResponseWriter, body io.Reader) (*proxyUsage, error) {
@@ -608,6 +647,9 @@ func (client *UsageProxyClient) StartServerUsage(ctx context.Context, request Tr
 		ModelID: request.Runtime.ModelID, Seed: request.Seed, Temperature: request.Temperature,
 		TopP: request.TopP, TopK: request.TopK, ContextWindow: request.ContextWindow,
 		MaxOutputTokens: request.Task.Budget.MaxOutputTokens, PreserveThinking: request.PreserveThinking,
+	}
+	if request.Harness.PhaseContractMode == PiPhaseContractEnforcedV1 && request.Task.PhaseContract != nil {
+		policy.ForcedToolName = request.Task.PhaseContract.ToolName
 	}
 	if err := client.adminJSON(ctx, http.MethodPost, "/admin/v1/trials", policy, &response); err != nil {
 		return UsageSession{}, err

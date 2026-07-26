@@ -51,6 +51,34 @@ func TestTaskRejectsMalformedVisibleBlobPin(t *testing.T) {
 	require.ErrorContains(t, task.Validate(), "invalid visible blob pin")
 }
 
+func TestTaskValidatesCompiledPiPhaseContract(t *testing.T) {
+	task := TaskSpec{
+		Schema: TaskSchemaVersion, ID: "phase", Title: "Phase", OracleID: "phase-v1",
+		Status: "placeholder", Mode: "direct_worker", InferencePolicy: "required",
+		AllowedToolPolicies: []string{ToolPolicyStructured, ToolPolicySandboxed},
+		WritePaths:          []string{"tests/contract.cpp"},
+		PhaseContract: &PhaseContract{
+			Kind: PiFixedSlotsContractV1, ToolName: "complete_contract", TargetPath: "tests/contract.cpp",
+			Slots: []PhaseContractSlot{{
+				ID: "assertion", Marker: "// TODO", Description: "one assertion",
+				ReplacementPattern: `^CHECK \\([^;]+\\);$`, ForbiddenSubstrings: []string{"executeAction"}, MaxBytes: 128,
+			}},
+		},
+	}
+	require.NoError(t, task.Validate())
+
+	task.PhaseContract.TargetPath = "tests/not-writable.cpp"
+	require.ErrorContains(t, task.Validate(), "outside writable scope")
+	task.PhaseContract.TargetPath = "tests/contract.cpp"
+	task.PhaseContract.Slots[0].ReplacementPattern = "unanchored"
+	require.ErrorContains(t, task.Validate(), "invalid Pi phase-contract slot")
+	task.PhaseContract.Slots[0].ReplacementPattern = `^(?i:CHECK) \\([^;]+\\);$`
+	require.ErrorContains(t, task.Validate(), "invalid Pi phase-contract slot")
+	task.PhaseContract.Slots[0].ReplacementPattern = `^CHECK \\([^;]+\\);$`
+	task.PhaseContract.Slots[0].FixedReplacement = "not an assertion"
+	require.ErrorContains(t, task.Validate(), "invalid fixed Pi phase-contract replacement")
+}
+
 func TestAttestationFailsClosed(t *testing.T) {
 	matrix := validMatrix()
 	require.NoError(t, matrix.Validate())
@@ -93,6 +121,28 @@ func TestExternalAttestationRequiresPinnedOuterRuntime(t *testing.T) {
 	require.ErrorContains(t, matrix.Validate(), "external harness attestation")
 }
 
+func TestPiPhaseContractAttestationFailsClosed(t *testing.T) {
+	matrix := validMatrix()
+	matrix.Harness = selectableExternalHarness()
+	matrix.Harness.Name = AdapterPi
+	matrix.Harness.SourceState = "source"
+	matrix.Harness.ConfigSHA256 = "config"
+	matrix.Harness.AdapterModelRef = "provider/model"
+	matrix.Harness.TrajectoryNormalizer = NormalizerPi
+	matrix.Harness.InferenceEnvContract = inferenceEnvContractForAdapter(AdapterPi)
+	require.NoError(t, matrix.Validate(), "generic Pi remains a sandboxed-shell comparator")
+
+	matrix.Harness.ToolPolicy = ToolPolicyStructured
+	require.ErrorContains(t, matrix.Validate(), "requires phase-contract enforcement")
+	matrix.Harness.PhaseContractMode = PiPhaseContractEnforcedV1
+	require.NoError(t, matrix.Validate())
+
+	matrix.Harness.Name = AdapterOpenCode
+	matrix.Harness.TrajectoryNormalizer = NormalizerOpenCode
+	matrix.Harness.InferenceEnvContract = inferenceEnvContractForAdapter(AdapterOpenCode)
+	require.ErrorContains(t, matrix.Validate(), "phase-contract attestation is invalid")
+}
+
 func TestLiteLLMAdaptersRequireExplicitOpenAIProvider(t *testing.T) {
 	for _, adapter := range []struct {
 		name       string
@@ -131,6 +181,7 @@ func TestManifestAndTaskDigestsValidate(t *testing.T) {
 	require.Equal(t, "build/DremCanvas", tasks[8].ReleaseArtifactPath)
 	require.Equal(t, "deterministic_exempt", tasks[7].InferencePolicy)
 	require.Equal(t, []string{ToolPolicyReplay}, tasks[7].AllowedToolPolicies)
+	require.True(t, filepath.IsAbs(tasks[3].Fixture.SeedPatch), "fixture preparation changes cwd and therefore requires an absolute seed path")
 	for _, index := range []int{0, 1, 2, 3, 4, 5, 8} {
 		require.Equal(t, "da8d567ea85a6ffc08e7a1ec0d3d7e49802306fc", tasks[index].Fixture.BaseCommit)
 	}
@@ -162,6 +213,32 @@ func TestFocusedManifestPinsOnlyAgentDiscriminatorCases(t *testing.T) {
 	for _, task := range tasks {
 		require.Equal(t, "required", task.InferencePolicy)
 	}
+}
+
+func TestOrchestratedManifestPinsProductionInterventionCases(t *testing.T) {
+	root := filepath.Join("..", "..", "bench", "canvasbench-v2")
+	manifest, tasks, err := LoadManifest(filepath.Join(root, "manifest-orchestrated.json"))
+	require.NoError(t, err)
+	require.NoError(t, manifest.Validate())
+	require.Equal(t, "canvasbench-v2-orchestrated-20260725", manifest.SuiteID)
+	require.Equal(t, []string{"case-02", "case-03", "case-04", "case-05", "case-06", "case-07", "case-08"}, []string{
+		tasks[0].ID, tasks[1].ID, tasks[2].ID, tasks[3].ID, tasks[4].ID, tasks[5].ID, tasks[6].ID,
+	})
+	for index, task := range tasks {
+		require.Equal(t, index >= 2 && (index <= 4 || index == 6), task.HardGate, task.ID)
+	}
+}
+
+func TestPiContractManifestPinsOnlyCompiledTakeCycleCase(t *testing.T) {
+	root := filepath.Join("..", "..", "bench", "canvasbench-v2")
+	manifest, tasks, err := LoadManifest(filepath.Join(root, "manifest-pi-contract.json"))
+	require.NoError(t, err)
+	require.NoError(t, manifest.Validate())
+	require.Equal(t, "canvasbench-v2-pi-contract-20260725", manifest.SuiteID)
+	require.Len(t, tasks, 1)
+	require.Equal(t, "case-04", tasks[0].ID)
+	require.True(t, tasks[0].HardGate)
+	require.NotNil(t, tasks[0].PhaseContract)
 }
 
 func TestTaskRejectsEscapingReleaseArtifactPath(t *testing.T) {

@@ -62,3 +62,17 @@ func TestAdapterSelectionRejectsPolicyMismatch(t *testing.T) {
 	_, err = SelectAdapter(HarnessConfig{Name: AdapterDirect, ToolPolicy: ToolPolicySandboxed}, task, "", nil)
 	require.ErrorContains(t, err, ToolPolicyStructured)
 }
+
+func TestAdapterSelectionAcceptsEnforcedPiPhaseContract(t *testing.T) {
+	task := crossHarnessTask()
+	task.PhaseContract = &PhaseContract{Kind: PiFixedSlotsContractV1, ToolName: "complete_contract", TargetPath: "file"}
+	harness := selectableExternalHarness()
+	harness.Name = AdapterPi
+	harness.ToolPolicy = ToolPolicyStructured
+	harness.PhaseContractMode = PiPhaseContractEnforcedV1
+	harness.TrajectoryNormalizer = NormalizerPi
+	harness.InferenceEnvContract = inferenceEnvContractForAdapter(AdapterPi)
+	adapter, err := SelectAdapter(harness, task, "http://unused", fakeUsageAttestor{})
+	require.NoError(t, err)
+	require.Equal(t, AdapterPi, adapter.Name())
+}

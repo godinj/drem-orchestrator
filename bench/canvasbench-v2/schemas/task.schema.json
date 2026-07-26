@@ -11,13 +11,16 @@
     "system_prompt": {"type": "string"}, "user_message": {"type": "string"},
     "fixture": {"$ref": "#/$defs/fixture"}, "read_paths": {"$ref": "#/$defs/paths"}, "write_paths": {"$ref": "#/$defs/paths"},
     "required_changed_paths": {"$ref": "#/$defs/paths"}, "result_artifact": {"type": "string"}, "release_artifact_path": {"type": "string"}, "required_mutation": {"type": "boolean"},
-    "oracle_id": {"type": "string"}, "oracle_artifacts": {"type": "array", "items": {"$ref": "#/$defs/oracle_artifact"}, "uniqueItems": true}, "budget": {"$ref": "#/$defs/budget"}
+    "oracle_id": {"type": "string"}, "oracle_artifacts": {"type": "array", "items": {"$ref": "#/$defs/oracle_artifact"}, "uniqueItems": true}, "budget": {"$ref": "#/$defs/budget"},
+    "phase_contract": {"$ref": "#/$defs/phase_contract"}
   },
   "$defs": {
     "paths": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "blob": {"type": "object", "additionalProperties": false, "required": ["path", "git_blob_sha"], "properties": {"path": {"type": "string"}, "git_blob_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}},
     "oracle_artifact": {"type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
     "fixture": {"type": "object", "additionalProperties": false, "required": ["repo_id", "base_commit", "visible_blobs"], "properties": {"repo_id": {"type": "string"}, "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "visible_blobs": {"type": "array", "items": {"$ref": "#/$defs/blob"}}, "seed_patch": {"type": "string"}, "seed_patch_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
-    "budget": {"type": "object", "additionalProperties": false, "required": ["max_input_tokens", "max_output_tokens", "max_tool_calls", "max_iterations", "timeout_seconds"], "properties": {"max_input_tokens": {"type": "integer", "minimum": 1}, "max_output_tokens": {"type": "integer", "minimum": 1}, "max_tool_calls": {"type": "integer", "minimum": 1}, "max_iterations": {"type": "integer", "minimum": 1}, "timeout_seconds": {"type": "integer", "minimum": 1}}}
+    "budget": {"type": "object", "additionalProperties": false, "required": ["max_input_tokens", "max_output_tokens", "max_tool_calls", "max_iterations", "timeout_seconds"], "properties": {"max_input_tokens": {"type": "integer", "minimum": 1}, "max_output_tokens": {"type": "integer", "minimum": 1}, "max_tool_calls": {"type": "integer", "minimum": 1}, "max_iterations": {"type": "integer", "minimum": 1}, "timeout_seconds": {"type": "integer", "minimum": 1}}},
+    "phase_contract": {"type": "object", "additionalProperties": false, "required": ["kind", "tool_name", "target_path", "slots"], "properties": {"kind": {"const": "pi_fixed_slots_v1"}, "tool_name": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}, "target_path": {"type": "string"}, "slots": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/phase_contract_slot"}}}},
+    "phase_contract_slot": {"type": "object", "additionalProperties": false, "required": ["id", "marker", "description", "replacement_pattern", "max_bytes"], "properties": {"id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"}, "marker": {"type": "string", "minLength": 1}, "description": {"type": "string", "minLength": 1}, "replacement_pattern": {"type": "string", "minLength": 2}, "fixed_replacement": {"type": "string", "minLength": 1, "maxLength": 4096}, "forbidden_substrings": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 128}, "uniqueItems": true}, "max_bytes": {"type": "integer", "minimum": 1, "maximum": 4096}}}
   }
 }

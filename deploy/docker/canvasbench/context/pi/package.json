@@ -1,6 +1,10 @@
 {
   "private": true,
+  "scripts": {
+    "test": "node --test canvasbench-phase-contract.test.mjs"
+  },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.82.0"
+    "@earendil-works/pi-coding-agent": "0.82.0",
+    "typebox": "1.1.38"
   }
 }

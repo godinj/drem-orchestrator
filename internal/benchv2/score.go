@@ -19,7 +19,12 @@ func Score(task TaskSpec, result *TrialResult) float64 {
 	if result.Telemetry.TokensIn <= task.Budget.MaxInputTokens && result.Telemetry.TokensOut <= task.Budget.MaxOutputTokens {
 		score += 10
 	}
-	if result.Gates.Attested && result.Telemetry.PeakRequestInput > 0 {
+	usageAttested := result.Telemetry.PeakRequestInput > 0 ||
+		(result.ServerUsage.Complete && result.ServerUsage.RequestsTotal > 0 && trustedServerUsageSource(result.ServerUsage.Source))
+	if task.InferencePolicy == "deterministic_exempt" {
+		usageAttested = result.Telemetry.CheckpointObserved
+	}
+	if result.Gates.Attested && usageAttested {
 		score += 10
 	}
 	if !result.Gates.Compiled || !result.Gates.ScopePassed || !result.Gates.ReadScopePassed ||
@@ -39,6 +44,7 @@ type CaseAggregate struct {
 	CI95High     float64 `json:"ci95_high"`
 	AverageScore float64 `json:"average_score"`
 	Weight       int     `json:"weight"`
+	HardGate     bool    `json:"hard_gate"`
 }
 
 type Aggregate struct {
@@ -59,7 +65,7 @@ func AggregateResults(matrixID string, tasks []TaskSpec, results []TrialResult) 
 	}
 	weighted, weights := 0.0, 0
 	for _, task := range tasks {
-		caseResult := CaseAggregate{TaskID: task.ID, Status: task.Status, Weight: task.Weight}
+		caseResult := CaseAggregate{TaskID: task.ID, Status: task.Status, Weight: task.Weight, HardGate: task.HardGate}
 		trials := byTask[task.ID]
 		if task.Status != "runnable" {
 			caseResult.Status = "non_runnable"
@@ -81,7 +87,7 @@ func AggregateResults(matrixID string, tasks []TaskSpec, results []TrialResult) 
 		}
 		weighted += caseResult.AverageScore * float64(task.Weight)
 		weights += task.Weight
-		if (task.ID == "case-08" || task.ID == "case-09") && caseResult.Passes != caseResult.Trials {
+		if task.HardGate && caseResult.Passes != caseResult.Trials {
 			aggregate.IneligibleReasons = append(aggregate.IneligibleReasons, task.ID+": mandatory case did not pass every trial")
 		}
 		aggregate.Cases = append(aggregate.Cases, caseResult)

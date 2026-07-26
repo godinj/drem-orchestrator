@@ -12,6 +12,7 @@ RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
     && test "$(node -p "require('./node_modules/@earendil-works/pi-coding-agent/package.json').version")" = "$HARNESS_VERSION" \
     && test -n "$SOURCE_STATE" && test -n "$UPSTREAM_SOURCE" && test -n "$ENV_CONTRACT" && test -n "$NORMALIZER"
 COPY deploy/docker/canvasbench/context/pi/pi-wrapper.mjs /usr/local/bin/pi
+COPY deploy/docker/canvasbench/context/pi/canvasbench-phase-contract.mjs /opt/harness/canvasbench-phase-contract.mjs
 RUN chmod 0555 /usr/local/bin/pi
 LABEL org.opencontainers.image.source="${UPSTREAM_SOURCE}" \
       org.opencontainers.image.revision="${SOURCE_STATE}" \

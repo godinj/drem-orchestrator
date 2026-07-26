@@ -1,0 +1,15 @@
+{
+  "schema": "canvasbench.manifest.v2",
+  "suite_id": "canvasbench-v2-pi-contract-20260725",
+  "threshold": 90,
+  "cases": [
+    {
+      "id": "case-04",
+      "task_file": "tasks/case-04.json",
+      "sha256": "82c400c8f2ee706ff83c1ad9a56c1dd2166594f2104c2a5ea1d36914b2ec4c94",
+      "weight": 14,
+      "status": "runnable",
+      "hard_gate": true
+    }
+  ]
+}

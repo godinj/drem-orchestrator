@@ -28,8 +28,10 @@ The model receives only the public prompt and read/write contracts. Oracle
 sources remain outside its worktree. Inference tasks allow both
 `structured_only` and `sandboxed_shell`; the attested harness selects exactly
 one. DirectToolAgent uses exact structured read/write lists without shell.
-External adapters require the outer-container sandboxed-shell wrapper described
-below.
+External adapters ordinarily require the outer-container sandboxed-shell
+wrapper described below. Pi may instead use the separately attested
+`pi_phase_contract_enforced_v1` mode for a task carrying a compiled fixed-slot
+phase contract. That mode exposes no generic filesystem or shell tools.
 Case 8 allows only `deterministic_replay`. This keeps fixture, oracle, scope,
 and budget identical across harnesses without claiming that unlike execution
 policies are equivalent. Host verification runs only after the adapter exits
@@ -50,6 +52,37 @@ production orchestration state machine and does not exercise delivery rework,
 repair routing, or multi-worker ownership. Case 8 is the separate deterministic
 hard gate for ownership-aware delivery-rework scheduling. No benchmark result
 field claims Computer Use or live UI evidence.
+
+CanvasBench publishes four non-interchangeable manifests. The focused
+manifest is the raw four-case agent discriminator used for model or harness
+comparisons and deliberately credits no orchestration assistance. The
+orchestrated manifest is the production qualification envelope: it replaces
+the one-session capstone with the interventions the production state machine
+can actually provide—compiled API contracts before test and implementation
+phases, isolated assembly and seam closure, an ownership-union atomic repair
+with pinned compiler diagnostics, and deterministic ownership-aware rework.
+Each worker also receives a model-visible filesystem contract naming the exact
+readable and writable paths; the outer container independently enforces the
+same projection. Semantic contracts distinguish successful side effects from
+rejected/no-op behavior and bound the number of artifacts or tests owned by an
+atomic node.
+The full manifest remains an adversarial stress suite, including raw API
+discovery and the one-session capstone; it is not the acceptance boundary for
+a decomposed production pipeline.
+
+The Pi contract manifest isolates case 4 for an apples-to-apples enforcement
+experiment. A generic Pi comparator runs that identical task with
+`sandboxed_shell` and no phase mode. The constrained arm changes only the
+harness policy to `structured_only` and sets
+`phase_contract_mode=pi_phase_contract_enforced_v1`; task, fixture, prompt,
+model, sampling, and seed remain fixed.
+
+The orchestrated manifest does not make the benchmark runner secretly perform
+orchestration. Every inference case still invokes the harness exactly once in
+a fresh fixture. Its public prompt contains only the evidence and callable
+contract that the real upstream phase must compile, while the hidden oracle
+checks the resulting phase artifact. The intervention is therefore explicit,
+reproducible, and falsifiable.
 
 ## Harness adapters
 
@@ -80,6 +113,22 @@ text. Aider, OpenHands, Goose, Cline, Continue, and SWE-agent lack the same stab
 so their pinned image shims wrap the real captured terminal output in a strict
 terminal JSON record; the normalizer does not infer hidden tool events.
 Malformed, incomplete, or unsupported streams fail closed.
+
+For a compiled Pi phase, the task contract names one writable target and a
+bounded set of marker-replacement slots. The Pi image loads one extension and
+the CLI activates only the contract-named tool. The trusted proxy independently
+requires exactly that one function tool, marks its schema strict, forces it by
+name, disables parallel tool calls, and disables model thinking for the
+already-compiled phase. The extension validates every marker,
+replacement pattern, forbidden token, and byte bound before its single write,
+then returns `terminate=true`. The Pi normalizer treats that terminating tool
+result as the final output. Slots containing quote-bearing code may carry a
+host-validated fixed replacement and expose only a boolean acceptance field;
+this avoids relying on model/runtime parsers to round-trip nested source-code
+quotes. Quote-free slots remain model-authored and pattern-validated. Missing contracts, mismatched policy, extra tools,
+malformed replacements, partial streams, and unattested phase modes all fail
+closed. The published pattern subset is deliberately valid in both Go RE2 and
+JavaScript RegExp; runtime-specific constructs are rejected at task admission.
 Harness-reported usage is retained only as harness output and can never attest
 inference-server truth. External trials use the trusted CanvasBench usage proxy.
 Before each trial, the host creates an in-memory ledger through the
@@ -94,6 +143,8 @@ top-p, top-k, context declaration, per-case output limit, and thinking policy
 over the authenticated admin channel. The proxy overwrites those request fields
 on every harness call, preserving only unrelated chat-template arguments. This
 makes the trusted boundary—not individual CLI defaults—the sampling authority. It
+also applies the attested per-trial forced-tool policy for compiled Pi phases;
+the harness cannot weaken that policy in its request. It
 also forces `stream_options.include_usage=true`, parses usage from the server
 response, and aggregates every request. The host consumes the ledger exactly
 once after execution. Zero requests, invalid trial policies, in-flight requests,
@@ -231,15 +282,20 @@ comments and literals, requires exactly one executable call in the correct
 function body, and revalidates the pinned declaration, definition, action ID,
 and production keymap route.
 
-Cases 4–6 are runnable take-cycling stages. Case 4 grades a candidate red-test
-TU first on the clean base, then against the hidden canonical implementation
+Cases 4–6 are runnable take-cycling stages. Case 4 receives the exact callable
+API contract that the evidence phase must compile before dispatch, owns exactly
+three focused tests, and explicitly separates successful undoable cycling from
+rejected no-op cycling. It grades the candidate red-test TU first on the clean
+base, then against the hidden canonical implementation
 and eight deterministic mutants: missing wrap, automation-focus leakage,
 non-audio mutation, empty no-op undo, missing status, missing notification,
-declaration mismatch, and registration mismatch. Case 5 grades the four-file
+declaration mismatch, and registration mismatch. Case 5 receives the frozen
+member/API contract from the accepted plan and test handoff, then grades the four-file
 member implementation—header declarations, the EditorAdapter include seam, a
 focused `EditorAdapterTakeActions.inc`, and action registrations—against the
 hidden canonical test patch. The existing action-handler fragment remains at
-its pinned 597-line baseline. Case 6 starts
+its pinned 597-line baseline. Case 6 represents the ownership-union atomic
+repair lane and starts
 from the preserved `96db6b7..861eebff` bad-artifact diff applied over the
 portable descendant plus verbatim pinned compiler diagnostics, then grades
 production with hidden tests and independently
@@ -281,13 +337,25 @@ attributed to case 9.
 
 The weighted threshold is 90. Non-compiling output, out-of-scope access,
 missing required mutation, unmeasured inference, oracle exposure, or missing
-attestation caps a case at 40. Cases 8 and 9 are mandatory hard gates.
+attestation caps a case at 40. Hard gates are declared by the selected immutable
+manifest rather than inferred from case IDs. The full stress suite requires
+cases 8 and 9; the orchestrated suite requires cases 4, 5, 6, and 8.
+
+Trusted usage scoring accepts either DirectToolAgent peak-request telemetry or
+a complete trusted-proxy ledger containing at least one request. External
+harnesses are not penalized merely because their normalizer cannot reconstruct
+the DirectToolAgent-only `peak_request_input` field.
 
 ## Running
 
-Copy `bench/canvasbench-v2/matrices/example.json` and fill every attestation.
-The Qwen precise-coding baseline is temperature 0.6, top-p 0.95, top-k 20,
-and thinking preserved. `context_window` must equal the effective context limit
+Copy `bench/canvasbench-v2/matrices/example.json` for the full stress suite or
+`bench/canvasbench-v2/matrices/orchestrated-example.json` for production
+qualification, then fill every attestation. Always pass the matching manifest
+explicitly; results from different manifests must not be pooled.
+The production Qwen precise-coding baseline is temperature 0.2, top-p 0.9,
+top-k 20, and thinking preserved. The broader harness/model stress matrix keeps
+temperature 0.6 and top-p 0.95 to measure behavior under exploratory sampling;
+results from the two profiles must not be pooled. `context_window` must equal the effective context limit
 in the attested live runtime; the current Debian Qwen3.6-27B vLLM qualification
 uses 32768. A future 65536/131072 runtime must receive a new runtime-config hash
 and matrix rather than merely advertising the larger value to a harness.

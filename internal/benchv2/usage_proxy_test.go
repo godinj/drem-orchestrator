@@ -91,6 +91,51 @@ func TestUsageProxyForcesAndMeasuresStreamingUsage(t *testing.T) {
 	require.Equal(t, 2, usage.CompletionTokens)
 }
 
+func TestUsageProxyForcesSingleStrictPhaseTool(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var payload map[string]any
+		require.NoError(t, json.NewDecoder(request.Body).Decode(&payload))
+		choice := payload["tool_choice"].(map[string]any)
+		require.Equal(t, "function", choice["type"])
+		require.Equal(t, "complete_contract", choice["function"].(map[string]any)["name"])
+		require.Equal(t, false, payload["parallel_tool_calls"])
+		tools := payload["tools"].([]any)
+		function := tools[0].(map[string]any)["function"].(map[string]any)
+		require.Equal(t, true, function["strict"])
+		kwargs := payload["chat_template_kwargs"].(map[string]any)
+		require.Equal(t, false, kwargs["enable_thinking"])
+		require.Equal(t, true, kwargs["preserve_thinking"])
+		writeProxyJSON(writer, http.StatusOK, map[string]any{
+			"choices": []any{}, "usage": map[string]int{"prompt_tokens": 3, "completion_tokens": 2},
+		})
+	}))
+	defer upstream.Close()
+	proxy, client := usageProxyFixture(t, upstream.URL+"/v1/chat/completions", "")
+	trialRequest := testUsageTrialRequest()
+	trialRequest.Task.PhaseContract = &PhaseContract{ToolName: "complete_contract"}
+	trialRequest.Harness.PhaseContractMode = PiPhaseContractEnforcedV1
+	session, err := client.StartServerUsage(context.Background(), trialRequest)
+	require.NoError(t, err)
+	response := postTestCompletion(t, proxy.URL, session.APIKey, `{
+		"messages":[],
+		"tools":[{"type":"function","function":{"name":"complete_contract","parameters":{"type":"object","properties":{},"required":[],"additionalProperties":false}}}]
+	}`)
+	require.Equal(t, http.StatusOK, response.StatusCode)
+	_ = response.Body.Close()
+	usage, err := client.AttestServerUsage(context.Background(), session)
+	require.NoError(t, err)
+	require.Equal(t, 3, usage.PromptTokens)
+}
+
+func TestUsageProxyRejectsMissingForcedPhaseTool(t *testing.T) {
+	payload := map[string]any{"tools": []any{}}
+	err := applyUsageProxyTrialPolicy(payload, UsageProxyTrialPolicy{
+		ModelID: "qwen", Seed: 1, Temperature: 0.2, TopP: 0.9, TopK: 20,
+		ContextWindow: 32768, MaxOutputTokens: 256, ForcedToolName: "complete_contract",
+	})
+	require.ErrorContains(t, err, "requires exactly one tool")
+}
+
 func TestUsageProxyAdminAuthAndCrossTrialIsolation(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		_, _ = io.WriteString(writer, `{"choices":[],"usage":{"prompt_tokens":2,"completion_tokens":1}}`)

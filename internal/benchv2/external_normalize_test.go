@@ -78,6 +78,19 @@ func TestExternalNormalizersFailClosedOnMalformedOrIncompleteData(t *testing.T) 
 	}
 }
 
+func TestPiTerminatingContractToolProvidesTypedTerminalOutput(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("testdata", "external", "pi-terminating.jsonl"))
+	require.NoError(t, err)
+	run, err := NormalizeExternal(AdapterPi, NormalizerPi,
+		TrialRequest{Task: TaskSpec{ID: "contract"}, Harness: HarnessConfig{Name: AdapterPi, Version: "0.82.0", ConfigSHA256: "cfg"}, Runtime: RuntimeAttestation{ModelID: "qwen"}},
+		OuterExecutionResult{Stdout: raw, StartedAt: time.Unix(0, 0), Duration: time.Second})
+	require.NoError(t, err)
+	require.Equal(t, "Applied 1 validated contract slot to write.cpp.", run.Output)
+	require.Equal(t, "terminating_tool", run.StopReason)
+	require.Equal(t, 1, run.Telemetry.ToolCalls)
+	require.NoError(t, ValidateATIF(run.Trajectory))
+}
+
 func TestQwenHarnessUsageCannotPopulateServerTruth(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("testdata", "external", "qwen-code.jsonl"))
 	require.NoError(t, err)

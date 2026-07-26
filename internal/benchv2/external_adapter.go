@@ -2,6 +2,7 @@ package benchv2
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -67,8 +68,16 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 	if adapterUsesLiteLLM(adapter.Kind) && !validLiteLLMModelRef(request.Harness.AdapterModelRef) {
 		return CommandInvocation{}, fmt.Errorf("%s adapter model reference must use openai/<served-model>", adapter.Kind)
 	}
-	if request.Harness.ToolPolicy != ToolPolicySandboxed || !taskAllowsToolPolicy(request.Task, ToolPolicySandboxed) {
-		return CommandInvocation{}, fmt.Errorf("external CLI adapters require an allowed %s tool policy", ToolPolicySandboxed)
+	enforcePhaseContract := adapter.Kind == AdapterPi && request.Harness.PhaseContractMode == PiPhaseContractEnforcedV1
+	if enforcePhaseContract && request.Task.PhaseContract == nil {
+		return CommandInvocation{}, fmt.Errorf("Pi phase-contract enforcement requires a task phase contract")
+	}
+	requiredToolPolicy := ToolPolicySandboxed
+	if enforcePhaseContract {
+		requiredToolPolicy = ToolPolicyStructured
+	}
+	if request.Harness.ToolPolicy != requiredToolPolicy || !taskAllowsToolPolicy(request.Task, requiredToolPolicy) {
+		return CommandInvocation{}, fmt.Errorf("%s adapter requires an allowed %s tool policy", adapter.Kind, requiredToolPolicy)
 	}
 	if adapter.Normalizer != normalizerForAdapter(adapter.Kind) || request.Harness.TrajectoryNormalizer != adapter.Normalizer {
 		return CommandInvocation{}, fmt.Errorf("external adapter normalizer is missing or mismatched")
@@ -77,7 +86,8 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 	if err != nil {
 		return CommandInvocation{}, err
 	}
-	prompt := strings.TrimSpace(request.Task.SystemPrompt + "\n\n" + request.Task.UserMessage)
+	systemPrompt := scopedSystemPrompt(request.Task)
+	prompt := strings.TrimSpace(systemPrompt + "\n\n" + request.Task.UserMessage)
 	trajectory := filepath.ToSlash(filepath.Join(outerWorkspace, ".canvasbench", adapter.Kind+"-trajectory.json"))
 	invocation := CommandInvocation{
 		Executable: adapter.Executable, WorkDir: outerWorkspace,
@@ -101,14 +111,23 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 	case AdapterOpenCode:
 		invocation.Args = []string{"run", "--pure", "--auto", "--format", "json", "--agent", "build", "--dir", outerWorkspace, "--model", request.Harness.AdapterModelRef, prompt}
 	case AdapterQwenCode:
-		invocation.Args = []string{"--prompt", prompt, "--output-format", "stream-json", "--system-prompt", request.Task.SystemPrompt,
+		invocation.Args = []string{"--prompt", prompt, "--output-format", "stream-json", "--system-prompt", systemPrompt,
 			"--model", request.Harness.AdapterModelRef, "--auth-type", "openai", "--safe-mode", "--yolo", "--max-tool-calls", fmt.Sprint(request.Task.Budget.MaxToolCalls),
 			"--max-session-turns", fmt.Sprint(request.Task.Budget.MaxIterations), "--max-wall-time", fmt.Sprintf("%ds", request.Task.Budget.TimeoutSeconds),
 			"--exclude-tools", "agent"}
 	case AdapterMiniSWE:
 		invocation.Args = []string{"-t", prompt, "-m", request.Harness.AdapterModelRef, "-y", "--exit-immediately", "-o", trajectory}
 	case AdapterPi:
-		invocation.Args = []string{"--mode", "json", "--no-session", "--no-context-files", "--model", request.Harness.AdapterModelRef, "--system-prompt", request.Task.SystemPrompt, prompt}
+		invocation.Args = []string{"--mode", "json", "--no-session", "--no-context-files", "--model", request.Harness.AdapterModelRef, "--system-prompt", systemPrompt}
+		if enforcePhaseContract {
+			rawContract, err := json.Marshal(request.Task.PhaseContract)
+			if err != nil {
+				return CommandInvocation{}, fmt.Errorf("encode Pi phase contract: %w", err)
+			}
+			invocation.Env["CANVASBENCH_PI_PHASE_CONTRACT"] = string(rawContract)
+			invocation.Args = append(invocation.Args, "--extension", "/opt/harness/canvasbench-phase-contract.mjs", "--tools", request.Task.PhaseContract.ToolName)
+		}
+		invocation.Args = append(invocation.Args, strings.TrimSpace(request.Task.UserMessage))
 	case AdapterAider:
 		invocation.Args = []string{"--model", request.Harness.AdapterModelRef, "--message", prompt, "--edit-format", "diff",
 			"--yes-always", "--no-git", "--no-auto-commits", "--no-dirty-commits", "--no-stream", "--no-pretty",
@@ -133,7 +152,7 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 	case AdapterCline:
 		invocation.Args = []string{"--json", "--auto-approve", "--cwd", outerWorkspace,
 			"--provider", "openai-compatible", "--model", request.Harness.AdapterModelRef,
-			"--system", request.Task.SystemPrompt, "--retries", "3",
+			"--system", systemPrompt, "--retries", "3",
 			"--timeout", fmt.Sprint(request.Task.Budget.TimeoutSeconds), prompt}
 	case AdapterContinue:
 		invocation.Args = []string{"--config", "__CANVASBENCH_CONFIG__", "--auto", "--print", "--format", "json", prompt}
@@ -143,6 +162,19 @@ func (adapter ExternalCLIAdapter) BuildInvocation(request TrialRequest, usage Us
 		return CommandInvocation{}, fmt.Errorf("unsupported external adapter %q", adapter.Kind)
 	}
 	return invocation, nil
+}
+
+func scopedSystemPrompt(task TaskSpec) string {
+	readable := append([]string(nil), task.ReadPaths...)
+	for _, path := range task.WritePaths {
+		if !containsString(readable, path) {
+			readable = append(readable, path)
+		}
+	}
+	return strings.TrimSpace(task.SystemPrompt) + "\n\nWorkspace scope contract:\n" +
+		"- Projected readable paths: " + strings.Join(readable, ", ") + "\n" +
+		"- Authorized writable paths: " + strings.Join(task.WritePaths, ", ") + "\n" +
+		"- Modify exactly the authorized destination paths; do not invent replacement files or write elsewhere."
 }
 
 func adapterUsesLiteLLM(kind string) bool {

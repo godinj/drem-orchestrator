@@ -2,15 +2,15 @@
   "schema": "canvasbench.task.v2",
   "id": "case-04",
   "title": "Compile-valid take-cycling red-test authoring",
-  "description": "Author a compile-valid red test against the exact Canvas API and hidden canonical implementation/mutant bundle.",
+  "description": "Complete a compile-valid red-test skeleton emitted by the orchestration contract compiler, then grade it against the hidden canonical implementation and mutant bundle.",
   "status": "runnable",
   "mode": "direct_worker",
   "inference_policy": "required",
   "allowed_tool_policies": ["structured_only", "sandboxed_shell"],
   "weight": 14,
   "role": "coder",
-  "system_prompt": "Write only the declared integration test TU. Ground every call in the visible headers. Tests must compile on the base, fail because take.next/take.prev are absent, pass on the hidden canonical implementation, and kill the declared mutants.",
-  "user_message": "Cover next/previous wrap, automation-focus leakage, no-op undo, audio-only behavior, and both action routes without inventing APIs. Begin every added regression test title with `Take cycling` so the pinned focused native gate executes it.",
+  "system_prompt": "You are the atomic assertion-completion phase of a compiled orchestration manifest. The declared integration TU already contains two approved helpers, exactly three compile-valid TEST_CASE skeletons, and the complete state-transition choreography. Replace only the five CANVASBENCH_TODO assertion markers. Do not add helpers, includes, tests, sections, actions, state transitions, files, or APIs. Do not rename or restructure the skeleton. Tests must fail on the base because take.next/take.prev are absent, pass on the hidden canonical implementation, and kill the declared mutants. Stop immediately after all five markers are replaced.",
+  "user_message": "Complete only the five TODO assertion blocks in tests/integration/LaneVersionCommandTest.cpp. The orchestration compiler has already resolved every allowed expression; use these exact statements and call the compiled tool immediately.\n\n- ACTION_IDS: `CHECK (hasTakeAction (f, \"take.next\"));` and `CHECK (hasTakeAction (f, \"take.prev\"));`\n- PREV_WRAP_ASSERTIONS: `CHECK (previous.getActiveClipLaneVersionIndex() == 2);`, `CHECK (dc::LaneVersion (previous.getActiveClipLaneVersion()).getVersionId() != firstSource);`, `CHECK (f.engine.getStatusMessage() == \"Take: Take 3\");`, and `CHECK (notifications == 1);`\n- NEXT_WRAP_ASSERTIONS: `CHECK (wrapped.getActiveClipLaneVersionIndex() == 0);` and `CHECK (notifications == 3);`\n- MIDI_NOOP: `CHECK (midi.getActiveClipLaneVersionIndex() == 0);` and `CHECK_FALSE (f.project.getUndoSystem().canUndo());`\n- SINGLE_TAKE_NOOP: `CHECK (dc::Track (f.project.getTrack (0)).getActiveClipLaneVersionIndex() == 0);` and `CHECK_FALSE (f.project.getUndoSystem().canUndo());`\n\nAdd only those CHECK/CHECK_FALSE statements. Never call an action, undo, redo, getHistory, getClipLaneVersion(index), or any new API inside a TODO block.",
   "fixture": {"repo_id": "drem-canvas", "base_commit": "da8d567ea85a6ffc08e7a1ec0d3d7e49802306fc", "visible_blobs": [
     {"path": "tests/integration/LaneVersionCommandTest.cpp", "git_blob_sha": "e013d01be19945e0c009ac16987f7c2b5c49b32f"},
     {"path": "src/model/Arrangement.h", "git_blob_sha": "1692c085cfb8c5e561ed1e08291883e0c17db0d9"},
@@ -26,8 +26,8 @@
     {"path": "tests/helpers/VimTestFixture.h", "git_blob_sha": "f68811ee09ec2493b3f1dac19ca9ff0cb0625f47"},
     {"path": "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "git_blob_sha": "42a9aae475fdd7cb8e8a572d3c716e3bb5f51fc6"},
     {"path": "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc", "git_blob_sha": "f62cd413a41d34d706859eba27e29f82e5aa7eb3"}
-  ]},
-  "read_paths": ["tests/integration/LaneVersionCommandTest.cpp", "src/model/Arrangement.h", "src/model/Project.h", "src/utils/UndoSystem.h", "src/vim/ActionRegistry.h", "src/vim/ContextAdapter.h", "src/vim/KeymapRegistry.h", "src/vim/KeySequence.h", "src/vim/VimContext.h", "src/vim/adapters/EditorAdapter.h", "src/model/TrackVersionService.h", "tests/helpers/VimTestFixture.h", "src/vim/adapters/fragments/EditorAdapterActionHandlers.inc", "src/vim/adapters/fragments/EditorAdapterActionRegistration.inc"],
+  ], "seed_patch": "../seeds/case-04-take-test-skeleton.patch", "seed_patch_sha256": "8f21cdb4124007c10eadc9ced56a9401bc0baa415ef3bebbb05270cf2b4632e3"},
+  "read_paths": ["tests/integration/LaneVersionCommandTest.cpp", "tests/helpers/VimTestFixture.h"],
   "write_paths": ["tests/integration/LaneVersionCommandTest.cpp"],
   "required_changed_paths": ["tests/integration/LaneVersionCommandTest.cpp"],
   "result_artifact": "",
@@ -38,5 +38,54 @@
     {"path": "take-cycling-canonical-implementation.patch", "sha256": "247a217b09f63f634f6ce22ce726d9386d3ba19eac243fe74c08d64a5992511a"},
     {"path": "take-cycling-mutants.json", "sha256": "28116d85ce8941d7612c82d667a950ce8dc57a3fa4f3e994da881d0f5759b79f"}
   ],
-  "budget": {"max_input_tokens": 50000, "max_output_tokens": 5000, "max_tool_calls": 18, "max_iterations": 18, "timeout_seconds": 480}
+  "budget": {"max_input_tokens": 50000, "max_output_tokens": 5000, "max_tool_calls": 1, "max_iterations": 1, "timeout_seconds": 180},
+  "phase_contract": {
+    "kind": "pi_fixed_slots_v1",
+    "tool_name": "complete_take_cycle_assertions",
+    "target_path": "tests/integration/LaneVersionCommandTest.cpp",
+    "slots": [
+      {
+        "id": "action_ids",
+        "marker": "// CANVASBENCH_TODO_ACTION_IDS",
+        "description": "Exactly: CHECK (hasTakeAction (f, take.next)); then CHECK (hasTakeAction (f, take.prev)); with the action IDs quoted as C++ strings.",
+        "replacement_pattern": "^\\s*CHECK\\s*\\([^;\\n]+\\);\\s*CHECK\\s*\\([^;\\n]+\\);\\s*$",
+        "fixed_replacement": "CHECK (hasTakeAction (f, \"take.next\"));\nCHECK (hasTakeAction (f, \"take.prev\"));",
+        "forbidden_substrings": ["executeAction", ".undo(", ".redo(", "getHistory", "getClipLaneVersion"],
+        "max_bytes": 256
+      },
+      {
+        "id": "prev_wrap_assertions",
+        "marker": "// CANVASBENCH_TODO_PREV_WRAP_ASSERTIONS",
+        "description": "Use exactly previous.getActiveClipLaneVersionIndex() == 2; dc::LaneVersion (previous.getActiveClipLaneVersion()).getVersionId() != firstSource; f.engine.getStatusMessage() == Take: Take 3 as a quoted C++ string; and notifications == 1.",
+        "replacement_pattern": "^\\s*CHECK\\s*\\([^;\\n]+\\);\\s*CHECK\\s*\\([^;\\n]+\\);\\s*CHECK\\s*\\([^;\\n]+\\);\\s*CHECK\\s*\\([^;\\n]+\\);\\s*$",
+        "fixed_replacement": "CHECK (previous.getActiveClipLaneVersionIndex() == 2);\nCHECK (dc::LaneVersion (previous.getActiveClipLaneVersion()).getVersionId() != firstSource);\nCHECK (f.engine.getStatusMessage() == \"Take: Take 3\");\nCHECK (notifications == 1);",
+        "forbidden_substrings": ["executeAction", ".undo(", ".redo(", "getHistory", "getClipLaneVersion"],
+        "max_bytes": 640
+      },
+      {
+        "id": "next_wrap_assertions",
+        "marker": "// CANVASBENCH_TODO_NEXT_WRAP_ASSERTIONS",
+        "description": "Use exactly wrapped.getActiveClipLaneVersionIndex() == 0 and notifications == 3.",
+        "replacement_pattern": "^\\s*CHECK\\s*\\([^;\\n]+\\);\\s*CHECK\\s*\\([^;\\n]+\\);\\s*$",
+        "forbidden_substrings": ["executeAction", ".undo(", ".redo(", "getHistory", "getClipLaneVersion"],
+        "max_bytes": 320
+      },
+      {
+        "id": "midi_noop",
+        "marker": "// CANVASBENCH_TODO_MIDI_NOOP",
+        "description": "Use exactly CHECK (midi.getActiveClipLaneVersionIndex() == 0); then CHECK_FALSE (f.project.getUndoSystem().canUndo());.",
+        "replacement_pattern": "^\\s*CHECK\\s*\\([^;\\n]+\\);\\s*CHECK_FALSE\\s*\\([^;\\n]+\\);\\s*$",
+        "forbidden_substrings": ["executeAction", ".undo(", ".redo(", "getHistory", "getClipLaneVersion"],
+        "max_bytes": 320
+      },
+      {
+        "id": "single_take_noop",
+        "marker": "// CANVASBENCH_TODO_SINGLE_TAKE_NOOP",
+        "description": "Use exactly CHECK (dc::Track (f.project.getTrack (0)).getActiveClipLaneVersionIndex() == 0); then CHECK_FALSE (f.project.getUndoSystem().canUndo());.",
+        "replacement_pattern": "^\\s*CHECK\\s*\\([^;\\n]+\\);\\s*CHECK_FALSE\\s*\\([^;\\n]+\\);\\s*$",
+        "forbidden_substrings": ["executeAction", ".undo(", ".redo(", "getHistory", "getClipLaneVersion"],
+        "max_bytes": 320
+      }
+    ]
+  }
 }

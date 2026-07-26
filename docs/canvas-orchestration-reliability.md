@@ -56,3 +56,31 @@ checkpoint handoff, sibling draining, integration scope, artifact freezing,
 native verification failure, and repeated Computer Use rework. The real Qwen
 worker canary remains the final preflight; the corpus does not replace an
 exact-artifact host verification or Computer Use run.
+
+## Benchmark acceptance boundary
+
+`bench/canvasbench-v2/manifest-orchestrated.json` is the model/harness
+qualification suite for this contract. It tests the worker-facing result of
+compiled contracts, scoped artifact handoffs, ownership-union repair, and
+deterministic rework without requiring one model session to implement an
+entire cross-phase feature. `manifest-focused.json` remains a raw agent
+discriminator and `manifest.json` remains an adversarial stress suite; neither
+is a substitute for the orchestrated production acceptance boundary.
+
+Compiled worker contracts are executable contracts, not topic summaries. They
+name exact destination paths, allowed callable expressions, positive versus
+no-op side effects, and a bounded artifact count. The harness repeats the
+read/write projection in the model-visible system prompt while enforcing it in
+the outer container. A worker that must rediscover a type, choose a destination,
+or infer whether an operation is undoable indicates an upstream compilation
+defect rather than useful model difficulty.
+
+For sufficiently narrow skeleton-completion phases, the compiled contract may
+be enforced as the worker's entire tool surface instead of repeated as prose.
+The `pi_fixed_slots_v1` contract binds one target and bounded replacement
+slots; the Pi adapter exposes only that generated tool, the trusted proxy
+forces the exact strict function call, and the tool validates the whole edit
+before writing and terminating. This lane is intentionally narrower than a
+general implementation worker. Its one-case CanvasBench manifest compares the
+same task under generic Pi and enforced Pi so improvements are attributable to
+the contract rather than a changed fixture or prompt.

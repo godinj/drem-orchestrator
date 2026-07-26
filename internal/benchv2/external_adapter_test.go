@@ -2,6 +2,7 @@ package benchv2
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -157,6 +158,15 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 			for _, forbidden := range test.forbid {
 				require.NotContains(t, invocation.Args, forbidden)
 			}
+			if test.kind == AdapterPi {
+				require.Equal(t, "task", invocation.Args[len(invocation.Args)-1], "Pi's positional prompt must contain only the user task")
+				systemIndex := indexExactArg(invocation.Args, "--system-prompt")
+				require.GreaterOrEqual(t, systemIndex, 0)
+				require.Equal(t, 1, countExactArgs(invocation.Args, "--system-prompt"))
+				require.Contains(t, invocation.Args[systemIndex+1], "system\n\nWorkspace scope contract:")
+				require.Contains(t, invocation.Args[systemIndex+1], "Projected readable paths: read.cpp, write.cpp")
+				require.Contains(t, invocation.Args[systemIndex+1], "Authorized writable paths: write.cpp")
+			}
 			require.Equal(t, outerWorkspace, invocation.WorkDir)
 			require.NotContains(t, invocation.Env, "CANVASBENCH_USAGE_PROXY_ADMIN_TOKEN")
 			require.NotContains(t, invocation.Env, "OPENAI_API_KEY")
@@ -178,6 +188,76 @@ func TestExternalAdapterInvocationContracts(t *testing.T) {
 			require.Equal(t, "true", invocation.Env["CANVASBENCH_PRESERVE_THINKING"])
 		})
 	}
+}
+
+func TestPiPhaseContractLoadsOnlyTheCompiledExtension(t *testing.T) {
+	request := adapterRequest("/host/fixture", AdapterPi, NormalizerPi)
+	request.Harness.ToolPolicy = ToolPolicyStructured
+	request.Harness.PhaseContractMode = PiPhaseContractEnforcedV1
+	request.Task.PhaseContract = &PhaseContract{
+		Kind: PiFixedSlotsContractV1, ToolName: "complete_contract", TargetPath: "write.cpp",
+		Slots: []PhaseContractSlot{{
+			ID: "assertion", Marker: "// TODO", Description: "one assertion",
+			ReplacementPattern: `^CHECK \\([^;]+\\);$`, MaxBytes: 128,
+		}},
+	}
+	invocation, err := externalAdapter(AdapterPi, NormalizerPi).BuildInvocation(request, UsageSession{
+		CorrelationID: "trial", BaseURL: "http://usage-proxy:8080/v1", APIKey: "trial-secret",
+	})
+	require.NoError(t, err)
+	require.Contains(t, invocation.Args, "--extension")
+	require.Contains(t, invocation.Args, "/opt/harness/canvasbench-phase-contract.mjs")
+	toolsIndex := indexExactArg(invocation.Args, "--tools")
+	require.GreaterOrEqual(t, toolsIndex, 0)
+	require.Equal(t, "complete_contract", invocation.Args[toolsIndex+1])
+	var contract PhaseContract
+	require.NoError(t, json.Unmarshal([]byte(invocation.Env["CANVASBENCH_PI_PHASE_CONTRACT"]), &contract))
+	require.Equal(t, "complete_contract", contract.ToolName)
+	require.Equal(t, "task", invocation.Args[len(invocation.Args)-1])
+}
+
+func TestGenericPiIgnoresContractMetadataWithoutEnforcementMode(t *testing.T) {
+	request := adapterRequest("/host/fixture", AdapterPi, NormalizerPi)
+	request.Task.PhaseContract = &PhaseContract{
+		Kind: PiFixedSlotsContractV1, ToolName: "complete_contract", TargetPath: "write.cpp",
+		Slots: []PhaseContractSlot{{ID: "assertion", Marker: "// TODO", Description: "one assertion", ReplacementPattern: `^CHECK \\([^;]+\\);$`, MaxBytes: 128}},
+	}
+	invocation, err := externalAdapter(AdapterPi, NormalizerPi).BuildInvocation(request, UsageSession{
+		CorrelationID: "trial", BaseURL: "http://usage-proxy:8080/v1", APIKey: "trial-secret",
+	})
+	require.NoError(t, err)
+	require.NotContains(t, invocation.Args, "--extension")
+	require.NotContains(t, invocation.Args, "--tools")
+	require.NotContains(t, invocation.Env, "CANVASBENCH_PI_PHASE_CONTRACT")
+}
+
+func TestPiPhaseContractModeRequiresTaskContract(t *testing.T) {
+	request := adapterRequest("/host/fixture", AdapterPi, NormalizerPi)
+	request.Harness.ToolPolicy = ToolPolicyStructured
+	request.Harness.PhaseContractMode = PiPhaseContractEnforcedV1
+	_, err := externalAdapter(AdapterPi, NormalizerPi).BuildInvocation(request, UsageSession{
+		CorrelationID: "trial", BaseURL: "http://usage-proxy:8080/v1", APIKey: "trial-secret",
+	})
+	require.ErrorContains(t, err, "requires a task phase contract")
+}
+
+func countExactArgs(args []string, needle string) int {
+	count := 0
+	for _, arg := range args {
+		if arg == needle {
+			count++
+		}
+	}
+	return count
+}
+
+func indexExactArg(args []string, needle string) int {
+	for index, arg := range args {
+		if arg == needle {
+			return index
+		}
+	}
+	return -1
 }
 
 func TestExternalAdaptersExecuteOnlyThroughInjectedOuterBoundary(t *testing.T) {

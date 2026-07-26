@@ -1,0 +1,91 @@
+diff --git i/tests/integration/LaneVersionCommandTest.cpp w/tests/integration/LaneVersionCommandTest.cpp
+index e013d01..49d9a77 100644
+--- i/tests/integration/LaneVersionCommandTest.cpp
++++ w/tests/integration/LaneVersionCommandTest.cpp
+@@ -698,3 +698,86 @@ TEST_CASE ("Track versions: non-event tracks reject version creation",
+     CHECK (bus.getClipLaneVersionCount() == 1);
+     CHECK (f.engine.getStatusMessage().find ("not support") != std::string::npos);
+ }
++
++// ── Orchestration-compiled take-cycling test skeleton ───────────────────────
++
++static void prepareTakeCycleTrack (LvTestFixture& f)
++{
++    f.addTracks (1);
++    f.selectTrack (0);
++    f.focusClipLane();
++    dc::Track track (f.project.getTrack (0));
++    track.addClipLaneVersion ("Take 2");
++    track.addClipLaneVersion ("Take 3");
++    REQUIRE (track.switchClipLaneVersion (0));
++    f.project.getUndoManager().clearHistory();
++}
++
++static bool hasTakeAction (const LvTestFixture& f, const std::string& id)
++{
++    for (const auto& action : f.engine.getActionRegistry().getAllActions())
++        if (action.id == id)
++            return true;
++    return false;
++}
++
++TEST_CASE ("Take cycling actions expose exact IDs", "[integration][take_cycle_contract]")
++{
++    LvTestFixture f;
++    // CANVASBENCH_TODO_ACTION_IDS
++}
++
++TEST_CASE ("Take cycling wraps clip takes despite automation focus and is undoable",
++           "[integration][take_cycle_contract]")
++{
++    LvTestFixture f;
++    prepareTakeCycleTrack (f);
++    f.focusAutomationLane (0);
++    int notifications = 0;
++    f.editorAdapter->setContextChangedCallback ([&notifications]() { ++notifications; });
++
++    dc::Track before (f.project.getTrack (0));
++    auto firstSource = dc::LaneVersion (before.getActiveClipLaneVersion()).getVersionId();
++    REQUIRE (f.engine.getActionRegistry().executeAction ("take.prev"));
++    dc::Track previous (f.project.getTrack (0));
++    // CANVASBENCH_TODO_PREV_WRAP_ASSERTIONS
++    REQUIRE (f.project.getUndoSystem().canUndo());
++    f.project.getUndoSystem().undo();
++    CHECK (dc::Track (f.project.getTrack (0)).getActiveClipLaneVersionIndex() == 0);
++
++    f.project.getUndoManager().clearHistory();
++    REQUIRE (f.engine.getActionRegistry().executeAction ("take.next"));
++    CHECK (dc::Track (f.project.getTrack (0)).getActiveClipLaneVersionIndex() == 1);
++    REQUIRE (dc::Track (f.project.getTrack (0)).switchClipLaneVersion (2));
++    f.project.getUndoManager().clearHistory();
++    REQUIRE (f.engine.getActionRegistry().executeAction ("take.next"));
++    dc::Track wrapped (f.project.getTrack (0));
++    // CANVASBENCH_TODO_NEXT_WRAP_ASSERTIONS
++}
++
++TEST_CASE ("Take cycling rejects non-audio and single-take tracks without undo",
++           "[integration][take_cycle_contract]")
++{
++    SECTION ("MIDI")
++    {
++        LvTestFixture f;
++        f.arrangement.addMidiTrack ("MIDI");
++        f.selectTrack (0);
++        dc::Track midi (f.project.getTrack (0));
++        midi.addClipLaneVersion ("MIDI 2");
++        REQUIRE (midi.switchClipLaneVersion (0));
++        f.project.getUndoManager().clearHistory();
++        REQUIRE (f.engine.getActionRegistry().executeAction ("take.next"));
++        // CANVASBENCH_TODO_MIDI_NOOP
++    }
++
++    SECTION ("single audio take")
++    {
++        LvTestFixture f;
++        f.addTracks (1);
++        f.selectTrack (0);
++        f.project.getUndoManager().clearHistory();
++        REQUIRE (f.engine.getActionRegistry().executeAction ("take.prev"));
++        // CANVASBENCH_TODO_SINGLE_TAKE_NOOP
++    }
++}

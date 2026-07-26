@@ -113,3 +113,22 @@ func TestRunnerSkipsHostVerificationAfterUpstreamRequestRejection(t *testing.T) 
 	require.True(t, result.Gates.Attested)
 	require.False(t, verifierCalled)
 }
+
+func TestScoreAcceptsCompleteTrustedProxyUsageForExternalHarnesses(t *testing.T) {
+	task := TaskSpec{InferencePolicy: "required", Budget: Budget{MaxInputTokens: 100, MaxOutputTokens: 100}}
+	result := TrialResult{
+		Telemetry:   Telemetry{TokensIn: 10, TokensOut: 5},
+		ServerUsage: ServerUsage{Source: ServerUsageSourceProxy, RequestsMeasured: 1, RequestsTotal: 1, Complete: true},
+		Gates: Gates{VerifierPassed: true, Compiled: true, ScopePassed: true, ReadScopePassed: true,
+			OracleIsolated: true, Attested: true, RequiredMutationPassed: true, ArtifactAttested: true},
+	}
+	require.Equal(t, 100.0, Score(task, &result))
+}
+
+func TestAggregateUsesManifestHardGateInsteadOfCaseID(t *testing.T) {
+	task := TaskSpec{ID: "custom-hard-gate", Status: "runnable", Weight: 1, HardGate: true}
+	result := TrialResult{TaskID: task.ID, Status: "failed", Score: 90}
+	aggregate := AggregateResults("matrix", []TaskSpec{task}, []TrialResult{result})
+	require.False(t, aggregate.Eligible)
+	require.Contains(t, aggregate.IneligibleReasons, "custom-hard-gate: mandatory case did not pass every trial")
+}

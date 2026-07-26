@@ -66,6 +66,15 @@ runner invokes only one harness adapter per trial. Live Computer Use is not
 fabricated as benchmark evidence; it remains a mandatory post-qualification
 exact-binary Canvas pilot until a deterministic multi-take UI fixture exists.
 
+Production model/harness qualification uses the separate orchestrated
+manifest. It does not require case 9's single worker to rediscover APIs, author
+tests, implement production, assemble routes, and produce a Release artifact
+in one session. Instead, it hard-gates the compiled-contract test and
+implementation phases, the compiler-directed ownership-union repair, and case
+8's deterministic routing, while retaining isolated assembly and seam cases.
+The full case-9 suite remains an adversarial stress measurement rather than a
+proxy for the production state machine.
+
 ## Problem Statement
 
 The current Drem Orchestrator runs all services, daemons, and agent harnesses directly on the host. This causes several recurring pains:
@@ -231,6 +240,7 @@ Host-side Git worktrees are eliminated entirely. All working copies live inside 
 - Direct-worker limits distinguish the model context window from cumulative replay cost. Test, implementation, integration, and review phases may receive different cumulative-input and read-before-mutation ceilings. Any already-applied mutation is preserved as a checkpoint at a ceiling and admitted only through deterministic repository gates; a budget-exhausted worker with no mutation fails closed.
 - Scoped mutation workers enforce total-tool-call and pre-mutation inference ceilings. The runtime reserves one full cumulative-input turn after the reconnaissance ceiling, structured reads/searches and discovery-like bash share one reconnaissance budget, all shell commands are denied before mutation, and older large tool results are compacted without breaking assistant/tool protocol pairs.
 - Every paired red-test subtask receives a semantic planned-interface contract materialized from its implementation plan plus the adapter's verified source-evidence pack. C++ symbols, registry actions, keymap routes, and call edges have distinct validation/red-state rules; action IDs cannot masquerade as callable signatures. Adapter-authored implementation plans are rejected without typed contracts or legacy interface shapes.
+- An eligible single-file skeleton-completion phase may compile that semantic contract into a fixed-slot Pi tool. The task schema binds its exact target, markers, portable replacement patterns, forbidden tokens, and byte bounds; the adapter removes generic tools, the usage proxy forces the one strict named tool, and the extension validates all slots before one terminating write. This is an explicit attested execution mode, never an implicit prompt optimization or a substitute for general multi-file workers.
 - Child branch admission rejects destructive rewrites and invalid red-test checkpoints before model review. A failed child cancels dependency-blocked backlog work but allows already-running independent siblings to drain to an immutable checkpoint before the parent terminalizes.
 - A measured deployment is image-coherent: orchestrator, spawner, and selected worker image carry the same source-state attestation. Direct-agent runtime changes are not considered deployed when only the orchestrator image was rebuilt.
 - Accepted container child refs are deleted only when the Git reference registry proves exact task ownership and Git proves the ref is not checked out. Parent deliverable refs are retained through host verification and integration.

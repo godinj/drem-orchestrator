@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -64,6 +66,34 @@ type Budget struct {
 	TimeoutSeconds  int `json:"timeout_seconds"`
 }
 
+const (
+	PiFixedSlotsContractV1    = "pi_fixed_slots_v1"
+	PiPhaseContractEnforcedV1 = "pi_phase_contract_enforced_v1"
+)
+
+var phaseToolNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+var nonPortablePhasePattern = regexp.MustCompile(`\(\?|\\(?:A|z|C|Q|E|p|P|x\{|[1-7])|\[\[:`)
+
+// PhaseContract compiles a narrow orchestration phase into one structured Pi
+// tool. The extension validates all replacements before writing, replaces each
+// marker exactly once, and has no generic read, write, edit, or shell authority.
+type PhaseContract struct {
+	Kind       string              `json:"kind"`
+	ToolName   string              `json:"tool_name"`
+	TargetPath string              `json:"target_path"`
+	Slots      []PhaseContractSlot `json:"slots"`
+}
+
+type PhaseContractSlot struct {
+	ID                  string   `json:"id"`
+	Marker              string   `json:"marker"`
+	Description         string   `json:"description"`
+	ReplacementPattern  string   `json:"replacement_pattern"`
+	FixedReplacement    string   `json:"fixed_replacement,omitempty"`
+	ForbiddenSubstrings []string `json:"forbidden_substrings,omitempty"`
+	MaxBytes            int      `json:"max_bytes"`
+}
+
 type TaskSpec struct {
 	Schema               string              `json:"schema"`
 	ID                   string              `json:"id"`
@@ -87,6 +117,8 @@ type TaskSpec struct {
 	OracleID             string              `json:"oracle_id"`
 	OracleArtifacts      []OracleArtifactPin `json:"oracle_artifacts,omitempty"`
 	Budget               Budget              `json:"budget"`
+	PhaseContract        *PhaseContract      `json:"phase_contract,omitempty"`
+	HardGate             bool                `json:"-"`
 }
 
 type HarnessConfig struct {
@@ -108,6 +140,7 @@ type HarnessConfig struct {
 	UsageProxySourceState string `json:"usage_proxy_source_state,omitempty"`
 	UsageProxyImage       string `json:"usage_proxy_image,omitempty"`
 	UsageProxyConfigSHA   string `json:"usage_proxy_config_sha256,omitempty"`
+	PhaseContractMode     string `json:"phase_contract_mode,omitempty"`
 }
 
 type RuntimeAttestation struct {
@@ -226,6 +259,11 @@ func DecodeStrictFile(path string, value any) error {
 
 func LoadManifest(path string) (ManifestSpec, []TaskSpec, error) {
 	var manifest ManifestSpec
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		return manifest, nil, err
+	}
+	path = absolutePath
 	if err := DecodeStrictFile(path, &manifest); err != nil {
 		return manifest, nil, err
 	}
@@ -251,6 +289,7 @@ func LoadManifest(path string) (ManifestSpec, []TaskSpec, error) {
 		if task.ID != item.ID || task.Weight != item.Weight || task.Status != item.Status {
 			return manifest, nil, fmt.Errorf("manifest metadata mismatch for %s", item.ID)
 		}
+		task.HardGate = item.HardGate
 		for _, artifact := range task.OracleArtifacts {
 			artifactRaw, err := os.ReadFile(filepath.Join(root, "oracles", artifact.Path))
 			if err != nil {
@@ -263,6 +302,22 @@ func LoadManifest(path string) (ManifestSpec, []TaskSpec, error) {
 		}
 		if task.Fixture.SeedPatch != "" && !filepath.IsAbs(task.Fixture.SeedPatch) {
 			task.Fixture.SeedPatch = filepath.Join(filepath.Dir(taskPath), task.Fixture.SeedPatch)
+		}
+		if task.Fixture.SeedPatch != "" {
+			seedRaw, err := os.ReadFile(task.Fixture.SeedPatch)
+			if err != nil {
+				return manifest, nil, fmt.Errorf("read seed patch for %s: %w", item.ID, err)
+			}
+			if fmt.Sprintf("%x", sha256.Sum256(seedRaw)) != task.Fixture.SeedPatchSHA {
+				return manifest, nil, fmt.Errorf("seed patch digest mismatch for %s", item.ID)
+			}
+			apply := exec.Command("git", "apply", "--numstat", "--", task.Fixture.SeedPatch)
+			// Run outside the orchestrator worktree. From a repository subdirectory,
+			// git apply silently filters paths outside that prefix and emits no stats.
+			apply.Dir = os.TempDir()
+			if output, err := apply.CombinedOutput(); err != nil || len(bytes.TrimSpace(output)) == 0 {
+				return manifest, nil, fmt.Errorf("seed patch syntax is invalid for %s: %s", item.ID, strings.TrimSpace(string(output)))
+			}
 		}
 		if err := task.Validate(); err != nil {
 			return manifest, nil, err
@@ -349,6 +404,57 @@ func (task TaskSpec) Validate() error {
 	if task.OracleID == "take-cycling-capstone-canonical-v1" && task.ReleaseArtifactPath == "" {
 		return fmt.Errorf("task %s must require a Release artifact", task.ID)
 	}
+	if err := task.validatePhaseContract(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (task TaskSpec) validatePhaseContract() error {
+	contract := task.PhaseContract
+	if contract == nil {
+		return nil
+	}
+	if contract.Kind != PiFixedSlotsContractV1 || !phaseToolNamePattern.MatchString(contract.ToolName) ||
+		len(contract.Slots) == 0 || len(contract.Slots) > 16 {
+		return fmt.Errorf("task %s has an invalid Pi phase contract", task.ID)
+	}
+	cleanTarget := filepath.Clean(contract.TargetPath)
+	if filepath.IsAbs(contract.TargetPath) || cleanTarget != contract.TargetPath || cleanTarget == "." || cleanTarget == ".." ||
+		strings.HasPrefix(cleanTarget, ".."+string(filepath.Separator)) ||
+		!containsString(task.WritePaths, contract.TargetPath) {
+		return fmt.Errorf("task %s phase contract target is outside writable scope", task.ID)
+	}
+	seenIDs := map[string]bool{}
+	seenMarkers := map[string]bool{}
+	for _, slot := range contract.Slots {
+		if !phaseToolNamePattern.MatchString(slot.ID) || seenIDs[slot.ID] || slot.Marker == "" ||
+			seenMarkers[slot.Marker] || strings.TrimSpace(slot.Description) == "" ||
+			slot.MaxBytes <= 0 || slot.MaxBytes > 4096 || !strings.HasPrefix(slot.ReplacementPattern, "^") ||
+			!strings.HasSuffix(slot.ReplacementPattern, "$") || nonPortablePhasePattern.MatchString(slot.ReplacementPattern) {
+			return fmt.Errorf("task %s has an invalid Pi phase-contract slot", task.ID)
+		}
+		if _, err := regexp.Compile(slot.ReplacementPattern); err != nil {
+			return fmt.Errorf("task %s has an invalid Pi phase-contract pattern", task.ID)
+		}
+		if slot.FixedReplacement != "" {
+			if len([]byte(slot.FixedReplacement)) > slot.MaxBytes || !regexp.MustCompile(slot.ReplacementPattern).MatchString(slot.FixedReplacement) {
+				return fmt.Errorf("task %s has an invalid fixed Pi phase-contract replacement", task.ID)
+			}
+		}
+		seenForbidden := map[string]bool{}
+		for _, forbidden := range slot.ForbiddenSubstrings {
+			if forbidden == "" || seenForbidden[forbidden] || len(forbidden) > 128 {
+				return fmt.Errorf("task %s has an invalid Pi phase-contract forbidden token", task.ID)
+			}
+			if slot.FixedReplacement != "" && strings.Contains(slot.FixedReplacement, forbidden) {
+				return fmt.Errorf("task %s fixed Pi phase-contract replacement contains a forbidden token", task.ID)
+			}
+			seenForbidden[forbidden] = true
+		}
+		seenIDs[slot.ID] = true
+		seenMarkers[slot.Marker] = true
+	}
 	return nil
 }
 
@@ -384,6 +490,26 @@ func (manifest ManifestSpec) Validate() error {
 				return fmt.Errorf("focused manifest cases, weights, or hard gates are invalid")
 			}
 		}
+	case "canvasbench-v2-orchestrated-20260725":
+		expected := []string{"case-02", "case-03", "case-04", "case-05", "case-06", "case-07", "case-08"}
+		requiredHardGates := []string{"case-04", "case-05", "case-06", "case-08"}
+		if len(manifest.Cases) != len(expected) || weight != 76 || len(hard) != len(requiredHardGates) {
+			return fmt.Errorf("orchestrated manifest cases, weights, or hard gates are invalid")
+		}
+		for _, id := range expected {
+			if !seen[id] {
+				return fmt.Errorf("orchestrated manifest cases, weights, or hard gates are invalid")
+			}
+		}
+		for _, id := range requiredHardGates {
+			if !hard[id] {
+				return fmt.Errorf("orchestrated manifest cases, weights, or hard gates are invalid")
+			}
+		}
+	case "canvasbench-v2-pi-contract-20260725":
+		if len(manifest.Cases) != 1 || weight != 14 || !seen["case-04"] || !hard["case-04"] {
+			return fmt.Errorf("Pi contract manifest case, weight, or hard gate is invalid")
+		}
 	default:
 		return fmt.Errorf("invalid CanvasBench v2 manifest identity or threshold")
 	}
@@ -417,8 +543,15 @@ func ValidateAttestation(h HarnessConfig, r RuntimeAttestation) error {
 	if adapterUsesLiteLLM(h.Name) && !validLiteLLMModelRef(h.AdapterModelRef) {
 		return fmt.Errorf("%s adapter model reference must use openai/<served-model>", h.Name)
 	}
+	if h.PhaseContractMode != "" && (h.Name != AdapterPi || h.PhaseContractMode != PiPhaseContractEnforcedV1 || h.ToolPolicy != ToolPolicyStructured) {
+		return fmt.Errorf("Pi phase-contract attestation is invalid")
+	}
+	if h.Name == AdapterPi && h.ToolPolicy == ToolPolicyStructured && h.PhaseContractMode != PiPhaseContractEnforcedV1 {
+		return fmt.Errorf("Pi structured-only attestation requires phase-contract enforcement")
+	}
 	if h.Name == AdapterOpenCode || h.Name == AdapterQwenCode || h.Name == AdapterMiniSWE || h.Name == AdapterPi || h.Name == AdapterAider || h.Name == AdapterOpenHands || h.Name == AdapterGoose || h.Name == AdapterCline || h.Name == AdapterContinue {
-		if h.ToolPolicy != ToolPolicySandboxed || h.OuterIsolation != "outer_container" || !pinnedOCIImage.MatchString(h.OuterImage) ||
+		if (h.ToolPolicy != ToolPolicySandboxed && !(h.Name == AdapterPi && h.ToolPolicy == ToolPolicyStructured)) ||
+			h.OuterIsolation != "outer_container" || !pinnedOCIImage.MatchString(h.OuterImage) ||
 			h.OuterNetworkPolicy != OuterNetworkIsolatedInference || h.OuterNetworkName == "" || h.OuterNetworkName == "host" ||
 			h.OuterNetworkName == "bridge" || h.OuterNetworkName == "default" || h.TrajectoryNormalizer != normalizerForAdapter(h.Name) ||
 			h.InferenceEnvContract != inferenceEnvContractForAdapter(h.Name) || h.UsageProxySourceState == "" ||

@@ -21,11 +21,11 @@ func WriteReports(prefix string, aggregate Aggregate, results []TrialResult) err
 		return err
 	}
 	w := csv.NewWriter(file)
-	_ = w.Write([]string{"task_id", "status", "trials", "passes", "pass_rate", "ci95_low", "ci95_high", "average_score", "weight"})
+	_ = w.Write([]string{"task_id", "status", "trials", "passes", "pass_rate", "ci95_low", "ci95_high", "average_score", "weight", "hard_gate"})
 	for _, item := range aggregate.Cases {
 		_ = w.Write([]string{item.TaskID, item.Status, strconv.Itoa(item.Trials), strconv.Itoa(item.Passes),
 			fmt.Sprintf("%.6f", item.PassRate), fmt.Sprintf("%.6f", item.CI95Low), fmt.Sprintf("%.6f", item.CI95High),
-			fmt.Sprintf("%.2f", item.AverageScore), strconv.Itoa(item.Weight)})
+			fmt.Sprintf("%.2f", item.AverageScore), strconv.Itoa(item.Weight), strconv.FormatBool(item.HardGate)})
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {
@@ -38,7 +38,11 @@ func WriteReports(prefix string, aggregate Aggregate, results []TrialResult) err
 	markdown := fmt.Sprintf("# CanvasBench v2 result\n\n- Matrix: `%s`\n- Weighted score: **%.2f**\n- Qualification threshold: **%.2f**\n- Eligible: **%t**\n\n| Case | Status | Passes | Rate | 95%% CI | Score |\n| --- | --- | ---: | ---: | --- | ---: |\n",
 		aggregate.MatrixID, aggregate.WeightedScore, aggregate.Threshold, aggregate.Eligible)
 	for _, item := range aggregate.Cases {
-		markdown += fmt.Sprintf("| %s | %s | %d/%d | %.1f%% | %.1f–%.1f%% | %.1f |\n", item.TaskID, item.Status,
+		label := item.TaskID
+		if item.HardGate {
+			label += " (hard gate)"
+		}
+		markdown += fmt.Sprintf("| %s | %s | %d/%d | %.1f%% | %.1f–%.1f%% | %.1f |\n", label, item.Status,
 			item.Passes, item.Trials, 100*item.PassRate, 100*item.CI95Low, 100*item.CI95High, item.AverageScore)
 	}
 	if len(aggregate.IneligibleReasons) > 0 {

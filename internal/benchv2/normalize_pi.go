@@ -49,7 +49,9 @@ func normalizePi(raw []byte, started time.Time) (normalizedExternal, error) {
 			seenStart = true
 		case "agent_end":
 			seenEnd = true
-			result.StopReason = "agent_end"
+			if result.StopReason == "" {
+				result.StopReason = "agent_end"
+			}
 		case "message_end":
 			var message struct {
 				Role    string          `json:"role"`
@@ -63,7 +65,7 @@ func normalizePi(raw []byte, started time.Time) (normalizedExternal, error) {
 			}
 			content := textContent(message.Content)
 			if content == "" {
-				return normalizedExternal{}, fmt.Errorf("Pi assistant message is empty")
+				continue
 			}
 			result.Steps = append(result.Steps, ATIFStep{StepID: fmt.Sprintf("message-%d", index), Timestamp: timestamp, Source: "assistant", Message: content})
 			result.Output = content
@@ -86,6 +88,15 @@ func normalizePi(raw []byte, started time.Time) (normalizedExternal, error) {
 			}
 			delete(pending, event.ToolCallID)
 			result.Steps = append(result.Steps, ATIFStep{StepID: event.ToolCallID, Timestamp: timestamp, Source: "tool", ToolCalls: []ATIFToolCall{call}})
+			if output, terminating, err := piTerminatingToolOutput(event.Result); err != nil {
+				return normalizedExternal{}, err
+			} else if terminating {
+				if event.IsError {
+					return normalizedExternal{}, fmt.Errorf("terminating Pi tool failed")
+				}
+				result.Output = output
+				result.StopReason = "terminating_tool"
+			}
 		case "turn_start", "turn_end", "message_start", "message_update", "tool_execution_update", "queue_update", "compaction_start", "compaction_end", "auto_retry_start", "auto_retry_end", "summarization_retry_scheduled", "summarization_retry_attempt_start", "summarization_retry_finished", "agent_settled":
 			// Lifecycle and partial-update events carry no additional final text.
 		default:
@@ -96,4 +107,23 @@ func normalizePi(raw []byte, started time.Time) (normalizedExternal, error) {
 		return normalizedExternal{}, fmt.Errorf("incomplete Pi trajectory")
 	}
 	return result, nil
+}
+
+func piTerminatingToolOutput(value any) (string, bool, error) {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "", false, fmt.Errorf("invalid Pi tool result")
+	}
+	var result struct {
+		Content   json.RawMessage `json:"content"`
+		Terminate bool            `json:"terminate"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil || !result.Terminate {
+		return "", false, nil
+	}
+	output := textContent(result.Content)
+	if output == "" {
+		return "", false, fmt.Errorf("terminating Pi tool result is empty")
+	}
+	return output, true, nil
 }

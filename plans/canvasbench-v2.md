@@ -33,6 +33,10 @@ the next qualification boundary.
   Release SHA-256/size evidence.
 - Explicit evidence boundary: case 8 owns deterministic rework scheduling;
   case 9 owns a single worker/artifact. Neither claims live UI or Computer Use.
+- Production qualification is a separate immutable manifest over cases 2–8.
+  It supplies orchestration-compiled API/member contracts to cases 4 and 5,
+  treats case 6 as the ownership-union atomic-repair lane, and makes cases
+  4/5/6/8 hard gates. Case 9 remains only in the adversarial stress suite.
 - Trusted OpenAI-compatible usage proxy and host attestor for external harness
   trials: random per-trial credentials, stream/non-stream server parsing,
   aggregate consume-once ledgers, fail-closed correlation, and no harness-log
@@ -53,6 +57,16 @@ the next qualification boundary.
   orchestrator archive and matrix, keeps proxy secrets remote, runs harnesses,
   Canvas worktrees, native builds, and model access on Debian, and returns only
   the four report artifacts.
+- A compiled Pi fixed-slot phase lane spanning the task schema, adapter,
+  digest-pinned image extension, trusted-proxy forced strict tool policy, and
+  terminating-tool trajectory normalization. A dedicated case-4 manifest and
+  matrix template preserve an identical generic-Pi comparator.
+- A Debian live Q36/Pi qualification of that lane passed case 4 through the
+  production runner: one measured request, one terminating tool call, hidden
+  native verification, compilation, exact scope, and a 100/100 hard-gate
+  result. The canary also drove fixes for Pi extension lifecycle, forced-phase
+  thinking, nested quoted arguments, absolute seed paths, and malformed unified
+  diff admission before this result was accepted.
 
 ## Before model comparison
 
