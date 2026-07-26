@@ -90,6 +90,11 @@ type DirectToolAgentConfig struct {
 	// ScopedFiles lets corrective mutation turns omit write when every
 	// authorized path already exists.
 	ScopedFiles []string
+	// RequiredMutationFiles is the explicit completion contract for scoped
+	// test/implementation workers. Scope answers what may change; this list
+	// answers what must have a successful mutation before completion. It is
+	// intentionally empty for read-only-capable integration workers.
+	RequiredMutationFiles []string
 	// ReadableFiles is an optional exact read allowlist. When non-empty, the
 	// structured read/search tools reject every repository path not named here.
 	// DisableBash closes the shell escape hatch for benchmark runs so the read
@@ -138,16 +143,24 @@ type DirectToolAgentResult struct {
 	DeniedCalls            int
 	FirstMutationIteration int
 	FirstMutationMs        int64
+	// PendingMutationRepairs lists scoped paths whose most recent mutation
+	// attempt failed and has not yet been followed by a successful mutation.
+	// A partial checkpoint with entries here is useful recovery evidence, but
+	// it is not a completed worker result.
+	PendingMutationRepairs   []string
+	MutatedFiles             []string
+	MissingRequiredMutations []string
 }
 
 const (
-	DirectToolStopReasonContextLimit  = "context_limit"
-	DirectToolStopReasonMaxIterations = "max_iterations"
-	DirectToolStopReasonNoProgress    = "no_progress"
-	DirectToolStopReasonMaxTokens     = "max_tokens"
-	DirectToolStopReasonTimeout       = "timeout"
-	DirectToolStopReasonTokenBudget   = "token_budget"
-	DirectToolStopReasonToolBudget    = "tool_budget"
+	DirectToolStopReasonContextLimit   = "context_limit"
+	DirectToolStopReasonMaxIterations  = "max_iterations"
+	DirectToolStopReasonNoProgress     = "no_progress"
+	DirectToolStopReasonMaxTokens      = "max_tokens"
+	DirectToolStopReasonTimeout        = "timeout"
+	DirectToolStopReasonTokenBudget    = "token_budget"
+	DirectToolStopReasonToolBudget     = "tool_budget"
+	DirectToolStopReasonAnchorMismatch = "mutation_anchor_mismatch"
 )
 
 // ForWorkload returns a runtime copy with role/phase-specific inference and
@@ -171,6 +184,24 @@ func (cfg DirectToolAgentConfig) ForWorkload(role, phase string) DirectToolAgent
 	case "fixer":
 		if phase == "" {
 			phase = "implementation"
+		}
+	}
+
+	// Scoped mutating workers must retain enough complete source exchanges to
+	// execute a forced mutation turn. Reviewers and other read-only workloads
+	// keep the aggressive legacy policy so this reliability fix does not
+	// silently increase every direct-agent request.
+	if role == "coder" || role == "fixer" {
+		if cfg.ToolHistoryMode == "" {
+			cfg.ToolHistoryMode = ToolHistoryRetainRecent
+		}
+		if cfg.ToolHistoryMode == ToolHistoryRetainRecent {
+			if cfg.ToolHistoryKeepRecentExchanges < 3 {
+				cfg.ToolHistoryKeepRecentExchanges = 4
+			}
+			if cfg.ToolHistoryRetentionPct <= 0 {
+				cfg.ToolHistoryRetentionPct = 70
+			}
 		}
 	}
 

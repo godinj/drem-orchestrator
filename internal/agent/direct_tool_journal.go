@@ -16,17 +16,19 @@ const directToolJournalVersion = 1
 // timeout or container loss the next worker continues from the last completed
 // tool batch without asking the model to rediscover the same source.
 type directToolJournal struct {
-	Version          int           `json:"version"`
-	PromptHash       string        `json:"prompt_hash"`
-	Messages         []toolChatMsg `json:"messages"`
-	NextIteration    int           `json:"next_iteration"`
-	TokensIn         int           `json:"tokens_in"`
-	TokensOut        int           `json:"tokens_out"`
-	PeakRequestInput int           `json:"peak_request_input"`
-	MutationObserved bool          `json:"mutation_observed"`
-	TotalToolCalls   int           `json:"total_tool_calls"`
-	Completed        bool          `json:"completed"`
-	LastTurn         *TraceEvent   `json:"last_turn,omitempty"`
+	Version                int           `json:"version"`
+	PromptHash             string        `json:"prompt_hash"`
+	Messages               []toolChatMsg `json:"messages"`
+	NextIteration          int           `json:"next_iteration"`
+	TokensIn               int           `json:"tokens_in"`
+	TokensOut              int           `json:"tokens_out"`
+	PeakRequestInput       int           `json:"peak_request_input"`
+	MutationObserved       bool          `json:"mutation_observed"`
+	PendingMutationRepairs []string      `json:"pending_mutation_repairs,omitempty"`
+	MutatedFiles           []string      `json:"mutated_files,omitempty"`
+	TotalToolCalls         int           `json:"total_tool_calls"`
+	Completed              bool          `json:"completed"`
+	LastTurn               *TraceEvent   `json:"last_turn,omitempty"`
 }
 
 func directToolPromptHash(systemPrompt, userMessage string) string {

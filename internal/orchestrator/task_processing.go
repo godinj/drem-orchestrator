@@ -521,12 +521,20 @@ func isSupersededRejected(id uuid.UUID, superseded map[uuid.UUID]struct{}) bool 
 const cancellationKindContextKey = "cancellation_kind"
 
 func isIgnorableCancelledSubtask(task model.Task) bool {
-	if task.Status != model.StatusCancelled || task.Context == nil {
+	if task.Status != model.StatusCancelled {
 		return false
+	}
+	// Cancellation provenance was introduced after existing task rows and API
+	// clients already used an unqualified cancelled status as superseded work.
+	// Preserve that historical meaning. New dependency-failure cascades are
+	// explicitly labelled and remain blockers; unknown non-empty labels fail
+	// closed rather than silently dropping required work.
+	if task.Context == nil {
+		return true
 	}
 	kind, _ := task.Context[cancellationKindContextKey].(string)
 	switch strings.TrimSpace(kind) {
-	case "superseded", "replan":
+	case "", "superseded", "replan":
 		return true
 	default:
 		return false

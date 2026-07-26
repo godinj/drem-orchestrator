@@ -601,6 +601,39 @@ func TestCreateTaskSpecAcceptsSemanticInterfaceContracts(t *testing.T) {
 	}
 }
 
+func TestCreateTaskSpecRejectsRegistryContractWithoutExplicitRuntimeTestInstruction(t *testing.T) {
+	_, server, _ := setupHTTPTest(t, nil)
+	spec := validTaskSpecWithExecutionPlan()
+	impl := &spec.ExecutionPlan.Subtasks[1]
+	impl.InterfaceShapes = nil
+	impl.InterfaceContracts = []orchdto.TaskInterfaceContractDTO{{
+		Package: "src/model/TakeCompModel", Kind: "registry_action", State: "planned",
+		OwnerFile: "src/model/TakeCompModel.h", ActionID: "marker.add",
+		CallbackSignature: "TakeCompModel::selectRange(double, double)",
+	}}
+
+	resp := postTaskSpec(t, server.URL, spec)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+}
+
+func TestCreateTaskSpecAcceptsSourceBackedRegistryRuntimeTestInstruction(t *testing.T) {
+	_, server, _ := setupHTTPTest(t, nil)
+	spec := validTaskSpecWithExecutionPlan()
+	spec.ExecutionPlan.Subtasks[0].Description = "Enumerate the source-backed action registry and CHECK that marker.add exposes its argument callback before exercising production command dispatch."
+	impl := &spec.ExecutionPlan.Subtasks[1]
+	impl.InterfaceShapes = nil
+	impl.InterfaceContracts = []orchdto.TaskInterfaceContractDTO{{
+		Package: "src/model/TakeCompModel", Kind: "registry_action", State: "planned",
+		OwnerFile: "src/model/TakeCompModel.h", ActionID: "marker.add",
+		CallbackSignature: "TakeCompModel::selectRange(double, double)",
+	}}
+
+	resp := postTaskSpec(t, server.URL, spec)
+	defer resp.Body.Close()
+	require.Equal(t, http.StatusCreated, resp.StatusCode)
+}
+
 func TestCreateTaskSpecRejectsUnprovenExistingSemanticContract(t *testing.T) {
 	_, server, _ := setupHTTPTest(t, nil)
 	spec := validTaskSpecWithExecutionPlan()

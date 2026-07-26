@@ -352,6 +352,7 @@ func TestPersistDirectAgentContext_StructuredStopReasons(t *testing.T) {
 	}{
 		{name: "max iterations", stopReason: "max_iterations", want: model.ExitReasonMaxIterations},
 		{name: "no progress", stopReason: "no_progress", want: model.ExitReasonNoProgress},
+		{name: "mutation anchor mismatch", stopReason: agent.DirectToolStopReasonAnchorMismatch, want: model.ExitReasonAnchorMismatch},
 		{name: "token budget checkpoint", stopReason: "token_budget", want: model.ExitReasonTokenBudget},
 	}
 
@@ -367,6 +368,12 @@ func TestPersistDirectAgentContext_StructuredStopReasons(t *testing.T) {
 				t.Fatalf("stop_reason = %v, want %q", ag.Config["stop_reason"], tt.stopReason)
 			}
 		})
+	}
+}
+
+func TestMutationAnchorMismatchHasExplicitFailureClassification(t *testing.T) {
+	if got := normalizeFailureClass(agent.DirectToolStopReasonAnchorMismatch, ""); got != failureClassMutationAnchor {
+		t.Fatalf("normalizeFailureClass() = %q, want %q", got, failureClassMutationAnchor)
 	}
 }
 

@@ -228,6 +228,9 @@ func persistDirectAgentContext(ag *model.Agent, result *agent.DirectToolAgentRes
 	case result.StopReason == "no_progress":
 		ag.ExitReason = model.ExitReasonNoProgress
 		ag.Config["exit_reason"] = model.ExitReasonNoProgress
+	case result.StopReason == agent.DirectToolStopReasonAnchorMismatch:
+		ag.ExitReason = model.ExitReasonAnchorMismatch
+		ag.Config["exit_reason"] = model.ExitReasonAnchorMismatch
 	case result.StopReason == "token_budget":
 		ag.ExitReason = model.ExitReasonTokenBudget
 		ag.Config["exit_reason"] = model.ExitReasonTokenBudget

@@ -71,6 +71,9 @@ func main() {
 	cfg.ContextStopPct = envInt("DREM_DIRECT_CONTEXT_STOP_PCT", cfg.ContextStopPct)
 	cfg.ChatTemplateKwargs = envJSONMap("DREM_DIRECT_CHAT_TEMPLATE_KWARGS")
 	cfg.ToolArgumentsFormat = envDefault("DREM_DIRECT_TOOL_ARGUMENTS_FORMAT", cfg.ToolArgumentsFormat)
+	cfg.ToolHistoryMode = envDefault("DREM_DIRECT_TOOL_HISTORY_MODE", cfg.ToolHistoryMode)
+	cfg.ToolHistoryKeepRecentExchanges = envInt("DREM_DIRECT_TOOL_HISTORY_KEEP_RECENT", cfg.ToolHistoryKeepRecentExchanges)
+	cfg.ToolHistoryRetentionPct = envInt("DREM_DIRECT_TOOL_HISTORY_RETENTION_PCT", cfg.ToolHistoryRetentionPct)
 	cfg.GQCaller = envDefault("DREM_GQ_CALLER", *role)
 	cfg.GQPriority = strings.TrimSpace(os.Getenv("DREM_GQ_PRIORITY"))
 	cfg.JournalPath = strings.TrimSpace(os.Getenv("DREM_DIRECT_JOURNAL_PATH"))
@@ -90,6 +93,7 @@ func main() {
 	startSHA := gitValue(*workDir, "rev-parse", "HEAD")
 	scopedFiles := envJSONStrings("DREM_SCOPED_FILES_JSON")
 	cfg.ScopedFiles = scopedFiles
+	cfg.RequiredMutationFiles = envJSONStrings("DREM_REQUIRED_MUTATION_FILES_JSON")
 	defaultReadBudget := 0
 	defaultToolBudget := 0
 	defaultPreMutationInputBudget := 0
@@ -112,7 +116,7 @@ func main() {
 			result.Iterations, result.TokensIn, result.TokensOut, result.PeakRequestInput, result.ResumedTurns, result.FoldedBytes, result.Duration, result.StopReason)
 	}
 	if runErr != nil {
-		if result != nil && boundedStopWithWork(*workDir, startSHA, result.StopReason) {
+		if result != nil && boundedStopWithWork(*workDir, startSHA, result) {
 			log.Printf("direct tool agent stopped at %s with repository changes; preserving work for deterministic gates: %v", result.StopReason, runErr)
 			if err := finalizeGit(*workDir); err != nil {
 				log.Fatalf("finalize bounded direct-agent work: %v", err)
@@ -130,8 +134,11 @@ func main() {
 // loop applies the entire threshold-crossing tool batch before returning a
 // token/context stop, so those changes can safely proceed to deterministic
 // gates. Truncated and no-progress turns remain failed attempts.
-func boundedStopWithWork(workDir, startSHA, stopReason string) bool {
-	switch stopReason {
+func boundedStopWithWork(workDir, startSHA string, result *agent.DirectToolAgentResult) bool {
+	if result == nil || len(result.PendingMutationRepairs) > 0 || len(result.MissingRequiredMutations) > 0 {
+		return false
+	}
+	switch result.StopReason {
 	case agent.DirectToolStopReasonMaxIterations, agent.DirectToolStopReasonContextLimit,
 		agent.DirectToolStopReasonTokenBudget, agent.DirectToolStopReasonToolBudget:
 	default:

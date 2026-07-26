@@ -258,6 +258,53 @@ func TestAcceptRejectsTypedSetupWithoutPlannedFunctionCall(t *testing.T) {
 	assertRejectedPath(t, res, "divideAtTransients", "compile_missing_symbol", "missing_active_contract_assertion")
 }
 
+func TestAcceptRejectsRegistryActionMentionOnlyInTestName(t *testing.T) {
+	repo := newRepo(t)
+	writeCommit(t, repo, "tests/test_marker.cpp", "// existing tests\n")
+	base := branch(t, repo, "base")
+	runGit(t, repo, "checkout", "-b", "feature")
+	writeCommit(t, repo, "tests/test_marker.cpp", `
+TEST_CASE("marker.add is routed")
+{
+    fixture.simulateExCommand("mark \"Verse 1\"");
+    CHECK(fixture.markers().size() == 1);
+}
+`)
+	contract := `{"red_mode":"runtime_assertion","semantic_contracts":[{"kind":"registry_action","state":"planned","action_id":"marker.add"}]}`
+
+	res, err := Accept(context.Background(), AcceptanceRequest{
+		RepoDir: repo, BaseRef: base, AllowedScopes: []string{"tests/test_marker.cpp"}, TestContract: contract,
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	assertRejectedPath(t, res, "marker.add", "registry_action", "missing_active_runtime_assertion")
+}
+
+func TestAcceptAllowsSourceBackedRegistryActionAssertion(t *testing.T) {
+	repo := newRepo(t)
+	writeCommit(t, repo, "tests/test_marker.cpp", "// existing tests\n")
+	base := branch(t, repo, "base")
+	runGit(t, repo, "checkout", "-b", "feature")
+	writeCommit(t, repo, "tests/test_marker.cpp", `
+const auto& actions = fixture.engine.getActionRegistry().getAllActions();
+CHECK(std::any_of(actions.begin(), actions.end(), [](const auto& action) { return action.id == "marker.add" && static_cast<bool>(action.executeWithArgs); }));
+fixture.simulateExCommand("mark \"Verse 1\"");
+CHECK(fixture.markers().size() == 1);
+`)
+	contract := `{"red_mode":"runtime_assertion","semantic_contracts":[{"kind":"registry_action","state":"planned","action_id":"marker.add"}]}`
+
+	res, err := Accept(context.Background(), AcceptanceRequest{
+		RepoDir: repo, BaseRef: base, AllowedScopes: []string{"tests/test_marker.cpp"}, TestContract: contract,
+	})
+	if err != nil {
+		t.Fatalf("accept: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("expected active registry assertion to pass, got %+v", res.Rejected)
+	}
+}
+
 func TestAcceptUsesOriginalContractBaseAcrossBoundedRepair(t *testing.T) {
 	repo := newRepo(t)
 	writeCommit(t, repo, "tests/test_feature.cpp", "// existing tests\n")

@@ -34,6 +34,16 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 COPY . .
 
+# Production-trajectory reliability gate. These tests deliberately execute in
+# the Linux/CGO builder used for the shipped image so a host-only passing suite
+# cannot hide JSON-shape or branch-admission regressions from deployment.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=1 GOOS=linux \
+    go test ./internal/branchpolicy ./internal/orchestrator ./internal/orchhttp \
+      -run 'TestAcceptRejectsRegistryActionMentionOnlyInTestName|TestAcceptAllowsSourceBackedRegistryActionAssertion|TestRejectedTestContractPersistsAcceptanceForBoundedRework|TestMarkerRegistryIncidentReplayDispatchesCorrectionAndReachesFrozenArtifact|TestProductionIncidentReplayCorpus|TestCreateTaskSpecRejectsRegistryContractWithoutExplicitRuntimeTestInstruction|TestCreateTaskSpecAcceptsSourceBackedRegistryRuntimeTestInstruction' \
+      -count=1
+
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=1 GOOS=linux \

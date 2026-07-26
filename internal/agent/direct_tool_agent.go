@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -33,6 +34,9 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 	deniedCalls := 0
 	firstMutationIteration := 0
 	var firstMutationMs int64
+	mutationObserved := false
+	pendingMutationRepairs := make(map[string]struct{})
+	mutatedFiles := make(map[string]struct{})
 	defer func() {
 		if finalResult != nil {
 			finalResult.PeakRequestInput = peakRequestInput
@@ -41,6 +45,10 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			finalResult.DeniedCalls = deniedCalls
 			finalResult.FirstMutationIteration = firstMutationIteration
 			finalResult.FirstMutationMs = firstMutationMs
+			finalResult.MutationObserved = mutationObserved
+			finalResult.PendingMutationRepairs = sortedStringSet(pendingMutationRepairs)
+			finalResult.MutatedFiles = sortedStringSet(mutatedFiles)
+			finalResult.MissingRequiredMutations = missingRequiredMutationFiles(cfg, mutatedFiles)
 			for _, count := range readPaths {
 				finalResult.UniqueReads++
 				if count > 1 {
@@ -91,6 +99,16 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		peakRequestInput = resumedJournal.PeakRequestInput
 		startIteration = resumedJournal.NextIteration
 		resumedTurns = startIteration
+		for _, path := range resumedJournal.PendingMutationRepairs {
+			if path = strings.TrimSpace(path); path != "" {
+				pendingMutationRepairs[path] = struct{}{}
+			}
+		}
+		for _, path := range resumedJournal.MutatedFiles {
+			if path = strings.TrimSpace(path); path != "" {
+				mutatedFiles[path] = struct{}{}
+			}
+		}
 	}
 
 	// Context-window monitor state. finalPct mirrors the most recent
@@ -140,24 +158,26 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 	failedEditRecoveryAvailable := false
 	failedEditRecoveryGranted := false
 	mutationOnlyNudgeInjected := false
+	mutationOnlyRecoveryUsed := false
 	totalToolCalls := 0
-	mutationObserved := false
 	if resumedJournal != nil {
 		totalToolCalls = resumedJournal.TotalToolCalls
 		mutationObserved = resumedJournal.MutationObserved
 	}
 	persistJournal := func(nextIteration int, completed bool, lastTurn *TraceEvent) error {
 		return saveDirectToolJournal(cfg.JournalPath, directToolJournal{
-			PromptHash:       promptHash,
-			Messages:         messages,
-			NextIteration:    nextIteration,
-			TokensIn:         totalTokensIn,
-			TokensOut:        totalTokensOut,
-			PeakRequestInput: peakRequestInput,
-			MutationObserved: mutationObserved,
-			TotalToolCalls:   totalToolCalls,
-			Completed:        completed,
-			LastTurn:         lastTurn,
+			PromptHash:             promptHash,
+			Messages:               messages,
+			NextIteration:          nextIteration,
+			TokensIn:               totalTokensIn,
+			TokensOut:              totalTokensOut,
+			PeakRequestInput:       peakRequestInput,
+			MutationObserved:       mutationObserved,
+			PendingMutationRepairs: sortedStringSet(pendingMutationRepairs),
+			MutatedFiles:           sortedStringSet(mutatedFiles),
+			TotalToolCalls:         totalToolCalls,
+			Completed:              completed,
+			LastTurn:               lastTurn,
 		})
 	}
 
@@ -183,6 +203,8 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		}
 		if failedEditRecoveryAvailable {
 			activeTools = toolsByName([]string{"read", "edit"})
+		} else if len(pendingMutationRepairs) > 0 {
+			activeTools = mutationOnlyTools(cfg, tools)
 		} else if !mutationObserved && (hasNaturalStopCorrection(messages) || finalScopedReadGranted || blockedReconBatchesBeforeMutation > 0 || protectedWriteBatchesBeforeMutation > 0 || scopeViolationBatchesBeforeMutation > 0) {
 			activeTools = mutationOnlyTools(cfg, tools)
 		}
@@ -254,6 +276,32 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		// context_limit even if usage already crossed the stop threshold.
 		if choice.FinishReason == "stop" || choice.FinishReason == "end_of_turn" {
 			writeTrace(cfg.TraceWriter, traceEvent)
+			// A bounded-reconnaissance denial narrows the next request to
+			// mutation tools. Qwen can acknowledge that transition in prose
+			// without actually emitting the tool call. Give it one forced
+			// edit/write-only turn, then fail closed rather than reopening
+			// discovery or accepting the prose as successful completion.
+			if !cfg.AllowReadOnlyCompletion && !mutationObserved && mutationOnlyNudgeInjected &&
+				!strings.HasPrefix(strings.TrimSpace(choice.Message.Content), "BLOCKED:") {
+				if mutationOnlyRecoveryUsed {
+					result := naturalStopResult(choice.Message.Content, totalTokensIn, totalTokensOut, iteration+1,
+						time.Since(start), finalPct, mutationObserved, peakRequestInput, resumedTurns, foldedBytes)
+					result.StopReason = DirectToolStopReasonNoProgress
+					if err := persistJournal(iteration+1, true, &traceEvent); err != nil {
+						return nil, err
+					}
+					return result, fmt.Errorf("scoped agent returned prose instead of a mutation tool call after the forced mutation recovery")
+				}
+				mutationOnlyRecoveryUsed = true
+				messages = append(messages, choice.Message, toolChatMsg{
+					Role:    "system",
+					Content: mutationOnlyToollessRecoveryPrompt,
+				})
+				if err := persistJournal(iteration+1, false, &traceEvent); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if shouldCorrectUnmutatedNaturalStop(cfg, mutationObserved, totalTokensIn, choice.Message.Content, messages) {
 				messages = append(messages, choice.Message, toolChatMsg{
 					Role: "system", Content: naturalStopCorrectionPrompt,
@@ -262,6 +310,15 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					return nil, err
 				}
 				continue
+			}
+			if reason := incompleteMutationCheckpointReason(cfg, pendingMutationRepairs, mutatedFiles); reason != "" {
+				if err := persistJournal(iteration+1, false, &traceEvent); err != nil {
+					return nil, err
+				}
+				result := naturalStopResult(choice.Message.Content, totalTokensIn, totalTokensOut, iteration+1,
+					time.Since(start), finalPct, mutationObserved, peakRequestInput, resumedTurns, foldedBytes)
+				result.StopReason = DirectToolStopReasonNoProgress
+				return result, fmt.Errorf("agent stopped with incomplete mutation checkpoint: %s", reason)
 			}
 			if err := persistJournal(iteration+1, true, &traceEvent); err != nil {
 				return nil, err
@@ -324,6 +381,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			protectedWriteThisBatch := false
 			scopeViolationThisBatch := false
 			failedEditRecoveryReadThisBatch := false
+			failedEditRecoveryExhausted := false
 			failedMutationStopReason := ""
 			// Per-turn cap: if the model emits more than maxToolCallsPerTurn
 			// calls, only keep the first N and stub the rest. This prevents
@@ -442,13 +500,20 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 							firstMutationMs = time.Since(start).Milliseconds()
 						}
 						mutationObserved = true
+						path := normalizedToolCallPath(cfg.WorkDir, tc.Function.Arguments)
+						mutatedFiles[path] = struct{}{}
+						delete(pendingMutationRepairs, path)
 						failedEditRecoveryAvailable = false
 						failedMutationLoops.Reset()
 					}
-					if tc.Function.Name == "edit" && toolErr != nil && !failedEditRecoveryGranted && editErrorIsRecoverable(toolErr) {
-						failedEditRecoveryPath = toolCallPath(tc.Function.Arguments)
-						failedEditRecoveryAvailable = failedEditRecoveryPath != ""
-						failedEditRecoveryGranted = failedEditRecoveryAvailable
+					if tc.Function.Name == "edit" && toolErr != nil && editErrorIsRecoverable(toolErr) {
+						if failedEditRecoveryGranted {
+							failedEditRecoveryExhausted = true
+						} else {
+							failedEditRecoveryPath = toolCallPath(tc.Function.Arguments)
+							failedEditRecoveryAvailable = failedEditRecoveryPath != ""
+							failedEditRecoveryGranted = failedEditRecoveryAvailable
+						}
 					}
 				}
 				if finalScopedRead {
@@ -473,6 +538,9 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					}
 					traceCall.Error = toolErr.Error()
 					result = "ERROR: " + toolErr.Error()
+					if tc.Function.Name == "edit" || tc.Function.Name == "write" {
+						pendingMutationRepairs[normalizedToolCallPath(cfg.WorkDir, tc.Function.Arguments)] = struct{}{}
+					}
 					if count := failedMutationLoops.Observe(tc.Function.Name, tc.Function.Arguments, toolErr.Error()); count == 2 {
 						result += "\n\n[HARNESS] This exact mutation has now failed twice with the same error, even across intervening reads. Change the mutation arguments; do not repeat this call."
 					} else if count >= 3 {
@@ -607,13 +675,44 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					PeakRequestInput: peakRequestInput, ResumedTurns: resumedTurns, FoldedBytes: foldedBytes,
 				}, fmt.Errorf("failed-mutation no-progress detector: %s", failedMutationStopReason)
 			}
+			if failedEditRecoveryExhausted {
+				return &DirectToolAgentResult{
+					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
+					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
+					StopReason: DirectToolStopReasonAnchorMismatch, MutationObserved: mutationObserved,
+					PeakRequestInput: peakRequestInput, ResumedTurns: resumedTurns, FoldedBytes: foldedBytes,
+				}, fmt.Errorf("mutation anchor mismatch after bounded recovery for %s", failedEditRecoveryPath)
+			}
+			// An authorized surgical edit that misses its anchor has a more
+			// specific recovery contract than the generic reconnaissance guard.
+			// The guard counters may already be exhausted by the time the model
+			// finally attempts its edit; terminating on those counters would
+			// discard the promised recovery read before it can run. This exception
+			// is deliberately narrow: cumulative token, context, and tool budgets
+			// below remain authoritative checkpoint boundaries.
+			anchorRecoveryPending := failedEditRecoveryAvailable || failedEditRecoveryReadThisBatch
 			// Count denied reconnaissance by assistant response, not by raw tool
 			// call. Models commonly emit paired reads in a single response. A granted
 			// final scoped read transitions the next request to mutation-only tools,
 			// but is not itself a denial. After the first genuinely denied response,
 			// return its tool result so the model gets one complete corrective turn;
 			// a second denied response is genuine refusal to make progress.
-			if !cfg.AllowReadOnlyCompletion && !mutationObserved && blockedReconBatchesBeforeMutation >= 2 {
+			if !anchorRecoveryPending && !cfg.AllowReadOnlyCompletion && !mutationObserved && blockedReconBatchesBeforeMutation >= 2 {
+				// The model can still hallucinate a read call after discovery
+				// tools have been removed from the request. Return its second
+				// denial and issue exactly one final edit/write-only recovery
+				// turn; a third denied batch remains a real no-progress loop.
+				if !mutationOnlyRecoveryUsed {
+					mutationOnlyRecoveryUsed = true
+					messages = append(messages, toolChatMsg{
+						Role:    "system",
+						Content: mutationOnlyBlockedRecoveryPrompt,
+					})
+					if err := persistJournal(iteration+1, false, &traceEvent); err != nil {
+						return nil, err
+					}
+					continue
+				}
 				return &DirectToolAgentResult{
 						Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
 						Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
@@ -621,7 +720,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					}, fmt.Errorf("scoped agent refused to mutate after %d reconnaissance calls, %d blocked calls, and %d blocked response batches",
 						reconnaissanceBeforeMutation, blockedReconCallsBeforeMutation, blockedReconBatchesBeforeMutation)
 			}
-			if !cfg.AllowReadOnlyCompletion && !mutationObserved && protectedWriteBatchesBeforeMutation >= 2 {
+			if !anchorRecoveryPending && !cfg.AllowReadOnlyCompletion && !mutationObserved && protectedWriteBatchesBeforeMutation >= 2 {
 				return &DirectToolAgentResult{
 						Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
 						Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
@@ -629,7 +728,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					}, fmt.Errorf("scoped agent refused surgical editing after %d protected whole-file writes in %d response batches",
 						protectedWriteCallsBeforeMutation, protectedWriteBatchesBeforeMutation)
 			}
-			if !cfg.AllowReadOnlyCompletion && !mutationObserved && scopeViolationBatchesBeforeMutation >= 2 {
+			if !anchorRecoveryPending && !cfg.AllowReadOnlyCompletion && !mutationObserved && scopeViolationBatchesBeforeMutation >= 2 {
 				return &DirectToolAgentResult{
 						Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
 						Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
@@ -643,6 +742,9 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
 					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
 					StopReason: DirectToolStopReasonToolBudget, MutationObserved: mutationObserved,
+				}
+				if reason := incompleteMutationCheckpointReason(cfg, pendingMutationRepairs, mutatedFiles); reason != "" {
+					return result, fmt.Errorf("tool-call budget reached with incomplete mutation checkpoint: %s", reason)
 				}
 				if mutationObserved || cfg.AllowReadOnlyCompletion {
 					return result, nil
@@ -666,6 +768,9 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
 					StopReason: DirectToolStopReasonTokenBudget, MutationObserved: mutationObserved,
 				}
+				if reason := incompleteMutationCheckpointReason(cfg, pendingMutationRepairs, mutatedFiles); reason != "" {
+					return result, fmt.Errorf("cumulative input token budget reached with incomplete mutation checkpoint: %s", reason)
+				}
 				if mutationObserved || cfg.AllowReadOnlyCompletion {
 					return result, nil
 				}
@@ -675,11 +780,15 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				slog.Warn("direct tool agent: context stop threshold reached after checkpointing response",
 					"iteration", iteration, "pct", currentPct, "limit", cfg.ContextLimit,
 					"prompt_tokens", resp.Usage.PromptTokens)
-				return &DirectToolAgentResult{
+				result := &DirectToolAgentResult{
 					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
 					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
 					StopReason: DirectToolStopReasonContextLimit, MutationObserved: mutationObserved,
-				}, nil
+				}
+				if reason := incompleteMutationCheckpointReason(cfg, pendingMutationRepairs, mutatedFiles); reason != "" {
+					return result, fmt.Errorf("context limit reached with incomplete mutation checkpoint: %s", reason)
+				}
+				return result, nil
 			}
 
 			// Context monitor: warn nudge. Inject a one-shot system message
@@ -713,6 +822,9 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
 				StopReason: DirectToolStopReasonTokenBudget, MutationObserved: mutationObserved,
 			}
+			if reason := incompleteMutationCheckpointReason(cfg, pendingMutationRepairs, mutatedFiles); reason != "" {
+				return result, fmt.Errorf("cumulative input token budget reached with incomplete mutation checkpoint: %s", reason)
+			}
 			if mutationObserved || cfg.AllowReadOnlyCompletion {
 				return result, nil
 			}
@@ -720,11 +832,15 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		}
 		if contextReached {
 			writeTrace(cfg.TraceWriter, traceEvent)
-			return &DirectToolAgentResult{
+			result := &DirectToolAgentResult{
 				Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
 				Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
 				StopReason: DirectToolStopReasonContextLimit, MutationObserved: mutationObserved,
-			}, nil
+			}
+			if reason := incompleteMutationCheckpointReason(cfg, pendingMutationRepairs, mutatedFiles); reason != "" {
+				return result, fmt.Errorf("context limit reached with incomplete mutation checkpoint: %s", reason)
+			}
+			return result, nil
 		}
 
 		// Length-truncated response: the model hit max_tokens before completing
@@ -760,14 +876,19 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			"iteration", iteration,
 		)
 		writeTrace(cfg.TraceWriter, traceEvent)
-		return &DirectToolAgentResult{
+		result := &DirectToolAgentResult{
 			Output:          choice.Message.Content,
 			TokensIn:        totalTokensIn,
 			TokensOut:       totalTokensOut,
 			Iterations:      iteration + 1,
 			Duration:        time.Since(start),
 			FinalContextPct: finalPct,
-		}, nil
+		}
+		if reason := incompleteMutationCheckpointReason(cfg, pendingMutationRepairs, mutatedFiles); reason != "" {
+			result.StopReason = DirectToolStopReasonNoProgress
+			return result, fmt.Errorf("unexpected model stop with incomplete mutation checkpoint: %s", reason)
+		}
+		return result, nil
 	}
 
 	return &DirectToolAgentResult{
@@ -778,4 +899,62 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		FinalContextPct: finalPct,
 		StopReason:      DirectToolStopReasonMaxIterations,
 	}, fmt.Errorf("exceeded max iterations (%d)", maxIter)
+}
+
+func normalizedToolCallPath(workDir, arguments string) string {
+	path := strings.TrimSpace(toolCallPath(arguments))
+	if path == "" {
+		return "<unknown scoped path>"
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(workDir, path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.Clean(path)
+	}
+	if rel, err := filepath.Rel(workDir, abs); err == nil && rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.Clean(abs)
+}
+
+func sortedStringSet(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func joinedStringSet(values map[string]struct{}) string {
+	return strings.Join(sortedStringSet(values), ", ")
+}
+
+func missingRequiredMutationFiles(cfg DirectToolAgentConfig, mutated map[string]struct{}) []string {
+	missing := make(map[string]struct{})
+	for _, path := range cfg.RequiredMutationFiles {
+		normalized := normalizedScopedPath(cfg.WorkDir, path)
+		if _, ok := mutated[normalized]; !ok {
+			missing[normalized] = struct{}{}
+		}
+	}
+	return sortedStringSet(missing)
+}
+
+func incompleteMutationCheckpointReason(cfg DirectToolAgentConfig, pending, mutated map[string]struct{}) string {
+	parts := make([]string, 0, 2)
+	if len(pending) > 0 {
+		parts = append(parts, "unresolved failed mutation repairs: "+joinedStringSet(pending))
+	}
+	if missing := missingRequiredMutationFiles(cfg, mutated); len(missing) > 0 {
+		parts = append(parts, "required files without a successful mutation: "+strings.Join(missing, ", "))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func normalizedScopedPath(workDir, path string) string {
+	arguments, _ := json.Marshal(map[string]string{"path": path})
+	return normalizedToolCallPath(workDir, string(arguments))
 }

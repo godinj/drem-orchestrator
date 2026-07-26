@@ -9,6 +9,10 @@ import (
 
 const naturalStopCorrectionPrompt = "[HARNESS] The prior response stopped without a mutation after reaching the pre-mutation ceiling. This is the single reserved corrective turn. Only mutation tools are available: edit an existing authorized file or write a genuinely new authorized file now. Do not continue reconnaissance or return another prose-only response."
 
+const mutationOnlyToollessRecoveryPrompt = "[HARNESS] You returned prose without calling a tool while the worker is in its mutation-only phase. This is the one forced mutation turn: call edit for an existing authorized file or write for a genuinely new authorized file now. Do not explain, read, search, or return another prose-only response."
+
+const mutationOnlyBlockedRecoveryPrompt = "[HARNESS] You attempted reconnaissance again after it was removed from the tool set. This is the one forced mutation turn: call edit for an existing authorized file or write for a genuinely new authorized file now. Do not explain, read, search, or return another prose-only response."
+
 func shouldCorrectUnmutatedNaturalStop(cfg DirectToolAgentConfig, mutationObserved bool, totalTokens int, content string, messages []toolChatMsg) bool {
 	return !cfg.AllowReadOnlyCompletion && !mutationObserved && !hasNaturalStopCorrection(messages) &&
 		cfg.MaxInputTokensBeforeMutation > 0 && totalTokens >= cfg.MaxInputTokensBeforeMutation &&

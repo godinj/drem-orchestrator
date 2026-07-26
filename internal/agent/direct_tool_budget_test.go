@@ -33,6 +33,9 @@ func TestDirectToolAgentConfigForWorkload(t *testing.T) {
 	require.Equal(t, 65_000, testCfg.MaxCumulativeInputTokens)
 	require.Equal(t, 8, testCfg.MaxReadsBeforeMutation)
 	require.Equal(t, 18_000, testCfg.MaxInputTokensBeforeMutation)
+	require.Equal(t, ToolHistoryRetainRecent, testCfg.ToolHistoryMode)
+	require.Equal(t, 4, testCfg.ToolHistoryKeepRecentExchanges)
+	require.Equal(t, 70, testCfg.ToolHistoryRetentionPct)
 
 	implCfg := cfg.ForWorkload("coder", "implementation")
 	require.Equal(t, 90_000, implCfg.MaxCumulativeInputTokens)
@@ -48,6 +51,7 @@ func TestDirectToolAgentConfigForWorkload(t *testing.T) {
 	reviewCfg := cfg.ForWorkload("reviewer", "")
 	require.Equal(t, 30_000, reviewCfg.MaxCumulativeInputTokens)
 	require.Zero(t, reviewCfg.MaxReadsBeforeMutation)
+	require.Empty(t, reviewCfg.ToolHistoryMode)
 
 	fixerCfg := cfg.ForWorkload("fixer", "")
 	require.Equal(t, 90_000, fixerCfg.MaxCumulativeInputTokens)

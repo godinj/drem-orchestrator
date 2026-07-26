@@ -424,6 +424,17 @@ one explicit mutation-only corrective request for an unmutated `stop` or
 `end_of_turn` at the ceiling. A second unmutated stop still fails `no_progress`,
 and read-only integration completion is unchanged.
 
+The marker-parity replay then showed that these two recovery paths cannot own
+independent allowances: a prose recovery followed by denied reads could stack
+two nominally final turns. They now consume one shared allowance. The same
+replay also showed that aggressive tool-history folding could discard the
+exact writable source before the forced edit. Complete recent history is now a
+mutation-worker policy rather than a global default: coders and fixers retain
+four exchanges below 70% context pressure, while reviewers keep aggressive
+compaction. A deterministic marker-shaped trajectory test proves the source is
+present on the forced edit request, and a paired microbenchmark measures both
+compaction modes without invoking inference.
+
 ## Recovery-guard follow-up: completion, continuation, and delivery ownership
 
 The next parity pilots exposed three control-plane failures rather than Canvas
@@ -442,5 +453,30 @@ Delivery rework now reconstructs dependency-ordered scoped repair children from
 the completed ownership graph. Each repair retains its immutable writable
 scope, so a keymap-only integration child cannot receive an action or test
 repair.
+
+Compatibility note: cancellations created before provenance existed have no
+`cancellation_kind` and retain their historical superseded-work meaning.
+Explicit `dependency_failure` cancellations block delivery, while unknown
+non-empty provenance also fails closed. This prevents the hardening from
+stranding legacy parent tasks while preserving the missing-work invariant for
+new cascades.
 Generated merge subjects are neutral fixed control-plane text, so external
 branch/task wording cannot cause a repository-policy failure.
+
+## Marker v9 incident replay gate
+
+The v9 marker pilot produced a valid behavior-level red checkpoint but omitted
+the deterministic `marker.add` registry assertion. The live rejection path
+stored branch acceptance as the named `model.JSONField` type and classified it
+before a database reload; the bounded-repair detector asserted only the
+unnamed `map[string]any` type. That converted `test_contract` into terminal
+`branch_contamination` and suppressed its one allowed correction.
+
+Rejection decoding now round-trips through the typed JSON contract, and the
+exact no-reload acceptance-to-correction trajectory is mandatory. The task
+spec validator rejects registry-action test briefs that omit the exact action
+ID and an executable assertion instruction. Static branch admission rejects
+token mentions confined to test names or labels. A persisted marker-v9 fixture
+and a production-shaped replay prove one bounded correction, corrected
+checkpoint acceptance, and frozen-artifact creation. The same focused replay
+runs inside the production orchestrator image build.

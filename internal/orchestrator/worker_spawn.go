@@ -324,6 +324,9 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 				return spawnWorkerContext{}, fmt.Errorf("encode scoped worker files: %w", err)
 			}
 			env["DREM_SCOPED_FILES_JSON"] = string(encoded)
+			if task.Phase == "test" || task.Phase == "implementation" {
+				env["DREM_REQUIRED_MUTATION_FILES_JSON"] = string(encoded)
+			}
 		}
 		if o.directToolAgentCfg != nil {
 			workerCfg := o.directToolAgentCfg.ForWorkload(agentType, task.Phase)
@@ -359,6 +362,15 @@ func (o *Orchestrator) buildSpawnContext(task *model.Task, agentType string) (sp
 			}
 			if workerCfg.MaxInputTokensBeforeMutation > 0 {
 				env["DREM_DIRECT_MAX_INPUT_TOKENS_BEFORE_MUTATION"] = fmt.Sprintf("%d", workerCfg.MaxInputTokensBeforeMutation)
+			}
+			if workerCfg.ToolHistoryMode != "" {
+				env["DREM_DIRECT_TOOL_HISTORY_MODE"] = workerCfg.ToolHistoryMode
+			}
+			if workerCfg.ToolHistoryKeepRecentExchanges > 0 {
+				env["DREM_DIRECT_TOOL_HISTORY_KEEP_RECENT"] = fmt.Sprintf("%d", workerCfg.ToolHistoryKeepRecentExchanges)
+			}
+			if workerCfg.ToolHistoryRetentionPct > 0 {
+				env["DREM_DIRECT_TOOL_HISTORY_RETENTION_PCT"] = fmt.Sprintf("%d", workerCfg.ToolHistoryRetentionPct)
 			}
 			if workerCfg.AllowReadOnlyCompletion {
 				env["DREM_DIRECT_ALLOW_READ_ONLY_COMPLETION"] = "true"

@@ -147,6 +147,81 @@ func TestRunDirectToolAgentResumesNaturalStopCorrectiveTurnAsMutationOnly(t *tes
 	require.Equal(t, "changed", string(content))
 }
 
+func TestRunDirectToolAgentResumesPendingFailedMutationAsEditOnly(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "first.cpp"), []byte("first"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "second.cpp"), []byte("second"), 0o644))
+	journalPath := filepath.Join(t.TempDir(), "journal.json")
+	firstCalls := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		firstCalls++
+		var call toolCall
+		switch firstCalls {
+		case 1:
+			call = toolCall{ID: "first-edit", Type: "function", Function: toolCallFunction{
+				Name: "edit", Arguments: `{"path":"first.cpp","old":"first","new":"first changed"}`}}
+		case 2:
+			call = toolCall{ID: "second-edit-miss", Type: "function", Function: toolCallFunction{
+				Name: "edit", Arguments: `{"path":"second.cpp","old":"imagined","new":"second changed"}`}}
+		default:
+			call = toolCall{ID: "second-recovery-read", Type: "function", Function: toolCallFunction{
+				Name: "read", Arguments: `{"path":"second.cpp"}`}}
+		}
+		require.NoError(t, json.NewEncoder(w).Encode(toolChatResponse{
+			Choices: []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{call}}, FinishReason: "tool_calls"}},
+			Usage:   usageForTest(25, 5),
+		}))
+	}))
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = first.URL
+	cfg.WorkDir = dir
+	cfg.JournalPath = journalPath
+	cfg.ScopedFiles = []string{"first.cpp", "second.cpp"}
+	cfg.RequiredMutationFiles = append([]string(nil), cfg.ScopedFiles...)
+	cfg.ProtectExistingFiles = true
+	cfg.MaxCumulativeInputTokens = 75
+	cfg.MaxToolCalls = 10
+	result, err := RunDirectToolAgent(cfg, "system", "change both files", ToolsForRoleScope("coder", cfg.ScopedFiles), "")
+	require.ErrorContains(t, err, "unresolved failed mutation repairs")
+	require.Equal(t, []string{"second.cpp"}, result.PendingMutationRepairs)
+	require.Equal(t, []string{"second.cpp"}, result.MissingRequiredMutations)
+	first.Close()
+
+	journal, err := loadDirectToolJournal(journalPath, directToolPromptHash("system", "change both files"))
+	require.NoError(t, err)
+	require.NotNil(t, journal)
+	require.False(t, journal.Completed)
+	require.Equal(t, []string{"second.cpp"}, journal.PendingMutationRepairs)
+	require.Equal(t, []string{"first.cpp"}, journal.MutatedFiles)
+
+	secondCalls := 0
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondCalls++
+		var req toolChatRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		require.Len(t, req.Tools, 1)
+		require.Equal(t, "edit", req.Tools[0].Function.Name)
+		require.NoError(t, json.NewEncoder(w).Encode(toolChatResponse{
+			Choices: []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "second-edit-corrected", Type: "function", Function: toolCallFunction{
+					Name: "edit", Arguments: `{"path":"second.cpp","old":"second","new":"second changed"}`},
+			}}}, FinishReason: "tool_calls"}},
+			Usage: usageForTest(10, 5),
+		}))
+	}))
+	defer second.Close()
+	cfg.Endpoint = second.URL
+	result, err = RunDirectToolAgent(cfg, "system", "change both files", ToolsForRoleScope("coder", cfg.ScopedFiles), "")
+	require.NoError(t, err)
+	require.Equal(t, DirectToolStopReasonTokenBudget, result.StopReason)
+	require.Empty(t, result.PendingMutationRepairs)
+	require.Empty(t, result.MissingRequiredMutations)
+	require.Equal(t, 1, secondCalls)
+	content, readErr := os.ReadFile(filepath.Join(dir, "second.cpp"))
+	require.NoError(t, readErr)
+	require.Equal(t, "second changed", string(content))
+}
+
 func TestRunDirectToolAgentRequiredResumeFailsClosedWithoutMatchingJournal(t *testing.T) {
 	cfg := DefaultDirectToolAgentConfig()
 	cfg.WorkDir = t.TempDir()

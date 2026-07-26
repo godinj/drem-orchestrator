@@ -22,19 +22,25 @@ func TestBoundedStopWithWork(t *testing.T) {
 	runGitForTest(t, dir, "commit", "-m", "base")
 
 	startSHA := gitForTest(t, dir, "rev-parse", "HEAD")
-	require.False(t, boundedStopWithWork(dir, startSHA, agent.DirectToolStopReasonNoProgress))
+	require.False(t, boundedStopWithWork(dir, startSHA, &agent.DirectToolAgentResult{StopReason: agent.DirectToolStopReasonNoProgress}))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "tracked.txt"), []byte("changed\n"), 0o644))
 	for _, reason := range []string{agent.DirectToolStopReasonMaxIterations, agent.DirectToolStopReasonContextLimit, agent.DirectToolStopReasonTokenBudget} {
-		require.True(t, boundedStopWithWork(dir, startSHA, reason), reason)
+		require.True(t, boundedStopWithWork(dir, startSHA, &agent.DirectToolAgentResult{StopReason: reason}), reason)
 	}
 	for _, reason := range []string{agent.DirectToolStopReasonNoProgress, agent.DirectToolStopReasonMaxTokens, agent.DirectToolStopReasonTimeout, ""} {
-		require.False(t, boundedStopWithWork(dir, startSHA, reason), reason)
+		require.False(t, boundedStopWithWork(dir, startSHA, &agent.DirectToolAgentResult{StopReason: reason}), reason)
 	}
+	require.False(t, boundedStopWithWork(dir, startSHA, &agent.DirectToolAgentResult{
+		StopReason: agent.DirectToolStopReasonTokenBudget, PendingMutationRepairs: []string{"second.cpp"},
+	}), "a partial checkpoint with an unresolved failed edit must exit non-zero")
+	require.False(t, boundedStopWithWork(dir, startSHA, &agent.DirectToolAgentResult{
+		StopReason: agent.DirectToolStopReasonTokenBudget, MissingRequiredMutations: []string{"second.cpp"},
+	}), "a partial checkpoint missing a required output file must exit non-zero")
 
 	runGitForTest(t, dir, "add", "tracked.txt")
 	runGitForTest(t, dir, "commit", "-m", "completed work")
 	require.Empty(t, gitForTest(t, dir, "status", "--porcelain"))
-	require.False(t, boundedStopWithWork(dir, startSHA, agent.DirectToolStopReasonMaxTokens))
+	require.False(t, boundedStopWithWork(dir, startSHA, &agent.DirectToolAgentResult{StopReason: agent.DirectToolStopReasonMaxTokens}))
 }
 
 func TestEnvJSONStrings(t *testing.T) {

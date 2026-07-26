@@ -588,6 +588,9 @@ func validateExecutionPlan(planDTO orchdto.TaskExecutionPlanDTO, proposedScope [
 			return fmt.Errorf("implementation subtask %d must have exactly one test or one TDD exception", impl)
 		}
 	}
+	if err := validateRegistryActionTestInstructions(planDTO.Subtasks); err != nil {
+		return err
+	}
 	if integrationIndex != len(planDTO.Subtasks)-1 {
 		return errors.New("the final subtask must be the single integration subtask")
 	}

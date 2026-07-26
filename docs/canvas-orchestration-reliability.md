@@ -20,14 +20,18 @@ from repeatedly rediscovering and rewriting the same artifact.
 Direct workers journal every completed model/tool batch to a task-specific,
 host-backed directory. The journal contains the immutable prompt fingerprint,
 exact conversation replay state, last parsed turn, token totals, mutation
-state, and tool-call count. A replacement container resumes only when the
-prompt fingerprint matches; completed or stale journals are ignored.
+state, successfully mutated paths, unresolved failed edits, and tool-call
+count. A replacement container resumes only when the prompt fingerprint
+matches; completed or stale journals are ignored.
 
-The durable event history remains lossless. The model-facing view is bounded:
-the two newest tool observations remain complete and older observations are
-folded to a content hash, byte count, and short prefix. Telemetry distinguishes
-peak per-request input from cumulative replay input and records resumed turns
-and folded bytes.
+The durable event history remains lossless. The model-facing view is bounded
+by workload: read-only reviewers retain the aggressive compact view, while
+mutation-capable coders and fixers retain the four newest complete tool
+exchanges until 70% live-context pressure. Older observations are folded to a
+content hash, byte count, and short prefix. This preserves the most recent
+writable source through the read-denial-mutation transition without increasing
+every reviewer request. Telemetry distinguishes peak per-request input from
+cumulative replay input and records resumed turns and folded bytes.
 
 ## Budgets and recovery
 
@@ -37,10 +41,21 @@ the rendered prompt size, writable-scope size, role, and expected turns. A
 mutation turn always remains reserved.
 
 The semantic loop detector recognizes identical observations reached through
-different actions and alternating ABAB cycles. It grants one explicit
-rehydration turn, then requires an authorized mutation or `BLOCKED: <concrete
-missing fact>`. Blind retry count is zero. A valid Git checkpoint is preserved
-for deterministic admission or bounded adoption.
+different actions and alternating ABAB cycles. Once discovery closes, all
+prose-only and denied-read recovery paths share one non-stackable forced
+mutation allowance; after it is consumed, another non-mutating response fails
+closed. Blind retry count is zero. A valid Git checkpoint is preserved for
+deterministic admission or bounded adoption.
+
+A token, tool, context, or natural-stop boundary is not completion merely
+because one scoped file changed. Test and implementation workers receive an
+explicit required-mutation set equal to their declared writable contract.
+Every required path must have a successful mutation, and every failed mutation
+must be repaired, before the harness may return success. Otherwise the
+watchdog preserves the partial commit, the durable journal remains incomplete,
+and the orchestrator resumes the same child from that checkpoint. Integration
+workers retain read-only completion because their assembly inputs may already
+be correct after dependency merges.
 
 ## Regression corpus
 
@@ -52,10 +67,33 @@ scripts/drem-canvas-orchestration-regressions.sh
 
 It covers empty/length plan review, planned-contract and scope admission,
 large inherited artifacts, pre/post-mutation budget exits, crash/resume,
-checkpoint handoff, sibling draining, integration scope, artifact freezing,
-native verification failure, and repeated Computer Use rework. The real Qwen
-worker canary remains the final preflight; the corpus does not replace an
-exact-artifact host verification or Computer Use run.
+checkpoint handoff, branch-acceptance persistence, marker-shaped history
+retention and forced mutation, partial multi-file checkpoints, failed-edit
+journal continuation, required output coverage, non-stackable recovery,
+sibling draining, integration scope, artifact freezing, native verification
+failure, and repeated Computer Use rework. The real Qwen worker canary remains
+the final preflight; the corpus does not replace an exact-artifact host
+verification or Computer Use run.
+
+Production incidents also have data fixtures under
+`internal/orchestrator/testdata/incidents/`. A fixture preserves the relevant
+persisted task, attempt, rejection, and expected retry classification without
+retaining a worker checkout. The marker-v9 replay covers both JSON shapes that
+matter: the named in-memory `model.JSONField` seen before persistence and the
+ordinary nested maps produced by SQLite reload. It must classify the missing
+`marker.add` assertion as `test_contract`, dispatch one bounded correction,
+accept the repaired checkpoint, and reach a versioned frozen artifact.
+
+Registry-action red tests have a two-stage admission contract. Task filing
+must explicitly instruct an executable assertion, enumeration, resolution, or
+execution of the exact action ID. Branch admission then requires that token on
+an added executable test line; a test name, label, or comment is insufficient.
+The worker prompt requires source-backed registry APIs and fails closed when
+the verified source pack does not provide one.
+
+The production orchestrator Dockerfile runs the marker incident replay and
+its spec/admission tests in the Linux/CGO build stage. Local host tests alone
+therefore cannot authorize an image whose builder runtime fails the replay.
 
 ## Benchmark acceptance boundary
 

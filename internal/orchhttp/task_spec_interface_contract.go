@@ -113,3 +113,41 @@ func validateInterfaceContract(index, contractIndex int, contract orchdto.TaskIn
 	}
 	return nil
 }
+
+// validateRegistryActionTestInstructions rejects a plan before filing when its
+// paired test brief omits the exact runtime token that deterministic admission
+// will require. This keeps a recoverable authoring omission from becoming an
+// expensive worker run. The worker still has to put the token on executable
+// assertion/enumeration/execution code; this check only ensures the immutable
+// task contract tells it to do so.
+func validateRegistryActionTestInstructions(subtasks []orchdto.TaskExecutionSubtaskDTO) error {
+	for testIndex, testSubtask := range subtasks {
+		if testSubtask.Phase != "test" || len(testSubtask.TestsFor) != 1 {
+			continue
+		}
+		implementationIndex := testSubtask.TestsFor[0]
+		if implementationIndex < 0 || implementationIndex >= len(subtasks) {
+			continue // The structural validator reports this with its canonical error.
+		}
+		for _, contract := range subtasks[implementationIndex].InterfaceContracts {
+			if contract.Kind != "registry_action" || strings.TrimSpace(contract.ActionID) == "" {
+				continue
+			}
+			description := strings.ToLower(testSubtask.Description)
+			if !strings.Contains(testSubtask.Description, contract.ActionID) ||
+				!containsAny(description, "assert", "check", "require", "expect", "enumerat", "execute", "resolve") {
+				return fmt.Errorf("test subtask %d must instruct an executable assertion, enumeration, resolution, or execution of registry action %q required by implementation subtask %d", testIndex, contract.ActionID, implementationIndex)
+			}
+		}
+	}
+	return nil
+}
+
+func containsAny(value string, candidates ...string) bool {
+	for _, candidate := range candidates {
+		if strings.Contains(value, candidate) {
+			return true
+		}
+	}
+	return false
+}

@@ -1,0 +1,36 @@
+{
+  "incident_id": "canvas-marker-v9-test-contract",
+  "task": {
+    "phase": "test",
+    "status": "in_progress",
+    "context": {
+      "branch_acceptance": {
+        "accepted": false,
+        "accepted_files": [
+          "tests/integration/test_jump_motions.cpp"
+        ],
+        "base_ref": "96db6b709f0a4f2069db4a7d3415ef17867b0274",
+        "head_sha": "a8842a8f8317ae37e8262156e9fe16966139d731",
+        "reason": "branch_contamination",
+        "rejected": [
+          {
+            "path": "marker.add",
+            "reason": "missing_active_runtime_assertion",
+            "status": "registry_action"
+          }
+        ]
+      }
+    }
+  },
+  "attempt": {
+    "attempt_id": "e40f9e72-3461-490c-acc0-4e76f28461a0",
+    "failure_classification": "test_contract",
+    "first_error": "deterministic branch acceptance rejected checkpoint: [{marker.add registry_action missing_active_runtime_assertion}]"
+  },
+  "expected": {
+    "classification": "test_contract",
+    "bounded_retry_eligible": true,
+    "rejection_path": "marker.add",
+    "max_retries": 1
+  }
+}

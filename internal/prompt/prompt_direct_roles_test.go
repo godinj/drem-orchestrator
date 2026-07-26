@@ -151,6 +151,23 @@ func TestGenerateDirectCoder_ExternalVerificationIsPhaseAwareAndCompact(t *testi
 	assert.Less(t, len(result), 8000)
 }
 
+func TestGenerateDirectCoder_TestPhaseForbidsInventedFixtureAPIs(t *testing.T) {
+	task := &model.Task{
+		Title: "marker command test",
+		Phase: "test",
+		Context: model.JSONField{
+			"planned_interface_contract": "markerAddWithArgs(const std::string&)",
+		},
+	}
+
+	result := GenerateDirectCoder(Opts{Task: task, AgentType: model.AgentCoder, WorktreePath: "/tmp/canvas"})
+	require.Contains(t, result, "read its declaring header")
+	require.Contains(t, result, "never infer fixture fields, accessors, enums, or method signatures")
+	require.Contains(t, result, "assert the exact action_id")
+	require.Contains(t, result, "mentioning it only in a test name, label, or comment is rejected")
+	require.Contains(t, result, "stop with a missing-contract result")
+}
+
 func TestGenerateDirectReviewer_PlanReview(t *testing.T) {
 	task := &model.Task{
 		Title:       "Review the plan",

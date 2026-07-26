@@ -93,6 +93,9 @@ func (o *Orchestrator) processCoderDirect(sub *model.Task, parent *model.Task) e
 	toolCfg.GQPriority = "normal"
 	toolCfg.WorkDir = featureDir
 	toolCfg.ScopedFiles = extractWritableFiles(*sub)
+	if sub.Phase == "test" || sub.Phase == "implementation" {
+		toolCfg.RequiredMutationFiles = append([]string(nil), toolCfg.ScopedFiles...)
+	}
 	if len(toolCfg.ScopedFiles) == 0 {
 		toolCfg.MaxReadsBeforeMutation = 0
 	}

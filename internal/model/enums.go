@@ -198,14 +198,15 @@ func (s AgentStatus) String() string {
 
 // ExitReason constants for agent completion outcomes.
 const (
-	ExitReasonSuccess       = "success"        // Agent completed successfully
-	ExitReasonContextLimit  = "context_limit"  // Context window limit reached
-	ExitReasonError         = "error"          // Agent encountered an error
-	ExitReasonKilled        = "killed"         // Agent was forcibly terminated
-	ExitReasonTimeout       = "timeout"        // Agent exceeded timeout
-	ExitReasonMaxIterations = "max_iterations" // Agent exhausted iteration budget
-	ExitReasonNoProgress    = "no_progress"    // Agent repeated tool calls without progress
-	ExitReasonTokenBudget   = "token_budget"   // Agent checkpointed a complete response at cumulative budget
-	ExitReasonEmptyOutput   = "empty_output"   // Agent produced no output
-	ExitReasonDefault       = "unknown"        // Default when exit info is nil
+	ExitReasonSuccess        = "success"                  // Agent completed successfully
+	ExitReasonContextLimit   = "context_limit"            // Context window limit reached
+	ExitReasonError          = "error"                    // Agent encountered an error
+	ExitReasonKilled         = "killed"                   // Agent was forcibly terminated
+	ExitReasonTimeout        = "timeout"                  // Agent exceeded timeout
+	ExitReasonMaxIterations  = "max_iterations"           // Agent exhausted iteration budget
+	ExitReasonNoProgress     = "no_progress"              // Agent repeated tool calls without progress
+	ExitReasonTokenBudget    = "token_budget"             // Agent checkpointed a complete response at cumulative budget
+	ExitReasonAnchorMismatch = "mutation_anchor_mismatch" // Agent exhausted the bounded surgical-edit anchor recovery
+	ExitReasonEmptyOutput    = "empty_output"             // Agent produced no output
+	ExitReasonDefault        = "unknown"                  // Default when exit info is nil
 )

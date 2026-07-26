@@ -1911,6 +1911,37 @@ func TestProcessTestWriting_CancelledSubtasksDontBlockCompletion(t *testing.T) {
 	}
 }
 
+func TestProcessTestWriting_DependencyCancelledSubtaskBlocksCompletion(t *testing.T) {
+	o, db := setupLifecycleTest(t)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID: parentID, ProjectID: o.projectID, Title: "tw-dependency-cancelled",
+		Description: "parent with missing dependency-cancelled test work",
+		Status:      model.StatusTestWriting,
+	}
+	require.NoError(t, db.Create(&parent).Error)
+	require.NoError(t, db.Create(&model.Task{
+		ID: uuid.New(), ProjectID: o.projectID, ParentTaskID: &parentID,
+		Title: "test-done", Description: "done test subtask",
+		Status: model.StatusDone, Phase: "test",
+	}).Error)
+	cancelled := model.Task{
+		ID: uuid.New(), ProjectID: o.projectID, ParentTaskID: &parentID,
+		Title: "test-cancelled-by-dependency", Description: "required test work was cancelled",
+		Status: model.StatusCancelled, Phase: "test",
+		Context: model.JSONField{cancellationKindContextKey: "dependency_failure"},
+	}
+	require.NoError(t, db.Create(&cancelled).Error)
+
+	require.NoError(t, o.processTestWriting(&parent))
+
+	var updated model.Task
+	require.NoError(t, db.First(&updated, "id = ?", parentID).Error)
+	require.Equal(t, model.StatusTestWriting, updated.Status)
+	require.Contains(t, updated.Context["parent_readiness_blockers"], cancelled.ID.String())
+}
+
 func TestProcessTestWriting_StillInProgress(t *testing.T) {
 	orch, db, _ := setupReconcileTest(t)
 

@@ -197,6 +197,14 @@ func (o *Orchestrator) acceptWorkerBranchCompletion(ctx context.Context, ag *mod
 		CreatedAt: time.Now(),
 	}
 	if err := o.db.Transaction(func(tx *gorm.DB) error {
+		// The completion path reloads this task before deciding whether a
+		// deterministic test-contract rejection is eligible for its one bounded
+		// repair. Persist the evidence with the typed record and event; keeping it
+		// only on the in-memory task misclassifies the rejection as contamination.
+		if err := tx.Model(&model.Task{}).Where("id = ?", task.ID).
+			Update("context", task.Context).Error; err != nil {
+			return fmt.Errorf("persist branch acceptance context: %w", err)
+		}
 		if err := tx.Create(record).Error; err != nil {
 			return fmt.Errorf("create typed branch acceptance: %w", err)
 		}
@@ -247,26 +255,21 @@ func testContractOnlyRejections(task *model.Task) ([]branchpolicy.Rejection, boo
 	if task == nil || task.Phase != "test" || task.Context == nil {
 		return nil, false
 	}
-	detail, ok := task.Context["branch_acceptance"].(map[string]any)
-	if !ok {
+	// acceptanceDetails returns model.JSONField, a named map type. The live
+	// completion path classifies that value immediately, before a database
+	// round trip normalizes nested values to map[string]any. Decode through the
+	// JSON contract so in-memory and reloaded tasks take the identical path.
+	encoded, err := json.Marshal(task.Context["branch_acceptance"])
+	if err != nil {
 		return nil, false
 	}
-	raw, ok := detail["rejected"].([]any)
-	if !ok || len(raw) == 0 {
+	var detail struct {
+		Rejected []branchpolicy.Rejection `json:"rejected"`
+	}
+	if err := json.Unmarshal(encoded, &detail); err != nil || len(detail.Rejected) == 0 {
 		return nil, false
 	}
-	rejections := make([]branchpolicy.Rejection, 0, len(raw))
-	for _, item := range raw {
-		entry, ok := item.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		rejection := branchpolicy.Rejection{
-			Path: stringFromAny(entry["path"]), Status: stringFromAny(entry["status"]), Reason: stringFromAny(entry["reason"]),
-		}
-		rejections = append(rejections, rejection)
-	}
-	return rejections, testContractRejectionsOnly(rejections)
+	return detail.Rejected, testContractRejectionsOnly(detail.Rejected)
 }
 
 func testContractRejectionsOnly(rejections []branchpolicy.Rejection) bool {
@@ -325,6 +328,8 @@ func acceptanceDetails(res branchpolicy.AcceptanceResult, agentID uuid.UUID) (mo
 	detail["agent_id"] = agentID.String()
 	if res.Accepted {
 		detail["reason"] = "accepted_worker_completion"
+	} else if testContractRejectionsOnly(res.Rejected) {
+		detail["reason"] = failureClassTestContract
 	} else {
 		detail["reason"] = branchpolicy.ReasonBranchContaminate
 	}

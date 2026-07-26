@@ -67,13 +67,38 @@ func testCheckpointRejections(ctx context.Context, req AcceptanceRequest, headRe
 				continue
 			}
 			for _, token := range semanticTokens(semantic.Kind, semantic.ActionID, semantic.Route, semantic.TargetAction, semantic.Caller) {
-				if token != "" && !strings.Contains(active, token) {
+				if token != "" && !hasActiveRuntimeEvidence(byPath, token) {
 					return []Rejection{{Reason: "missing_active_runtime_assertion", Status: semantic.Kind, Path: token}}, nil
 				}
 			}
 		}
 	}
 	return nil, nil
+}
+
+// hasActiveRuntimeEvidence keeps labels and test names from satisfying a
+// runtime contract merely by mentioning its token. The deterministic gate is
+// intentionally language-light, but the token must occur on an added line
+// that visibly asserts, resolves, enumerates, or executes production state.
+func hasActiveRuntimeEvidence(byPath map[string]string, token string) bool {
+	for _, added := range byPath {
+		for _, line := range strings.Split(added, "\n") {
+			if !strings.Contains(line, token) {
+				continue
+			}
+			lower := strings.ToLower(line)
+			for _, signal := range []string{
+				"check(", "check_false(", "require(", "require_false(",
+				"expect_", "assert", "executeaction", "resolvecommand(",
+				"getallactions(",
+			} {
+				if strings.Contains(lower, signal) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // activeCompileContractSymbols returns the minimum planned C++ surface that

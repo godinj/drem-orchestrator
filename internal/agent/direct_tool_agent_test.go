@@ -876,6 +876,7 @@ func TestDefaultDirectToolAgentConfig(t *testing.T) {
 	assert.Equal(t, 60000, cfg.MaxCumulativeInputTokens)
 	assert.Equal(t, ToolArgumentsString, cfg.ToolArgumentsFormat)
 	assert.Equal(t, 30*1e9, float64(cfg.BashTimeout)) // 30s in nanoseconds
+	assert.Empty(t, cfg.ToolHistoryMode, "the zero/default policy stays aggressive until a mutating workload is selected")
 }
 
 func TestRunDirectToolAgent_CumulativeInputBudgetCheckpointsToolBatch(t *testing.T) {
@@ -1187,7 +1188,7 @@ func TestRunDirectToolAgent_ReservesCumulativeBudgetForMutationOnlyTurn(t *testi
 	require.Equal(t, "changed", string(content))
 }
 
-func TestRunDirectToolAgent_ScopedReadBudgetStopsAfterTwoBlockedResponseBatches(t *testing.T) {
+func TestRunDirectToolAgent_ScopedReadBudgetStopsAfterForcedMutationRecovery(t *testing.T) {
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestCount++
@@ -1218,8 +1219,236 @@ func TestRunDirectToolAgent_ScopedReadBudgetStopsAfterTwoBlockedResponseBatches(
 	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRole("coder"), "")
 	require.Error(t, err)
 	require.Equal(t, DirectToolStopReasonNoProgress, result.StopReason)
-	require.Equal(t, 2, requestCount)
+	require.Equal(t, 3, requestCount)
+	require.Contains(t, err.Error(), "3 blocked response batches")
+}
+
+func TestRunDirectToolAgent_RecoversOneSecondDeniedReadWithForcedMutationTurn(t *testing.T) {
+	requestCount := 0
+	requestToolNames := make([][]string, 0, 5)
+	forcedRecoverySeen := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var req toolChatRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		names := make([]string, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			names = append(names, tool.Function.Name)
+		}
+		requestToolNames = append(requestToolNames, names)
+		for _, message := range req.Messages {
+			if message.Role == "system" && message.Content == mutationOnlyBlockedRecoveryPrompt {
+				forcedRecoverySeen = true
+			}
+		}
+
+		resp := toolChatResponse{}
+		switch requestCount {
+		case 1:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "read-in-scope", Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: "{\"path\":\"existing.cpp\"}"},
+			}}}, FinishReason: "tool_calls"}}
+		case 2:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "read-denied-first", Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: "{\"path\":\"unneeded.cpp\"}"},
+			}}}, FinishReason: "tool_calls"}}
+		case 3:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "read-denied-second", Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: "{\"path\":\"existing.cpp\"}"},
+			}}}, FinishReason: "tool_calls"}}
+		case 4:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "edit", Type: "function",
+				Function: toolCallFunction{Name: "edit", Arguments: "{\"path\":\"existing.cpp\",\"old\":\"original\",\"new\":\"changed\"}"},
+			}}}, FinishReason: "tool_calls"}}
+		default:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", Content: "done"}, FinishReason: "stop"}}
+		}
+		resp.Usage.PromptTokens = 20
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "existing.cpp")
+	require.NoError(t, os.WriteFile(path, []byte("original"), 0o644))
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.ScopedFiles = []string{"existing.cpp"}
+	cfg.ProtectExistingFiles = true
+	cfg.MaxReadsBeforeMutation = 1
+
+	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRole("coder"), "")
+	require.NoError(t, err)
+	require.True(t, result.MutationObserved)
+	require.Equal(t, 5, requestCount)
+	require.Equal(t, []string{"edit"}, requestToolNames[2])
+	require.Equal(t, []string{"edit"}, requestToolNames[3])
+	require.True(t, forcedRecoverySeen)
+	content, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	require.Equal(t, "changed", string(content))
+}
+
+func TestRunDirectToolAgent_RecoversOneToollessStopInMutationOnlyPhase(t *testing.T) {
+	requestCount := 0
+	requestToolNames := make([][]string, 0, 5)
+	forcedRecoverySeen := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var req toolChatRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		names := make([]string, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			names = append(names, tool.Function.Name)
+		}
+		requestToolNames = append(requestToolNames, names)
+		for _, message := range req.Messages {
+			if message.Role == "system" && message.Content == mutationOnlyToollessRecoveryPrompt {
+				forcedRecoverySeen = true
+			}
+		}
+
+		resp := toolChatResponse{}
+		switch requestCount {
+		case 1, 2:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: fmt.Sprintf("read-%d", requestCount), Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: "{\"path\":\"existing.cpp\"}"},
+			}}}, FinishReason: "tool_calls"}}
+		case 3:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{
+				Role: "assistant", Content: "I need to make the first mutation now.",
+			}, FinishReason: "stop"}}
+		case 4:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "edit", Type: "function",
+				Function: toolCallFunction{Name: "edit", Arguments: "{\"path\":\"existing.cpp\",\"old\":\"original\",\"new\":\"changed\"}"},
+			}}}, FinishReason: "tool_calls"}}
+		default:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", Content: "done"}, FinishReason: "stop"}}
+		}
+		resp.Usage.PromptTokens = 20
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "existing.cpp")
+	require.NoError(t, os.WriteFile(path, []byte("original"), 0o644))
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.ScopedFiles = []string{"existing.cpp"}
+	cfg.ProtectExistingFiles = true
+	cfg.MaxReadsBeforeMutation = 1
+
+	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRole("coder"), "")
+	require.NoError(t, err)
+	require.True(t, result.MutationObserved)
+	require.Equal(t, 5, requestCount)
+	require.Equal(t, []string{"edit"}, requestToolNames[2])
+	require.Equal(t, []string{"edit"}, requestToolNames[3])
+	require.True(t, forcedRecoverySeen)
+	content, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	require.Equal(t, "changed", string(content))
+}
+
+func TestRunDirectToolAgent_DoesNotStackMutationOnlyRecoveries(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var req toolChatRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+
+		resp := toolChatResponse{}
+		switch requestCount {
+		case 1, 2:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: fmt.Sprintf("read-in-scope-%d", requestCount), Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: "{\"path\":\"existing.cpp\"}"},
+			}}}, FinishReason: "tool_calls"}}
+		case 3:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{
+				Role: "assistant", Content: "I will edit next.",
+			}, FinishReason: "stop"}}
+		case 4, 5:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: fmt.Sprintf("denied-read-%d", requestCount), Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: "{\"path\":\"existing.cpp\"}"},
+			}}}, FinishReason: "tool_calls"}}
+		default:
+			t.Fatal("the harness granted more than one mutation-only recovery")
+		}
+		resp.Usage.PromptTokens = 20
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.cpp"), []byte("original"), 0o644))
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.ScopedFiles = []string{"existing.cpp"}
+	cfg.ProtectExistingFiles = true
+	cfg.MaxReadsBeforeMutation = 1
+
+	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRole("coder"), "")
+	require.Error(t, err)
+	require.Equal(t, DirectToolStopReasonNoProgress, result.StopReason)
 	require.Contains(t, err.Error(), "2 blocked response batches")
+	require.Equal(t, 5, requestCount)
+}
+
+func TestRunDirectToolAgent_FailsAfterSecondToollessStopInMutationOnlyPhase(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		resp := toolChatResponse{}
+		switch requestCount {
+		case 1, 2:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: fmt.Sprintf("read-%d", requestCount), Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: "{\"path\":\"existing.cpp\"}"},
+			}}}, FinishReason: "tool_calls"}}
+		default:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{
+				Role: "assistant", Content: "I will make the edit.",
+			}, FinishReason: "stop"}}
+		}
+		resp.Usage.PromptTokens = 20
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.cpp"), []byte("original"), 0o644))
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.ScopedFiles = []string{"existing.cpp"}
+	cfg.ProtectExistingFiles = true
+	cfg.MaxReadsBeforeMutation = 1
+
+	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRole("coder"), "")
+	require.Error(t, err)
+	require.Equal(t, DirectToolStopReasonNoProgress, result.StopReason)
+	require.Equal(t, 4, requestCount)
+	require.Contains(t, err.Error(), "after the forced mutation recovery")
 }
 
 func TestRunDirectToolAgent_AllowsOneRecoveryReadAfterFailedSurgicalEdit(t *testing.T) {
@@ -1288,6 +1517,223 @@ func TestRunDirectToolAgent_AllowsOneRecoveryReadAfterFailedSurgicalEdit(t *test
 	content, readErr := os.ReadFile(path)
 	require.NoError(t, readErr)
 	require.Equal(t, "corrected", string(content))
+}
+
+func TestRunDirectToolAgent_FailedEditRecoveryOutranksExhaustedReconnaissance(t *testing.T) {
+	requestCount := 0
+	requestToolNames := make([][]string, 0, 8)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var req toolChatRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		names := make([]string, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			names = append(names, tool.Function.Name)
+		}
+		requestToolNames = append(requestToolNames, names)
+
+		var message toolChatMsg
+		finishReason := "tool_calls"
+		switch requestCount {
+		case 1, 2, 3, 4:
+			message = toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: fmt.Sprintf("read-%d", requestCount), Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: `{"path":"tests/integration/test_jump_motions.cpp"}`},
+			}}}
+		case 5:
+			message = toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "edit-stale-anchor", Type: "function",
+				Function: toolCallFunction{Name: "edit", Arguments: `{"path":"tests/integration/test_jump_motions.cpp","old":"} // namespace imagined","new":"marker regression"}`},
+			}}}
+		case 6:
+			message = toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "read-after-anchor-miss", Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: `{"path":"tests/integration/test_jump_motions.cpp"}`},
+			}}}
+		case 7:
+			message = toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "edit-correct-anchor", Type: "function",
+				Function: toolCallFunction{Name: "edit", Arguments: `{"path":"tests/integration/test_jump_motions.cpp","old":"existing jump tests","new":"existing jump tests\nmarker regression"}`},
+			}}}
+		default:
+			message = toolChatMsg{Role: "assistant", Content: "done"}
+			finishReason = "stop"
+		}
+		resp := toolChatResponse{Choices: []toolChatChoice{{Message: message, FinishReason: finishReason}}}
+		resp.Usage.PromptTokens = 2_000
+		resp.Usage.CompletionTokens = 50
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tests/integration/test_jump_motions.cpp")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("existing jump tests"), 0o644))
+	cfg := DefaultDirectToolAgentConfig().ForWorkload("coder", "test")
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.ScopedFiles = []string{"tests/integration/test_jump_motions.cpp"}
+	cfg.RequiredMutationFiles = append([]string(nil), cfg.ScopedFiles...)
+	cfg.ProtectExistingFiles = true
+	cfg.MaxReadsBeforeMutation = 1
+	cfg.MaxInputTokensBeforeMutation = 100_000
+	cfg.MaxCumulativeInputTokens = 100_000
+	cfg.MaxToolCalls = 20
+
+	result, err := RunDirectToolAgent(cfg, "sys", "write the marker regression",
+		ToolsForRoleScope("coder", cfg.ScopedFiles), "")
+	require.NoError(t, err)
+	require.True(t, result.MutationObserved)
+	require.Empty(t, result.PendingMutationRepairs)
+	require.Empty(t, result.MissingRequiredMutations)
+	require.Equal(t, 8, requestCount)
+	require.Equal(t, []string{"edit"}, requestToolNames[4])
+	require.Equal(t, []string{"read", "edit"}, requestToolNames[5])
+	require.Equal(t, []string{"edit"}, requestToolNames[6])
+	content, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	require.Equal(t, "existing jump tests\nmarker regression", string(content))
+}
+
+func TestRunDirectToolAgent_ClassifiesExhaustedEditAnchorRecovery(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var message toolChatMsg
+		switch requestCount {
+		case 1:
+			message = toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "edit-stale-anchor", Type: "function",
+				Function: toolCallFunction{Name: "edit", Arguments: `{"path":"existing.cpp","old":"imagined tail","new":"changed"}`},
+			}}}
+		case 2:
+			message = toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "recovery-read", Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: `{"path":"existing.cpp"}`},
+			}}}
+		default:
+			message = toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "edit-second-stale-anchor", Type: "function",
+				Function: toolCallFunction{Name: "edit", Arguments: `{"path":"existing.cpp","old":"still imagined","new":"changed"}`},
+			}}}
+		}
+		resp := toolChatResponse{Choices: []toolChatChoice{{Message: message, FinishReason: "tool_calls"}}}
+		resp.Usage.PromptTokens = 100
+		resp.Usage.CompletionTokens = 10
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.cpp"), []byte("actual tail"), 0o644))
+	cfg := DefaultDirectToolAgentConfig().ForWorkload("coder", "implementation")
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.ScopedFiles = []string{"existing.cpp"}
+	cfg.RequiredMutationFiles = append([]string(nil), cfg.ScopedFiles...)
+	cfg.ProtectExistingFiles = true
+	cfg.MaxToolCalls = 10
+
+	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRoleScope("coder", cfg.ScopedFiles), "")
+	require.ErrorContains(t, err, "mutation anchor mismatch after bounded recovery")
+	require.Equal(t, DirectToolStopReasonAnchorMismatch, result.StopReason)
+	require.Equal(t, 3, requestCount)
+}
+
+func TestRunDirectToolAgent_TokenBudgetDoesNotCompletePartialMultiFileCheckpoint(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		resp := toolChatResponse{}
+		switch requestCount {
+		case 1:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "edit-declaration", Type: "function",
+				Function: toolCallFunction{Name: "edit", Arguments: `{"path":"EditorAdapter.h","old":"declarations","new":"declarations\nmarkerAddWithArgs"}`},
+			}}}, FinishReason: "tool_calls"}}
+		case 2:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "edit-handler-miss", Type: "function",
+				Function: toolCallFunction{Name: "edit", Arguments: `{"path":"EditorAdapterActionHandlers.inc","old":"obsolete end marker","new":"marker implementation"}`},
+			}}}, FinishReason: "tool_calls"}}
+		default:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "read-handler-recovery", Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: `{"path":"EditorAdapterActionHandlers.inc"}`},
+			}}}, FinishReason: "tool_calls"}}
+		}
+		resp.Usage.PromptTokens = 25
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "EditorAdapter.h"), []byte("declarations"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "EditorAdapterActionHandlers.inc"), []byte("real file ending"), 0o644))
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.ScopedFiles = []string{"EditorAdapter.h", "EditorAdapterActionHandlers.inc"}
+	cfg.RequiredMutationFiles = append([]string(nil), cfg.ScopedFiles...)
+	cfg.ProtectExistingFiles = true
+	cfg.MaxCumulativeInputTokens = 75
+	cfg.MaxToolCalls = 10
+
+	result, err := RunDirectToolAgent(cfg, "sys", "implement both marker files", ToolsForRoleScope("coder", cfg.ScopedFiles), "")
+	require.ErrorContains(t, err, "token budget reached with incomplete mutation checkpoint")
+	require.Equal(t, DirectToolStopReasonTokenBudget, result.StopReason)
+	require.True(t, result.MutationObserved)
+	require.Equal(t, []string{"EditorAdapterActionHandlers.inc"}, result.PendingMutationRepairs)
+	require.Equal(t, []string{"EditorAdapterActionHandlers.inc"}, result.MissingRequiredMutations)
+	require.Equal(t, 3, requestCount)
+	header, readErr := os.ReadFile(filepath.Join(dir, "EditorAdapter.h"))
+	require.NoError(t, readErr)
+	handler, readErr := os.ReadFile(filepath.Join(dir, "EditorAdapterActionHandlers.inc"))
+	require.NoError(t, readErr)
+	require.Equal(t, "declarations\nmarkerAddWithArgs", string(header))
+	require.Equal(t, "real file ending", string(handler))
+}
+
+func TestRunDirectToolAgent_NaturalStopRequiresEveryDeclaredMutationFile(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		resp := toolChatResponse{}
+		if requestCount == 1 {
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "edit-first-only", Type: "function", Function: toolCallFunction{
+					Name: "edit", Arguments: `{"path":"first.cpp","old":"first","new":"first changed"}`},
+			}}}, FinishReason: "tool_calls"}}
+		} else {
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", Content: "done"}, FinishReason: "stop"}}
+		}
+		resp.Usage.PromptTokens = 20
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "first.cpp"), []byte("first"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "second.cpp"), []byte("second"), 0o644))
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.ScopedFiles = []string{"first.cpp", "second.cpp"}
+	cfg.RequiredMutationFiles = append([]string(nil), cfg.ScopedFiles...)
+
+	result, err := RunDirectToolAgent(cfg, "sys", "change both files", ToolsForRoleScope("coder", cfg.ScopedFiles), "")
+	require.ErrorContains(t, err, "required files without a successful mutation: second.cpp")
+	require.Equal(t, DirectToolStopReasonNoProgress, result.StopReason)
+	require.Equal(t, []string{"first.cpp"}, result.MutatedFiles)
+	require.Equal(t, []string{"second.cpp"}, result.MissingRequiredMutations)
+	require.Equal(t, 2, requestCount)
 }
 
 func TestToolCallTargetsAnyPathNormalizesAbsoluteScopedPath(t *testing.T) {
@@ -1382,8 +1828,10 @@ func TestRunDirectToolAgent_BoundsHistoricalBashDiscoveryTraceByInputBudget(t *t
 	result, err := RunDirectToolAgent(cfg, "sys", "write the contracted red test", ToolsForRoleScope("coder", []string{"tests/test.cpp"}), "")
 	require.Error(t, err)
 	require.Equal(t, DirectToolStopReasonNoProgress, result.StopReason)
-	require.Equal(t, 5, callCount)
-	require.Equal(t, 27_500, result.TokensIn)
+	// The second denied discovery batch receives one final mutation-only
+	// recovery turn; the third denial remains bounded no-progress.
+	require.Equal(t, 6, callCount)
+	require.Equal(t, 33_000, result.TokensIn)
 	require.False(t, result.MutationObserved)
 }
 
