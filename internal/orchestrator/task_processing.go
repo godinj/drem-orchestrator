@@ -386,7 +386,18 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		case model.StatusDone:
 			// good
 		case model.StatusCancelled:
-			// Superseded subtasks are terminal and should not block the active generation.
+			// A cancellation is not evidence that the planned work completed. Only
+			// an explicitly superseded/replanned child is historical. In particular,
+			// dependency_failure_cascade must remain a delivery blocker after its
+			// prerequisite is repaired or adopted; otherwise the parent can freeze an
+			// artifact that never contained this child’s required work.
+			if isIgnorableCancelledSubtask(sub) {
+				continue
+			}
+			allDone = false
+			if isDependencyFailureCancelledSubtask(sub) {
+				anyFailed = true
+			}
 		case model.StatusRejected:
 			if _, superseded := supersededRejectedTests[sub.ID]; superseded {
 				// Preserve the rejected row as immutable review history. A done
@@ -474,7 +485,9 @@ func (o *Orchestrator) checkFeatureCompletion(parent *model.Task) error {
 		// siblings drain to a checkpoint before terminalizing the parent.
 		var failedNames []string
 		for _, sub := range subtasks {
-			if sub.Status == model.StatusFailed || (sub.Status == model.StatusRejected && !isSupersededRejected(sub.ID, supersededRejectedTests)) {
+			if sub.Status == model.StatusFailed ||
+				(sub.Status == model.StatusRejected && !isSupersededRejected(sub.ID, supersededRejectedTests)) ||
+				isDependencyFailureCancelledSubtask(sub) {
 				failedNames = append(failedNames, sub.Title)
 			}
 		}
@@ -505,6 +518,29 @@ func isSupersededRejected(id uuid.UUID, superseded map[uuid.UUID]struct{}) bool 
 	return ok
 }
 
+const cancellationKindContextKey = "cancellation_kind"
+
+func isIgnorableCancelledSubtask(task model.Task) bool {
+	if task.Status != model.StatusCancelled || task.Context == nil {
+		return false
+	}
+	kind, _ := task.Context[cancellationKindContextKey].(string)
+	switch strings.TrimSpace(kind) {
+	case "superseded", "replan":
+		return true
+	default:
+		return false
+	}
+}
+
+func isDependencyFailureCancelledSubtask(task model.Task) bool {
+	if task.Status != model.StatusCancelled || task.Context == nil {
+		return false
+	}
+	kind, _ := task.Context[cancellationKindContextKey].(string)
+	return strings.TrimSpace(kind) == "dependency_failure"
+}
+
 func (o *Orchestrator) cancelBlockedSiblings(parent *model.Task, subtasks []model.Task, failedNames []string) error {
 	reason := fmt.Sprintf("execution plan stopped after required subtask failure: %s", strings.Join(failedNames, ", "))
 	for i := range subtasks {
@@ -512,6 +548,11 @@ func (o *Orchestrator) cancelBlockedSiblings(parent *model.Task, subtasks []mode
 		if isTerminalWaveStatus(sub.Status) || siblingIsRunning(*sub) {
 			continue
 		}
+		if sub.Context == nil {
+			sub.Context = make(model.JSONField)
+		}
+		sub.Context[cancellationKindContextKey] = "dependency_failure"
+		sub.Context["cancelled_by_failure"] = append([]string(nil), failedNames...)
 		oldStatus := sub.Status
 		if err := o.transitionTaskAtomic(sub, model.StatusCancelled, "orchestrator", "dependency_failure_cascade", reason,
 			map[string]any{"parent_task_id": parent.ID.String(), "failed_subtasks": failedNames}); err != nil {

@@ -520,7 +520,7 @@ func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, 
 	if checkpoint, sha, err := o.attemptCheckpoint(ctx, attempt); err != nil {
 		o.logger.Warn("worker death: inspect checkpoint", "task_id", task.ID, "attempt_id", attempt.ID, "error", err)
 	} else if checkpoint {
-		summary := fmt.Sprintf("worker stopped after creating checkpoint %s on %s; preserved for bounded artifact handoff", sha, attempt.Branch)
+		summary := fmt.Sprintf("worker stopped after creating checkpoint %s on %s; preserved for bounded continuation or artifact handoff", sha, attempt.Branch)
 		if task.Context == nil {
 			task.Context = make(model.JSONField)
 		}
@@ -531,6 +531,15 @@ func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, 
 		budget := consumeRetryBudget(task, retryEdgeForTask(*task, attempt.AgentType), failureClassArtifactHandoff, summary, now)
 		if err := o.failTaskWithFailureEvidence(task, "worker checkpoint requires bounded artifact handoff", failureClassArtifactHandoff, summary, now, budget); err != nil {
 			o.logger.Error("handle worker death: preserve checkpoint handoff", "task_id", task.ID, "error", err)
+			return
+		}
+		if shouldAutoContinueCheckpoint(task, attempt, failureReason) {
+			if err := o.ResumeFailedCheckpoint(task.ID, sha, "orchestrator:checkpoint-continuation"); err == nil {
+				o.logger.Info("worker checkpoint automatically resumed", "task_id", task.ID, "attempt_id", attempt.ID, "commit_sha", sha)
+				return
+			} else {
+				o.logger.Info("worker checkpoint not eligible for automatic continuation; preserving handoff", "task_id", task.ID, "attempt_id", attempt.ID, "error", err)
+			}
 		}
 		return
 	}
@@ -570,6 +579,18 @@ func (o *Orchestrator) handleWorkerDeath(ctx context.Context, task *model.Task, 
 		}
 		o.logger.Error("handle worker death: respawn failed",
 			"task_id", task.ID, "error", err)
+	}
+}
+
+func shouldAutoContinueCheckpoint(task *model.Task, attempt *model.WorkerAttempt, failureReason string) bool {
+	if task == nil || attempt == nil || task.ParentTaskID == nil || strings.TrimSpace(attempt.RenderedPromptHash) == "" || strings.TrimSpace(attempt.RenderedPromptPath) == "" {
+		return false
+	}
+	switch strings.TrimSpace(failureReason) {
+	case "token_budget", "timeout", "context_limit":
+		return true
+	default:
+		return false
 	}
 }
 

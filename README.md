@@ -324,6 +324,14 @@ may use compile-red; runtime seams require active behavioral assertions. Every
 child also receives the immutable, hash-checked source excerpts, acceptance
 criteria, and paired TDD file list supplied by the adapter.
 
+Orchestrated delivery rework reconstructs dependency-ordered repair children
+from the completed ownership graph, retaining each child's immutable writable
+scope. A completed integration task with only `config/default_keymap.yaml`
+authority can therefore never be asked to repair a test or action fragment.
+Generated merge commits use a neutral control-plane subject rather than an
+external task or branch name, and dependency-failure-cancelled children remain
+required blockers until a replacement completes.
+
 Worker checkpoints pass deterministic admission before review. The gate rejects
 out-of-scope files, destructive rewrites of existing files, placeholder tests,
 comment-only contract references, and language-mismatched manifest content. A

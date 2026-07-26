@@ -353,6 +353,12 @@ reconnaissance rather than only the structured read tool. Scoped workers reject
 all shell commands before mutation; use the declared
 files and the generated planned-interface contract instead.
 
+When a delivery verifier finds a defect in an orchestrated artifact, request
+orchestrated rework normally. The state machine reconstructs dependency-ordered
+repair children from the completed ownership graph and preserves each original
+write scope. Do not use `--scope` for orchestrated rework: that remains the
+bounded host-direct correction contract.
+
 ### 4e — SGLang + GQ (GPU required)
 
 ```bash

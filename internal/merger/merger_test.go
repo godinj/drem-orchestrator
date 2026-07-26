@@ -195,6 +195,9 @@ func TestMerger_HappyPath_MergesAndDeletesFeature(t *testing.T) {
 		[]string{"rev-parse", scn.Integration}, scn.BareRepo)
 	require.NoError(t, gitErr)
 	require.Equal(t, gotSHA, res.MergedSHA, "integration HEAD should equal reported SHA")
+	subject, gitErr := testutil.RunGit([]string{"log", "-1", "--format=%s", scn.Integration}, scn.BareRepo)
+	require.NoError(t, gitErr)
+	require.Equal(t, "orchestrator: integrate accepted scoped change", subject)
 
 	// Feature branch should be gone from the bare repo.
 	featureOut, _ := testutil.RunGit(

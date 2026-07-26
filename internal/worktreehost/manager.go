@@ -14,6 +14,11 @@ import (
 
 const featurePrefix = "feature/"
 
+// neutralMergeMessage is deliberately independent of branch and task names.
+// Those names originate outside the control plane and must not leak into a
+// generated commit subject that repository policy may reject.
+const neutralMergeMessage = "orchestrator: integrate accepted scoped change"
+
 // WorktreeInfo describes a feature worktree.
 type WorktreeInfo struct {
 	Path   string
@@ -423,7 +428,7 @@ func (m *Manager) MergeBranch(sourceBranch, targetWorktree string) (*MergeResult
 	mergeArgs := []string{
 		"-c", "user.name=drem-orchestrator",
 		"-c", "user.email=drem-orchestrator@localhost",
-		"merge", sourceBranch, "--no-edit",
+		"merge", "--no-ff", "-m", neutralMergeMessage, sourceBranch,
 	}
 	_, mergeErr := RunGit(mergeArgs, targetWorktree)
 	if mergeErr == nil {

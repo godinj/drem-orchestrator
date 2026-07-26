@@ -1,6 +1,32 @@
 package worktreehost
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/godinj/drem-orchestrator/internal/testutil"
+	"github.com/stretchr/testify/require"
+)
+
+func TestManagerMergeBranchUsesNeutralGeneratedCommitMessage(t *testing.T) {
+	bare := testutil.SetupBareRepo(t)
+	defaultBranch := testutil.GetDefaultBranch(t, bare)
+	target := t.TempDir()
+	testutil.AddWorktree(t, bare, "integration", target)
+	source := t.TempDir()
+	// This name deliberately resembles a policy-sensitive external title. The
+	// generated merge subject must remain independent of it.
+	testutil.AddWorktree(t, bare, "feature/competitor-product", source)
+	testutil.CommitFile(t, source, "change.txt", "accepted\n", "scoped change")
+
+	manager := &Manager{BareRepoPath: bare, DefaultBranch: defaultBranch}
+	result, err := manager.MergeBranch("feature/competitor-product", target)
+	require.NoError(t, err)
+	require.True(t, result.Success)
+	subject, err := RunGit([]string{"log", "-1", "--format=%s"}, filepath.Clean(target))
+	require.NoError(t, err)
+	require.Equal(t, neutralMergeMessage, subject)
+}
 
 func TestParseWorktreeListPorcelainParsesNormalEntries(t *testing.T) {
 	output := `worktree /repo/main

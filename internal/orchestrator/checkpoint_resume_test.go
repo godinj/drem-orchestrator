@@ -16,7 +16,7 @@ import (
 	"github.com/godinj/drem-orchestrator/internal/testutil"
 )
 
-func TestResumeFailedCheckpointContinuesAtomicChildWithoutMergingOrCompleting(t *testing.T) {
+func TestResumeFailedCheckpointContinuesDecomposedChildWithoutMergingOrCompleting(t *testing.T) {
 	bare := testutil.SetupBareRepo(t)
 	defaultBranch := testutil.GetDefaultBranch(t, bare)
 	featureDir := t.TempDir()
@@ -41,11 +41,11 @@ func TestResumeFailedCheckpointContinuesAtomicChildWithoutMergingOrCompleting(t 
 	require.NoError(t, db.Create(parent).Error)
 	child := &model.Task{
 		ID: uuid.New(), ProjectID: o.projectID, ParentTaskID: &parent.ID,
-		Title: "atomic child", Description: "atomic child", Phase: "implementation",
+		Title: "decomposed child", Description: "decomposed child", Phase: "implementation",
 		Status: model.StatusFailed, StateVersion: 3,
 		Context: model.JSONField{
 			"estimated_files": []any{"allowed.txt"}, "writable_files": []any{"allowed.txt"},
-			"execution_lane": string(executionLaneAtomic), "failure_class": failureClassArtifactHandoff,
+			"execution_lane": string(executionLaneDecomposed), "failure_class": failureClassArtifactHandoff,
 		},
 	}
 	require.NoError(t, db.Create(child).Error)
@@ -102,14 +102,6 @@ func TestBuildSpawnContextUsesCheckpointBranchWithoutChangingIntegrationIdentity
 	require.NoError(t, err)
 	require.Equal(t, "feature/checkpoint-worker", swc.branch)
 	require.Empty(t, task.WorktreeBranch)
-}
-
-func TestResumeFailedCheckpointRejectsNonAtomicChild(t *testing.T) {
-	o, _, child, _, featureDir, workerBranch := codexAdoptionRig(t, []any{"allowed.txt"})
-	head := strings.TrimSpace(runGitCmd(t, featureDir, "rev-parse", workerBranch))
-	err := o.ResumeFailedCheckpoint(child.ID, head, "codex:self-verification")
-	require.ErrorIs(t, err, ErrCheckpointResumeConflict)
-	require.Contains(t, err.Error(), "atomic execution lane")
 }
 
 func TestResumeFailedCheckpointFinalizesCompletedJournalWithoutSpawning(t *testing.T) {

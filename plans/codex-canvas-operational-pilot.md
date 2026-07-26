@@ -423,3 +423,24 @@ phase budget had reserved a mutation turn. Scoped mutation workers now journal
 one explicit mutation-only corrective request for an unmutated `stop` or
 `end_of_turn` at the ceiling. A second unmutated stop still fails `no_progress`,
 and read-only integration completion is unchanged.
+
+## Recovery-guard follow-up: completion, continuation, and delivery ownership
+
+The next parity pilots exposed three control-plane failures rather than Canvas
+implementation failures: a dependency-cancelled child was treated as completed
+after a sibling was adopted; a useful decomposed-child checkpoint could only be
+handed to Codex instead of continued with its durable journal; and delivery
+rework was assigned to the completed integration child even when the observed
+defect belonged to a test or action owner.
+
+The state machine now records dependency-failure cancellation provenance and
+requires explicit supersession/replanning before a cancelled child can be
+ignored. Token-budget/timeout/context-limit child checkpoints continue
+automatically only after exact-head, immutable-prompt, durable-journal, and
+file-scope admission; continuation remains partial work, never an adoption.
+Delivery rework now reconstructs dependency-ordered scoped repair children from
+the completed ownership graph. Each repair retains its immutable writable
+scope, so a keymap-only integration child cannot receive an action or test
+repair.
+Generated merge subjects are neutral fixed control-plane text, so external
+branch/task wording cannot cause a repository-policy failure.

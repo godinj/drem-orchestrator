@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -121,6 +123,80 @@ func workerDeathEvent(taskID uuid.UUID, attempt model.WorkerAttempt, exitCode in
 			"drem.agent_type": attempt.AgentType,
 		},
 	}
+}
+
+func TestShouldAutoContinueCheckpointRequiresDurableChildCheckpoint(t *testing.T) {
+	parentID := uuid.New()
+	baseTask := &model.Task{ParentTaskID: &parentID}
+	baseAttempt := &model.WorkerAttempt{RenderedPromptPath: "/immutable/prompt", RenderedPromptHash: strings.Repeat("a", 64)}
+	for _, tc := range []struct {
+		name    string
+		task    *model.Task
+		attempt *model.WorkerAttempt
+		reason  string
+		want    bool
+	}{
+		{name: "token budget", task: baseTask, attempt: baseAttempt, reason: "token_budget", want: true},
+		{name: "timeout", task: baseTask, attempt: baseAttempt, reason: "timeout", want: true},
+		{name: "ordinary tool failure", task: baseTask, attempt: baseAttempt, reason: "no_progress", want: false},
+		{name: "top level task has no parent", task: &model.Task{}, attempt: baseAttempt, reason: "token_budget", want: false},
+		{name: "missing immutable prompt", task: baseTask, attempt: &model.WorkerAttempt{}, reason: "token_budget", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, shouldAutoContinueCheckpoint(tc.task, tc.attempt, tc.reason))
+		})
+	}
+}
+
+func TestHandleWorkerDeathAutomaticallyContinuesAdmittedDecomposedCheckpoint(t *testing.T) {
+	o, _, fake := dockerEventsTestRig(t)
+	o.projectName = "canvas"
+	bare := o.worktree.BareRepo()
+	parentBranch := "feature/checkpoint-parent"
+	parentDir := t.TempDir()
+	testutil.AddWorktree(t, bare, parentBranch, parentDir)
+	base := strings.TrimSpace(runGitCmd(t, parentDir, "rev-parse", "HEAD"))
+	workerBranch := "feature/checkpoint-child"
+	workerDir := t.TempDir()
+	testutil.AddWorktree(t, bare, workerBranch, workerDir)
+	testutil.CommitFile(t, workerDir, "allowed.txt", "partial\n", "checkpoint")
+	childID := uuid.New()
+	parent := &model.Task{ID: uuid.New(), ProjectID: o.projectID, Title: "parent", Description: "parent", Status: model.StatusInProgress, WorktreeBranch: parentBranch, WorktreeBaseSHA: base}
+	require.NoError(t, o.db.Create(parent).Error)
+	child := &model.Task{
+		ID: childID, ProjectID: o.projectID, ParentTaskID: &parent.ID, Title: "decomposed implementation", Description: "child",
+		Phase: "implementation", Status: model.StatusInProgress, WorktreeBranch: workerBranch,
+		Context: model.JSONField{"estimated_files": []any{"allowed.txt"}, "writable_files": []any{"allowed.txt"}, "execution_lane": string(executionLaneDecomposed)},
+	}
+	require.NoError(t, o.db.Create(child).Error)
+	o.worktree.(*FakeWorktreeManager).Features = map[string]string{"checkpoint-parent": parentDir}
+	attempt := seedAssignedWorkerAttempt(t, o, child, model.AgentCoder, "checkpoint-worker", "checkpoint-container")
+	attempt.BaseSHA = base
+	attempt.Branch = workerBranch
+	promptRoot := t.TempDir()
+	t.Setenv(workerPromptRootEnv, promptRoot)
+	promptPath := filepath.Join(promptRoot, child.ID.String()+".md")
+	prompt := []byte("immutable prompt")
+	require.NoError(t, os.WriteFile(promptPath, prompt, 0o600))
+	sum := sha256.Sum256(prompt)
+	attempt.RenderedPromptPath = promptPath
+	attempt.RenderedPromptHash = hex.EncodeToString(sum[:])
+	require.NoError(t, o.db.Save(attempt).Error)
+	journalDir := filepath.Join(promptRoot, "journals", child.ID.String())
+	require.NoError(t, os.MkdirAll(journalDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(journalDir, "journal.json"), []byte(`{"version":1,"prompt_hash":"turn-contract","messages":[{"role":"system","content":"s"},{"role":"user","content":"u"}],"next_iteration":4,"completed":false}`), 0o600))
+
+	ev := workerDeathEvent(child.ID, *attempt, 1, false)
+	ev.Usage = &container.WorkerUsage{StopReason: "token_budget"}
+	o.handleWorkerDeath(context.Background(), child, attempt, ev, newReplacementTracker())
+
+	var gotChild, gotParent model.Task
+	require.NoError(t, o.db.First(&gotChild, "id = ?", child.ID).Error)
+	require.NoError(t, o.db.First(&gotParent, "id = ?", parent.ID).Error)
+	require.Equal(t, model.StatusInProgress, gotChild.Status)
+	require.Equal(t, model.StatusInProgress, gotParent.Status)
+	require.Contains(t, gotChild.Context, "checkpoint_resume")
+	require.Empty(t, fake.spawnCalls, "continuation is scheduled as the same child, not an identical replacement")
 }
 
 func TestDispatchEvent_OOMTriggersHandleWorkerDeath(t *testing.T) {

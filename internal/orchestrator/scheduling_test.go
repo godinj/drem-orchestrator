@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 
 	"github.com/godinj/drem-orchestrator/internal/model"
@@ -366,7 +367,9 @@ func TestCheckFeatureCompletion_CancelledSubtasksDoNotBlockDoneWork(t *testing.T
 
 	createTask(t, db, projectID, "done-sub-1", model.StatusDone, &parentID)
 	createTask(t, db, projectID, "done-sub-2", model.StatusDone, &parentID)
-	createTask(t, db, projectID, "cancelled-superseded-sub", model.StatusCancelled, &parentID)
+	cancelled := createTask(t, db, projectID, "cancelled-superseded-sub", model.StatusCancelled, &parentID)
+	cancelled.Context = model.JSONField{cancellationKindContextKey: "superseded"}
+	require.NoError(t, db.Save(&cancelled).Error)
 
 	if err := o.checkFeatureCompletion(&parent); err != nil {
 		t.Fatalf("checkFeatureCompletion: %v", err)
@@ -377,6 +380,30 @@ func TestCheckFeatureCompletion_CancelledSubtasksDoNotBlockDoneWork(t *testing.T
 	if updated.Status != model.StatusTestingReady {
 		t.Errorf("expected parent status testing_ready, got %s", updated.Status)
 	}
+}
+
+func TestCheckFeatureCompletion_DependencyFailureCancellationBlocksDelivery(t *testing.T) {
+	o, db, projectID := setupSchedulingTest(t)
+
+	parentID := uuid.New()
+	parent := model.Task{
+		ID: parentID, ProjectID: projectID, Title: "parent-with-cancelled-required-work",
+		Description: "a required child was cancelled when its dependency failed",
+		Status:      model.StatusInProgress,
+	}
+	require.NoError(t, db.Create(&parent).Error)
+	createTask(t, db, projectID, "repaired-prerequisite", model.StatusDone, &parentID)
+	cancelled := createTask(t, db, projectID, "cancelled-required-integration", model.StatusCancelled, &parentID)
+	cancelled.Context = model.JSONField{cancellationKindContextKey: "dependency_failure"}
+	require.NoError(t, db.Save(&cancelled).Error)
+
+	require.NoError(t, o.checkFeatureCompletion(&parent))
+
+	var updated model.Task
+	require.NoError(t, db.First(&updated, "id = ?", parentID).Error)
+	require.Equal(t, model.StatusFailed, updated.Status,
+		"a repaired prerequisite must not make a dependency-cancelled required child look complete")
+	require.NotEqual(t, model.StatusTestingReady, updated.Status)
 }
 
 func TestCheckFeatureCompletion_SomeSubtasksPending(t *testing.T) {

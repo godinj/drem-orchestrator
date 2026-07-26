@@ -35,7 +35,7 @@ func (o *Orchestrator) evaluateParentReadiness(parent *model.Task, target model.
 	result := parentReadiness{Ready: true}
 	for id := range required {
 		sub := byID[id]
-		if sub.Status == model.StatusCancelled {
+		if isIgnorableCancelledSubtask(sub) {
 			continue
 		}
 		if sub.Status != model.StatusDone {

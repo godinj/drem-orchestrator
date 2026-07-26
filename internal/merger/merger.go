@@ -13,6 +13,10 @@ import (
 	"time"
 )
 
+// neutralMergeMessage never incorporates external branch, task, or product
+// names. Repository policy is evaluated against generated commit metadata too.
+const neutralMergeMessage = "orchestrator: integrate accepted scoped change"
+
 // defaultTestTimeout is the upper bound on the project-supplied test command.
 // Tests that legitimately need longer should raise this in the parent caller;
 // inside the merger container we fail closed to keep merge latency bounded.
@@ -202,8 +206,7 @@ func (m *Merger) Merge(ctx context.Context, req MergeRequest) (*MergeResult, err
 		}
 	}
 
-	mergeMsg := fmt.Sprintf("Merge branch '%s' into %s", req.FeatureBranch, req.IntegrationBranch)
-	mergeOut := mergeBranch(ctx, m.WorkDir, req.FeatureBranch, mergeMsg)
+	mergeOut := mergeBranch(ctx, m.WorkDir, req.FeatureBranch, neutralMergeMessage)
 	if mergeOut.Err != nil {
 		conflicts, cErr := conflictedFiles(ctx, m.WorkDir)
 		if cErr != nil {

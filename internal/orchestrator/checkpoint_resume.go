@@ -75,9 +75,11 @@ func (o *Orchestrator) ResumeFailedCheckpoint(taskID uuid.UUID, commitSHA, actor
 	} else if child.Phase != "implementation" && child.Phase != "integration" {
 		return fmt.Errorf("%w: child phase %q is not resumable", ErrCheckpointResumeConflict, child.Phase)
 	}
-	if taskExecutionLane(&child) != executionLaneAtomic {
-		return fmt.Errorf("%w: partial checkpoint continuation requires the atomic execution lane", ErrCheckpointResumeConflict)
-	}
+	// A continuation preserves the same child, immutable prompt, branch head,
+	// declared file scope, and dependency position. Those invariants are what
+	// make it safe; the execution lane only controls how sibling work is
+	// decomposed. A partial decomposed child must never be *adopted as done*,
+	// but it can safely continue its own durable journal.
 
 	var parent model.Task
 	if err := o.db.First(&parent, "id = ?", *child.ParentTaskID).Error; err != nil {
@@ -172,12 +174,12 @@ func (o *Orchestrator) ResumeFailedCheckpoint(taskID uuid.UUID, commitSHA, actor
 		child.Context["checkpoint_resume"] = refs
 		parent.Context["checkpoint_resume"] = refs
 		if err := casTaskTransition(tx, &child, model.StatusFailed, model.StatusInProgress, actor,
-			"checkpoint_resume", "resuming incomplete atomic worker from admitted checkpoint and durable journal", refs); err != nil {
+			"checkpoint_resume", "resuming incomplete worker from admitted checkpoint and durable journal", refs); err != nil {
 			return err
 		}
 		if parent.Status == model.StatusFailed {
 			return casTaskTransition(tx, &parent, model.StatusFailed, resumeStatus, actor,
-				"checkpoint_resume", "incomplete atomic child checkpoint resumed parent pipeline", refs)
+				"checkpoint_resume", "incomplete child checkpoint resumed parent pipeline", refs)
 		}
 		oldVersion := parent.StateVersion
 		parent.UpdatedAt = time.Now()

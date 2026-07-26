@@ -97,6 +97,9 @@ func TestStandardParent_FailedChildCancelsDependencyBlockedSiblingsImmediately(t
 	if gotBlocked.Status != model.StatusCancelled {
 		t.Fatalf("blocked child status = %s, want cancelled", gotBlocked.Status)
 	}
+	if gotBlocked.Context[cancellationKindContextKey] != "dependency_failure" {
+		t.Fatalf("blocked child cancellation kind = %v, want dependency_failure", gotBlocked.Context[cancellationKindContextKey])
+	}
 	var event model.TaskEvent
 	if err := db.Where("task_id = ? AND new_value = ?", gotBlocked.ID, string(model.StatusCancelled)).First(&event).Error; err != nil {
 		t.Fatalf("load cascade event: %v", err)
