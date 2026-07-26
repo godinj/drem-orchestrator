@@ -406,3 +406,20 @@ after two blocked attempts at 11k cumulative input with `no_progress`, no
 repository mutation, and no SGLang dependency. This protection is validated
 before another Canvas task is filed; raising the cumulative limit again is not
 an accepted repair.
+
+A later two-file Canvas implementation pilot exposed an accounting edge at the
+transition itself: the one allowed final scoped read was recorded as a blocked
+response, so the first actually denied re-read terminated the worker before it
+could observe the denial. The final read now selects mutation-only tools without
+incrementing the denied-response counter. One genuinely denied response is sent
+back for correction, while a second denied response still fails closed.
+
+The next clean pilot found the equivalent natural-stop edge. After six
+successful reconnaissance turns, the OpenAI-compatible inference backend
+(SGLang in this pilot) returned a provider compaction message with
+`finish_reason=stop` at 73,294 cumulative input tokens. The natural-stop
+branch failed immediately at the 55k pre-mutation ceiling even though the 90k
+phase budget had reserved a mutation turn. Scoped mutation workers now journal
+one explicit mutation-only corrective request for an unmutated `stop` or
+`end_of_turn` at the ceiling. A second unmutated stop still fails `no_progress`,
+and read-only integration completion is unchanged.

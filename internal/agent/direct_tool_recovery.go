@@ -4,7 +4,41 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"strings"
+	"time"
 )
+
+const naturalStopCorrectionPrompt = "[HARNESS] The prior response stopped without a mutation after reaching the pre-mutation ceiling. This is the single reserved corrective turn. Only mutation tools are available: edit an existing authorized file or write a genuinely new authorized file now. Do not continue reconnaissance or return another prose-only response."
+
+func shouldCorrectUnmutatedNaturalStop(cfg DirectToolAgentConfig, mutationObserved bool, totalTokens int, content string, messages []toolChatMsg) bool {
+	return !cfg.AllowReadOnlyCompletion && !mutationObserved && !hasNaturalStopCorrection(messages) &&
+		cfg.MaxInputTokensBeforeMutation > 0 && totalTokens >= cfg.MaxInputTokensBeforeMutation &&
+		!strings.HasPrefix(strings.TrimSpace(content), "BLOCKED:")
+}
+
+func hasNaturalStopCorrection(messages []toolChatMsg) bool {
+	for _, message := range messages {
+		if message.Role == "system" && message.Content == naturalStopCorrectionPrompt {
+			return true
+		}
+	}
+	return false
+}
+
+func unmutatedNaturalStopReason(totalTokens, limit int, correctionRequested bool) string {
+	if correctionRequested {
+		return "agent stopped without mutation after the reserved mutation-only corrective request"
+	}
+	return fmt.Sprintf("pre-mutation input budget reached without a mutation checkpoint: %d/%d", totalTokens, limit)
+}
+
+func naturalStopResult(output string, tokensIn, tokensOut, iterations int, duration time.Duration,
+	finalContextPct int, mutationObserved bool, peakRequestInput, resumedTurns, foldedBytes int) *DirectToolAgentResult {
+	return &DirectToolAgentResult{
+		Output: output, TokensIn: tokensIn, TokensOut: tokensOut, Iterations: iterations,
+		Duration: duration, FinalContextPct: finalContextPct, MutationObserved: mutationObserved,
+		PeakRequestInput: peakRequestInput, ResumedTurns: resumedTurns, FoldedBytes: foldedBytes,
+	}
+}
 
 type failedMutationLoopDetector struct {
 	failures        map[string]int

@@ -306,6 +306,14 @@ pre-mutation input budget (55k test, 30k implementation, 24k integration).
 The runtime reserves at least 20k cumulative input tokens after every configured
 pre-mutation ceiling so a denied reconnaissance turn can be followed by a real
 mutation-only response.
+A granted final scoped read transitions the next request to mutation-only tools
+without consuming the denial allowance. The first genuinely denied response is
+returned to the model for correction; only a second denied response fails as
+`no_progress`.
+An unmutated natural stop at or above the pre-mutation ceiling receives the
+same single mutation-only corrective request from the reserved cumulative
+budget. A second unmutated stop fails `no_progress`; read-only integration
+workers remain allowed to finish without manufacturing a mutation.
 Reads, structured searches, and discovery-like shell commands share the same
 reconnaissance budget; all shell commands are rejected before the first mutation.
 Older large tool results are compacted in replay history. Test subtasks receive

@@ -984,6 +984,76 @@ func TestRunDirectToolAgent_ScopedReadBudgetAllowsOneCorrectiveMutationTurn(t *t
 	require.Equal(t, "content-1\nmutated", string(content))
 }
 
+func TestRunDirectToolAgent_FinalScopedReadDoesNotConsumeDeniedResponseAllowance(t *testing.T) {
+	requestCount := 0
+	requestToolNames := make([][]string, 0, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var req toolChatRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		names := make([]string, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			names = append(names, tool.Function.Name)
+		}
+		requestToolNames = append(requestToolNames, names)
+
+		resp := toolChatResponse{}
+		switch requestCount {
+		case 1:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{
+				{ID: "reference-read", Type: "function", Function: toolCallFunction{Name: "read", Arguments: `{"path":"reference.cpp"}`}},
+				{ID: "final-scoped-read", Type: "function", Function: toolCallFunction{Name: "read", Arguments: `{"path":"existing.cpp"}`}},
+			}}, FinishReason: "tool_calls"}}
+		case 2:
+			require.Equal(t, []string{"edit"}, names)
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "hallucinated-read", Type: "function",
+				Function: toolCallFunction{Name: "read", Arguments: `{"path":"existing.cpp"}`},
+			}}}, FinishReason: "tool_calls"}}
+		case 3:
+			require.Equal(t, []string{"edit"}, names)
+			conversation := ""
+			for _, message := range req.Messages {
+				conversation += message.Content
+			}
+			require.Contains(t, conversation, "unavailable before the first scoped mutation")
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "corrective-edit", Type: "function",
+				Function: toolCallFunction{Name: "edit", Arguments: `{"path":"existing.cpp","old":"original","new":"changed"}`},
+			}}}, FinishReason: "tool_calls"}}
+		default:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", Content: "done"}, FinishReason: "stop"}}
+		}
+		resp.Usage.PromptTokens = 20
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "reference.cpp"), []byte("reference"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.cpp"), []byte("original"), 0o644))
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.MaxReadsBeforeMutation = 1
+	cfg.MaxInputTokensBeforeMutation = 1_000
+	cfg.ProtectExistingFiles = true
+	cfg.ScopedFiles = []string{"existing.cpp"}
+
+	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRole("coder"), "")
+	require.NoError(t, err)
+	require.True(t, result.MutationObserved)
+	require.Equal(t, 4, requestCount)
+	require.Contains(t, requestToolNames[0], "read")
+	require.Equal(t, []string{"edit"}, requestToolNames[1])
+	require.Equal(t, []string{"edit"}, requestToolNames[2])
+	content, readErr := os.ReadFile(filepath.Join(dir, "existing.cpp"))
+	require.NoError(t, readErr)
+	require.Equal(t, "changed", string(content))
+}
+
 func TestRunDirectToolAgent_RefusesHallucinatedShellBeforeScopedMutation(t *testing.T) {
 	requestCount := 0
 	requestToolNames := make([][]string, 0, 3)
@@ -1522,6 +1592,133 @@ func TestRunDirectToolAgent_EnforcesTotalToolCallBudget(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, DirectToolStopReasonToolBudget, result.StopReason)
 	require.Equal(t, 3, callCount)
+}
+
+func TestRunDirectToolAgent_NaturalStopAtPreMutationCeilingGetsCorrectiveMutationTurn(t *testing.T) {
+	requestCount := 0
+	requestToolNames := make([][]string, 0, 3)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var req toolChatRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		names := make([]string, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			names = append(names, tool.Function.Name)
+		}
+		requestToolNames = append(requestToolNames, names)
+
+		resp := toolChatResponse{}
+		switch requestCount {
+		case 1:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{
+				Role: "assistant", Content: "The response was compacted before I made the change.",
+			}, FinishReason: "stop"}}
+		case 2:
+			require.Equal(t, []string{"edit"}, names)
+			conversation := ""
+			for _, message := range req.Messages {
+				conversation += message.Content
+			}
+			require.Contains(t, conversation, "single reserved corrective turn")
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", ToolCalls: []toolCall{{
+				ID: "corrective-edit", Type: "function",
+				Function: toolCallFunction{Name: "edit", Arguments: `{"path":"existing.cpp","old":"original","new":"changed"}`},
+			}}}, FinishReason: "tool_calls"}}
+		default:
+			resp.Choices = []toolChatChoice{{Message: toolChatMsg{Role: "assistant", Content: "done"}, FinishReason: "stop"}}
+		}
+		resp.Usage.PromptTokens = 60
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.cpp"), []byte("original"), 0o644))
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.MaxInputTokensBeforeMutation = 50
+	cfg.MaxCumulativeInputTokens = 200
+	cfg.ProtectExistingFiles = true
+	cfg.ScopedFiles = []string{"existing.cpp"}
+
+	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRole("coder"), "")
+	require.NoError(t, err)
+	require.True(t, result.MutationObserved)
+	require.Equal(t, 3, requestCount)
+	require.Equal(t, []string{"edit"}, requestToolNames[1])
+	content, readErr := os.ReadFile(filepath.Join(dir, "existing.cpp"))
+	require.NoError(t, readErr)
+	require.Equal(t, "changed", string(content))
+}
+
+func TestRunDirectToolAgent_SecondNaturalStopAfterCorrectiveRequestFailsNoProgress(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var req toolChatRequest
+		require.NoError(t, json.NewDecoder(r.Body).Decode(&req))
+		if requestCount == 2 {
+			names := make([]string, 0, len(req.Tools))
+			for _, tool := range req.Tools {
+				names = append(names, tool.Function.Name)
+			}
+			require.Equal(t, []string{"edit"}, names)
+		}
+		resp := toolChatResponse{Choices: []toolChatChoice{{Message: toolChatMsg{
+			Role: "assistant", Content: "I did not make a change.",
+		}, FinishReason: "end_of_turn"}}}
+		resp.Usage.PromptTokens = 60
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "existing.cpp"), []byte("original"), 0o644))
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = dir
+	cfg.MaxInputTokensBeforeMutation = 50
+	cfg.MaxCumulativeInputTokens = 200
+	cfg.ProtectExistingFiles = true
+	cfg.ScopedFiles = []string{"existing.cpp"}
+
+	result, err := RunDirectToolAgent(cfg, "sys", "make the scoped edit", ToolsForRole("coder"), "")
+	require.Error(t, err)
+	require.Equal(t, DirectToolStopReasonNoProgress, result.StopReason)
+	require.Contains(t, err.Error(), "reserved mutation-only corrective request")
+	require.Equal(t, 2, requestCount)
+}
+
+func TestRunDirectToolAgent_ReadOnlyNaturalStopAtPreMutationCeilingRemainsSuccessful(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		resp := toolChatResponse{Choices: []toolChatChoice{{Message: toolChatMsg{
+			Role: "assistant", Content: "read-only validation complete",
+		}, FinishReason: "stop"}}}
+		resp.Usage.PromptTokens = 60
+		resp.Usage.CompletionTokens = 5
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(resp))
+	}))
+	defer server.Close()
+
+	cfg := DefaultDirectToolAgentConfig()
+	cfg.Endpoint = server.URL
+	cfg.WorkDir = t.TempDir()
+	cfg.MaxInputTokensBeforeMutation = 50
+	cfg.AllowReadOnlyCompletion = true
+
+	result, err := RunDirectToolAgent(cfg, "sys", "validate only", ToolsForRole("coder"), "")
+	require.NoError(t, err)
+	require.Equal(t, "read-only validation complete", result.Output)
+	require.False(t, result.MutationObserved)
+	require.Equal(t, 1, requestCount)
 }
 
 func TestRunDirectToolAgent_NaturalStopWinsOverCumulativeInputBudget(t *testing.T) {

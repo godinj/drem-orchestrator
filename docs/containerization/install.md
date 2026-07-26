@@ -333,7 +333,13 @@ read-count limit, this includes the repeated system prompt and verified source
 pack on every tool turn. The 90k cumulative test budget leaves at least one
 complete corrective mutation-only turn after reconnaissance is denied. The
 runtime enforces the same minimum headroom if a hand-edited profile requests an
-unsafe larger value. The 8-read and 20-tool ceilings still bound the run. Test prompts treat
+unsafe larger value. A granted final scoped read changes the following request
+to mutation-only tools but is not counted as a denial. The worker receives the
+first genuinely denied tool result and gets one corrective response before a
+second denied response becomes `no_progress`. The 8-read and 20-tool ceilings
+still bound the run. An unmutated `stop` or `end_of_turn` at the pre-mutation
+ceiling also consumes one journaled mutation-only corrective request before a
+second unmutated stop fails. Read-only integration completion is exempt. Test prompts treat
 content-addressed source excerpts as completed reads and direct sequential
 writers to inspect their shared test TU once before editing it. A default read
 of an authorized scoped file returns up to 800 lines, so bounded dependency

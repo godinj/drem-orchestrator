@@ -183,7 +183,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		}
 		if failedEditRecoveryAvailable {
 			activeTools = toolsByName([]string{"read", "edit"})
-		} else if !mutationObserved && (blockedReconBatchesBeforeMutation > 0 || protectedWriteBatchesBeforeMutation > 0 || scopeViolationBatchesBeforeMutation > 0) {
+		} else if !mutationObserved && (hasNaturalStopCorrection(messages) || finalScopedReadGranted || blockedReconBatchesBeforeMutation > 0 || protectedWriteBatchesBeforeMutation > 0 || scopeViolationBatchesBeforeMutation > 0) {
 			activeTools = mutationOnlyTools(cfg, tools)
 		}
 		resp, err := callToolAPI(cfg, messages, activeTools)
@@ -254,36 +254,30 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 		// context_limit even if usage already crossed the stop threshold.
 		if choice.FinishReason == "stop" || choice.FinishReason == "end_of_turn" {
 			writeTrace(cfg.TraceWriter, traceEvent)
+			if shouldCorrectUnmutatedNaturalStop(cfg, mutationObserved, totalTokensIn, choice.Message.Content, messages) {
+				messages = append(messages, choice.Message, toolChatMsg{
+					Role: "system", Content: naturalStopCorrectionPrompt,
+				})
+				if err := persistJournal(iteration+1, false, &traceEvent); err != nil {
+					return nil, err
+				}
+				continue
+			}
 			if err := persistJournal(iteration+1, true, &traceEvent); err != nil {
 				return nil, err
 			}
+			result := naturalStopResult(choice.Message.Content, totalTokensIn, totalTokensOut, iteration+1,
+				time.Since(start), finalPct, mutationObserved, peakRequestInput, resumedTurns, foldedBytes)
 			if !cfg.AllowReadOnlyCompletion && !mutationObserved && strings.HasPrefix(strings.TrimSpace(choice.Message.Content), "BLOCKED:") {
-				return &DirectToolAgentResult{
-					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
-					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
-					StopReason: DirectToolStopReasonNoProgress, PeakRequestInput: peakRequestInput, ResumedTurns: resumedTurns, FoldedBytes: foldedBytes,
-				}, fmt.Errorf("agent reported typed blocker: %s", strings.TrimSpace(choice.Message.Content))
+				result.StopReason = DirectToolStopReasonNoProgress
+				return result, fmt.Errorf("agent reported typed blocker: %s", strings.TrimSpace(choice.Message.Content))
 			}
 			if !cfg.AllowReadOnlyCompletion && !mutationObserved && cfg.MaxInputTokensBeforeMutation > 0 && totalTokensIn >= cfg.MaxInputTokensBeforeMutation {
-				return &DirectToolAgentResult{
-					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
-					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
-					StopReason: DirectToolStopReasonNoProgress,
-				}, fmt.Errorf("pre-mutation input budget reached without a mutation checkpoint: %d/%d", totalTokensIn, cfg.MaxInputTokensBeforeMutation)
+				result.StopReason = DirectToolStopReasonNoProgress
+				reason := unmutatedNaturalStopReason(totalTokensIn, cfg.MaxInputTokensBeforeMutation, hasNaturalStopCorrection(messages))
+				return result, fmt.Errorf("%s", reason)
 			}
-			finalOutput := choice.Message.Content
-			result := &DirectToolAgentResult{
-				Output:           finalOutput,
-				TokensIn:         totalTokensIn,
-				TokensOut:        totalTokensOut,
-				Iterations:       iteration + 1,
-				Duration:         time.Since(start),
-				FinalContextPct:  finalPct,
-				MutationObserved: mutationObserved,
-				PeakRequestInput: peakRequestInput,
-				ResumedTurns:     resumedTurns,
-				FoldedBytes:      foldedBytes,
-			}
+			finalOutput := result.Output
 
 			// Write output file if requested.
 			if outputPath != "" && finalOutput != "" {
@@ -326,7 +320,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				)
 				choice.Message.ToolCalls[i] = repaired
 			}
-			blockedReconThisBatch := false
+			blockedReconThisBatch, finalScopedReadThisBatch := false, false
 			protectedWriteThisBatch := false
 			scopeViolationThisBatch := false
 			failedEditRecoveryReadThisBatch := false
@@ -459,7 +453,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				}
 				if finalScopedRead {
 					finalScopedReadGranted = true
-					blockedReconThisBatch = true
+					finalScopedReadThisBatch = true
 					result += "\n\n[HARNESS] This was the single scoped final-look read. The next turn is edit-only; use this exact content to make the planned mutation."
 				}
 				if recoveryRead && !blockedRecon {
@@ -589,7 +583,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			if scopeViolationThisBatch {
 				scopeViolationBatchesBeforeMutation++
 			}
-			if (blockedReconThisBatch || protectedWriteThisBatch || scopeViolationThisBatch) && !mutationOnlyNudgeInjected {
+			if (finalScopedReadThisBatch || blockedReconThisBatch || protectedWriteThisBatch || scopeViolationThisBatch) && !mutationOnlyNudgeInjected {
 				messages = append(messages, toolChatMsg{
 					Role:    "system",
 					Content: "[HARNESS] The next turn is mutation-only. Read, search, and shell tools are intentionally unavailable. Use edit for an existing file; write is available only when an authorized path is genuinely new.",
@@ -614,11 +608,11 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 				}, fmt.Errorf("failed-mutation no-progress detector: %s", failedMutationStopReason)
 			}
 			// Count denied reconnaissance by assistant response, not by raw tool
-			// call. Models commonly emit paired reads in a single response. Failing
-			// after the second denied call meant the process exited before the model
-			// ever received the harness results telling it to mutate. One complete
-			// corrective response is allowed; a second response that still contains
-			// denied reconnaissance is genuine refusal to make progress.
+			// call. Models commonly emit paired reads in a single response. A granted
+			// final scoped read transitions the next request to mutation-only tools,
+			// but is not itself a denial. After the first genuinely denied response,
+			// return its tool result so the model gets one complete corrective turn;
+			// a second denied response is genuine refusal to make progress.
 			if !cfg.AllowReadOnlyCompletion && !mutationObserved && blockedReconBatchesBeforeMutation >= 2 {
 				return &DirectToolAgentResult{
 						Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
@@ -658,7 +652,7 @@ func RunDirectToolAgent(cfg DirectToolAgentConfig, systemPrompt, userMessage str
 			// If this response was the first blocked reconnaissance batch, return
 			// its tool results to the model before enforcing the input ceiling. The
 			// next response must mutate; a second blocked batch fails above.
-			if !cfg.AllowReadOnlyCompletion && !mutationObserved && !blockedReconThisBatch && !protectedWriteThisBatch && !scopeViolationThisBatch && !failedEditRecoveryAvailable && !failedEditRecoveryReadThisBatch && cfg.MaxInputTokensBeforeMutation > 0 && totalTokensIn >= cfg.MaxInputTokensBeforeMutation {
+			if !cfg.AllowReadOnlyCompletion && !mutationObserved && !finalScopedReadThisBatch && !blockedReconThisBatch && !protectedWriteThisBatch && !scopeViolationThisBatch && !failedEditRecoveryAvailable && !failedEditRecoveryReadThisBatch && cfg.MaxInputTokensBeforeMutation > 0 && totalTokensIn >= cfg.MaxInputTokensBeforeMutation {
 				return &DirectToolAgentResult{
 					Output: choice.Message.Content, TokensIn: totalTokensIn, TokensOut: totalTokensOut,
 					Iterations: iteration + 1, Duration: time.Since(start), FinalContextPct: finalPct,
